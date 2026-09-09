@@ -40,7 +40,7 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task HoldAllQueuesCommand_HoldsAllQueues()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         viewModel.InputText = "hello";
         viewModel.SubmitToNewQueue();
 
@@ -52,7 +52,7 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task UnholdAllQueuesCommand_UnholdsAllQueues()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         viewModel.InputText = "hello";
         viewModel.SubmitToNewQueue();
         viewModel.HoldAllQueues();
@@ -65,7 +65,7 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task ToggleHoldAllQueuesCommand_TogglesHoldState()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         viewModel.InputText = "hello";
         viewModel.SubmitToNewQueue();
 
@@ -77,7 +77,7 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task HandleInputKey_CtrlShiftQ_WhenQueuesAreHeld_CreatesHeldQueue()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         viewModel.InputText = "create";
         viewModel.HoldAllQueues();
 
@@ -93,7 +93,7 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task HandleInputKey_Return_SubmitsToDefaultQueue()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager)
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat })
         {
             InputText = "hello from return",
         };
@@ -110,7 +110,7 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task HandleInputKey_CtrlEnter_InNormalMode_SubmitsToCurrentQueue()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager)
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat })
         {
             InputText = "hello ctrl enter",
         };
@@ -128,7 +128,7 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task HandleInputKey_CtrlEnter_InFormattedMode_Submits()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager)
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat })
         {
             InputText = "multi-line submit",
         };
@@ -145,9 +145,9 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task HandleEditKey_Enter_SavesEditAndExitsEditMode()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var queue = chat.QueueManager.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
-        viewModel.AppendToQueue(queue, "original");
+        viewModel.AppendToQueue(queue.Queue.QueueId, "original");
         var entry = Assert.Single(viewModel.Queues[1].Items);
         entry.EditCommand.Execute(null);
         entry.EditText = "edited";
@@ -164,9 +164,9 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task HandleEditKey_ShiftEnter_IsNotHandledSoNewlineInserts()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var queue = chat.QueueManager.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
-        viewModel.AppendToQueue(queue, "original");
+        viewModel.AppendToQueue(queue.Queue.QueueId, "original");
         var entry = Assert.Single(viewModel.Queues[1].Items);
         entry.EditCommand.Execute(null);
         entry.EditText = "edited";
@@ -182,9 +182,9 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task HandleEditKey_OrdinaryKey_IsNotHandled()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var queue = chat.QueueManager.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
-        viewModel.AppendToQueue(queue, "original");
+        viewModel.AppendToQueue(queue.Queue.QueueId, "original");
         var entry = Assert.Single(viewModel.Queues[1].Items);
         entry.EditCommand.Execute(null);
         entry.EditText = "edited";
@@ -201,9 +201,9 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task HandleEditKey_CtrlEnter_RemovesFromQueueAndPostsToDefaultQueue()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var queue = chat.QueueManager.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
-        viewModel.AppendToQueue(queue, "original");
+        viewModel.AppendToQueue(queue.Queue.QueueId, "original");
         var entry = Assert.Single(viewModel.Queues[1].Items);
         entry.EditCommand.Execute(null);
         entry.EditText = "send now";
@@ -221,9 +221,9 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task HandleEditKey_Escape_CancelsEditWithoutSaving()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var queue = chat.QueueManager.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
-        viewModel.AppendToQueue(queue, "original");
+        viewModel.AppendToQueue(queue.Queue.QueueId, "original");
         var entry = Assert.Single(viewModel.Queues[1].Items);
         entry.EditCommand.Execute(null);
         entry.EditText = "discarded";
@@ -240,7 +240,7 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task HandleInputKey_CtrlQ_WithEmptyComposer_ReturnsFalse()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         // Composer is empty — no text, no attachments
         viewModel.InputText = string.Empty;
 
@@ -254,7 +254,7 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task HandleInputKey_CtrlQ_WithText_ReturnsTrue()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         viewModel.InputText = "route to most recent";
 
         var handled = QueueComposerControl.HandleInputKey(viewModel.DefaultComposer, Key.Q, KeyModifiers.Control);
@@ -267,7 +267,7 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task PlaceholderText_DefaultComposer_ShowsShortcuts()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
 
         Assert.Contains("Enter", viewModel.DefaultComposer.PlaceholderText);
         Assert.Contains("Shift+Enter", viewModel.DefaultComposer.PlaceholderText);
@@ -279,7 +279,7 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task PlaceholderText_DefaultComposer_FormattedMode_ShowsFormattedShortcuts()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         viewModel.DefaultComposer.EnterFormattedMode();
 
         // Placeholder is simplified in formatted mode; shortcuts are in FormattedModeHint.
@@ -293,7 +293,7 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task PlaceholderText_ChangesWhenFormattedModeChanges()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var changedProperties = new List<string?>();
         viewModel.DefaultComposer.PropertyChanged += (_, e) => changedProperties.Add(e.PropertyName);
 
@@ -306,7 +306,7 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task HandleInputKey_Escape_WhenCompletionsVisible_DismissesCompletions()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = viewModel.DefaultComposer;
 
         composer.Completions.SetItems([new Phantom.Workspaces.Llm.SlashCommands.SlashCommandCompletion("working-directory", "/working-directory", "desc")]);
@@ -322,7 +322,7 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task HandleInputKey_Enter_WhenCompletionsVisible_DoesNotSubmit()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = viewModel.DefaultComposer;
         composer.InputText = "hello";
 
@@ -338,7 +338,7 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task HandleInputKey_Tab_WhenCompletionsVisible_AndNothingSelected_SelectsFirst()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = viewModel.DefaultComposer;
 
         composer.Completions.SetItems([
@@ -357,7 +357,7 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task HandleInputKey_Tab_WhenItemSelected_AcceptsCompletionAndDismisses()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = viewModel.DefaultComposer;
 
         composer.InputText = "/wo";
@@ -377,7 +377,7 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task HandleInputKey_AcceptingCompletion_SetsNewText()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = viewModel.DefaultComposer;
 
         composer.InputText = "/wo";
@@ -395,7 +395,7 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task HandleInputKey_AcceptingCompletion_MovesCursorToEnd()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = viewModel.DefaultComposer;
 
         composer.InputText = "/wo";
@@ -416,7 +416,7 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task HandleInputKey_Tab_ArgumentCompletion_ReplacesOnlyArgumentToken()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = viewModel.DefaultComposer;
 
         // Argument completion values are bare tokens (no leading slash).
@@ -443,7 +443,7 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task HandleInputKey_Tab_ArgumentCompletion_DoesNotPrependSlash()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = viewModel.DefaultComposer;
 
         composer.InputText = "/model gpt";
@@ -469,7 +469,7 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task HandleInputKey_Tab_ArgumentCompletion_PreservesCommandPrefix()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = viewModel.DefaultComposer;
 
         composer.InputText = "/model gpt";
@@ -495,7 +495,7 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task HandleInputKey_Tab_ArgumentCompletion_PlacesCaretAfterInsertedArgument()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = viewModel.DefaultComposer;
 
         composer.InputText = "/model gpt";
@@ -521,7 +521,7 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task HandleInputKey_Tab_ArgumentCompletionWithTrailingText_PreservesTextAfterCaret()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = viewModel.DefaultComposer;
 
         // Caret sits after "gpt"; the trailing " more" text must be preserved.
@@ -548,7 +548,7 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task HandleInputKey_Tab_CommandNameCompletion_StillReplacesNameToken()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = viewModel.DefaultComposer;
 
         // Command-name completion values carry a trailing space and no slash
@@ -576,7 +576,7 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task HandleInputKey_Tab_DirectoryArgumentCompletion_InsertsPathVerbatim()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = viewModel.DefaultComposer;
 
         // Directory completions are bare path tokens with a trailing separator
@@ -604,7 +604,7 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task HandleInputKey_Down_WhenCompletionsVisible_SelectsNext()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = viewModel.DefaultComposer;
 
         composer.Completions.SetItems([
@@ -622,7 +622,7 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task HandleInputKey_Up_WhenCompletionsVisible_SelectsPrevious()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = viewModel.DefaultComposer;
 
         composer.Completions.SetItems([
@@ -641,7 +641,7 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task HandleInputKey_CtrlShiftEnter_InNormalMode_SubmitsBeforeCursor()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = viewModel.DefaultComposer;
         composer.InputText = "hello world";
 
@@ -670,7 +670,7 @@ public sealed class AgentChatInputQueueControlKeyTests
     public async Task HandleInputKey_CtrlShiftEnter_InFormattedMode_SubmitsBeforeCursor()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = viewModel.DefaultComposer;
         composer.InputText = "line1\nline2";
         composer.EnterFormattedMode();

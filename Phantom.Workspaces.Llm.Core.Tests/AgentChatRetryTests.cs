@@ -20,7 +20,8 @@ public sealed class AgentChatRetryTests
 {
     private const string EchoAgentJson =
         """
-        { "kind": "prompt", "name": "echo-agent", "model": { "id": "echo", "provider": "echo", "apiType": "Echo" }, "tools": [] }
+        { "kind": "prompt", "name": "echo-agent", "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+          "tools": [{ "kind": "web_search", "description": "Search docs" }] }
         """;
 
     private static AgentDefinition EchoDef => AgentDefinitionLoader.LoadAgentFromJson(EchoAgentJson);
@@ -50,14 +51,22 @@ public sealed class AgentChatRetryTests
         await using var factory = await NewFactoryAsync(sessionId);
         await using var lease = await factory.CreateAsync(EchoDef, sessionId);
         var chat = (AgentChat)lease.AgentChat;
-        var info = chat.Information;
-        // Publisher validation: every required string is non-blank when Information is exposed.
-        Assert.False(string.IsNullOrEmpty(info.AgentSessionId));
-        Assert.False(string.IsNullOrEmpty(info.AgentId));
-        Assert.False(string.IsNullOrEmpty(info.Name));
-        Assert.False(string.IsNullOrEmpty(info.DisplayName));
-        Assert.False(string.IsNullOrEmpty(info.Description));
-        Assert.NotNull(info.AgentDefinition);
+        var before = chat.Information;
+        var raised = 0;
+        AgentInformation observed = default;
+        chat.InformationChanged += (_, _) =>
+        {
+            raised++;
+            observed = chat.Information;
+        };
+
+        typeof(AgentChat).GetProperty(nameof(AgentChat.DisplayName))!.SetValue(chat, "replacement");
+        typeof(AgentChat).GetMethod("PublishInformation", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(chat, null);
+
+        Assert.Equal(1, raised);
+        Assert.NotEqual(before, observed);
+        Assert.Equal("replacement", observed.DisplayName);
+        Assert.Equal(observed, chat.Information);
     }
 
     [Fact]
@@ -67,6 +76,7 @@ public sealed class AgentChatRetryTests
         await using var factory = await NewFactoryAsync(sessionId);
         await using var lease = await factory.CreateAsync(EchoDef, sessionId);
         var chat = (AgentChat)lease.AgentChat;
+        await chat.Initialization;
         var raised = 0;
         Usage? observedAtEvent = null;
         chat.UsageChanged += (_, _) =>
@@ -92,6 +102,62 @@ public sealed class AgentChatRetryTests
     }
 
     [Fact]
+    public async Task UsagePublisher_NegativeMetric_RejectsThroughChatPublication()
+    {
+        var sessionId = new AgentSessionId("retry-usage-invalid");
+        await using var factory = await NewFactoryAsync(sessionId);
+        await using var lease = await factory.CreateAsync(EchoDef, sessionId);
+        var chat = (AgentChat)lease.AgentChat;
+        await chat.Initialization;
+        var before = chat.Usage;
+        var raised = 0;
+        chat.UsageChanged += (_, _) => raised++;
+        var update = new AgentResponseUpdate
+        {
+            Contents =
+            [
+                new UsageContent(new Microsoft.Extensions.AI.UsageDetails { InputTokenCount = -1 }),
+            ],
+        };
+
+        typeof(AgentChat)
+            .GetMethod("AccumulateUsage", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .Invoke(chat, [update]);
+
+        Assert.Equal(before, chat.Usage);
+        Assert.Equal(0, raised);
+    }
+
+    [Fact]
+    public async Task InformationPublisher_InvalidCandidates_RejectThroughChatPublication()
+    {
+        var sessionId = new AgentSessionId("retry-info-invalid");
+        await using var factory = await NewFactoryAsync(sessionId);
+        await using var lease = await factory.CreateAsync(EchoDef, sessionId);
+        var chat = (AgentChat)lease.AgentChat;
+        var before = chat.Information;
+        var invalidCandidates = new[]
+        {
+            before with { AgentSessionId = "" },
+            before with { CurrentModelId = " " },
+            before with { AgentDefinition = null! },
+        };
+        var raised = 0;
+        chat.InformationChanged += (_, _) => raised++;
+        var publish = typeof(AgentChat).GetMethod(
+            "TryPublishInformation",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+
+        foreach (var candidate in invalidCandidates)
+        {
+            publish.Invoke(chat, [candidate]);
+        }
+
+        Assert.Equal(before, chat.Information);
+        Assert.Equal(0, raised);
+    }
+
+    [Fact]
     public async Task InputQueues_LocalChat_ReturnsCommonQueueAggregate()
     {
         var sessionId = new AgentSessionId("retry-queues-1");
@@ -108,14 +174,37 @@ public sealed class AgentChatRetryTests
         await using var factory = await NewFactoryAsync(sessionId);
         await using var lease = await factory.CreateAsync(EchoDef, sessionId);
         var chat = (AgentChat)lease.AgentChat;
+        await chat.Initialization;
         var first = chat.GetToolSnapshot();
-        var firstCount = first.Count;
-        if (firstCount > 0)
+        var tool = Assert.Single(first);
+
+        await chat.SetToolEnabledAsync(tool.Id, !tool.IsEnabled);
+
+        Assert.Equal(tool.IsEnabled, Assert.Single(first).IsEnabled);
+        Assert.Equal(!tool.IsEnabled, Assert.Single(chat.GetToolSnapshot()).IsEnabled);
+    }
+
+    [Fact]
+    public async Task SetToolEnabledAsync_KnownTool_ChangesStateThenRaisesToolsChanged()
+    {
+        var sessionId = new AgentSessionId("retry-tool-known");
+        await using var factory = await NewFactoryAsync(sessionId);
+        await using var lease = await factory.CreateAsync(EchoDef, sessionId);
+        var chat = (AgentChat)lease.AgentChat;
+        await chat.Initialization;
+        var tool = Assert.Single(chat.GetToolSnapshot());
+        var raised = 0;
+        bool? enabledAtEvent = null;
+        chat.ToolsChanged += (_, _) =>
         {
-            await chat.SetToolEnabledAsync(first[0].Id, !first[0].IsEnabled);
-        }
-        // Snapshot returned before the mutation is a captured value — its Count is stable.
-        Assert.Equal(firstCount, first.Count);
+            raised++;
+            enabledAtEvent = Assert.Single(chat.GetToolSnapshot()).IsEnabled;
+        };
+
+        await chat.SetToolEnabledAsync(tool.Id, !tool.IsEnabled);
+
+        Assert.Equal(1, raised);
+        Assert.Equal(!tool.IsEnabled, enabledAtEvent);
     }
 
     [Fact]
@@ -135,15 +224,17 @@ public sealed class AgentChatRetryTests
         await using var factory = await NewFactoryAsync(sessionId);
         await using var lease = await factory.CreateAsync(EchoDef, sessionId);
         var chat = (AgentChat)lease.AgentChat;
+        await chat.Initialization;
         var beforeSnapshot = chat.GetToolSnapshot();
+        var tool = Assert.Single(beforeSnapshot);
         using var cts = new CancellationTokenSource();
         cts.Cancel();
         var raised = 0;
         chat.ToolsChanged += (_, _) => raised++;
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => chat.SetToolEnabledAsync("anything", true, cts.Token));
+            () => chat.SetToolEnabledAsync(tool.Id, !tool.IsEnabled, cts.Token));
         var afterSnapshot = chat.GetToolSnapshot();
-        Assert.Equal(beforeSnapshot.Count, afterSnapshot.Count);
+        Assert.Equal(tool.IsEnabled, Assert.Single(afterSnapshot).IsEnabled);
         Assert.Equal(0, raised);
     }
 
@@ -219,16 +310,30 @@ public sealed class AgentChatRetryTests
     public async Task EnqueueTransientDiagnostic_ValidText_AppendsNonPersistedDiagnostic()
     {
         var sessionId = new AgentSessionId("retry-diag-note");
-        await using var factory = await NewFactoryAsync(sessionId);
-        await using var lease = await factory.CreateAsync(EchoDef, sessionId);
+        var store = new InMemoryAgentPersistenceStore();
+        await store.StoreAsync(new StoreRequestAgent
+        {
+            Agent = new PersistedAgent
+            {
+                AgentSessionId = sessionId.Value!,
+                AgentDefinitionJson = BsonDocument.Parse(EchoDef.ToJson()),
+            },
+        });
+        await using var factory = new AgentChatFactory(
+            store,
+            new AgentServices { ChatClientOverride = new DeterministicTestChatClient() },
+            this.foregroundScheduler);
+        var lease = await factory.GetAsync(sessionId);
         var chat = (AgentChat)lease.AgentChat;
-        var before = chat.History.Count;
         chat.EnqueueTransientDiagnostic("diag");
-        Assert.Equal(before + 1, chat.History.Count);
         var last = chat.History[^1];
-        // Diagnostic role: not persisted by the store even though observable in History.
         Assert.Equal(AgentChatHistoryItem.DiagnosticChatRole, last.Role);
-        Assert.Contains(last.Contents.OfType<TextContent>(), c => c.Text == "diag");
+        await lease.DisposeAsync();
+
+        await using var reloadedLease = await factory.GetAsync(sessionId);
+        Assert.DoesNotContain(
+            reloadedLease.AgentChat.History,
+            item => item.Contents.OfType<TextContent>().Any(content => content.Text == "diag"));
     }
 
     [Fact]
@@ -245,29 +350,130 @@ public sealed class AgentChatRetryTests
     [Fact]
     public async Task Interrupt_ActiveTurn_CancelsTurnWithoutDisposingChat()
     {
-        var sessionId = new AgentSessionId("retry-interrupt-active");
-        await using var factory = await NewFactoryAsync(sessionId);
-        await using var lease = await factory.CreateAsync(EchoDef, sessionId);
-        var chat = (AgentChat)lease.AgentChat;
-        var cts = new CancellationTokenSource();
-        typeof(AgentChat)
-            .GetField("activeRunCancellation", BindingFlags.NonPublic | BindingFlags.Instance)!
-            .SetValue(chat, cts);
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(
+            new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new TextContent("blocked")] },
+            isReady: false);
+        stream.Complete(isReady: false);
+        await using var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = EchoDef,
+            ConfiguredStore = new InMemoryAgentPersistenceStore(),
+            ClientOverride = client,
+            ForegroundScheduler = this.foregroundScheduler,
+        });
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ((System.Collections.Specialized.INotifyCollectionChanged)chat.RunningItems).CollectionChanged += (_, _) =>
+        {
+            if (chat.RunningItems.Count > 0)
+            {
+                started.TrySetResult();
+            }
+        };
+        chat.EnqueueUserMessage("start");
+        await started.Task.WaitAsync(CancellationToken.None);
+
         chat.Interrupt();
-        Assert.True(cts.IsCancellationRequested);
-        var info = chat.Information;
-        Assert.False(string.IsNullOrEmpty(info.AgentSessionId));
+        var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ((System.Collections.Specialized.INotifyCollectionChanged)chat.RunningItems).CollectionChanged += (_, _) =>
+        {
+            if (chat.RunningItems.Count == 0)
+            {
+                stopped.TrySetResult();
+            }
+        };
+        if (chat.RunningItems.Count == 0)
+        {
+            stopped.TrySetResult();
+        }
+        await stopped.Task.WaitAsync(CancellationToken.None);
+
+        chat.EnqueueSystemNote("still-usable");
+        Assert.Contains(chat.History, item => item.Contents.OfType<TextContent>().Any(content => content.Text == "still-usable"));
+    }
+
+    [Fact]
+    public async Task InputQueues_ActiveNonCopilotRun_ConsumesAtFutureTurnWithSingleRevisionStep()
+    {
+        var client = new DeterministicTestChatClient();
+        var activeTurn = client.EnqueueStreamingResponse();
+        var activeTurnEnd = activeTurn.Complete(isReady: false);
+        client.EnqueueStreamingResponse().Complete();
+        await using var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = EchoDef,
+            ConfiguredStore = new InMemoryAgentPersistenceStore(),
+            ClientOverride = client,
+            ForegroundScheduler = this.foregroundScheduler,
+        });
+        chat.EnqueueUserMessage("first turn");
+        await client.WaitForRequestAsync(CancellationToken.None);
+
+        var queues = ((IAgentChat)chat).InputQueues;
+        var enqueue = await queues.EnqueueAsync(new EnqueueAgentInputRequest
+        {
+            TargetQueueId = queues.DefaultQueue.Snapshot.QueueId,
+            Messages = [new ChatMessage(ChatRole.User, "future turn")],
+            CommandId = Guid.NewGuid(),
+            ExpectedRevision = queues.Snapshot.Revision,
+        });
+        Assert.Contains(queues.DefaultQueue.Snapshot.Items, item => item.ItemId == enqueue.ItemId);
+        var revisionBeforeConsumption = queues.Snapshot.Revision;
+        var changedCount = 0;
+        var consumed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        queues.Changed += (_, _) =>
+        {
+            changedCount++;
+            if (queues.DefaultQueue.Snapshot.Items.All(item => item.ItemId != enqueue.ItemId))
+            {
+                consumed.TrySetResult();
+            }
+        };
+
+        activeTurnEnd.MarkReady();
+        await consumed.Task.WaitAsync(CancellationToken.None);
+
+        Assert.Equal(revisionBeforeConsumption + 1, queues.Snapshot.Revision);
+        Assert.Equal(1, changedCount);
+        Assert.DoesNotContain(queues.DefaultQueue.Snapshot.Items, item => item.ItemId == enqueue.ItemId);
     }
 
     [Fact]
     public async Task TurnCompleted_TurnPersists_EventRaisedAfterHistoryMutation()
     {
-        // Structural: TurnCompleted's argument type is the completed history item, so the event
-        // fires *after* the history is mutated (invariant established by the signature contract).
-        var evt = typeof(IAgentChat).GetEvent(nameof(IAgentChat.TurnCompleted));
-        Assert.NotNull(evt);
-        Assert.Equal(typeof(EventHandler<AgentChatHistoryItem>), evt!.EventHandlerType);
-        await Task.CompletedTask;
+        var store = new InMemoryAgentPersistenceStore();
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new TextContent("completed")],
+            FinishReason = ChatFinishReason.Stop,
+        });
+        stream.Complete();
+        await using var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = EchoDef,
+            ConfiguredStore = store,
+            ClientOverride = client,
+            ForegroundScheduler = this.foregroundScheduler,
+        });
+        var completed = new TaskCompletionSource<AgentChatHistoryItem>(TaskCreationOptions.RunContinuationsAsynchronously);
+        chat.TurnCompleted += (_, item) =>
+        {
+            Assert.Contains(item, chat.History);
+            completed.TrySetResult(item);
+        };
+
+        chat.EnqueueUserMessage("start");
+        var item = await completed.Task.WaitAsync(CancellationToken.None);
+        var persisted = await store.ReadMessagesAsync(
+            new ReadMessagesRequest { AgentSessionId = chat.AgentSessionId },
+            CancellationToken.None);
+
+        Assert.Contains(item.Contents.OfType<TextContent>(), content => content.Text == "completed");
+        Assert.Contains(persisted, message => message.Contents.OfType<TextContent>().Any(content => content.Text == "completed"));
     }
 
     [Fact]

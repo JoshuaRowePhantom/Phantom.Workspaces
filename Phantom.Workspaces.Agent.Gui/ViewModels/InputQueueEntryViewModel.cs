@@ -97,7 +97,12 @@ public sealed class InputQueueEntryViewModel : ViewModelBase
 
     private void Remove() => this.parent.RemoveQueueItem(this.queueId, this.ItemId);
 
-    private void RemoveAttachment(int contentIndex) => this.parent.RemoveQueueItemContent(this.queueId, this.ItemId, contentIndex);
+    private void RemoveAttachment(int contentIndex) => this.parent.RemoveQueueItemContent(new RemoveQueueItemContentRequest
+    {
+        QueueId = this.queueId,
+        ItemId = this.ItemId,
+        ContentIndex = contentIndex,
+    });
 
     private void BeginEdit()
     {

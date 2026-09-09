@@ -37,11 +37,11 @@ public sealed class InputQueueViewModel : ViewModelBase
     private readonly ICommand createNewQueueCommand;
     private int ignoredQueueChangedEvents;
 
-    public InputQueueViewModel(IAgentChat agentChat)
+    public InputQueueViewModel(InputQueueViewModelOptions options)
         : this(
-            agentChat,
-            agentChat.InputQueues.DefaultQueue.Snapshot.QueueId,
-            agentChat.InputQueues.ImmediateQueue.Snapshot.QueueId)
+            (options ?? throw new ArgumentNullException(nameof(options))).AgentChat,
+            options.DefaultQueueId ?? options.AgentChat.InputQueues.DefaultQueue.Snapshot.QueueId,
+            options.HiddenBuiltInQueueId ?? options.AgentChat.InputQueues.ImmediateQueue.Snapshot.QueueId)
     {
     }
 
@@ -61,21 +61,6 @@ public sealed class InputQueueViewModel : ViewModelBase
         this.createNewQueueCommand = new RelayCommand(this.CreateNewQueue);
         this.inputQueues.Changed += this.OnQueuesChanged;
         this.RefreshQueues();
-    }
-
-    public InputQueueViewModel(
-        AgentChat agentChat,
-        AgentChatQueue defaultInputQueue,
-        AgentInputQueueManager? inputQueueManager = null)
-        : this(
-            agentChat,
-            defaultInputQueue.IsImmediate
-                ? ((IAgentChat)agentChat).InputQueues.ImmediateQueue.Snapshot.QueueId
-                : ((IAgentChat)agentChat).InputQueues.DefaultQueue.Snapshot.QueueId,
-            defaultInputQueue.IsImmediate
-                ? ((IAgentChat)agentChat).InputQueues.DefaultQueue.Snapshot.QueueId
-                : ((IAgentChat)agentChat).InputQueues.ImmediateQueue.Snapshot.QueueId)
-    {
     }
 
     internal string DefaultQueueId { get; private set; }
@@ -253,21 +238,6 @@ public sealed class InputQueueViewModel : ViewModelBase
         }
     }
 
-    public void RemoveQueueItem(string queueId, int index)
-    {
-        if (!this.TryGetQueueSnapshot(queueId, out var snapshot)
-            || index < 0
-            || index >= snapshot.Items.Length)
-        {
-            return;
-        }
-
-        this.RemoveQueueItem(queueId, snapshot.Items[index].ItemId);
-    }
-
-    public void RemoveQueueItem(AgentChatQueue queue, int index)
-        => this.RemoveQueueItem(this.ResolveQueueId(queue), index);
-
     public void RemoveQueueItem(string queueId, string itemId)
     {
         this.Apply((commandId, expectedRevision) => this.inputQueues.Remove(new RemoveAgentInputQueueItemRequest
@@ -279,9 +249,6 @@ public sealed class InputQueueViewModel : ViewModelBase
         }));
         this.RefreshQueue(queueId);
     }
-
-    public void RemoveQueueItem(AgentChatQueue queue, AgentInputItem item)
-        => this.RemoveQueueItem(this.ResolveQueueId(queue), item.ItemId);
 
     public bool RemoveInputQueue(string queueId)
     {
@@ -301,29 +268,11 @@ public sealed class InputQueueViewModel : ViewModelBase
         return true;
     }
 
-    public bool RemoveInputQueue(AgentChatQueue queue)
-        => this.RemoveInputQueue(this.ResolveQueueId(queue));
-
     private void RecordQueueUse(string queueId)
     {
         this.queueUseHistory.Remove(queueId);
         this.queueUseHistory.Insert(0, queueId);
     }
-
-    public void UpdateQueueItem(string queueId, int index, string text)
-    {
-        if (!this.TryGetQueueSnapshot(queueId, out var snapshot)
-            || index < 0
-            || index >= snapshot.Items.Length)
-        {
-            return;
-        }
-
-        this.UpdateQueueItem(queueId, snapshot.Items[index].ItemId, text);
-    }
-
-    public void UpdateQueueItem(AgentChatQueue queue, int index, string text)
-        => this.UpdateQueueItem(this.ResolveQueueId(queue), index, text);
 
     public void UpdateQueueItem(string queueId, string itemId, string text)
     {
@@ -343,9 +292,6 @@ public sealed class InputQueueViewModel : ViewModelBase
         this.RefreshQueue(queueId);
     }
 
-    public void UpdateQueueItem(AgentChatQueue queue, AgentInputItem item, string text)
-        => this.UpdateQueueItem(this.ResolveQueueId(queue), item.ItemId, text);
-
     public void SendQueueItemImmediately(string queueId, string itemId, string text)
     {
         if (!this.TryGetItemSnapshot(queueId, itemId, out var item))
@@ -358,26 +304,12 @@ public sealed class InputQueueViewModel : ViewModelBase
         this.AppendToQueue(this.DefaultQueueId, contents);
     }
 
-    public void SendQueueItemImmediately(AgentChatQueue queue, AgentInputItem item, string text)
-        => this.SendQueueItemImmediately(this.ResolveQueueId(queue), item.ItemId, text);
-
-    public void RemoveQueueItemContent(string queueId, int index, int contentIndex)
+    internal void RemoveQueueItemContent(RemoveQueueItemContentRequest request)
     {
-        if (!this.TryGetQueueSnapshot(queueId, out var snapshot)
-            || index < 0
-            || index >= snapshot.Items.Length)
-        {
-            return;
-        }
-
-        this.RemoveQueueItemContent(queueId, snapshot.Items[index].ItemId, contentIndex);
-    }
-
-    public void RemoveQueueItemContent(AgentChatQueue queue, int index, int contentIndex)
-        => this.RemoveQueueItemContent(this.ResolveQueueId(queue), index, contentIndex);
-
-    public void RemoveQueueItemContent(string queueId, string itemId, int contentIndex)
-    {
+        ArgumentNullException.ThrowIfNull(request);
+        var queueId = request.QueueId;
+        var itemId = request.ItemId;
+        var contentIndex = request.ContentIndex;
         if (!this.TryGetItemSnapshot(queueId, itemId, out var item))
         {
             return;
@@ -412,9 +344,6 @@ public sealed class InputQueueViewModel : ViewModelBase
         this.RefreshQueue(queueId);
     }
 
-    public void RemoveQueueItemContent(AgentChatQueue queue, AgentInputItem item, int contentIndex)
-        => this.RemoveQueueItemContent(this.ResolveQueueId(queue), item.ItemId, contentIndex);
-
     public void AppendToQueue(string queueId, string text)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -424,9 +353,6 @@ public sealed class InputQueueViewModel : ViewModelBase
 
         this.AppendToQueue(queueId, [new TextContent(text)]);
     }
-
-    public void AppendToQueue(AgentChatQueue queue, string text)
-        => this.AppendToQueue(this.ResolveQueueId(queue), text);
 
     public void AppendToQueue(string queueId, IReadOnlyList<AIContent> contents)
     {
@@ -446,9 +372,6 @@ public sealed class InputQueueViewModel : ViewModelBase
         this.RefreshQueue(queueId);
     }
 
-    public void AppendToQueue(AgentChatQueue queue, IReadOnlyList<AIContent> contents)
-        => this.AppendToQueue(this.ResolveQueueId(queue), contents);
-
     public void HideQueueComposer(string queueId)
     {
         InputQueueGroupViewModel? viewModel;
@@ -459,9 +382,6 @@ public sealed class InputQueueViewModel : ViewModelBase
 
         viewModel?.HideComposer();
     }
-
-    public void HideQueueComposer(AgentChatQueue queue)
-        => this.HideQueueComposer(this.ResolveQueueId(queue));
 
     internal bool TryGetQueueSnapshot(string queueId, out AgentInputQueueSnapshot snapshot)
     {
@@ -640,28 +560,6 @@ public sealed class InputQueueViewModel : ViewModelBase
         }
 
         return $"Queue {next}";
-    }
-
-    private string ResolveQueueId(AgentChatQueue queue)
-    {
-        ArgumentNullException.ThrowIfNull(queue);
-        if (queue.IsDefault)
-        {
-            return this.DefaultQueueId;
-        }
-
-        if (queue.IsImmediate)
-        {
-            return this.inputQueues.ImmediateQueue.Snapshot.QueueId;
-        }
-
-        var match = this.InputQueues.FirstOrDefault(snapshot => string.Equals(snapshot.Name, queue.Name, StringComparison.Ordinal));
-        if (!string.IsNullOrEmpty(match.QueueId))
-        {
-            return match.QueueId;
-        }
-
-        throw new InvalidOperationException($"Queue '{queue.Name}' is no longer available.");
     }
 
     private AgentInputQueueSnapshot[] GetVisibleQueues()

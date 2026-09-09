@@ -39,21 +39,21 @@ public sealed class AgentInputQueuesRetryTests
     public async Task Snapshot_LocalQueue_ReturnsDeepImmutableCopy()
     {
         var (_, def, adapter) = NewAdapter();
-        var enqueue = await adapter.EnqueueAsync(Enqueue(def.QueueId, adapter.Snapshot.Revision, "hi"));
-        // Snapshot returned before edit does not observe edit's messages.
-        var snapshotBefore = adapter.Snapshot;
-        await adapter.EditAsync(new EditAgentInputQueueItemRequest
+        var source = new ChatMessage(ChatRole.User, [new TextContent("hi")]);
+        var enqueue = await adapter.EnqueueAsync(new EnqueueAgentInputRequest
         {
-            QueueId = def.QueueId,
-            ItemId = enqueue.ItemId!,
-            Messages = new[] { new ChatMessage(ChatRole.User, "edited") },
+            TargetQueueId = def.QueueId,
+            Messages = [source],
             CommandId = Guid.NewGuid(),
             ExpectedRevision = adapter.Snapshot.Revision,
         });
-        var snapshotAfter = adapter.Snapshot;
+        var snapshotBefore = adapter.Snapshot;
+        source.Contents[0] = new TextContent("mutated");
         var qBefore = snapshotBefore.Queues.Single(q => q.QueueId == def.QueueId);
-        var qAfter = snapshotAfter.Queues.Single(q => q.QueueId == def.QueueId);
-        Assert.NotEqual(qBefore.Revision, qAfter.Revision);
+        var copiedText = Assert.IsType<TextContent>(
+            Assert.Single(Assert.Single(qBefore.Items).Messages).Contents[0]);
+        Assert.Equal("hi", copiedText.Text);
+        Assert.Equal(enqueue.ItemId, Assert.Single(qBefore.Items).ItemId);
     }
 
     [Fact]
@@ -65,8 +65,7 @@ public sealed class AgentInputQueuesRetryTests
             Revision = -1,
             Queues = ImmutableArray<AgentInputQueueSnapshot>.Empty,
         };
-        var snapshot = invalidRevision();
-        Assert.True(snapshot.Revision < 0, "Publisher must treat negative aggregate revision as invalid");
+        Assert.Throws<ArgumentException>(() => AgentInputQueueSnapshotValidator.Validate(invalidRevision()));
         // Duplicate queue ids are structurally detectable.
         var q = new AgentInputQueueSnapshot
         {
@@ -84,7 +83,7 @@ public sealed class AgentInputQueuesRetryTests
             Revision = 1,
             Queues = ImmutableArray.Create(q, q),
         };
-        Assert.NotEqual(dup.Queues.Length, dup.Queues.Select(x => x.QueueId).Distinct().Count());
+        Assert.Throws<ArgumentException>(() => AgentInputQueueSnapshotValidator.Validate(dup));
     }
 
     [Fact]
@@ -101,23 +100,39 @@ public sealed class AgentInputQueuesRetryTests
             Revision = -1,
             Items = ImmutableArray<AgentInputItemSnapshot>.Empty,
         };
-        // A queue must not be both default and immediate; publisher-side validation rejects this.
-        Assert.True(invalidRole.IsDefault && invalidRole.IsImmediate);
-        Assert.True(invalidRole.Revision < 0);
+        Assert.Throws<ArgumentException>(() => AgentInputQueueSnapshotValidator.Validate(new AgentInputQueuesSnapshot
+        {
+            Revision = 0,
+            Queues = [invalidRole],
+        }));
     }
 
     [Fact]
     public void QueueSnapshotPublisher_InvalidItemIdentityOrMessages_RejectsBeforePublication()
     {
-        // Empty item id and empty messages are invalid inputs. Value record accepts them
-        // structurally; publisher-side ValidateConfiguration/EnqueueAsync rejects them.
         var badItem = new AgentInputItemSnapshot
         {
             ItemId = "",
             Messages = ImmutableArray<ChatMessage>.Empty,
         };
-        Assert.True(string.IsNullOrEmpty(badItem.ItemId));
-        Assert.Empty(badItem.Messages);
+        Assert.Throws<ArgumentException>(() => AgentInputQueueSnapshotValidator.Validate(new AgentInputQueuesSnapshot
+        {
+            Revision = 0,
+            Queues =
+            [
+                new AgentInputQueueSnapshot
+                {
+                    QueueId = "q",
+                    Name = "queue",
+                    IsDefault = true,
+                    IsImmediate = false,
+                    Immediacy = AgentInputQueueImmediacy.Queue,
+                    Priority = 0,
+                    Revision = 0,
+                    Items = [badItem],
+                },
+            ],
+        }));
     }
 
     [Fact]
@@ -169,25 +184,45 @@ public sealed class AgentInputQueuesRetryTests
     [Fact]
     public void QueueRequestTypes_RequiredInitProperties_AreMarkedRequired()
     {
-        Type[] requestTypes =
+        var expected = new Dictionary<Type, string[]>
         {
-            typeof(CreateAgentInputQueueRequest),
-            typeof(DeleteAgentInputQueueRequest),
-            typeof(EnqueueAgentInputRequest),
-            typeof(EditAgentInputQueueItemRequest),
-            typeof(RemoveAgentInputQueueItemRequest),
-            typeof(MoveAgentInputQueueItemRequest),
-            typeof(ConfigureAgentInputQueueRequest),
+            [typeof(AgentInputQueuesSnapshot)] = [nameof(AgentInputQueuesSnapshot.Revision), nameof(AgentInputQueuesSnapshot.Queues)],
+            [typeof(AgentInputQueueSnapshot)] =
+            [
+                nameof(AgentInputQueueSnapshot.QueueId), nameof(AgentInputQueueSnapshot.Name),
+                nameof(AgentInputQueueSnapshot.IsDefault), nameof(AgentInputQueueSnapshot.IsImmediate),
+                nameof(AgentInputQueueSnapshot.Immediacy), nameof(AgentInputQueueSnapshot.Priority),
+                nameof(AgentInputQueueSnapshot.Revision), nameof(AgentInputQueueSnapshot.Items),
+            ],
+            [typeof(AgentInputItemSnapshot)] = [nameof(AgentInputItemSnapshot.ItemId), nameof(AgentInputItemSnapshot.Messages)],
+            [typeof(AgentInputQueueConfiguration)] =
+                [nameof(AgentInputQueueConfiguration.Name), nameof(AgentInputQueueConfiguration.Immediacy), nameof(AgentInputQueueConfiguration.Priority)],
+            [typeof(AgentInputQueueCommandResult)] =
+                [nameof(AgentInputQueueCommandResult.CommandId), nameof(AgentInputQueueCommandResult.Status), nameof(AgentInputQueueCommandResult.Revision)],
+            [typeof(CreateAgentInputQueueRequest)] =
+                [nameof(CreateAgentInputQueueRequest.Configuration), nameof(CreateAgentInputQueueRequest.CommandId), nameof(CreateAgentInputQueueRequest.ExpectedRevision)],
+            [typeof(DeleteAgentInputQueueRequest)] =
+                [nameof(DeleteAgentInputQueueRequest.QueueId), nameof(DeleteAgentInputQueueRequest.CommandId), nameof(DeleteAgentInputQueueRequest.ExpectedRevision)],
+            [typeof(EnqueueAgentInputRequest)] =
+                [nameof(EnqueueAgentInputRequest.TargetQueueId), nameof(EnqueueAgentInputRequest.Messages), nameof(EnqueueAgentInputRequest.CommandId), nameof(EnqueueAgentInputRequest.ExpectedRevision)],
+            [typeof(EditAgentInputQueueItemRequest)] =
+                [nameof(EditAgentInputQueueItemRequest.QueueId), nameof(EditAgentInputQueueItemRequest.ItemId), nameof(EditAgentInputQueueItemRequest.Messages), nameof(EditAgentInputQueueItemRequest.CommandId), nameof(EditAgentInputQueueItemRequest.ExpectedRevision)],
+            [typeof(RemoveAgentInputQueueItemRequest)] =
+                [nameof(RemoveAgentInputQueueItemRequest.QueueId), nameof(RemoveAgentInputQueueItemRequest.ItemId), nameof(RemoveAgentInputQueueItemRequest.CommandId), nameof(RemoveAgentInputQueueItemRequest.ExpectedRevision)],
+            [typeof(MoveAgentInputQueueItemRequest)] =
+                [nameof(MoveAgentInputQueueItemRequest.SourceQueueId), nameof(MoveAgentInputQueueItemRequest.ItemId), nameof(MoveAgentInputQueueItemRequest.TargetQueueId), nameof(MoveAgentInputQueueItemRequest.CommandId), nameof(MoveAgentInputQueueItemRequest.ExpectedRevision)],
+            [typeof(ConfigureAgentInputQueueRequest)] =
+                [nameof(ConfigureAgentInputQueueRequest.QueueId), nameof(ConfigureAgentInputQueueRequest.Configuration), nameof(ConfigureAgentInputQueueRequest.CommandId), nameof(ConfigureAgentInputQueueRequest.ExpectedRevision)],
         };
-        foreach (var t in requestTypes)
+        foreach (var (type, expectedRequired) in expected)
         {
-            var required = t.GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            var actualRequired = type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
                 .Where(p => p.GetCustomAttributesData()
                     .Any(a => a.AttributeType.FullName == "System.Runtime.CompilerServices.RequiredMemberAttribute"))
                 .Select(p => p.Name)
-                .ToHashSet();
-            Assert.Contains("CommandId", required);
-            Assert.Contains("ExpectedRevision", required);
+                .Order()
+                .ToArray();
+            Assert.Equal(expectedRequired.Order(), actualRequired);
         }
     }
 
@@ -217,17 +252,39 @@ public sealed class AgentInputQueuesRetryTests
     [Fact]
     public void QueueRequestTypes_NamedInitializers_MapToExactCommandSerialization()
     {
-        var request = new EnqueueAgentInputRequest
+        var id = Guid.Parse("11111111-1111-1111-1111-111111111111");
+        var configuration = new AgentInputQueueConfiguration
         {
-            TargetQueueId = "target",
-            Messages = new[] { new ChatMessage(ChatRole.User, "hi") },
-            CommandId = Guid.Parse("11111111-1111-1111-1111-111111111111"),
-            ExpectedRevision = 5,
+            Name = "queue",
+            Immediacy = AgentInputQueueImmediacy.Queue,
+            Priority = 3,
         };
-        var json = JsonSerializer.Serialize(request, AIJsonUtilities.DefaultOptions);
-        Assert.Contains("target", json);
-        Assert.Contains("11111111-1111-1111-1111-111111111111", json);
-        Assert.Contains("5", json);
+        object[] requests =
+        [
+            new CreateAgentInputQueueRequest { Configuration = configuration, CommandId = id, ExpectedRevision = 1 },
+            new DeleteAgentInputQueueRequest { QueueId = "q", CommandId = id, ExpectedRevision = 2 },
+            new EnqueueAgentInputRequest { TargetQueueId = "q", Messages = [new ChatMessage(ChatRole.User, "hi")], CommandId = id, ExpectedRevision = 3 },
+            new EditAgentInputQueueItemRequest { QueueId = "q", ItemId = "i", Messages = [new ChatMessage(ChatRole.User, "edited")], CommandId = id, ExpectedRevision = 4 },
+            new RemoveAgentInputQueueItemRequest { QueueId = "q", ItemId = "i", CommandId = id, ExpectedRevision = 5 },
+            new MoveAgentInputQueueItemRequest { SourceQueueId = "q", ItemId = "i", TargetQueueId = "q2", BeforeItemId = "before", CommandId = id, ExpectedRevision = 6 },
+            new ConfigureAgentInputQueueRequest { QueueId = "q", Configuration = configuration, CommandId = id, ExpectedRevision = 7 },
+        ];
+
+        foreach (var request in requests)
+        {
+            var json = JsonSerializer.Serialize(request, request.GetType(), AIJsonUtilities.DefaultOptions);
+            var roundTrip = JsonSerializer.Deserialize(json, request.GetType(), AIJsonUtilities.DefaultOptions);
+            Assert.NotNull(roundTrip);
+            var roundTripJson = JsonSerializer.Serialize(roundTrip, request.GetType(), AIJsonUtilities.DefaultOptions);
+            Assert.True(JsonElement.DeepEquals(
+                JsonDocument.Parse(json).RootElement,
+                JsonDocument.Parse(roundTripJson).RootElement));
+        }
+
+        var enqueueJson = JsonSerializer.SerializeToElement(requests[2], requests[2].GetType(), AIJsonUtilities.DefaultOptions);
+        Assert.Equal("q", enqueueJson.GetProperty("targetQueueId").GetString());
+        var message = Assert.Single(enqueueJson.GetProperty("messages").EnumerateArray());
+        Assert.Equal("user", message.GetProperty("role").GetString());
     }
 
     [Fact]
@@ -598,33 +655,55 @@ public sealed class AgentInputQueuesRetryTests
             AgentSessionId = "s", AgentId = "a", Name = "n", DisplayName = "d", Description = "e",
             AcceptsUserInput = true, AgentDefinition = def,
         };
-        Assert.NotNull(info.AgentDefinition);
-        Assert.Same(def, info.AgentDefinition);
+        Assert.True(AgentInformationOpenPublisher.TryCreatePayload(true, () => info, out var payload));
+        var received = AgentInformationOpenPublisher.ReadPayload(payload!);
+
+        Assert.Equal(info.AgentSessionId, received.AgentSessionId);
+        Assert.Equal(info.AgentId, received.AgentId);
+        Assert.Equal(info.Name, received.Name);
+        Assert.Equal(info.DisplayName, received.DisplayName);
+        Assert.Equal(info.Description, received.Description);
+        Assert.Equal(info.AcceptsUserInput, received.AcceptsUserInput);
+        Assert.Equal(info.AgentDefinition.ToJson(), received.AgentDefinition.ToJson());
     }
 
     [Fact]
     public void SessionSnapshot_TwoAuthorizedViewers_ReceiveEquivalentFullDefinition()
     {
         var def = TestDefinitions.Make();
-        var a = new AgentInformation
+        var information = new AgentInformation
         {
             AgentSessionId = "s", AgentId = "a", Name = "n", DisplayName = "d", Description = "e",
             AcceptsUserInput = true, AgentDefinition = def,
         };
-        var b = a;
-        Assert.Equal(a, b);
-        Assert.Same(a.AgentDefinition, b.AgentDefinition);
+        Assert.True(AgentInformationOpenPublisher.TryCreatePayload(true, () => information, out var firstPayload));
+        Assert.True(AgentInformationOpenPublisher.TryCreatePayload(true, () => information, out var secondPayload));
+        var first = AgentInformationOpenPublisher.ReadPayload(firstPayload!);
+        var second = AgentInformationOpenPublisher.ReadPayload(secondPayload!);
+
+        Assert.Equal(first.AgentSessionId, second.AgentSessionId);
+        Assert.Equal(first.DisplayName, second.DisplayName);
+        Assert.NotSame(first.AgentDefinition, second.AgentDefinition);
+        Assert.Equal(def.ToJson(), first.AgentDefinition.ToJson());
+        Assert.Equal(def.ToJson(), second.AgentDefinition.ToJson());
     }
 
     [Fact]
     public void OpenAsync_UnauthorizedPeer_SerializesNoSessionMetadata()
     {
-        // Publisher-side validation refuses to publish AgentInformation without a definition.
-        Assert.False(AgentInformationPublisher.TryValidate(new AgentInformation
-        {
-            AgentSessionId = "s", AgentId = "a", Name = "n", DisplayName = "d", Description = "e",
-            AcceptsUserInput = false, AgentDefinition = null!,
-        }, out _));
+        var informationAccessed = false;
+        var authorized = AgentInformationOpenPublisher.TryCreatePayload(
+            false,
+            () =>
+            {
+                informationAccessed = true;
+                throw new InvalidOperationException("Unauthorized open must not perform runtime lookup.");
+            },
+            out var payload);
+
+        Assert.False(authorized);
+        Assert.False(informationAccessed);
+        Assert.Null(payload);
     }
 
     [Fact]

@@ -765,11 +765,11 @@ public sealed class AgentViewModelSubAgentBrowserTests
                     var constructor = leaseType.GetConstructor(
                         System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic,
                         null,
-                        [typeof(AgentSessionId), typeof(AgentChat), typeof(Func<ValueTask>)],
+                        [typeof(AgentSessionId), typeof(AgentChat), typeof(Func<ValueTask>), typeof(Func<ValueTask>)],
                         null);
                     var sessionIdStruct = new AgentSessionId(_agentChat.AgentSessionId);
                     var lease = (RunningAgentChatLease)constructor!.Invoke(
-                        [sessionIdStruct, _agentChat, new Func<ValueTask>(() => ValueTask.CompletedTask)]);
+                        [sessionIdStruct, _agentChat, new Func<ValueTask>(() => ValueTask.CompletedTask), null]);
                     tcs.SetResult(lease);
                 },
                 CancellationToken.None,

@@ -15,9 +15,9 @@ public sealed class AgentInputQueuesRetry8BehavioralTests
 {
     private sealed class StubAgentChat : IAgentChat
     {
-        private readonly LocalAgentInputQueuesAdapter adapter;
+        private readonly IAgentInputQueues adapter;
 
-        public StubAgentChat(LocalAgentInputQueuesAdapter adapter)
+        public StubAgentChat(IAgentInputQueues adapter)
         {
             this.adapter = adapter;
         }
@@ -70,12 +70,52 @@ public sealed class AgentInputQueuesRetry8BehavioralTests
 
         public ValueTask DisposeAsync()
         {
-            this.adapter.Dispose();
+            (this.adapter as IDisposable)?.Dispose();
             this.Disposed = true;
             return ValueTask.CompletedTask;
         }
 
         public bool Disposed { get; private set; }
+    }
+
+    private sealed class GatedAgentInputQueues(IAgentInputQueues inner) : IAgentInputQueues
+    {
+        private readonly TaskCompletionSource requested = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public AgentInputQueuesSnapshot Snapshot => inner.Snapshot;
+        public IReadOnlyList<IAgentInputQueue> Queues => inner.Queues;
+        public IAgentInputQueue DefaultQueue => inner.DefaultQueue;
+        public IAgentInputQueue ImmediateQueue => inner.ImmediateQueue;
+        public event EventHandler? Changed
+        {
+            add => inner.Changed += value;
+            remove => inner.Changed -= value;
+        }
+
+        public Task WaitUntilRequestedAsync(CancellationToken ct) => this.requested.Task.WaitAsync(ct);
+        public void Complete() => this.release.TrySetResult();
+
+        public async Task<AgentInputQueueCommandResult> EnqueueAsync(EnqueueAgentInputRequest request, CancellationToken ct = default)
+        {
+            this.requested.TrySetResult();
+            await this.release.Task.WaitAsync(ct);
+            return await inner.EnqueueAsync(request, ct);
+        }
+
+        public Task<AgentInputQueueCommandResult> CreateQueueAsync(CreateAgentInputQueueRequest request, CancellationToken ct = default) => inner.CreateQueueAsync(request, ct);
+        public Task<AgentInputQueueCommandResult> DeleteQueueAsync(DeleteAgentInputQueueRequest request, CancellationToken ct = default) => inner.DeleteQueueAsync(request, ct);
+        public Task<AgentInputQueueCommandResult> EditAsync(EditAgentInputQueueItemRequest request, CancellationToken ct = default) => inner.EditAsync(request, ct);
+        public Task<AgentInputQueueCommandResult> RemoveAsync(RemoveAgentInputQueueItemRequest request, CancellationToken ct = default) => inner.RemoveAsync(request, ct);
+        public Task<AgentInputQueueCommandResult> MoveAsync(MoveAgentInputQueueItemRequest request, CancellationToken ct = default) => inner.MoveAsync(request, ct);
+        public Task<AgentInputQueueCommandResult> ConfigureAsync(ConfigureAgentInputQueueRequest request, CancellationToken ct = default) => inner.ConfigureAsync(request, ct);
+        public AgentInputQueueCommandResult CreateQueue(CreateAgentInputQueueRequest request) => inner.CreateQueue(request);
+        public AgentInputQueueCommandResult DeleteQueue(DeleteAgentInputQueueRequest request) => inner.DeleteQueue(request);
+        public AgentInputQueueCommandResult Enqueue(EnqueueAgentInputRequest request) => inner.Enqueue(request);
+        public AgentInputQueueCommandResult Edit(EditAgentInputQueueItemRequest request) => inner.Edit(request);
+        public AgentInputQueueCommandResult Remove(RemoveAgentInputQueueItemRequest request) => inner.Remove(request);
+        public AgentInputQueueCommandResult Move(MoveAgentInputQueueItemRequest request) => inner.Move(request);
+        public AgentInputQueueCommandResult Configure(ConfigureAgentInputQueueRequest request) => inner.Configure(request);
     }
 
     private static (AgentInputQueueManager Manager, AgentInputQueue Default, LocalAgentInputQueuesAdapter Adapter, StubAgentChat Chat, RemoteAgentChatProxy Proxy) NewPair()
@@ -502,6 +542,46 @@ public sealed class AgentInputQueuesRetry8BehavioralTests
         var proxyTargetQ = proxy.InputQueues.Snapshot.Queues.Single(q => q.QueueId == targetCreate.QueueId);
         Assert.DoesNotContain(proxyDefQ.Items, i => i.ItemId == enqueue.ItemId);
         Assert.Contains(proxyTargetQ.Items, i => i.ItemId == enqueue.ItemId);
+    }
+
+    [Fact]
+    public async Task RemoteProxy_PendingCommandWaitsForAuthoritativeDeltaBeforeCompleting()
+    {
+        var manager = new AgentInputQueueManager();
+        var defaultQueue = new AgentInputQueue(new AgentInputQueue.Parameters
+        {
+            Priority = int.MaxValue - 1,
+            Immediacy = AgentInputQueueImmediacy.Queue,
+        });
+        manager.RegisterInputQueue(defaultQueue);
+        using var owner = new LocalAgentInputQueuesAdapter(manager, defaultQueue);
+        var gated = new GatedAgentInputQueues(owner);
+        var source = new StubAgentChat(gated);
+        await using var proxy = new RemoteAgentChatProxy(source);
+        var revisionBefore = proxy.InputQueues.Snapshot.Revision;
+        var changedCount = 0;
+        proxy.InputQueues.Changed += (_, _) => changedCount++;
+
+        var command = proxy.InputQueues.EnqueueAsync(new EnqueueAgentInputRequest
+        {
+            TargetQueueId = proxy.InputQueues.DefaultQueue.Snapshot.QueueId,
+            Messages = [new ChatMessage(ChatRole.User, "pending")],
+            CommandId = Guid.NewGuid(),
+            ExpectedRevision = revisionBefore,
+        });
+        await gated.WaitUntilRequestedAsync(CancellationToken.None);
+
+        Assert.False(command.IsCompleted);
+        Assert.Equal(revisionBefore, proxy.InputQueues.Snapshot.Revision);
+        Assert.Empty(proxy.InputQueues.DefaultQueue.Snapshot.Items);
+
+        gated.Complete();
+        var result = await command;
+
+        Assert.Equal(AgentInputQueueCommandStatus.Applied, result.Status);
+        Assert.Equal(revisionBefore + 1, proxy.InputQueues.Snapshot.Revision);
+        Assert.Contains(proxy.InputQueues.DefaultQueue.Snapshot.Items, item => item.ItemId == result.ItemId);
+        Assert.Equal(1, changedCount);
     }
 
     // Gap #6: Immutable snapshot contract — the ImmutableArray fields are truly immutable.

@@ -355,10 +355,10 @@ public sealed class AgentViewModelTests
             var leaseCtor = typeof(RunningAgentChatLease).GetConstructor(
                 System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic,
                 null,
-                [typeof(AgentSessionId), typeof(AgentChat), typeof(Func<ValueTask>)],
+                [typeof(AgentSessionId), typeof(AgentChat), typeof(Func<ValueTask>), typeof(Func<ValueTask>)],
                 null)!;
             var lease = (RunningAgentChatLease)leaseCtor.Invoke(
-                [new AgentSessionId(this.agentChat.AgentSessionId), this.agentChat, new Func<ValueTask>(() => ValueTask.CompletedTask)]);
+                [new AgentSessionId(this.agentChat.AgentSessionId), this.agentChat, new Func<ValueTask>(() => ValueTask.CompletedTask), null]);
             this.leaseTcs.SetResult(lease);
             this.ContinuationQueued.TrySetResult();
         }
@@ -379,10 +379,10 @@ public sealed class AgentViewModelTests
             var leaseCtor = typeof(RunningAgentChatLease).GetConstructor(
                 System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic,
                 null,
-                [typeof(AgentSessionId), typeof(AgentChat), typeof(Func<ValueTask>)],
+                [typeof(AgentSessionId), typeof(AgentChat), typeof(Func<ValueTask>), typeof(Func<ValueTask>)],
                 null)!;
             var lease = (RunningAgentChatLease)leaseCtor.Invoke(
-                [new AgentSessionId(agentChat.AgentSessionId), agentChat, new Func<ValueTask>(() => ValueTask.CompletedTask)]);
+                [new AgentSessionId(agentChat.AgentSessionId), agentChat, new Func<ValueTask>(() => ValueTask.CompletedTask), null]);
 
             if (backgroundLease)
             {

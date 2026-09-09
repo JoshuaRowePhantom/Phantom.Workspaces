@@ -2455,6 +2455,12 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
             // token counts, NaN/negative cost) never reach IAgentChat.Usage or UsageChanged.
             if (!UsagePublisher.TryValidate(candidate, out _))
             {
+                this.TotalInputTokenCount = previousInputTokenCount;
+                this.TotalOutputTokenCount = previousOutputTokenCount;
+                this.TotalCacheReadTokenCount = previousCacheReadTokenCount;
+                this.TotalCacheWriteTokenCount = previousCacheWriteTokenCount;
+                this.TotalReasoningTokenCount = previousReasoningTokenCount;
+                this.TotalSessionCostMicroUsd = previousCostMicroUsd;
                 return;
             }
             this.usage = candidate;
@@ -2493,12 +2499,16 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
             CurrentModelId = string.IsNullOrWhiteSpace(this.CurrentModelId) ? null : this.CurrentModelId,
             AgentDefinition = this.agentDefinition,
         };
-        // Publisher validation gates publication. All required strings are guaranteed non-blank
-        // above; only null-definition would fail here, which is already guarded at method entry.
+        this.TryPublishInformation(candidate);
+    }
+
+    private void TryPublishInformation(AgentInformation candidate)
+    {
         if (!AgentInformationPublisher.TryValidate(candidate, out _))
         {
             return;
         }
+
         this.information = candidate;
         this.InformationChanged?.Invoke(this, EventArgs.Empty);
     }

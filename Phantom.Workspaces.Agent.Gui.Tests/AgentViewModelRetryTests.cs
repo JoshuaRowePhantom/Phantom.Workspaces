@@ -4,6 +4,7 @@ using AgentSchema;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.SlashCommands;
 using Phantom.Workspaces.Testing.Gui;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
@@ -147,15 +148,25 @@ public sealed class AgentViewModelRetryTests
     {
         using var loggerFactory = new ObservableLoggerFactory();
         await using var chat = CreateChat(MakeDefinition());
-        Assert.Throws<ArgumentNullException>(() => new AgentViewModel(
-            new AgentViewModelOptions
-            {
-                AgentChat = chat,
-                DisplayName = "d",
-                Description = "e",
-                LoggerFactory = loggerFactory,
-                ForegroundScheduler = null!,
-            }));
+        var original = SynchronizationContext.Current;
+        var current = new SynchronizationContext();
+        SynchronizationContext.SetSynchronizationContext(current);
+        try
+        {
+            Assert.Throws<InvalidOperationException>(() => new AgentViewModel(
+                new AgentViewModelOptions
+                {
+                    AgentChat = chat,
+                    DisplayName = "d",
+                    Description = "e",
+                    LoggerFactory = loggerFactory,
+                    ForegroundScheduler = new SynchronizationContextTaskScheduler(new SynchronizationContext()),
+                }));
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(original);
+        }
     }
 
     [Fact]
@@ -221,37 +232,79 @@ public sealed class AgentViewModelRetryTests
     [Fact]
     public async Task ModalEvent_DescendantModal_UpdatesRootAggregateOnly()
     {
-        // Contract check: descendant modals published via the same collection surface do not create a
-        // second aggregate; the sole AgentChatModal collection is Modals on the running chat.
-        await using var chat = CreateChat(MakeDefinition());
-        Assert.NotNull(chat.Modals);
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var rootChat = CreateChat(MakeDefinition());
+        await using var childChat = CreateChat(MakeDefinition());
+        await using var root = this.CreateViewModel(rootChat, loggerFactory);
+        var children = (System.Collections.ObjectModel.ObservableCollection<IRunningSubAgent>)
+            typeof(AgentChat).GetField("subAgentItems", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(rootChat)!;
+        children.Add(childChat);
+        var modal = new AgentChatModal
+        {
+            Id = "child-modal",
+            OwnerAgentId = childChat.AgentId,
+            Title = "Child",
+            Body = "Needs input",
+            Content = new FreeformModalContent { IsRequired = true },
+        };
+
+        childChat.PublishModal(modal);
+
+        var projected = Assert.Single(root.ModalProjection);
+        Assert.Equal(modal.Id, projected.Id);
+        Assert.Empty(rootChat.Modals);
     }
 
     [Fact]
     public async Task DisposeAsync_RemoteChat_UnsubscribesBeforeDetaching()
     {
-        await using var chat = CreateChat(MakeDefinition());
-        await chat.DisposeAsync();
-        await chat.DisposeAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var local = CreateChat(MakeDefinition());
+        var remote = new RemoteAgentChatProxy(local);
+        var vm = this.CreateViewModel(remote, loggerFactory);
+        var notifications = 0;
+        vm.PropertyChanged += (_, _) => notifications++;
+
+        await vm.DisposeAsync();
+        var before = notifications;
+        typeof(AgentChat).GetProperty(nameof(AgentChat.DisplayName))!.SetValue(local, "after-detach");
+        typeof(AgentChat).GetMethod("PublishInformation", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(local, null);
+
+        Assert.Equal(before, notifications);
     }
 
     [Fact]
     public async Task InterruptCommand_RemoteChat_InvokesCommonInterrupt()
     {
-        await using var chat = CreateChat(MakeDefinition());
-        chat.Interrupt();
-        // Interrupt is idempotent.
-        chat.Interrupt();
-        await Task.CompletedTask;
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var local = CreateChat(MakeDefinition());
+        await using var remote = new RemoteAgentChatProxy(local);
+        await using var vm = this.CreateViewModel(remote, loggerFactory);
+
+        vm.InterruptCommand.Execute(null);
+        vm.InterruptCommand.Execute(null);
+
+        local.EnqueueSystemNote("usable-after-remote-interrupt");
+        Assert.Contains(local.History,
+            item => item.Contents.OfType<Microsoft.Extensions.AI.TextContent>()
+                .Any(content => content.Text == "usable-after-remote-interrupt"));
     }
 
     [Fact]
     public async Task ConfigureSlashCommands_RemoteChat_RegistersOnlyCommonHandlers()
     {
-        await using var chat = CreateChat(MakeDefinition());
-        // SlashCommands is exposed via the common surface.
-        Assert.NotNull(chat.SlashCommands);
-        await Task.CompletedTask;
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var local = CreateChat(MakeDefinition());
+        await using var remote = new RemoteAgentChatProxy(local);
+        await using var vm = this.CreateViewModel(remote, loggerFactory);
+
+        vm.ConfigureSlashCommands(() => new SlashCommandContext { AgentChat = remote });
+
+        Assert.Equal(
+            ["auto-resume", "clone", "help", "input-help", "reasoning", "rename", "restart", "title"],
+            remote.SlashCommands.Commands.Select(command => command.Name).Order().ToArray());
     }
 
     [Fact]
@@ -284,29 +337,19 @@ public sealed class AgentViewModelRetryTests
     [Fact]
     public async Task AgentChatSetter_LocalOrRemote_PreservesCommonChat()
     {
-        using var loggerFactory = new ObservableLoggerFactory();
         await using var localChat = CreateChat(MakeDefinition());
         await using var remoteChat = new RemoteAgentChatProxy(localChat);
-        await using var localVm = this.CreateViewModel(localChat, loggerFactory);
-        await using var remoteVm = this.CreateViewModel(remoteChat, loggerFactory);
+        var localContext = new SlashCommandContext { AgentChat = localChat };
+        var remoteContext = new SlashCommandContext { AgentChat = remoteChat };
 
-        Assert.Same(localChat, localVm.AgentChat);
-        Assert.Same(remoteChat, remoteVm.AgentChat);
+        Assert.Same(localChat, localContext.AgentChat);
+        Assert.Same(remoteChat, remoteContext.AgentChat);
     }
 
     [Fact]
     public async Task AgentChatSetter_Null_RejectsInitialization()
     {
-        using var loggerFactory = new ObservableLoggerFactory();
-        Assert.Throws<ArgumentNullException>(() => new AgentViewModel(
-            new AgentViewModelOptions
-            {
-                AgentChat = null!,
-                DisplayName = "d",
-                Description = "e",
-                LoggerFactory = loggerFactory,
-                ForegroundScheduler = TaskScheduler.Default,
-            }));
+        Assert.Throws<ArgumentNullException>(() => new SlashCommandContext { AgentChat = null! });
         await Task.CompletedTask;
     }
 }

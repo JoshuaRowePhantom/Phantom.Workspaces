@@ -81,7 +81,15 @@ public sealed class OpenAgentSessionShortcutHandlerTests
         };
 
         AgentViewModel agent = handler.ComposeSessionAgentViewModel(
-            viewModel, loggerFactory, chat, sessionEntity, tab, TaskScheduler.Default);
+            new ComposeSessionAgentViewModelOptions
+            {
+                MainWindowViewModel = viewModel,
+                LoggerFactory = loggerFactory,
+                AgentChat = chat,
+                AgentSessionEntity = sessionEntity,
+                Tab = tab,
+                ForegroundScheduler = TaskScheduler.Default,
+            });
 
         try
         {

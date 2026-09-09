@@ -276,7 +276,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             request.AgentChat);
     }
 
-    public async Task<AgentSessionWorkspaceTabViewModel> CreateAgentSessionTabAsync(
+    private async Task<AgentSessionWorkspaceTabViewModel> CreateAgentSessionTabAsync(
         MainWindowViewModel mainWindowViewModel,
         SubscribedEntityViewModel agentSessionEntity,
         IAgentChat agentChat)
@@ -500,24 +500,6 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
 
         return agent;
     }
-
-    public AgentViewModel ComposeSessionAgentViewModel(
-        MainWindowViewModel mainWindowViewModel,
-        ObservableLoggerFactory loggerFactory,
-        IAgentChat agentChat,
-        SubscribedEntityViewModel agentSessionEntity,
-        AgentSessionWorkspaceTabViewModel tab,
-        TaskScheduler foregroundScheduler)
-        => this.ComposeSessionAgentViewModel(
-            new ComposeSessionAgentViewModelOptions
-            {
-                MainWindowViewModel = mainWindowViewModel,
-                LoggerFactory = loggerFactory,
-                AgentChat = agentChat,
-                AgentSessionEntity = agentSessionEntity,
-                Tab = tab,
-                ForegroundScheduler = foregroundScheduler,
-            });
 
     private static string ResolveTrustedExecutorIdentifier(
         MainWindowViewModel mainWindowViewModel,

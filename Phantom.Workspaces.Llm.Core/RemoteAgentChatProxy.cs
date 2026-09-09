@@ -168,7 +168,13 @@ public sealed class RemoteAgentChatProxy : IAgentChat
         }
 
         public void Dispose()
-            => this.source.Changed -= this.OnChanged;
+        {
+            this.source.Changed -= this.OnChanged;
+            foreach (var queue in this.queuesById.Values)
+            {
+                queue.Dispose();
+            }
+        }
 
         private async Task<AgentInputQueueCommandResult> ExecuteAsync(Func<Task<AgentInputQueueCommandResult>> operation)
         {
@@ -205,18 +211,20 @@ public sealed class RemoteAgentChatProxy : IAgentChat
 
             foreach (var stale in this.queuesById.Keys.Where(id => !queueIds.Contains(id)).ToArray())
             {
-                this.queuesById.Remove(stale);
+                    this.queuesById[stale].Dispose();
+                    this.queuesById.Remove(stale);
             }
         }
 
         private static AgentInputQueuesSnapshot CloneSnapshot(AgentInputQueuesSnapshot snapshot)
         {
+            AgentInputQueueSnapshotValidator.Validate(snapshot);
             var json = JsonSerializer.Serialize(snapshot, AIJsonUtilities.DefaultOptions);
             return JsonSerializer.Deserialize<AgentInputQueuesSnapshot>(json, AIJsonUtilities.DefaultOptions);
         }
     }
 
-    private sealed class RemoteAgentInputQueueProxy : IAgentInputQueue
+    private sealed class RemoteAgentInputQueueProxy : IAgentInputQueue, IDisposable
     {
         public RemoteAgentInputQueueProxy(IAgentInputQueue source)
         {
@@ -239,6 +247,9 @@ public sealed class RemoteAgentChatProxy : IAgentChat
             this.Update(this.source.Snapshot);
             this.Changed?.Invoke(this, EventArgs.Empty);
         }
+
+        public void Dispose()
+            => this.source.Changed -= this.OnChanged;
 
         private static AgentInputQueueSnapshot CloneSnapshot(AgentInputQueueSnapshot snapshot)
         {

@@ -65,8 +65,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     // continuation in AddSubAgentSlotLazy performs its UI-affine mutations on the correct
     // thread. Tests that do not exercise UI-thread affinity may pass TaskScheduler.Default.
     /// <summary>
-    /// #1485: named-initialiser construction preferred by the common chat surface. Delegates to
-    /// the existing positional constructor to preserve exact behaviour and every existing test.
+    /// #1485: named-initialiser construction for the common chat surface.
     /// </summary>
     public AgentViewModel(AgentViewModelOptions options)
         : this(
@@ -79,7 +78,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     {
     }
 
-    public AgentViewModel(IAgentChat agentChat, string displayName, string description, ObservableLoggerFactory loggerFactory, TaskScheduler foregroundScheduler, AgentViewModel? parentAgentViewModel = null)
+    internal AgentViewModel(IAgentChat agentChat, string displayName, string description, ObservableLoggerFactory loggerFactory, TaskScheduler foregroundScheduler, AgentViewModel? parentAgentViewModel = null)
     {
         ArgumentNullException.ThrowIfNull(agentChat);
         ArgumentNullException.ThrowIfNull(loggerFactory);
@@ -87,6 +86,12 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.loggerFactory = loggerFactory;
         this.logger = loggerFactory.CreateLogger<AgentViewModel>();
         this.foregroundScheduler = foregroundScheduler ?? throw new ArgumentNullException(nameof(foregroundScheduler));
+        if (foregroundScheduler is SynchronizationContextTaskScheduler synchronizationScheduler
+            && SynchronizationContext.Current is { } currentContext
+            && currentContext != synchronizationScheduler.SynchronizationContext)
+        {
+            throw new InvalidOperationException("AgentViewModel must be constructed on its foreground scheduler.");
+        }
         this.agentSessionId = agentChat.Information.AgentSessionId;
         this.ParentAgentViewModel = parentAgentViewModel;
         this.ParentAgentDisplay = parentAgentViewModel?.agentChat is AgentChat parentLocalChat
@@ -105,7 +110,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.ToggleReasoningVisibilityCommand = new RelayCommand(this.ToggleReasoningVisibility);
         this.RequestOpenLogWindowCommand = new RelayCommand(this.RequestOpenLogWindow);
         this.InputQueue = agentChat.Information.AcceptsUserInput
-            ? new InputQueueViewModel(agentChat)
+            ? new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = agentChat })
             : null;
         this.ToggleHoldAllQueuesCommand = new RelayCommand(() => this.InputQueue?.ToggleHoldAllQueuesCommand.Execute(null));
         this.HoldAllQueuesCommand = new RelayCommand(() => this.InputQueue?.HoldAllQueuesCommand.Execute(null));
@@ -816,7 +821,15 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     {
         var display = new RunningSubAgentDisplay(subAgentChat);
         this.subAgentDisplayItems.Add(display);
-        var subAgentViewModel = new AgentViewModel(subAgentChat, subAgent.DisplayName, subAgent.Description, this.loggerFactory, this.foregroundScheduler, this);
+        var subAgentViewModel = new AgentViewModel(new AgentViewModelOptions
+        {
+            AgentChat = subAgentChat,
+            DisplayName = subAgent.DisplayName,
+            Description = subAgent.Description,
+            LoggerFactory = this.loggerFactory,
+            ForegroundScheduler = this.foregroundScheduler,
+            ParentAgentViewModel = this,
+        });
         // Delegate the sub-agent's navigation handler to this parent so ancestor navigation works
         // (issue #1046): the parent can resolve its own children, and if the target is above this
         // agent it falls through to ancestor resolution logic in NavigateToSubAgent.

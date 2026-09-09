@@ -9,6 +9,7 @@ using Phantom.Workspaces.Llm.Core.Manifest;
 using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Transport;
+using Moq;
 using IRunningAgentChatFactory = Phantom.Workspaces.Llm.IRunningAgentChatFactory;
 
 namespace Phantom.Workspaces.Tests;
@@ -246,6 +247,123 @@ public sealed class RunningAgentChatTableTests
         Assert.Single(table.RunningSessions);
 
         await lease2.DisposeAsync();
+        Assert.Empty(table.RunningSessions);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_ViewerMetadataAndContinueInBackground_AreAuthoritative()
+    {
+        var factory = new FakeRunningAgentChatFactory();
+        var table = new RunningAgentChatTable(factory);
+        var sessionId = new AgentSessionId("session-authoritative-metadata");
+        var changes = new List<string?>();
+
+        var lease1 = await table.AcquireAsync(Request(sessionId, entityName: "Entity"), TestContext.Current.CancellationToken);
+        var entry = Assert.Single(table.RunningSessions);
+        entry.PropertyChanged += (_, args) => changes.Add(args.PropertyName);
+        var lease2 = await table.AcquireAsync(Request(sessionId, entityName: "Entity"), TestContext.Current.CancellationToken);
+
+        Assert.False(entry.IsRemote);
+        Assert.Equal(2, entry.ViewerCount);
+        Assert.Contains(nameof(RunningAgentChatWithEntityInfo.ViewerCount), changes);
+
+        await lease1.DisposeAsync();
+        Assert.Equal(1, entry.ViewerCount);
+        await table.SetContinueInBackgroundAsync(sessionId, true, TestContext.Current.CancellationToken);
+        Assert.True(entry.ContinueInBackground);
+        await lease2.DisposeAsync();
+        Assert.Single(table.RunningSessions);
+        Assert.Equal(0, entry.ViewerCount);
+
+        await table.SetContinueInBackgroundAsync(sessionId, false, TestContext.Current.CancellationToken);
+        Assert.Empty(table.RunningSessions);
+        Assert.Contains(nameof(RunningAgentChatWithEntityInfo.ContinueInBackground), changes);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_ValidRemoteRequest_PropagatesModeTransportAndCursor()
+    {
+        var factory = new FakeRunningAgentChatFactory();
+        var table = new RunningAgentChatTable(factory, new FakeRuntimeContextFactory());
+        var transport = Mock.Of<ITransport>();
+        var cursor = new ReplayCursor { Epoch = "epoch-4", GlobalSequence = 9 };
+        var hostContext = new CurrentSessionContext
+        {
+            AgentSessionId = "remote-metadata",
+            Owner = "host-A",
+            OwnershipGeneration = 2,
+            RuntimeEpoch = 4,
+        };
+        var entity = JsonDocument.Parse(
+            """{"host-profile-entity-id":"11111111-1111-1111-1111-111111111111","ownership-generation":2}""").RootElement.Clone();
+        var request = new AcquireAgentChatRequest
+        {
+            AgentSessionId = new AgentSessionId("remote-metadata"),
+            EntityName = "Entity",
+            AgentSessionEntity = entity,
+            AcquisitionMode = AgentChatAcquisitionMode.AttachRemote,
+            OwningProfileTransport = transport,
+            ReplayCursor = cursor,
+            AgentServices = new AgentServices { CurrentSessionContext = hostContext },
+        };
+
+        await using var lease = await table.AcquireAsync(request, TestContext.Current.CancellationToken);
+        var entry = Assert.Single(table.RunningSessions);
+
+        Assert.True(entry.IsRemote);
+        Assert.Same(transport, request.OwningProfileTransport);
+        Assert.Same(cursor, request.ReplayCursor);
+        Assert.Equal(AgentChatAcquisitionMode.AttachRemote, request.AcquisitionMode);
+        Assert.Same(hostContext, factory.LastServices!.CurrentSessionContext);
+        Assert.Equal("host-A", ((CurrentSessionContext)factory.LastServices.CurrentSessionContext!).Owner);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_InvalidRemoteCombination_RejectsBeforeFactoryMutation()
+    {
+        var factory = new FakeRunningAgentChatFactory();
+        var table = new RunningAgentChatTable(factory);
+        var request = new AcquireAgentChatRequest
+        {
+            AgentSessionId = new AgentSessionId("invalid-remote"),
+            AcquisitionMode = AgentChatAcquisitionMode.AttachRemote,
+        };
+
+        await Assert.ThrowsAsync<ArgumentException>(() => table.AcquireAsync(request, TestContext.Current.CancellationToken));
+        Assert.Empty(factory.RunningSessions);
+        Assert.Empty(table.RunningSessions);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_LocalAndRemotePairs_FinalReleaseEndsEachViewerLifetime()
+    {
+        var factory = new FakeRunningAgentChatFactory();
+        var table = new RunningAgentChatTable(factory, new FakeRuntimeContextFactory());
+        var localRequest = Request(new AgentSessionId("local-pair"), entityName: "Local");
+        var remoteRequest = new AcquireAgentChatRequest
+        {
+            AgentSessionId = new AgentSessionId("remote-pair"),
+            EntityName = "Remote",
+            AgentSessionEntity = JsonDocument.Parse(
+                """{"host-profile-entity-id":"11111111-1111-1111-1111-111111111111","ownership-generation":2}""").RootElement.Clone(),
+            AcquisitionMode = AgentChatAcquisitionMode.AttachRemote,
+            OwningProfileTransport = Mock.Of<ITransport>(),
+        };
+
+        var localFirst = await table.AcquireAsync(localRequest, TestContext.Current.CancellationToken);
+        var localSecond = await table.AcquireAsync(localRequest, TestContext.Current.CancellationToken);
+        var remoteFirst = await table.AcquireAsync(remoteRequest, TestContext.Current.CancellationToken);
+        var remoteSecond = await table.AcquireAsync(remoteRequest, TestContext.Current.CancellationToken);
+        Assert.Equal(2, table.RunningSessions.Single(entry => !entry.IsRemote).ViewerCount);
+        Assert.Equal(2, table.RunningSessions.Single(entry => entry.IsRemote).ViewerCount);
+
+        await localFirst.DisposeAsync();
+        await remoteFirst.DisposeAsync();
+        Assert.Equal(2, table.RunningSessions.Count);
+        Assert.All(table.RunningSessions, entry => Assert.Equal(1, entry.ViewerCount));
+
+        await localSecond.DisposeAsync();
+        await remoteSecond.DisposeAsync();
         Assert.Empty(table.RunningSessions);
     }
 

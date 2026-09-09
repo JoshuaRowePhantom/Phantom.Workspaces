@@ -29,7 +29,7 @@ public sealed class QueueComposerSlashCommandTests
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
 
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         var intercepted = false;
@@ -59,7 +59,7 @@ public sealed class QueueComposerSlashCommandTests
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
 
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         var interceptorCalled = false;
@@ -84,7 +84,7 @@ public sealed class QueueComposerSlashCommandTests
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
 
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         // No interceptor set.
@@ -110,7 +110,7 @@ public sealed class QueueComposerSlashCommandTests
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
 
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         var providerCalled = false;
@@ -141,7 +141,7 @@ public sealed class QueueComposerSlashCommandTests
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
 
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         var completions = new List<SlashCommandCompletion>
@@ -174,7 +174,7 @@ public sealed class QueueComposerSlashCommandTests
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
 
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         string? capturedCommandName = "not-set";
@@ -201,7 +201,7 @@ public sealed class QueueComposerSlashCommandTests
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
 
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         string? capturedCommandName = "not-set";
@@ -231,7 +231,7 @@ public sealed class QueueComposerSlashCommandTests
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
 
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         string? capturedCommandName = "not-set";

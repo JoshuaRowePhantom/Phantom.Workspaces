@@ -6162,7 +6162,12 @@ public sealed class MainWindowIntegrationTests
         var handler = new OpenAgentSessionShortcutHandler(
             context, CreateLocalTrustedExecutorSelector(), CreateTestRunningAgentChatTable());
         var chat = await CreateEchoAgentChatAsync();
-        var tab = await handler.CreateAgentSessionTabAsync(viewModel, sessionEntity!, chat);
+        var tab = await handler.CreateAgentSessionTabAsync(new CreateAgentSessionTabRequest
+        {
+            MainWindowViewModel = viewModel,
+            AgentSessionEntity = sessionEntity!,
+            AgentChat = chat,
+        });
         await WaitForAgentReadyAsync(tab);
         Assert.Equal(AgentTabState.Ready, tab.State);
         Assert.NotNull(tab.Agent);

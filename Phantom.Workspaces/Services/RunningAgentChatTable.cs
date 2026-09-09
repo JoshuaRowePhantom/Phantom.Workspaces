@@ -139,8 +139,6 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                 nameof(request));
         }
 
-        throw new NotSupportedException(
-            "Remote agent-chat transport is introduced by the next implementation commit.");
     }
 
     private async Task<AgentDefinition?> ResolveDefinitionIfNeededAsync(

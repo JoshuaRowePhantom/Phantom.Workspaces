@@ -41,7 +41,7 @@ public sealed class InputQueueViewModelApplyRetryTests
     public async Task Apply_ConflictOnFirstAttempts_RetriesWithFreshRevisionAndReturnsApplied()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var observedCommandIds = new List<Guid>();
         var observedRevisions = new List<long>();
 
@@ -82,7 +82,7 @@ public sealed class InputQueueViewModelApplyRetryTests
     public async Task Apply_PersistentConflict_ExhaustsRetryBudgetAndReturnsLastConflict()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var attemptCount = 0;
 
         var result = viewModel.Apply((commandId, expectedRevision) =>
@@ -105,7 +105,7 @@ public sealed class InputQueueViewModelApplyRetryTests
     public async Task Apply_AppliedOnFirstAttempt_DoesNotRetryAndCoalescesChangedNotification()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var attemptCount = 0;
 
         var result = viewModel.Apply((commandId, expectedRevision) =>
@@ -127,7 +127,7 @@ public sealed class InputQueueViewModelApplyRetryTests
     public async Task Apply_RejectedResult_DoesNotRetry()
     {
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var attemptCount = 0;
 
         var result = viewModel.Apply((commandId, expectedRevision) =>
@@ -157,9 +157,9 @@ public sealed class InputQueueViewModelApplyRetryTests
         // InputQueueEntryViewModel.SaveEdit through UpdateQueueItem(string,string,string) to
         // the AgentInputQueue mutation lands the new text.
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var queue = chat.QueueManager.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
-        viewModel.AppendToQueue(queue, "original");
+        viewModel.AppendToQueue(queue.Queue.QueueId, "original");
         var entry = Assert.Single(viewModel.Queues[1].Items);
         entry.EditCommand.Execute(null);
         entry.EditText = "edited";
@@ -190,9 +190,9 @@ public sealed class InputQueueViewModelApplyRetryTests
         // failure (Sequence.Single "more than one matching element"). RefreshQueues must
         // serialize its queueViewModels/Queues mutations.
         await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var queue = chat.QueueManager.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
-        viewModel.AppendToQueue(queue, "original");
+        viewModel.AppendToQueue(queue.Queue.QueueId, "original");
 
         var refreshQueues = typeof(InputQueueViewModel).GetMethod(
             "RefreshQueues",

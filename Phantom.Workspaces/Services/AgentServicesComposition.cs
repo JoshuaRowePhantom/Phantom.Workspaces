@@ -55,7 +55,7 @@ public static class AgentServicesComposition
         // Hand the resolved host context to the running-agent / Copilot path so get_current_session
         // is populated there too (issue #1236).
         var currentSessionContext = await CurrentSessionContextFactory.CreateForHostAsync(
-            agentSessionId: string.Empty,
+            agentSessionId: "unbound",
             dataAccessLayer: dataAccessLayer,
             userName: executionContext.UserName,
             computerName: executionContext.ComputerName,

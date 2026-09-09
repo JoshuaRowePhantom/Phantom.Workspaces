@@ -210,7 +210,15 @@ internal static class AgentManifestSessionLauncher
             var (agentChat, loggerFactory) = await createChatAsync();
             // #1429: materialize through the single composition seam so slash commands are always wired.
             var agent = openAgentSessionShortcutHandler.ComposeSessionAgentViewModel(
-                mainWindowViewModel, loggerFactory, agentChat, createdAgentSessionEntity, loadingTab, foregroundScheduler);
+                new ComposeSessionAgentViewModelOptions
+                {
+                    MainWindowViewModel = mainWindowViewModel,
+                    LoggerFactory = loggerFactory,
+                    AgentChat = agentChat,
+                    AgentSessionEntity = createdAgentSessionEntity,
+                    Tab = loadingTab,
+                    ForegroundScheduler = foregroundScheduler,
+                });
             loadingTab.SetReady(agent, loggerFactory);
         }
         catch (Exception ex)

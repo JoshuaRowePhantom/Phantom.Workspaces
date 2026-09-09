@@ -1,4 +1,4 @@
-﻿using AgentSchema;
+using AgentSchema;
 using Avalonia.Input;
 using Phantom.Workspaces.Agent.Gui.Controls;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
@@ -23,7 +23,7 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "first message";
@@ -44,7 +44,7 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "first message";
@@ -67,7 +67,7 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "msg1";
@@ -101,7 +101,7 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "first message";
@@ -120,7 +120,7 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "duplicate";
@@ -152,7 +152,7 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "first message";
@@ -175,7 +175,7 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "first message";
@@ -200,7 +200,7 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "submitted message";
@@ -231,7 +231,7 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "only message";
@@ -251,7 +251,7 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "first message";
@@ -275,7 +275,7 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "first message";
@@ -300,7 +300,7 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "draft";
@@ -318,7 +318,7 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "first message";
@@ -344,7 +344,7 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "first message";
@@ -365,7 +365,7 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "A";
@@ -392,7 +392,7 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "A";
@@ -418,7 +418,7 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.SlashCommandInterceptorAsync = _ => Task.CompletedTask;
@@ -444,7 +444,7 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "A";
@@ -462,7 +462,7 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "A";
@@ -484,7 +484,7 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "first";
@@ -505,7 +505,7 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "A";
@@ -537,7 +537,7 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.Completions.SetItems([
@@ -561,7 +561,7 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.Completions.SetItems([
@@ -585,7 +585,7 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.Completions.SetItems([
@@ -607,7 +607,7 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "A";
@@ -635,7 +635,7 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "A";
@@ -663,7 +663,7 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "recent";

@@ -254,9 +254,12 @@ public sealed class StartAgentSessionOnProfileViewModel : WorkspaceTabViewModel
             });
 
         var agentSessionTab = await this.openAgentSessionShortcutHandler.CreateAgentSessionTabAsync(
-            this.mainWindowViewModel,
-            createdAgentSessionEntity,
-            lease.LocalAgentChat);
+            new CreateAgentSessionTabRequest
+            {
+                MainWindowViewModel = this.mainWindowViewModel,
+                AgentSessionEntity = createdAgentSessionEntity,
+                AgentChat = lease.AgentChat,
+            });
         agentSessionTab.SetLease(lease);
 
         await this.tabService.ReplaceTabAsync(this, agentSessionTab);

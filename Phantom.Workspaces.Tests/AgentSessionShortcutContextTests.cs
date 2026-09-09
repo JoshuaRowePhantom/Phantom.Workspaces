@@ -46,7 +46,7 @@ public sealed class AgentSessionShortcutContextTests
         // The GUI path stashes the resolved host context on the returned AgentServices (issue #1236).
         var actual = Assert.IsType<CurrentSessionContext>(services.CurrentSessionContext);
 
-        Assert.Equal(string.Empty, actual.AgentSessionId);
+        Assert.Equal("unbound", actual.AgentSessionId);
         Assert.NotNull(actual.User);
         Assert.NotNull(actual.Computer);
         Assert.NotNull(actual.UserComputerProfile);
@@ -54,7 +54,7 @@ public sealed class AgentSessionShortcutContextTests
         // Prove delegation: the GUI path must produce exactly what the shared factory produces for
         // the same host identity (same session id, same resolved user / computer / profile entities).
         var expected = await CurrentSessionContextFactory.CreateForHostAsync(
-            agentSessionId: string.Empty,
+            agentSessionId: "unbound",
             dataAccessLayer: dataAccessLayer,
             userName: userName,
             computerName: computerName,
