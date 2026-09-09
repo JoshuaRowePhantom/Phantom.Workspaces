@@ -11,6 +11,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
 {
     private static readonly TimeSpan ReconnectGrace = TimeSpan.FromSeconds(5);
     private readonly object gate = new();
+    private readonly SemaphoreSlim transitionGate = new(1, 1);
     private readonly Dictionary<string, AttachmentState> attachments = new(StringComparer.Ordinal);
     private readonly Dictionary<Guid, CommandCacheEntry> commands = [];
     private readonly TimeProvider timeProvider;
@@ -18,6 +19,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     private readonly Func<CancellationToken, ValueTask> persistTerminalAsync;
     private readonly Func<AgentSessionSnapshot> snapshotFactory;
     private readonly AgentSessionOwnershipLease? ownershipLease;
+    private HashSet<string> queueIds;
     private Task? termination;
     private bool fenced;
     private bool continueInBackground;
@@ -45,11 +47,16 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         this.timeProvider = timeProvider ?? TimeProvider.System;
         this.ownershipLease = ownershipLease;
         this.Replay = new AgentSessionReplayBuffer(epoch, this.timeProvider);
+        var initialQueues = this.Chat.InputQueues.Snapshot.Queues;
+        this.queueIds = initialQueues.IsDefault
+            ? []
+            : initialQueues.Select(queue => queue.QueueId).ToHashSet(StringComparer.Ordinal);
         this.Chat.InformationChanged += this.OnInformationChanged;
         this.Chat.UsageChanged += this.OnUsageChanged;
         this.Chat.ToolsChanged += this.OnToolsChanged;
         this.Chat.TurnCompleted += this.OnTurnCompleted;
         this.Chat.InputQueues.Changed += this.OnQueuesChanged;
+        ((INotifyCollectionChanged)this.Chat.RunningItems).CollectionChanged += this.OnRunningItemsChanged;
         ((INotifyCollectionChanged)this.Chat.SubAgents).CollectionChanged += this.OnSubagentsChanged;
         ((INotifyCollectionChanged)this.Chat.Modals).CollectionChanged += this.OnModalsChanged;
     }
@@ -68,27 +75,30 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(request);
         lock (this.gate)
+            return this.AttachUnderLock(request);
+    }
+
+    private RemoteAgentAttachmentLease AttachUnderLock(AttachRemoteAgentSessionRequest request)
+    {
+        if (this.fenced)
+            throw new InvalidOperationException("The runtime is stopping.");
+
+        if (this.attachments.TryGetValue(request.AttachmentToken, out var existing))
         {
-            if (this.fenced)
-                throw new InvalidOperationException("The runtime is stopping.");
-
-            if (this.attachments.TryGetValue(request.AttachmentToken, out var existing))
-            {
-                if (!existing.Disconnected)
-                    throw new InvalidOperationException("The attachment token is already connected.");
-                existing.GraceTimer?.Dispose();
-                existing.Channel = request.Channel;
-                existing.Disconnected = false;
-                existing.GraceTimer = null;
-                existing.Generation++;
-                return new RemoteAgentAttachmentLease(this, request.AttachmentToken, existing.Generation, request.Cursor);
-            }
-
-            var state = new AttachmentState(request.Channel);
-            this.attachments.Add(request.AttachmentToken, state);
-            this.PublishRetentionChangedUnderLock(request.Channel);
-            return new RemoteAgentAttachmentLease(this, request.AttachmentToken, state.Generation, request.Cursor);
+            if (!existing.Disconnected)
+                throw new InvalidOperationException("The attachment token is already connected.");
+            existing.GraceTimer?.Dispose();
+            existing.Channel = request.Channel;
+            existing.Disconnected = false;
+            existing.GraceTimer = null;
+            existing.Generation++;
+            return new RemoteAgentAttachmentLease(this, request.AttachmentToken, existing.Generation, request.Cursor);
         }
+
+        var state = new AttachmentState(request.Channel);
+        this.attachments.Add(request.AttachmentToken, state);
+        this.PublishRetentionChangedUnderLock(request.Channel);
+        return new RemoteAgentAttachmentLease(this, request.AttachmentToken, state.Generation, request.Cursor);
     }
 
     internal AgentSessionSnapshot CaptureSnapshot()
@@ -104,23 +114,55 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         }
     }
 
-    internal async ValueTask SetContinueInBackgroundAsync(bool value, CancellationToken ct = default)
+    internal InitialAttachmentState AttachAndCaptureInitialState(AttachRemoteAgentSessionRequest request)
     {
         lock (this.gate)
         {
-            if (this.fenced) throw new InvalidOperationException("The runtime is stopping.");
-            if (this.continueInBackground == value) return;
-        }
+            var attachment = this.AttachUnderLock(request);
+            if (request.Cursor is { } cursor)
+            {
+                var replay = this.Replay.ReadAfter(cursor);
+                if (replay.IsCovered)
+                    return new InitialAttachmentState(attachment, replay.Frames, null);
+            }
 
-        await this.persistRetentionAsync(value, ct).ConfigureAwait(false);
-        var stop = false;
-        lock (this.gate)
-        {
-            if (this.fenced) throw new InvalidOperationException("The runtime is stopping.");
-            this.continueInBackground = value;
-            stop = !value && this.attachments.Count == 0;
+            var snapshot = this.snapshotFactory() with
+            {
+                ContinueInBackground = this.continueInBackground,
+                ViewerCount = this.attachments.Count,
+            };
+            var frame = this.Replay.Append(
+                Guid.NewGuid(),
+                new SessionSnapshotEvent { Snapshot = snapshot });
+            return new InitialAttachmentState(attachment, [frame], snapshot);
         }
-        await this.PublishRetentionChangedAsync(ct).ConfigureAwait(false);
+    }
+
+    internal async ValueTask SetContinueInBackgroundAsync(bool value, CancellationToken ct = default)
+    {
+        var stop = false;
+        await this.transitionGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            lock (this.gate)
+            {
+                if (this.fenced) throw new InvalidOperationException("The runtime is stopping.");
+                if (this.continueInBackground == value) return;
+            }
+
+            await this.persistRetentionAsync(value, ct).ConfigureAwait(false);
+            lock (this.gate)
+            {
+                if (this.fenced) throw new InvalidOperationException("The runtime is stopping.");
+                this.continueInBackground = value;
+                stop = !value && this.attachments.Count == 0;
+            }
+            await this.PublishRetentionChangedAsync(ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            this.transitionGate.Release();
+        }
         if (stop) await this.TryTerminateAsync(ct).ConfigureAwait(false);
     }
 
@@ -168,18 +210,26 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
 
     internal async ValueTask<bool> TryTerminateAsync(CancellationToken ct = default)
     {
+        await this.transitionGate.WaitAsync(ct).ConfigureAwait(false);
         Task task;
-        lock (this.gate)
+        try
         {
-            if (this.termination is not null)
+            lock (this.gate)
             {
-                task = this.termination;
+                if (this.termination is not null)
+                {
+                    task = this.termination;
+                }
+                else
+                {
+                    this.fenced = true;
+                    task = this.termination = this.TerminateCoreAsync();
+                }
             }
-            else
-            {
-                this.fenced = true;
-                task = this.termination = this.TerminateCoreAsync();
-            }
+        }
+        finally
+        {
+            this.transitionGate.Release();
         }
         await task.WaitAsync(ct).ConfigureAwait(false);
         return true;
@@ -301,6 +351,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         this.Chat.ToolsChanged -= this.OnToolsChanged;
         this.Chat.TurnCompleted -= this.OnTurnCompleted;
         this.Chat.InputQueues.Changed -= this.OnQueuesChanged;
+        ((INotifyCollectionChanged)this.Chat.RunningItems).CollectionChanged -= this.OnRunningItemsChanged;
         ((INotifyCollectionChanged)this.Chat.SubAgents).CollectionChanged -= this.OnSubagentsChanged;
         ((INotifyCollectionChanged)this.Chat.Modals).CollectionChanged -= this.OnModalsChanged;
         await this.Chat.DisposeAsync().ConfigureAwait(false);
@@ -333,6 +384,11 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         internal long Generation { get; set; } = 1;
     }
 
+    internal readonly record struct InitialAttachmentState(
+        RemoteAgentAttachmentLease Attachment,
+        IReadOnlyList<AgentSessionServerFrame> Frames,
+        AgentSessionSnapshot? Snapshot);
+
     private sealed record CommandCacheEntry(string Payload, Task<AgentSessionServerEvent> Result);
 
     private void OnInformationChanged(object? sender, EventArgs args)
@@ -353,13 +409,21 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     private void OnQueuesChanged(object? sender, EventArgs args)
     {
         var snapshot = this.Chat.InputQueues.Snapshot;
+        var current = snapshot.Queues.IsDefault
+            ? []
+            : snapshot.Queues.Select(queue => queue.QueueId).ToHashSet(StringComparer.Ordinal);
+        var removed = this.queueIds.Except(current, StringComparer.Ordinal).ToArray();
+        this.queueIds = current;
         this.PublishFromOwner(new QueueChangedEvent
         {
             Revision = snapshot.Revision,
             Queues = snapshot.Queues,
-            RemovedQueueIds = [],
+            RemovedQueueIds = removed,
         });
     }
+
+    private void OnRunningItemsChanged(object? sender, NotifyCollectionChangedEventArgs args)
+        => this.PublishFromOwner(new BusyChangedEvent { IsBusy = this.Chat.IsBusy });
 
     private void OnSubagentsChanged(object? sender, NotifyCollectionChangedEventArgs args)
         => this.PublishFromOwner(new SubagentsChangedEvent

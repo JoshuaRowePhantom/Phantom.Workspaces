@@ -11,7 +11,14 @@ internal interface IRemoteAgentSessionRuntimeRegistry
     ValueTask SetContinueInBackgroundAsync(UpdateAgentSessionRuntimeRetentionRequest request, CancellationToken ct = default);
 }
 
-internal sealed class RemoteAgentSessionRuntimeRegistry : IRemoteAgentSessionRuntimeRegistry, IAsyncDisposable
+internal interface IAgentSessionChildRegistry
+{
+    ValueTask<bool> ContainsAsync(
+        string sessionId, long ownershipGeneration, string childAgentId, CancellationToken ct = default);
+}
+
+internal sealed class RemoteAgentSessionRuntimeRegistry :
+    IRemoteAgentSessionRuntimeRegistry, IAgentSessionChildRegistry, IAsyncDisposable
 {
     private readonly object gate = new();
     private readonly Dictionary<RuntimeKey, RegistryEntry> entries = [];
@@ -81,6 +88,14 @@ internal sealed class RemoteAgentSessionRuntimeRegistry : IRemoteAgentSessionRun
         if (lease is null || lease.Epoch != request.Epoch)
             throw new InvalidOperationException("The remote agent session runtime changed.");
         await lease.SetContinueInBackgroundAsync(request.ContinueInBackground, ct).ConfigureAwait(false);
+    }
+
+    public async ValueTask<bool> ContainsAsync(
+        string sessionId, long ownershipGeneration, string childAgentId, CancellationToken ct = default)
+    {
+        var lease = await this.TryGetAsync(sessionId, ownershipGeneration, ct).ConfigureAwait(false);
+        return lease is not null && lease.Chat.SubAgents.Any(
+            child => string.Equals(child.AgentId, childAgentId, StringComparison.Ordinal));
     }
 
     public async ValueTask DisposeAsync()

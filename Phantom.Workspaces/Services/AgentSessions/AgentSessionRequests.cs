@@ -17,6 +17,7 @@ internal sealed record AgentSessionAuthorizationRequest
     public required long ExpectedOwnershipGeneration { get; init; }
     public required AgentSessionAuthorizationOperation Operation { get; init; }
     public string? ChildAgentId { get; init; } = null;
+    public string? NewOwningProfileEntityId { get; init; } = null;
 }
 
 internal readonly record struct AgentSessionAuthorizationDecision

@@ -5,7 +5,7 @@ using Phantom.Workspaces.Transport;
 
 namespace Phantom.Workspaces.Tests;
 
-public sealed class RemoteAgentSessionHostTests
+public sealed partial class RemoteAgentSessionHostTests
 {
     [Fact]
     public async Task GetStatusAsync_UnauthorizedPeer_ReturnsUnavailableWithoutRuntimeLookup()

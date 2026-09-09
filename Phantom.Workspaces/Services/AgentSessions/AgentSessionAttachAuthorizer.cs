@@ -15,9 +15,15 @@ internal interface IAgentSessionAttachAuthorizer
 internal sealed class AgentSessionAttachAuthorizer : IAgentSessionAttachAuthorizer
 {
     private readonly IDataAccessLayer dataAccessLayer;
+    private readonly IAgentSessionChildRegistry? childRegistry;
 
-    internal AgentSessionAttachAuthorizer(IDataAccessLayer dataAccessLayer)
-        => this.dataAccessLayer = dataAccessLayer ?? throw new ArgumentNullException(nameof(dataAccessLayer));
+    internal AgentSessionAttachAuthorizer(
+        IDataAccessLayer dataAccessLayer,
+        IAgentSessionChildRegistry? childRegistry = null)
+    {
+        this.dataAccessLayer = dataAccessLayer ?? throw new ArgumentNullException(nameof(dataAccessLayer));
+        this.childRegistry = childRegistry;
+    }
 
     public async ValueTask<AgentSessionAuthorizationDecision> AuthorizeAsync(
         TransportPeerIdentity peer,
@@ -73,6 +79,29 @@ internal sealed class AgentSessionAttachAuthorizer : IAgentSessionAttachAuthoriz
                 || !string.Equals(ReadString(peerData, "user-entity-id"), peer.UserEntityId, StringComparison.OrdinalIgnoreCase))
                 return Denied;
         }
+
+        if (request.Operation == AgentSessionAuthorizationOperation.Takeover)
+        {
+            if (request.NewOwningProfileEntityId is not { } newOwnerId)
+                return Denied;
+            var newOwner = entities.FirstOrDefault(entity =>
+                string.Equals(entity.EntityId.ToString(), newOwnerId, StringComparison.OrdinalIgnoreCase));
+            if (newOwner?.Data is not JsonElement newOwnerData
+                || !string.Equals(
+                    ReadString(newOwnerData, "user-entity-id"),
+                    peer.UserEntityId,
+                    StringComparison.OrdinalIgnoreCase))
+                return Denied;
+        }
+
+        if (request.ChildAgentId is { } childAgentId
+            && (this.childRegistry is null
+                || !await this.childRegistry.ContainsAsync(
+                    request.AgentSessionId,
+                    request.ExpectedOwnershipGeneration,
+                    childAgentId,
+                    ct).ConfigureAwait(false)))
+            return Denied;
 
         return new AgentSessionAuthorizationDecision { IsAllowed = true };
     }

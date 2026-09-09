@@ -3,6 +3,7 @@ using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Transport;
+using System.Collections.Concurrent;
 
 namespace Phantom.Workspaces.Services.AgentSessions;
 
@@ -18,6 +19,7 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
     private readonly IAgentSessionAttachAuthorizer authorizer;
     private readonly IRemoteAgentSessionRuntimeRegistry runtimeRegistry;
     private readonly IAgentSessionRuntimeHostFactory runtimeFactory;
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> openGates = new(StringComparer.Ordinal);
 
     internal RemoteAgentSessionHost(
         IAgentSessionAttachAuthorizer authorizer,
@@ -37,9 +39,7 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
             authorizer,
             runtimeRegistry,
             runtimeContextFactory as IAgentSessionRuntimeHostFactory
-                ?? throw new ArgumentException(
-                    "The runtime context factory must provide host-side persistence and startup operations.",
-                    nameof(runtimeContextFactory)))
+                ?? new ContextOnlyRuntimeHostFactory(runtimeContextFactory))
     {
     }
 
@@ -67,31 +67,40 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
             throw new AgentSessionUnavailableException();
 
         var open = request.OpenRequest;
-        var existing = await this.runtimeRegistry.TryGetAsync(
-            open.AgentSessionId, open.ExpectedOwnershipGeneration, ct).ConfigureAwait(false);
         RemoteAgentSessionLease runtime;
-        switch (open.OpenIntent)
-        {
-            case AgentSessionOpenIntent.Attach:
-                runtime = existing ?? throw new AgentSessionUnavailableException();
-                break;
-            case AgentSessionOpenIntent.Start when existing is not null:
-                throw new InvalidOperationException("The agent session is already running.");
-            default:
-                var intent = await this.runtimeFactory.LoadIntentAsync(open.AgentSessionId, ct).ConfigureAwait(false)
-                    ?? throw new AgentSessionUnavailableException();
-                if (!string.Equals(intent.OwningProfileEntityId, open.ExpectedOwningProfileEntityId, StringComparison.OrdinalIgnoreCase)
-                    || intent.OwnershipGeneration != open.ExpectedOwnershipGeneration)
-                    throw new AgentSessionUnavailableException();
-                runtime = existing ?? await this.runtimeRegistry.GetOrStartAsync(
-                    intent, token => this.runtimeFactory.StartAsync(intent, token), ct).ConfigureAwait(false);
-                break;
-        }
-
-        RemoteAgentAttachmentLease attachment;
+        var openGate = this.openGates.GetOrAdd(open.AgentSessionId, static _ => new SemaphoreSlim(1, 1));
+        await openGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            attachment = runtime.Attach(new AttachRemoteAgentSessionRequest
+            var existing = await this.runtimeRegistry.TryGetAsync(
+                open.AgentSessionId, open.ExpectedOwnershipGeneration, ct).ConfigureAwait(false);
+            switch (open.OpenIntent)
+            {
+                case AgentSessionOpenIntent.Attach:
+                    runtime = existing ?? throw new AgentSessionUnavailableException();
+                    break;
+                case AgentSessionOpenIntent.Start when existing is not null:
+                    throw new InvalidOperationException("The agent session is already running.");
+                default:
+                    var intent = await this.runtimeFactory.LoadIntentAsync(open.AgentSessionId, ct).ConfigureAwait(false)
+                        ?? throw new AgentSessionUnavailableException();
+                    if (!string.Equals(intent.OwningProfileEntityId, open.ExpectedOwningProfileEntityId, StringComparison.OrdinalIgnoreCase)
+                        || intent.OwnershipGeneration != open.ExpectedOwnershipGeneration)
+                        throw new AgentSessionUnavailableException();
+                    runtime = existing ?? await this.runtimeRegistry.GetOrStartAsync(
+                        intent, token => this.runtimeFactory.StartAsync(intent, token), ct).ConfigureAwait(false);
+                    break;
+            }
+        }
+        finally
+        {
+            openGate.Release();
+        }
+
+        RemoteAgentSessionLease.InitialAttachmentState initial;
+        try
+        {
+            initial = runtime.AttachAndCaptureInitialState(new AttachRemoteAgentSessionRequest
             {
                 AttachmentToken = open.AttachmentToken,
                 Channel = request.Channel,
@@ -102,19 +111,12 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
         {
             throw new AgentSessionUnavailableException();
         }
-        if (open.ReplayCursor is { } cursor)
+        foreach (var frame in initial.Frames)
         {
-            var replay = runtime.Replay.ReadAfter(cursor);
-            if (replay.IsCovered)
-            {
-                foreach (var frame in replay.Frames)
-                    await request.Channel.Writer.WriteAsync(AgentSessionProtocolCodec.SerializeFrame(frame), ct).ConfigureAwait(false);
-                attachment.StartReceiving((command, token) =>
-                    this.HandleCommandAsync(request.Peer, open, runtime, attachment, command, token));
-                return attachment;
-            }
+            await request.Channel.Writer.WriteAsync(
+                AgentSessionProtocolCodec.SerializeFrame(frame), ct).ConfigureAwait(false);
         }
-        await attachment.PublishAsync(new SessionSnapshotEvent { Snapshot = runtime.CaptureSnapshot() }, ct).ConfigureAwait(false);
+        var attachment = initial.Attachment;
         attachment.StartReceiving((command, token) =>
             this.HandleCommandAsync(request.Peer, open, runtime, attachment, command, token));
         return attachment;
@@ -149,18 +151,20 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
             ExpectedOwningProfileEntityId = request.ExpectedOwningProfileEntityId,
             ExpectedOwnershipGeneration = request.ExpectedOwnershipGeneration,
             Operation = AgentSessionAuthorizationOperation.Takeover,
+            NewOwningProfileEntityId = request.NewOwningProfileEntityId,
         }, ct).ConfigureAwait(false);
         if (!decision.IsAllowed) throw new AgentSessionUnavailableException();
 
         var existing = await this.runtimeRegistry.TryGetAsync(
             request.AgentSessionId, request.ExpectedOwnershipGeneration, ct).ConfigureAwait(false);
-        if (existing is not null)
-            await this.runtimeRegistry.TryTerminateAsync(new TerminateAgentSessionRuntimeRequest
+        if (existing is not null
+            && !await this.runtimeRegistry.TryTerminateAsync(new TerminateAgentSessionRuntimeRequest
             {
                 SessionId = request.AgentSessionId,
                 OwnershipGeneration = request.ExpectedOwnershipGeneration,
                 Epoch = existing.Epoch,
-            }, ct).ConfigureAwait(false);
+            }, ct).ConfigureAwait(false))
+            throw new AgentSessionTakeoverBlockedException();
         if (!await this.runtimeFactory.TryTakeOverAsync(request, ct).ConfigureAwait(false))
             throw new AgentSessionTakeoverBlockedException();
     }
@@ -173,10 +177,12 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
         AgentSessionCommand command,
         CancellationToken ct)
     {
-        if (command.RuntimeEpoch != runtime.Epoch)
-            throw new AgentSessionUnavailableException();
-        var operation = command switch
+        try
         {
+            if (command.RuntimeEpoch != runtime.Epoch)
+                throw new AgentSessionUnavailableException();
+            var operation = command switch
+            {
             SetToolEnabledCommand => AgentSessionAuthorizationOperation.SetToolState,
             SetContinueInBackgroundCommand => AgentSessionAuthorizationOperation.SetBackgroundPreference,
             InterruptCommand => AgentSessionAuthorizationOperation.Interrupt,
@@ -184,27 +190,43 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
             OpenSubagentCommand => AgentSessionAuthorizationOperation.OpenSubagent,
             ModalResponseCommand => AgentSessionAuthorizationOperation.ModalResponse,
             _ => AgentSessionAuthorizationOperation.Send,
-        };
-        var authorized = await this.authorizer.AuthorizeAsync(peer, new AgentSessionAuthorizationRequest
-        {
+            };
+            var authorized = await this.authorizer.AuthorizeAsync(peer, new AgentSessionAuthorizationRequest
+            {
             AgentSessionId = open.AgentSessionId,
             ExpectedOwningProfileEntityId = open.ExpectedOwningProfileEntityId,
             ExpectedOwnershipGeneration = open.ExpectedOwnershipGeneration,
             Operation = operation,
             ChildAgentId = command is OpenSubagentCommand child ? child.AgentId : null,
-        }, ct).ConfigureAwait(false);
-        if (!authorized.IsAllowed) throw new AgentSessionUnavailableException();
+            }, ct).ConfigureAwait(false);
+            if (!authorized.IsAllowed) throw new AgentSessionUnavailableException();
 
-        if (command is TerminateSessionCommand)
-        {
-            await runtime.TryTerminateAsync(ct).ConfigureAwait(false);
-            return;
+            if (command is TerminateSessionCommand)
+            {
+                await runtime.TryTerminateAsync(ct).ConfigureAwait(false);
+                return;
+            }
+            var result = await runtime.ExecuteCommandOnceAsync(
+                command, token => this.ExecuteCommandAsync(runtime, command, token), ct).ConfigureAwait(false);
+            await attachment.PublishAsync(result, ct).ConfigureAwait(false);
+            if (command is DetachCommand)
+                await attachment.DisposeAsync().ConfigureAwait(false);
         }
-        var result = await runtime.ExecuteCommandOnceAsync(
-            command, token => this.ExecuteCommandAsync(runtime, command, token), ct).ConfigureAwait(false);
-        await attachment.PublishAsync(result, ct).ConfigureAwait(false);
-        if (command is DetachCommand)
-            await attachment.DisposeAsync().ConfigureAwait(false);
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception)
+        {
+            await attachment.PublishAsync(new OperationErrorEvent
+            {
+                Error = new RemoteAgentOperationError
+                {
+                    Code = "operation-failed",
+                    Operation = command.Type,
+                    IsRetryable = false,
+                    Message = "The operation could not be completed.",
+                    CorrelationId = command.CorrelationId,
+                },
+            }, ct).ConfigureAwait(false);
+        }
     }
 
     private async Task<AgentSessionServerEvent> ExecuteCommandAsync(
@@ -289,6 +311,26 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
 
     private static IReadOnlyList<ChatMessage> DeserializeMessages(JsonElement messages)
         => JsonSerializer.Deserialize<ChatMessage[]>(messages) ?? throw new InvalidOperationException("Messages are required.");
+}
+
+internal sealed class ContextOnlyRuntimeHostFactory : IAgentSessionRuntimeHostFactory
+{
+    private readonly IAgentSessionRuntimeContextFactory contextFactory;
+
+    internal ContextOnlyRuntimeHostFactory(IAgentSessionRuntimeContextFactory contextFactory)
+        => this.contextFactory = contextFactory ?? throw new ArgumentNullException(nameof(contextFactory));
+
+    public ValueTask<PersistedAgentSessionRuntimeIntent?> LoadIntentAsync(string sessionId, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        return ValueTask.FromResult<PersistedAgentSessionRuntimeIntent?>(null);
+    }
+
+    public Task<RemoteAgentSessionLease> StartAsync(PersistedAgentSessionRuntimeIntent intent, CancellationToken ct)
+        => throw new InvalidOperationException("A persisted session entity is required to create the runtime context.");
+
+    public ValueTask<bool> TryTakeOverAsync(AgentSessionTakeoverRequest request, CancellationToken ct)
+        => ValueTask.FromResult(false);
 }
 
 internal sealed class AgentSessionUnavailableException : Exception;

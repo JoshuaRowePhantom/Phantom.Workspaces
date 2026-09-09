@@ -1,7 +1,12 @@
 using System.Text.Json;
 using System.Threading.Channels;
+using System.Collections.ObjectModel;
+using AgentSchema;
 using Moq;
+using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Core.Manifest;
 using Phantom.Workspaces.Llm.Remote;
+using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.AgentSessions;
 using Phantom.Workspaces.Transport;
 
@@ -37,9 +42,77 @@ public sealed class AgentSessionTransportListenerTests
             JsonSerializer.SerializeToElement(new { type = "attach-agent-session", secret = "local-path" }),
             channel,
             TestContext.Current.CancellationToken);
-        var error = await channel.Reader.ReadAsync(TestContext.Current.CancellationToken);
+        var error = await channel.Output.ReadAsync(TestContext.Current.CancellationToken);
         Assert.DoesNotContain("local-path", error.GetRawText(), StringComparison.Ordinal);
         Assert.Contains("invalid-request", error.GetRawText(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task OnChannelOpenAsync_ValidAttach_ReturnsAttachmentLease()
+    {
+        var chat = Chat();
+        await using var runtime = new RemoteAgentSessionLease(
+            "session", 1, Epoch, chat.Object, true, Snapshot);
+        var registry = new Mock<IRemoteAgentSessionRuntimeRegistry>();
+        registry.Setup(value => value.TryGetAsync("session", 1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(runtime);
+        var authorizer = AllowingAuthorizer();
+        var provider = new Mock<ITransportPeerIdentityProvider>();
+        provider.Setup(value => value.GetRequiredIdentity(It.IsAny<IMessageChannel>())).Returns(Peer());
+        await using var listener = new AgentSessionTransportListener(
+            new RemoteAgentSessionHost(authorizer.Object, registry.Object, Mock.Of<IAgentSessionRuntimeHostFactory>()),
+            provider.Object);
+        await using var channel = new TestChannel();
+        var lease = await listener.OnChannelOpenAsync(
+            AgentSessionProtocolCodec.SerializeOpen(Open()), channel, TestContext.Current.CancellationToken);
+        Assert.NotNull(lease);
+        Assert.Contains("session-snapshot", (await channel.Output.ReadAsync(
+            TestContext.Current.CancellationToken)).GetRawText(), StringComparison.Ordinal);
+        await lease.DisposeAsync();
+        Assert.Equal(0, runtime.ViewerCount);
+    }
+
+    [Fact]
+    public async Task OnChannelOpenAsync_UnauthorizedPeer_DoesNotRevealSessionExistence()
+    {
+        var authorizer = new Mock<IAgentSessionAttachAuthorizer>();
+        authorizer.Setup(value => value.AuthorizeAsync(
+                It.IsAny<TransportPeerIdentity>(), It.IsAny<AgentSessionAuthorizationRequest>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AgentSessionAuthorizationDecision { IsAllowed = false });
+        var registry = new Mock<IRemoteAgentSessionRuntimeRegistry>();
+        var provider = new Mock<ITransportPeerIdentityProvider>();
+        provider.Setup(value => value.GetRequiredIdentity(It.IsAny<IMessageChannel>())).Returns(Peer());
+        await using var listener = new AgentSessionTransportListener(
+            new RemoteAgentSessionHost(authorizer.Object, registry.Object, Mock.Of<IAgentSessionRuntimeHostFactory>()),
+            provider.Object);
+        await using var channel = new TestChannel();
+        await listener.OnChannelOpenAsync(
+            AgentSessionProtocolCodec.SerializeOpen(Open()), channel, TestContext.Current.CancellationToken);
+        var wire = (await channel.Output.ReadAsync(TestContext.Current.CancellationToken)).GetRawText();
+        Assert.Contains("not-found", wire, StringComparison.Ordinal);
+        Assert.DoesNotContain("agent-session-id", wire, StringComparison.OrdinalIgnoreCase);
+        registry.Verify(value => value.TryGetAsync(
+            It.IsAny<string>(), It.IsAny<long>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task DisposeAsync_ActiveAttachments_ReleasesViewersThenHostStopsAllRuntimes()
+    {
+        var runtime = new RemoteAgentSessionLease("session", 1, Epoch, Chat().Object, true, Snapshot);
+        await using var registry = new RemoteAgentSessionRuntimeRegistry(TimeProvider.System);
+        await registry.GetOrStartAsync(Intent(), _ => Task.FromResult(runtime), TestContext.Current.CancellationToken);
+        var provider = new Mock<ITransportPeerIdentityProvider>();
+        provider.Setup(value => value.GetRequiredIdentity(It.IsAny<IMessageChannel>())).Returns(Peer());
+        var listener = new AgentSessionTransportListener(
+            new RemoteAgentSessionHost(AllowingAuthorizer().Object, registry, Mock.Of<IAgentSessionRuntimeHostFactory>()),
+            provider.Object);
+        await using var channel = new TestChannel();
+        Assert.NotNull(await listener.OnChannelOpenAsync(
+            AgentSessionProtocolCodec.SerializeOpen(Open()), channel, TestContext.Current.CancellationToken));
+        await listener.DisposeAsync();
+        Assert.Equal(0, runtime.ViewerCount);
+        Assert.True(runtime.IsFenced);
     }
 
     [Fact]
@@ -78,11 +151,86 @@ public sealed class AgentSessionTransportListenerTests
         Capabilities = [],
     };
 
+    private static readonly RuntimeEpoch Epoch = new() { Value = Guid.NewGuid() };
+
+    private static TransportPeerIdentity Peer() => new()
+    {
+        AuthenticationScheme = "test", StablePeerId = "peer", UserEntityId = Guid.NewGuid().ToString(),
+    };
+
+    private static Mock<IAgentSessionAttachAuthorizer> AllowingAuthorizer()
+    {
+        var authorizer = new Mock<IAgentSessionAttachAuthorizer>();
+        authorizer.Setup(value => value.AuthorizeAsync(
+                It.IsAny<TransportPeerIdentity>(), It.IsAny<AgentSessionAuthorizationRequest>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AgentSessionAuthorizationDecision { IsAllowed = true });
+        return authorizer;
+    }
+
+    private static Mock<IAgentChat> Chat()
+    {
+        var queues = new Mock<IAgentInputQueues>();
+        queues.SetupGet(value => value.Snapshot).Returns(new AgentInputQueuesSnapshot
+        {
+            Revision = 0, Queues = [],
+        });
+        var chat = new Mock<IAgentChat>();
+        chat.SetupGet(value => value.InputQueues).Returns(queues.Object);
+        chat.SetupGet(value => value.RunningItems).Returns(new AgentChatRunningItemCollection());
+        chat.SetupGet(value => value.SubAgents).Returns(
+            new ReadOnlyObservableCollection<IRunningSubAgent>(new ObservableCollection<IRunningSubAgent>()));
+        chat.SetupGet(value => value.Modals).Returns(
+            new ReadOnlyObservableCollection<AgentChatModal>(new ObservableCollection<AgentChatModal>()));
+        chat.Setup(value => value.GetToolSnapshot()).Returns([]);
+        chat.Setup(value => value.DisposeAsync()).Returns(ValueTask.CompletedTask);
+        return chat;
+    }
+
+    private static AgentSessionSnapshot Snapshot() => new()
+    {
+        Information = new AgentInformation
+        {
+            AgentSessionId = "session", AgentId = "agent", Name = "agent", DisplayName = "Agent",
+            Description = "Description", AcceptsUserInput = true,
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(
+                """{"kind":"prompt","name":"agent","model":{"id":"echo","provider":"echo","apiType":"Echo"}}"""),
+        },
+        Usage = new Usage(),
+        InputQueues = new AgentInputQueuesSnapshot { Revision = 0, Queues = [] },
+        IsBusy = false,
+        History = [],
+        RunningItems = [],
+        Tools = [],
+        Subagents = [],
+        Modals = [],
+        ContinueInBackground = false,
+        ViewerCount = 0,
+    };
+
+    private static PersistedAgentSessionRuntimeIntent Intent() => new()
+    {
+        AgentSessionId = "session",
+        OwningProfileEntityId = Open().ExpectedOwningProfileEntityId,
+        OwnershipGeneration = 1,
+        ExecutorBindings = new ExecutorBindings
+        {
+            SessionExecutor = JsonDocument.Parse("""{"type":"local"}""").RootElement.Clone(),
+        },
+    };
+
     private sealed class TestChannel : IMessageChannel
     {
-        private readonly Channel<JsonElement> channel = Channel.CreateUnbounded<JsonElement>();
-        public ChannelWriter<JsonElement> Writer => this.channel.Writer;
-        public ChannelReader<JsonElement> Reader => this.channel.Reader;
-        public ValueTask DisposeAsync() { this.channel.Writer.TryComplete(); return ValueTask.CompletedTask; }
+        private readonly Channel<JsonElement> input = Channel.CreateUnbounded<JsonElement>();
+        private readonly Channel<JsonElement> output = Channel.CreateUnbounded<JsonElement>();
+        public ChannelWriter<JsonElement> Writer => this.output.Writer;
+        public ChannelReader<JsonElement> Reader => this.input.Reader;
+        public ChannelReader<JsonElement> Output => this.output.Reader;
+        public ValueTask DisposeAsync()
+        {
+            this.input.Writer.TryComplete();
+            this.output.Writer.TryComplete();
+            return ValueTask.CompletedTask;
+        }
     }
 }

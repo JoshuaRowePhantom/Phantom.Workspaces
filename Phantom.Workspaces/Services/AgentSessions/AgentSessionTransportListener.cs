@@ -46,8 +46,9 @@ public sealed class AgentSessionTransportListener : ITransportListener
                 OpenRequest = open,
                 Channel = channel,
             }, ct).ConfigureAwait(false);
-            lock (this.gate) this.active.Add(attachment);
-            return new TransportAttachmentHandle(attachment);
+            var handle = new TransportAttachmentHandle(attachment, this.RemoveActive);
+            lock (this.gate) this.active.Add(handle);
+            return handle;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception error)
@@ -101,8 +102,22 @@ public sealed class AgentSessionTransportListener : ITransportListener
         await channel.Writer.WriteAsync(AgentSessionProtocolCodec.SerializeFrame(frame), ct).ConfigureAwait(false);
     }
 
-    private sealed class TransportAttachmentHandle(RemoteAgentAttachmentLease attachment) : IAsyncDisposable
+    private void RemoveActive(IAsyncDisposable handle)
     {
-        public ValueTask DisposeAsync() => attachment.MarkTransportLostAsync();
+        lock (this.gate) this.active.Remove(handle);
+    }
+
+    private sealed class TransportAttachmentHandle(
+        RemoteAgentAttachmentLease attachment,
+        Action<IAsyncDisposable> onDispose) : IAsyncDisposable
+    {
+        private int disposed;
+
+        public async ValueTask DisposeAsync()
+        {
+            if (Interlocked.Exchange(ref this.disposed, 1) != 0) return;
+            onDispose(this);
+            await attachment.DisposeAsync().ConfigureAwait(false);
+        }
     }
 }
