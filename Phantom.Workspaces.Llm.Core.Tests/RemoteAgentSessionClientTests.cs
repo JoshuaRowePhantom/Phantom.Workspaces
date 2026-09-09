@@ -1,0 +1,239 @@
+using System.Text.Json;
+using System.Threading.Channels;
+using Phantom.Workspaces.Llm.Remote;
+using Phantom.Workspaces.Transport;
+
+namespace Phantom.Workspaces.Llm.Tests;
+
+public sealed class RemoteAgentSessionClientTests
+{
+    [Fact]
+    public void Constructor_NullTransport_ThrowsArgumentNullException()
+        => Assert.Throws<ArgumentNullException>(() => new RemoteAgentSessionClient(null!));
+
+    [Fact]
+    public void LastAppliedCursor_NoFrames_IsNull()
+        => Assert.Null(new RemoteAgentSessionClient(new TestTransport()).LastAppliedCursor);
+
+    [Theory]
+    [InlineData(AgentSessionRemoteStatus.Running)]
+    [InlineData(AgentSessionRemoteStatus.NotRunning)]
+    [InlineData(AgentSessionRemoteStatus.Unavailable)]
+    public async Task GetStatusAsync_AuthorizedRunningOrStopped_ReturnsAuthoritativeStatusOnly(
+        AgentSessionRemoteStatus status)
+    {
+        var transport = new TestTransport();
+        await transport.ServerSendAsync(Frame(1, new SessionStatusEvent { Status = status }));
+        var result = await RemoteAgentSessionClient.GetStatusAsync(new AgentSessionStatusRequest
+        {
+            Transport = transport,
+            OpenRequest = AgentSessionProtocolCodecTests.Open() with
+            {
+                OpenIntent = AgentSessionOpenIntent.Status,
+            },
+        });
+        Assert.Equal(status, result);
+        Assert.False(transport.Disposed);
+    }
+
+    [Fact]
+    public async Task ConnectAsync_SnapshotThenDelta_UpdatesCursorAndRaisesFramesInOrder()
+    {
+        var transport = new TestTransport();
+        await using var client = new RemoteAgentSessionClient(transport);
+        var observed = new List<long>();
+        client.FrameReceived += (_, frame) =>
+        {
+            Assert.Equal(frame.Sequence, client.LastAppliedCursor!.Value.Sequence);
+            observed.Add(frame.Sequence);
+        };
+        var connecting = client.ConnectAsync(AgentSessionProtocolCodecTests.Open());
+        await transport.ServerSendAsync(Frame(1, new SessionSnapshotEvent
+        {
+            Snapshot = AgentSessionProtocolCodecTests.Snapshot(),
+        }));
+        await connecting;
+        await transport.ServerSendAsync(Frame(2, new BusyChangedEvent { IsBusy = true }));
+        await WaitUntilAsync(() => observed.Count == 2);
+        Assert.Equal([1L, 2L], observed);
+        Assert.Equal(2, client.LastAppliedCursor!.Value.Sequence);
+    }
+
+    [Fact]
+    public async Task ConnectAsync_SecondCall_ThrowsInvalidOperationException()
+    {
+        var transport = new TestTransport();
+        await using var client = new RemoteAgentSessionClient(transport);
+        var connecting = client.ConnectAsync(AgentSessionProtocolCodecTests.Open());
+        await transport.ServerSendAsync(Frame(1, new SessionSnapshotEvent
+        {
+            Snapshot = AgentSessionProtocolCodecTests.Snapshot(),
+        }));
+        await connecting;
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => client.ConnectAsync(AgentSessionProtocolCodecTests.Open()));
+    }
+
+    [Fact]
+    public async Task ConnectAsync_SequenceGap_ClosesWithProtocolException()
+    {
+        var transport = new TestTransport();
+        await using var client = await ConnectAsync(transport);
+        var disconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        client.UnexpectedlyDisconnected += (_, _) => disconnected.TrySetResult();
+        await transport.ServerSendAsync(Frame(3, new BusyChangedEvent { IsBusy = true }));
+        await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(1, client.LastAppliedCursor!.Value.Sequence);
+    }
+
+    [Fact]
+    public async Task CreateQueueAsync_Connected_SerializesCommandAndAwaitsResult()
+    {
+        var transport = new TestTransport();
+        await using var client = await ConnectAsync(transport);
+        var commandId = Guid.NewGuid();
+        var operation = client.CreateQueueAsync(new CreateAgentInputQueueRequest
+        {
+            Configuration = new AgentInputQueueConfiguration
+            {
+                Name = "later", Immediacy = AgentInputQueueImmediacy.Queue, Priority = 4,
+            },
+            CommandId = commandId, ExpectedRevision = 1,
+        });
+        var commandJson = await transport.ServerReadAsync();
+        var command = Assert.IsType<CreateQueueCommand>(
+            AgentSessionProtocolCodec.DeserializeCommand(commandJson));
+        Assert.Equal(commandId, command.CommandId);
+        var result = new AgentInputQueueCommandResult
+        {
+            CommandId = commandId, Status = AgentInputQueueCommandStatus.Applied,
+            QueueId = "later-id", Revision = 2,
+        };
+        await transport.ServerSendAsync(Frame(2, new CommandCompletedEvent
+        {
+            CommandId = commandId,
+            Result = JsonSerializer.SerializeToElement(result, AgentSessionProtocolCodec.Options),
+        }, command.CorrelationId));
+        Assert.Equal("later-id", (await operation).QueueId);
+    }
+
+    [Fact]
+    public async Task RemoteAgentSessionException_WireError_ExposesOnlySafeFields()
+    {
+        var transport = new TestTransport();
+        await using var client = await ConnectAsync(transport);
+        var operation = client.InterruptAsync(Guid.NewGuid());
+        var command = AgentSessionProtocolCodec.DeserializeCommand(await transport.ServerReadAsync());
+        var correlation = command.CorrelationId;
+        await transport.ServerSendAsync(Frame(2, new OperationErrorEvent
+        {
+            Error = new RemoteAgentOperationError
+            {
+                Code = "runtime-changed", Operation = "interrupt", IsRetryable = true,
+                Message = "The runtime changed.", CorrelationId = correlation,
+            },
+        }, correlation));
+        var error = await Assert.ThrowsAsync<RemoteAgentSessionException>(() => operation);
+        Assert.Equal("runtime-changed", error.Code);
+        Assert.Equal("interrupt", error.Operation);
+        Assert.True(error.IsRetryable);
+        Assert.Equal(correlation, error.CorrelationId);
+        Assert.Equal("The runtime changed.", error.Message);
+    }
+
+    [Fact]
+    public async Task TerminateAsync_Connected_SerializesReasonAndAwaitsTerminal()
+    {
+        var transport = new TestTransport();
+        await using var client = await ConnectAsync(transport);
+        var commandId = Guid.NewGuid();
+        var operation = client.TerminateAsync(new TerminateAgentSessionRequest
+        {
+            Reason = "user-requested", CommandId = commandId,
+        });
+        var command = Assert.IsType<TerminateSessionCommand>(
+            AgentSessionProtocolCodec.DeserializeCommand(await transport.ServerReadAsync()));
+        await transport.ServerSendAsync(Frame(2, new CommandCompletedEvent
+        {
+            CommandId = commandId,
+        }, command.CorrelationId));
+        Assert.False(operation.IsCompleted);
+        await transport.ServerSendAsync(Frame(3, new SessionTerminalEvent
+        {
+            Reason = "user-requested",
+            CompletionState = JsonDocument.Parse("""{"state":"completed"}""").RootElement.Clone(),
+        }, command.CorrelationId));
+        await operation;
+    }
+
+    [Fact]
+    public async Task DetachAsync_RepeatedCall_IsIdempotent()
+    {
+        var transport = new TestTransport();
+        await using var client = await ConnectAsync(transport);
+        await client.DetachAsync();
+        await client.DetachAsync();
+        Assert.IsType<DetachCommand>(
+            AgentSessionProtocolCodec.DeserializeCommand(await transport.ServerReadAsync()));
+        Assert.False(transport.ClientWrites.Reader.TryRead(out _));
+    }
+
+    private static async Task<RemoteAgentSessionClient> ConnectAsync(TestTransport transport)
+    {
+        var client = new RemoteAgentSessionClient(transport);
+        var connecting = client.ConnectAsync(AgentSessionProtocolCodecTests.Open());
+        await transport.ServerSendAsync(Frame(1, new SessionSnapshotEvent
+        {
+            Snapshot = AgentSessionProtocolCodecTests.Snapshot(),
+        }));
+        await connecting;
+        return client;
+    }
+
+    private static JsonElement Frame(long sequence, AgentSessionServerEvent value, Guid? correlation = null)
+        => AgentSessionProtocolCodec.SerializeFrame(AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.CreateFrame(
+            AgentSessionProtocolCodecTests.Epoch(), sequence, correlation ?? Guid.NewGuid(), value));
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(10));
+        for (var i = 0; i < 100 && await timer.WaitForNextTickAsync(); i++)
+            if (condition()) return;
+        Assert.Fail("Condition was not reached.");
+    }
+
+    private sealed class TestTransport : ITransport
+    {
+        private readonly TestMessageChannel channel = new();
+        public Channel<JsonElement> ClientWrites => this.channel.ClientWrites;
+        public Task<IMessageChannel> ConnectToMessageChannelAsync(JsonElement request, CancellationToken ct = default)
+        {
+            Assert.Equal("attach-agent-session", request.GetProperty("type").GetString());
+            return Task.FromResult<IMessageChannel>(this.channel);
+        }
+        public Task<Stream> ConnectToStreamAsync(JsonElement request, CancellationToken ct = default)
+            => throw new NotSupportedException();
+        public bool Disposed { get; private set; }
+        public ValueTask DisposeAsync()
+        {
+            this.Disposed = true;
+            return ValueTask.CompletedTask;
+        }
+        public ValueTask ServerSendAsync(JsonElement value) => this.channel.ServerWrites.Writer.WriteAsync(value);
+        public ValueTask<JsonElement> ServerReadAsync() => this.channel.ClientWrites.Reader.ReadAsync();
+    }
+
+    private sealed class TestMessageChannel : IMessageChannel
+    {
+        public Channel<JsonElement> ClientWrites { get; } = Channel.CreateUnbounded<JsonElement>();
+        public Channel<JsonElement> ServerWrites { get; } = Channel.CreateUnbounded<JsonElement>();
+        public ChannelWriter<JsonElement> Writer => this.ClientWrites.Writer;
+        public ChannelReader<JsonElement> Reader => this.ServerWrites.Reader;
+        public ValueTask DisposeAsync()
+        {
+            this.ClientWrites.Writer.TryComplete();
+            this.ServerWrites.Writer.TryComplete();
+            return ValueTask.CompletedTask;
+        }
+    }
+}
