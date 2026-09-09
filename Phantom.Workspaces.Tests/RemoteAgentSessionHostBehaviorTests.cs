@@ -484,19 +484,23 @@ public sealed partial class RemoteAgentSessionHostTests
     }
 
     [Fact]
-    public async Task OpenAsync_LastViewerStopWinsAttachRace_StartsFreshEpoch()
+    public async Task RuntimeRegistry_LastViewerStopWins_WaitsForCleanupBeforeStartingFreshEpoch()
     {
         var terminalEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseTerminal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var terminalPersisted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var terminated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var stopWinningRuntime = Runtime(
             background: false,
             persistTerminalAsync: async _ =>
             {
                 terminalEntered.SetResult();
                 await releaseTerminal.Task;
+                terminalPersisted.SetResult();
             });
         await using var stopWinningRegistry = new RemoteAgentSessionRuntimeRegistry(TimeProvider.System);
         await stopWinningRegistry.GetOrStartAsync(Intent(), _ => Task.FromResult(stopWinningRuntime));
+        stopWinningRuntime.Terminated += (_, _) => terminated.SetResult();
         var lastViewer = stopWinningRuntime.Attach(new AttachRemoteAgentSessionRequest
         {
             AttachmentToken = "last",
@@ -506,30 +510,32 @@ public sealed partial class RemoteAgentSessionHostTests
         await terminalEntered.Task;
 
         await using var fresh = Runtime(background: false);
-        var factory = new Mock<IAgentSessionRuntimeHostFactory>();
-        factory.Setup(value => value.LoadIntentAsync("session", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Intent());
-        factory.Setup(value => value.StartAsync(
-                It.IsAny<PersistedAgentSessionRuntimeIntent>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(fresh);
-        var stopWinningHost = new RemoteAgentSessionHost(Allow(), stopWinningRegistry, factory.Object);
-        var freshAttachmentTask = stopWinningHost.OpenAsync(new OpenAgentSessionHostRequest
-        {
-            Peer = Peer(),
-            OpenRequest = Open(AgentSessionOpenIntent.StartOrAttach) with { AttachmentToken = "fresh" },
-            Channel = new DuplexChannel(),
-        });
-        RemoteAgentAttachmentLease? freshAttachment = null;
-        var openError = await Record.ExceptionAsync(async () => freshAttachment = await freshAttachmentTask);
+        var freshStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var replacementTask = stopWinningRegistry.GetOrStartAsync(
+            Intent(),
+            _ =>
+            {
+                freshStarted.SetResult();
+                return Task.FromResult(fresh);
+            }).AsTask();
+        var replacementCompletedBeforeCleanup = replacementTask.IsCompleted;
+        var freshStartedBeforeCleanup = freshStarted.Task.IsCompleted;
+
         releaseTerminal.SetResult();
         await stopTask;
-        Assert.Null(openError);
-        await using var freshAttachmentScope = freshAttachment!;
+        await terminated.Task;
+        await freshStarted.Task;
+        Assert.False(replacementCompletedBeforeCleanup);
+        Assert.False(freshStartedBeforeCleanup);
+        Assert.True(terminalPersisted.Task.IsCompleted);
+        Assert.Same(fresh, await replacementTask);
+        await using var freshAttachment = fresh.Attach(new AttachRemoteAgentSessionRequest
+        {
+            AttachmentToken = "fresh",
+            Channel = new DuplexChannel(),
+        });
         Assert.Equal(1, fresh.ViewerCount);
         Assert.NotEqual(stopWinningRuntime.Epoch, fresh.Epoch);
-        factory.Verify(value => value.StartAsync(
-            It.Is<PersistedAgentSessionRuntimeIntent>(intent => intent.AgentSessionId == "session"),
-            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]

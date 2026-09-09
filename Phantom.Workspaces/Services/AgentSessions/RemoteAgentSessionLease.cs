@@ -26,6 +26,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     private Task? termination;
     private string terminalReason = "runtime-stopped";
     private bool fenced;
+    private bool hasTerminated;
     private bool continueInBackground;
 
     internal RemoteAgentSessionLease(
@@ -79,6 +80,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     internal IAgentChat Chat { get; }
     internal AgentSessionReplayBuffer Replay { get; }
     internal bool IsFenced { get { lock (this.gate) return this.fenced; } }
+    internal bool HasTerminated { get { lock (this.gate) return this.hasTerminated; } }
     internal int ViewerCount { get { lock (this.gate) return this.attachments.Count; } }
     internal bool ContinueInBackground { get { lock (this.gate) return this.continueInBackground; } }
 
@@ -437,7 +439,11 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             }
             await state.Channel.DisposeAsync().ConfigureAwait(false);
         }
-        lock (this.gate) this.attachments.Clear();
+        lock (this.gate)
+        {
+            this.attachments.Clear();
+            this.hasTerminated = true;
+        }
         this.Terminated?.Invoke(this, EventArgs.Empty);
     }
 

@@ -72,19 +72,21 @@ internal sealed class RemoteAgentSessionRuntimeRegistry :
             {
                 lock (this.gate)
                     if (this.entries.TryGetValue(key, out var current) && ReferenceEquals(current, entry))
+                    {
                         this.entries.Remove(key);
+                        entry.MarkRemoved();
+                    }
                 throw;
             }
 
+            lease.Terminated -= this.OnTerminated;
+            lease.Terminated += this.OnTerminated;
+            if (lease.HasTerminated)
+                this.OnTerminated(lease, EventArgs.Empty);
             if (!lease.IsFenced)
-            {
-                lease.Terminated -= this.OnTerminated;
-                lease.Terminated += this.OnTerminated;
                 return lease;
-            }
 
-            lock (this.gate)
-                if (this.entries.TryGetValue(key, out var current) && ReferenceEquals(current, entry)) this.entries.Remove(key);
+            await entry.Removal.WaitAsync(ct).ConfigureAwait(false);
         }
     }
 
@@ -120,6 +122,7 @@ internal sealed class RemoteAgentSessionRuntimeRegistry :
             this.disposed = true;
             entries = this.entries.Values.ToArray();
             this.entries.Clear();
+            foreach (var entry in entries) entry.MarkRemoved();
         }
         foreach (var entry in entries)
         {
@@ -135,7 +138,10 @@ internal sealed class RemoteAgentSessionRuntimeRegistry :
         {
             var key = new RuntimeKey(lease.SessionId, lease.OwnershipGeneration);
             if (this.entries.TryGetValue(key, out var entry) && ReferenceEquals(entry.Lease, lease))
+            {
                 this.entries.Remove(key);
+                entry.MarkRemoved();
+            }
         }
     }
 
@@ -143,7 +149,13 @@ internal sealed class RemoteAgentSessionRuntimeRegistry :
 
     private sealed class RegistryEntry(Task<RemoteAgentSessionLease> startTask)
     {
+        private readonly TaskCompletionSource removed =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         internal Task<RemoteAgentSessionLease> StartTask { get; } = startTask;
         internal RemoteAgentSessionLease? Lease { get; set; }
+        internal Task Removal => this.removed.Task;
+
+        internal void MarkRemoved() => this.removed.TrySetResult();
     }
 }
