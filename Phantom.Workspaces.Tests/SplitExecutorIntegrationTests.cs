@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using AgentSchema;
+using Moq;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Gui.Shared.Utilities;
 using Phantom.Workspaces.Llm;
@@ -184,6 +185,8 @@ public sealed class SplitExecutorIntegrationTests
 
         try
         {
+            Assert.Same(chatFactory.AgentChat, lease.AgentChat);
+
             // The effective services reaching the running-chat factory carry the reconstructed
             // ExecutorBindings and the shared transport registry.
             var services = chatFactory.LastServices;
@@ -213,6 +216,8 @@ public sealed class SplitExecutorIntegrationTests
         {
             await lease.DisposeAsync();
         }
+
+        Assert.Equal(1, chatFactory.DisposeCallCount);
     }
 
     private sealed class RecordingUserComputerProfileTransportFactory : ITransportFactory
@@ -263,11 +268,22 @@ public sealed class SplitExecutorIntegrationTests
 
     private sealed class CapturingRunningAgentChatFactory : IRunningAgentChatFactory
     {
+        private int disposeCallCount;
+
         public System.Collections.ObjectModel.ObservableCollection<RunningAgentChat> RunningSessions { get; } = new();
         public AgentServices? LastServices { get; private set; }
+        public IAgentChat AgentChat { get; } = Mock.Of<IAgentChat>();
+        public int DisposeCallCount => Volatile.Read(ref this.disposeCallCount);
 
         public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, bool registerAsRunningAgent = true, CancellationToken ct = default)
-            => Task.FromResult(new RunningAgentChatLease(sessionId, null!, () => ValueTask.CompletedTask));
+            => Task.FromResult(new RunningAgentChatLease(
+                sessionId,
+                AgentChat,
+                () =>
+                {
+                    Interlocked.Increment(ref this.disposeCallCount);
+                    return ValueTask.CompletedTask;
+                }));
 
         public Task<RunningAgentChatLease> CreateAsync(
             AgentDefinition definition,

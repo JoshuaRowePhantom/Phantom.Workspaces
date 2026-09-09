@@ -122,14 +122,25 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
             entry.IncrementViewerCount();
         }
 
-        var remoteProxy = isRemote
-            ? RemoteAgentChatProxy.TryOpen(lease.LocalAgentChat, isAuthorized: true, out var proxy) ? proxy : null
-            : null;
+        AgentChat? localAgentChat = null;
+        RemoteAgentChatProxy? remoteProxy = null;
+        IAgentChat exposedAgentChat = lease.AgentChat;
+        if (isRemote)
+        {
+            localAgentChat = lease.LocalAgentChat;
+            if (RemoteAgentChatProxy.TryOpen(localAgentChat, isAuthorized: true, out var proxy)
+                && proxy is not null)
+            {
+                remoteProxy = proxy;
+                exposedAgentChat = proxy;
+            }
+        }
+
         return new RunningAgentChatLease(
             lease.SessionId,
-            remoteProxy is not null ? remoteProxy : lease.LocalAgentChat,
+            exposedAgentChat,
             onDispose: lease.DisposeAsync,
-            localAgentChat: lease.LocalAgentChat,
+            localAgentChat: localAgentChat,
             afterDispose: () =>
             {
                 var disposedEntry = this.FindEntry(sessionId);
@@ -382,4 +393,3 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         return null;
     }
 }
-
