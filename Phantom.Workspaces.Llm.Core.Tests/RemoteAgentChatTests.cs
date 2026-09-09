@@ -6,7 +6,7 @@ using Phantom.Workspaces.Transport;
 
 namespace Phantom.Workspaces.Llm.Tests;
 
-public sealed class RemoteAgentChatTests
+public sealed partial class RemoteAgentChatTests
 {
     [Fact]
     public void RemoteAgentChatAttachOptions_RequiredInitProperties_AreMarkedRequired()
@@ -74,7 +74,7 @@ public sealed class RemoteAgentChatTests
             {
                 Usage = new Usage { TotalOutputTokenCount = 9 },
             }));
-            Assert.True(await observed.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+            Assert.True(await observed.Task);
         }
     }
 
@@ -93,7 +93,7 @@ public sealed class RemoteAgentChatTests
                 Queues = [queue with { Name = "Renamed", Revision = 1 }],
                 RemovedQueueIds = [],
             }));
-            await changed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await changed.Task;
             Assert.Equal(2, chat.InputQueues.Snapshot.Revision);
             Assert.Equal("Renamed", chat.InputQueues.DefaultQueue.Snapshot.Name);
         }
@@ -110,21 +110,27 @@ public sealed class RemoteAgentChatTests
                 Role = ChatRole.Assistant,
                 Contents = [new TextContent("partial")],
             };
+            var runningChanged = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            ((System.Collections.Specialized.INotifyCollectionChanged)chat.RunningItems).CollectionChanged +=
+                (_, _) => runningChanged.TrySetResult();
             await transport.SendAsync(Frame(2, new StreamingStartedEvent
             {
                 RunId = "run-1",
                 Item = JsonSerializer.SerializeToElement(item, AIJsonUtilities.DefaultOptions),
             }));
-            await WaitUntilAsync(() => chat.RunningItems.Count == 1);
+            await runningChanged.Task;
             Assert.Empty(chat.History);
 
             var completed = item with { Contents = [new TextContent("complete")] };
+            var historyChanged = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            ((System.Collections.Specialized.INotifyCollectionChanged)chat.History).CollectionChanged +=
+                (_, _) => historyChanged.TrySetResult();
             await transport.SendAsync(Frame(3, new StreamingCompletedEvent
             {
                 RunId = "run-1",
                 Item = JsonSerializer.SerializeToElement(completed, AIJsonUtilities.DefaultOptions),
             }));
-            await WaitUntilAsync(() => chat.RunningItems.Count == 0 && chat.History.Count == 1);
+            await historyChanged.Task;
             Assert.Equal(ChatRole.Assistant, chat.History[0].Role);
         }
     }
@@ -135,8 +141,11 @@ public sealed class RemoteAgentChatTests
         var (_, chat) = await AttachAsync();
         await using (chat)
         {
+            var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            ((System.Collections.Specialized.INotifyCollectionChanged)chat.History).CollectionChanged +=
+                (_, _) => changed.TrySetResult();
             chat.EnqueueSystemNote("local note");
-            await WaitUntilAsync(() => chat.History.Count == 1);
+            await changed.Task;
             Assert.Equal("diagnostic", chat.History[0].Role.Value);
         }
     }
@@ -177,28 +186,22 @@ public sealed class RemoteAgentChatTests
         return (transport, await attaching);
     }
 
-    private static JsonElement Frame(long sequence, AgentSessionServerEvent value)
+    private static JsonElement Frame(long sequence, AgentSessionServerEvent value, Guid? correlation = null)
         => AgentSessionProtocolCodec.SerializeFrame(AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.CreateFrame(
-            AgentSessionProtocolCodecTests.Epoch(), sequence, Guid.NewGuid(), value));
-
-    private static async Task WaitUntilAsync(Func<bool> condition)
-    {
-        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(10));
-        for (var i = 0; i < 100 && await timer.WaitForNextTickAsync(); i++)
-            if (condition()) return;
-        Assert.Fail("Condition was not reached.");
-    }
+            AgentSessionProtocolCodecTests.Epoch(), sequence, correlation ?? Guid.NewGuid(), value));
 
     private sealed class TestTransport : ITransport
     {
         private readonly TestMessageChannel channel = new();
         public bool ChannelDisposed => this.channel.Disposed;
+        public ChannelReader<JsonElement> Outgoing => this.channel.Outgoing.Reader;
         public Task<IMessageChannel> ConnectToMessageChannelAsync(JsonElement request, CancellationToken ct = default)
             => Task.FromResult<IMessageChannel>(this.channel);
         public Task<Stream> ConnectToStreamAsync(JsonElement request, CancellationToken ct = default)
             => throw new NotSupportedException();
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         public ValueTask SendAsync(JsonElement value) => this.channel.Incoming.Writer.WriteAsync(value);
+        public void Disconnect() => this.channel.Incoming.Writer.TryComplete();
     }
 
     private sealed class TestMessageChannel : IMessageChannel

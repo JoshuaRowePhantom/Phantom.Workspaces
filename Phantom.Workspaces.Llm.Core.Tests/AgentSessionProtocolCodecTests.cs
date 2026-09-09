@@ -1,6 +1,8 @@
 using System.Collections.Immutable;
+using System.Collections.Concurrent;
 using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using AgentSchema;
 using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Transport;
@@ -65,6 +67,52 @@ public sealed class AgentSessionProtocolCodecTests
             CommandId = Guid.NewGuid(), CorrelationId = Guid.NewGuid(), RuntimeEpoch = Epoch(),
         };
         Assert.Null(move.BeforeItemId);
+    }
+
+    [Fact]
+    public void ProtocolDtos_NamedInitializers_PreserveFixedDiscriminators()
+    {
+        AgentSessionCommand[] commands =
+        [
+            new InterruptCommand { CommandId = Guid.NewGuid(), CorrelationId = Guid.NewGuid(), RuntimeEpoch = Epoch() },
+            new DetachCommand { CommandId = Guid.NewGuid(), CorrelationId = Guid.NewGuid(), RuntimeEpoch = Epoch() },
+            new SetContinueInBackgroundCommand
+            {
+                ContinueInBackground = true, CommandId = Guid.NewGuid(),
+                CorrelationId = Guid.NewGuid(), RuntimeEpoch = Epoch(),
+            },
+        ];
+
+        Assert.Equal(["interrupt", "detach", "set-continue-in-background"], commands.Select(c => c.Type));
+    }
+
+    [Fact]
+    public void RemoteSubagentDescriptor_ValidValues_RoundTrips()
+    {
+        var value = new RemoteSubagentDescriptor
+        {
+            AgentSessionId = "child", AgentId = "agent", OwningProfileEntityId = "profile",
+            OwnershipGeneration = 4, RuntimeEpoch = Epoch(),
+        };
+        var copy = JsonSerializer.Deserialize<RemoteSubagentDescriptor>(
+            JsonSerializer.Serialize(value, AgentSessionProtocolCodec.Options),
+            AgentSessionProtocolCodec.Options)!;
+        Assert.Equal(value, copy);
+    }
+
+    [Fact]
+    public void RoundTrip_AgentSessionTakeoverRequest_PreservesProfilesGenerationAndCorrelation()
+    {
+        var value = new AgentSessionTakeoverRequest
+        {
+            AgentSessionId = "session", ExpectedOwningProfileEntityId = "old",
+            ExpectedOwnershipGeneration = 8, NewOwningProfileEntityId = "new",
+            CorrelationId = Guid.NewGuid(),
+        };
+        var copy = JsonSerializer.Deserialize<AgentSessionTakeoverRequest>(
+            JsonSerializer.Serialize(value, AgentSessionProtocolCodec.Options),
+            AgentSessionProtocolCodec.Options)!;
+        Assert.Equal(value, copy);
     }
 
     [Theory]
@@ -157,6 +205,109 @@ public sealed class AgentSessionProtocolCodecTests
         Assert.Equal(3, copy.ViewerCount);
     }
 
+    [Fact]
+    public void RoundTrip_AllServerEventDiscriminators_PreservesSequenceAndCorrelation()
+    {
+        long sequence = 0;
+        foreach (var value in ServerEvents())
+        {
+            var correlation = Guid.NewGuid();
+            var frame = AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.CreateFrame(
+                Epoch(), ++sequence, correlation, value);
+            var copy = AgentSessionProtocolCodec.DeserializeFrame(AgentSessionProtocolCodec.SerializeFrame(frame));
+            Assert.Equal(value.Type, copy.Type);
+            Assert.Equal(sequence, copy.Sequence);
+            Assert.Equal(correlation, copy.CorrelationId);
+            Assert.IsType(value.GetType(), AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(copy));
+        }
+        Assert.Equal(21, sequence);
+    }
+
+    [Fact]
+    public void RoundTrip_SessionSnapshot_PreservesBackgroundPreferenceViewerCountAndFullDefinition()
+    {
+        var snapshot = Snapshot() with { ContinueInBackground = true, ViewerCount = 3 };
+        var copy = RoundTrip(new SessionSnapshotEvent { Snapshot = snapshot });
+        Assert.True(copy.Snapshot.ContinueInBackground);
+        Assert.Equal(3, copy.Snapshot.ViewerCount);
+        Assert.Equal(snapshot.Information.AgentDefinition.ToJson(), copy.Snapshot.Information.AgentDefinition.ToJson());
+    }
+
+    [Fact]
+    public void RoundTrip_SetContinueInBackgroundCommand_PreservesCommandAndCorrelationIds()
+    {
+        var value = new SetContinueInBackgroundCommand
+        {
+            ContinueInBackground = true, CommandId = Guid.NewGuid(),
+            CorrelationId = Guid.NewGuid(), RuntimeEpoch = Epoch(),
+        };
+        var copy = Assert.IsType<SetContinueInBackgroundCommand>(
+            AgentSessionProtocolCodec.DeserializeCommand(AgentSessionProtocolCodec.SerializeCommand(value)));
+        Assert.True(copy.ContinueInBackground);
+        Assert.Equal(value.CommandId, copy.CommandId);
+        Assert.Equal(value.CorrelationId, copy.CorrelationId);
+    }
+
+    [Fact]
+    public void RoundTrip_QueueChanged_PreservesStableIdsRevisionsAndOrdering()
+    {
+        var queues = Snapshot().InputQueues.Queues.Reverse().ToArray();
+        var copy = RoundTrip(new QueueChangedEvent
+        {
+            Revision = 9, Queues = queues, RemovedQueueIds = ["removed"],
+        });
+        Assert.Equal(9, copy.Revision);
+        Assert.Equal(queues.Select(q => q.QueueId), copy.Queues.Select(q => q.QueueId));
+        Assert.Equal(["removed"], copy.RemovedQueueIds);
+    }
+
+    [Fact]
+    public void RoundTrip_AgentInformation_ClonesDefinitionJsonElements()
+    {
+        var copy = RoundTrip(new AgentInformationChangedEvent { Information = Snapshot().Information });
+        Assert.Equal("test-agent", copy.Information.AgentDefinition.Name);
+        Assert.Equal("prompt", JsonDocument.Parse(copy.Information.AgentDefinition.ToJson()).RootElement.GetProperty("kind").GetString());
+    }
+
+    [Fact]
+    public void Deserialize_CompiledPolicyMember_RejectsFrame()
+    {
+        var node = JsonNode.Parse(AgentSessionProtocolCodec.SerializeFrame(
+            AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.CreateFrame(
+                Epoch(), 1, Guid.NewGuid(),
+                new AgentInformationChangedEvent { Information = Snapshot().Information })).GetRawText())!;
+        node["payload"]!["information"]!["compiled-policy"] = new JsonObject();
+        Assert.Throws<RemoteAgentProtocolException>(() =>
+            AgentSessionProtocolCodec.DeserializeFrame(JsonSerializer.SerializeToElement(node)));
+    }
+
+    [Fact]
+    public void Deserialize_EmptyRequiredId_RejectsFrame()
+    {
+        var frame = AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.CreateFrame(
+            Epoch(), 1, Guid.NewGuid(), new ModalDismissedEvent { ModalId = "modal" });
+        var node = JsonNode.Parse(AgentSessionProtocolCodec.SerializeFrame(frame).GetRawText())!;
+        node["payload"]!["modal-id"] = "";
+        Assert.Throws<ArgumentException>(() =>
+            AgentSessionProtocolCodec.DeserializeFrame(JsonSerializer.SerializeToElement(node)));
+    }
+
+    [Fact]
+    public void ServerFrames_ConcurrentPublish_AreStrictlyOrdered()
+    {
+        long sequence = 0;
+        var frames = new ConcurrentBag<AgentSessionServerFrame>();
+        Parallel.For(0, 128, _ =>
+        {
+            var current = Interlocked.Increment(ref sequence);
+            frames.Add(AgentSessionProtocolCodec.DeserializeFrame(
+                AgentSessionProtocolCodec.SerializeFrame(
+                    AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.CreateFrame(
+                        Epoch(), current, Guid.NewGuid(), new BusyChangedEvent { IsBusy = true }))));
+        });
+        Assert.Equal(Enumerable.Range(1, 128).Select(i => (long)i), frames.OrderBy(f => f.Sequence).Select(f => f.Sequence));
+    }
+
     internal static AgentSessionOpenRequest Open() => new()
     {
         ProtocolVersion = 1,
@@ -207,6 +358,51 @@ public sealed class AgentSessionProtocolCodecTests
       "model": { "id": "echo", "provider": "echo", "apiType": "Echo" }
     }
     """);
+
+    private static T RoundTrip<T>(T value) where T : AgentSessionServerEvent
+        => Assert.IsType<T>(AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(
+            AgentSessionProtocolCodec.DeserializeFrame(AgentSessionProtocolCodec.SerializeFrame(
+                AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.CreateFrame(
+                    Epoch(), 1, Guid.NewGuid(), value)))));
+
+    private static IEnumerable<AgentSessionServerEvent> ServerEvents()
+    {
+        var json = JsonDocument.Parse("""{"value":"x"}""").RootElement.Clone();
+        var commandId = Guid.NewGuid();
+        var modal = new AgentChatModal
+        {
+            Id = "modal", OwnerAgentId = "agent", Title = "Title", Body = "Body",
+            Content = new FreeformModalContent { IsRequired = false },
+        };
+        yield return new SessionStatusEvent { Status = AgentSessionRemoteStatus.Running };
+        yield return new SessionSnapshotEvent { Snapshot = Snapshot() };
+        yield return new HistoryAppendedEvent { Item = json };
+        yield return new UsageChangedEvent { Usage = new Usage() };
+        yield return new AgentInformationChangedEvent { Information = Snapshot().Information };
+        yield return new QueueChangedEvent { Revision = 2, Queues = Snapshot().InputQueues.Queues, RemovedQueueIds = [] };
+        yield return new StreamingStartedEvent { RunId = "run", Item = json };
+        yield return new StreamingUpdatedEvent { RunId = "run", Update = json };
+        yield return new StreamingCompletedEvent { RunId = "run", Item = json };
+        yield return new BusyChangedEvent { IsBusy = true };
+        yield return new ToolsSnapshotEvent { Tools = [json] };
+        yield return new ToolsChangedEvent { Tools = [json] };
+        yield return new SubagentsSnapshotEvent { Subagents = [json] };
+        yield return new SubagentsChangedEvent { Subagents = [json] };
+        yield return new ModalRaisedEvent { Modal = modal };
+        yield return new ModalUpdatedEvent { Modal = modal };
+        yield return new ModalDismissedEvent { ModalId = "modal" };
+        yield return new SessionRetentionChangedEvent { ContinueInBackground = true, ViewerCount = 1 };
+        yield return new CommandCompletedEvent { CommandId = commandId };
+        yield return new OperationErrorEvent
+        {
+            Error = new RemoteAgentOperationError
+            {
+                Code = "cancelled", Operation = "test", IsRetryable = true,
+                Message = "Cancelled.", CorrelationId = Guid.NewGuid(),
+            },
+        };
+        yield return new SessionTerminalEvent { Reason = "done", CompletionState = json };
+    }
 
     private static void AssertRequired<T>(params string[] propertyNames)
     {

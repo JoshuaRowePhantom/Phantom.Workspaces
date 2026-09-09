@@ -1,0 +1,436 @@
+using System.Collections.Immutable;
+using System.Collections.Specialized;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Threading.Channels;
+using Microsoft.Extensions.AI;
+using Phantom.Workspaces.Llm.Remote;
+using Phantom.Workspaces.Transport;
+
+namespace Phantom.Workspaces.Llm.Tests;
+
+public sealed partial class RemoteAgentChatTests
+{
+    [Fact]
+    public void AgentChatModal_InvalidIdentityTitleOrBody_RejectsInitialization()
+    {
+        static AgentChatModal Create(string id, string owner, string title, string body) => new()
+        {
+            Id = id, OwnerAgentId = owner, Title = title, Body = body,
+            Content = new FreeformModalContent { IsRequired = false },
+        };
+        Assert.Throws<ArgumentException>(() => Create("", "owner", "title", "body"));
+        Assert.Throws<ArgumentException>(() => Create("id", " ", "title", "body"));
+        Assert.Throws<ArgumentException>(() => Create("id", "owner", "", "body"));
+        Assert.Throws<ArgumentException>(() => Create("id", "owner", "title", "\t"));
+    }
+
+    [Fact]
+    public void MultipleChoiceModalContent_Options_AreClonedOnInitialization()
+    {
+        var document = JsonDocument.Parse("""["one","two"]""");
+        var content = new MultipleChoiceModalContent
+        {
+            Options = [document.RootElement[0], document.RootElement[1]], AllowsMultiple = true,
+        };
+        document.Dispose();
+        Assert.Equal(["one", "two"], content.Options.Select(o => o.GetString()));
+    }
+
+    [Fact]
+    public void FreeformModalContent_ValidSettings_RoundTrips()
+    {
+        var value = new FreeformModalContent { Placeholder = "Answer", IsRequired = true };
+        var copy = JsonSerializer.Deserialize<AgentChatModalContent>(
+            JsonSerializer.Serialize<AgentChatModalContent>(value, AgentSessionProtocolCodec.Options),
+            AgentSessionProtocolCodec.Options);
+        Assert.Equal(value, copy);
+    }
+
+    [Fact]
+    public void MultipleChoiceModalContent_DuplicateOrEmptyOptions_RejectsInitialization()
+    {
+        Assert.Throws<ArgumentException>(() => new MultipleChoiceModalContent { Options = [], AllowsMultiple = false });
+        var option = JsonDocument.Parse("\"same\"").RootElement.Clone();
+        Assert.Throws<ArgumentException>(() => new MultipleChoiceModalContent { Options = [option, option], AllowsMultiple = false });
+    }
+
+    [Fact]
+    public void ApprovalModalContent_BlankLabels_RejectsInitialization()
+    {
+        Assert.Throws<ArgumentException>(() => new ApprovalModalContent { ApproveLabel = "", RejectLabel = "No" });
+        Assert.Throws<ArgumentException>(() => new ApprovalModalContent { ApproveLabel = "Yes", RejectLabel = " " });
+    }
+
+    [Fact]
+    public async Task AttachAsync_InvalidSnapshot_ThrowsProtocolException()
+    {
+        var transport = new TestTransport();
+        var client = new RemoteAgentSessionClient(transport);
+        var attaching = RemoteAgentChat.AttachAsync(new RemoteAgentChatAttachOptions
+        {
+            Client = client, OpenRequest = AgentSessionProtocolCodecTests.Open(),
+            ForegroundScheduler = TaskScheduler.Default,
+        });
+        var invalid = JsonNode.Parse(Frame(
+            1, new SessionSnapshotEvent { Snapshot = AgentSessionProtocolCodecTests.Snapshot() }).GetRawText())!;
+        invalid["payload"]!["snapshot"]!["usage"]!["total-input-token-count"] = -1;
+        await transport.SendAsync(JsonSerializer.SerializeToElement(invalid));
+        await Assert.ThrowsAsync<RemoteAgentProtocolException>(() => attaching);
+        Assert.True(transport.ChannelDisposed);
+    }
+
+    [Fact]
+    public async Task Reconnect_UnexpectedLoss_RetriesWithinGraceAndKeepsProxyEpoch()
+    {
+        var transport = new ReconnectingChatTransport();
+        var attaching = RemoteAgentChat.AttachAsync(new RemoteAgentChatAttachOptions
+        {
+            Client = new RemoteAgentSessionClient(transport),
+            OpenRequest = AgentSessionProtocolCodecTests.Open(),
+            ForegroundScheduler = TaskScheduler.Default,
+        });
+        await transport.SendAsync(0, Frame(1, new SessionSnapshotEvent
+        {
+            Snapshot = AgentSessionProtocolCodecTests.Snapshot(),
+        }));
+        await using var chat = await attaching;
+        transport.Complete(0);
+        await transport.SecondOpen;
+        var usageApplied = Event(chat, nameof(chat.UsageChanged));
+        await transport.SendAsync(1, Frame(2, new UsageChangedEvent
+        {
+            Usage = new Usage { TotalInputTokenCount = 99 },
+        }));
+        await usageApplied;
+
+        var replay = transport.Opens[1].GetProperty("replay-cursor");
+        Assert.Equal(AgentSessionProtocolCodecTests.Epoch().Value, replay.GetProperty("epoch").GetProperty("value").GetGuid());
+        Assert.Equal(1, replay.GetProperty("sequence").GetInt64());
+        Assert.Equal(99, chat.Usage.TotalInputTokenCount);
+    }
+
+    [Fact]
+    public async Task ProxyGetters_AfterOrderedFrames_ReturnMirroredState()
+    {
+        var (transport, chat) = await AttachAsync();
+        await using (chat)
+        {
+            var usageApplied = Event(chat, nameof(chat.UsageChanged));
+            await transport.SendAsync(Frame(2, new UsageChangedEvent { Usage = new Usage { TotalOutputTokenCount = 11 } }));
+            await usageApplied;
+            Assert.Equal(11, chat.Usage.TotalOutputTokenCount);
+
+            var informationApplied = Event(chat, nameof(chat.InformationChanged));
+            await transport.SendAsync(Frame(3, new AgentInformationChangedEvent
+            {
+                Information = AgentSessionProtocolCodecTests.Snapshot().Information with { DisplayName = "Changed" },
+            }));
+            await informationApplied;
+            Assert.Equal("Changed", chat.Information.DisplayName);
+        }
+    }
+
+    [Fact]
+    public async Task UsageChanged_OrderedFrame_AtomicallyReplacesUsage()
+    {
+        var (transport, chat) = await AttachAsync();
+        await using (chat)
+        {
+            var observed = new TaskCompletionSource<Usage>(TaskCreationOptions.RunContinuationsAsynchronously);
+            chat.UsageChanged += (_, _) => observed.TrySetResult(chat.Usage);
+            var replacement = new Usage { TotalInputTokenCount = 20, TotalOutputTokenCount = 10, TotalSessionCostUsd = 1.5 };
+            await transport.SendAsync(Frame(2, new UsageChangedEvent { Usage = replacement }));
+            Assert.Equal(replacement, await observed.Task);
+        }
+    }
+
+    [Fact]
+    public async Task InformationChanged_OrderedFrame_AtomicallyReplacesInformation()
+    {
+        var (transport, chat) = await AttachAsync();
+        await using (chat)
+        {
+            var observed = new TaskCompletionSource<AgentInformation>(TaskCreationOptions.RunContinuationsAsynchronously);
+            chat.InformationChanged += (_, _) => observed.TrySetResult(chat.Information);
+            var replacement = AgentSessionProtocolCodecTests.Snapshot().Information with
+            { DisplayName = "Replacement", CurrentModelId = "new-model" };
+            await transport.SendAsync(Frame(2, new AgentInformationChangedEvent { Information = replacement }));
+            var value = await observed.Task;
+            Assert.Equal(("Replacement", "new-model"), (value.DisplayName, value.CurrentModelId));
+        }
+    }
+
+    [Fact]
+    public async Task InputQueues_RejectedCommand_DoesNotMutateProjection()
+    {
+        var (transport, chat) = await AttachAsync();
+        await using (chat)
+        {
+            var before = chat.InputQueues.Snapshot;
+            var id = Guid.NewGuid();
+            var operation = chat.InputQueues.DeleteQueueAsync(new DeleteAgentInputQueueRequest
+            { QueueId = "missing", ExpectedRevision = before.Revision, CommandId = id });
+            var command = AgentSessionProtocolCodec.DeserializeCommand(await transport.Outgoing.ReadAsync());
+            await CompleteAsync(transport, 2, command, new AgentInputQueueCommandResult
+            {
+                CommandId = id, Status = AgentInputQueueCommandStatus.Rejected,
+                ErrorCode = AgentInputQueueErrorCodes.UnknownQueue, Revision = before.Revision,
+            });
+            Assert.Equal(AgentInputQueueCommandStatus.Rejected, (await operation).Status);
+            Assert.Equal(before, chat.InputQueues.Snapshot);
+        }
+    }
+
+    [Fact]
+    public async Task InputQueues_ConflictResult_RefreshesFromAuthoritativeSnapshot()
+    {
+        var (transport, chat) = await AttachAsync();
+        await using (chat)
+        {
+            var id = Guid.NewGuid();
+            var operation = chat.InputQueues.DeleteQueueAsync(new DeleteAgentInputQueueRequest
+            { QueueId = "missing", ExpectedRevision = 1, CommandId = id });
+            var command = AgentSessionProtocolCodec.DeserializeCommand(await transport.Outgoing.ReadAsync());
+            var current = AgentSessionProtocolCodecTests.Snapshot().InputQueues with { Revision = 5 };
+            await CompleteAsync(transport, 2, command, new AgentInputQueueCommandResult
+            {
+                CommandId = id, Status = AgentInputQueueCommandStatus.Conflict,
+                ErrorCode = "conflict", Revision = 5, CurrentSnapshot = current,
+            });
+            Assert.Equal(AgentInputQueueCommandStatus.Conflict, (await operation).Status);
+            Assert.Equal(5, chat.InputQueues.Snapshot.Revision);
+        }
+    }
+
+    [Fact]
+    public async Task InputQueues_CommandPending_DoesNotMutateProjection()
+    {
+        var (transport, chat) = await AttachAsync();
+        await using (chat)
+        {
+            var before = chat.InputQueues.Snapshot;
+            var operation = chat.InputQueues.DeleteQueueAsync(new DeleteAgentInputQueueRequest
+            { QueueId = "missing", ExpectedRevision = 1, CommandId = Guid.NewGuid() });
+            _ = await transport.Outgoing.ReadAsync();
+            Assert.False(operation.IsCompleted);
+            Assert.Equal(before, chat.InputQueues.Snapshot);
+        }
+    }
+
+    [Fact]
+    public async Task SetToolEnabledAsync_RemoteTool_SerializesCommandAndAppliesAcknowledgedEvent()
+    {
+        var (transport, chat) = await AttachAsync();
+        await using (chat)
+        {
+            var operation = chat.SetToolEnabledAsync("tool", true);
+            var command = Assert.IsType<SetToolEnabledCommand>(
+                AgentSessionProtocolCodec.DeserializeCommand(await transport.Outgoing.ReadAsync()));
+            await CompleteAsync(transport, 2, command);
+            Assert.False(operation.IsCompleted);
+            var tool = new AgentChatToolItem("tool", "Tool", "Description", "", "function", true, []);
+            await transport.SendAsync(Frame(3, new ToolsChangedEvent
+            {
+                Tools = [JsonSerializer.SerializeToElement(tool, AIJsonUtilities.DefaultOptions)],
+            }));
+            await operation;
+            Assert.True(chat.GetToolSnapshot().Single().IsEnabled);
+        }
+    }
+
+    [Fact]
+    public async Task RespondToModalAsync_CurrentModal_SerializesResponseCommand()
+    {
+        var snapshot = AgentSessionProtocolCodecTests.Snapshot() with { Modals = [Modal()] };
+        var (transport, chat) = await AttachAsync(snapshot);
+        await using (chat)
+        {
+            var operation = chat.RespondToModalAsync("modal", JsonDocument.Parse("""{"value":"yes"}""").RootElement);
+            var command = Assert.IsType<ModalResponseCommand>(
+                AgentSessionProtocolCodec.DeserializeCommand(await transport.Outgoing.ReadAsync()));
+            Assert.Equal("modal", command.ModalId);
+            await CompleteAsync(transport, 2, command);
+            await operation;
+        }
+    }
+
+    [Fact]
+    public async Task EnqueueHelpNote_RemoteProxy_AddsLocalDisplayOnlyNote()
+        => await AssertLocalNoteAsync((chat, text) => chat.EnqueueHelpNote(text), AgentChatHistoryItem.HelpChatRole);
+
+    [Fact]
+    public async Task EnqueueTransientDiagnostic_RemoteProxy_AddsLocalNonPersistedDiagnostic()
+        => await AssertLocalNoteAsync((chat, text) => chat.EnqueueTransientDiagnostic(text), AgentChatHistoryItem.DiagnosticChatRole);
+
+    [Fact]
+    public async Task Interrupt_ConnectedProxy_SerializesInterrupt()
+    {
+        var (transport, chat) = await AttachAsync();
+        await using (chat)
+        {
+            chat.Interrupt();
+            Assert.IsType<InterruptCommand>(AgentSessionProtocolCodec.DeserializeCommand(await transport.Outgoing.ReadAsync()));
+        }
+    }
+
+    [Fact]
+    public async Task DetachAsync_RepeatedCall_SendsAtMostOneDetach()
+    {
+        var (transport, chat) = await AttachAsync();
+        await chat.DetachAsync();
+        await chat.DetachAsync();
+        Assert.IsType<DetachCommand>(AgentSessionProtocolCodec.DeserializeCommand(await transport.Outgoing.ReadAsync()));
+        Assert.False(transport.Outgoing.TryRead(out _));
+    }
+
+    [Fact]
+    public async Task DetachAsync_LastViewer_DefaultPolicy_TerminatesRuntime()
+        => await AssertDetachPolicyAsync(continueInBackground: false);
+
+    [Fact]
+    public async Task DetachAsync_LastViewer_BackgroundEnabled_PreservesRuntime()
+        => await AssertDetachPolicyAsync(continueInBackground: true);
+
+    [Fact]
+    public async Task TerminateAsync_CurrentEpoch_WaitsForTerminalFrame()
+    {
+        var (transport, chat) = await AttachAsync();
+        await using (chat)
+        {
+            var operation = chat.TerminateAsync();
+            var command = AgentSessionProtocolCodec.DeserializeCommand(await transport.Outgoing.ReadAsync());
+            await CompleteAsync(transport, 2, command);
+            Assert.False(operation.IsCompleted);
+            await transport.SendAsync(Frame(3, new SessionTerminalEvent
+            {
+                Reason = "done", CompletionState = JsonDocument.Parse("""{"state":"completed"}""").RootElement.Clone(),
+            }, command.CorrelationId));
+            await operation;
+        }
+    }
+
+    [Fact]
+    public async Task TerminateAsync_StaleEpoch_ThrowsRuntimeChanged()
+    {
+        var (transport, chat) = await AttachAsync();
+        await using (chat)
+        {
+            var operation = chat.TerminateAsync();
+            var command = AgentSessionProtocolCodec.DeserializeCommand(await transport.Outgoing.ReadAsync());
+            await transport.SendAsync(Frame(2, new OperationErrorEvent
+            {
+                Error = new RemoteAgentOperationError
+                {
+                    Code = "runtime-changed", Operation = "terminate-session", IsRetryable = false,
+                    Message = "Runtime changed.", CorrelationId = command.CorrelationId,
+                },
+            }, command.CorrelationId));
+            Assert.Equal("runtime-changed", (await Assert.ThrowsAsync<RemoteAgentSessionException>(() => operation)).Code);
+        }
+    }
+
+    [Fact]
+    public async Task DisposeAsync_ConnectedProxy_ReleasesViewerWithoutTerminateCommand()
+    {
+        var (transport, chat) = await AttachAsync();
+        await chat.DisposeAsync();
+        Assert.True(transport.ChannelDisposed);
+        Assert.False(transport.Outgoing.TryRead(out _));
+    }
+
+    private static async Task<(TestTransport Transport, RemoteAgentChat Chat)> AttachAsync(AgentSessionSnapshot snapshot)
+    {
+        var transport = new TestTransport();
+        var attaching = RemoteAgentChat.AttachAsync(new RemoteAgentChatAttachOptions
+        {
+            Client = new RemoteAgentSessionClient(transport), OpenRequest = AgentSessionProtocolCodecTests.Open(),
+            ForegroundScheduler = TaskScheduler.Default,
+        });
+        await transport.SendAsync(Frame(1, new SessionSnapshotEvent { Snapshot = snapshot }));
+        return (transport, await attaching);
+    }
+
+    private static Task Event(RemoteAgentChat chat, string eventName)
+    {
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        EventHandler handler = (_, _) => completion.TrySetResult();
+        typeof(RemoteAgentChat).GetEvent(eventName)!.AddEventHandler(chat, handler);
+        return completion.Task;
+    }
+
+    private static AgentChatModal Modal() => new()
+    {
+        Id = "modal", OwnerAgentId = "agent", Title = "Question", Body = "Choose",
+        Content = new FreeformModalContent { IsRequired = true },
+    };
+
+    private static ValueTask CompleteAsync(
+        TestTransport transport, long sequence, AgentSessionCommand command, object? result = null)
+        => transport.SendAsync(Frame(sequence, new CommandCompletedEvent
+        {
+            CommandId = command.CommandId,
+            Result = result is null ? null : JsonSerializer.SerializeToElement(result, AgentSessionProtocolCodec.Options),
+        }, command.CorrelationId));
+
+    private static async Task AssertLocalNoteAsync(Action<RemoteAgentChat, string> enqueue, ChatRole role)
+    {
+        var (_, chat) = await AttachAsync();
+        await using (chat)
+        {
+            var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            ((INotifyCollectionChanged)chat.History).CollectionChanged += (_, _) => changed.TrySetResult();
+            enqueue(chat, "local");
+            await changed.Task;
+            Assert.Equal(role, chat.History.Single().Role);
+        }
+    }
+
+    private static async Task AssertDetachPolicyAsync(bool continueInBackground)
+    {
+        var snapshot = AgentSessionProtocolCodecTests.Snapshot() with
+        { ContinueInBackground = continueInBackground, ViewerCount = 1 };
+        var (transport, chat) = await AttachAsync(snapshot);
+        Assert.Equal(continueInBackground, chat.ContinueInBackground);
+        await chat.DetachAsync();
+        Assert.IsType<DetachCommand>(AgentSessionProtocolCodec.DeserializeCommand(await transport.Outgoing.ReadAsync()));
+    }
+
+    private sealed class ReconnectingChatTransport : ITransport
+    {
+        private readonly List<ReconnectingChatChannel> channels = [];
+        private readonly TaskCompletionSource secondOpen = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public List<JsonElement> Opens { get; } = [];
+        public Task SecondOpen => this.secondOpen.Task;
+
+        public Task<IMessageChannel> ConnectToMessageChannelAsync(JsonElement request, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var channel = new ReconnectingChatChannel();
+            this.channels.Add(channel);
+            this.Opens.Add(request.Clone());
+            if (this.channels.Count == 2) this.secondOpen.TrySetResult();
+            return Task.FromResult<IMessageChannel>(channel);
+        }
+
+        public Task<Stream> ConnectToStreamAsync(JsonElement request, CancellationToken ct = default)
+            => throw new NotSupportedException();
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public ValueTask SendAsync(int index, JsonElement value) => this.channels[index].Incoming.Writer.WriteAsync(value);
+        public void Complete(int index) => this.channels[index].Incoming.Writer.TryComplete();
+    }
+
+    private sealed class ReconnectingChatChannel : IMessageChannel
+    {
+        public Channel<JsonElement> Outgoing { get; } = Channel.CreateUnbounded<JsonElement>();
+        public Channel<JsonElement> Incoming { get; } = Channel.CreateUnbounded<JsonElement>();
+        public ChannelWriter<JsonElement> Writer => this.Outgoing.Writer;
+        public ChannelReader<JsonElement> Reader => this.Incoming.Reader;
+        public ValueTask DisposeAsync()
+        {
+            this.Outgoing.Writer.TryComplete();
+            this.Incoming.Writer.TryComplete();
+            return ValueTask.CompletedTask;
+        }
+    }
+}

@@ -515,6 +515,13 @@ internal static class AgentSessionProtocolCodec
             switch (value)
             {
                 case SessionSnapshotEvent snapshot:
+                    if (snapshot.Snapshot is null
+                        || snapshot.Snapshot.History is null
+                        || snapshot.Snapshot.RunningItems is null
+                        || snapshot.Snapshot.Tools is null
+                        || snapshot.Snapshot.Subagents is null
+                        || snapshot.Snapshot.Modals is null)
+                        throw new RemoteAgentProtocolException("Session snapshot collections are required.");
                     ProtocolValueValidator.Validate(snapshot.Snapshot.Information);
                     ProtocolValueValidator.Validate(snapshot.Snapshot.Usage);
                     AgentInputQueueSnapshotValidator.Validate(snapshot.Snapshot.InputQueues);
@@ -540,6 +547,15 @@ internal static class AgentSessionProtocolCodec
                     break;
                 case SessionRetentionChangedEvent retention when retention.ViewerCount < 0:
                     throw new RemoteAgentProtocolException("Viewer count cannot be negative.");
+                case ToolsSnapshotEvent toolSnapshot when toolSnapshot.Tools is null:
+                case ToolsChangedEvent toolChange when toolChange.Tools is null:
+                    throw new RemoteAgentProtocolException("Tool state is required.");
+                case SubagentsSnapshotEvent subagentSnapshot when subagentSnapshot.Subagents is null:
+                case SubagentsChangedEvent subagentChange when subagentChange.Subagents is null:
+                    throw new RemoteAgentProtocolException("Subagent state is required.");
+                case ModalRaisedEvent raisedModal when raisedModal.Modal is null:
+                case ModalUpdatedEvent updatedModal when updatedModal.Modal is null:
+                    throw new RemoteAgentProtocolException("Modal state is required.");
                 case CommandCompletedEvent command when command.CommandId == Guid.Empty:
                     throw new RemoteAgentProtocolException("Completed command id cannot be empty.");
                 case OperationErrorEvent operation:

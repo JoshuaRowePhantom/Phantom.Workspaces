@@ -10,6 +10,7 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
     private readonly ITransport transport;
     private readonly SemaphoreSlim lifecycleGate = new(1, 1);
     private readonly ConcurrentDictionary<Guid, PendingCommand> pending = new();
+    private readonly ConcurrentDictionary<Guid, Guid> abandonedCommands = new();
     private IMessageChannel? channel;
     private CancellationTokenSource? pumpCancellation;
     private Task? pump;
@@ -271,22 +272,22 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
     public Task SetToolEnabledAsync(SetAgentToolEnabledRequest request, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        return this.SendNoResultAsync(new SetToolEnabledCommand
+        return this.SendNoResultAndAuthoritativeEventAsync(new SetToolEnabledCommand
         {
             ToolId = RequireText(request.ToolId, nameof(request.ToolId)), Enabled = request.Enabled,
             CommandId = request.CommandId, CorrelationId = Guid.NewGuid(), RuntimeEpoch = this.RequireEpoch(),
-        }, ct);
+        }, frame => frame.Type == "tools-changed", ct);
     }
 
     public Task SetContinueInBackgroundAsync(
         SetAgentSessionRetentionRequest request, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        return this.SendNoResultAsync(new SetContinueInBackgroundCommand
+        return this.SendNoResultAndAuthoritativeEventAsync(new SetContinueInBackgroundCommand
         {
             ContinueInBackground = request.ContinueInBackground, CommandId = request.CommandId,
             CorrelationId = Guid.NewGuid(), RuntimeEpoch = this.RequireEpoch(),
-        }, ct);
+        }, frame => frame.Type == "session-retention-changed", ct);
     }
 
     public async Task DetachAsync(CancellationToken ct = default)
@@ -353,6 +354,7 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
         }
         finally
         {
+            await activeChannel.DisposeAsync().ConfigureAwait(false);
             if (ReferenceEquals(this.channel, activeChannel))
             {
                 this.channel = null;
@@ -388,20 +390,42 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
         }
         if (value is SessionTerminalEvent)
             this.terminal = true;
-        if ((value is CommandCompletedEvent || value is OperationErrorEvent || value is SessionTerminalEvent)
-            && this.pending.TryGetValue(frame.CorrelationId, out var pendingCommand))
+        if (value is CommandCompletedEvent or OperationErrorEvent)
         {
-            if (value is CommandCompletedEvent && pendingCommand.AcceptTerminal)
+            if (this.pending.TryGetValue(frame.CorrelationId, out var pendingCommand))
             {
-                this.FrameReceived?.Invoke(this, frame);
-                return;
+                if (value is CommandCompletedEvent && pendingCommand.AcceptTerminal)
+                {
+                    this.FrameReceived?.Invoke(this, frame);
+                    return;
+                }
+                this.pending.TryRemove(frame.CorrelationId, out _);
+                if (value is CommandCompletedEvent completed && completed.CommandId != pendingCommand.CommandId)
+                    throw new RemoteAgentProtocolException("A command acknowledgement contained a mismatched command id.");
+                if (value is OperationErrorEvent error && error.Error.CorrelationId != frame.CorrelationId)
+                    throw new RemoteAgentProtocolException("An operation error contained a mismatched correlation id.");
+                pendingCommand.Completion.TrySetResult(frame);
             }
-            this.pending.TryRemove(frame.CorrelationId, out _);
-            if (value is CommandCompletedEvent completed && completed.CommandId != pendingCommand.CommandId)
-                throw new RemoteAgentProtocolException("A command acknowledgement contained a mismatched command id.");
-            if (value is OperationErrorEvent error && error.Error.CorrelationId != frame.CorrelationId)
-                throw new RemoteAgentProtocolException("An operation error contained a mismatched correlation id.");
-            pendingCommand.Completion.TrySetResult(frame);
+            else
+            {
+                if (!this.abandonedCommands.TryRemove(frame.CorrelationId, out var abandonedCommandId))
+                    throw new RemoteAgentProtocolException("A command response contained an unknown correlation id.");
+                if (value is CommandCompletedEvent abandonedCompletion
+                    && abandonedCompletion.CommandId != abandonedCommandId)
+                    throw new RemoteAgentProtocolException("A command acknowledgement contained a mismatched command id.");
+                if (value is OperationErrorEvent abandonedError
+                    && abandonedError.Error.CorrelationId != frame.CorrelationId)
+                    throw new RemoteAgentProtocolException("An operation error contained a mismatched correlation id.");
+            }
+        }
+        else if (value is SessionTerminalEvent
+            && this.pending.TryGetValue(frame.CorrelationId, out var terminalCommand))
+        {
+            if (terminalCommand.AcceptTerminal)
+            {
+                this.pending.TryRemove(frame.CorrelationId, out _);
+                terminalCommand.Completion.TrySetResult(frame);
+            }
         }
         this.FrameReceived?.Invoke(this, frame);
     }
@@ -433,6 +457,30 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
         _ = ReadCompletion(frame);
     }
 
+    private async Task SendNoResultAndAuthoritativeEventAsync(
+        AgentSessionCommand command,
+        Func<AgentSessionServerFrame, bool> isAuthoritativeEvent,
+        CancellationToken ct)
+    {
+        var applied = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnFrame(object? sender, AgentSessionServerFrame frame)
+        {
+            if (isAuthoritativeEvent(frame))
+                applied.TrySetResult();
+        }
+
+        this.FrameReceived += OnFrame;
+        try
+        {
+            await this.SendNoResultAsync(command, ct).ConfigureAwait(false);
+            await applied.Task.WaitAsync(ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            this.FrameReceived -= OnFrame;
+        }
+    }
+
     private async Task<AgentSessionServerFrame> SendAsync(
         AgentSessionCommand command, CancellationToken ct, bool acceptTerminal = false)
     {
@@ -448,7 +496,16 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
         try
         {
             await activeChannel.Writer.WriteAsync(AgentSessionProtocolCodec.SerializeCommand(command), ct).ConfigureAwait(false);
-            var frame = await completion.Task.WaitAsync(ct).ConfigureAwait(false);
+            AgentSessionServerFrame frame;
+            try
+            {
+                frame = await completion.Task.WaitAsync(ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                this.abandonedCommands.TryAdd(command.CorrelationId, command.CommandId);
+                throw;
+            }
             if (!acceptTerminal && frame.Type == "session-terminal")
                 throw new RemoteAgentProtocolException("The session terminated before command completion.");
             return frame;

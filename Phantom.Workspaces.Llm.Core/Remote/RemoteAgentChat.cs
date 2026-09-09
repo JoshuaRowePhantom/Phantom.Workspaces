@@ -33,7 +33,7 @@ public sealed class RemoteAgentChat : IAgentChat
     {
         this.client = client;
         this.foregroundScheduler = foregroundScheduler;
-        this.inputQueues = new RemoteInputQueues(client);
+        this.inputQueues = new RemoteInputQueues(client, foregroundScheduler);
         this.SubAgents = new(this.subagents);
         this.Modals = new(this.modals);
         this.client.FrameReceived += this.OnFrameReceived;
@@ -395,7 +395,9 @@ public sealed class RemoteAgentChat : IAgentChat
         if (this.disposed) throw new ObjectDisposedException(nameof(RemoteAgentChat));
     }
 
-    private sealed class RemoteInputQueues(RemoteAgentSessionClient client) : IAgentInputQueues
+    private sealed class RemoteInputQueues(
+        RemoteAgentSessionClient client,
+        TaskScheduler foregroundScheduler) : IAgentInputQueues
     {
         private readonly object sync = new();
         private readonly Dictionary<string, RemoteInputQueue> queues = new(StringComparer.Ordinal);
@@ -474,7 +476,11 @@ public sealed class RemoteAgentChat : IAgentChat
             var result = await operation().ConfigureAwait(false);
             if (result.CurrentSnapshot is { } current)
             {
-                this.Replace(current);
+                await Task.Factory.StartNew(
+                    () => this.Replace(current),
+                    CancellationToken.None,
+                    TaskCreationOptions.DenyChildAttach,
+                    foregroundScheduler).ConfigureAwait(false);
                 return result;
             }
             if (result.Status is not (AgentInputQueueCommandStatus.Applied or AgentInputQueueCommandStatus.Duplicate))

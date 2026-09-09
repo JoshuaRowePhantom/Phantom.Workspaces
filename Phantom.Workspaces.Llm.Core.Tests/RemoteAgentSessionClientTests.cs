@@ -1,11 +1,12 @@
 using System.Text.Json;
 using System.Threading.Channels;
+using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Transport;
 
 namespace Phantom.Workspaces.Llm.Tests;
 
-public sealed class RemoteAgentSessionClientTests
+public sealed partial class RemoteAgentSessionClientTests
 {
     [Fact]
     public void Constructor_NullTransport_ThrowsArgumentNullException()
@@ -14,6 +15,37 @@ public sealed class RemoteAgentSessionClientTests
     [Fact]
     public void LastAppliedCursor_NoFrames_IsNull()
         => Assert.Null(new RemoteAgentSessionClient(new TestTransport()).LastAppliedCursor);
+
+    [Fact]
+    public async Task Constructor_ProcessScopedTransport_DoesNotDisposeBorrowedTransport()
+    {
+        var transport = new TestTransport();
+        await new RemoteAgentSessionClient(transport).DisposeAsync();
+        Assert.False(transport.Disposed);
+    }
+
+    [Fact]
+    public void ClientRequestTypes_RequiredInitProperties_AreMarkedRequired()
+    {
+        AssertRequired<AgentSessionStatusRequest>(nameof(AgentSessionStatusRequest.Transport), nameof(AgentSessionStatusRequest.OpenRequest));
+        AssertRequired<TerminateAgentSessionRequest>(nameof(TerminateAgentSessionRequest.Reason), nameof(TerminateAgentSessionRequest.CommandId));
+        AssertRequired<OpenAgentSubagentRequest>(nameof(OpenAgentSubagentRequest.AgentId), nameof(OpenAgentSubagentRequest.CommandId));
+        AssertRequired<RespondToAgentModalRequest>(nameof(RespondToAgentModalRequest.ModalId), nameof(RespondToAgentModalRequest.Response), nameof(RespondToAgentModalRequest.CommandId));
+        AssertRequired<SetAgentToolEnabledRequest>(nameof(SetAgentToolEnabledRequest.ToolId), nameof(SetAgentToolEnabledRequest.Enabled), nameof(SetAgentToolEnabledRequest.CommandId));
+        AssertRequired<SetAgentSessionRetentionRequest>(nameof(SetAgentSessionRetentionRequest.ContinueInBackground), nameof(SetAgentSessionRetentionRequest.CommandId));
+    }
+
+    [Fact]
+    public void ClientRequestTypes_NamedInitializers_PreserveStatusAndCommandPayloads()
+    {
+        var id = Guid.NewGuid();
+        var status = new AgentSessionStatusRequest { Transport = new TestTransport(), OpenRequest = AgentSessionProtocolCodecTests.Open() };
+        var terminate = new TerminateAgentSessionRequest { Reason = "done", CommandId = id };
+        var retention = new SetAgentSessionRetentionRequest { ContinueInBackground = true, CommandId = id };
+        Assert.Equal("session", status.OpenRequest.AgentSessionId);
+        Assert.Equal(("done", id), (terminate.Reason, terminate.CommandId));
+        Assert.Equal((true, id), (retention.ContinueInBackground, retention.CommandId));
+    }
 
     [Theory]
     [InlineData(AgentSessionRemoteStatus.Running)]
@@ -42,10 +74,12 @@ public sealed class RemoteAgentSessionClientTests
         var transport = new TestTransport();
         await using var client = new RemoteAgentSessionClient(transport);
         var observed = new List<long>();
+        var allObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         client.FrameReceived += (_, frame) =>
         {
             Assert.Equal(frame.Sequence, client.LastAppliedCursor!.Value.Sequence);
             observed.Add(frame.Sequence);
+            if (observed.Count == 2) allObserved.TrySetResult();
         };
         var connecting = client.ConnectAsync(AgentSessionProtocolCodecTests.Open());
         await transport.ServerSendAsync(Frame(1, new SessionSnapshotEvent
@@ -54,7 +88,7 @@ public sealed class RemoteAgentSessionClientTests
         }));
         await connecting;
         await transport.ServerSendAsync(Frame(2, new BusyChangedEvent { IsBusy = true }));
-        await WaitUntilAsync(() => observed.Count == 2);
+        await allObserved.Task;
         Assert.Equal([1L, 2L], observed);
         Assert.Equal(2, client.LastAppliedCursor!.Value.Sequence);
     }
@@ -82,7 +116,7 @@ public sealed class RemoteAgentSessionClientTests
         var disconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         client.UnexpectedlyDisconnected += (_, _) => disconnected.TrySetResult();
         await transport.ServerSendAsync(Frame(3, new BusyChangedEvent { IsBusy = true }));
-        await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await disconnected.Task;
         Assert.Equal(1, client.LastAppliedCursor!.Value.Sequence);
     }
 
@@ -194,21 +228,17 @@ public sealed class RemoteAgentSessionClientTests
         => AgentSessionProtocolCodec.SerializeFrame(AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.CreateFrame(
             AgentSessionProtocolCodecTests.Epoch(), sequence, correlation ?? Guid.NewGuid(), value));
 
-    private static async Task WaitUntilAsync(Func<bool> condition)
-    {
-        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(10));
-        for (var i = 0; i < 100 && await timer.WaitForNextTickAsync(); i++)
-            if (condition()) return;
-        Assert.Fail("Condition was not reached.");
-    }
-
     private sealed class TestTransport : ITransport
     {
         private readonly TestMessageChannel channel = new();
         public Channel<JsonElement> ClientWrites => this.channel.ClientWrites;
+        public JsonElement LastOpen { get; private set; }
+        public bool ChannelDisposed => this.channel.Disposed;
         public Task<IMessageChannel> ConnectToMessageChannelAsync(JsonElement request, CancellationToken ct = default)
         {
+            ct.ThrowIfCancellationRequested();
             Assert.Equal("attach-agent-session", request.GetProperty("type").GetString());
+            this.LastOpen = request.Clone();
             return Task.FromResult<IMessageChannel>(this.channel);
         }
         public Task<Stream> ConnectToStreamAsync(JsonElement request, CancellationToken ct = default)
@@ -225,12 +255,14 @@ public sealed class RemoteAgentSessionClientTests
 
     private sealed class TestMessageChannel : IMessageChannel
     {
+        public bool Disposed { get; private set; }
         public Channel<JsonElement> ClientWrites { get; } = Channel.CreateUnbounded<JsonElement>();
         public Channel<JsonElement> ServerWrites { get; } = Channel.CreateUnbounded<JsonElement>();
         public ChannelWriter<JsonElement> Writer => this.ClientWrites.Writer;
         public ChannelReader<JsonElement> Reader => this.ServerWrites.Reader;
         public ValueTask DisposeAsync()
         {
+            this.Disposed = true;
             this.ClientWrites.Writer.TryComplete();
             this.ServerWrites.Writer.TryComplete();
             return ValueTask.CompletedTask;
