@@ -780,25 +780,19 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
             // While a turn is running, forward any Immediate-immediacy queue items as steering
             // input. SendAsync with Mode="immediate" is safe to call concurrently with a live turn.
-            void OnQueueChanged(object? sender, AgentInputQueueManager.QueueStateChangedEventArgs e)
-                => this.ForwardPendingImmediateMessages(
-                    (options, ct) => session.SendAsync(options, ct),
-                    e);
-
-            if (this.queueManager is not null)
-            {
-                this.queueManager.QueueStateChanged += OnQueueChanged;
-            }
+            // The subscription (and dispatch to ForwardPendingImmediateMessages) is established
+            // through SubscribeImmediateQueueSteering so that fake-BeginTurnAsync test call sites
+            // exercise the exact same production wiring — not a duplicated copy — when observing
+            // SteeringMessageForwarded during a live turn.
+            var queueSubscription = this.SubscribeImmediateQueueSteering(
+                (options, ct) => session.SendAsync(options, ct));
 
             var subscription = new AsyncDelegateDisposable(async () =>
             {
                 eventSubscription.Dispose();
                 eventChannel.Writer.Complete();
                 await dispatchLoop;
-                if (this.queueManager is not null)
-                {
-                    this.queueManager.QueueStateChanged -= OnQueueChanged;
-                }
+                queueSubscription.Dispose();
 
                 await router.DisposeRemainingLeasesAsync();
             });
@@ -938,6 +932,50 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 this.loggerFactory?.CreateLogger<CopilotSdkChatClient>()
                     .LogDebug(exception, "Terminalizing running sub-agents on parent interrupt failed.");
             }
+        }
+    }
+
+    /// <summary>
+    /// Subscribes the client's queue manager (if any) so that any Immediate-immediacy queue
+    /// items are dequeued and forwarded to <paramref name="sendAsync"/> via
+    /// <see cref="ForwardPendingImmediateMessages"/>. Returns an <see cref="IDisposable"/> that
+    /// unsubscribes when disposed. Extracted from <c>BeginTurnAsync</c> so tests can exercise
+    /// the exact production wiring that raises <see cref="SteeringMessageForwarded"/> during a
+    /// live turn instead of reproducing the wiring themselves.
+    /// </summary>
+    internal IDisposable SubscribeImmediateQueueSteering(
+        Func<MessageOptions, CancellationToken, Task> sendAsync)
+    {
+        ArgumentNullException.ThrowIfNull(sendAsync);
+
+        var queueManager = this.queueManager;
+        if (queueManager is null)
+        {
+            return new NoopDisposable();
+        }
+
+        void Handler(object? sender, AgentInputQueueManager.QueueStateChangedEventArgs e)
+            => this.ForwardPendingImmediateMessages(sendAsync, e);
+
+        queueManager.QueueStateChanged += Handler;
+        return new SyncDelegateDisposable(() => queueManager.QueueStateChanged -= Handler);
+    }
+
+    private sealed class NoopDisposable : IDisposable
+    {
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class SyncDelegateDisposable(Action dispose) : IDisposable
+    {
+        private Action? dispose = dispose ?? throw new ArgumentNullException(nameof(dispose));
+
+        public void Dispose()
+        {
+            var d = Interlocked.Exchange(ref this.dispose, null);
+            d?.Invoke();
         }
     }
 

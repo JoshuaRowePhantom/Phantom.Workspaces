@@ -50,6 +50,102 @@ public sealed class Retry1485ContractTests
     }
 
     [Fact]
+    public async Task AttachRemoteAcquisition_TransportBackedIntent_RoundTripsMessageThroughOwningTransport()
+    {
+        // Uses the sanctioned in-memory transport (InProcessTransport.Create) so the value stored on
+        // RemoteRuntimeIntent.OwningProfileTransport is a fully-functional ITransport, not an inert
+        // placeholder. The test propagates the client side of the paired transport through the real
+        // acquisition path, extracts it back off the forwarded intent, and performs a real
+        // message-channel round-trip through it to prove the propagated instance is usable.
+        var factory = new TestRunningAgentChatFactory();
+        var table = new RunningAgentChatTable(factory, new FakeRuntimeContextFactory());
+        var registry = new TransportRegistry();
+        var listener = new EchoTransportListener();
+        registry.Register(listener);
+        var (server, client) = InProcessTransport.Create(registry);
+
+        try
+        {
+            await using var lease = await table.AcquireAsync(new AcquireAgentChatRequest
+            {
+                AgentSessionId = new AgentSessionId("transport-backed"),
+                EntityName = "Entity",
+                AgentSessionEntity = RemoteEntity(),
+                AcquisitionMode = AgentChatAcquisitionMode.AttachRemote,
+                OwningProfileTransport = client,
+            }, TestContext.Current.CancellationToken);
+
+            var intent = Assert.IsType<RemoteRuntimeIntent>(factory.LastServices!.RemoteRuntimeIntent);
+            var propagated = Assert.IsAssignableFrom<ITransport>(intent.OwningProfileTransport);
+            Assert.Same(client, propagated);
+
+            var request = JsonDocument.Parse("{\"op\":\"attach\"}").RootElement;
+            var channel = await propagated.ConnectToMessageChannelAsync(request, TestContext.Current.CancellationToken);
+            try
+            {
+                await listener.ChannelOpened.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+                var payload = JsonDocument.Parse("{\"probe\":true}").RootElement;
+                await channel.Writer.WriteAsync(payload, TestContext.Current.CancellationToken);
+                var response = await channel.Reader.ReadAsync(TestContext.Current.CancellationToken);
+                Assert.Equal(payload.GetRawText(), response.GetRawText());
+            }
+            finally
+            {
+                await channel.DisposeAsync();
+            }
+        }
+        finally
+        {
+            await client.DisposeAsync();
+            await server.DisposeAsync();
+        }
+    }
+
+    private sealed class EchoTransportListener : ITransportListener
+    {
+        private readonly TaskCompletionSource channelOpened =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task ChannelOpened => this.channelOpened.Task;
+
+        public Task<IAsyncDisposable?> OnChannelOpenAsync(
+            JsonElement request,
+            IMessageChannel channel,
+            CancellationToken ct = default)
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await foreach (var message in channel.Reader.ReadAllAsync(ct))
+                    {
+                        await channel.Writer.WriteAsync(message, ct);
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            }, ct);
+
+            this.channelOpened.TrySetResult();
+            return Task.FromResult<IAsyncDisposable?>(new NoopAsyncDisposable());
+        }
+
+        public Task<IAsyncDisposable?> OnStreamOpenAsync(
+            JsonElement request,
+            Stream stream,
+            CancellationToken ct = default)
+            => Task.FromResult<IAsyncDisposable?>(null);
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        private sealed class NoopAsyncDisposable : IAsyncDisposable
+        {
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
+    }
+
+    [Fact]
     public async Task AcquireAgentChatRequest_Defaults_SelectLocalModeWithoutTransportOrCursor()
     {
         var factory = new TestRunningAgentChatFactory();

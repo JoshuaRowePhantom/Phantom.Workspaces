@@ -729,35 +729,25 @@ public sealed class AgentInputQueuesRetryTests
         client.SteeringMessageForwarded += msg => forwarded = msg;
         var channel = Channel.CreateUnbounded<ChatResponseUpdate>();
         var subscribed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var forwardedOptions = new List<MessageOptions>();
 
         Task<StreamingTurnContext> BeginTurnAsync(CancellationToken _)
         {
-            void OnQueueChanged(object? sender, AgentInputQueueManager.QueueStateChangedEventArgs e)
+            // Use the exact production wiring: SubscribeImmediateQueueSteering subscribes the
+            // real QueueStateChanged event to production ForwardPendingImmediateMessages, which
+            // is what raises SteeringMessageForwarded during a real turn. No reflection or
+            // test-side duplicate wiring is involved.
+            var queueSubscription = client.SubscribeImmediateQueueSteering((options, ct) =>
             {
-                if (e.ChangeKind != AgentInputQueueManager.QueueStateChangeKind.ItemAdded)
-                {
-                    return;
-                }
-
-                while (queueManager.TryDequeueNextImmediate(out var item))
-                {
-                    foreach (var message in item.Messages ?? [])
-                    {
-                        var handler = (Action<ChatMessage>?)typeof(CopilotSdkChatClient)
-                            .GetField("SteeringMessageForwarded", BindingFlags.Instance | BindingFlags.NonPublic)!
-                            .GetValue(client);
-                        handler?.Invoke(message);
-                    }
-                }
-            }
-
-            queueManager.QueueStateChanged += OnQueueChanged;
+                forwardedOptions.Add(options);
+                return Task.CompletedTask;
+            });
             subscribed.TrySetResult();
             return Task.FromResult(new StreamingTurnContext(
                 channel.Reader,
                 new AsyncDisposableAction(() =>
                 {
-                    queueManager.QueueStateChanged -= OnQueueChanged;
+                    queueSubscription.Dispose();
                     return ValueTask.CompletedTask;
                 }),
                 _ => Task.CompletedTask,
@@ -787,6 +777,7 @@ public sealed class AgentInputQueuesRetryTests
         Assert.Equal(AgentInputQueueCommandStatus.Applied, result.Status);
         Assert.NotNull(forwarded);
         Assert.Equal("steer", forwarded!.Text);
+        Assert.Single(forwardedOptions);
         Assert.Empty(inputQueues.ImmediateQueue.Snapshot.Items);
     }
 
