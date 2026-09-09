@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Text.Json;
+using AgentSchema;
 using Microsoft.Extensions.AI;
 
 namespace Phantom.Workspaces.Llm.Tests;
@@ -16,22 +17,24 @@ public sealed class AgentInputQueuesRetry8BehavioralTests
     private sealed class StubAgentChat : IAgentChat
     {
         private readonly IAgentInputQueues adapter;
+        private readonly AgentInformation information;
 
-        public StubAgentChat(IAgentInputQueues adapter)
+        public StubAgentChat(IAgentInputQueues adapter, AgentDefinition definition)
         {
             this.adapter = adapter;
+            this.information = new AgentInformation
+            {
+                AgentSessionId = "stub-session",
+                AgentId = "stub-agent",
+                Name = "stub",
+                DisplayName = "Stub",
+                Description = "Stub agent chat used by retry 8 behavioural tests.",
+                AcceptsUserInput = true,
+                AgentDefinition = definition,
+            };
         }
 
-        public AgentInformation Information => new()
-        {
-            AgentSessionId = "stub-session",
-            AgentId = "stub-agent",
-            Name = "stub",
-            DisplayName = "Stub",
-            Description = "Stub agent chat used by retry 8 behavioural tests.",
-            AcceptsUserInput = true,
-            AgentDefinition = null!,
-        };
+        public AgentInformation Information => this.information;
 
         public Usage Usage => default;
         public bool IsBusy => false;
@@ -120,6 +123,7 @@ public sealed class AgentInputQueuesRetry8BehavioralTests
 
     private static (AgentInputQueueManager Manager, AgentInputQueue Default, LocalAgentInputQueuesAdapter Adapter, StubAgentChat Chat, RemoteAgentChatProxy Proxy) NewPair()
     {
+        var definition = MakeDefinition();
         var manager = new AgentInputQueueManager();
         var defaultQueue = new AgentInputQueue(new AgentInputQueue.Parameters
         {
@@ -128,7 +132,7 @@ public sealed class AgentInputQueuesRetry8BehavioralTests
         });
         manager.RegisterInputQueue(defaultQueue);
         var adapter = new LocalAgentInputQueuesAdapter(manager, defaultQueue);
-        var chat = new StubAgentChat(adapter);
+        var chat = new StubAgentChat(adapter, definition);
         var proxy = new RemoteAgentChatProxy(chat);
         return (manager, defaultQueue, adapter, chat, proxy);
     }
@@ -501,7 +505,10 @@ public sealed class AgentInputQueuesRetry8BehavioralTests
     public void RemoteProxy_SlashCommands_ExposesOwnerRegistry()
     {
         var (_, _, _, chat, proxy) = NewPair();
-        Assert.Same(chat.SlashCommands, proxy.SlashCommands);
+        chat.SlashCommands.Register(new FakeSlashCommandHandler("engine-only"));
+
+        Assert.NotSame(chat.SlashCommands, proxy.SlashCommands);
+        Assert.Empty(proxy.SlashCommands.Commands);
     }
 
     // Gap #54: Pending remote command — Move through the proxy actually mutates the projection.
@@ -556,7 +563,7 @@ public sealed class AgentInputQueuesRetry8BehavioralTests
         manager.RegisterInputQueue(defaultQueue);
         using var owner = new LocalAgentInputQueuesAdapter(manager, defaultQueue);
         var gated = new GatedAgentInputQueues(owner);
-        var source = new StubAgentChat(gated);
+        var source = new StubAgentChat(gated, MakeDefinition());
         await using var proxy = new RemoteAgentChatProxy(source);
         var revisionBefore = proxy.InputQueues.Snapshot.Revision;
         var changedCount = 0;
@@ -826,4 +833,18 @@ public sealed class AgentInputQueuesRetry8BehavioralTests
         Phantom.Workspaces.Llm.AgentDefinitionLoader.LoadAgentFromJson("""
         { "kind": "prompt", "name": "test-agent", "model": { "id": "echo", "provider": "echo", "apiType": "Echo" } }
         """);
+
+    private sealed class FakeSlashCommandHandler(string name) : Phantom.Workspaces.Llm.SlashCommands.ISlashCommandHandler
+    {
+        public string Name => name;
+        public string Description => name;
+        public string? Usage => "/" + name;
+        public string? LongDescription => name;
+
+        public Task<Phantom.Workspaces.Llm.SlashCommands.SlashCommandResult> ExecuteAsync(
+            Phantom.Workspaces.Llm.SlashCommands.SlashCommandContext context,
+            string arguments,
+            CancellationToken cancellationToken)
+            => Task.FromResult(new Phantom.Workspaces.Llm.SlashCommands.SlashCommandResult { StatusMessage = name });
+    }
 }

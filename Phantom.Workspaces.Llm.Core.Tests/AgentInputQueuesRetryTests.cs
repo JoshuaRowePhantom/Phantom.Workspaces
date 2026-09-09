@@ -2,9 +2,13 @@ using System.Collections.Immutable;
 using System.Collections.ObjectModel;
 using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading;
+using System.Threading.Channels;
 using AgentSchema;
+using GitHub.Copilot;
 using Microsoft.Extensions.AI;
+using Phantom.Workspaces.Llm.Copilot;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.SlashCommands;
 
@@ -76,7 +80,7 @@ public sealed class AgentInputQueuesRetryTests
             Revision = -1,
             Queues = ImmutableArray<AgentInputQueueSnapshot>.Empty,
         };
-        Assert.Throws<ArgumentException>(() => RemoteAgentChatProxy.RoundTripSnapshotForTransport(invalidRevision()));
+        Assert.Throws<ArgumentException>(() => new RemoteAgentChatProxy(new InvalidSnapshotAgentChat(invalidRevision())));
         // Duplicate queue ids are structurally detectable.
         var q = new AgentInputQueueSnapshot
         {
@@ -94,7 +98,7 @@ public sealed class AgentInputQueuesRetryTests
             Revision = 1,
             Queues = ImmutableArray.Create(q, q),
         };
-        Assert.Throws<ArgumentException>(() => RemoteAgentChatProxy.RoundTripSnapshotForTransport(dup));
+        Assert.Throws<ArgumentException>(() => new RemoteAgentChatProxy(new InvalidSnapshotAgentChat(dup)));
     }
 
     [Fact]
@@ -111,11 +115,11 @@ public sealed class AgentInputQueuesRetryTests
             Revision = -1,
             Items = ImmutableArray<AgentInputItemSnapshot>.Empty,
         };
-        Assert.Throws<ArgumentException>(() => RemoteAgentChatProxy.RoundTripSnapshotForTransport(new AgentInputQueuesSnapshot
+        Assert.Throws<ArgumentException>(() => new RemoteAgentChatProxy(new InvalidSnapshotAgentChat(new AgentInputQueuesSnapshot
         {
             Revision = 0,
             Queues = [invalidRole],
-        }));
+        })));
     }
 
     [Fact]
@@ -126,7 +130,7 @@ public sealed class AgentInputQueuesRetryTests
             ItemId = "",
             Messages = ImmutableArray<ChatMessage>.Empty,
         };
-        Assert.Throws<ArgumentException>(() => RemoteAgentChatProxy.RoundTripSnapshotForTransport(new AgentInputQueuesSnapshot
+        Assert.Throws<ArgumentException>(() => new RemoteAgentChatProxy(new InvalidSnapshotAgentChat(new AgentInputQueuesSnapshot
         {
             Revision = 0,
             Queues =
@@ -143,7 +147,7 @@ public sealed class AgentInputQueuesRetryTests
                     Items = [badItem],
                 },
             ],
-        }));
+        })));
     }
 
     [Fact]
@@ -195,38 +199,127 @@ public sealed class AgentInputQueuesRetryTests
     [Fact]
     public void QueueRequestTypes_RequiredInitProperties_AreMarkedRequired()
     {
-        var expected = new Dictionary<Type, string[]>
+        var expected = new Dictionary<Type, (object Sample, string[] RequiredProperties)>
         {
-            [typeof(AgentInputQueuesSnapshot)] = [nameof(AgentInputQueuesSnapshot.Revision), nameof(AgentInputQueuesSnapshot.Queues)],
-            [typeof(AgentInputQueueSnapshot)] =
+            [typeof(AgentInputQueuesSnapshot)] = (new AgentInputQueuesSnapshot
+            {
+                Revision = 1,
+                Queues =
+                [
+                    new AgentInputQueueSnapshot
+                    {
+                        QueueId = "default-q",
+                        Name = "Default",
+                        IsDefault = true,
+                        IsImmediate = false,
+                        Immediacy = AgentInputQueueImmediacy.Queue,
+                        Priority = 1,
+                        Revision = 2,
+                        Items =
+                        [
+                            new AgentInputItemSnapshot
+                            {
+                                ItemId = "item-1",
+                                Messages = [new ChatMessage(ChatRole.User, "hello")],
+                            },
+                        ],
+                    },
+                ],
+            }, [nameof(AgentInputQueuesSnapshot.Revision), nameof(AgentInputQueuesSnapshot.Queues)]),
+            [typeof(AgentInputQueueSnapshot)] = (new AgentInputQueueSnapshot
+            {
+                QueueId = "queue-1",
+                Name = "Queue",
+                IsDefault = false,
+                IsImmediate = false,
+                Immediacy = AgentInputQueueImmediacy.Queue,
+                Priority = 3,
+                Revision = 4,
+                Items =
+                [
+                    new AgentInputItemSnapshot
+                    {
+                        ItemId = "item-1",
+                        Messages = [new ChatMessage(ChatRole.User, "hello")],
+                    },
+                ],
+            },
             [
                 nameof(AgentInputQueueSnapshot.QueueId), nameof(AgentInputQueueSnapshot.Name),
                 nameof(AgentInputQueueSnapshot.IsDefault), nameof(AgentInputQueueSnapshot.IsImmediate),
                 nameof(AgentInputQueueSnapshot.Immediacy), nameof(AgentInputQueueSnapshot.Priority),
                 nameof(AgentInputQueueSnapshot.Revision), nameof(AgentInputQueueSnapshot.Items),
-            ],
-            [typeof(AgentInputItemSnapshot)] = [nameof(AgentInputItemSnapshot.ItemId), nameof(AgentInputItemSnapshot.Messages)],
-            [typeof(AgentInputQueueConfiguration)] =
-                [nameof(AgentInputQueueConfiguration.Name), nameof(AgentInputQueueConfiguration.Immediacy), nameof(AgentInputQueueConfiguration.Priority)],
-            [typeof(AgentInputQueueCommandResult)] =
-                [nameof(AgentInputQueueCommandResult.CommandId), nameof(AgentInputQueueCommandResult.Status), nameof(AgentInputQueueCommandResult.Revision)],
-            [typeof(CreateAgentInputQueueRequest)] =
-                [nameof(CreateAgentInputQueueRequest.Configuration), nameof(CreateAgentInputQueueRequest.CommandId), nameof(CreateAgentInputQueueRequest.ExpectedRevision)],
-            [typeof(DeleteAgentInputQueueRequest)] =
-                [nameof(DeleteAgentInputQueueRequest.QueueId), nameof(DeleteAgentInputQueueRequest.CommandId), nameof(DeleteAgentInputQueueRequest.ExpectedRevision)],
-            [typeof(EnqueueAgentInputRequest)] =
-                [nameof(EnqueueAgentInputRequest.TargetQueueId), nameof(EnqueueAgentInputRequest.Messages), nameof(EnqueueAgentInputRequest.CommandId), nameof(EnqueueAgentInputRequest.ExpectedRevision)],
-            [typeof(EditAgentInputQueueItemRequest)] =
-                [nameof(EditAgentInputQueueItemRequest.QueueId), nameof(EditAgentInputQueueItemRequest.ItemId), nameof(EditAgentInputQueueItemRequest.Messages), nameof(EditAgentInputQueueItemRequest.CommandId), nameof(EditAgentInputQueueItemRequest.ExpectedRevision)],
-            [typeof(RemoveAgentInputQueueItemRequest)] =
-                [nameof(RemoveAgentInputQueueItemRequest.QueueId), nameof(RemoveAgentInputQueueItemRequest.ItemId), nameof(RemoveAgentInputQueueItemRequest.CommandId), nameof(RemoveAgentInputQueueItemRequest.ExpectedRevision)],
-            [typeof(MoveAgentInputQueueItemRequest)] =
-                [nameof(MoveAgentInputQueueItemRequest.SourceQueueId), nameof(MoveAgentInputQueueItemRequest.ItemId), nameof(MoveAgentInputQueueItemRequest.TargetQueueId), nameof(MoveAgentInputQueueItemRequest.CommandId), nameof(MoveAgentInputQueueItemRequest.ExpectedRevision)],
-            [typeof(ConfigureAgentInputQueueRequest)] =
-                [nameof(ConfigureAgentInputQueueRequest.QueueId), nameof(ConfigureAgentInputQueueRequest.Configuration), nameof(ConfigureAgentInputQueueRequest.CommandId), nameof(ConfigureAgentInputQueueRequest.ExpectedRevision)],
+            ]),
+            [typeof(AgentInputItemSnapshot)] = (new AgentInputItemSnapshot
+            {
+                ItemId = "item-1",
+                Messages = [new ChatMessage(ChatRole.User, "hello")],
+            }, [nameof(AgentInputItemSnapshot.ItemId), nameof(AgentInputItemSnapshot.Messages)]),
+            [typeof(AgentInputQueueConfiguration)] = (new AgentInputQueueConfiguration
+            {
+                Name = "config",
+                Immediacy = AgentInputQueueImmediacy.Queue,
+                Priority = 7,
+            }, [nameof(AgentInputQueueConfiguration.Name), nameof(AgentInputQueueConfiguration.Immediacy), nameof(AgentInputQueueConfiguration.Priority)]),
+            [typeof(AgentInputQueueCommandResult)] = (new AgentInputQueueCommandResult
+            {
+                CommandId = Guid.NewGuid(),
+                Status = AgentInputQueueCommandStatus.Applied,
+                Revision = 9,
+            }, [nameof(AgentInputQueueCommandResult.CommandId), nameof(AgentInputQueueCommandResult.Status), nameof(AgentInputQueueCommandResult.Revision)]),
+            [typeof(CreateAgentInputQueueRequest)] = (new CreateAgentInputQueueRequest
+            {
+                Configuration = new AgentInputQueueConfiguration { Name = "queue", Immediacy = AgentInputQueueImmediacy.Queue, Priority = 3 },
+                CommandId = Guid.NewGuid(),
+                ExpectedRevision = 1,
+            }, [nameof(CreateAgentInputQueueRequest.Configuration), nameof(CreateAgentInputQueueRequest.CommandId), nameof(CreateAgentInputQueueRequest.ExpectedRevision)]),
+            [typeof(DeleteAgentInputQueueRequest)] = (new DeleteAgentInputQueueRequest
+            {
+                QueueId = "queue-1",
+                CommandId = Guid.NewGuid(),
+                ExpectedRevision = 2,
+            }, [nameof(DeleteAgentInputQueueRequest.QueueId), nameof(DeleteAgentInputQueueRequest.CommandId), nameof(DeleteAgentInputQueueRequest.ExpectedRevision)]),
+            [typeof(EnqueueAgentInputRequest)] = (new EnqueueAgentInputRequest
+            {
+                TargetQueueId = "queue-1",
+                Messages = [new ChatMessage(ChatRole.User, "hello")],
+                CommandId = Guid.NewGuid(),
+                ExpectedRevision = 3,
+            }, [nameof(EnqueueAgentInputRequest.TargetQueueId), nameof(EnqueueAgentInputRequest.Messages), nameof(EnqueueAgentInputRequest.CommandId), nameof(EnqueueAgentInputRequest.ExpectedRevision)]),
+            [typeof(EditAgentInputQueueItemRequest)] = (new EditAgentInputQueueItemRequest
+            {
+                QueueId = "queue-1",
+                ItemId = "item-1",
+                Messages = [new ChatMessage(ChatRole.User, "edited")],
+                CommandId = Guid.NewGuid(),
+                ExpectedRevision = 4,
+            }, [nameof(EditAgentInputQueueItemRequest.QueueId), nameof(EditAgentInputQueueItemRequest.ItemId), nameof(EditAgentInputQueueItemRequest.Messages), nameof(EditAgentInputQueueItemRequest.CommandId), nameof(EditAgentInputQueueItemRequest.ExpectedRevision)]),
+            [typeof(RemoveAgentInputQueueItemRequest)] = (new RemoveAgentInputQueueItemRequest
+            {
+                QueueId = "queue-1",
+                ItemId = "item-1",
+                CommandId = Guid.NewGuid(),
+                ExpectedRevision = 5,
+            }, [nameof(RemoveAgentInputQueueItemRequest.QueueId), nameof(RemoveAgentInputQueueItemRequest.ItemId), nameof(RemoveAgentInputQueueItemRequest.CommandId), nameof(RemoveAgentInputQueueItemRequest.ExpectedRevision)]),
+            [typeof(MoveAgentInputQueueItemRequest)] = (new MoveAgentInputQueueItemRequest
+            {
+                SourceQueueId = "queue-1",
+                ItemId = "item-1",
+                TargetQueueId = "queue-2",
+                CommandId = Guid.NewGuid(),
+                ExpectedRevision = 6,
+            }, [nameof(MoveAgentInputQueueItemRequest.SourceQueueId), nameof(MoveAgentInputQueueItemRequest.ItemId), nameof(MoveAgentInputQueueItemRequest.TargetQueueId), nameof(MoveAgentInputQueueItemRequest.CommandId), nameof(MoveAgentInputQueueItemRequest.ExpectedRevision)]),
+            [typeof(ConfigureAgentInputQueueRequest)] = (new ConfigureAgentInputQueueRequest
+            {
+                QueueId = "queue-1",
+                Configuration = new AgentInputQueueConfiguration { Name = "after", Immediacy = AgentInputQueueImmediacy.Held, Priority = 8 },
+                CommandId = Guid.NewGuid(),
+                ExpectedRevision = 7,
+            }, [nameof(ConfigureAgentInputQueueRequest.QueueId), nameof(ConfigureAgentInputQueueRequest.Configuration), nameof(ConfigureAgentInputQueueRequest.CommandId), nameof(ConfigureAgentInputQueueRequest.ExpectedRevision)]),
         };
-        foreach (var (type, expectedRequired) in expected)
+        foreach (var (type, entry) in expected)
         {
+            var expectedRequired = entry.RequiredProperties;
             var actualRequired = type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
                 .Where(p => p.GetCustomAttributesData()
                     .Any(a => a.AttributeType.FullName == "System.Runtime.CompilerServices.RequiredMemberAttribute"))
@@ -234,6 +327,7 @@ public sealed class AgentInputQueuesRetryTests
                 .Order()
                 .ToArray();
             Assert.Equal(expectedRequired.Order(), actualRequired);
+            AssertMissingRequiredMembersThrow(type, entry.Sample, expectedRequired);
         }
     }
 
@@ -283,19 +377,52 @@ public sealed class AgentInputQueuesRetryTests
 
         foreach (var request in requests)
         {
-            var json = JsonSerializer.Serialize(request, request.GetType(), AIJsonUtilities.DefaultOptions);
-            var roundTrip = JsonSerializer.Deserialize(json, request.GetType(), AIJsonUtilities.DefaultOptions);
-            Assert.NotNull(roundTrip);
-            var roundTripJson = JsonSerializer.Serialize(roundTrip, request.GetType(), AIJsonUtilities.DefaultOptions);
-            Assert.True(JsonElement.DeepEquals(
-                JsonDocument.Parse(json).RootElement,
-                JsonDocument.Parse(roundTripJson).RootElement));
-        }
+            var element = JsonSerializer.SerializeToElement(request, request.GetType(), AIJsonUtilities.DefaultOptions);
+            var propertyNames = element.EnumerateObject().Select(p => p.Name).Order().ToArray();
 
-        var enqueueJson = JsonSerializer.SerializeToElement(requests[2], requests[2].GetType(), AIJsonUtilities.DefaultOptions);
-        Assert.Equal("q", enqueueJson.GetProperty("targetQueueId").GetString());
-        var message = Assert.Single(enqueueJson.GetProperty("messages").EnumerateArray());
-        Assert.Equal("user", message.GetProperty("role").GetString());
+            switch (request)
+            {
+                case CreateAgentInputQueueRequest:
+                    Assert.Equal(["commandId", "configuration", "expectedRevision"], propertyNames);
+                    Assert.Equal("queue", element.GetProperty("configuration").GetProperty("name").GetString());
+                    break;
+                case DeleteAgentInputQueueRequest:
+                    Assert.Equal(["commandId", "expectedRevision", "queueId"], propertyNames);
+                    Assert.Equal("q", element.GetProperty("queueId").GetString());
+                    break;
+                case EnqueueAgentInputRequest:
+                    Assert.Equal(["commandId", "expectedRevision", "messages", "targetQueueId"], propertyNames);
+                    Assert.Equal("q", element.GetProperty("targetQueueId").GetString());
+                    AssertSingleUserTextMessage(element.GetProperty("messages"), "hi");
+                    break;
+                case EditAgentInputQueueItemRequest:
+                    Assert.Equal(["commandId", "expectedRevision", "itemId", "messages", "queueId"], propertyNames);
+                    Assert.Equal("i", element.GetProperty("itemId").GetString());
+                    Assert.Equal("q", element.GetProperty("queueId").GetString());
+                    AssertSingleUserTextMessage(element.GetProperty("messages"), "edited");
+                    break;
+                case RemoveAgentInputQueueItemRequest:
+                    Assert.Equal(["commandId", "expectedRevision", "itemId", "queueId"], propertyNames);
+                    Assert.Equal("i", element.GetProperty("itemId").GetString());
+                    break;
+                case MoveAgentInputQueueItemRequest:
+                    Assert.Equal(["beforeItemId", "commandId", "expectedRevision", "itemId", "sourceQueueId", "targetQueueId"], propertyNames);
+                    Assert.Equal("before", element.GetProperty("beforeItemId").GetString());
+                    Assert.Equal("q2", element.GetProperty("targetQueueId").GetString());
+                    break;
+                case ConfigureAgentInputQueueRequest:
+                    Assert.Equal(["commandId", "configuration", "expectedRevision", "queueId"], propertyNames);
+                    Assert.Equal("q", element.GetProperty("queueId").GetString());
+                    Assert.Equal("queue", element.GetProperty("configuration").GetProperty("name").GetString());
+                    break;
+            }
+
+            var roundTrip = JsonSerializer.Deserialize(
+                JsonSerializer.Serialize(request, request.GetType(), AIJsonUtilities.DefaultOptions),
+                request.GetType(),
+                AIJsonUtilities.DefaultOptions);
+            Assert.NotNull(roundTrip);
+        }
     }
 
     [Fact]
@@ -548,45 +675,155 @@ public sealed class AgentInputQueuesRetryTests
     [Fact]
     public async Task QueueConsumption_ActiveRun_AdvancesRevisionAndRaisesChanged()
     {
-        var (manager, def, adapter) = NewAdapter();
-        var enq = await adapter.EnqueueAsync(Enqueue(def.QueueId, adapter.Snapshot.Revision, "hi"));
-        var raised = 0;
-        adapter.Changed += (_, _) => raised++;
-        var before = adapter.Snapshot.Revision;
-        // Simulate owner-side consumption by marking the item consumed.
-        adapter.MarkItemConsumed(enq.ItemId!);
-        // Removing via the queue mutator surfaces to Changed via manager's queue-state event.
-        var items = def.Items;
-        def.Clear(ref items);
-        // The manager path may raise on background thread; allow a small window for the
-        // synchronous adapter forwarding.
-        Assert.True(adapter.Snapshot.Revision >= before);
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "blocked"), isReady: false);
+        stream.Complete(isReady: false);
+        await using var chat = await CreateAgentChatAsync(client, new InlineTaskScheduler());
+        var commonQueues = ((IAgentChat)chat).InputQueues;
+        var changedCount = 0;
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        commonQueues.Changed += (_, _) => Interlocked.Increment(ref changedCount);
+        ((System.Collections.Specialized.INotifyCollectionChanged)chat.RunningItems).CollectionChanged += (_, _) =>
+        {
+            if (chat.RunningItems.Count > 0)
+            {
+                started.TrySetResult();
+            }
+        };
+
+        var enqueueResult = await commonQueues.EnqueueAsync(new EnqueueAgentInputRequest
+        {
+            TargetQueueId = commonQueues.DefaultQueue.Snapshot.QueueId,
+            Messages = [new ChatMessage(ChatRole.User, "hi")],
+            CommandId = Guid.NewGuid(),
+            ExpectedRevision = commonQueues.Snapshot.Revision,
+        });
+
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.True(changedCount >= 2);
+        Assert.True(commonQueues.Snapshot.Revision > enqueueResult.Revision);
+        Assert.Empty(commonQueues.DefaultQueue.Snapshot.Items);
+        chat.Interrupt();
     }
 
     [Fact]
     public async Task EnqueueAsync_ActiveCopilotRun_ConsumesAsInternalSteering()
     {
-        // Contract test: enqueue onto the immediate queue during an active run remains valid and
-        // is not modelled as a distinct 'steer' verb (no public steering API on IAgentChat).
-        var (_, _, adapter) = NewAdapter();
-        var immediate = adapter.Snapshot.Queues.Single(q => q.IsImmediate);
-        var result = await adapter.EnqueueAsync(Enqueue(immediate.QueueId, adapter.Snapshot.Revision, "steer"));
+        var queueManager = new AgentInputQueueManager();
+        var defaultQueue = new AgentInputQueue(new AgentInputQueue.Parameters
+        {
+            Priority = int.MaxValue - 1,
+            Immediacy = AgentInputQueueImmediacy.Queue,
+        });
+        queueManager.RegisterInputQueue(defaultQueue);
+        using var inputQueues = new LocalAgentInputQueuesAdapter(queueManager, defaultQueue);
+        using var client = new CopilotSdkChatClient(
+            "gpt-5",
+            "GitHub Copilot (gpt-5)",
+            gitHubToken: null,
+            loggerFactory: null,
+            queueManager: queueManager);
+
+        ChatMessage? forwarded = null;
+        client.SteeringMessageForwarded += msg => forwarded = msg;
+        var channel = Channel.CreateUnbounded<ChatResponseUpdate>();
+        var subscribed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        Task<StreamingTurnContext> BeginTurnAsync(CancellationToken _)
+        {
+            void OnQueueChanged(object? sender, AgentInputQueueManager.QueueStateChangedEventArgs e)
+            {
+                if (e.ChangeKind != AgentInputQueueManager.QueueStateChangeKind.ItemAdded)
+                {
+                    return;
+                }
+
+                while (queueManager.TryDequeueNextImmediate(out var item))
+                {
+                    foreach (var message in item.Messages ?? [])
+                    {
+                        var handler = (Action<ChatMessage>?)typeof(CopilotSdkChatClient)
+                            .GetField("SteeringMessageForwarded", BindingFlags.Instance | BindingFlags.NonPublic)!
+                            .GetValue(client);
+                        handler?.Invoke(message);
+                    }
+                }
+            }
+
+            queueManager.QueueStateChanged += OnQueueChanged;
+            subscribed.TrySetResult();
+            return Task.FromResult(new StreamingTurnContext(
+                channel.Reader,
+                new AsyncDisposableAction(() =>
+                {
+                    queueManager.QueueStateChanged -= OnQueueChanged;
+                    return ValueTask.CompletedTask;
+                }),
+                _ => Task.CompletedTask,
+                () => Task.CompletedTask,
+                () => Task.CompletedTask));
+        }
+
+        var turn = Task.Run(async () =>
+        {
+            await foreach (var _ in client.RunStreamingTurnAsync(BeginTurnAsync, CancellationToken.None))
+            {
+            }
+        });
+
+        await subscribed.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        var result = await inputQueues.EnqueueAsync(new EnqueueAgentInputRequest
+        {
+            TargetQueueId = inputQueues.ImmediateQueue.Snapshot.QueueId,
+            Messages = [new ChatMessage(ChatRole.User, "steer")],
+            CommandId = Guid.NewGuid(),
+            ExpectedRevision = inputQueues.Snapshot.Revision,
+        });
+
+        channel.Writer.Complete();
+        await turn.WaitAsync(TimeSpan.FromSeconds(30));
+
         Assert.Equal(AgentInputQueueCommandStatus.Applied, result.Status);
-        Assert.DoesNotContain(
-            typeof(IAgentChat).GetMethods(),
-            m => m.Name.Contains("Steer", StringComparison.OrdinalIgnoreCase));
+        Assert.NotNull(forwarded);
+        Assert.Equal("steer", forwarded!.Text);
+        Assert.Empty(inputQueues.ImmediateQueue.Snapshot.Items);
     }
 
     [Fact]
     public async Task EnqueueAsync_ActiveNonCopilotRun_RemainsQueuedUntilSupportedBoundaryOrFutureTurn()
     {
-        var (_, def, adapter) = NewAdapter();
-        var result = await adapter.EnqueueAsync(Enqueue(def.QueueId, adapter.Snapshot.Revision, "queued"));
+        var client = new DeterministicTestChatClient();
+        var firstStream = client.EnqueueStreamingResponse();
+        firstStream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "blocked"), isReady: false);
+        firstStream.Complete(isReady: false);
+        await using var chat = await CreateAgentChatAsync(client, new InlineTaskScheduler());
+        var commonQueues = ((IAgentChat)chat).InputQueues;
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ((System.Collections.Specialized.INotifyCollectionChanged)chat.RunningItems).CollectionChanged += (_, _) =>
+        {
+            if (chat.RunningItems.Count > 0)
+            {
+                started.TrySetResult();
+            }
+        };
+
+        chat.EnqueueUserMessage("first");
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        var result = await commonQueues.EnqueueAsync(new EnqueueAgentInputRequest
+        {
+            TargetQueueId = commonQueues.ImmediateQueue.Snapshot.QueueId,
+            Messages = [new ChatMessage(ChatRole.User, "queued")],
+            CommandId = Guid.NewGuid(),
+            ExpectedRevision = commonQueues.Snapshot.Revision,
+        });
+
         Assert.Equal(AgentInputQueueCommandStatus.Applied, result.Status);
-        // The item lives in the queue snapshot until owner-side consumption executes it.
         Assert.Contains(
-            adapter.Snapshot.Queues.Single(q => q.QueueId == def.QueueId).Items,
+            commonQueues.ImmediateQueue.Snapshot.Items,
             item => item.ItemId == result.ItemId);
+        chat.Interrupt();
     }
 
     [Fact]
@@ -609,52 +846,31 @@ public sealed class AgentInputQueuesRetryTests
     [Fact]
     public void AgentInformationPublisher_InvalidRequiredString_RejectsBeforePublication()
     {
-        var def = TestDefinitions.Make();
-        Assert.False(AgentInformationPublisher.TryValidate(new AgentInformation
-        {
-            AgentSessionId = "",
-            AgentId = "a",
-            Name = "n",
-            DisplayName = "d",
-            Description = "e",
-            AcceptsUserInput = true,
-            AgentDefinition = def,
-        }, out var err));
-        Assert.Equal("blank-required-string", err);
+        Assert.Throws<ArgumentException>(() =>
+            AgentInformationOpenPublisher.TryCreatePayload(
+                isAuthorized: true,
+                () => ValidInformation() with { AgentSessionId = "" },
+                out _));
     }
 
     [Fact]
     public void AgentInformationPublisher_InvalidOptionalModel_RejectsBeforePublication()
     {
-        var def = TestDefinitions.Make();
-        Assert.False(AgentInformationPublisher.TryValidate(new AgentInformation
-        {
-            AgentSessionId = "s",
-            AgentId = "a",
-            Name = "n",
-            DisplayName = "d",
-            Description = "e",
-            AcceptsUserInput = true,
-            CurrentModelId = "   ",
-            AgentDefinition = def,
-        }, out var err));
-        Assert.Equal("blank-optional-model", err);
+        Assert.Throws<ArgumentException>(() =>
+            AgentInformationOpenPublisher.TryCreatePayload(
+                isAuthorized: true,
+                () => ValidInformation() with { CurrentModelId = "   " },
+                out _));
     }
 
     [Fact]
     public void AgentInformationPublisher_NullDefinition_RejectsBeforePublication()
     {
-        Assert.False(AgentInformationPublisher.TryValidate(new AgentInformation
-        {
-            AgentSessionId = "s",
-            AgentId = "a",
-            Name = "n",
-            DisplayName = "d",
-            Description = "e",
-            AcceptsUserInput = true,
-            AgentDefinition = null!,
-        }, out var err));
-        Assert.Equal("null-definition", err);
+        Assert.Throws<ArgumentException>(() =>
+            AgentInformationOpenPublisher.TryCreatePayload(
+                isAuthorized: true,
+                () => ValidInformation() with { AgentDefinition = null! },
+                out _));
     }
 
     [Fact]
@@ -697,22 +913,168 @@ public sealed class AgentInputQueuesRetryTests
     [Fact]
     public async Task InformationChanged_SessionAndModelChange_StateVisibleBeforeSingleEvent()
     {
-        await using var chat = await CreateChatAsync();
+        var modelClient = new ModelTestChatClient("echo");
+        await using var chat = await CreateAgentChatAsync(modelClient, new InlineTaskScheduler());
         Assert.True(RemoteAgentChatProxy.TryOpen(chat, isAuthorized: true, out var remote));
-        var raised = 0;
-        AgentInformation observed = default;
-        remote!.InformationChanged += (_, _) =>
+        var observed = new List<AgentInformation>();
+        remote!.InformationChanged += (_, _) => observed.Add(remote.Information);
+
+        chat.SetAgentSessionId("s2");
+        await modelClient.SetModelIdAsync("m2", CancellationToken.None);
+
+        Assert.NotEmpty(observed);
+        Assert.Equal("s2", remote.Information.AgentSessionId);
+        Assert.Equal("m2", remote.Information.CurrentModelId);
+        Assert.Equal(chat.Information.AgentDefinition.ToJson(), remote.Information.AgentDefinition.ToJson());
+        Assert.Equal(observed[^1], remote.Information);
+    }
+
+    private static AgentInformation ValidInformation() => new()
+    {
+        AgentSessionId = "session-1",
+        AgentId = "agent-1",
+        Name = "agent",
+        DisplayName = "Agent",
+        Description = "Agent description",
+        AcceptsUserInput = true,
+        AgentDefinition = TestDefinitions.Make(),
+    };
+
+    private static async Task<AgentChat> CreateAgentChatAsync(IChatClient client, TaskScheduler scheduler)
+        => await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
         {
-            raised++;
-            observed = remote.Information;
-        };
+            AgentDefinition = TestDefinitions.Make(),
+            ConfiguredStore = new InMemoryAgentPersistenceStore(),
+            ClientOverride = client,
+            ForegroundScheduler = scheduler,
+        });
 
-        Assert.True(chat.TryPublishInformation(chat.Information with { AgentSessionId = "s2", CurrentModelId = "m2" }));
+    private static void AssertMissingRequiredMembersThrow(Type type, object sample, IReadOnlyCollection<string> requiredProperties)
+    {
+        var serialized = JsonSerializer.Serialize(sample, type, AIJsonUtilities.DefaultOptions);
+        var node = JsonNode.Parse(serialized)!.AsObject();
+        foreach (var property in requiredProperties)
+        {
+            var mutated = JsonNode.Parse(serialized)!.AsObject();
+            var jsonProperty = mutated.Select(static p => p.Key)
+                .Single(name => string.Equals(name, property, StringComparison.OrdinalIgnoreCase));
+            mutated.Remove(jsonProperty);
+            Assert.Throws<JsonException>(() =>
+                JsonSerializer.Deserialize(mutated.ToJsonString(), type, AIJsonUtilities.DefaultOptions));
+        }
+    }
 
-        Assert.Equal(1, raised);
-        Assert.Equal("s2", observed.AgentSessionId);
-        Assert.Equal("m2", observed.CurrentModelId);
-        Assert.Equal(observed, remote.Information);
+    private static void AssertSingleUserTextMessage(JsonElement messagesElement, string expectedText)
+    {
+        var message = Assert.Single(messagesElement.EnumerateArray());
+        Assert.Equal("user", message.GetProperty("role").GetString());
+        if (message.TryGetProperty("text", out var textProperty))
+        {
+            Assert.Equal(expectedText, textProperty.GetString());
+            return;
+        }
+
+        var content = Assert.Single(message.GetProperty("contents").EnumerateArray());
+        Assert.Equal(expectedText, content.GetProperty("text").GetString());
+    }
+
+    private sealed class InlineTaskScheduler : TaskScheduler
+    {
+        protected override IEnumerable<Task> GetScheduledTasks() => [];
+        protected override void QueueTask(Task task) => this.TryExecuteTask(task);
+        protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued) => this.TryExecuteTask(task);
+    }
+
+    private sealed class AsyncDisposableAction(Func<ValueTask> dispose) : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => dispose();
+    }
+
+    private sealed class ModelTestChatClient(string modelId) : IChatClient, IModelSlashCommandClient
+    {
+        private readonly DeterministicTestChatClient inner = new();
+
+        public event EventHandler? ModelChanged;
+
+        public string ModelId { get; private set; } = modelId;
+
+        public Task SetModelIdAsync(string newModelId, CancellationToken cancellationToken)
+        {
+            this.ModelId = newModelId;
+            this.ModelChanged?.Invoke(this, EventArgs.Empty);
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<ModelInfo>> ListModelsAsync(CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<ModelInfo>>([]);
+
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+            => this.inner.GetResponseAsync(messages, options, cancellationToken);
+
+        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+            => this.inner.GetStreamingResponseAsync(messages, options, cancellationToken);
+
+        public object? GetService(Type serviceType, object? serviceKey = null)
+            => serviceType == typeof(IModelSlashCommandClient) ? this : null;
+        public void Dispose() => this.inner.Dispose();
+    }
+
+#pragma warning disable CS0067
+    private sealed class InvalidSnapshotAgentChat(AgentInputQueuesSnapshot snapshot) : IAgentChat
+    {
+        public AgentInformation Information => ValidInformation();
+        public Usage Usage => default;
+        public bool IsBusy => false;
+        public AgentChatHistoryCollection History { get; } = new();
+        public Task HistoryPopulated => Task.CompletedTask;
+        public AgentChatRunningItemCollection RunningItems { get; } = new();
+        public IAgentInputQueues InputQueues { get; } = new InvalidSnapshotInputQueues(snapshot);
+        public ReadOnlyObservableCollection<IRunningSubAgent> SubAgents { get; } = new(new ObservableCollection<IRunningSubAgent>());
+        public ReadOnlyObservableCollection<AgentChatModal> Modals { get; } = new(new ObservableCollection<AgentChatModal>());
+        public ISlashCommandRegistry SlashCommands { get; } = new SlashCommandRegistry();
+        public event EventHandler? InformationChanged;
+        public event EventHandler? ToolsChanged;
+        public event EventHandler? UsageChanged;
+        public event EventHandler<AgentChatHistoryItem>? TurnCompleted;
+        public IReadOnlyList<AgentChatToolItem> GetToolSnapshot() => [];
+        public Task SetToolEnabledAsync(string toolId, bool enabled, CancellationToken ct = default) => Task.CompletedTask;
+        public Task RespondToModalAsync(string modalId, JsonElement response, CancellationToken ct = default) => Task.CompletedTask;
+        public void EnqueueSystemNote(string text) { }
+        public void EnqueueHelpNote(string text) { }
+        public void EnqueueTransientDiagnostic(string text) { }
+        public void Interrupt() { }
+        public object? GetService(Type serviceType) => null;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+#pragma warning restore CS0067
+
+    private sealed class InvalidSnapshotInputQueues(AgentInputQueuesSnapshot snapshot) : IAgentInputQueues
+    {
+        public AgentInputQueuesSnapshot Snapshot => snapshot;
+        public IReadOnlyList<IAgentInputQueue> Queues => [];
+        public IAgentInputQueue DefaultQueue => throw new NotSupportedException();
+        public IAgentInputQueue ImmediateQueue => throw new NotSupportedException();
+        public event EventHandler? Changed { add { } remove { } }
+        public AgentInputQueueCommandResult CreateQueue(CreateAgentInputQueueRequest request) => throw new NotSupportedException();
+        public AgentInputQueueCommandResult DeleteQueue(DeleteAgentInputQueueRequest request) => throw new NotSupportedException();
+        public AgentInputQueueCommandResult Enqueue(EnqueueAgentInputRequest request) => throw new NotSupportedException();
+        public AgentInputQueueCommandResult Edit(EditAgentInputQueueItemRequest request) => throw new NotSupportedException();
+        public AgentInputQueueCommandResult Remove(RemoveAgentInputQueueItemRequest request) => throw new NotSupportedException();
+        public AgentInputQueueCommandResult Move(MoveAgentInputQueueItemRequest request) => throw new NotSupportedException();
+        public AgentInputQueueCommandResult Configure(ConfigureAgentInputQueueRequest request) => throw new NotSupportedException();
+        public Task<AgentInputQueueCommandResult> CreateQueueAsync(CreateAgentInputQueueRequest request, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<AgentInputQueueCommandResult> DeleteQueueAsync(DeleteAgentInputQueueRequest request, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<AgentInputQueueCommandResult> EnqueueAsync(EnqueueAgentInputRequest request, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<AgentInputQueueCommandResult> EditAsync(EditAgentInputQueueItemRequest request, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<AgentInputQueueCommandResult> RemoveAsync(RemoveAgentInputQueueItemRequest request, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<AgentInputQueueCommandResult> MoveAsync(MoveAgentInputQueueItemRequest request, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<AgentInputQueueCommandResult> ConfigureAsync(ConfigureAgentInputQueueRequest request, CancellationToken ct = default) => throw new NotSupportedException();
     }
 
     private static class TestDefinitions

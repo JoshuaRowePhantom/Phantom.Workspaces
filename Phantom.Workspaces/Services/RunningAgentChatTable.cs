@@ -77,6 +77,22 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
             };
         }
 
+        if (request.AcquisitionMode != AgentChatAcquisitionMode.Local)
+        {
+            services = (services ?? new AgentServices()) with
+            {
+                RemoteRuntimeIntent = new RemoteRuntimeIntent
+                {
+                    AcquisitionMode = request.AcquisitionMode,
+                    OwningProfileTransport = request.OwningProfileTransport
+                        ?? throw new ArgumentException(
+                            "Remote acquisition requires an owning profile transport.",
+                            nameof(request)),
+                    ReplayCursor = request.ReplayCursor,
+                },
+            };
+        }
+
         var definition = await ResolveDefinitionIfNeededAsync(request, isRunning, ct).ConfigureAwait(false);
 
         var lease = await _factory.GetOrCreateAsync(

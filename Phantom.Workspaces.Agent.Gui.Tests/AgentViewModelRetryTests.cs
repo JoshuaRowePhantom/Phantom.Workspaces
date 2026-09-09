@@ -295,6 +295,7 @@ public sealed class AgentViewModelRetryTests
         await using var remote = new RemoteAgentChatProxy(local);
         await using var vm = this.CreateViewModel(remote, loggerFactory);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         ((System.Collections.Specialized.INotifyCollectionChanged)local.RunningItems).CollectionChanged += (_, _) =>
         {
             if (local.RunningItems.Count > 0)
@@ -302,13 +303,25 @@ public sealed class AgentViewModelRetryTests
                 started.TrySetResult();
             }
         };
+        local.TurnCompleted += (_, _) => completed.TrySetResult();
         local.EnqueueUserMessage("start");
         await started.Task.WaitAsync(CancellationToken.None);
 
         vm.InterruptCommand.Execute(null);
-        await WaitForConditionAsync(() => local.RunningItems.Count == 0, "remote interrupt to clear running items");
+        await completed.Task.WaitAsync(CancellationToken.None);
+        Assert.Empty(local.RunningItems);
 
+        var noteAdded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ((System.Collections.Specialized.INotifyCollectionChanged)local.History).CollectionChanged += (_, _) =>
+        {
+            if (local.History.Any(item => item.Contents.OfType<Microsoft.Extensions.AI.TextContent>()
+                .Any(content => content.Text == "usable-after-remote-interrupt")))
+            {
+                noteAdded.TrySetResult();
+            }
+        };
         local.EnqueueSystemNote("usable-after-remote-interrupt");
+        await noteAdded.Task.WaitAsync(CancellationToken.None);
         Assert.Contains(local.History,
             item => item.Contents.OfType<Microsoft.Extensions.AI.TextContent>()
                 .Any(content => content.Text == "usable-after-remote-interrupt"));
@@ -369,12 +382,17 @@ public sealed class AgentViewModelRetryTests
         var source = new DeferredQueues();
         await using var remote = new RemoteAgentChatProxy(new StubAgentChat(source, MakeDefinition()));
         var observedRevisions = new List<long>();
-        remote.InputQueues.Changed += (_, _) => observedRevisions.Add(remote.InputQueues.Snapshot.Revision);
+        var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        remote.InputQueues.Changed += (_, _) =>
+        {
+            observedRevisions.Add(remote.InputQueues.Snapshot.Revision);
+            changed.TrySetResult();
+        };
         var command = source.NewEnqueueRequest("applied");
         var pending = remote.InputQueues.EnqueueAsync(command, TestContext.Current.CancellationToken);
 
         source.PublishAppliedButDoNotComplete(command);
-        await WaitForConditionAsync(() => observedRevisions.Count == 1, "authoritative delta publication");
+        await changed.Task.WaitAsync(CancellationToken.None);
         Assert.False(pending.IsCompleted);
         Assert.Contains(remote.InputQueues.DefaultQueue.Snapshot.Items, item => item.ItemId == source.LastItemId);
         source.ReleaseCompletion();
@@ -399,21 +417,6 @@ public sealed class AgentViewModelRetryTests
     {
         Assert.Throws<ArgumentNullException>(() => new SlashCommandContext { AgentChat = null! });
         await Task.CompletedTask;
-    }
-
-    private static async Task WaitForConditionAsync(Func<bool> condition, string description)
-    {
-        for (var i = 0; i < 100; i++)
-        {
-            if (condition())
-            {
-                return;
-            }
-
-            await Task.Delay(10, TestContext.Current.CancellationToken);
-        }
-
-        throw new TimeoutException($"Timed out waiting for {description}.");
     }
 
     private sealed class FakeSlashCommandHandler(string name) : ISlashCommandHandler

@@ -172,12 +172,12 @@ public sealed record AgentServices : IServiceProvider
     public object? ExecutionTrustContext { get; init; }
 
     /// <summary>
-    /// Optional remote-runtime intent supplied by the host for a remote-proxy chat (issue #1485).
-    /// Typed as <see langword="object"/> to avoid a reverse project reference from
-    /// <c>Phantom.Workspaces.Llm.Interfaces</c> to <c>Phantom.Workspaces.Llm.Core</c>; consuming
-    /// code casts to the concrete <c>Phantom.Workspaces.Llm.Core.RemoteRuntimeIntent</c> when
-    /// present. When null, the host runs everything in-process against the local engine.
-    /// </summary>
+     /// Optional remote-runtime intent supplied by the host for a remote-proxy chat (issue #1485).
+     /// Typed as <see langword="object"/> to avoid a reverse project reference from
+     /// <c>Phantom.Workspaces.Llm.Interfaces</c> to <c>Phantom.Workspaces.Llm.Core</c>; consuming
+     /// code casts to the concrete <c>Phantom.Workspaces.Services.RemoteRuntimeIntent</c> when
+     /// present. When null, the host runs everything in-process against the local engine.
+     /// </summary>
     public object? RemoteRuntimeIntent { get; init; }
 
     public object? GetService(Type serviceType)

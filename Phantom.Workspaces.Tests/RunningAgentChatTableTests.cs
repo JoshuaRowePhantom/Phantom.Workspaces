@@ -21,7 +21,7 @@ public sealed class RunningAgentChatTableTests
     private sealed class FakeRunningAgentChatFactory : IRunningAgentChatFactory
     {
         private readonly TaskScheduler _foregroundScheduler;
-        private readonly Dictionary<AgentSessionId, (int RefCount, RunningAgentChat Entry, AgentChat Chat)> _sessions = new();
+        private readonly Dictionary<AgentSessionId, (int RefCount, RunningAgentChat Entry, Task<AgentChat> ChatTask)> _sessions = new();
 
         public ObservableCollection<RunningAgentChat> RunningSessions { get; } = new();
         public AgentDefinition? LastDefinition { get; private set; }
@@ -35,29 +35,51 @@ public sealed class RunningAgentChatTableTests
         public async Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, bool registerAsRunningAgent = true, CancellationToken ct = default)
         {
             bool isNew;
-            AgentChat chat;
+            RunningAgentChat? entryToAdd = null;
+            Task<AgentChat> chatTask;
             lock (_sessions)
             {
                 if (_sessions.TryGetValue(sessionId, out var existing))
                 {
-                    _sessions[sessionId] = (existing.RefCount + 1, existing.Entry, existing.Chat);
+                    _sessions[sessionId] = (existing.RefCount + 1, existing.Entry, existing.ChatTask);
                     isNew = false;
-                    chat = existing.Chat;
+                    chatTask = existing.ChatTask;
                 }
                 else
                 {
-                    var entry = new RunningAgentChat(sessionId, this);
-                    chat = CreateTestChatAsync(LastDefinition ?? CreateTestAgentDefinition(), LastServices, ct).GetAwaiter().GetResult();
-                    _sessions[sessionId] = (1, entry, chat);
+                    entryToAdd = new RunningAgentChat(sessionId, this);
+                    chatTask = CreateTestChatAsync(LastDefinition ?? CreateTestAgentDefinition(), LastServices, ct);
+                    _sessions[sessionId] = (1, entryToAdd, chatTask);
                     isNew = true;
                 }
             }
 
+            AgentChat chat;
+            try
+            {
+                chat = await chatTask.ConfigureAwait(false);
+            }
+            catch
+            {
+                if (isNew)
+                {
+                    lock (_sessions)
+                    {
+                        if (_sessions.TryGetValue(sessionId, out var current)
+                            && ReferenceEquals(current.ChatTask, chatTask))
+                        {
+                            _sessions.Remove(sessionId);
+                        }
+                    }
+                }
+
+                throw;
+            }
+
             if (isNew)
             {
-                var entryToAdd = _sessions[sessionId].Entry;
                 await Task.Factory.StartNew(
-                    () => RunningSessions.Add(entryToAdd),
+                    () => RunningSessions.Add(entryToAdd!),
                     CancellationToken.None,
                     TaskCreationOptions.None,
                     _foregroundScheduler);
@@ -105,11 +127,11 @@ public sealed class RunningAgentChatTableTests
                     _sessions.Remove(sessionId);
                     shouldRemove = true;
                     entryToRemove = existing.Entry;
-                    _ = existing.Chat.DisposeAsync();
+                    _ = DisposeChatAsync(existing.ChatTask);
                 }
                 else
                 {
-                    _sessions[sessionId] = (existing.RefCount - 1, existing.Entry, existing.Chat);
+                    _sessions[sessionId] = (existing.RefCount - 1, existing.Entry, existing.ChatTask);
                     shouldRemove = false;
                     entryToRemove = null;
                 }
@@ -124,6 +146,9 @@ public sealed class RunningAgentChatTableTests
                     _foregroundScheduler);
             }
         }
+
+        private static async Task DisposeChatAsync(Task<AgentChat> chatTask)
+            => await (await chatTask.ConfigureAwait(false)).DisposeAsync();
     }
 
     private static AgentDefinition CreateTestAgentDefinition()
