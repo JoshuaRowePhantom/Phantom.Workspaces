@@ -848,6 +848,16 @@ internal sealed class AgentSessionFramePublisher(
     }
 }
 
+internal static class AgentSessionViewerReleasePolicy
+{
+    internal static bool ShouldTerminateRuntime(bool continueInBackground, int remainingViewerCount)
+    {
+        if (remainingViewerCount < 0)
+            throw new ArgumentOutOfRangeException(nameof(remainingViewerCount));
+        return remainingViewerCount == 0 && !continueInBackground;
+    }
+}
+
 public sealed class RemoteAgentProtocolException : Exception
 {
     public RemoteAgentProtocolException(string message) : base(message) { }

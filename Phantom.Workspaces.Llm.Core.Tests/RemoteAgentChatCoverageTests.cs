@@ -480,21 +480,11 @@ public sealed partial class RemoteAgentChatTests
         await chat.DetachAsync();
         var command = Assert.IsType<DetachCommand>(
             AgentSessionProtocolCodec.DeserializeCommand(await transport.Outgoing.ReadAsync()));
-        var owner = new LastViewerOwnerHarness(continueInBackground);
-        owner.Apply(command);
-        Assert.Equal(continueInBackground, owner.RuntimeIsRunning);
-    }
-
-    private sealed class LastViewerOwnerHarness(bool continueInBackground)
-    {
-        public bool RuntimeIsRunning { get; private set; } = true;
-
-        public void Apply(DetachCommand command)
-        {
-            Assert.Equal("detach", command.Type);
-            if (!continueInBackground)
-                this.RuntimeIsRunning = false;
-        }
+        Assert.Equal("detach", command.Type);
+        Assert.Equal(!continueInBackground,
+            AgentSessionViewerReleasePolicy.ShouldTerminateRuntime(continueInBackground, remainingViewerCount: 0));
+        Assert.False(AgentSessionViewerReleasePolicy.ShouldTerminateRuntime(
+            continueInBackground, remainingViewerCount: 1));
     }
 
     private sealed class ManuallyReversedTaskScheduler : TaskScheduler
