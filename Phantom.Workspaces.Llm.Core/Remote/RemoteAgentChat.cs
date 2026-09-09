@@ -21,6 +21,7 @@ public sealed class RemoteAgentChat : IAgentChat
     private readonly ObservableCollection<IRunningSubAgent> subagents = [];
     private readonly ObservableCollection<AgentChatModal> modals = [];
     private readonly List<AgentChatToolItem> tools = [];
+    private readonly Dictionary<string, AgentChatRunningItem> runningById = new(StringComparer.Ordinal);
     private readonly SlashCommandRegistry slashCommands = new();
     private readonly RemoteInputQueues inputQueues;
     private bool disposed;
@@ -260,6 +261,26 @@ public sealed class RemoteAgentChat : IAgentChat
             case QueueChangedEvent e:
                 this.inputQueues.ApplyDelta(e);
                 break;
+            case StreamingStartedEvent e:
+                var running = new AgentChatRunningItem();
+                running.Items.Add(Deserialize<AgentChatHistoryItem>(e.Item));
+                this.runningById.Add(e.RunId, running);
+                this.RunningItems.Add(running);
+                break;
+            case StreamingUpdatedEvent e:
+                if (!this.runningById.TryGetValue(e.RunId, out var updated))
+                    throw new RemoteAgentProtocolException("A streaming update referenced an unknown run.");
+                updated.Items.Clear();
+                foreach (var update in DeserializeStreamingItems(e.Update)) updated.Items.Add(update);
+                break;
+            case StreamingCompletedEvent e:
+                if (!this.runningById.Remove(e.RunId, out var completed))
+                    throw new RemoteAgentProtocolException("A streaming completion referenced an unknown run.");
+                this.RunningItems.Remove(completed);
+                var completedItem = Deserialize<AgentChatHistoryItem>(e.Item);
+                this.History.Add(completedItem);
+                this.TurnCompleted?.Invoke(this, completedItem);
+                break;
             case BusyChangedEvent e:
                 this.IsBusy = e.IsBusy;
                 break;
@@ -308,10 +329,13 @@ public sealed class RemoteAgentChat : IAgentChat
         this.History.Clear();
         foreach (var value in snapshot.History) this.History.Add(Deserialize<AgentChatHistoryItem>(value));
         this.RunningItems.Clear();
+        this.runningById.Clear();
         foreach (var value in snapshot.RunningItems)
         {
+            var state = Deserialize<RemoteRunningItemState>(value);
             var running = new AgentChatRunningItem();
-            foreach (var item in Deserialize<AgentChatHistoryItem[]>(value)) running.Items.Add(item);
+            foreach (var item in state.Items) running.Items.Add(item);
+            this.runningById.Add(state.RunId, running);
             this.RunningItems.Add(running);
         }
         this.inputQueues.Replace(snapshot.InputQueues);
@@ -351,6 +375,11 @@ public sealed class RemoteAgentChat : IAgentChat
     private static T Deserialize<T>(JsonElement value)
         => JsonSerializer.Deserialize<T>(value.GetRawText(), AIJsonUtilities.DefaultOptions)
            ?? throw new RemoteAgentProtocolException($"A {typeof(T).Name} payload was null.");
+
+    private static IReadOnlyList<AgentChatHistoryItem> DeserializeStreamingItems(JsonElement value)
+        => value.ValueKind == JsonValueKind.Array
+            ? Deserialize<AgentChatHistoryItem[]>(value)
+            : [Deserialize<AgentChatHistoryItem>(value)];
 
     private static AgentInformation CloneInformation(AgentInformation value)
         => new()
@@ -488,6 +517,12 @@ public sealed class RemoteAgentChat : IAgentChat
         internal static RemoteRunningSubagent FromJson(JsonElement value)
             => JsonSerializer.Deserialize<RemoteRunningSubagent>(value.GetRawText(), AIJsonUtilities.DefaultOptions)
                ?? throw new RemoteAgentProtocolException("Subagent payload was null.");
+    }
+
+    private sealed record RemoteRunningItemState
+    {
+        public required string RunId { get; init; }
+        public required IReadOnlyList<AgentChatHistoryItem> Items { get; init; }
     }
 }
 

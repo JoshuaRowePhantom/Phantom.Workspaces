@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Threading.Channels;
+using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Transport;
 
@@ -95,6 +96,36 @@ public sealed class RemoteAgentChatTests
             await changed.Task.WaitAsync(TimeSpan.FromSeconds(2));
             Assert.Equal(2, chat.InputQueues.Snapshot.Revision);
             Assert.Equal("Renamed", chat.InputQueues.DefaultQueue.Snapshot.Name);
+        }
+    }
+
+    [Fact]
+    public async Task ProxyGetters_AfterOrderedStreamingFrames_ReturnMirroredState()
+    {
+        var (transport, chat) = await AttachAsync();
+        await using (chat)
+        {
+            var item = new AgentChatHistoryItem
+            {
+                Role = ChatRole.Assistant,
+                Contents = [new TextContent("partial")],
+            };
+            await transport.SendAsync(Frame(2, new StreamingStartedEvent
+            {
+                RunId = "run-1",
+                Item = JsonSerializer.SerializeToElement(item, AIJsonUtilities.DefaultOptions),
+            }));
+            await WaitUntilAsync(() => chat.RunningItems.Count == 1);
+            Assert.Empty(chat.History);
+
+            var completed = item with { Contents = [new TextContent("complete")] };
+            await transport.SendAsync(Frame(3, new StreamingCompletedEvent
+            {
+                RunId = "run-1",
+                Item = JsonSerializer.SerializeToElement(completed, AIJsonUtilities.DefaultOptions),
+            }));
+            await WaitUntilAsync(() => chat.RunningItems.Count == 0 && chat.History.Count == 1);
+            Assert.Equal(ChatRole.Assistant, chat.History[0].Role);
         }
     }
 
