@@ -26,6 +26,9 @@ public static class CopilotSdkStreamAdapter
     /// </summary>
     public const string ParentToolCallIdPropertyName = "copilot.sdk.parent_tool_call_id";
 
+    /// <summary>Spawning tool-call ID used to correlate a child runtime ID without relying on order.</summary>
+    public const string SourceToolCallIdPropertyName = "copilot.sdk.source_tool_call_id";
+
     /// <summary>
     /// <see cref="AIContent.AdditionalProperties"/> key describing special content kinds
     /// (<see cref="SystemNotificationContentType"/>, <see cref="SubAgentLifecycleContentType"/>).
@@ -130,6 +133,26 @@ public static class CopilotSdkStreamAdapter
                     {
                         Role = ChatRole.Assistant,
                         Contents = [Tag(new TextContent(delta.Data.DeltaContent), delta.AgentId)],
+                    };
+                    break;
+
+                // Copilot CLI 1.0.83 emits child output as a final assistant.message event rather
+                // than assistant.message_delta events. Root messages are excluded because their
+                // text has already streamed through the delta path.
+                case AssistantMessageEvent message when !string.IsNullOrEmpty(message.AgentId)
+                                                        && !string.IsNullOrEmpty(message.Data?.Content):
+                    var finalContent = Tag(new TextContent(message.Data.Content), message.AgentId);
+                    var sourceToolCallId = GetAssistantParentToolCallId(message.Data);
+                    if (!string.IsNullOrEmpty(sourceToolCallId))
+                    {
+                        finalContent.AdditionalProperties![SourceToolCallIdPropertyName] =
+                            sourceToolCallId;
+                    }
+
+                    yield return new ChatResponseUpdate
+                    {
+                        Role = ChatRole.Assistant,
+                        Contents = [finalContent],
                     };
                     break;
 
@@ -291,7 +314,9 @@ public static class CopilotSdkStreamAdapter
                 case SessionModeChangedEvent:
                 case SessionRemoteSteerableChangedEvent:
                 case SessionSessionLimitsChangedEvent:
+#pragma warning disable GHCP001 // Known metadata event; consumed without depending on its payload.
                 case SessionPermissionsChangedEvent:
+#pragma warning restore GHCP001
                 case SessionPlanChangedEvent:
                 case SessionTodosChangedEvent:
                 case SessionWorkspaceFileChangedEvent:
@@ -358,6 +383,15 @@ public static class CopilotSdkStreamAdapter
             : null;
     }
 
+    /// <summary>Returns the root tool call that spawned the child content, when supplied by the SDK.</summary>
+    public static string? GetSourceToolCallId(AIContent content)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        return content.AdditionalProperties?.TryGetValue(SourceToolCallIdPropertyName, out var value) == true
+            ? value as string
+            : null;
+    }
+
     /// <summary>
     /// Returns whether <paramref name="content"/> is a sub-agent lifecycle signal
     /// (started/completed/failed) as opposed to ordinary routed content.
@@ -387,6 +421,10 @@ public static class CopilotSdkStreamAdapter
 
         return content;
     }
+
+#pragma warning disable GHCP001 // Current CLI still emits this as the exact spawn correlation key.
+    private static string? GetAssistantParentToolCallId(AssistantMessageData data) => data.ParentToolCallId;
+#pragma warning restore GHCP001
 
     private static AIContent TagLifecycle(AIContent content)
     {
