@@ -220,7 +220,7 @@ public sealed class InputQueueViewModel : ViewModelBase
             return;
         }
 
-        this.Execute(this.inputQueues.ConfigureAsync(new ConfigureAgentInputQueueRequest
+        this.Apply(this.inputQueues.Configure(new ConfigureAgentInputQueueRequest
         {
             QueueId = queueId,
             Configuration = new AgentInputQueueConfiguration
@@ -262,7 +262,7 @@ public sealed class InputQueueViewModel : ViewModelBase
 
     public void RemoveQueueItem(string queueId, string itemId)
     {
-        this.Execute(this.inputQueues.RemoveAsync(new RemoveAgentInputQueueItemRequest
+        this.Apply(this.inputQueues.Remove(new RemoveAgentInputQueueItemRequest
         {
             QueueId = queueId,
             ItemId = itemId,
@@ -277,7 +277,7 @@ public sealed class InputQueueViewModel : ViewModelBase
 
     public bool RemoveInputQueue(string queueId)
     {
-        var result = this.Execute(this.inputQueues.DeleteQueueAsync(new DeleteAgentInputQueueRequest
+        var result = this.Apply(this.inputQueues.DeleteQueue(new DeleteAgentInputQueueRequest
         {
             QueueId = queueId,
             CommandId = Guid.NewGuid(),
@@ -324,7 +324,7 @@ public sealed class InputQueueViewModel : ViewModelBase
             return;
         }
 
-        this.Execute(this.inputQueues.EditAsync(new EditAgentInputQueueItemRequest
+        this.Apply(this.inputQueues.Edit(new EditAgentInputQueueItemRequest
         {
             QueueId = queueId,
             ItemId = itemId,
@@ -393,7 +393,7 @@ public sealed class InputQueueViewModel : ViewModelBase
 
         var updatedMessages = item.Messages.ToArray();
         updatedMessages[0] = new ChatMessage(ChatRole.User, contents);
-        this.Execute(this.inputQueues.EditAsync(new EditAgentInputQueueItemRequest
+        this.Apply(this.inputQueues.Edit(new EditAgentInputQueueItemRequest
         {
             QueueId = queueId,
             ItemId = itemId,
@@ -427,7 +427,7 @@ public sealed class InputQueueViewModel : ViewModelBase
             return;
         }
 
-        this.Execute(this.inputQueues.EnqueueAsync(new EnqueueAgentInputRequest
+        this.Apply(this.inputQueues.Enqueue(new EnqueueAgentInputRequest
         {
             TargetQueueId = queueId,
             Messages = [new ChatMessage(ChatRole.User, contents.ToList())],
@@ -505,7 +505,7 @@ public sealed class InputQueueViewModel : ViewModelBase
                 continue;
             }
 
-            this.Execute(this.inputQueues.ConfigureAsync(new ConfigureAgentInputQueueRequest
+            this.Apply(this.inputQueues.Configure(new ConfigureAgentInputQueueRequest
             {
                 QueueId = queue.QueueId,
                 Configuration = new AgentInputQueueConfiguration
@@ -594,7 +594,7 @@ public sealed class InputQueueViewModel : ViewModelBase
 
     private string? CreateQueue(AgentInputQueueImmediacy immediacy)
     {
-        var result = this.Execute(this.inputQueues.CreateQueueAsync(new CreateAgentInputQueueRequest
+        var result = this.Apply(this.inputQueues.CreateQueue(new CreateAgentInputQueueRequest
         {
             Configuration = new AgentInputQueueConfiguration
             {
@@ -678,9 +678,10 @@ public sealed class InputQueueViewModel : ViewModelBase
         return updatedMessages;
     }
 
-    private AgentInputQueueCommandResult Execute(Task<AgentInputQueueCommandResult> task)
+    // #1485 retry 5: owner-side commands complete synchronously on the caller's thread.
+    // No task blocking is needed — Apply just records the coalescing sentinel and refreshes.
+    private AgentInputQueueCommandResult Apply(AgentInputQueueCommandResult result)
     {
-        var result = task.GetAwaiter().GetResult();
         Interlocked.Increment(ref this.ignoredQueueChangedEvents);
         this.RefreshQueues();
         return result;

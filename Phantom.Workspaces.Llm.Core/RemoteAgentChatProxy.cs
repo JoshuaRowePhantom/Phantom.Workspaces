@@ -137,6 +137,36 @@ public sealed class RemoteAgentChatProxy : IAgentChat
         public Task<AgentInputQueueCommandResult> ConfigureAsync(ConfigureAgentInputQueueRequest request, CancellationToken ct = default)
             => this.ExecuteAsync(() => this.source.ConfigureAsync(request, ct));
 
+        public AgentInputQueueCommandResult CreateQueue(CreateAgentInputQueueRequest request)
+            => this.ExecuteSync(() => this.source.CreateQueue(request));
+
+        public AgentInputQueueCommandResult DeleteQueue(DeleteAgentInputQueueRequest request)
+            => this.ExecuteSync(() => this.source.DeleteQueue(request));
+
+        public AgentInputQueueCommandResult Enqueue(EnqueueAgentInputRequest request)
+            => this.ExecuteSync(() => this.source.Enqueue(request));
+
+        public AgentInputQueueCommandResult Edit(EditAgentInputQueueItemRequest request)
+            => this.ExecuteSync(() => this.source.Edit(request));
+
+        public AgentInputQueueCommandResult Remove(RemoveAgentInputQueueItemRequest request)
+            => this.ExecuteSync(() => this.source.Remove(request));
+
+        public AgentInputQueueCommandResult Move(MoveAgentInputQueueItemRequest request)
+            => this.ExecuteSync(() => this.source.Move(request));
+
+        public AgentInputQueueCommandResult Configure(ConfigureAgentInputQueueRequest request)
+            => this.ExecuteSync(() => this.source.Configure(request));
+
+        private AgentInputQueueCommandResult ExecuteSync(Func<AgentInputQueueCommandResult> operation)
+        {
+            var result = operation();
+            this.RebuildQueues();
+            return result.CurrentSnapshot is { } current
+                ? result with { CurrentSnapshot = CloneSnapshot(current) }
+                : result;
+        }
+
         public void Dispose()
             => this.source.Changed -= this.OnChanged;
 

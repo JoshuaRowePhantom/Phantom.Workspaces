@@ -125,9 +125,14 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
     public Task<AgentInputQueueCommandResult> CreateQueueAsync(
         CreateAgentInputQueueRequest request, CancellationToken ct = default)
     {
-        ArgumentNullException.ThrowIfNull(request);
         ct.ThrowIfCancellationRequested();
-        return Task.FromResult(this.Execute(request, request.CommandId, request.ExpectedRevision, () =>
+        return Task.FromResult(this.CreateQueue(request));
+    }
+
+    public AgentInputQueueCommandResult CreateQueue(CreateAgentInputQueueRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return this.Execute(request, request.CommandId, request.ExpectedRevision, () =>
         {
             var (ok, err) = ValidateConfiguration(request.Configuration);
             if (!ok)
@@ -166,15 +171,20 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
                     CurrentSnapshot = this.snapshot,
                 };
             }
-        }));
+        });
     }
 
     public Task<AgentInputQueueCommandResult> DeleteQueueAsync(
         DeleteAgentInputQueueRequest request, CancellationToken ct = default)
     {
-        ArgumentNullException.ThrowIfNull(request);
         ct.ThrowIfCancellationRequested();
-        return Task.FromResult(this.Execute(request, request.CommandId, request.ExpectedRevision, () =>
+        return Task.FromResult(this.DeleteQueue(request));
+    }
+
+    public AgentInputQueueCommandResult DeleteQueue(DeleteAgentInputQueueRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return this.Execute(request, request.CommandId, request.ExpectedRevision, () =>
         {
             if (string.IsNullOrWhiteSpace(request.QueueId))
             {
@@ -211,15 +221,20 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
                     CurrentSnapshot = this.snapshot,
                 };
             }
-        }));
+        });
     }
 
     public Task<AgentInputQueueCommandResult> EnqueueAsync(
         EnqueueAgentInputRequest request, CancellationToken ct = default)
     {
-        ArgumentNullException.ThrowIfNull(request);
         ct.ThrowIfCancellationRequested();
-        return Task.FromResult(this.Execute(request, request.CommandId, request.ExpectedRevision, () =>
+        return Task.FromResult(this.Enqueue(request));
+    }
+
+    public AgentInputQueueCommandResult Enqueue(EnqueueAgentInputRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return this.Execute(request, request.CommandId, request.ExpectedRevision, () =>
         {
             if (string.IsNullOrWhiteSpace(request.TargetQueueId))
             {
@@ -254,15 +269,20 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
                     CurrentSnapshot = this.snapshot,
                 };
             }
-        }));
+        });
     }
 
     public Task<AgentInputQueueCommandResult> EditAsync(
         EditAgentInputQueueItemRequest request, CancellationToken ct = default)
     {
-        ArgumentNullException.ThrowIfNull(request);
         ct.ThrowIfCancellationRequested();
-        return Task.FromResult(this.Execute(request, request.CommandId, request.ExpectedRevision, () =>
+        return Task.FromResult(this.Edit(request));
+    }
+
+    public AgentInputQueueCommandResult Edit(EditAgentInputQueueItemRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return this.Execute(request, request.CommandId, request.ExpectedRevision, () =>
         {
             if (string.IsNullOrWhiteSpace(request.QueueId) || string.IsNullOrWhiteSpace(request.ItemId))
             {
@@ -318,15 +338,20 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
                     CurrentSnapshot = this.snapshot,
                 };
             }
-        }));
+        });
     }
 
     public Task<AgentInputQueueCommandResult> RemoveAsync(
         RemoveAgentInputQueueItemRequest request, CancellationToken ct = default)
     {
-        ArgumentNullException.ThrowIfNull(request);
         ct.ThrowIfCancellationRequested();
-        return Task.FromResult(this.Execute(request, request.CommandId, request.ExpectedRevision, () =>
+        return Task.FromResult(this.Remove(request));
+    }
+
+    public AgentInputQueueCommandResult Remove(RemoveAgentInputQueueItemRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return this.Execute(request, request.CommandId, request.ExpectedRevision, () =>
         {
             if (string.IsNullOrWhiteSpace(request.QueueId) || string.IsNullOrWhiteSpace(request.ItemId))
             {
@@ -363,15 +388,20 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
                     CurrentSnapshot = this.snapshot,
                 };
             }
-        }));
+        });
     }
 
     public Task<AgentInputQueueCommandResult> MoveAsync(
         MoveAgentInputQueueItemRequest request, CancellationToken ct = default)
     {
-        ArgumentNullException.ThrowIfNull(request);
         ct.ThrowIfCancellationRequested();
-        return Task.FromResult(this.Execute(request, request.CommandId, request.ExpectedRevision, () =>
+        return Task.FromResult(this.Move(request));
+    }
+
+    public AgentInputQueueCommandResult Move(MoveAgentInputQueueItemRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return this.Execute(request, request.CommandId, request.ExpectedRevision, () =>
         {
             if (string.IsNullOrWhiteSpace(request.SourceQueueId)
                 || string.IsNullOrWhiteSpace(request.TargetQueueId)
@@ -504,15 +534,20 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
                     CurrentSnapshot = this.snapshot,
                 };
             }
-        }));
+        });
     }
 
     public Task<AgentInputQueueCommandResult> ConfigureAsync(
         ConfigureAgentInputQueueRequest request, CancellationToken ct = default)
     {
-        ArgumentNullException.ThrowIfNull(request);
         ct.ThrowIfCancellationRequested();
-        return Task.FromResult(this.Execute(request, request.CommandId, request.ExpectedRevision, () =>
+        return Task.FromResult(this.Configure(request));
+    }
+
+    public AgentInputQueueCommandResult Configure(ConfigureAgentInputQueueRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return this.Execute(request, request.CommandId, request.ExpectedRevision, () =>
         {
             if (string.IsNullOrWhiteSpace(request.QueueId))
             {
@@ -560,7 +595,7 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
                     CurrentSnapshot = this.snapshot,
                 };
             }
-        }));
+        });
     }
 
     /// <summary>Marks an owner-consumed item id so future edit attempts return <c>Rejected</c>.</summary>

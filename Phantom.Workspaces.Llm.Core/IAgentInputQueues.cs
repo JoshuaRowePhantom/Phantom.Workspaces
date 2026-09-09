@@ -31,6 +31,18 @@ public interface IAgentInputQueues
         MoveAgentInputQueueItemRequest request, CancellationToken ct = default);
     Task<AgentInputQueueCommandResult> ConfigureAsync(
         ConfigureAgentInputQueueRequest request, CancellationToken ct = default);
+
+    // #1485 retry 5: synchronous owner-side command surface. Owner-side implementations
+    // complete these entirely on the caller's thread (no I/O, no continuation, no waiting)
+    // so UI callers can obtain the AgentInputQueueCommandResult without any of the flagged
+    // blocking patterns (.Result, .Wait(), .GetAwaiter().GetResult()).
+    AgentInputQueueCommandResult CreateQueue(CreateAgentInputQueueRequest request);
+    AgentInputQueueCommandResult DeleteQueue(DeleteAgentInputQueueRequest request);
+    AgentInputQueueCommandResult Enqueue(EnqueueAgentInputRequest request);
+    AgentInputQueueCommandResult Edit(EditAgentInputQueueItemRequest request);
+    AgentInputQueueCommandResult Remove(RemoveAgentInputQueueItemRequest request);
+    AgentInputQueueCommandResult Move(MoveAgentInputQueueItemRequest request);
+    AgentInputQueueCommandResult Configure(ConfigureAgentInputQueueRequest request);
 }
 
 /// <summary>Per-queue read model. Snapshots replace atomically on the foreground scheduler.</summary>
