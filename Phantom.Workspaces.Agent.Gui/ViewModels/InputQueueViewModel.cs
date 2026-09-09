@@ -22,6 +22,11 @@ public sealed class InputQueueViewModel : ViewModelBase
     private readonly IAgentInputQueues inputQueues;
     private readonly Dictionary<string, InputQueueGroupViewModel> queueViewModels = new(StringComparer.Ordinal);
     private readonly List<string> queueUseHistory = [];
+    // #1485: serialize RefreshQueues so concurrent Changed notifications delivered on
+    // TaskScheduler.Default (the fallback foregroundScheduler when no dispatcher is captured,
+    // e.g. in headless tests) cannot both observe a dictionary miss for the same queue and
+    // insert two InputQueueGroupViewModel instances for the same QueueId into Queues.
+    private readonly object queuesLock = new();
     private string? hiddenBuiltInQueueId;
     private bool hasMultipleQueues;
     private readonly ICommand holdAllQueuesCommand;
@@ -239,9 +244,12 @@ public sealed class InputQueueViewModel : ViewModelBase
     public void Dispose()
     {
         this.inputQueues.Changed -= this.OnQueuesChanged;
-        foreach (var viewModel in this.queueViewModels.Values)
+        lock (this.queuesLock)
         {
-            viewModel.Dispose();
+            foreach (var viewModel in this.queueViewModels.Values)
+            {
+                viewModel.Dispose();
+            }
         }
     }
 
@@ -443,10 +451,13 @@ public sealed class InputQueueViewModel : ViewModelBase
 
     public void HideQueueComposer(string queueId)
     {
-        if (this.queueViewModels.TryGetValue(queueId, out var viewModel))
+        InputQueueGroupViewModel? viewModel;
+        lock (this.queuesLock)
         {
-            viewModel.HideComposer();
+            this.queueViewModels.TryGetValue(queueId, out viewModel);
         }
+
+        viewModel?.HideComposer();
     }
 
     public void HideQueueComposer(AgentChatQueue queue)
@@ -535,54 +546,60 @@ public sealed class InputQueueViewModel : ViewModelBase
 
     private void RefreshQueue(string queueId)
     {
-        if (this.queueViewModels.TryGetValue(queueId, out var viewModel))
+        lock (this.queuesLock)
         {
-            viewModel.Refresh();
+            if (this.queueViewModels.TryGetValue(queueId, out var viewModel))
+            {
+                viewModel.Refresh();
+            }
         }
     }
 
     private void RefreshQueues()
     {
-        var snapshots = this.GetVisibleQueues();
-        var queueIds = snapshots.Select(static q => q.QueueId).ToArray();
-        foreach (var existing in this.Queues.ToArray())
+        lock (this.queuesLock)
         {
-            if (existing is null || !queueIds.Contains(existing.QueueId, StringComparer.Ordinal))
+            var snapshots = this.GetVisibleQueues();
+            var queueIds = snapshots.Select(static q => q.QueueId).ToArray();
+            foreach (var existing in this.Queues.ToArray())
             {
-                if (existing is not null)
+                if (existing is null || !queueIds.Contains(existing.QueueId, StringComparer.Ordinal))
                 {
-                    this.Queues.Remove(existing);
-                    this.queueViewModels.Remove(existing.QueueId);
-                    existing.Dispose();
-                }
-            }
-        }
-
-        for (var index = 0; index < snapshots.Length; index++)
-        {
-            var snapshot = snapshots[index];
-            if (!this.queueViewModels.TryGetValue(snapshot.QueueId, out var existing))
-            {
-                var composer = snapshot.IsDefault
-                    ? this.DefaultComposer
-                    : new QueueComposerViewModel(this, snapshot.QueueId, isDefaultComposer: false);
-                existing = new InputQueueGroupViewModel(this, snapshot.QueueId, composer);
-                this.queueViewModels[snapshot.QueueId] = existing;
-                this.Queues.Insert(index, existing);
-            }
-            else
-            {
-                var currentIndex = this.Queues.IndexOf(existing);
-                if (currentIndex >= 0 && currentIndex != index)
-                {
-                    this.Queues.Move(currentIndex, index);
+                    if (existing is not null)
+                    {
+                        this.Queues.Remove(existing);
+                        this.queueViewModels.Remove(existing.QueueId);
+                        existing.Dispose();
+                    }
                 }
             }
 
-            existing.Refresh();
-        }
+            for (var index = 0; index < snapshots.Length; index++)
+            {
+                var snapshot = snapshots[index];
+                if (!this.queueViewModels.TryGetValue(snapshot.QueueId, out var existing))
+                {
+                    var composer = snapshot.IsDefault
+                        ? this.DefaultComposer
+                        : new QueueComposerViewModel(this, snapshot.QueueId, isDefaultComposer: false);
+                    existing = new InputQueueGroupViewModel(this, snapshot.QueueId, composer);
+                    this.queueViewModels[snapshot.QueueId] = existing;
+                    this.Queues.Insert(index, existing);
+                }
+                else
+                {
+                    var currentIndex = this.Queues.IndexOf(existing);
+                    if (currentIndex >= 0 && currentIndex != index)
+                    {
+                        this.Queues.Move(currentIndex, index);
+                    }
+                }
 
-        this.UpdateQueueCollectionState();
+                existing.Refresh();
+            }
+
+            this.UpdateQueueCollectionState();
+        }
     }
 
     private void UpdateQueueCollectionState()

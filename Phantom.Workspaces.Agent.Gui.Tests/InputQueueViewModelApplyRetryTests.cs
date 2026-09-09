@@ -172,4 +172,46 @@ public sealed class InputQueueViewModelApplyRetryTests
         Assert.Equal("edited", string.Concat(
             underlyingItem.Messages.SelectMany(m => m.Contents).OfType<TextContent>().Select(t => t.Text)));
     }
+
+    [Fact]
+    public async Task RefreshQueues_ConcurrentDispatch_DoesNotDuplicateQueueGroups()
+    {
+        // Regression coverage for issue #1485. LocalAgentInputQueuesAdapter.RaiseChanged posts
+        // Task.Factory.StartNew(..., foregroundScheduler) whenever TaskScheduler.Current does not
+        // match the captured foregroundScheduler. When AgentChat is constructed without an
+        // explicit dispatcher (the default in headless tests), the captured foregroundScheduler
+        // is TaskScheduler.Default, which schedules on arbitrary thread-pool threads with no
+        // serialization guarantee. Two Changed notifications can then execute the
+        // OnQueuesChanged -> RefreshQueues path concurrently: both observe a dictionary miss for
+        // the same QueueId, both call new InputQueueGroupViewModel(...) + Queues.Insert, and the
+        // ObservableCollection ends up with duplicate entries under the same QueueId. That was
+        // the actual cause of the intermittent
+        // `InputQueueViewModelTests.QueueComposer_AppendsTextToExistingQueue`
+        // failure (Sequence.Single "more than one matching element"). RefreshQueues must
+        // serialize its queueViewModels/Queues mutations.
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var queue = chat.QueueManager.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
+        viewModel.AppendToQueue(queue, "original");
+
+        var refreshQueues = typeof(InputQueueViewModel).GetMethod(
+            "RefreshQueues",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+
+        using var barrier = new Barrier(4);
+        var tasks = Enumerable.Range(0, 4).Select(_ => Task.Run(() =>
+        {
+            barrier.SignalAndWait();
+            for (var i = 0; i < 400; i++)
+            {
+                refreshQueues.Invoke(viewModel, null);
+            }
+        })).ToArray();
+        await Task.WhenAll(tasks);
+
+        Assert.Equal(2, viewModel.Queues.Count);
+        Assert.Single(viewModel.Queues, static q => !q.IsDefault);
+        var distinctIds = viewModel.Queues.Select(static q => q.QueueId).Distinct(StringComparer.Ordinal).Count();
+        Assert.Equal(viewModel.Queues.Count, distinctIds);
+    }
 }
