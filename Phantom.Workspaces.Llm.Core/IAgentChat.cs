@@ -87,11 +87,51 @@ public readonly record struct AgentInformation
 /// </summary>
 public sealed record AgentChatModal
 {
-    public required string Id { get; init; }
-    public required string OwnerAgentId { get; init; }
-    public required string Title { get; init; }
-    public required string Body { get; init; }
-    public required AgentChatModalContent Content { get; init; }
+    private string id = string.Empty;
+    private string ownerAgentId = string.Empty;
+    private string title = string.Empty;
+    private string body = string.Empty;
+    private AgentChatModalContent? content;
+
+    public required string Id
+    {
+        get => this.id;
+        init => this.id = RequireNonBlank(value, nameof(Id));
+    }
+
+    public required string OwnerAgentId
+    {
+        get => this.ownerAgentId;
+        init => this.ownerAgentId = RequireNonBlank(value, nameof(OwnerAgentId));
+    }
+
+    public required string Title
+    {
+        get => this.title;
+        init => this.title = RequireNonBlank(value, nameof(Title));
+    }
+
+    public required string Body
+    {
+        get => this.body;
+        init => this.body = RequireNonBlank(value, nameof(Body));
+    }
+
+    public required AgentChatModalContent Content
+    {
+        get => this.content ?? throw new InvalidOperationException("Modal content was not initialized.");
+        init => this.content = value ?? throw new ArgumentNullException(nameof(Content));
+    }
+
+    private static string RequireNonBlank(string? value, string propertyName)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new ArgumentException($"{propertyName} must be non-blank.", propertyName);
+        }
+
+        return value;
+    }
 }
 
 /// <summary>Discriminated content payload for an <see cref="AgentChatModal"/>.</summary>
@@ -153,6 +193,28 @@ public sealed record MultipleChoiceModalContent : AgentChatModalContent
 public sealed record ApprovalModalContent : AgentChatModalContent
 {
     public override string Type => "approval";
-    public required string ApproveLabel { get; init; }
-    public required string RejectLabel { get; init; }
+    private string approveLabel = string.Empty;
+    private string rejectLabel = string.Empty;
+
+    public required string ApproveLabel
+    {
+        get => this.approveLabel;
+        init => this.approveLabel = RequireNonBlank(value, nameof(ApproveLabel));
+    }
+
+    public required string RejectLabel
+    {
+        get => this.rejectLabel;
+        init => this.rejectLabel = RequireNonBlank(value, nameof(RejectLabel));
+    }
+
+    private static string RequireNonBlank(string? value, string propertyName)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new ArgumentException($"{propertyName} must be non-blank.", propertyName);
+        }
+
+        return value;
+    }
 }

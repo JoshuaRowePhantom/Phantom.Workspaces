@@ -25,6 +25,7 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
     private readonly IRunningAgentChatFactory _factory;
     private readonly IAgentSessionRuntimeContextFactory runtimeContextFactory;
     private readonly Dictionary<AgentSessionId, (string EntityName, string? EntityId, string? WorkspaceId)> _entityInfo = new();
+    private readonly Dictionary<AgentSessionId, RunningAgentChatLease> _continueInBackgroundLeases = new();
     private readonly object _entityInfoLock = new();
     private readonly ObservableCollection<RunningAgentChatWithEntityInfo> _runningSessions = new();
 
@@ -77,13 +78,26 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
 
         var definition = await ResolveDefinitionIfNeededAsync(request, isRunning, ct).ConfigureAwait(false);
 
-        return await _factory.GetOrCreateAsync(
+        var lease = await _factory.GetOrCreateAsync(
             sessionId,
             definition,
             services,
             request.EntityDisplayName,
             request.EntityDescription,
             ct: ct);
+
+        var entry = this.FindEntry(sessionId);
+        entry?.SetIsRemote(request.AcquisitionMode != AgentChatAcquisitionMode.Local);
+        entry?.IncrementViewerCount();
+        return new RunningAgentChatLease(
+            lease.SessionId,
+            lease.LocalAgentChat,
+            onDispose: lease.DisposeAsync,
+            afterDispose: () =>
+            {
+                this.FindEntry(sessionId)?.DecrementViewerCount();
+                return ValueTask.CompletedTask;
+            });
     }
 
     private static void ValidateAcquisitionRequest(AcquireAgentChatRequest request)
@@ -189,7 +203,10 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
             foreach (RunningAgentChat added in e.NewItems)
             {
                 var (name, id, workspaceId) = GetEntityInfo(added.SessionId);
-                _runningSessions.Add(new RunningAgentChatWithEntityInfo(added, name, id, workspaceId));
+                _runningSessions.Add(new RunningAgentChatWithEntityInfo(added, name, id, workspaceId)
+                {
+                    ViewerCount = 0,
+                });
             }
         }
         else if (e.Action == NotifyCollectionChangedAction.Remove && e.OldItems is not null)
@@ -228,9 +245,6 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         AgentSessionId sessionId, bool continueInBackground,
         CancellationToken ct = default)
     {
-        // Commit 2 (#1485) defines the surface without adding transport behaviour. The local flag
-        // is stored on the entity-info row so UI observers pick it up via existing property-change
-        // paths; the remote plumbing is added in a later commit.
         foreach (var entry in _runningSessions)
         {
             if (entry.SessionId == sessionId)
@@ -239,7 +253,65 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                 break;
             }
         }
-        return Task.CompletedTask;
+        return this.SetContinueInBackgroundCoreAsync(sessionId, continueInBackground, ct);
+    }
+
+    private async Task SetContinueInBackgroundCoreAsync(
+        AgentSessionId sessionId,
+        bool continueInBackground,
+        CancellationToken ct)
+    {
+        if (continueInBackground)
+        {
+            lock (_entityInfoLock)
+            {
+                if (_continueInBackgroundLeases.ContainsKey(sessionId))
+                {
+                    return;
+                }
+            }
+
+            var lease = await _factory.GetAsync(sessionId, registerAsRunningAgent: false, ct).ConfigureAwait(false);
+            lock (_entityInfoLock)
+            {
+                if (_continueInBackgroundLeases.ContainsKey(sessionId))
+                {
+                    _ = lease.DisposeAsync();
+                    return;
+                }
+
+                _continueInBackgroundLeases[sessionId] = lease;
+            }
+
+            return;
+        }
+
+        RunningAgentChatLease? pinnedLease = null;
+        lock (_entityInfoLock)
+        {
+            if (_continueInBackgroundLeases.Remove(sessionId, out var lease))
+            {
+                pinnedLease = lease;
+            }
+        }
+
+        if (pinnedLease is not null)
+        {
+            await pinnedLease.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    private RunningAgentChatWithEntityInfo? FindEntry(AgentSessionId sessionId)
+    {
+        foreach (var entry in _runningSessions)
+        {
+            if (entry.SessionId == sessionId)
+            {
+                return entry;
+            }
+        }
+
+        return null;
     }
 }
 

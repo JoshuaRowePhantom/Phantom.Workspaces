@@ -8,6 +8,7 @@ public sealed class AgentChatQueueManager
 {
     private readonly AgentInputQueueManager inputQueueManager;
     private readonly ObservableCollection<AgentChatQueue> inputQueues = [];
+    private readonly Dictionary<string, AgentChatQueue> queuesById = new(StringComparer.Ordinal);
     private int nextUserQueuePriority = 10;
     private int userQueueSequence = 1;
 
@@ -29,8 +30,12 @@ public sealed class AgentChatQueueManager
             "Immediate Queue",
             isDefault: false,
             isImmediate: true);
+        this.queuesById[this.DefaultInputQueue.Queue.QueueId] = this.DefaultInputQueue;
+        this.queuesById[this.ImmediateInputQueue.Queue.QueueId] = this.ImmediateInputQueue;
         this.inputQueues.Add(this.DefaultInputQueue);
         this.InputQueues = new ReadOnlyObservableCollection<AgentChatQueue>(this.inputQueues);
+        this.inputQueueManager.QueueRegistered += this.OnQueueRegistered;
+        this.inputQueueManager.QueueUnregistered += this.OnQueueUnregistered;
     }
 
     public ReadOnlyObservableCollection<AgentChatQueue> InputQueues { get; }
@@ -52,10 +57,9 @@ public sealed class AgentChatQueueManager
         var queueName = string.IsNullOrWhiteSpace(name)
             ? $"Queue {this.userQueueSequence++}"
             : name;
-        var wrapped = new AgentChatQueue(queue, queueName, isDefault: false);
+        this.inputQueueManager.SetQueueName(queue.QueueId, queueName);
         this.inputQueueManager.RegisterInputQueue(queue);
-        this.inputQueues.Add(wrapped);
-        return wrapped;
+        return this.queuesById[queue.QueueId];
     }
 
     public bool RemoveInputQueue(AgentChatQueue queue)
@@ -67,12 +71,40 @@ public sealed class AgentChatQueueManager
         }
 
         var removedFromManager = this.inputQueueManager.UnregisterInputQueue(queue.Queue);
-        if (removedFromManager)
+        return removedFromManager;
+    }
+
+    private void OnQueueRegistered(object? sender, AgentInputQueueManager.QueueRegistrationChangedEventArgs e)
+    {
+        if (ReferenceEquals(e.Queue, this.inputQueueManager.ImmediateQueue)
+            || ReferenceEquals(e.Queue, this.DefaultInputQueue.Queue)
+            || this.queuesById.ContainsKey(e.Queue.QueueId))
         {
-            this.inputQueues.Remove(queue);
+            return;
         }
 
-        return removedFromManager;
+        var name = this.inputQueueManager.GetQueueName(e.Queue.QueueId);
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            name = $"Queue {this.userQueueSequence++}";
+            this.inputQueueManager.SetQueueName(e.Queue.QueueId, name);
+        }
+
+        var wrapped = new AgentChatQueue(e.Queue, name, isDefault: false);
+        this.queuesById[e.Queue.QueueId] = wrapped;
+        this.inputQueues.Add(wrapped);
+    }
+
+    private void OnQueueUnregistered(object? sender, AgentInputQueueManager.QueueRegistrationChangedEventArgs e)
+    {
+        if (!this.queuesById.Remove(e.Queue.QueueId, out var wrapped)
+            || ReferenceEquals(wrapped, this.DefaultInputQueue)
+            || ReferenceEquals(wrapped, this.ImmediateInputQueue))
+        {
+            return;
+        }
+
+        this.inputQueues.Remove(wrapped);
     }
 
     public void SetQueueHeld(AgentChatQueue queue, bool held)

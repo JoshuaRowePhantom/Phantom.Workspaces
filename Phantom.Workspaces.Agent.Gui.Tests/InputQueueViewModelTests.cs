@@ -102,12 +102,13 @@ public sealed class InputQueueViewModelTests
         queueVm.ToggleComposerCommand.Execute(null);
         queueVm.Composer.InputText = "more";
         queueVm.Composer.Submit();
+        var refreshedQueueVm = viewModel.Queues.Single(queueViewModel => !queueViewModel.IsDefault);
 
-        Assert.False(queueVm.IsComposerVisible);
-        Assert.Empty(queueVm.Composer.InputText);
-        Assert.Equal(2, queueVm.Items.Count);
-        Assert.Equal("original", queueVm.Items[0].Text);
-        Assert.Equal("more", queueVm.Items[1].Text);
+        Assert.False(refreshedQueueVm.IsComposerVisible);
+        Assert.Empty(refreshedQueueVm.Composer.InputText);
+        Assert.Equal(2, refreshedQueueVm.Items.Count);
+        Assert.Equal("original", refreshedQueueVm.Items[0].Text);
+        Assert.Equal("more", refreshedQueueVm.Items[1].Text);
         Assert.Empty(chat.History);
     }
 

@@ -23,6 +23,11 @@ public sealed class AgentInputQueueManager
         public required QueueStateChangeKind ChangeKind { get; init; }
     }
 
+    public sealed record QueueRegistrationChangedEventArgs
+    {
+        public required AgentInputQueue Queue { get; init; }
+    }
+
     private readonly object syncLock = new();
     private readonly List<AgentInputQueue> inputQueues;
     private readonly Dictionary<AgentInputQueue, EventHandler> queueConfigurationHandlers = [];
@@ -31,6 +36,8 @@ public sealed class AgentInputQueueManager
 
     public event EventHandler<QueuePublishedEventArgs>? QueuePublished;
     public event EventHandler<QueueStateChangedEventArgs>? QueueStateChanged;
+    public event EventHandler<QueueRegistrationChangedEventArgs>? QueueRegistered;
+    public event EventHandler<QueueRegistrationChangedEventArgs>? QueueUnregistered;
 
     public AgentInputQueueManager()
     {
@@ -145,6 +152,12 @@ public sealed class AgentInputQueueManager
                 this.inputQueues.Add(queue);
                 this.queueConfigurationHandlers[queue] = this.OnQueueConfigurationChanged;
                 queue.ConfigurationChanged += this.OnQueueConfigurationChanged;
+                this.QueueRegistered?.Invoke(
+                    this,
+                    new QueueRegistrationChangedEventArgs
+                    {
+                        Queue = queue,
+                    });
             }
         }
     }
@@ -165,6 +178,16 @@ public sealed class AgentInputQueueManager
             if (removed && this.queueConfigurationHandlers.Remove(queue, out var handler))
             {
                 queue.ConfigurationChanged -= handler;
+            }
+
+            if (removed)
+            {
+                this.QueueUnregistered?.Invoke(
+                    this,
+                    new QueueRegistrationChangedEventArgs
+                    {
+                        Queue = queue,
+                    });
             }
 
             return removed;

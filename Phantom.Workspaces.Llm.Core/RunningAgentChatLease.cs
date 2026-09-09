@@ -5,6 +5,7 @@ namespace Phantom.Workspaces.Llm;
 public sealed class RunningAgentChatLease : IAsyncDisposable
 {
     private readonly Func<ValueTask> _onDispose;
+    private readonly Func<ValueTask>? _afterDispose;
     private int _disposed;
 
     public AgentSessionId SessionId { get; }
@@ -16,19 +17,24 @@ public sealed class RunningAgentChatLease : IAsyncDisposable
     /// </summary>
     public AgentChat LocalAgentChat { get; }
 
-    internal RunningAgentChatLease(AgentSessionId sessionId, AgentChat agentChat, Func<ValueTask> onDispose)
+    internal RunningAgentChatLease(
+        AgentSessionId sessionId,
+        AgentChat agentChat,
+        Func<ValueTask> onDispose,
+        Func<ValueTask>? afterDispose = null)
     {
         SessionId = sessionId;
         AgentChat = agentChat;
         LocalAgentChat = agentChat;
         _onDispose = onDispose;
+        _afterDispose = afterDispose;
     }
 
     ~RunningAgentChatLease()
     {
         if (Interlocked.CompareExchange(ref _disposed, 1, 0) == 0)
         {
-            ObserveDisposal(_onDispose());
+            ObserveDisposal(this.DisposeCoreAsync());
         }
     }
 
@@ -40,7 +46,16 @@ public sealed class RunningAgentChatLease : IAsyncDisposable
         }
 
         GC.SuppressFinalize(this);
-        return _onDispose();
+        return DisposeCoreAsync();
+    }
+
+    private async ValueTask DisposeCoreAsync()
+    {
+        await _onDispose().ConfigureAwait(false);
+        if (_afterDispose is not null)
+        {
+            await _afterDispose().ConfigureAwait(false);
+        }
     }
 
     // Ensures the fire-and-forget disposal launched from the finalizer can never leave an

@@ -1,7 +1,9 @@
 using System.Reflection;
+using System.Linq;
 using AgentSchema;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Testing.Gui;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
@@ -44,6 +46,16 @@ public sealed class AgentViewModelRetryTests
         return chat;
     }
 
+    private AgentViewModel CreateViewModel(IAgentChat chat, ObservableLoggerFactory loggerFactory)
+        => new(new AgentViewModelOptions
+        {
+            AgentChat = chat,
+            DisplayName = "display",
+            Description = "description",
+            LoggerFactory = loggerFactory,
+            ForegroundScheduler = TaskScheduler.Default,
+        });
+
     // #1226 pattern: inline foreground scheduler so publish/respond/dismiss run inline.
     private sealed class SynchronousTaskScheduler : TaskScheduler
     {
@@ -56,32 +68,59 @@ public sealed class AgentViewModelRetryTests
     [Fact]
     public async Task AgentViewModel_AgentChatProperty_LocalAndRemote_ReturnsIAgentChat()
     {
-        var property = typeof(AgentViewModel).GetProperty(nameof(AgentViewModel.AgentChat));
-        Assert.NotNull(property);
-        Assert.Equal(typeof(IAgentChat), property!.PropertyType);
-        await Task.CompletedTask;
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var localChat = CreateChat(MakeDefinition());
+        await using var remoteChat = new RemoteAgentChatProxy(localChat);
+        await using var localVm = this.CreateViewModel(localChat, loggerFactory);
+        await using var remoteVm = this.CreateViewModel(remoteChat, loggerFactory);
+
+        Assert.IsAssignableFrom<IAgentChat>(localVm.AgentChat);
+        Assert.IsAssignableFrom<IAgentChat>(remoteVm.AgentChat);
+        Assert.Same(localChat, localVm.AgentChat);
+        Assert.Same(remoteChat, remoteVm.AgentChat);
+        Assert.NotNull(localVm.InputQueue);
+        Assert.NotNull(remoteVm.InputQueue);
+        Assert.Equal(localVm.InputQueue!.InputQueues.Select(q => q.QueueId), remoteVm.InputQueue!.InputQueues.Select(q => q.QueueId));
     }
 
     [Fact]
     public async Task RunningAgentChatLease_AgentChatProperty_LocalAndRemote_ReturnsIAgentChat()
     {
-        var property = typeof(RunningAgentChatLease).GetProperty(nameof(RunningAgentChatLease.AgentChat));
-        Assert.NotNull(property);
-        Assert.Equal(typeof(IAgentChat), property!.PropertyType);
-        await Task.CompletedTask;
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var localChat = CreateChat(MakeDefinition());
+        var lease = (RunningAgentChatLease)Activator.CreateInstance(
+            typeof(RunningAgentChatLease),
+            BindingFlags.Instance | BindingFlags.NonPublic,
+            binder: null,
+            args:
+            [
+                new AgentSessionId("lease-1"),
+                localChat,
+                (Func<ValueTask>)(() => ValueTask.CompletedTask),
+                null,
+            ],
+            culture: null)!;
+        await using var remoteChat = new RemoteAgentChatProxy(localChat);
+        await using var vm = this.CreateViewModel(remoteChat, loggerFactory);
+
+        Assert.IsAssignableFrom<IAgentChat>(lease.AgentChat);
+        Assert.Same(localChat, lease.AgentChat);
+        Assert.NotNull(vm.InputQueue);
+        await lease.DisposeAsync();
     }
 
     [Fact]
     public async Task Constructor_RemoteChat_UsesCommonSurfaceWithoutConcreteCast()
     {
-        // The named-initialiser constructor accepts an IAgentChat; no cast to AgentChat is required.
-        var ctors = typeof(AgentViewModel).GetConstructors();
-        Assert.Contains(ctors, c =>
-        {
-            var ps = c.GetParameters();
-            return ps.Length >= 1 && ps[0].ParameterType == typeof(AgentViewModelOptions);
-        });
-        await Task.CompletedTask;
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var localChat = CreateChat(MakeDefinition());
+        await using var remoteChat = new RemoteAgentChatProxy(localChat);
+        await using var vm = this.CreateViewModel(remoteChat, loggerFactory);
+
+        Assert.Same(remoteChat, vm.AgentChat);
+        Assert.NotNull(vm.InputQueue);
+        Assert.Equal(remoteChat.Information.AgentSessionId, vm.AgentSessionId);
+        Assert.Equal(vm.InputQueue!.InputQueues.Select(q => q.QueueId), remoteChat.InputQueues.Snapshot.Queues.Where(q => !q.IsImmediate).Select(q => q.QueueId));
     }
 
     [Fact]
@@ -122,15 +161,19 @@ public sealed class AgentViewModelRetryTests
     [Fact]
     public async Task RespondToModalAsync_UnknownModal_ThrowsArgumentException()
     {
+        using var loggerFactory = new ObservableLoggerFactory();
         await using var chat = CreateChat(MakeDefinition());
+        await using var vm = this.CreateViewModel(chat, loggerFactory);
         await Assert.ThrowsAsync<ArgumentException>(
-            () => chat.RespondToModalAsync("nope", default, TestContext.Current.CancellationToken));
+            () => vm.RespondToModalAsync("nope", default, TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public async Task RespondToModalAsync_CurrentModal_SendsResponseAndKeepsInputGatedUntilDismissed()
     {
+        using var loggerFactory = new ObservableLoggerFactory();
         await using var chat = CreateChat(MakeDefinition());
+        await using var vm = this.CreateViewModel(chat, loggerFactory);
         var modal = new AgentChatModal
         {
             Id = "m",
@@ -140,20 +183,23 @@ public sealed class AgentViewModelRetryTests
             Content = new ApprovalModalContent { ApproveLabel = "Y", RejectLabel = "N" },
         };
         chat.PublishModal(modal);
-        Assert.Single(chat.Modals);
-        var respondTask = chat.RespondToModalAsync("m", default, TestContext.Current.CancellationToken);
-        // Input remains gated: the modal is still present until the owner dismisses it.
+        Assert.Single(vm.ModalProjection);
+        Assert.True(vm.IsInputGated);
+        var respondTask = vm.RespondToModalAsync("m", default, TestContext.Current.CancellationToken);
         Assert.False(respondTask.IsCompleted);
-        Assert.Single(chat.Modals);
-        chat.PublishModalDismiss("m");
+        Assert.Single(vm.ModalProjection);
+        vm.DismissModal("m");
         await respondTask;
-        Assert.Empty(chat.Modals);
+        Assert.Empty(vm.ModalProjection);
+        Assert.False(vm.IsInputGated);
     }
 
     [Fact]
     public async Task RespondToModalAsync_Cancelled_DoesNotDismissModal()
     {
+        using var loggerFactory = new ObservableLoggerFactory();
         await using var chat = CreateChat(MakeDefinition());
+        await using var vm = this.CreateViewModel(chat, loggerFactory);
         var modal = new AgentChatModal
         {
             Id = "m",
@@ -167,9 +213,9 @@ public sealed class AgentViewModelRetryTests
         using var cts = new CancellationTokenSource();
         cts.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => chat.RespondToModalAsync("m", default, cts.Token));
-        // Cancellation does not remove the modal (owner-authoritative dismissal).
-        Assert.Single(chat.Modals);
+            () => vm.RespondToModalAsync("m", default, cts.Token));
+        Assert.Single(vm.ModalProjection);
+        Assert.True(vm.IsInputGated);
     }
 
     [Fact]
@@ -239,26 +285,20 @@ public sealed class AgentViewModelRetryTests
     public async Task AgentChatSetter_LocalOrRemote_PreservesCommonChat()
     {
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var chat = CreateChat(MakeDefinition());
-        var vm = new AgentViewModel(new AgentViewModelOptions
-        {
-            AgentChat = chat,
-            DisplayName = "d",
-            Description = "e",
-            LoggerFactory = loggerFactory,
-            ForegroundScheduler = TaskScheduler.Default,
-        });
-        await using (vm.ConfigureAwait(false))
-        {
-            Assert.Same(chat, vm.AgentChat);
-        }
+        await using var localChat = CreateChat(MakeDefinition());
+        await using var remoteChat = new RemoteAgentChatProxy(localChat);
+        await using var localVm = this.CreateViewModel(localChat, loggerFactory);
+        await using var remoteVm = this.CreateViewModel(remoteChat, loggerFactory);
+
+        Assert.Same(localChat, localVm.AgentChat);
+        Assert.Same(remoteChat, remoteVm.AgentChat);
     }
 
     [Fact]
     public async Task AgentChatSetter_Null_RejectsInitialization()
     {
         using var loggerFactory = new ObservableLoggerFactory();
-        Assert.ThrowsAny<Exception>(() => new AgentViewModel(
+        Assert.Throws<ArgumentNullException>(() => new AgentViewModel(
             new AgentViewModelOptions
             {
                 AgentChat = null!,

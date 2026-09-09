@@ -87,8 +87,20 @@ public sealed class RunningAgentChatWithEntityInfo : INotifyPropertyChanged
     /// Delegates to the underlying <see cref="RunningAgentChat.AcquireLeaseAsync"/>.
     /// Dispose the lease when done.
     /// </summary>
-    public Task<RunningAgentChatLease> AcquireLeaseAsync(CancellationToken ct = default)
-        => _chat.AcquireLeaseAsync(ct);
+    public async Task<RunningAgentChatLease> AcquireLeaseAsync(CancellationToken ct = default)
+    {
+        var lease = await _chat.AcquireLeaseAsync(ct).ConfigureAwait(false);
+        this.IncrementViewerCount();
+        return new RunningAgentChatLease(
+            lease.SessionId,
+            lease.LocalAgentChat,
+            onDispose: lease.DisposeAsync,
+            afterDispose: () =>
+            {
+                this.DecrementViewerCount();
+                return ValueTask.CompletedTask;
+            });
+    }
 
     internal void SetContinueInBackground(bool value)
     {

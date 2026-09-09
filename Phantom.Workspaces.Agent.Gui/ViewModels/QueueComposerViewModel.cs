@@ -14,7 +14,7 @@ namespace Phantom.Workspaces.Agent.Gui.ViewModels;
 public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewModel
 {
     private readonly InputQueueViewModel parent;
-    private readonly AgentChatQueue targetQueue;
+    private readonly string targetQueueId;
     private readonly List<AIContent> attachments = [];
     private readonly List<string> attachmentPlaceholders = [];
     private readonly ObservableCollection<QueueComposerAttachmentViewModel> attachmentPreviews = [];
@@ -40,23 +40,38 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
     /// <see cref="InputText"/> starts with '/' to populate the completions popup.
     /// </summary>
     public Func<string, string, CancellationToken, Task<IReadOnlyList<SlashCommandCompletion>>>? SlashCompletionsProviderAsync { get; set; }
+    internal Action? HideOwnerComposerAction { get; set; }
 
     /// <summary>Completions popup state driven by <see cref="InputText"/> changes.</summary>
     public SlashCompletionsViewModel Completions { get; } = new();
 
     public QueueComposerViewModel(
         InputQueueViewModel parent,
-        AgentChatQueue targetQueue,
+        string targetQueueId,
         bool isDefaultComposer)
     {
         this.parent = parent;
-        this.targetQueue = targetQueue;
+        this.targetQueueId = targetQueueId;
         this.IsDefaultComposer = isDefaultComposer;
-        this.targetQueue.Changed += this.OnTargetQueueChanged;
         this.SubmitCommand = new RelayCommand(this.Submit);
         this.SubmitToNewQueueCommand = new RelayCommand(() => this.SubmitToNewQueue());
         this.CreateNewQueueCommand = new RelayCommand(this.CreateNewQueue);
         this.SetImmediacyCommand = new RelayCommand<QueueImmediacyOption>(this.SetQueueImmediacy);
+    }
+
+    public QueueComposerViewModel(
+        InputQueueViewModel parent,
+        AgentChatQueue targetQueue,
+        bool isDefaultComposer)
+        : this(
+            parent,
+            targetQueue.IsDefault
+                ? parent.DefaultQueueId
+                : targetQueue.IsImmediate
+                    ? parent.InputQueues.First(static queue => queue.IsImmediate).QueueId
+                    : parent.InputQueues.First(queue => string.Equals(queue.Name, targetQueue.Name, StringComparison.Ordinal)).QueueId,
+            isDefaultComposer)
+    {
     }
 
     public event EventHandler? FocusPrimaryControlRequested;
@@ -102,7 +117,7 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
 
     public string SubmitButtonGlyph => "↵";
 
-    public QueueImmediacyOption SelectedImmediacyOption => QueueImmediacyOption.All.First(option => option.Value == this.targetQueue.Immediacy);
+    public QueueImmediacyOption SelectedImmediacyOption => QueueImmediacyOption.All.First(option => option.Value == this.TargetQueueSnapshot.Immediacy);
 
     public QueueImmediacyOption ImmediateImmediacyOption => QueueImmediacyOption.All[0];
 
@@ -319,10 +334,10 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
 
     public void Submit()
     {
-        this.Submit(this.targetQueue);
+        this.Submit(this.targetQueueId);
     }
 
-    public bool Submit(AgentChatQueue targetQueue)
+    public bool Submit(string targetQueueId)
     {
         var text = this.SanitizeText(this.InputText);
         if (string.IsNullOrWhiteSpace(text) && this.attachments.Count == 0)
@@ -330,18 +345,18 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
             return false;
         }
 
-        this.SubmitContent(text, targetQueue);
+        this.SubmitContent(text, targetQueueId);
         this.InputText = string.Empty;
         return true;
     }
 
     public bool SubmitBeforeCursor(int caretIndex) =>
-        this.SubmitBeforeCursor(this.targetQueue, caretIndex, out _);
+        this.SubmitBeforeCursor(this.targetQueueId, caretIndex, out _);
 
     public bool SubmitBeforeCursor(int caretIndex, out int newCaretIndex) =>
-        this.SubmitBeforeCursor(this.targetQueue, caretIndex, out newCaretIndex);
+        this.SubmitBeforeCursor(this.targetQueueId, caretIndex, out newCaretIndex);
 
-    public bool SubmitBeforeCursor(AgentChatQueue targetQueue, int caretIndex, out int newCaretIndex)
+    public bool SubmitBeforeCursor(string targetQueueId, int caretIndex, out int newCaretIndex)
     {
         var input = this.InputText ?? string.Empty;
         var clampedCaret = Math.Clamp(caretIndex, 0, input.Length);
@@ -356,7 +371,7 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
             return false;
         }
 
-        this.SubmitContent(text, targetQueue);
+        this.SubmitContent(text, targetQueueId);
 
         // Retain everything after the caret and place the caret at the start of it,
         // rather than hard-clearing the box the way Submit does.
@@ -370,7 +385,7 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
     /// interception on the default composer, history commit, queue append, attachments)
     /// without clearing the input box — the caller decides what the box becomes.
     /// </summary>
-    private void SubmitContent(string text, AgentChatQueue targetQueue)
+    private void SubmitContent(string text, string targetQueueId)
     {
         // Intercept slash commands on the default (primary) composer. Non-default queue
         // composers are used to append steering messages; slash commands are not applicable there.
@@ -392,12 +407,13 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
 
         contents.AddRange(this.attachments);
         this.CommitToHistory(text);
-        this.parent.AppendToQueue(targetQueue, contents);
+        this.parent.AppendToQueue(targetQueueId, contents);
         this.ClearAttachments();
         this.IsFormattedMode = false;
         if (!this.IsDefaultComposer)
         {
-            this.parent.HideQueueComposer(targetQueue);
+            this.HideOwnerComposerAction?.Invoke();
+            this.parent.HideQueueComposer(targetQueueId);
         }
     }
 
@@ -437,7 +453,6 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
 
     public void Dispose()
     {
-        this.targetQueue.Changed -= this.OnTargetQueueChanged;
         this.completionsCts?.Cancel();
         this.completionsCts?.Dispose();
         this.completionsCts = null;
@@ -581,13 +596,18 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
         this.RaisePropertyChanged(nameof(this.AttachmentPreviews));
     }
 
-    private void OnTargetQueueChanged(object? sender, EventArgs e)
+    public void RefreshQueueState()
     {
         this.RaisePropertyChanged(nameof(this.SelectedImmediacyOption));
     }
 
     private void SetQueueImmediacy(QueueImmediacyOption option)
     {
-        this.parent.SetQueueImmediacy(this.targetQueue, option.Value);
+        this.parent.SetQueueImmediacy(this.targetQueueId, option.Value);
     }
+
+    private AgentInputQueueSnapshot TargetQueueSnapshot
+        => this.parent.TryGetQueueSnapshot(this.targetQueueId, out var snapshot)
+            ? snapshot
+            : throw new InvalidOperationException($"Queue '{this.targetQueueId}' is no longer available.");
 }

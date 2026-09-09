@@ -152,26 +152,27 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
        VerifyOnForegroundContext(request.ForegroundScheduler);
        this.request = request;
        this.timeProvider = request.TimeProvider;
-       this.logger = request.AgentServices?.LoggerFactory?.CreateLogger<AgentChat>()
-           ?? (ILogger)NullLogger<AgentChat>.Instance;
-       this.lastUpdatedAt = this.timeProvider.GetUtcNow().UtcDateTime;
-       this.queueManager = new AgentInputQueueManager();
-       this.chatQueueManager = new AgentChatQueueManager(this.queueManager);
-       this.commonInputQueues = new LocalAgentInputQueuesAdapter(
-           this.queueManager,
-           this.chatQueueManager.DefaultInputQueue.Queue);
-       this.runningItemOperations = new AgentRunningItems(this.runningItems);
-       this.ownedResources = request.OwnedResources?.ToList() ?? [];
-       this.PendingApprovalItems = new ReadOnlyObservableCollection<AgentChatPendingApprovalItem>(this.pendingApprovalItems);
-       this.SubAgents = new ReadOnlyObservableCollection<IRunningSubAgent>(this.subAgentItems);
-       this.Modals = new ReadOnlyObservableCollection<AgentChatModal>(this.modals);
-       this.information = default;
-       this.foregroundScheduler = request.ForegroundScheduler
-           ?? (SynchronizationContext.Current is not null
-               ? TaskScheduler.FromCurrentSynchronizationContext()
-               : this.foregroundSchedulerPair.ExclusiveScheduler);
-       this.outerSlashCommands.Register(this.replaceableCommands);
-       this.outerSlashCommands.Register(new HelpSlashCommandHandler(this.outerSlashCommands));
+        this.logger = request.AgentServices?.LoggerFactory?.CreateLogger<AgentChat>()
+            ?? (ILogger)NullLogger<AgentChat>.Instance;
+        this.lastUpdatedAt = this.timeProvider.GetUtcNow().UtcDateTime;
+        this.foregroundScheduler = request.ForegroundScheduler
+            ?? (SynchronizationContext.Current is not null
+                ? TaskScheduler.FromCurrentSynchronizationContext()
+                : this.foregroundSchedulerPair.ExclusiveScheduler);
+        this.queueManager = new AgentInputQueueManager();
+        this.chatQueueManager = new AgentChatQueueManager(this.queueManager);
+        this.commonInputQueues = new LocalAgentInputQueuesAdapter(
+            this.queueManager,
+            this.chatQueueManager.DefaultInputQueue.Queue,
+            this.foregroundScheduler);
+        this.runningItemOperations = new AgentRunningItems(this.runningItems);
+        this.ownedResources = request.OwnedResources?.ToList() ?? [];
+        this.PendingApprovalItems = new ReadOnlyObservableCollection<AgentChatPendingApprovalItem>(this.pendingApprovalItems);
+        this.SubAgents = new ReadOnlyObservableCollection<IRunningSubAgent>(this.subAgentItems);
+        this.Modals = new ReadOnlyObservableCollection<AgentChatModal>(this.modals);
+        this.information = default;
+        this.outerSlashCommands.Register(this.replaceableCommands);
+        this.outerSlashCommands.Register(new HelpSlashCommandHandler(this.outerSlashCommands));
     }
 
     // Enforces the foreground-context affinity invariant (issue #909): AgentChat construction and

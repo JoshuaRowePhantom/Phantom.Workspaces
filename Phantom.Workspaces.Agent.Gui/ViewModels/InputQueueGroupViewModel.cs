@@ -8,18 +8,19 @@ namespace Phantom.Workspaces.Agent.Gui.ViewModels;
 public sealed class InputQueueGroupViewModel : ViewModelBase, IDisposable, IQueueImmediacyViewModel
 {
     private readonly InputQueueViewModel parent;
-    private readonly AgentChatQueue queue;
+    private readonly string queueId;
     private readonly RelayCommand toggleComposerCommand;
     private readonly RelayCommand removeQueueCommand;
     private readonly RelayCommand<QueueImmediacyOption> setImmediacyCommand;
     private readonly object itemsLock = new();
     private bool isComposerVisible;
 
-    public InputQueueGroupViewModel(InputQueueViewModel parent, AgentChatQueue queue, QueueComposerViewModel composer)
+    public InputQueueGroupViewModel(InputQueueViewModel parent, string queueId, QueueComposerViewModel composer)
     {
         this.parent = parent;
-        this.queue = queue;
+        this.queueId = queueId;
         this.Composer = composer;
+        this.Composer.HideOwnerComposerAction = this.HideComposer;
         this.Items = [];
         this.toggleComposerCommand = new RelayCommand(this.ToggleComposer);
         this.removeQueueCommand = new RelayCommand(this.RemoveQueue);
@@ -29,19 +30,19 @@ public sealed class InputQueueGroupViewModel : ViewModelBase, IDisposable, IQueu
 
     public QueueComposerViewModel Composer { get; }
 
-    internal AgentChatQueue Queue => this.queue;
+    internal string QueueId => this.queueId;
 
-    public string? Name => this.ShowName ? this.queue.Name : null;
+    public string? Name => this.ShowName ? this.QueueSnapshot.Name : null;
 
-    public bool ShowName => this.parent.HasMultipleQueues || !this.queue.IsDefault;
+    public bool ShowName => this.parent.HasMultipleQueues || !this.QueueSnapshot.IsDefault;
 
-    public bool IsDefault => this.queue.IsDefault;
+    public bool IsDefault => this.QueueSnapshot.IsDefault;
 
-    public bool IsHeld => this.queue.IsHeld;
+    public bool IsHeld => this.QueueSnapshot.Immediacy == AgentInputQueueImmediacy.Held;
 
-    public bool IsImmediate => !this.queue.IsHeld && this.queue.Immediacy == AgentInputQueueImmediacy.Immediate;
+    public bool IsImmediate => this.QueueSnapshot.Immediacy == AgentInputQueueImmediacy.Immediate;
 
-    public bool IsQueued => !this.queue.IsHeld && this.queue.Immediacy == AgentInputQueueImmediacy.Queue;
+    public bool IsQueued => this.QueueSnapshot.Immediacy == AgentInputQueueImmediacy.Queue;
 
     public bool CanToggleComposer => !this.IsDefault;
 
@@ -90,12 +91,12 @@ public sealed class InputQueueGroupViewModel : ViewModelBase, IDisposable, IQueu
 
     public QueueImmediacyOption SelectedImmediacyOption
     {
-        get => QueueImmediacyOption.All.First(option => option.Value == this.queue.Immediacy);
+        get => QueueImmediacyOption.All.First(option => option.Value == this.QueueSnapshot.Immediacy);
         set
         {
-            if (value.Value != this.queue.Immediacy)
+            if (value.Value != this.QueueSnapshot.Immediacy)
             {
-                this.parent.SetQueueImmediacy(this.queue, value.Value);
+                this.parent.SetQueueImmediacy(this.queueId, value.Value);
                 this.RaisePropertyChanged(nameof(this.SelectedImmediacyOption));
                 this.RaisePropertyChanged(nameof(this.IsHeld));
                 this.RaisePropertyChanged(nameof(this.IsImmediate));
@@ -121,29 +122,44 @@ public sealed class InputQueueGroupViewModel : ViewModelBase, IDisposable, IQueu
             return;
         }
 
-        this.parent.RemoveInputQueue(this.queue);
+        this.parent.RemoveInputQueue(this.queueId);
     }
 
     public void Refresh()
     {
-        // Snapshot the queue items before touching this.Items so the source cannot be
-        // modified mid-loop, then serialise all mutations to this.Items under a lock to
-        // prevent concurrent Refresh() calls from racing on the ObservableCollection.
-        var queueItems = this.queue.Items.ToList();
+        var queueSnapshot = this.QueueSnapshot;
 
         lock (this.itemsLock)
         {
-            if (this.Items.Count > 0)
+            var itemsById = this.Items.ToDictionary(static item => item.ItemId, StringComparer.Ordinal);
+            for (var i = this.Items.Count - 1; i >= 0; i--)
             {
-                this.Items.Clear();
+                if (!queueSnapshot.Items.Any(item => string.Equals(item.ItemId, this.Items[i].ItemId, StringComparison.Ordinal)))
+                {
+                    this.Items.RemoveAt(i);
+                }
             }
 
-            foreach (var message in queueItems)
+            for (var index = 0; index < queueSnapshot.Items.Length; index++)
             {
-                this.Items.Add(new InputQueueEntryViewModel(this.parent, this.queue, message));
+                var itemSnapshot = queueSnapshot.Items[index];
+                if (!itemsById.TryGetValue(itemSnapshot.ItemId, out var itemViewModel))
+                {
+                    itemViewModel = new InputQueueEntryViewModel(this.parent, this.queueId, itemSnapshot);
+                    this.Items.Insert(index, itemViewModel);
+                    continue;
+                }
+
+                itemViewModel.Refresh(itemSnapshot);
+                var currentIndex = this.Items.IndexOf(itemViewModel);
+                if (currentIndex >= 0 && currentIndex != index)
+                {
+                    this.Items.Move(currentIndex, index);
+                }
             }
         }
 
+        this.Composer.RefreshQueueState();
         this.RaisePropertyChanged(nameof(this.ItemCount));
         this.RaisePropertyChanged(nameof(this.ItemCountText));
         this.RaisePropertyChanged(nameof(this.HasItems));
@@ -165,4 +181,9 @@ public sealed class InputQueueGroupViewModel : ViewModelBase, IDisposable, IQueu
             this.Composer.Dispose();
         }
     }
+
+    private AgentInputQueueSnapshot QueueSnapshot
+        => this.parent.TryGetQueueSnapshot(this.queueId, out var snapshot)
+            ? snapshot
+            : throw new InvalidOperationException($"Queue '{this.queueId}' is no longer available.");
 }

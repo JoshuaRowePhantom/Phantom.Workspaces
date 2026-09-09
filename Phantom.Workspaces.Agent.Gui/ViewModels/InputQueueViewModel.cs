@@ -1,5 +1,9 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
+using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.Linq;
+using System.Threading;
 using System.Windows.Input;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels.Collections;
@@ -14,11 +18,11 @@ namespace Phantom.Workspaces.Agent.Gui.ViewModels;
 /// </summary>
 public sealed class InputQueueViewModel : ViewModelBase
 {
-    private readonly AgentChat agentChat;
-    private readonly AgentInputQueueManager? inputQueueManager;
-    private readonly Dictionary<AgentChatQueue, InputQueueGroupViewModel> queueViewModels = [];
-    private readonly InputQueueCollectionTransformer queueCollectionTransformer;
-    private readonly List<AgentChatQueue> queueUseHistory = [];
+    private readonly IAgentChat agentChat;
+    private readonly IAgentInputQueues inputQueues;
+    private readonly Dictionary<string, InputQueueGroupViewModel> queueViewModels = new(StringComparer.Ordinal);
+    private readonly List<string> queueUseHistory = [];
+    private string? hiddenBuiltInQueueId;
     private bool hasMultipleQueues;
     private readonly ICommand holdAllQueuesCommand;
     private readonly ICommand unholdAllQueuesCommand;
@@ -26,16 +30,23 @@ public sealed class InputQueueViewModel : ViewModelBase
     private readonly ICommand submitToMostRecentQueueCommand;
     private readonly ICommand submitToNewQueueCommand;
     private readonly ICommand createNewQueueCommand;
+    private int ignoredQueueChangedEvents;
 
-    public InputQueueViewModel(
-        AgentChat agentChat,
-        AgentChatQueue defaultInputQueue,
-        AgentInputQueueManager? inputQueueManager = null)
+    public InputQueueViewModel(IAgentChat agentChat)
+        : this(
+            agentChat,
+            agentChat.InputQueues.DefaultQueue.Snapshot.QueueId,
+            agentChat.InputQueues.ImmediateQueue.Snapshot.QueueId)
     {
-        this.agentChat = agentChat;
-        this.DefaultInputQueue = defaultInputQueue;
-        this.inputQueueManager = inputQueueManager;
-        this.DefaultComposer = new QueueComposerViewModel(this, defaultInputQueue, isDefaultComposer: true);
+    }
+
+    private InputQueueViewModel(IAgentChat agentChat, string defaultQueueId, string? hiddenBuiltInQueueId)
+    {
+        this.agentChat = agentChat ?? throw new ArgumentNullException(nameof(agentChat));
+        this.inputQueues = agentChat.InputQueues;
+        this.DefaultQueueId = defaultQueueId;
+        this.hiddenBuiltInQueueId = hiddenBuiltInQueueId;
+        this.DefaultComposer = new QueueComposerViewModel(this, this.DefaultQueueId, isDefaultComposer: true);
         this.SubmitToDefaultQueueCommand = this.DefaultComposer.SubmitCommand;
         this.holdAllQueuesCommand = new RelayCommand(this.HoldAllQueues);
         this.unholdAllQueuesCommand = new RelayCommand(this.UnholdAllQueues);
@@ -43,14 +54,30 @@ public sealed class InputQueueViewModel : ViewModelBase
         this.submitToMostRecentQueueCommand = new RelayCommand(() => this.SubmitToMostRecentQueue());
         this.submitToNewQueueCommand = new RelayCommand(() => this.SubmitToNewQueue());
         this.createNewQueueCommand = new RelayCommand(this.CreateNewQueue);
-        this.queueCollectionTransformer = new InputQueueCollectionTransformer(this, this.agentChat.InputQueues, this.Queues, this.queueViewModels);
+        this.inputQueues.Changed += this.OnQueuesChanged;
+        this.RefreshQueues();
     }
 
-    public AgentChatQueue DefaultInputQueue { get; }
+    public InputQueueViewModel(
+        AgentChat agentChat,
+        AgentChatQueue defaultInputQueue,
+        AgentInputQueueManager? inputQueueManager = null)
+        : this(
+            agentChat,
+            defaultInputQueue.IsImmediate
+                ? ((IAgentChat)agentChat).InputQueues.ImmediateQueue.Snapshot.QueueId
+                : ((IAgentChat)agentChat).InputQueues.DefaultQueue.Snapshot.QueueId,
+            defaultInputQueue.IsImmediate
+                ? ((IAgentChat)agentChat).InputQueues.DefaultQueue.Snapshot.QueueId
+                : ((IAgentChat)agentChat).InputQueues.ImmediateQueue.Snapshot.QueueId)
+    {
+    }
+
+    internal string DefaultQueueId { get; private set; }
 
     public QueueComposerViewModel DefaultComposer { get; }
 
-    public bool HasQueueManager => this.inputQueueManager is not null;
+    public bool HasQueueManager => true;
 
     public bool HasMultipleQueues
     {
@@ -60,7 +87,7 @@ public sealed class InputQueueViewModel : ViewModelBase
 
     public ObservableCollection<InputQueueGroupViewModel> Queues { get; } = [];
 
-    public ReadOnlyObservableCollection<AgentChatQueue> InputQueues => this.agentChat.InputQueues;
+    public IReadOnlyList<AgentInputQueueSnapshot> InputQueues => this.GetVisibleQueues();
 
     public string InputText
     {
@@ -118,37 +145,30 @@ public sealed class InputQueueViewModel : ViewModelBase
 
     public bool SubmitToMostRecentQueue()
     {
-        if (!this.HasQueueManager)
+        var queueId = this.queueUseHistory.FirstOrDefault(q => q != this.DefaultQueueId && this.TryGetQueueSnapshot(q, out _));
+        if (queueId is not null)
         {
-            return this.DefaultComposer.Submit(this.DefaultInputQueue);
+            return this.DefaultComposer.Submit(queueId);
         }
 
-        var queue = this.queueUseHistory.FirstOrDefault(q => q != this.DefaultInputQueue);
-        if (queue is not null)
+        if (this.TryGetQueueSnapshot(this.DefaultQueueId, out var defaultQueue) && defaultQueue.IsImmediate)
         {
-            return this.DefaultComposer.Submit(queue);
-        }
-
-        if (this.DefaultInputQueue.IsImmediate)
-        {
-            var newQueue = this.agentChat.QueueManager.CreateInputQueue(
-                immediacy: this.InputQueues.All(q => q.IsHeld)
+            var newQueue = this.CreateQueue(
+                this.InputQueues.All(static q => q.Immediacy == AgentInputQueueImmediacy.Held)
                     ? AgentInputQueueImmediacy.Held
                     : AgentInputQueueImmediacy.Queue);
-            this.RecordQueueUse(newQueue);
-            return this.DefaultComposer.Submit(newQueue);
+            if (newQueue is not null)
+            {
+                this.RecordQueueUse(newQueue);
+                return this.DefaultComposer.Submit(newQueue);
+            }
         }
 
-        return this.DefaultComposer.Submit(this.DefaultInputQueue);
+        return this.DefaultComposer.Submit(this.DefaultQueueId);
     }
 
     public bool SubmitToNewQueue()
     {
-        if (!this.HasQueueManager)
-        {
-            return this.DefaultComposer.Submit(this.DefaultInputQueue);
-        }
-
         if (string.IsNullOrWhiteSpace(this.InputText))
         {
             return false;
@@ -156,33 +176,30 @@ public sealed class InputQueueViewModel : ViewModelBase
 
         // Ctrl+Shift+Q always stages the new queue in the Held state so the user can configure,
         // reorder, or release it before any work is dispatched (issue #1070).
-        var queue = this.agentChat.QueueManager.CreateInputQueue(
-            immediacy: AgentInputQueueImmediacy.Held);
-        return this.DefaultComposer.Submit(queue);
+        var queueId = this.CreateQueue(AgentInputQueueImmediacy.Held);
+        return queueId is not null && this.DefaultComposer.Submit(queueId);
     }
 
     public void CreateNewQueue()
     {
-        if (!this.HasQueueManager)
-        {
-            return;
-        }
-
-        var queue = this.agentChat.QueueManager.CreateInputQueue(
-            immediacy: this.InputQueues.All(queue => queue.IsHeld)
+        var queueId = this.CreateQueue(
+            this.InputQueues.All(static queue => queue.Immediacy == AgentInputQueueImmediacy.Held)
                 ? AgentInputQueueImmediacy.Held
                 : AgentInputQueueImmediacy.Queue);
-        this.RecordQueueUse(queue);
+        if (queueId is not null)
+        {
+            this.RecordQueueUse(queueId);
+        }
     }
 
     public void ToggleHoldAllQueues()
     {
-        if (!this.HasQueueManager || this.InputQueues.Count == 0)
+        if (this.InputQueues.Count == 0)
         {
             return;
         }
 
-        var holdAll = this.InputQueues.Any(queue => !queue.IsHeld);
+        var holdAll = this.InputQueues.Any(static queue => queue.Immediacy != AgentInputQueueImmediacy.Held);
         this.SetAllQueuesHeld(holdAll);
     }
 
@@ -196,217 +213,476 @@ public sealed class InputQueueViewModel : ViewModelBase
         this.SetAllQueuesHeld(held: false);
     }
 
-    public void SetQueueImmediacy(AgentChatQueue queue, AgentInputQueueImmediacy immediacy)
+    public void SetQueueImmediacy(string queueId, AgentInputQueueImmediacy immediacy)
     {
-        this.agentChat.QueueManager.SetQueueImmediacy(queue, immediacy);
-        this.RefreshQueue(queue);
+        if (!this.TryGetQueueSnapshot(queueId, out var snapshot))
+        {
+            return;
+        }
+
+        this.Execute(this.inputQueues.ConfigureAsync(new ConfigureAgentInputQueueRequest
+        {
+            QueueId = queueId,
+            Configuration = new AgentInputQueueConfiguration
+            {
+                Name = snapshot.Name,
+                Immediacy = immediacy,
+                Priority = snapshot.Priority,
+                CoalescingKey = snapshot.CoalescingKey,
+            },
+            CommandId = Guid.NewGuid(),
+            ExpectedRevision = this.inputQueues.Snapshot.Revision,
+        }));
+        this.RefreshQueue(queueId);
     }
 
     public void Dispose()
     {
-        this.queueCollectionTransformer.Dispose();
-        foreach (var queue in this.queueViewModels.Keys)
-        {
-            queue.Changed -= this.OnQueueChanged;
-        }
-
+        this.inputQueues.Changed -= this.OnQueuesChanged;
         foreach (var viewModel in this.queueViewModels.Values)
         {
             viewModel.Dispose();
         }
     }
 
-    public void RemoveQueueItem(AgentChatQueue queue, int index)
+    public void RemoveQueueItem(string queueId, int index)
     {
-        if (!this.agentChat.QueueManager.RemoveQueueItem(queue, index))
+        if (!this.TryGetQueueSnapshot(queueId, out var snapshot)
+            || index < 0
+            || index >= snapshot.Items.Length)
         {
             return;
         }
 
-        this.RefreshQueue(queue);
+        this.RemoveQueueItem(queueId, snapshot.Items[index].ItemId);
+    }
+
+    public void RemoveQueueItem(AgentChatQueue queue, int index)
+        => this.RemoveQueueItem(this.ResolveQueueId(queue), index);
+
+    public void RemoveQueueItem(string queueId, string itemId)
+    {
+        this.Execute(this.inputQueues.RemoveAsync(new RemoveAgentInputQueueItemRequest
+        {
+            QueueId = queueId,
+            ItemId = itemId,
+            CommandId = Guid.NewGuid(),
+            ExpectedRevision = this.inputQueues.Snapshot.Revision,
+        }));
+        this.RefreshQueue(queueId);
     }
 
     public void RemoveQueueItem(AgentChatQueue queue, AgentInputItem item)
+        => this.RemoveQueueItem(this.ResolveQueueId(queue), item.ItemId);
+
+    public bool RemoveInputQueue(string queueId)
     {
-        if (!this.agentChat.QueueManager.RemoveQueueItem(queue, item))
+        var result = this.Execute(this.inputQueues.DeleteQueueAsync(new DeleteAgentInputQueueRequest
         {
-            return;
-        }
+            QueueId = queueId,
+            CommandId = Guid.NewGuid(),
+            ExpectedRevision = this.inputQueues.Snapshot.Revision,
+        }));
 
-        this.RefreshQueue(queue);
-    }
-
-    public bool RemoveInputQueue(AgentChatQueue queue)
-    {
-        if (!this.agentChat.QueueManager.RemoveInputQueue(queue))
+        if (result.Status != AgentInputQueueCommandStatus.Applied)
         {
             return false;
         }
 
-        this.queueUseHistory.Remove(queue);
+        this.queueUseHistory.Remove(queueId);
         return true;
     }
 
-    private void RecordQueueUse(AgentChatQueue queue)
+    public bool RemoveInputQueue(AgentChatQueue queue)
+        => this.RemoveInputQueue(this.ResolveQueueId(queue));
+
+    private void RecordQueueUse(string queueId)
     {
-        this.queueUseHistory.Remove(queue);
-        this.queueUseHistory.Insert(0, queue);
+        this.queueUseHistory.Remove(queueId);
+        this.queueUseHistory.Insert(0, queueId);
+    }
+
+    public void UpdateQueueItem(string queueId, int index, string text)
+    {
+        if (!this.TryGetQueueSnapshot(queueId, out var snapshot)
+            || index < 0
+            || index >= snapshot.Items.Length)
+        {
+            return;
+        }
+
+        this.UpdateQueueItem(queueId, snapshot.Items[index].ItemId, text);
     }
 
     public void UpdateQueueItem(AgentChatQueue queue, int index, string text)
-        => this.UpdateQueueItem(queue, queue.Items[index], text);
+        => this.UpdateQueueItem(this.ResolveQueueId(queue), index, text);
 
-    public void UpdateQueueItem(AgentChatQueue queue, AgentInputItem item, string text)
+    public void UpdateQueueItem(string queueId, string itemId, string text)
     {
-        if (!this.agentChat.QueueManager.UpdateQueueItem(queue, item, text))
+        if (!this.TryGetItemSnapshot(queueId, itemId, out var item))
         {
             return;
         }
 
-        this.RefreshQueue(queue);
+        this.Execute(this.inputQueues.EditAsync(new EditAgentInputQueueItemRequest
+        {
+            QueueId = queueId,
+            ItemId = itemId,
+            Messages = UpdateMessages(item.Messages, text),
+            CommandId = Guid.NewGuid(),
+            ExpectedRevision = this.inputQueues.Snapshot.Revision,
+        }));
+        this.RefreshQueue(queueId);
+    }
+
+    public void UpdateQueueItem(AgentChatQueue queue, AgentInputItem item, string text)
+        => this.UpdateQueueItem(this.ResolveQueueId(queue), item.ItemId, text);
+
+    public void SendQueueItemImmediately(string queueId, string itemId, string text)
+    {
+        if (!this.TryGetItemSnapshot(queueId, itemId, out var item))
+        {
+            return;
+        }
+
+        var contents = UpdateMessages(item.Messages, text)[0].Contents.ToArray();
+        this.RemoveQueueItem(queueId, itemId);
+        this.AppendToQueue(this.DefaultQueueId, contents);
     }
 
     public void SendQueueItemImmediately(AgentChatQueue queue, AgentInputItem item, string text)
-    {
-        IReadOnlyList<AIContent> contents =
-        [
-            new TextContent(text),
-            .. item.Contents.Where(static content => content is not TextContent),
-        ];
-        this.RemoveQueueItem(queue, item);
-        this.AppendToQueue(this.DefaultInputQueue, contents);
-    }
+        => this.SendQueueItemImmediately(this.ResolveQueueId(queue), item.ItemId, text);
 
-    public void RemoveQueueItemContent(AgentChatQueue queue, int index, int contentIndex)
-        => this.RemoveQueueItemContent(queue, queue.Items[index], contentIndex);
-
-    public void RemoveQueueItemContent(AgentChatQueue queue, AgentInputItem item, int contentIndex)
+    public void RemoveQueueItemContent(string queueId, int index, int contentIndex)
     {
-        if (!this.agentChat.QueueManager.RemoveQueueItemContent(queue, item, contentIndex))
+        if (!this.TryGetQueueSnapshot(queueId, out var snapshot)
+            || index < 0
+            || index >= snapshot.Items.Length)
         {
             return;
         }
 
-        this.RefreshQueue(queue);
+        this.RemoveQueueItemContent(queueId, snapshot.Items[index].ItemId, contentIndex);
     }
 
-    public void AppendToQueue(AgentChatQueue queue, string text)
+    public void RemoveQueueItemContent(AgentChatQueue queue, int index, int contentIndex)
+        => this.RemoveQueueItemContent(this.ResolveQueueId(queue), index, contentIndex);
+
+    public void RemoveQueueItemContent(string queueId, string itemId, int contentIndex)
+    {
+        if (!this.TryGetItemSnapshot(queueId, itemId, out var item))
+        {
+            return;
+        }
+
+        var existingMessage = item.Messages.Length > 0
+            ? item.Messages[0]
+            : new ChatMessage(ChatRole.User, []);
+        var contents = existingMessage.Contents.ToList();
+        if (contentIndex < 0 || contentIndex >= contents.Count)
+        {
+            return;
+        }
+
+        contents.RemoveAt(contentIndex);
+        if (contents.Count == 0)
+        {
+            this.RemoveQueueItem(queueId, itemId);
+            return;
+        }
+
+        var updatedMessages = item.Messages.ToArray();
+        updatedMessages[0] = new ChatMessage(ChatRole.User, contents);
+        this.Execute(this.inputQueues.EditAsync(new EditAgentInputQueueItemRequest
+        {
+            QueueId = queueId,
+            ItemId = itemId,
+            Messages = updatedMessages,
+            CommandId = Guid.NewGuid(),
+            ExpectedRevision = this.inputQueues.Snapshot.Revision,
+        }));
+        this.RefreshQueue(queueId);
+    }
+
+    public void RemoveQueueItemContent(AgentChatQueue queue, AgentInputItem item, int contentIndex)
+        => this.RemoveQueueItemContent(this.ResolveQueueId(queue), item.ItemId, contentIndex);
+
+    public void AppendToQueue(string queueId, string text)
     {
         if (string.IsNullOrWhiteSpace(text))
         {
             return;
         }
 
-        this.agentChat.EnqueueUserMessage(text, queue);
-        this.RecordQueueUse(queue);
-        this.RefreshQueue(queue);
+        this.AppendToQueue(queueId, [new TextContent(text)]);
     }
 
-    public void AppendToQueue(AgentChatQueue queue, IReadOnlyList<AIContent> contents)
+    public void AppendToQueue(AgentChatQueue queue, string text)
+        => this.AppendToQueue(this.ResolveQueueId(queue), text);
+
+    public void AppendToQueue(string queueId, IReadOnlyList<AIContent> contents)
     {
         if (contents.Count == 0)
         {
             return;
         }
 
-        this.agentChat.EnqueueUserContents(contents, queue);
-        this.RecordQueueUse(queue);
-        this.RefreshQueue(queue);
+        this.Execute(this.inputQueues.EnqueueAsync(new EnqueueAgentInputRequest
+        {
+            TargetQueueId = queueId,
+            Messages = [new ChatMessage(ChatRole.User, contents.ToList())],
+            CommandId = Guid.NewGuid(),
+            ExpectedRevision = this.inputQueues.Snapshot.Revision,
+        }));
+        this.RecordQueueUse(queueId);
+        this.RefreshQueue(queueId);
     }
 
-    public void HideQueueComposer(AgentChatQueue queue)
+    public void AppendToQueue(AgentChatQueue queue, IReadOnlyList<AIContent> contents)
+        => this.AppendToQueue(this.ResolveQueueId(queue), contents);
+
+    public void HideQueueComposer(string queueId)
     {
-        if (this.queueViewModels.TryGetValue(queue, out var viewModel))
+        if (this.queueViewModels.TryGetValue(queueId, out var viewModel))
         {
             viewModel.HideComposer();
         }
     }
 
-    private void OnQueueChanged(object? sender, EventArgs e)
+    public void HideQueueComposer(AgentChatQueue queue)
+        => this.HideQueueComposer(this.ResolveQueueId(queue));
+
+    internal bool TryGetQueueSnapshot(string queueId, out AgentInputQueueSnapshot snapshot)
     {
-        if (sender is not AgentChatQueue queue)
+        foreach (var queue in this.GetVisibleQueues())
         {
-            return;
+            if (string.Equals(queue.QueueId, queueId, StringComparison.Ordinal))
+            {
+                snapshot = queue;
+                return true;
+            }
         }
 
-        this.RefreshQueue(queue);
+        snapshot = default;
+        return false;
     }
 
-    private void RefreshQueue(AgentChatQueue queue)
+    internal bool TryGetItemSnapshot(string queueId, string itemId, out AgentInputItemSnapshot snapshot)
     {
-        if (!this.queueViewModels.TryGetValue(queue, out var viewModel))
+        if (this.TryGetQueueSnapshot(queueId, out var queueSnapshot))
+        {
+            foreach (var item in queueSnapshot.Items)
+            {
+                if (string.Equals(item.ItemId, itemId, StringComparison.Ordinal))
+                {
+                    snapshot = item;
+                    return true;
+                }
+            }
+        }
+
+        snapshot = default;
+        return false;
+    }
+
+    private void SetAllQueuesHeld(bool held)
+    {
+        if (this.InputQueues.Count == 0)
         {
             return;
         }
 
-        viewModel.Refresh();
+        var snapshots = this.InputQueues.ToArray();
+        foreach (var queue in snapshots)
+        {
+            var targetImmediacy = held
+                ? AgentInputQueueImmediacy.Held
+                : queue.IsImmediate
+                    ? AgentInputQueueImmediacy.Immediate
+                    : AgentInputQueueImmediacy.Queue;
+            if (queue.Immediacy == targetImmediacy)
+            {
+                continue;
+            }
+
+            this.Execute(this.inputQueues.ConfigureAsync(new ConfigureAgentInputQueueRequest
+            {
+                QueueId = queue.QueueId,
+                Configuration = new AgentInputQueueConfiguration
+                {
+                    Name = queue.Name,
+                    Immediacy = targetImmediacy,
+                    Priority = queue.Priority,
+                    CoalescingKey = queue.CoalescingKey,
+                },
+                CommandId = Guid.NewGuid(),
+                ExpectedRevision = this.inputQueues.Snapshot.Revision,
+            }));
+        }
+    }
+
+    private void OnQueuesChanged(object? sender, EventArgs e)
+    {
+        if (Interlocked.Exchange(ref this.ignoredQueueChangedEvents, 0) > 0)
+        {
+            return;
+        }
+
+        this.RefreshQueues();
+    }
+
+    private void RefreshQueue(string queueId)
+    {
+        if (this.queueViewModels.TryGetValue(queueId, out var viewModel))
+        {
+            viewModel.Refresh();
+        }
+    }
+
+    private void RefreshQueues()
+    {
+        var snapshots = this.GetVisibleQueues();
+        var queueIds = snapshots.Select(static q => q.QueueId).ToArray();
+        foreach (var existing in this.Queues.ToArray())
+        {
+            if (existing is null || !queueIds.Contains(existing.QueueId, StringComparer.Ordinal))
+            {
+                if (existing is not null)
+                {
+                    this.Queues.Remove(existing);
+                    this.queueViewModels.Remove(existing.QueueId);
+                    existing.Dispose();
+                }
+            }
+        }
+
+        for (var index = 0; index < snapshots.Length; index++)
+        {
+            var snapshot = snapshots[index];
+            if (!this.queueViewModels.TryGetValue(snapshot.QueueId, out var existing))
+            {
+                var composer = snapshot.IsDefault
+                    ? this.DefaultComposer
+                    : new QueueComposerViewModel(this, snapshot.QueueId, isDefaultComposer: false);
+                existing = new InputQueueGroupViewModel(this, snapshot.QueueId, composer);
+                this.queueViewModels[snapshot.QueueId] = existing;
+                this.Queues.Insert(index, existing);
+            }
+            else
+            {
+                var currentIndex = this.Queues.IndexOf(existing);
+                if (currentIndex >= 0 && currentIndex != index)
+                {
+                    this.Queues.Move(currentIndex, index);
+                }
+            }
+
+            existing.Refresh();
+        }
+
+        this.UpdateQueueCollectionState();
     }
 
     private void UpdateQueueCollectionState()
     {
         this.HasMultipleQueues = this.Queues.Count > 1;
-        foreach (var queueViewModel in this.queueViewModels.Values)
+        foreach (var queueViewModel in this.queueViewModels.Values.ToArray())
         {
             queueViewModel.Refresh();
         }
     }
 
-    private void SetAllQueuesHeld(bool held)
+    private string? CreateQueue(AgentInputQueueImmediacy immediacy)
     {
-        if (!this.HasQueueManager || this.InputQueues.Count == 0)
+        var result = this.Execute(this.inputQueues.CreateQueueAsync(new CreateAgentInputQueueRequest
         {
-            return;
-        }
-
-        foreach (var queue in this.InputQueues)
-        {
-            this.agentChat.QueueManager.SetQueueHeld(queue, held);
-        }
-
-        foreach (var queue in this.InputQueues)
-        {
-            this.RefreshQueue(queue);
-        }
+            Configuration = new AgentInputQueueConfiguration
+            {
+                Name = this.CreateQueueName(),
+                Immediacy = immediacy,
+                Priority = 0,
+            },
+            CommandId = Guid.NewGuid(),
+            ExpectedRevision = this.inputQueues.Snapshot.Revision,
+        }));
+        return result.Status == AgentInputQueueCommandStatus.Applied ? result.QueueId : null;
     }
 
-    private sealed class InputQueueCollectionTransformer : CollectionTransformer<AgentChatQueue, InputQueueGroupViewModel>
+    private string CreateQueueName()
     {
-        private readonly InputQueueViewModel parent;
-        private readonly Dictionary<AgentChatQueue, InputQueueGroupViewModel> queueViewModels;
-
-        public InputQueueCollectionTransformer(
-            InputQueueViewModel parent,
-            IReadOnlyList<AgentChatQueue> source,
-            IList<InputQueueGroupViewModel> target,
-            Dictionary<AgentChatQueue, InputQueueGroupViewModel> queueViewModels)
-            : base(source, target)
+        var used = this.InputQueues
+            .Select(static queue => queue.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        var next = 1;
+        while (used.Contains($"Queue {next}"))
         {
-            this.parent = parent;
-            this.queueViewModels = queueViewModels;
-            this.ApplyInitialTransform();
+            next++;
         }
 
-        protected override InputQueueGroupViewModel Create(AgentChatQueue sourceItem)
+        return $"Queue {next}";
+    }
+
+    private string ResolveQueueId(AgentChatQueue queue)
+    {
+        ArgumentNullException.ThrowIfNull(queue);
+        if (queue.IsDefault)
         {
-            var composer = sourceItem.IsDefault
-                ? this.parent.DefaultComposer
-                : new QueueComposerViewModel(this.parent, sourceItem, isDefaultComposer: false);
-            return new InputQueueGroupViewModel(this.parent, sourceItem, composer);
+            return this.DefaultQueueId;
         }
 
-        protected override void OnInsert(int index, InputQueueGroupViewModel target)
+        if (queue.IsImmediate)
         {
-            target.Queue.Changed += this.parent.OnQueueChanged;
-            this.queueViewModels[target.Queue] = target;
-            this.parent.UpdateQueueCollectionState();
+            return this.inputQueues.ImmediateQueue.Snapshot.QueueId;
         }
 
-        protected override void OnRemoveAt(int index, InputQueueGroupViewModel target)
+        var match = this.InputQueues.FirstOrDefault(snapshot => string.Equals(snapshot.Name, queue.Name, StringComparison.Ordinal));
+        if (!string.IsNullOrEmpty(match.QueueId))
         {
-            target.Queue.Changed -= this.parent.OnQueueChanged;
-            this.queueViewModels.Remove(target.Queue);
-            target.Dispose();
-            this.parent.UpdateQueueCollectionState();
+            return match.QueueId;
         }
+
+        throw new InvalidOperationException($"Queue '{queue.Name}' is no longer available.");
+    }
+
+    private AgentInputQueueSnapshot[] GetVisibleQueues()
+        => this.inputQueues.Snapshot.Queues
+            .Where(queue => !string.Equals(queue.QueueId, this.hiddenBuiltInQueueId, StringComparison.Ordinal))
+            .ToArray();
+
+    private static ChatMessage[] UpdateMessages(ImmutableArray<ChatMessage> messages, string text)
+    {
+        var existingMessage = messages.Length > 0
+            ? messages[0]
+            : new ChatMessage(ChatRole.User, []);
+        var contents = existingMessage.Contents.ToList();
+        var textContentIndex = contents.FindIndex(static content => content is TextContent);
+        if (textContentIndex >= 0)
+        {
+            contents[textContentIndex] = new TextContent(text);
+        }
+        else
+        {
+            contents.Insert(0, new TextContent(text));
+        }
+
+        var updatedMessages = messages.ToArray();
+        if (updatedMessages.Length == 0)
+        {
+            updatedMessages = [new ChatMessage(ChatRole.User, contents)];
+        }
+        else
+        {
+            updatedMessages[0] = new ChatMessage(ChatRole.User, contents);
+        }
+
+        return updatedMessages;
+    }
+
+    private AgentInputQueueCommandResult Execute(Task<AgentInputQueueCommandResult> task)
+    {
+        var result = task.GetAwaiter().GetResult();
+        Interlocked.Increment(ref this.ignoredQueueChangedEvents);
+        this.RefreshQueues();
+        return result;
     }
 }

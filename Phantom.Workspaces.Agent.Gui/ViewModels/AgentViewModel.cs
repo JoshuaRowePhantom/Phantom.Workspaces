@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Windows.Input;
 using Avalonia.Threading;
@@ -29,7 +30,9 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private readonly List<RunningAgentChatLease> subAgentLeases = [];
     private readonly ObservableCollection<IRunningSubAgentDisplay> subAgentDisplayItems = [];
     private readonly ObservableCollection<AgentDetailDocumentItem> allDetailContents = [];
+    private readonly ObservableCollection<AgentSessionModalViewModel> modalProjectionSource = [];
     private readonly Dictionary<AgentViewModel, NotifyCollectionChangedEventHandler> subAgentDetailSubscriptions = new();
+    private readonly Dictionary<AgentViewModel, NotifyCollectionChangedEventHandler> subAgentModalSubscriptions = new();
     private readonly ObservableCollection<AgentEditorNavigationItemViewModel> subAgentAllChildren = [];
     private readonly AgentEditorNavigationItemViewModel chatDetailsNavItem;
     private readonly AgentEditorNavigationItemViewModel toolsNavItem;
@@ -78,6 +81,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     public AgentViewModel(IAgentChat agentChat, string displayName, string description, ObservableLoggerFactory loggerFactory, TaskScheduler foregroundScheduler, AgentViewModel? parentAgentViewModel = null)
     {
+        ArgumentNullException.ThrowIfNull(agentChat);
+        ArgumentNullException.ThrowIfNull(loggerFactory);
         this.agentChat = agentChat;
         this.loggerFactory = loggerFactory;
         this.logger = loggerFactory.CreateLogger<AgentViewModel>();
@@ -95,14 +100,12 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.subAgentsBrowserDetail = new SubAgentBrowserViewModel(agentChat.SubAgents);
         this.subAgentsContainerDetail = new SubAgentsContainerViewModel(this.subAgentsBrowserDetail);
         this.SubAgentDisplays = new ReadOnlyObservableCollection<IRunningSubAgentDisplay>(this.subAgentDisplayItems);
+        this.ModalProjection = new ReadOnlyObservableCollection<AgentSessionModalViewModel>(this.modalProjectionSource);
         this.InterruptCommand = new RelayCommand(agentChat.Interrupt);
         this.ToggleReasoningVisibilityCommand = new RelayCommand(this.ToggleReasoningVisibility);
         this.RequestOpenLogWindowCommand = new RelayCommand(this.RequestOpenLogWindow);
-        this.InputQueue = agentChat.Information.AcceptsUserInput && agentChat is AgentChat localAgentChat
-            ? new InputQueueViewModel(
-                localAgentChat,
-                localAgentChat.DefaultInputQueue,
-                localAgentChat.InputQueueManager)
+        this.InputQueue = agentChat.Information.AcceptsUserInput
+            ? new InputQueueViewModel(agentChat)
             : null;
         this.ToggleHoldAllQueuesCommand = new RelayCommand(() => this.InputQueue?.ToggleHoldAllQueuesCommand.Execute(null));
         this.HoldAllQueuesCommand = new RelayCommand(() => this.InputQueue?.HoldAllQueuesCommand.Execute(null));
@@ -119,6 +122,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             runningItemsNotifications.CollectionChanged += this.OnRunningItemsCollectionChanged;
         }
         ((INotifyCollectionChanged)agentChat.SubAgents).CollectionChanged += this.OnSubAgentsCollectionChanged;
+        ((INotifyCollectionChanged)agentChat.Modals).CollectionChanged += this.OnLocalModalsChanged;
 
         // Build the flat detail-content collection (one item per nav node's DetailContent) and the
         // locked, tab-strip-less DocumentDock that hosts them (issue #1035). Every node — including
@@ -197,6 +201,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.capturingRestoreContinuations = false;
 
         this.ApplyToolSnapshot(agentChat.GetToolSnapshot());
+        this.RefreshModalProjection();
     }
 
     public string DisplayName { get; }
@@ -272,6 +277,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     public IAgentChat AgentChat => this.agentChat;
 
+    public ReadOnlyObservableCollection<AgentSessionModalViewModel> ModalProjection { get; }
+
     internal AgentChat LocalAgentChat => (AgentChat)this.agentChat;
 
     /// <summary>Whether this agent accepts user input (false for hosted sub-agents).</summary>
@@ -305,6 +312,10 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     public ICommand UnholdAllQueuesCommand { get; }
 
     public InputQueueViewModel? InputQueue { get; }
+
+    public bool IsInputGated => this.agentChat.Modals.Count > 0;
+
+    public bool HasModalsNeedingInput => this.ModalProjection.Count > 0;
 
     public ReadOnlyObservableCollection<AgentChatHistoryItem> History => this.agentChat.History;
 
@@ -473,6 +484,25 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     }
 
     public IAgentStatusSink StatusSink => this.conversationDetail.StatusLine;
+
+    public Task RespondToModalAsync(string modalId, JsonElement response, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(modalId);
+        var owner = this.FindModalOwner(modalId)
+            ?? throw new ArgumentException($"Unknown modal id '{modalId}'.", nameof(modalId));
+        return owner.agentChat.RespondToModalAsync(modalId, response, ct);
+    }
+
+    public void DismissModal(string modalId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(modalId);
+        var owner = this.FindModalOwner(modalId)
+            ?? throw new ArgumentException($"Unknown modal id '{modalId}'.", nameof(modalId));
+        if (owner.agentChat is AgentChat localAgentChat)
+        {
+            localAgentChat.PublishModalDismiss(modalId);
+        }
+    }
 
     public void ToggleReasoningVisibility() => this.SetReasoningVisibility(!this.IsReasoningVisible);
 
@@ -672,10 +702,16 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             ((INotifyCollectionChanged)subAgentViewModel.AllDetailContents).CollectionChanged -= handler;
         }
         this.subAgentDetailSubscriptions.Clear();
+        foreach (var (subAgentViewModel, handler) in this.subAgentModalSubscriptions)
+        {
+            ((INotifyCollectionChanged)subAgentViewModel.ModalProjection).CollectionChanged -= handler;
+        }
+        this.subAgentModalSubscriptions.Clear();
         this.InputQueue?.Dispose();
         this.conversationDetail.Dispose();
         this.subAgentsBrowserDetail.Dispose();
         ((INotifyCollectionChanged)this.agentChat.SubAgents).CollectionChanged -= this.OnSubAgentsCollectionChanged;
+        ((INotifyCollectionChanged)this.agentChat.Modals).CollectionChanged -= this.OnLocalModalsChanged;
         this.agentChat.InformationChanged -= this.OnInformationChanged;
         this.agentChat.ToolsChanged -= this.OnToolsChanged;
         this.agentChat.UsageChanged -= this.OnUsageChanged;
@@ -786,6 +822,9 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         // agent it falls through to ancestor resolution logic in NavigateToSubAgent.
         subAgentViewModel.NavigateToAgentHandler = this.NavigateToAgentHandler;
         this.subAgentViewModels.Add(subAgentViewModel);
+        NotifyCollectionChangedEventHandler modalHandler = (_, _) => this.RefreshModalProjection();
+        ((INotifyCollectionChanged)subAgentViewModel.ModalProjection).CollectionChanged += modalHandler;
+        this.subAgentModalSubscriptions[subAgentViewModel] = modalHandler;
         // Recursively aggregate the sub-agent's flat detail-content collection into this agent's
         // collection so every sub-agent node (and its descendants) has a first-class cached document
         // in the root dock (issue #1035). The sub-agent's collection already includes its own
@@ -793,6 +832,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.AppendSubAgentDetailContents(subAgentViewModel);
         // Use the AgentChat's AgentId, not the stub's AgentId (which may be the session ID for lazy stubs)
         this.subAgentsContainerDetail.AddSlot(subAgentChat.AgentId, subAgentViewModel, subAgentChat);
+        this.RefreshModalProjection();
     }
 
     private void AppendSubAgentDetailContents(AgentViewModel subAgentViewModel)
@@ -846,11 +886,17 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             ((INotifyCollectionChanged)subAgentViewModel.AllDetailContents).CollectionChanged -= handler;
             this.subAgentDetailSubscriptions.Remove(subAgentViewModel);
         }
+        if (this.subAgentModalSubscriptions.TryGetValue(subAgentViewModel, out var modalHandler))
+        {
+            ((INotifyCollectionChanged)subAgentViewModel.ModalProjection).CollectionChanged -= modalHandler;
+            this.subAgentModalSubscriptions.Remove(subAgentViewModel);
+        }
 
         foreach (var item in subAgentViewModel.AllDetailContents)
         {
             this.allDetailContents.Remove(item);
         }
+        this.RefreshModalProjection();
     }
 
     private void AddSubAgentSlotLazy(SubAgent stub)
@@ -1036,6 +1082,58 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.RaisePropertyChanged(nameof(this.TotalCacheWriteTokenCount));
         this.RaisePropertyChanged(nameof(this.TotalReasoningTokenCount));
         this.RaisePropertyChanged(nameof(this.TotalSessionCostUsd));
+    }
+
+    private void OnLocalModalsChanged(object? sender, NotifyCollectionChangedEventArgs e)
+        => this.RefreshModalProjection();
+
+    private void RefreshModalProjection()
+    {
+        this.modalProjectionSource.Clear();
+        foreach (var modal in this.agentChat.Modals)
+        {
+            this.modalProjectionSource.Add(new AgentSessionModalViewModel(this, modal, isDescendant: false));
+        }
+
+        foreach (var child in this.subAgentViewModels)
+        {
+            foreach (var modal in child.ModalProjection)
+            {
+                this.modalProjectionSource.Add(new AgentSessionModalViewModel(
+                    child.FindModalOwner(modal.Id) ?? child,
+                    new AgentChatModal
+                    {
+                        Id = modal.Id,
+                        OwnerAgentId = modal.OwnerAgentId,
+                        Title = modal.Title,
+                        Body = modal.Body,
+                        Content = modal.Content,
+                    },
+                    isDescendant: true));
+            }
+        }
+
+        this.RaisePropertyChanged(nameof(this.IsInputGated));
+        this.RaisePropertyChanged(nameof(this.HasModalsNeedingInput));
+    }
+
+    private AgentViewModel? FindModalOwner(string modalId)
+    {
+        if (this.agentChat.Modals.Any(modal => string.Equals(modal.Id, modalId, StringComparison.Ordinal)))
+        {
+            return this;
+        }
+
+        foreach (var child in this.subAgentViewModels)
+        {
+            var owner = child.FindModalOwner(modalId);
+            if (owner is not null)
+            {
+                return owner;
+            }
+        }
+
+        return null;
     }
 
     private sealed class ToolsCollectionTransformer : CollectionTransformer<AgentChatToolViewModel, AgentEditorNavigationItemViewModel>
