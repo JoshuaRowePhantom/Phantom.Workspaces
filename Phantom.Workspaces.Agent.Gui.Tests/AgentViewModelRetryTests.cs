@@ -1,6 +1,8 @@
-using System.Reflection;
 using System.Linq;
+using System.Collections.ObjectModel;
+using System.Reflection;
 using AgentSchema;
+using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
@@ -27,12 +29,14 @@ public sealed class AgentViewModelRetryTests
 
     private readonly TaskScheduler foregroundScheduler = new SynchronousTaskScheduler();
 
-    private AgentChat CreateChat(AgentDefinition? def)
+    private AgentChat CreateChat(AgentDefinition? def, AgentServices? agentServices = null)
     {
         var reqType = typeof(AgentChat).Assembly.GetType("Phantom.Workspaces.Llm.InternalCreateAgentChatRequest")!;
         var request = Activator.CreateInstance(reqType)!;
         reqType.GetProperty("AgentDefinition")!.SetValue(request, def);
         reqType.GetProperty("ConfiguredStore")!.SetValue(request, new InMemoryAgentPersistenceStore());
+        reqType.GetProperty("AgentServices")!.SetValue(request, agentServices);
+        reqType.GetProperty("ClientOverride")!.SetValue(request, agentServices?.ChatClientOverride);
         // #1485 retry: synchronous foreground scheduler makes PublishModal / RespondToModalAsync /
         // PublishModalDismiss execute inline so tests do not depend on Task.Yield polling loops.
         reqType.GetProperty("ForegroundScheduler")!.SetValue(request, this.foregroundScheduler);
@@ -41,8 +45,7 @@ public sealed class AgentViewModelRetryTests
         typeof(AgentChat).GetField("agentDefinition", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(chat, def);
         if (def is not null)
         {
-            typeof(AgentChat).GetMethod("PublishInformation", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .Invoke(chat, null);
+            chat.PublishInformation();
         }
         return chat;
     }
@@ -98,6 +101,7 @@ public sealed class AgentViewModelRetryTests
                 new AgentSessionId("lease-1"),
                 localChat,
                 (Func<ValueTask>)(() => ValueTask.CompletedTask),
+                localChat,
                 null,
             ],
             culture: null)!;
@@ -236,10 +240,7 @@ public sealed class AgentViewModelRetryTests
         await using var rootChat = CreateChat(MakeDefinition());
         await using var childChat = CreateChat(MakeDefinition());
         await using var root = this.CreateViewModel(rootChat, loggerFactory);
-        var children = (System.Collections.ObjectModel.ObservableCollection<IRunningSubAgent>)
-            typeof(AgentChat).GetField("subAgentItems", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .GetValue(rootChat)!;
-        children.Add(childChat);
+        await ((ISubAgentTable)rootChat).Add(childChat);
         var modal = new AgentChatModal
         {
             Id = "child-modal",
@@ -268,9 +269,7 @@ public sealed class AgentViewModelRetryTests
 
         await vm.DisposeAsync();
         var before = notifications;
-        typeof(AgentChat).GetProperty(nameof(AgentChat.DisplayName))!.SetValue(local, "after-detach");
-        typeof(AgentChat).GetMethod("PublishInformation", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(local, null);
+        local.SetAgentSessionId("after-detach");
 
         Assert.Equal(before, notifications);
     }
@@ -279,12 +278,35 @@ public sealed class AgentViewModelRetryTests
     public async Task InterruptCommand_RemoteChat_InvokesCommonInterrupt()
     {
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var local = CreateChat(MakeDefinition());
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new TextContent("blocked")],
+        }, isReady: false);
+        stream.Complete(isReady: false);
+        await using var local = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest
+            {
+                AgentDefinition = MakeDefinition(),
+                AgentServices = new AgentServices { ChatClientOverride = client },
+            });
         await using var remote = new RemoteAgentChatProxy(local);
         await using var vm = this.CreateViewModel(remote, loggerFactory);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ((System.Collections.Specialized.INotifyCollectionChanged)local.RunningItems).CollectionChanged += (_, _) =>
+        {
+            if (local.RunningItems.Count > 0)
+            {
+                started.TrySetResult();
+            }
+        };
+        local.EnqueueUserMessage("start");
+        await started.Task.WaitAsync(CancellationToken.None);
 
         vm.InterruptCommand.Execute(null);
-        vm.InterruptCommand.Execute(null);
+        await WaitForConditionAsync(() => local.RunningItems.Count == 0, "remote interrupt to clear running items");
 
         local.EnqueueSystemNote("usable-after-remote-interrupt");
         Assert.Contains(local.History,
@@ -297,41 +319,67 @@ public sealed class AgentViewModelRetryTests
     {
         using var loggerFactory = new ObservableLoggerFactory();
         await using var local = CreateChat(MakeDefinition());
+        local.SlashCommands.Register(new FakeSlashCommandHandler("engine-only"));
         await using var remote = new RemoteAgentChatProxy(local);
         await using var vm = this.CreateViewModel(remote, loggerFactory);
 
         vm.ConfigureSlashCommands(() => new SlashCommandContext { AgentChat = remote });
 
-        Assert.Equal(
-            ["auto-resume", "clone", "help", "input-help", "reasoning", "rename", "restart", "title"],
-            remote.SlashCommands.Commands.Select(command => command.Name).Order().ToArray());
+        var commands = remote.SlashCommands.Commands.Select(command => command.Name).Order().ToArray();
+        Assert.DoesNotContain("engine-only", commands);
+        Assert.Equal(["auto-resume", "clone", "help", "input-help", "reasoning", "rename", "restart", "title"], commands);
     }
 
     [Fact]
     public async Task CommandPending_RemoteQueue_DoesNotMutateProjectionOptimistically()
     {
-        await using var chat = CreateChat(MakeDefinition());
-        IAgentChat common = chat;
-        Assert.NotNull(common.InputQueues);
-        await Task.CompletedTask;
+        var source = new DeferredQueues();
+        await using var remote = new RemoteAgentChatProxy(new StubAgentChat(source, MakeDefinition()));
+        var before = remote.InputQueues.Snapshot;
+        var command = source.NewEnqueueRequest("pending");
+        var pending = remote.InputQueues.EnqueueAsync(command, TestContext.Current.CancellationToken);
+
+        Assert.False(pending.IsCompleted);
+        Assert.Equal(before, remote.InputQueues.Snapshot);
+        Assert.Empty(remote.InputQueues.DefaultQueue.Snapshot.Items);
+        source.CompleteApplied(command);
+        var result = await pending;
+        Assert.Equal(AgentInputQueueCommandStatus.Applied, result.Status);
     }
 
     [Fact]
     public async Task CommandConflict_StaleRevision_RefreshesFromAuthoritativeSnapshot()
     {
-        await using var chat = CreateChat(MakeDefinition());
-        IAgentChat common = chat;
-        var snapshot = common.InputQueues.Snapshot;
-        Assert.True(snapshot.Revision >= 0);
+        var source = new DeferredQueues();
+        await using var remote = new RemoteAgentChatProxy(new StubAgentChat(source, MakeDefinition()));
+        var stale = source.NewEnqueueRequest("stale");
+        stale = stale with { ExpectedRevision = stale.ExpectedRevision - 1 };
+
+        var result = await remote.InputQueues.EnqueueAsync(stale, TestContext.Current.CancellationToken);
+
+        Assert.Equal(AgentInputQueueCommandStatus.Conflict, result.Status);
+        Assert.Equal(source.Snapshot.Revision, remote.InputQueues.Snapshot.Revision);
+        Assert.Equal(source.Snapshot.Queues.Single().QueueId, remote.InputQueues.Snapshot.Queues.Single().QueueId);
+        Assert.Equal(source.Snapshot.Revision, result.CurrentSnapshot?.Revision);
     }
 
     [Fact]
     public async Task CommandApplied_AuthoritativeDeltaAppliedBeforeTaskCompletes()
     {
-        await using var chat = CreateChat(MakeDefinition());
-        IAgentChat common = chat;
-        Assert.NotNull(common.InputQueues);
-        await Task.CompletedTask;
+        var source = new DeferredQueues();
+        await using var remote = new RemoteAgentChatProxy(new StubAgentChat(source, MakeDefinition()));
+        var observedRevisions = new List<long>();
+        remote.InputQueues.Changed += (_, _) => observedRevisions.Add(remote.InputQueues.Snapshot.Revision);
+        var command = source.NewEnqueueRequest("applied");
+        var pending = remote.InputQueues.EnqueueAsync(command, TestContext.Current.CancellationToken);
+
+        source.PublishAppliedButDoNotComplete(command);
+        await WaitForConditionAsync(() => observedRevisions.Count == 1, "authoritative delta publication");
+        Assert.False(pending.IsCompleted);
+        Assert.Contains(remote.InputQueues.DefaultQueue.Snapshot.Items, item => item.ItemId == source.LastItemId);
+        source.ReleaseCompletion();
+        await pending;
+        Assert.Equal(source.Snapshot.Revision, observedRevisions.Single());
     }
 
     [Fact]
@@ -351,5 +399,207 @@ public sealed class AgentViewModelRetryTests
     {
         Assert.Throws<ArgumentNullException>(() => new SlashCommandContext { AgentChat = null! });
         await Task.CompletedTask;
+    }
+
+    private static async Task WaitForConditionAsync(Func<bool> condition, string description)
+    {
+        for (var i = 0; i < 100; i++)
+        {
+            if (condition())
+            {
+                return;
+            }
+
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        throw new TimeoutException($"Timed out waiting for {description}.");
+    }
+
+    private sealed class FakeSlashCommandHandler(string name) : ISlashCommandHandler
+    {
+        public string Name => name;
+        public string Description => name;
+        public string? Usage => "/" + name;
+        public string? LongDescription => name;
+        public Task<SlashCommandResult> ExecuteAsync(
+            SlashCommandContext context,
+            string arguments,
+            CancellationToken cancellationToken)
+            => Task.FromResult(new SlashCommandResult { StatusMessage = name });
+    }
+
+#pragma warning disable CS0067
+    private sealed class StubAgentChat(DeferredQueues inputQueues, AgentDefinition definition) : IAgentChat
+    {
+        private readonly ReadOnlyObservableCollection<IRunningSubAgent> subAgents = new(new System.Collections.ObjectModel.ObservableCollection<IRunningSubAgent>());
+        private readonly ReadOnlyObservableCollection<AgentChatModal> modals = new(new System.Collections.ObjectModel.ObservableCollection<AgentChatModal>());
+
+        public AgentInformation Information { get; private set; } = new()
+        {
+            AgentSessionId = "stub-session",
+            AgentId = "stub-agent",
+            Name = "stub-agent",
+            DisplayName = "Stub Agent",
+            Description = "Stub Agent",
+            AcceptsUserInput = true,
+            AgentDefinition = definition,
+        };
+
+        public Usage Usage => default;
+        public bool IsBusy => false;
+        public AgentChatHistoryCollection History { get; } = new();
+        public Task HistoryPopulated => Task.CompletedTask;
+        public AgentChatRunningItemCollection RunningItems { get; } = new();
+        public IAgentInputQueues InputQueues { get; } = inputQueues;
+        public ReadOnlyObservableCollection<IRunningSubAgent> SubAgents => this.subAgents;
+        public ReadOnlyObservableCollection<AgentChatModal> Modals => this.modals;
+        public ISlashCommandRegistry SlashCommands { get; } = new SlashCommandRegistry();
+        public event EventHandler? InformationChanged;
+        public event EventHandler? ToolsChanged;
+        public event EventHandler? UsageChanged;
+        public event EventHandler<AgentChatHistoryItem>? TurnCompleted;
+        public IReadOnlyList<AgentChatToolItem> GetToolSnapshot() => [];
+        public Task SetToolEnabledAsync(string toolId, bool enabled, CancellationToken ct = default) => Task.CompletedTask;
+        public Task RespondToModalAsync(string modalId, System.Text.Json.JsonElement response, CancellationToken ct = default) => Task.CompletedTask;
+        public void EnqueueSystemNote(string text) { }
+        public void EnqueueHelpNote(string text) { }
+        public void EnqueueTransientDiagnostic(string text) { }
+        public void Interrupt() { }
+        public object? GetService(Type serviceType) => null;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+#pragma warning restore CS0067
+
+    private sealed class DeferredQueues : IAgentInputQueues
+    {
+        private readonly string queueId = "queue-1";
+        private readonly DeferredQueue queue;
+        private TaskCompletionSource<AgentInputQueueCommandResult>? pendingCompletion;
+        private Guid pendingCommandId;
+        private long revision;
+        public string? LastItemId { get; private set; }
+
+        public DeferredQueues()
+        {
+            this.Snapshot = this.CreateSnapshot([]);
+            this.queue = new DeferredQueue(this.Snapshot.Queues.Single());
+        }
+
+        public AgentInputQueuesSnapshot Snapshot { get; private set; }
+        public IReadOnlyList<IAgentInputQueue> Queues => [this.queue];
+        public IAgentInputQueue DefaultQueue => this.queue;
+        public IAgentInputQueue ImmediateQueue => this.queue;
+        public event EventHandler? Changed;
+
+        public EnqueueAgentInputRequest NewEnqueueRequest(string text) => new()
+        {
+            TargetQueueId = this.queueId,
+            Messages = [new ChatMessage(ChatRole.User, text)],
+            CommandId = Guid.NewGuid(),
+            ExpectedRevision = this.Snapshot.Revision,
+        };
+
+        public Task<AgentInputQueueCommandResult> CreateQueueAsync(CreateAgentInputQueueRequest request, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<AgentInputQueueCommandResult> DeleteQueueAsync(DeleteAgentInputQueueRequest request, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<AgentInputQueueCommandResult> EditAsync(EditAgentInputQueueItemRequest request, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<AgentInputQueueCommandResult> RemoveAsync(RemoveAgentInputQueueItemRequest request, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<AgentInputQueueCommandResult> MoveAsync(MoveAgentInputQueueItemRequest request, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<AgentInputQueueCommandResult> ConfigureAsync(ConfigureAgentInputQueueRequest request, CancellationToken ct = default) => throw new NotSupportedException();
+        public AgentInputQueueCommandResult CreateQueue(CreateAgentInputQueueRequest request) => throw new NotSupportedException();
+        public AgentInputQueueCommandResult DeleteQueue(DeleteAgentInputQueueRequest request) => throw new NotSupportedException();
+        public AgentInputQueueCommandResult Edit(EditAgentInputQueueItemRequest request) => throw new NotSupportedException();
+        public AgentInputQueueCommandResult Remove(RemoveAgentInputQueueItemRequest request) => throw new NotSupportedException();
+        public AgentInputQueueCommandResult Move(MoveAgentInputQueueItemRequest request) => throw new NotSupportedException();
+        public AgentInputQueueCommandResult Configure(ConfigureAgentInputQueueRequest request) => throw new NotSupportedException();
+
+        public Task<AgentInputQueueCommandResult> EnqueueAsync(EnqueueAgentInputRequest request, CancellationToken ct = default)
+        {
+            if (request.ExpectedRevision != this.Snapshot.Revision)
+            {
+                return Task.FromResult(new AgentInputQueueCommandResult
+                {
+                    CommandId = request.CommandId,
+                    Status = AgentInputQueueCommandStatus.Conflict,
+                    Revision = this.Snapshot.Revision,
+                    CurrentSnapshot = this.Snapshot,
+                });
+            }
+
+            this.pendingCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            this.pendingCommandId = request.CommandId;
+            this.LastItemId = Guid.NewGuid().ToString("N");
+            return this.pendingCompletion.Task;
+        }
+
+        public AgentInputQueueCommandResult Enqueue(EnqueueAgentInputRequest request) => throw new NotSupportedException();
+
+        public void PublishAppliedButDoNotComplete(EnqueueAgentInputRequest request)
+        {
+            this.Apply(request);
+        }
+
+        public void CompleteApplied(EnqueueAgentInputRequest request)
+        {
+            this.Apply(request);
+            this.ReleaseCompletion();
+        }
+
+        public void ReleaseCompletion()
+        {
+            this.pendingCompletion?.TrySetResult(new AgentInputQueueCommandResult
+            {
+                CommandId = this.pendingCommandId,
+                Status = AgentInputQueueCommandStatus.Applied,
+                Revision = this.Snapshot.Revision,
+                ItemId = this.LastItemId,
+                CurrentSnapshot = this.Snapshot,
+            });
+        }
+
+        private void Apply(EnqueueAgentInputRequest request)
+        {
+            this.revision++;
+            this.Snapshot = this.CreateSnapshot(
+                [
+                    new AgentInputItemSnapshot
+                    {
+                        ItemId = this.LastItemId!,
+                        Messages = [.. request.Messages],
+                    },
+                ]);
+            this.queue.Update(this.Snapshot.Queues.Single());
+            this.Changed?.Invoke(this, EventArgs.Empty);
+        }
+
+        private AgentInputQueuesSnapshot CreateSnapshot(IEnumerable<AgentInputItemSnapshot> items) => new()
+        {
+            Revision = this.revision,
+            Queues =
+            [
+                new AgentInputQueueSnapshot
+                {
+                    QueueId = this.queueId,
+                    Name = "default",
+                    IsDefault = true,
+                    IsImmediate = false,
+                    Immediacy = AgentInputQueueImmediacy.Queue,
+                    Priority = 0,
+                    Revision = this.revision,
+                    Items = [.. items],
+                },
+            ],
+        };
+
+        private sealed class DeferredQueue(AgentInputQueueSnapshot snapshot) : IAgentInputQueue
+        {
+            public AgentInputQueueSnapshot Snapshot { get; private set; } = snapshot;
+            public event EventHandler? Changed;
+            public void Update(AgentInputQueueSnapshot snapshot)
+            {
+                this.Snapshot = snapshot;
+                this.Changed?.Invoke(this, EventArgs.Empty);
+            }
+        }
     }
 }

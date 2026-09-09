@@ -21,7 +21,7 @@ public sealed class RunningAgentChatTableTests
     private sealed class FakeRunningAgentChatFactory : IRunningAgentChatFactory
     {
         private readonly TaskScheduler _foregroundScheduler;
-        private readonly Dictionary<AgentSessionId, (int RefCount, RunningAgentChat Entry)> _sessions = new();
+        private readonly Dictionary<AgentSessionId, (int RefCount, RunningAgentChat Entry, AgentChat Chat)> _sessions = new();
 
         public ObservableCollection<RunningAgentChat> RunningSessions { get; } = new();
         public AgentDefinition? LastDefinition { get; private set; }
@@ -35,17 +35,20 @@ public sealed class RunningAgentChatTableTests
         public async Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, bool registerAsRunningAgent = true, CancellationToken ct = default)
         {
             bool isNew;
+            AgentChat chat;
             lock (_sessions)
             {
                 if (_sessions.TryGetValue(sessionId, out var existing))
                 {
-                    _sessions[sessionId] = (existing.RefCount + 1, existing.Entry);
+                    _sessions[sessionId] = (existing.RefCount + 1, existing.Entry, existing.Chat);
                     isNew = false;
+                    chat = existing.Chat;
                 }
                 else
                 {
                     var entry = new RunningAgentChat(sessionId, this);
-                    _sessions[sessionId] = (1, entry);
+                    chat = CreateTestChatAsync(LastDefinition ?? CreateTestAgentDefinition(), LastServices, ct).GetAwaiter().GetResult();
+                    _sessions[sessionId] = (1, entry, chat);
                     isNew = true;
                 }
             }
@@ -60,7 +63,7 @@ public sealed class RunningAgentChatTableTests
                     _foregroundScheduler);
             }
 
-            return new RunningAgentChatLease(sessionId, null!, () => RemoveRefAsync(sessionId));
+            return new RunningAgentChatLease(sessionId, chat, () => RemoveRefAsync(sessionId), localAgentChat: chat);
         }
 
         public Task<RunningAgentChatLease> CreateAsync(
@@ -102,10 +105,11 @@ public sealed class RunningAgentChatTableTests
                     _sessions.Remove(sessionId);
                     shouldRemove = true;
                     entryToRemove = existing.Entry;
+                    _ = existing.Chat.DisposeAsync();
                 }
                 else
                 {
-                    _sessions[sessionId] = (existing.RefCount - 1, existing.Entry);
+                    _sessions[sessionId] = (existing.RefCount - 1, existing.Entry, existing.Chat);
                     shouldRemove = false;
                     entryToRemove = null;
                 }
@@ -121,6 +125,25 @@ public sealed class RunningAgentChatTableTests
             }
         }
     }
+
+    private static AgentDefinition CreateTestAgentDefinition()
+        => AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            { "kind": "prompt", "name": "table-test-agent",
+              "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+              "tools": [] }
+            """);
+
+    private static Task<AgentChat> CreateTestChatAsync(
+        AgentDefinition definition,
+        AgentServices? services,
+        CancellationToken ct)
+        => AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest
+            {
+                AgentDefinition = definition,
+                AgentServices = services,
+            });
 
     private sealed class CapturingScheduler : TaskScheduler
     {
@@ -311,6 +334,9 @@ public sealed class RunningAgentChatTableTests
         var entry = Assert.Single(table.RunningSessions);
 
         Assert.True(entry.IsRemote);
+        Assert.IsType<RemoteAgentChatProxy>(lease.AgentChat);
+        Assert.NotSame(lease.AgentChat, lease.LocalAgentChat);
+        Assert.Equal(lease.LocalAgentChat.Information.AgentDefinition.ToJson(), lease.AgentChat.Information.AgentDefinition.ToJson());
         Assert.Same(transport, request.OwningProfileTransport);
         Assert.Same(cursor, request.ReplayCursor);
         Assert.Equal(AgentChatAcquisitionMode.AttachRemote, request.AcquisitionMode);
@@ -323,13 +349,36 @@ public sealed class RunningAgentChatTableTests
     {
         var factory = new FakeRunningAgentChatFactory();
         var table = new RunningAgentChatTable(factory);
-        var request = new AcquireAgentChatRequest
+        var entity = JsonDocument.Parse("""{"ownership-generation":2}""").RootElement.Clone();
+        var invalidRequests = new[]
         {
-            AgentSessionId = new AgentSessionId("invalid-remote"),
-            AcquisitionMode = AgentChatAcquisitionMode.AttachRemote,
+            new AcquireAgentChatRequest
+            {
+                AgentSessionId = new AgentSessionId("invalid-remote-no-transport"),
+                AcquisitionMode = AgentChatAcquisitionMode.AttachRemote,
+                AgentSessionEntity = entity,
+            },
+            new AcquireAgentChatRequest
+            {
+                AgentSessionId = new AgentSessionId("invalid-local-transport"),
+                AcquisitionMode = AgentChatAcquisitionMode.Local,
+                AgentSessionEntity = entity,
+                OwningProfileTransport = Mock.Of<ITransport>(),
+            },
+            new AcquireAgentChatRequest
+            {
+                AgentSessionId = new AgentSessionId("invalid-remote-owner"),
+                AcquisitionMode = AgentChatAcquisitionMode.AttachRemote,
+                AgentSessionEntity = JsonDocument.Parse("""{"host-profile-entity-id":"not-a-guid","ownership-generation":2}""").RootElement.Clone(),
+                OwningProfileTransport = Mock.Of<ITransport>(),
+            },
         };
 
-        await Assert.ThrowsAsync<ArgumentException>(() => table.AcquireAsync(request, TestContext.Current.CancellationToken));
+        foreach (var request in invalidRequests)
+        {
+            await Assert.ThrowsAsync<ArgumentException>(() => table.AcquireAsync(request, TestContext.Current.CancellationToken));
+        }
+
         Assert.Empty(factory.RunningSessions);
         Assert.Empty(table.RunningSessions);
     }
@@ -339,11 +388,12 @@ public sealed class RunningAgentChatTableTests
     {
         var factory = new FakeRunningAgentChatFactory();
         var table = new RunningAgentChatTable(factory, new FakeRuntimeContextFactory());
-        var localRequest = Request(new AgentSessionId("local-pair"), entityName: "Local");
+        var sessionId = new AgentSessionId("shared-pair");
+        var localRequest = Request(sessionId, entityName: "Shared");
         var remoteRequest = new AcquireAgentChatRequest
         {
-            AgentSessionId = new AgentSessionId("remote-pair"),
-            EntityName = "Remote",
+            AgentSessionId = sessionId,
+            EntityName = "Shared",
             AgentSessionEntity = JsonDocument.Parse(
                 """{"host-profile-entity-id":"11111111-1111-1111-1111-111111111111","ownership-generation":2}""").RootElement.Clone(),
             AcquisitionMode = AgentChatAcquisitionMode.AttachRemote,
@@ -351,18 +401,21 @@ public sealed class RunningAgentChatTableTests
         };
 
         var localFirst = await table.AcquireAsync(localRequest, TestContext.Current.CancellationToken);
-        var localSecond = await table.AcquireAsync(localRequest, TestContext.Current.CancellationToken);
         var remoteFirst = await table.AcquireAsync(remoteRequest, TestContext.Current.CancellationToken);
         var remoteSecond = await table.AcquireAsync(remoteRequest, TestContext.Current.CancellationToken);
-        Assert.Equal(2, table.RunningSessions.Single(entry => !entry.IsRemote).ViewerCount);
-        Assert.Equal(2, table.RunningSessions.Single(entry => entry.IsRemote).ViewerCount);
+        var entry = Assert.Single(table.RunningSessions);
+        Assert.Equal(3, entry.ViewerCount);
+        Assert.True(entry.IsRemote);
+        Assert.IsType<AgentChat>(localFirst.AgentChat);
+        Assert.IsType<RemoteAgentChatProxy>(remoteFirst.AgentChat);
+        Assert.IsType<RemoteAgentChatProxy>(remoteSecond.AgentChat);
 
         await localFirst.DisposeAsync();
         await remoteFirst.DisposeAsync();
-        Assert.Equal(2, table.RunningSessions.Count);
-        Assert.All(table.RunningSessions, entry => Assert.Equal(1, entry.ViewerCount));
+        Assert.Single(table.RunningSessions);
+        Assert.Equal(1, entry.ViewerCount);
+        Assert.True(entry.IsRemote);
 
-        await localSecond.DisposeAsync();
         await remoteSecond.DisposeAsync();
         Assert.Empty(table.RunningSessions);
     }

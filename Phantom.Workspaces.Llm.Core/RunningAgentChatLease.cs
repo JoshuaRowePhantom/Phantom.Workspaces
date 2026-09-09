@@ -6,6 +6,7 @@ public sealed class RunningAgentChatLease : IAsyncDisposable
 {
     private readonly Func<ValueTask> _onDispose;
     private readonly Func<ValueTask>? _afterDispose;
+    private readonly AgentChat? _localAgentChat;
     private int _disposed;
 
     public AgentSessionId SessionId { get; }
@@ -15,17 +16,19 @@ public sealed class RunningAgentChatLease : IAsyncDisposable
     /// <summary>
     /// Temporary local-engine compatibility accessor. New UI code consumes <see cref="AgentChat"/>.
     /// </summary>
-    public AgentChat LocalAgentChat { get; }
+    public AgentChat LocalAgentChat => this._localAgentChat
+        ?? throw new InvalidOperationException("This lease does not expose a local AgentChat instance.");
 
     internal RunningAgentChatLease(
         AgentSessionId sessionId,
-        AgentChat agentChat,
+        IAgentChat agentChat,
         Func<ValueTask> onDispose,
+        AgentChat? localAgentChat = null,
         Func<ValueTask>? afterDispose = null)
     {
         SessionId = sessionId;
         AgentChat = agentChat;
-        LocalAgentChat = agentChat;
+        this._localAgentChat = localAgentChat ?? agentChat as AgentChat;
         _onDispose = onDispose;
         _afterDispose = afterDispose;
     }

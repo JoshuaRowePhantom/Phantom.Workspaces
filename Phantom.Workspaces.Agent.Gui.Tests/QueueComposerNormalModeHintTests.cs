@@ -55,7 +55,10 @@ public sealed class QueueComposerNormalModeHintTests
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
 
         var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
-        var appendComposer = new QueueComposerViewModel(inputQueue, chat.DefaultInputQueue, isDefaultComposer: false);
+        var appendComposer = new QueueComposerViewModel(
+            inputQueue,
+            inputQueue.InputQueues[0].QueueId,
+            isDefaultComposer: false);
 
         appendComposer.IsFormattedMode = false;
 

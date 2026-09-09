@@ -26,6 +26,7 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
     private readonly IAgentSessionRuntimeContextFactory runtimeContextFactory;
     private readonly Dictionary<AgentSessionId, (string EntityName, string? EntityId, string? WorkspaceId)> _entityInfo = new();
     private readonly Dictionary<AgentSessionId, RunningAgentChatLease> _continueInBackgroundLeases = new();
+    private readonly Dictionary<AgentSessionId, int> _remoteViewerCounts = new();
     private readonly object _entityInfoLock = new();
     private readonly ObservableCollection<RunningAgentChatWithEntityInfo> _runningSessions = new();
 
@@ -87,15 +88,64 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
             ct: ct);
 
         var entry = this.FindEntry(sessionId);
-        entry?.SetIsRemote(request.AcquisitionMode != AgentChatAcquisitionMode.Local);
-        entry?.IncrementViewerCount();
+        var isRemote = request.AcquisitionMode != AgentChatAcquisitionMode.Local;
+        var viewerCount = 0;
+        if (entry is not null)
+        {
+            if (isRemote)
+            {
+                lock (_entityInfoLock)
+                {
+                    _remoteViewerCounts.TryGetValue(sessionId, out viewerCount);
+                    viewerCount++;
+                    _remoteViewerCounts[sessionId] = viewerCount;
+                }
+            }
+
+            entry.SetIsRemote(viewerCount > 0);
+            entry.IncrementViewerCount();
+        }
+
+        var remoteProxy = isRemote
+            ? RemoteAgentChatProxy.TryOpen(lease.LocalAgentChat, isAuthorized: true, out var proxy) ? proxy : null
+            : null;
         return new RunningAgentChatLease(
             lease.SessionId,
-            lease.LocalAgentChat,
+            remoteProxy is not null ? remoteProxy : lease.LocalAgentChat,
             onDispose: lease.DisposeAsync,
+            localAgentChat: lease.LocalAgentChat,
             afterDispose: () =>
             {
-                this.FindEntry(sessionId)?.DecrementViewerCount();
+                var disposedEntry = this.FindEntry(sessionId);
+                if (disposedEntry is not null)
+                {
+                    if (isRemote)
+                    {
+                        lock (_entityInfoLock)
+                        {
+                            if (_remoteViewerCounts.TryGetValue(sessionId, out var remaining) && remaining > 1)
+                            {
+                                _remoteViewerCounts[sessionId] = remaining - 1;
+                                remaining--;
+                            }
+                            else
+                            {
+                                _remoteViewerCounts.Remove(sessionId);
+                                remaining = 0;
+                            }
+
+                            disposedEntry.SetIsRemote(remaining > 0);
+                        }
+                    }
+
+                    disposedEntry.DecrementViewerCount();
+                }
+
+                if (remoteProxy is not null)
+                {
+                    return remoteProxy.DisposeAsync();
+                }
+
                 return ValueTask.CompletedTask;
             });
     }
@@ -216,6 +266,10 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                     if (_runningSessions[i].SessionId == removed.SessionId)
                     {
                         _runningSessions.RemoveAt(i);
+                        lock (_entityInfoLock)
+                        {
+                            _remoteViewerCounts.Remove(removed.SessionId);
+                        }
                         break;
                     }
                 }

@@ -57,7 +57,10 @@ public sealed class QueueComposerFormattedModeHintTests
         var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
 
         // Create a non-default (append-to-queue) composer directly.
-        var appendComposer = new QueueComposerViewModel(inputQueue, chat.DefaultInputQueue, isDefaultComposer: false);
+        var appendComposer = new QueueComposerViewModel(
+            inputQueue,
+            inputQueue.InputQueues[0].QueueId,
+            isDefaultComposer: false);
 
         appendComposer.IsFormattedMode = true;
 

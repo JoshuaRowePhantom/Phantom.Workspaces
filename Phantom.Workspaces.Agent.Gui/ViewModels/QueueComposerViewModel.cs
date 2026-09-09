@@ -59,21 +59,6 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
         this.SetImmediacyCommand = new RelayCommand<QueueImmediacyOption>(this.SetQueueImmediacy);
     }
 
-    public QueueComposerViewModel(
-        InputQueueViewModel parent,
-        AgentChatQueue targetQueue,
-        bool isDefaultComposer)
-        : this(
-            parent,
-            targetQueue.IsDefault
-                ? parent.DefaultQueueId
-                : targetQueue.IsImmediate
-                    ? parent.InputQueues.First(static queue => queue.IsImmediate).QueueId
-                    : parent.InputQueues.First(queue => string.Equals(queue.Name, targetQueue.Name, StringComparison.Ordinal)).QueueId,
-            isDefaultComposer)
-    {
-    }
-
     public event EventHandler? FocusPrimaryControlRequested;
 
     public void RequestFocusPrimaryControl() =>

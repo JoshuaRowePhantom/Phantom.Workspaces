@@ -1,9 +1,12 @@
 using System.Collections.Immutable;
+using System.Collections.ObjectModel;
 using System.Reflection;
 using System.Text.Json;
 using System.Threading;
 using AgentSchema;
 using Microsoft.Extensions.AI;
+using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.SlashCommands;
 
 namespace Phantom.Workspaces.Llm.Tests;
 
@@ -15,6 +18,14 @@ namespace Phantom.Workspaces.Llm.Tests;
 /// </summary>
 public sealed class AgentInputQueuesRetryTests
 {
+    private static Task<AgentChat> CreateChatAsync(AgentDefinition? definition = null)
+        => AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest
+            {
+                AgentDefinition = definition ?? TestDefinitions.Make(),
+                AgentServices = new AgentServices { ChatClientOverride = new DeterministicTestChatClient() },
+            });
+
     private static (AgentInputQueueManager Manager, AgentInputQueue Default, LocalAgentInputQueuesAdapter Adapter) NewAdapter()
     {
         var manager = new AgentInputQueueManager();
@@ -65,7 +76,7 @@ public sealed class AgentInputQueuesRetryTests
             Revision = -1,
             Queues = ImmutableArray<AgentInputQueueSnapshot>.Empty,
         };
-        Assert.Throws<ArgumentException>(() => AgentInputQueueSnapshotValidator.Validate(invalidRevision()));
+        Assert.Throws<ArgumentException>(() => RemoteAgentChatProxy.RoundTripSnapshotForTransport(invalidRevision()));
         // Duplicate queue ids are structurally detectable.
         var q = new AgentInputQueueSnapshot
         {
@@ -83,7 +94,7 @@ public sealed class AgentInputQueuesRetryTests
             Revision = 1,
             Queues = ImmutableArray.Create(q, q),
         };
-        Assert.Throws<ArgumentException>(() => AgentInputQueueSnapshotValidator.Validate(dup));
+        Assert.Throws<ArgumentException>(() => RemoteAgentChatProxy.RoundTripSnapshotForTransport(dup));
     }
 
     [Fact]
@@ -100,7 +111,7 @@ public sealed class AgentInputQueuesRetryTests
             Revision = -1,
             Items = ImmutableArray<AgentInputItemSnapshot>.Empty,
         };
-        Assert.Throws<ArgumentException>(() => AgentInputQueueSnapshotValidator.Validate(new AgentInputQueuesSnapshot
+        Assert.Throws<ArgumentException>(() => RemoteAgentChatProxy.RoundTripSnapshotForTransport(new AgentInputQueuesSnapshot
         {
             Revision = 0,
             Queues = [invalidRole],
@@ -115,7 +126,7 @@ public sealed class AgentInputQueuesRetryTests
             ItemId = "",
             Messages = ImmutableArray<ChatMessage>.Empty,
         };
-        Assert.Throws<ArgumentException>(() => AgentInputQueueSnapshotValidator.Validate(new AgentInputQueuesSnapshot
+        Assert.Throws<ArgumentException>(() => RemoteAgentChatProxy.RoundTripSnapshotForTransport(new AgentInputQueuesSnapshot
         {
             Revision = 0,
             Queues =
@@ -647,78 +658,61 @@ public sealed class AgentInputQueuesRetryTests
     }
 
     [Fact]
-    public void AgentInformation_AuthorizedPeer_RoundTripsCompleteDefinition()
+    public async Task AgentInformation_AuthorizedPeer_RoundTripsCompleteDefinition()
     {
-        var def = TestDefinitions.Make();
-        var info = new AgentInformation
-        {
-            AgentSessionId = "s", AgentId = "a", Name = "n", DisplayName = "d", Description = "e",
-            AcceptsUserInput = true, AgentDefinition = def,
-        };
-        Assert.True(AgentInformationOpenPublisher.TryCreatePayload(true, () => info, out var payload));
-        var received = AgentInformationOpenPublisher.ReadPayload(payload!);
-
-        Assert.Equal(info.AgentSessionId, received.AgentSessionId);
-        Assert.Equal(info.AgentId, received.AgentId);
-        Assert.Equal(info.Name, received.Name);
-        Assert.Equal(info.DisplayName, received.DisplayName);
-        Assert.Equal(info.Description, received.Description);
-        Assert.Equal(info.AcceptsUserInput, received.AcceptsUserInput);
-        Assert.Equal(info.AgentDefinition.ToJson(), received.AgentDefinition.ToJson());
+        await using var chat = await CreateChatAsync();
+        Assert.True(RemoteAgentChatProxy.TryOpen(chat, isAuthorized: true, out var remote));
+        Assert.NotNull(remote);
+        Assert.Equal(chat.Information.AgentSessionId, remote!.Information.AgentSessionId);
+        Assert.Equal(chat.Information.AgentId, remote.Information.AgentId);
+        Assert.Equal(chat.Information.CurrentModelId, remote.Information.CurrentModelId);
+        Assert.NotSame(chat.Information.AgentDefinition, remote.Information.AgentDefinition);
+        Assert.Equal(chat.Information.AgentDefinition.ToJson(), remote.Information.AgentDefinition.ToJson());
     }
 
     [Fact]
-    public void SessionSnapshot_TwoAuthorizedViewers_ReceiveEquivalentFullDefinition()
+    public async Task SessionSnapshot_TwoAuthorizedViewers_ReceiveEquivalentFullDefinition()
     {
-        var def = TestDefinitions.Make();
-        var information = new AgentInformation
-        {
-            AgentSessionId = "s", AgentId = "a", Name = "n", DisplayName = "d", Description = "e",
-            AcceptsUserInput = true, AgentDefinition = def,
-        };
-        Assert.True(AgentInformationOpenPublisher.TryCreatePayload(true, () => information, out var firstPayload));
-        Assert.True(AgentInformationOpenPublisher.TryCreatePayload(true, () => information, out var secondPayload));
-        var first = AgentInformationOpenPublisher.ReadPayload(firstPayload!);
-        var second = AgentInformationOpenPublisher.ReadPayload(secondPayload!);
+        await using var chat = await CreateChatAsync();
+        Assert.True(RemoteAgentChatProxy.TryOpen(chat, isAuthorized: true, out var first));
+        Assert.True(RemoteAgentChatProxy.TryOpen(chat, isAuthorized: true, out var second));
 
-        Assert.Equal(first.AgentSessionId, second.AgentSessionId);
-        Assert.Equal(first.DisplayName, second.DisplayName);
-        Assert.NotSame(first.AgentDefinition, second.AgentDefinition);
-        Assert.Equal(def.ToJson(), first.AgentDefinition.ToJson());
-        Assert.Equal(def.ToJson(), second.AgentDefinition.ToJson());
+        Assert.Equal(first!.Information.AgentSessionId, second!.Information.AgentSessionId);
+        Assert.Equal(first.Information.DisplayName, second.Information.DisplayName);
+        Assert.NotSame(first.Information.AgentDefinition, second.Information.AgentDefinition);
+        Assert.Equal(chat.Information.AgentDefinition.ToJson(), first.Information.AgentDefinition.ToJson());
+        Assert.Equal(chat.Information.AgentDefinition.ToJson(), second.Information.AgentDefinition.ToJson());
     }
 
     [Fact]
-    public void OpenAsync_UnauthorizedPeer_SerializesNoSessionMetadata()
+    public async Task OpenAsync_UnauthorizedPeer_SerializesNoSessionMetadata()
     {
-        var informationAccessed = false;
-        var authorized = AgentInformationOpenPublisher.TryCreatePayload(
-            false,
-            () =>
-            {
-                informationAccessed = true;
-                throw new InvalidOperationException("Unauthorized open must not perform runtime lookup.");
-            },
-            out var payload);
-
-        Assert.False(authorized);
-        Assert.False(informationAccessed);
-        Assert.Null(payload);
+        await using var chat = new UnauthorizedOpenProbeChat();
+        Assert.False(RemoteAgentChatProxy.TryOpen(chat, isAuthorized: false, out var remote));
+        Assert.True(chat.WasDisposed == false);
+        Assert.Null(remote);
+        Assert.False(chat.InformationWasRead);
     }
 
     [Fact]
-    public void InformationChanged_SessionAndModelChange_StateVisibleBeforeSingleEvent()
+    public async Task InformationChanged_SessionAndModelChange_StateVisibleBeforeSingleEvent()
     {
-        var def = TestDefinitions.Make();
-        var a = new AgentInformation
+        await using var chat = await CreateChatAsync();
+        Assert.True(RemoteAgentChatProxy.TryOpen(chat, isAuthorized: true, out var remote));
+        var raised = 0;
+        AgentInformation observed = default;
+        remote!.InformationChanged += (_, _) =>
         {
-            AgentSessionId = "s1", AgentId = "a", Name = "n", DisplayName = "d", Description = "e",
-            AcceptsUserInput = true, CurrentModelId = "m1", AgentDefinition = def,
+            raised++;
+            observed = remote.Information;
         };
-        var b = a with { AgentSessionId = "s2", CurrentModelId = "m2" };
-        Assert.NotEqual(a, b);
-        Assert.Equal("s2", b.AgentSessionId);
-        Assert.Equal("m2", b.CurrentModelId);
+
+        Assert.True(chat.TryPublishInformation(chat.Information with { AgentSessionId = "s2", CurrentModelId = "m2" }));
+
+        Assert.Equal(1, raised);
+        Assert.Equal("s2", observed.AgentSessionId);
+        Assert.Equal("m2", observed.CurrentModelId);
+        Assert.Equal(observed, remote.Information);
     }
 
     private static class TestDefinitions
@@ -732,4 +726,47 @@ public sealed class AgentInputQueuesRetryTests
             }
             """);
     }
+
+#pragma warning disable CS0067
+    private sealed class UnauthorizedOpenProbeChat : IAgentChat
+    {
+        public bool InformationWasRead { get; private set; }
+        public bool WasDisposed { get; private set; }
+        public AgentInformation Information
+        {
+            get
+            {
+                this.InformationWasRead = true;
+                throw new InvalidOperationException("Unauthorized open must not inspect information.");
+            }
+        }
+
+        public Usage Usage => default;
+        public bool IsBusy => false;
+        public AgentChatHistoryCollection History { get; } = new();
+        public Task HistoryPopulated => Task.CompletedTask;
+        public AgentChatRunningItemCollection RunningItems { get; } = new();
+        public IAgentInputQueues InputQueues { get; } = new LocalAgentInputQueuesAdapter(new AgentInputQueueManager(), new AgentInputQueue(new AgentInputQueue.Parameters { Priority = 0, Immediacy = AgentInputQueueImmediacy.Immediate }));
+        public ReadOnlyObservableCollection<IRunningSubAgent> SubAgents { get; } = new(new System.Collections.ObjectModel.ObservableCollection<IRunningSubAgent>());
+        public ReadOnlyObservableCollection<AgentChatModal> Modals { get; } = new(new System.Collections.ObjectModel.ObservableCollection<AgentChatModal>());
+        public ISlashCommandRegistry SlashCommands { get; } = new SlashCommandRegistry();
+        public event EventHandler? InformationChanged;
+        public event EventHandler? ToolsChanged;
+        public event EventHandler? UsageChanged;
+        public event EventHandler<AgentChatHistoryItem>? TurnCompleted;
+        public IReadOnlyList<AgentChatToolItem> GetToolSnapshot() => [];
+        public Task SetToolEnabledAsync(string toolId, bool enabled, CancellationToken ct = default) => Task.CompletedTask;
+        public Task RespondToModalAsync(string modalId, JsonElement response, CancellationToken ct = default) => Task.CompletedTask;
+        public void EnqueueSystemNote(string text) { }
+        public void EnqueueHelpNote(string text) { }
+        public void EnqueueTransientDiagnostic(string text) { }
+        public void Interrupt() { }
+        public object? GetService(Type serviceType) => null;
+        public ValueTask DisposeAsync()
+        {
+            this.WasDisposed = true;
+            return ValueTask.CompletedTask;
+        }
+    }
+#pragma warning restore CS0067
 }

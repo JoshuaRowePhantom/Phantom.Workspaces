@@ -44,6 +44,23 @@ public sealed class AgentChatRetryTests
         return new AgentChatFactory(store, services, this.foregroundScheduler);
     }
 
+    private async Task<(AgentChatFactory Factory, DeterministicTestChatClient Client)> NewFactoryWithClientAsync(AgentSessionId sessionId)
+    {
+        var store = new InMemoryAgentPersistenceStore();
+        var def = EchoDef;
+        await store.StoreAsync(new StoreRequestAgent
+        {
+            Agent = new PersistedAgent
+            {
+                AgentSessionId = sessionId.Value!,
+                AgentDefinitionJson = BsonDocument.Parse(def.ToJson()),
+            }
+        });
+        var client = new DeterministicTestChatClient();
+        var services = new AgentServices { ChatClientOverride = client };
+        return (new AgentChatFactory(store, services, this.foregroundScheduler), client);
+    }
+
     [Fact]
     public async Task Information_LocalChat_ReturnsAtomicAgentInformation()
     {
@@ -60,12 +77,11 @@ public sealed class AgentChatRetryTests
             observed = chat.Information;
         };
 
-        typeof(AgentChat).GetProperty(nameof(AgentChat.DisplayName))!.SetValue(chat, "replacement");
-        typeof(AgentChat).GetMethod("PublishInformation", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(chat, null);
+        chat.SetAgentSessionId("replacement-session");
 
         Assert.Equal(1, raised);
         Assert.NotEqual(before, observed);
-        Assert.Equal("replacement", observed.DisplayName);
+        Assert.Equal("replacement-session", observed.AgentSessionId);
         Assert.Equal(observed, chat.Information);
     }
 
@@ -73,28 +89,34 @@ public sealed class AgentChatRetryTests
     public async Task Usage_LocalChat_ReturnsAtomicUsage()
     {
         var sessionId = new AgentSessionId("retry-usage-1");
-        await using var factory = await NewFactoryAsync(sessionId);
+        var (factory, client) = await NewFactoryWithClientAsync(sessionId);
+        await using var _ = factory;
         await using var lease = await factory.CreateAsync(EchoDef, sessionId);
         var chat = (AgentChat)lease.AgentChat;
         await chat.Initialization;
         var raised = 0;
         Usage? observedAtEvent = null;
+        var published = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         chat.UsageChanged += (_, _) =>
         {
             raised++;
             observedAtEvent = chat.Usage;
+            published.TrySetResult();
         };
-        // Publish a Usage delta via the same private path the streaming pipeline uses.
-        var update = new AgentResponseUpdate
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate
         {
-            Contents = new List<AIContent>
-            {
+            Role = ChatRole.Assistant,
+            Contents =
+            [
+                new TextContent("usage"),
                 new UsageContent(new Microsoft.Extensions.AI.UsageDetails { InputTokenCount = 42, OutputTokenCount = 7 }),
-            },
-        };
-        typeof(AgentChat)
-            .GetMethod("AccumulateUsage", BindingFlags.NonPublic | BindingFlags.Instance)!
-            .Invoke(chat, new object[] { update });
+            ],
+            FinishReason = ChatFinishReason.Stop,
+        });
+        stream.Complete();
+        chat.EnqueueUserMessage("count tokens");
+        await published.Task.WaitAsync(CancellationToken.None);
         Assert.Equal(1, raised);
         Assert.NotNull(observedAtEvent);
         Assert.Equal(42, observedAtEvent!.Value.TotalInputTokenCount);
@@ -105,24 +127,29 @@ public sealed class AgentChatRetryTests
     public async Task UsagePublisher_NegativeMetric_RejectsThroughChatPublication()
     {
         var sessionId = new AgentSessionId("retry-usage-invalid");
-        await using var factory = await NewFactoryAsync(sessionId);
+        var (factory, client) = await NewFactoryWithClientAsync(sessionId);
+        await using var _ = factory;
         await using var lease = await factory.CreateAsync(EchoDef, sessionId);
         var chat = (AgentChat)lease.AgentChat;
         await chat.Initialization;
         var before = chat.Usage;
         var raised = 0;
+        var turnCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         chat.UsageChanged += (_, _) => raised++;
-        var update = new AgentResponseUpdate
+        chat.TurnCompleted += (_, _) => turnCompleted.TrySetResult();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate
         {
+            Role = ChatRole.Assistant,
             Contents =
             [
                 new UsageContent(new Microsoft.Extensions.AI.UsageDetails { InputTokenCount = -1 }),
             ],
-        };
-
-        typeof(AgentChat)
-            .GetMethod("AccumulateUsage", BindingFlags.NonPublic | BindingFlags.Instance)!
-            .Invoke(chat, [update]);
+            FinishReason = ChatFinishReason.Stop,
+        });
+        stream.Complete();
+        chat.EnqueueUserMessage("invalid usage");
+        await turnCompleted.Task.WaitAsync(CancellationToken.None);
 
         Assert.Equal(before, chat.Usage);
         Assert.Equal(0, raised);
@@ -144,13 +171,10 @@ public sealed class AgentChatRetryTests
         };
         var raised = 0;
         chat.InformationChanged += (_, _) => raised++;
-        var publish = typeof(AgentChat).GetMethod(
-            "TryPublishInformation",
-            BindingFlags.NonPublic | BindingFlags.Instance)!;
 
         foreach (var candidate in invalidCandidates)
         {
-            publish.Invoke(chat, [candidate]);
+            Assert.False(chat.TryPublishInformation(candidate));
         }
 
         Assert.Equal(before, chat.Information);

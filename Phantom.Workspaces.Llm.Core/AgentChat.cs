@@ -2340,7 +2340,7 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
         }
     }
 
-    private void AccumulateUsage(AgentResponseUpdate update)
+    internal void AccumulateUsage(AgentResponseUpdate update)
     {
         var inputTokenCountToAdd = 0L;
         var outputTokenCountToAdd = 0L;
@@ -2468,7 +2468,7 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
         }
     }
 
-    private void PublishInformation()
+    internal void PublishInformation()
     {
         if (this.agentDefinition is null)
         {
@@ -2502,15 +2502,16 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
         this.TryPublishInformation(candidate);
     }
 
-    private void TryPublishInformation(AgentInformation candidate)
+    internal bool TryPublishInformation(AgentInformation candidate)
     {
         if (!AgentInformationPublisher.TryValidate(candidate, out _))
         {
-            return;
+            return false;
         }
 
         this.information = candidate;
         this.InformationChanged?.Invoke(this, EventArgs.Empty);
+        return true;
     }
 
     /// <summary>

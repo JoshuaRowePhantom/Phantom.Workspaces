@@ -1,4 +1,3 @@
-using System.Collections.Immutable;
 using System.Collections.ObjectModel;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
@@ -15,18 +14,27 @@ public sealed class RemoteAgentChatProxy : IAgentChat
 {
     private readonly IAgentChat source;
     private readonly RemoteAgentInputQueuesProxy inputQueues;
+    private readonly SlashCommandRegistry slashCommands = new();
+    private AgentInformation information;
 
     public RemoteAgentChatProxy(IAgentChat source)
+        : this(source, CloneAuthorizedInformation(source))
+    {
+    }
+
+    internal RemoteAgentChatProxy(IAgentChat source, AgentInformation information)
     {
         this.source = source ?? throw new ArgumentNullException(nameof(source));
         this.inputQueues = new RemoteAgentInputQueuesProxy(source.InputQueues);
+        this.information = Clone(information);
+        this.slashCommands.Register(new FilteredSourceSlashCommandRegistry(source.SlashCommands));
         source.InformationChanged += this.ForwardInformationChanged;
         source.ToolsChanged += this.ForwardToolsChanged;
         source.UsageChanged += this.ForwardUsageChanged;
         source.TurnCompleted += this.ForwardTurnCompleted;
     }
 
-    public AgentInformation Information => Clone(this.source.Information);
+    public AgentInformation Information => Clone(this.information);
     public Usage Usage => this.source.Usage;
     public bool IsBusy => this.source.IsBusy;
     public AgentChatHistoryCollection History => this.source.History;
@@ -35,7 +43,7 @@ public sealed class RemoteAgentChatProxy : IAgentChat
     public IAgentInputQueues InputQueues => this.inputQueues;
     public ReadOnlyObservableCollection<IRunningSubAgent> SubAgents => this.source.SubAgents;
     public ReadOnlyObservableCollection<AgentChatModal> Modals => this.source.Modals;
-    public ISlashCommandRegistry SlashCommands => this.source.SlashCommands;
+    public ISlashCommandRegistry SlashCommands => this.slashCommands;
 
     public event EventHandler? InformationChanged;
     public event EventHandler? ToolsChanged;
@@ -43,6 +51,25 @@ public sealed class RemoteAgentChatProxy : IAgentChat
     public event EventHandler<AgentChatHistoryItem>? TurnCompleted;
 
     public IReadOnlyList<AgentChatToolItem> GetToolSnapshot() => this.source.GetToolSnapshot();
+
+    internal static bool TryOpen(IAgentChat source, bool isAuthorized, out RemoteAgentChatProxy? proxy)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (!AgentInformationOpenPublisher.TryCreatePayload(isAuthorized, () => source.Information, out var payload))
+        {
+            proxy = null;
+            return false;
+        }
+
+        proxy = new RemoteAgentChatProxy(source, AgentInformationOpenPublisher.ReadPayload(payload!));
+        return true;
+    }
+
+    internal static AgentInputQueuesSnapshot RoundTripSnapshotForTransport(AgentInputQueuesSnapshot snapshot)
+        => RemoteAgentInputQueuesProxy.CloneSnapshot(snapshot);
+
+    internal static AgentInputQueueSnapshot RoundTripQueueSnapshotForTransport(AgentInputQueueSnapshot snapshot)
+        => RemoteAgentInputQueueProxy.CloneSnapshot(snapshot);
 
     public Task SetToolEnabledAsync(string toolId, bool enabled, CancellationToken ct = default)
         => this.source.SetToolEnabledAsync(toolId, enabled, ct);
@@ -66,6 +93,12 @@ public sealed class RemoteAgentChatProxy : IAgentChat
         return ValueTask.CompletedTask;
     }
 
+    private static AgentInformation CloneAuthorizedInformation(IAgentChat source)
+    {
+        _ = AgentInformationOpenPublisher.TryCreatePayload(isAuthorized: true, () => source.Information, out var payload);
+        return AgentInformationOpenPublisher.ReadPayload(payload!);
+    }
+
     private static AgentInformation Clone(AgentInformation information)
         => new()
         {
@@ -80,7 +113,10 @@ public sealed class RemoteAgentChatProxy : IAgentChat
         };
 
     private void ForwardInformationChanged(object? sender, EventArgs e)
-        => this.InformationChanged?.Invoke(this, EventArgs.Empty);
+    {
+        this.information = CloneAuthorizedInformation(this.source);
+        this.InformationChanged?.Invoke(this, EventArgs.Empty);
+    }
 
     private void ForwardToolsChanged(object? sender, EventArgs e)
         => this.ToolsChanged?.Invoke(this, EventArgs.Empty);
@@ -216,7 +252,7 @@ public sealed class RemoteAgentChatProxy : IAgentChat
             }
         }
 
-        private static AgentInputQueuesSnapshot CloneSnapshot(AgentInputQueuesSnapshot snapshot)
+        internal static AgentInputQueuesSnapshot CloneSnapshot(AgentInputQueuesSnapshot snapshot)
         {
             AgentInputQueueSnapshotValidator.Validate(snapshot);
             var json = JsonSerializer.Serialize(snapshot, AIJsonUtilities.DefaultOptions);
@@ -251,10 +287,20 @@ public sealed class RemoteAgentChatProxy : IAgentChat
         public void Dispose()
             => this.source.Changed -= this.OnChanged;
 
-        private static AgentInputQueueSnapshot CloneSnapshot(AgentInputQueueSnapshot snapshot)
+        internal static AgentInputQueueSnapshot CloneSnapshot(AgentInputQueueSnapshot snapshot)
         {
             var json = JsonSerializer.Serialize(snapshot, AIJsonUtilities.DefaultOptions);
             return JsonSerializer.Deserialize<AgentInputQueueSnapshot>(json, AIJsonUtilities.DefaultOptions);
         }
+    }
+
+    private sealed class FilteredSourceSlashCommandRegistry(ISlashCommandRegistry source) : ISlashCommandRegistry
+    {
+        public void Register(ISlashCommandHandler handler) => throw new NotSupportedException();
+
+        public void Register(ISlashCommandRegistry registry) => throw new NotSupportedException();
+
+        public IEnumerable<ISlashCommandHandler> Commands =>
+            source.Commands.Where(static handler => handler is HelpSlashCommandHandler);
     }
 }
