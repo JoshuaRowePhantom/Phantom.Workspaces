@@ -40,7 +40,8 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
         WorkspaceEntitySession workspaceEntitySession,
         IReadOnlyList<ReverseHttpClientTransportFactory>? hubFactories = null,
         AgentServices? agentServices = null,
-        TransportFactoryRegistryProvider? registryProvider = null)
+        TransportFactoryRegistryProvider? registryProvider = null,
+        ITransportListener? agentSessionTransportListener = null)
     {
         ArgumentNullException.ThrowIfNull(dataAccessLayer);
         ArgumentNullException.ThrowIfNull(workspaceEntitySession);
@@ -87,6 +88,10 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
         // ICopilotClient here and bridging only its SDK session back over the channel. This is
         // distinct from ChatClientTransportListener above, which remotes the whole AgentChat.
         this.LocalListeners.Register(new Phantom.Workspaces.Llm.Core.Transport.Chat.CopilotClientTransportListener(agentServices));
+        if (agentSessionTransportListener is not null)
+        {
+            this.LocalListeners.Register(agentSessionTransportListener);
+        }
 
         var registry = new TransportFactoryRegistry();
         this.localTransportFactory = new LocalTransportFactory(this.LocalListeners);

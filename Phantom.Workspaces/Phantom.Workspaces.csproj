@@ -138,5 +138,6 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Phantom.Workspaces.Tests" />
     <InternalsVisibleTo Include="Phantom.Workspaces.Tools.Tests" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
   </ItemGroup>
 </Project>

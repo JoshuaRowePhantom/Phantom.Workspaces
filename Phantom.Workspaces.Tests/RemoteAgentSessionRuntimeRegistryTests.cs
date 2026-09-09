@@ -1,0 +1,210 @@
+using System.Text.Json;
+using System.Threading.Channels;
+using System.Collections.ObjectModel;
+using Microsoft.Extensions.Time.Testing;
+using Moq;
+using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Core.Manifest;
+using Phantom.Workspaces.Llm.Remote;
+using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Services.AgentSessions;
+using Phantom.Workspaces.Transport;
+
+namespace Phantom.Workspaces.Tests;
+
+public sealed class RemoteAgentSessionRuntimeRegistryTests
+{
+    [Fact]
+    public async Task GetOrStartAsync_ConcurrentCallers_StartsFactoryOnce()
+    {
+        await using var registry = new RemoteAgentSessionRuntimeRegistry(TimeProvider.System);
+        var ready = new TaskCompletionSource<RemoteAgentSessionLease>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        Task<RemoteAgentSessionLease> Start(CancellationToken _) { Interlocked.Increment(ref calls); return ready.Task; }
+
+        var first = registry.GetOrStartAsync(Intent(), Start, TestContext.Current.CancellationToken).AsTask();
+        var second = registry.GetOrStartAsync(Intent(), Start, TestContext.Current.CancellationToken).AsTask();
+        var lease = Lease(background: true);
+        ready.SetResult(lease);
+
+        Assert.Same(await first, await second);
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public async Task GetOrStartAsync_CancelledFactory_RemovesFailedEntry()
+    {
+        await using var registry = new RemoteAgentSessionRuntimeRegistry(TimeProvider.System);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            registry.GetOrStartAsync(Intent(), _ => Task.FromCanceled<RemoteAgentSessionLease>(new(true)),
+                TestContext.Current.CancellationToken).AsTask());
+        var lease = Lease(background: true);
+        Assert.Same(lease, await registry.GetOrStartAsync(
+            Intent(), _ => Task.FromResult(lease), TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task TryGetAsync_WrongGeneration_ReturnsNull()
+    {
+        await using var registry = new RemoteAgentSessionRuntimeRegistry(TimeProvider.System);
+        var lease = Lease(background: true);
+        await registry.GetOrStartAsync(Intent(), _ => Task.FromResult(lease), TestContext.Current.CancellationToken);
+        Assert.Null(await registry.TryGetAsync("session", 2, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task TryTerminateAsync_StaleEpoch_ReturnsFalse()
+    {
+        await using var registry = new RemoteAgentSessionRuntimeRegistry(TimeProvider.System);
+        var lease = Lease(background: true);
+        await registry.GetOrStartAsync(Intent(), _ => Task.FromResult(lease), TestContext.Current.CancellationToken);
+        Assert.False(await registry.TryTerminateAsync(new TerminateAgentSessionRuntimeRequest
+        {
+            SessionId = "session", OwnershipGeneration = 1, Epoch = Epoch(),
+        }, TestContext.Current.CancellationToken));
+        Assert.False(lease.IsFenced);
+    }
+
+    [Fact]
+    public async Task TryTerminateAsync_ExactEpoch_FencesThenDisposesOnce()
+    {
+        await using var registry = new RemoteAgentSessionRuntimeRegistry(TimeProvider.System);
+        var chat = Chat();
+        var lease = Lease(background: true, chat: chat.Object);
+        await registry.GetOrStartAsync(Intent(), _ => Task.FromResult(lease), TestContext.Current.CancellationToken);
+        Assert.True(await registry.TryTerminateAsync(new TerminateAgentSessionRuntimeRequest
+        {
+            SessionId = "session", OwnershipGeneration = 1, Epoch = lease.Epoch,
+        }, TestContext.Current.CancellationToken));
+        Assert.True(lease.IsFenced);
+        chat.Verify(value => value.DisposeAsync(), Times.Once);
+    }
+
+    [Fact]
+    public async Task Attach_MultipleViewers_UsesIndependentAttachmentLeases()
+    {
+        await using var lease = Lease(background: true);
+        await using var first = lease.Attach(Attach("a"));
+        await using var second = lease.Attach(Attach("b"));
+        Assert.Equal(2, lease.ViewerCount);
+        await first.DisposeAsync();
+        Assert.Equal(1, lease.ViewerCount);
+        Assert.False(lease.IsFenced);
+    }
+
+    [Fact]
+    public async Task AttachmentDispose_LastViewer_DefaultPolicy_DisposesRuntime()
+    {
+        var terminal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var lease = Lease(background: false, persistTerminal: _ => { terminal.SetResult(); return ValueTask.CompletedTask; });
+        var attachment = lease.Attach(Attach("a"));
+        await attachment.DisposeAsync();
+        await terminal.Task;
+        Assert.True(lease.IsFenced);
+    }
+
+    [Fact]
+    public async Task AttachmentDispose_LastViewer_BackgroundEnabled_PreservesRuntime()
+    {
+        await using var lease = Lease(background: true);
+        var attachment = lease.Attach(Attach("a"));
+        await attachment.DisposeAsync();
+        Assert.Equal(0, lease.ViewerCount);
+        Assert.False(lease.IsFenced);
+    }
+
+    [Fact]
+    public async Task TransportLoss_ReconnectWithinFiveSeconds_ReusesAttachmentAndEpoch()
+    {
+        var time = new FakeTimeProvider();
+        await using var lease = Lease(background: false, time: time);
+        var first = lease.Attach(Attach("a"));
+        await first.MarkTransportLostAsync();
+        time.Advance(TimeSpan.FromSeconds(4));
+        await using var reconnected = lease.Attach(Attach("a"));
+        Assert.Equal(1, lease.ViewerCount);
+        Assert.False(lease.IsFenced);
+    }
+
+    [Fact]
+    public async Task TransportLoss_GraceExpiresAsLastViewer_DefaultPolicy_DisposesRuntimeAndChildren()
+    {
+        var time = new FakeTimeProvider();
+        var terminal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var lease = Lease(false, time: time, persistTerminal: _ => { terminal.TrySetResult(); return ValueTask.CompletedTask; });
+        var attachment = lease.Attach(Attach("a"));
+        await attachment.MarkTransportLostAsync();
+        time.Advance(TimeSpan.FromSeconds(5));
+        await terminal.Task;
+        Assert.True(lease.IsFenced);
+    }
+
+    [Fact]
+    public async Task SetContinueInBackground_FalseAtZeroViewers_StopsImmediately()
+    {
+        var terminal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var lease = Lease(true, persistTerminal: _ => { terminal.SetResult(); return ValueTask.CompletedTask; });
+        await lease.SetContinueInBackgroundAsync(false, TestContext.Current.CancellationToken);
+        await terminal.Task;
+        Assert.True(lease.IsFenced);
+    }
+
+    [Fact]
+    public async Task SetContinueInBackground_TrueWithViewers_PersistsWithoutStopping()
+    {
+        var persisted = false;
+        await using var lease = Lease(false, persistRetention: (value, _) => { persisted = value; return ValueTask.CompletedTask; });
+        await using var attachment = lease.Attach(Attach("a"));
+        await lease.SetContinueInBackgroundAsync(true, TestContext.Current.CancellationToken);
+        Assert.True(persisted);
+        Assert.False(lease.IsFenced);
+    }
+
+    private static PersistedAgentSessionRuntimeIntent Intent() => new()
+    {
+        AgentSessionId = "session",
+        OwningProfileEntityId = "11111111-1111-1111-1111-111111111111",
+        OwnershipGeneration = 1,
+        ExecutorBindings = new ExecutorBindings
+        {
+            SessionExecutor = JsonDocument.Parse("""{"type":"local"}""").RootElement.Clone(),
+        },
+    };
+
+    private static RemoteAgentSessionLease Lease(
+        bool background,
+        IAgentChat? chat = null,
+        TimeProvider? time = null,
+        Func<bool, CancellationToken, ValueTask>? persistRetention = null,
+        Func<CancellationToken, ValueTask>? persistTerminal = null)
+        => new("session", 1, Epoch(), chat ?? Chat().Object, background, () => null!,
+            persistRetention, persistTerminal, time);
+
+    private static Mock<IAgentChat> Chat()
+    {
+        var chat = new Mock<IAgentChat>();
+        chat.Setup(value => value.DisposeAsync()).Returns(ValueTask.CompletedTask);
+        chat.SetupGet(value => value.InputQueues).Returns(Mock.Of<IAgentInputQueues>());
+        chat.SetupGet(value => value.SubAgents).Returns(
+            new ReadOnlyObservableCollection<IRunningSubAgent>(new ObservableCollection<IRunningSubAgent>()));
+        chat.SetupGet(value => value.Modals).Returns(
+            new ReadOnlyObservableCollection<AgentChatModal>(new ObservableCollection<AgentChatModal>()));
+        chat.Setup(value => value.GetToolSnapshot()).Returns([]);
+        return chat;
+    }
+
+    private static RuntimeEpoch Epoch() => new() { Value = Guid.NewGuid() };
+    private static AttachRemoteAgentSessionRequest Attach(string token) => new()
+    {
+        AttachmentToken = token,
+        Channel = new TestChannel(),
+    };
+
+    private sealed class TestChannel : IMessageChannel
+    {
+        private readonly Channel<JsonElement> channel = Channel.CreateUnbounded<JsonElement>();
+        public ChannelWriter<JsonElement> Writer => this.channel.Writer;
+        public ChannelReader<JsonElement> Reader => this.channel.Reader;
+        public ValueTask DisposeAsync() { this.channel.Writer.TryComplete(); return ValueTask.CompletedTask; }
+    }
+}

@@ -37,7 +37,7 @@ public sealed record TransportPeerIdentity
             : throw new ArgumentException($"{name} must be nonblank.", name);
 
     private static string? RequireOptionalNonBlank(string? value, string name)
-        => value is null || !string.IsNullOrWhiteSpace(value)
+        => value is null || Guid.TryParse(value, out _)
             ? value
-            : throw new ArgumentException($"{name} must be null or nonblank.", name);
+            : throw new ArgumentException($"{name} must be null or a canonical entity UUID.", name);
 }
