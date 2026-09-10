@@ -16,11 +16,12 @@ public sealed class AgentSessionOwnershipLeaseTests
             {
                 var expiry = time.GetUtcNow() + TimeSpan.FromSeconds(30);
                 renewed.TrySetResult(expiry);
-                return ValueTask.FromResult<DateTimeOffset?>(expiry);
+                return ValueTask.FromResult<AgentSessionOwnershipLeasePeriod?>(
+                    new(time.GetUtcNow(), expiry));
             },
             _ => ValueTask.CompletedTask,
             _ => ValueTask.CompletedTask);
-        lease.Start(time.GetUtcNow() + TimeSpan.FromSeconds(30));
+        lease.Start(new(time.GetUtcNow(), time.GetUtcNow() + TimeSpan.FromSeconds(30)));
 
         time.Advance(TimeSpan.FromSeconds(10));
 
@@ -34,10 +35,10 @@ public sealed class AgentSessionOwnershipLeaseTests
         var fenced = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var lease = new AgentSessionOwnershipLease(
             time,
-            _ => ValueTask.FromResult<DateTimeOffset?>(null),
+            _ => ValueTask.FromResult<AgentSessionOwnershipLeasePeriod?>(null),
             _ => { fenced.TrySetResult(); return ValueTask.CompletedTask; },
             _ => ValueTask.CompletedTask);
-        lease.Start(time.GetUtcNow() + TimeSpan.FromSeconds(14));
+        lease.Start(new(time.GetUtcNow(), time.GetUtcNow() + TimeSpan.FromSeconds(14)));
 
         time.Advance(TimeSpan.FromSeconds(10));
 
@@ -50,7 +51,7 @@ public sealed class AgentSessionOwnershipLeaseTests
         var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-09-09T00:00:00Z"));
         var renewalStarted = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        var neverRenewed = new TaskCompletionSource<DateTimeOffset?>(
+        var neverRenewed = new TaskCompletionSource<AgentSessionOwnershipLeasePeriod?>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var fenced = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -67,7 +68,7 @@ public sealed class AgentSessionOwnershipLeaseTests
                 return ValueTask.CompletedTask;
             },
             _ => ValueTask.CompletedTask);
-        lease.Start(time.GetUtcNow() + TimeSpan.FromSeconds(16));
+        lease.Start(new(time.GetUtcNow(), time.GetUtcNow() + TimeSpan.FromSeconds(16)));
 
         time.Advance(TimeSpan.FromSeconds(10));
         await renewalStarted.Task;
@@ -107,7 +108,7 @@ public sealed class AgentSessionOwnershipLeaseTests
                 released = true;
                 return ValueTask.CompletedTask;
             });
-        lease.Start(time.GetUtcNow() + TimeSpan.FromSeconds(30));
+        lease.Start(new(time.GetUtcNow(), time.GetUtcNow() + TimeSpan.FromSeconds(30)));
         time.Advance(TimeSpan.FromSeconds(10));
         await renewalStarted.Task;
 

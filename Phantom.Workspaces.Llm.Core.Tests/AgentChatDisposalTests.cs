@@ -75,6 +75,36 @@ public sealed class AgentChatDisposalTests
         Assert.True(trackingClient.Disposed);
     }
 
+    [Fact]
+    public async Task DisposeAsync_OwnedResourceFailure_DisposesRemainingProductionResourcesAndReportsFailure()
+    {
+        var first = new ThrowingResource();
+        var second = new TrackingResource();
+        var childResource = new TrackingResource();
+        var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(EchoAgentJson),
+            ConfiguredStore = new InMemoryAgentPersistenceStore(),
+            ClientOverride = new DeterministicTestChatClient(),
+            OwnedResources = [first, second],
+        });
+        await chat.GetOrCreateAsync(
+            "child",
+            AgentDefinitionLoader.LoadAgentFromJson(EchoAgentJson),
+            "tool-call");
+        var child = Assert.IsType<AgentChat>(Assert.Single(chat.SubAgents));
+        child.RegisterOwnedResource(childResource);
+
+        var failure = await Assert.ThrowsAsync<AggregateException>(
+            () => chat.DisposeAsync().AsTask());
+
+        Assert.True(first.DisposeAttempted);
+        Assert.True(second.Disposed);
+        Assert.True(childResource.Disposed);
+        Assert.Contains(failure.InnerExceptions,
+            error => error.Message == "owned resource failed");
+    }
+
     private sealed class DisposalTrackingChatClient : IChatClient, IAsyncDisposable
     {
         public bool Disposed { get; private set; }
@@ -100,6 +130,28 @@ public sealed class AgentChatDisposalTests
         public void Dispose()
         {
         }
+
+        public ValueTask DisposeAsync()
+        {
+            this.Disposed = true;
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class ThrowingResource : IAsyncDisposable
+    {
+        internal bool DisposeAttempted { get; private set; }
+
+        public ValueTask DisposeAsync()
+        {
+            this.DisposeAttempted = true;
+            return ValueTask.FromException(new InvalidOperationException("owned resource failed"));
+        }
+    }
+
+    private sealed class TrackingResource : IAsyncDisposable
+    {
+        internal bool Disposed { get; private set; }
 
         public ValueTask DisposeAsync()
         {

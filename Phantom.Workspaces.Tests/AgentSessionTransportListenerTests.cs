@@ -181,6 +181,46 @@ public sealed class AgentSessionTransportListenerTests
             It.IsAny<CancellationToken>()), Times.Once);
     }
 
+    [Fact]
+    public async Task OnChannelOpenAsync_BlockedTakeover_WritesStableTakeoverError()
+    {
+        var registry = new Mock<IRemoteAgentSessionRuntimeRegistry>();
+        registry.Setup(value => value.TryGetAsync(
+                "session", 1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((RemoteAgentSessionLease?)null);
+        var factory = new Mock<IAgentSessionRuntimeHostFactory>();
+        factory.Setup(value => value.TryTakeOverAsync(
+                It.IsAny<AgentSessionTakeoverRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+        var provider = new Mock<ITransportPeerIdentityProvider>();
+        provider.Setup(value => value.GetRequiredIdentity(It.IsAny<IMessageChannel>())).Returns(Peer());
+        await using var listener = new AgentSessionTransportListener(
+            new RemoteAgentSessionHost(AllowingAuthorizer().Object, registry.Object, factory.Object),
+            provider.Object);
+        await using var channel = new TestChannel();
+        var request = new AgentSessionTakeoverRequest
+        {
+            AgentSessionId = "session",
+            ExpectedOwningProfileEntityId = Open().ExpectedOwningProfileEntityId,
+            ExpectedOwnershipGeneration = 1,
+            NewOwningProfileEntityId = Guid.NewGuid().ToString(),
+            CorrelationId = Guid.NewGuid(),
+        };
+
+        await listener.OnChannelOpenAsync(
+            AgentSessionProtocolCodec.SerializeTakeover(request),
+            channel,
+            TestContext.Current.CancellationToken);
+
+        var frame = AgentSessionProtocolCodec.DeserializeFrame(
+            await channel.Output.ReadAsync(TestContext.Current.CancellationToken));
+        var terminal = Assert.IsType<SessionTerminalEvent>(
+            AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(frame));
+        Assert.Equal("takeover-blocked", terminal.Reason);
+        Assert.Equal("takeover-blocked", terminal.CompletionState.GetProperty("code").GetString());
+        Assert.Equal("takeover", terminal.CompletionState.GetProperty("operation").GetString());
+    }
+
     private static AgentSessionTransportListener Listener(
         out Mock<IRemoteAgentSessionRuntimeRegistry> registry,
         out Mock<IAgentSessionRuntimeHostFactory> factory)

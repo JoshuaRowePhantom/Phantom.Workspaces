@@ -99,15 +99,19 @@ public sealed class AgentSessionTransportListener : ITransportListener
     private static async ValueTask WriteSanitizedErrorAsync(
         IMessageChannel channel, Exception error, CancellationToken ct)
     {
-        var code = error is AgentSessionUnavailableException ? "not-found" : "invalid-request";
-        var message = error is AgentSessionUnavailableException
-            ? "The agent session is unavailable."
-            : "The attach request could not be processed.";
+        var (code, operation, message) = error switch
+        {
+            AgentSessionUnavailableException =>
+                ("not-found", "attach", "The agent session is unavailable."),
+            AgentSessionTakeoverBlockedException =>
+                ("takeover-blocked", "takeover", "The agent session takeover could not be completed."),
+            _ => ("invalid-request", "attach", "The attach request could not be processed."),
+        };
         var correlationId = Guid.NewGuid();
         var completion = JsonSerializer.SerializeToElement(new Dictionary<string, object?>
         {
             ["code"] = code,
-            ["operation"] = "attach",
+            ["operation"] = operation,
             ["retryable"] = false,
             ["message"] = message,
             ["correlation-id"] = correlationId,

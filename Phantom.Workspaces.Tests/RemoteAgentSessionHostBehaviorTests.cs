@@ -462,10 +462,10 @@ public sealed partial class RemoteAgentSessionHostTests
         var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-09-09T00:00:00Z"));
         await using var ownership = new AgentSessionOwnershipLease(
-            time, _ => ValueTask.FromResult<DateTimeOffset?>(null),
+            time, _ => ValueTask.FromResult<AgentSessionOwnershipLeasePeriod?>(null),
             _ => { order.Add("stopped"); stopped.SetResult(); return ValueTask.CompletedTask; },
             _ => ValueTask.CompletedTask);
-        ownership.Start(time.GetUtcNow() + TimeSpan.FromSeconds(14));
+        ownership.Start(new(time.GetUtcNow(), time.GetUtcNow() + TimeSpan.FromSeconds(14)));
         time.Advance(TimeSpan.FromSeconds(10));
         await stopped.Task;
         order.Add("replacement");

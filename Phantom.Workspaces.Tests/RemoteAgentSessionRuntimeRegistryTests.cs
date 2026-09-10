@@ -94,6 +94,28 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
     }
 
     [Fact]
+    public async Task TryGetAsync_StartupInFlight_DisposalWinsAndReturnsNull()
+    {
+        var registry = new RemoteAgentSessionRuntimeRegistry(TimeProvider.System);
+        var ready = new TaskCompletionSource<RemoteAgentSessionLease>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var start = registry.GetOrStartAsync(
+            Intent(), _ => ready.Task, TestContext.Current.CancellationToken).AsTask();
+        var lookup = registry.TryGetAsync(
+            "session", 1, TestContext.Current.CancellationToken).AsTask();
+        var dispose = registry.DisposeAsync().AsTask();
+        var chat = Chat();
+        var lease = Lease(background: true, chat: chat.Object);
+
+        ready.SetResult(lease);
+
+        await dispose;
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => start);
+        Assert.Null(await lookup);
+        chat.Verify(value => value.DisposeAsync(), Times.Once);
+    }
+
+    [Fact]
     public async Task TryGetAsync_WrongGeneration_ReturnsNull()
     {
         await using var registry = new RemoteAgentSessionRuntimeRegistry(TimeProvider.System);
@@ -379,7 +401,7 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
         chat.SetupGet(value => value.IsBusy).Returns(true);
         chat.Setup(value => value.Interrupt()).Callback(() => order.Add("interrupt"));
         chat.Setup(value => value.DisposeAsync()).Callback(() => order.Add("dispose")).Returns(ValueTask.CompletedTask);
-        await using var lease = Lease(true, chat: chat.Object, persistTerminal: _ =>
+        var lease = Lease(true, chat: chat.Object, persistTerminal: _ =>
         {
             order.Add("persist");
             return ValueTask.CompletedTask;
@@ -391,7 +413,7 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
     }
 
     [Fact]
-    public async Task RuntimeDispose_CleanupFailures_StillEmitsTerminalBeforeClosingChannel()
+    public async Task RuntimeDispose_CleanupFailure_IsReportedAfterTerminalAndChannelCleanup()
     {
         TestChannel? channel = null;
         channel = new TestChannel(() =>
@@ -404,10 +426,9 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
         var runtimeTree = new Mock<IAsyncDisposable>();
         runtimeTree.Setup(value => value.DisposeAsync())
             .ThrowsAsync(new InvalidOperationException("runtime cleanup failed"));
-        await using var lease = new RemoteAgentSessionLease(
+        var lease = new RemoteAgentSessionLease(
             "session", 1, Epoch(), Chat().Object, true, () => null!,
-            persistTerminalAsync: _ => ValueTask.FromException(
-                new InvalidOperationException("persistence failed")),
+            persistTerminalAsync: _ => ValueTask.CompletedTask,
             runtimeLifetime: runtimeTree.Object);
         lease.Attach(new AttachRemoteAgentSessionRequest
         {
@@ -415,10 +436,77 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
             Channel = channel,
         });
 
-        await lease.DisposeAsync();
+        var failure = await Assert.ThrowsAsync<AggregateException>(
+            () => lease.DisposeAsync().AsTask());
 
         Assert.True(channel.IsDisposed);
         Assert.True(lease.IsFenced);
+        Assert.Contains(failure.InnerExceptions,
+            error => error.Message == "runtime cleanup failed");
+        Assert.True(lease.HasTerminated);
+    }
+
+    [Fact]
+    public async Task RuntimeDispose_TerminalPersistenceFailure_PreventsTerminalAndRegistryRemoval()
+    {
+        var channel = new TestChannel();
+        var lease = Lease(
+            true,
+            persistTerminal: _ => ValueTask.FromException(
+                new InvalidOperationException("persistence failed")));
+        await using var registry = new RemoteAgentSessionRuntimeRegistry(TimeProvider.System);
+        await registry.GetOrStartAsync(
+            Intent(), _ => Task.FromResult(lease), TestContext.Current.CancellationToken);
+        lease.Attach(new AttachRemoteAgentSessionRequest
+        {
+            AttachmentToken = "active",
+            Channel = channel,
+        });
+
+        var failure = await Assert.ThrowsAsync<AggregateException>(
+            () => lease.DisposeAsync().AsTask());
+
+        Assert.Contains(failure.InnerExceptions,
+            error => error.Message == "persistence failed");
+        Assert.False(lease.HasTerminated);
+        Assert.False(channel.Reader.TryRead(out var frame)
+            && frame.GetRawText().Contains("session-terminal", StringComparison.Ordinal));
+        var replacementCalls = 0;
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            registry.GetOrStartAsync(
+                Intent(),
+                _ =>
+                {
+                    Interlocked.Increment(ref replacementCalls);
+                    return Task.FromResult(Lease(background: true));
+                },
+                cancellation.Token).AsTask());
+        Assert.Equal(0, replacementCalls);
+    }
+
+    [Fact]
+    public async Task RuntimeDispose_AwaitsTerminalWriteBeforeClosingChannel()
+    {
+        var channel = new BlockingWriteChannel();
+        var lease = Lease(background: true);
+        lease.Attach(new AttachRemoteAgentSessionRequest
+        {
+            AttachmentToken = "active",
+            Channel = channel,
+        });
+
+        var dispose = lease.DisposeAsync().AsTask();
+        await channel.WriteStarted;
+
+        Assert.False(channel.IsDisposed);
+        channel.AllowWrite();
+        await dispose;
+
+        Assert.True(channel.IsDisposed);
+        Assert.Contains("session-terminal", channel.Written!.Value.GetRawText(),
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -435,7 +523,7 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
             .Returns(ValueTask.CompletedTask);
         var failing = new ThrowingChannel(() => order.Add("failing-channel"));
         var remaining = new TestChannel(() => order.Add("remaining-channel"));
-        await using var lease = Lease(true, chat: chat.Object, persistTerminal: _ =>
+        var lease = Lease(true, chat: chat.Object, persistTerminal: _ =>
         {
             order.Add("persist");
             return ValueTask.CompletedTask;
@@ -451,11 +539,13 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
             Channel = remaining,
         });
 
-        await lease.DisposeAsync();
+        var failure = await Assert.ThrowsAsync<AggregateException>(
+            () => lease.DisposeAsync().AsTask());
 
         Assert.Equal(
             ["interrupt", "runtime", "persist", "failing-channel", "remaining-channel"],
             order);
+        Assert.Equal(2, failure.InnerExceptions.Count);
         Assert.True(remaining.IsDisposed);
         Assert.True(lease.HasTerminated);
     }
@@ -500,7 +590,7 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
             },
             _ => ValueTask.CompletedTask,
             _ => ValueTask.CompletedTask);
-        ownership.Start(time.GetUtcNow() + TimeSpan.FromSeconds(30));
+        ownership.Start(new(time.GetUtcNow(), time.GetUtcNow() + TimeSpan.FromSeconds(30)));
         await using var lease = new RemoteAgentSessionLease(
             "session", 1, Epoch(), Chat().Object, true, () => null!,
             persistTerminalAsync: _ =>
@@ -595,6 +685,61 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
             onDispose();
             this.channel.Writer.TryComplete();
             return ValueTask.FromException(new InvalidOperationException("channel cleanup failed"));
+        }
+    }
+
+    private sealed class BlockingWriteChannel : IMessageChannel
+    {
+        private readonly TaskCompletionSource writeStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource allowWrite =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly Channel<JsonElement> input = Channel.CreateUnbounded<JsonElement>();
+        private readonly BlockingWriter writer;
+
+        internal BlockingWriteChannel()
+        {
+            this.writer = new BlockingWriter(this);
+        }
+
+        public ChannelWriter<JsonElement> Writer => this.writer;
+        public ChannelReader<JsonElement> Reader => this.input.Reader;
+        internal Task WriteStarted => this.writeStarted.Task;
+        internal JsonElement? Written { get; private set; }
+        internal bool IsDisposed { get; private set; }
+        internal void AllowWrite() => this.allowWrite.SetResult();
+
+        public ValueTask DisposeAsync()
+        {
+            this.IsDisposed = true;
+            this.input.Writer.TryComplete();
+            return ValueTask.CompletedTask;
+        }
+
+        private sealed class BlockingWriter(BlockingWriteChannel owner) : ChannelWriter<JsonElement>
+        {
+            public override bool TryComplete(Exception? error = null) => true;
+            public override bool TryWrite(JsonElement item) => false;
+            public override ValueTask<bool> WaitToWriteAsync(CancellationToken cancellationToken = default)
+                => new(owner.WaitUntilAllowedAsync(cancellationToken));
+
+            public override ValueTask WriteAsync(
+                JsonElement item, CancellationToken cancellationToken = default)
+                => new(owner.WriteAsync(item, cancellationToken));
+        }
+
+        private async Task<bool> WaitUntilAllowedAsync(CancellationToken cancellationToken)
+        {
+            this.writeStarted.TrySetResult();
+            await this.allowWrite.Task.WaitAsync(cancellationToken);
+            return true;
+        }
+
+        private async Task WriteAsync(JsonElement item, CancellationToken cancellationToken)
+        {
+            this.writeStarted.TrySetResult();
+            await this.allowWrite.Task.WaitAsync(cancellationToken);
+            this.Written = item;
         }
     }
 }

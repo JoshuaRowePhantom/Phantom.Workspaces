@@ -397,6 +397,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
 
     private async Task TerminateCoreAsync()
     {
+        var failures = new List<Exception>();
         AttachmentState[] states;
         lock (this.gate) states = this.attachments.Values.ToArray();
         foreach (var state in states) state.GraceTimer?.Dispose();
@@ -404,14 +405,14 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         if (this.ownershipLease is not null)
         {
             try { await this.ownershipLease.QuiesceAsync().ConfigureAwait(false); }
-            catch { }
+            catch (Exception error) { failures.Add(error); }
         }
         try
         {
             if (this.Chat.IsBusy)
                 this.Chat.Interrupt();
         }
-        catch { }
+        catch (Exception error) { failures.Add(error); }
         this.Chat.InformationChanged -= this.OnInformationChanged;
         this.Chat.UsageChanged -= this.OnUsageChanged;
         this.Chat.ToolsChanged -= this.OnToolsChanged;
@@ -433,51 +434,71 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             else
                 await this.Chat.DisposeAsync().ConfigureAwait(false);
         }
-        catch { }
-        try { await this.persistTerminalAsync(CancellationToken.None).ConfigureAwait(false); }
-        catch { }
-        if (this.ownershipLease is not null)
+        catch (Exception error) { failures.Add(error); }
+
+        Exception? persistenceFailure = null;
+        try
+        {
+            await this.persistTerminalAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception error)
+        {
+            persistenceFailure = error;
+            failures.Add(error);
+        }
+
+        if (this.ownershipLease is not null && persistenceFailure is null)
         {
             try { await this.ownershipLease.ReleaseAsync().ConfigureAwait(false); }
-            catch { }
-            try { await this.ownershipLease.DisposeAsync().ConfigureAwait(false); }
-            catch { }
+            catch (Exception error) { failures.Add(error); }
         }
-        var terminal = this.Replay.Append(Guid.NewGuid(), new SessionTerminalEvent
+        if (this.ownershipLease is not null)
         {
-            Reason = this.terminalReason,
-            CompletionState = System.Text.Json.JsonSerializer.SerializeToElement(new
+            try { await this.ownershipLease.DisposeAsync().ConfigureAwait(false); }
+            catch (Exception error) { failures.Add(error); }
+        }
+
+        JsonElement? serializedTerminal = null;
+        if (persistenceFailure is null)
+        {
+            var terminal = this.Replay.Append(Guid.NewGuid(), new SessionTerminalEvent
             {
-                stopped = true,
-                failed = this.terminalReason == "runtime-failed",
-            }),
-        });
-        var serializedTerminal = AgentSessionProtocolCodec.SerializeFrame(terminal);
+                Reason = this.terminalReason,
+                CompletionState = System.Text.Json.JsonSerializer.SerializeToElement(new
+                {
+                    stopped = true,
+                    failed = this.terminalReason == "runtime-failed",
+                }),
+            });
+            serializedTerminal = AgentSessionProtocolCodec.SerializeFrame(terminal);
+        }
         foreach (var state in states)
         {
-            if (!state.Disconnected)
+            if (!state.Disconnected && serializedTerminal is { } terminal)
             {
-                try { state.Channel.Writer.TryWrite(serializedTerminal); }
-                catch { }
+                try { await state.Channel.Writer.WriteAsync(terminal).ConfigureAwait(false); }
+                catch (Exception error) { failures.Add(error); }
             }
             try { await state.Channel.DisposeAsync().ConfigureAwait(false); }
-            catch { }
+            catch (Exception error) { failures.Add(error); }
         }
         lock (this.gate)
         {
             foreach (var state in this.attachments.Values)
                 state.Released.TrySetResult();
             this.attachments.Clear();
-            this.hasTerminated = true;
+            this.hasTerminated = persistenceFailure is null;
         }
-        if (this.Terminated is { } terminated)
+        if (persistenceFailure is null && this.Terminated is { } terminated)
         {
             foreach (EventHandler handler in terminated.GetInvocationList())
             {
                 try { handler(this, EventArgs.Empty); }
-                catch { }
+                catch (Exception error) { failures.Add(error); }
             }
         }
+        if (failures.Count != 0)
+            throw new AggregateException("Remote agent session shutdown failed.", failures);
     }
 
     private sealed class AttachmentState(IMessageChannel channel)

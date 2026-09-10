@@ -37,8 +37,15 @@ internal sealed class RemoteAgentSessionRuntimeRegistry :
                 return null;
         }
         var lease = entry.Lease ?? await entry.StartTask.WaitAsync(ct).ConfigureAwait(false);
-        lock (this.gate) entry.Lease ??= lease;
-        return lease.IsFenced ? null : lease;
+        lock (this.gate)
+        {
+            if (this.disposed
+                || !this.entries.TryGetValue(new(sessionId, ownershipGeneration), out var current)
+                || !ReferenceEquals(current, entry))
+                return null;
+            entry.Lease ??= lease;
+            return lease.IsFenced ? null : lease;
+        }
     }
 
     public async ValueTask<RemoteAgentSessionLease> GetOrStartAsync(

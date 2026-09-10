@@ -32,15 +32,15 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
     public async ValueTask<PersistedAgentSessionRuntimeIntent?> LoadIntentAsync(
         string sessionId, CancellationToken ct)
     {
-        var entity = await this.FindAsync(sessionId, ct).ConfigureAwait(false);
-        return entity?.Data is JsonElement data ? this.contextFactory.Create(data).Intent : null;
+        var result = await this.FindAsync(sessionId, ct).ConfigureAwait(false);
+        return result.Entity?.Data is JsonElement data ? this.contextFactory.Create(data).Intent : null;
     }
 
     public async Task<RemoteAgentSessionLease> StartAsync(
         PersistedAgentSessionRuntimeIntent intent, CancellationToken ct)
     {
-        var persisted = await this.FindAsync(intent.AgentSessionId, ct).ConfigureAwait(false)
-            ?? throw new AgentSessionUnavailableException();
+        var query = await this.FindAsync(intent.AgentSessionId, ct).ConfigureAwait(false);
+        var persisted = query.Entity ?? throw new AgentSessionUnavailableException();
         if (persisted.Data is not JsonElement data)
             throw new AgentSessionUnavailableException();
         if (ReadLong(data, "ownership-generation") != intent.OwnershipGeneration
@@ -51,7 +51,8 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
                 StringComparison.OrdinalIgnoreCase))
             throw new AgentSessionUnavailableException();
 
-        var state = new PersistedRuntimeState(this.dataAccessLayer, persisted, this.timeProvider);
+        var state = new PersistedRuntimeState(
+            this.dataAccessLayer, persisted, query.GetRequiredAuthoritativeTime());
         await state.RecordInterruptedAndAcquireAsync(intent, ct).ConfigureAwait(false);
         RunningAgentChatLease? chatLease = null;
         try
@@ -99,7 +100,7 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
                 this.timeProvider,
                 ownership,
                 chatLease);
-            ownership.Start(state.Expiry);
+            ownership.Start(state.LeasePeriod);
             return runtime;
         }
         catch
@@ -114,7 +115,8 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
     public async ValueTask<bool> TryTakeOverAsync(
         AgentSessionTakeoverRequest request, CancellationToken ct)
     {
-        var entity = await this.FindAsync(request.AgentSessionId, ct).ConfigureAwait(false);
+        var query = await this.FindAsync(request.AgentSessionId, ct).ConfigureAwait(false);
+        var entity = query.Entity;
         if (entity?.Data is not JsonElement data
             || ReadLong(data, "ownership-generation") != request.ExpectedOwnershipGeneration
             || !string.Equals(
@@ -123,12 +125,14 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
                 request.ExpectedOwningProfileEntityId,
                 StringComparison.OrdinalIgnoreCase))
             return false;
-        var hasEpoch = ReadString(data, "runtime-epoch") is not null;
+        var hasEpoch = data.TryGetProperty("runtime-epoch", out _);
         var hasLease = data.TryGetProperty("runtime-lease-expiry", out _);
         if (hasEpoch || hasLease)
         {
-            if (!TryReadLeaseExpiry(data, out var expiry)
-                || expiry > this.timeProvider.GetUtcNow())
+            if (!hasEpoch || !hasLease
+                || !TryReadRuntimeEpoch(data, out _)
+                || !TryReadLeaseExpiry(data, out var expiry)
+                || expiry > query.GetRequiredAuthoritativeTime())
                 return false;
         }
 
@@ -145,7 +149,7 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
             .ConfigureAwait(false);
     }
 
-    private async Task<QueryEntitySnapshot?> FindAsync(string sessionId, CancellationToken ct)
+    private async Task<AuthoritativeQueryResult> FindAsync(string sessionId, CancellationToken ct)
     {
         var result = await this.dataAccessLayer.QueryAsync(new QueryRequest
         {
@@ -162,9 +166,18 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
             ],
             Timestamps = [null],
         }, ct).ConfigureAwait(false);
-        return result.Batches.SelectMany(batch => batch.Entities).FirstOrDefault(entity =>
+        var entity = result.Batches.SelectMany(batch => batch.Entities).FirstOrDefault(entity =>
             entity.Data is JsonElement value
             && string.Equals(ReadString(value, "agent-session-id"), sessionId, StringComparison.Ordinal));
+        return new AuthoritativeQueryResult(entity, result.AuthoritativeTimestamp?.DateTime);
+    }
+
+    private readonly record struct AuthoritativeQueryResult(
+        QueryEntitySnapshot? Entity, DateTimeOffset? AuthoritativeTime)
+    {
+        internal DateTimeOffset GetRequiredAuthoritativeTime()
+            => this.AuthoritativeTime
+                ?? throw new AgentSessionTakeoverBlockedException();
     }
 
     private static AgentSessionSnapshot Snapshot(IAgentChat chat) => new()
@@ -189,6 +202,14 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
 
     private static long? ReadLong(JsonElement data, string name)
         => data.TryGetProperty(name, out var value) && value.TryGetInt64(out var number) ? number : null;
+
+    private static bool TryReadRuntimeEpoch(JsonElement data, out Guid epoch)
+    {
+        epoch = default;
+        return data.TryGetProperty("runtime-epoch", out var value)
+            && value.ValueKind == JsonValueKind.String
+            && Guid.TryParse(value.GetString(), out epoch);
+    }
 
     private static bool TryReadLeaseExpiry(JsonElement data, out DateTimeOffset expiry)
     {
@@ -241,32 +262,37 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
     private sealed class PersistedRuntimeState
     {
         private readonly IDataAccessLayer dataAccessLayer;
-        private readonly TimeProvider timeProvider;
         private readonly SemaphoreSlim gate = new(1, 1);
         private EntitySnapshot entity;
         private JsonElement data;
+        private DateTimeOffset authoritativeTime;
 
         internal PersistedRuntimeState(
-            IDataAccessLayer dataAccessLayer, EntitySnapshot entity, TimeProvider timeProvider)
+            IDataAccessLayer dataAccessLayer,
+            EntitySnapshot entity,
+            DateTimeOffset authoritativeTime)
         {
             this.dataAccessLayer = dataAccessLayer;
             this.entity = entity;
             this.data = entity.Data!.Value;
-            this.timeProvider = timeProvider;
+            this.authoritativeTime = authoritativeTime;
         }
 
         internal RuntimeEpoch Epoch { get; private set; }
         internal DateTimeOffset Expiry { get; private set; }
+        internal AgentSessionOwnershipLeasePeriod LeasePeriod
+            => new(this.authoritativeTime, this.Expiry);
 
         internal async ValueTask RecordInterruptedAndAcquireAsync(
             PersistedAgentSessionRuntimeIntent intent, CancellationToken ct)
         {
-            var now = this.timeProvider.GetUtcNow();
-            var abandoned = ReadString(this.data, "runtime-epoch");
+            var now = this.authoritativeTime;
+            var hasEpoch = this.data.TryGetProperty("runtime-epoch", out _);
             var hasLease = this.data.TryGetProperty("runtime-lease-expiry", out _);
-            if (abandoned is not null || hasLease)
+            if (hasEpoch || hasLease)
             {
-                if (abandoned is null
+                if (!hasEpoch || !hasLease
+                    || !TryReadRuntimeEpoch(this.data, out var abandoned)
                     || !TryReadLeaseExpiry(this.data, out var oldExpiryValue))
                     throw new AgentSessionTakeoverBlockedException();
                 if (oldExpiryValue > now)
@@ -274,7 +300,7 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
                 await this.ReplaceAsync(new Dictionary<string, object?>
                 {
                     ["runtime-state"] = "interrupted",
-                    ["last-stopped-runtime-epoch"] = abandoned,
+                    ["last-stopped-runtime-epoch"] = abandoned.ToString("D"),
                     ["runtime-epoch"] = null,
                     ["runtime-lease-expiry"] = null,
                 }, "Record interrupted agent session epoch", ct).ConfigureAwait(false);
@@ -291,14 +317,32 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
             }, "Acquire agent session runtime lease", ct).ConfigureAwait(false);
         }
 
-        internal async ValueTask<DateTimeOffset?> RenewAsync(CancellationToken ct)
+        internal async ValueTask<AgentSessionOwnershipLeasePeriod?> RenewAsync(CancellationToken ct)
         {
-            this.Expiry = this.timeProvider.GetUtcNow() + LeaseDuration;
+            var query = await this.dataAccessLayer.QueryAsync(new QueryRequest
+            {
+                Clauses =
+                [
+                    new TopLevelQueryClause
+                    {
+                        ClauseIdentifier = new QueryClauseIdentifier("agent-session"),
+                        Clause = new EntityTypeQueryClause
+                        {
+                            EntityTypeNames = new EntityTypeNameSet(["agent-session"]),
+                        },
+                    },
+                ],
+                Timestamps = [null],
+            }, ct).ConfigureAwait(false);
+            if (query.AuthoritativeTimestamp is not { } timestamp)
+                return null;
+            this.authoritativeTime = timestamp.DateTime;
+            this.Expiry = timestamp.DateTime + LeaseDuration;
             return await this.TryReplaceAsync(new Dictionary<string, object?>
             {
                 ["runtime-lease-expiry"] = this.Expiry.ToString("O"),
             }, "Renew agent session runtime lease", ct).ConfigureAwait(false)
-                ? this.Expiry
+                ? this.LeasePeriod
                 : null;
         }
 

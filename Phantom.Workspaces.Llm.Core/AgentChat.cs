@@ -1643,6 +1643,7 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
             return;
         }
 
+        var failures = new List<Exception>();
         this.commonInputQueues.Dispose();
 
         if (this.modelClient is not null)
@@ -1650,13 +1651,24 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
             this.modelClient.ModelChanged -= this.OnModelChanged;
         }
 
-        await this.cts.CancelAsync();
+        try
+        {
+            await this.cts.CancelAsync();
+        }
+        catch (Exception error)
+        {
+            failures.Add(error);
+        }
         try
         {
             await this.processTask;
         }
         catch (OperationCanceledException)
         {
+        }
+        catch (Exception error)
+        {
+            failures.Add(error);
         }
 
         this.cts.Dispose();
@@ -1669,7 +1681,14 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
 
         foreach (var resource in resourcesToDispose)
         {
-            await resource.DisposeAsync();
+            try
+            {
+                await resource.DisposeAsync();
+            }
+            catch (Exception error)
+            {
+                failures.Add(error);
+            }
         }
 
         List<AgentChat> childChats;
@@ -1681,7 +1700,19 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
 
         foreach (var childChat in childChats)
         {
-            await childChat.DisposeAsync();
+            try
+            {
+                await childChat.DisposeAsync();
+            }
+            catch (Exception error)
+            {
+                failures.Add(error);
+            }
+        }
+
+        if (failures.Count != 0)
+        {
+            throw new AggregateException("Agent chat resource cleanup failed.", failures);
         }
     }
 

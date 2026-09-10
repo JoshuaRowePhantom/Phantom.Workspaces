@@ -1,12 +1,16 @@
 namespace Phantom.Workspaces.Services.AgentSessions;
 
+internal readonly record struct AgentSessionOwnershipLeasePeriod(
+    DateTimeOffset AuthoritativeTime,
+    DateTimeOffset Expiry);
+
 internal sealed class AgentSessionOwnershipLease : IAsyncDisposable
 {
     private static readonly TimeSpan RenewalInterval = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan RetryInterval = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan SafetyMargin = TimeSpan.FromSeconds(5);
     private readonly TimeProvider timeProvider;
-    private readonly Func<CancellationToken, ValueTask<DateTimeOffset?>> renewAsync;
+    private readonly Func<CancellationToken, ValueTask<AgentSessionOwnershipLeasePeriod?>> renewAsync;
     private readonly Func<CancellationToken, ValueTask> fenceAsync;
     private readonly Func<CancellationToken, ValueTask> releaseAsync;
     private readonly CancellationTokenSource cancellation = new();
@@ -19,7 +23,7 @@ internal sealed class AgentSessionOwnershipLease : IAsyncDisposable
 
     internal AgentSessionOwnershipLease(
         TimeProvider timeProvider,
-        Func<CancellationToken, ValueTask<DateTimeOffset?>> renewAsync,
+        Func<CancellationToken, ValueTask<AgentSessionOwnershipLeasePeriod?>> renewAsync,
         Func<CancellationToken, ValueTask> fenceAsync,
         Func<CancellationToken, ValueTask> releaseAsync)
     {
@@ -29,13 +33,14 @@ internal sealed class AgentSessionOwnershipLease : IAsyncDisposable
         this.releaseAsync = releaseAsync ?? throw new ArgumentNullException(nameof(releaseAsync));
     }
 
-    internal void Start(DateTimeOffset authoritativeExpiry)
+    internal void Start(AgentSessionOwnershipLeasePeriod period)
     {
-        if (authoritativeExpiry <= this.timeProvider.GetUtcNow())
-            throw new ArgumentOutOfRangeException(nameof(authoritativeExpiry));
+        var remaining = period.Expiry - period.AuthoritativeTime;
+        if (remaining <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(period));
         if (this.runTask is not null)
             throw new InvalidOperationException("Ownership renewal already started.");
-        this.confirmedExpiry = authoritativeExpiry;
+        this.confirmedExpiry = this.timeProvider.GetUtcNow() + remaining;
         this.runTask = this.RunAsync(this.cancellation.Token);
     }
 
@@ -95,7 +100,7 @@ internal sealed class AgentSessionOwnershipLease : IAsyncDisposable
                 return;
             }
 
-            DateTimeOffset? renewed = null;
+            AgentSessionOwnershipLeasePeriod? renewed = null;
             using var renewalCancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
             using var deadlineCancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
             var renewal = this.renewAsync(renewalCancellation.Token).AsTask();
@@ -124,9 +129,10 @@ internal sealed class AgentSessionOwnershipLease : IAsyncDisposable
                 catch (OperationCanceledException) when (deadlineCancellation.IsCancellationRequested) { }
             }
 
-            if (renewed is { } expiry && expiry > this.timeProvider.GetUtcNow())
+            if (renewed is { } period && period.Expiry > period.AuthoritativeTime)
             {
-                this.confirmedExpiry = expiry;
+                this.confirmedExpiry =
+                    this.timeProvider.GetUtcNow() + (period.Expiry - period.AuthoritativeTime);
                 interval = RenewalInterval;
                 continue;
             }

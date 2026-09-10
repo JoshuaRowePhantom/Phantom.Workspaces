@@ -190,6 +190,7 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
         return Task.FromResult(
             new QueryResult
             {
+                AuthoritativeTimestamp = new Timestamp(this.timeProvider.GetUtcNow(), "query"),
                 Batches = request.Timestamps is { Count: > 0 }
                     ? request.Timestamps.Select(timestamp => new TimestampedQueryBatch { Timestamp = timestamp, Entities = Array.Empty<QueryEntitySnapshot>() }).ToArray()
                     : new[] { new TimestampedQueryBatch { Timestamp = null, Entities = Array.Empty<QueryEntitySnapshot>() } },
