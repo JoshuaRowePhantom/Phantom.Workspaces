@@ -1,11 +1,13 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
+using System.Globalization;
 using System.Text.Json;
 using AgentSchema;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Remote;
+using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Services.AgentSessions;
 using IRunningAgentChatFactory = Phantom.Workspaces.Llm.IRunningAgentChatFactory;
 
@@ -121,11 +123,16 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                     "The persisted agent session is owned by another profile and requires remote acquisition.");
             }
             continueInBackground = runtimeContext.Intent.ContinueInBackground;
+            var executionTrustContext = CreateExecutionTrustContext(
+                services,
+                runtimeContext.Intent);
             services = (services ?? new AgentServices()) with
             {
                 ExecutorBindings = runtimeContext.Intent.ExecutorBindings,
                 ExecutorTransportFactoryRegistry = runtimeContext.TransportFactoryRegistry,
                 RemoteAgentSessionRuntimeIntent = runtimeContext.Intent,
+                AgentExecutionTrustContext = executionTrustContext,
+                ExecutionTrustContext = executionTrustContext,
                 CurrentSessionContext = CreateCurrentSessionContext(
                     services?.CurrentSessionContext as CurrentSessionContext,
                     sessionId,
@@ -174,6 +181,29 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                 }
                 return ValueTask.CompletedTask;
             });
+    }
+
+    private static AgentExecutionTrustContext? CreateExecutionTrustContext(
+        AgentServices? services,
+        PersistedAgentSessionRuntimeIntent intent)
+    {
+        if (intent.TrustProfileReference is null
+            || intent.ExpectedTrustProfileRevision is null)
+        {
+            return null;
+        }
+
+        var reference = new AgentExecutionTrustProfileReference(
+            "trust-profile",
+            intent.TrustProfileReference,
+            intent.ExpectedTrustProfileRevision.Value.ToString(CultureInfo.InvariantCulture));
+        if (services?.TrustProfileResolver is IRemoteTrustProfileResolver resolver
+            && services.TrustProfilePolicyCompiler is ITrustProfileProcessPolicyCompiler compiler)
+        {
+            return new AgentExecutionTrustContext(reference, resolver, compiler);
+        }
+
+        return new AgentExecutionTrustContext(reference);
     }
 
     private async Task<RunningAgentChatLease> AcquireRemoteAsync(

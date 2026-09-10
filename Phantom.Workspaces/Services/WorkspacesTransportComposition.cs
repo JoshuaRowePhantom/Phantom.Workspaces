@@ -110,7 +110,8 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
                 dataAccessLayer,
                 runningAgentChats,
                 AgentSessionRuntimeContextFactory.FromProvider(effectiveRegistryProvider),
-                TimeProvider.System);
+                TimeProvider.System,
+                remoteHostServices);
             var host = new RemoteAgentSessionHost(authorizer, runtimeRegistry, runtimeFactory);
             agentSessionTransportListener = new AgentSessionTransportListener(host, peerIdentities);
             this.AgentSessionPeerIdentities = peerIdentities;

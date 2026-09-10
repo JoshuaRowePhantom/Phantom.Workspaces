@@ -13,6 +13,7 @@ using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Llm.Core.Manifest;
 using Phantom.Workspaces.Llm.Secrets;
+using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.AgentSessions;
 using Phantom.Workspaces.Transport;
@@ -437,6 +438,33 @@ public sealed class RunningAgentChatTableTests
             Writes++;
             LastValue = continueInBackground;
             return Task.CompletedTask;
+        }
+
+    }
+
+    private sealed class RuntimeTrustResolver(string revision) : IRemoteTrustProfileResolver
+    {
+        public int CallCount { get; private set; }
+
+        public Task<RemoteTrustProfileResolution?> ResolveAsync(
+            string profileReference,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            CallCount++;
+            return Task.FromResult<RemoteTrustProfileResolution?>(
+                new(new TrustProfile(), revision));
+        }
+    }
+
+    private sealed class RuntimeTrustCompiler : ITrustProfileProcessPolicyCompiler
+    {
+        public int CallCount { get; private set; }
+
+        public TrustProfileProcessPolicyCompilation Compile(TrustProfile effectiveProfile)
+        {
+            CallCount++;
+            return new TrustProfileProcessPolicyCompilation(false, null, []);
         }
     }
 
@@ -1679,6 +1707,127 @@ public sealed class RunningAgentChatTableTests
         Assert.Equal(1, runtimeFactory.CreateCallCount);
         Assert.NotSame(originalServices, factory.LastServices);
         Assert.IsType<ExecutorBindings>(factory.LastServices!.ExecutorBindings);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_PersistedTrustIntent_HydratesRevisionPinnedContextWithoutCompiling()
+    {
+        var factory = new FakeRunningAgentChatFactory();
+        var table = new RunningAgentChatTable(
+            factory,
+            new AgentSessionRuntimeContextFactory(null));
+        var resolver = new RuntimeTrustResolver("12");
+        var compiler = new RuntimeTrustCompiler();
+
+        await using var lease = await table.AcquireAsync(
+            new AcquireAgentChatRequest
+            {
+                AgentSessionId = new AgentSessionId("trust-runtime-context"),
+                AgentSessionEntity = JsonDocument.Parse(
+                    """
+                    {
+                      "agent-session-id": "trust-runtime-context",
+                      "host-profile-entity-id": "11111111-1111-1111-1111-111111111111",
+                      "ownership-generation": 4,
+                      "trust-profile-reference": "restricted",
+                      "expected-trust-profile-revision": 12
+                    }
+                    """).RootElement.Clone(),
+                AgentDefinition = CreateTestDefinition("trust-runtime-context"),
+                AgentServices = new AgentServices
+                {
+                    TrustProfileResolver = resolver,
+                    TrustProfilePolicyCompiler = compiler,
+                },
+            },
+            TestContext.Current.CancellationToken);
+
+        var services = factory.LastServices!;
+        var context = Assert.IsType<AgentExecutionTrustContext>(
+            services.AgentExecutionTrustContext);
+        Assert.Same(context, services.ExecutionTrustContext);
+        Assert.Equal("restricted", context.RemoteReference!.Id);
+        Assert.Equal("12", context.RemoteReference.ExpectedRevision);
+        Assert.Equal(0, resolver.CallCount);
+        Assert.Equal(0, compiler.CallCount);
+
+        await context.GetCompilationAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(1, resolver.CallCount);
+        Assert.Equal(1, compiler.CallCount);
+    }
+
+    [Fact]
+    public async Task CurrentSessionContext_TwoRemoteSessions_DoNotCrossContaminate()
+    {
+        var factory = new FakeRunningAgentChatFactory();
+        var table = new RunningAgentChatTable(
+            factory,
+            new AgentSessionRuntimeContextFactory(null));
+        var firstEpoch = new RuntimeEpoch { Value = Guid.NewGuid() };
+        var firstServices = new AgentServices
+        {
+            CurrentSessionContext = new CurrentSessionContext
+            {
+                AgentSessionId = "placeholder-one",
+                OwningProfileEntityId = "placeholder-owner",
+                OwnershipGeneration = 0,
+                RuntimeEpoch = firstEpoch,
+            },
+        };
+
+        await using var first = await table.AcquireAsync(
+            new AcquireAgentChatRequest
+            {
+                AgentSessionId = new AgentSessionId("isolated-one"),
+                AgentSessionEntity = JsonDocument.Parse(
+                    """
+                    {
+                      "agent-session-id": "isolated-one",
+                      "host-profile-entity-id": "11111111-1111-1111-1111-111111111111",
+                      "ownership-generation": 1
+                    }
+                    """).RootElement.Clone(),
+                AgentDefinition = CreateTestDefinition("isolated-one"),
+                AgentServices = firstServices,
+            },
+            TestContext.Current.CancellationToken);
+        var firstContext = Assert.IsType<CurrentSessionContext>(
+            factory.LastServices!.CurrentSessionContext);
+
+        await using var second = await table.AcquireAsync(
+            new AcquireAgentChatRequest
+            {
+                AgentSessionId = new AgentSessionId("isolated-two"),
+                AgentSessionEntity = JsonDocument.Parse(
+                    """
+                    {
+                      "agent-session-id": "isolated-two",
+                      "host-profile-entity-id": "22222222-2222-2222-2222-222222222222",
+                      "ownership-generation": 9
+                    }
+                    """).RootElement.Clone(),
+                AgentDefinition = CreateTestDefinition("isolated-two"),
+                AgentServices = new AgentServices
+                {
+                    CurrentSessionContext = new CurrentSessionContext
+                    {
+                        AgentSessionId = "placeholder-two",
+                        OwningProfileEntityId = "placeholder-owner",
+                        OwnershipGeneration = 0,
+                    },
+                },
+            },
+            TestContext.Current.CancellationToken);
+        var secondContext = Assert.IsType<CurrentSessionContext>(
+            factory.LastServices!.CurrentSessionContext);
+
+        Assert.Equal("isolated-one", firstContext.AgentSessionId);
+        Assert.Equal("11111111-1111-1111-1111-111111111111", firstContext.OwningProfileEntityId);
+        Assert.Equal(firstEpoch, firstContext.RuntimeEpoch);
+        Assert.Equal("isolated-two", secondContext.AgentSessionId);
+        Assert.Equal("22222222-2222-2222-2222-222222222222", secondContext.OwningProfileEntityId);
+        Assert.Null(secondContext.RuntimeEpoch);
+        Assert.NotSame(firstContext, secondContext);
     }
 
     [Fact]

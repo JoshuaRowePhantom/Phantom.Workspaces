@@ -74,6 +74,10 @@ internal static class McpTransportFactory
     {
         ArgumentNullException.ThrowIfNull(tool);
         processExecutor ??= services?.ProcessExecutor as IProcessExecutor;
+        if (trustContext is not null)
+        {
+            await trustContext.GetCompilationAsync(cancellationToken).ConfigureAwait(false);
+        }
 
         // #1416: resolve the Phantom transport mode from the (possibly Phantom-subclassed) tool. A
         // plain McpTool has no 'type' field, so it defaults to Streamable HTTP rather than the SDK's

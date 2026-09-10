@@ -542,12 +542,15 @@ public static class AgentFactory
             createAgentChatRequest.AgentSessionId,
             ct).ConfigureAwait(false);
 
-        var executionTrustContext = await ResolveExecutionTrustContextAsync(
-            requestedAgentDefinition,
-            createAgentChatRequest.TrustProfileProvider
-                ?? services?.TrustProfileResolver as Phantom.Workspaces.Llm.Trust.ITrustProfileProvider,
-            services,
-            ct);
+        var executionTrustContext = services?.RemoteAgentSessionRuntimeIntent is not null
+            ? services.AgentExecutionTrustContext
+                as Phantom.Workspaces.Llm.Trust.AgentExecutionTrustContext
+            : await ResolveExecutionTrustContextAsync(
+                requestedAgentDefinition,
+                createAgentChatRequest.TrustProfileProvider
+                    ?? services?.TrustProfileResolver as Phantom.Workspaces.Llm.Trust.ITrustProfileProvider,
+                services,
+                ct);
 
         ChatHistoryProviderDefinition? definition = null;
         if (requestedAgentDefinition is PromptAgent promptAgent

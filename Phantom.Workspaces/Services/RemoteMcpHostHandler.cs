@@ -115,32 +115,14 @@ public sealed class RemoteMcpHostHandler
                 $"Remote MCP host has no trust profile resolver/compiler for reference '{trustProfileRef}'.");
         }
 
-        return ResolveTrustContextCoreAsync(resolver, compiler, trustProfileRef, expectedRevision, ct);
-
-        static async Task<AgentExecutionTrustContext?> ResolveTrustContextCoreAsync(
-            IRemoteTrustProfileResolver resolver,
-            ITrustProfileProcessPolicyCompiler compiler,
-            string trustProfileRef,
-            string? expectedRevision,
-            CancellationToken ct)
-        {
-            var resolved = await resolver.ResolveAsync(trustProfileRef, ct).ConfigureAwait(false)
-                ?? throw new InvalidOperationException(
-                    $"Trust profile '{trustProfileRef}' could not be resolved on the launch host.");
-
-            if (!string.IsNullOrWhiteSpace(expectedRevision)
-                && !string.Equals(resolved.Revision, expectedRevision, StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException(
-                    $"Trust profile '{trustProfileRef}' has revision '{resolved.Revision}' "
-                    + $"but the request expected '{expectedRevision}'. Refusing to launch.");
-            }
-
-            return new AgentExecutionTrustContext(
-                resolved.Profile,
-                compiler,
-                new AgentExecutionTrustProfileReference("trust-profile", trustProfileRef, expectedRevision));
-        }
+        return Task.FromResult<AgentExecutionTrustContext?>(
+            new AgentExecutionTrustContext(
+                new AgentExecutionTrustProfileReference(
+                    "trust-profile",
+                    trustProfileRef,
+                    expectedRevision),
+                resolver,
+                compiler));
     }
 
     /// <summary>

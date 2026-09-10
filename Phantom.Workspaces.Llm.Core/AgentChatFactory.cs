@@ -77,13 +77,14 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
                 else
                 {
                     var effectiveServices = WithSelfAsFactory(services ?? _services);
-                    var trustProfileProvider =
-                        effectiveServices.TrustProfileResolver as Trust.ITrustProfileProvider;
-                    var executionTrustContext = await AgentFactory.ResolveExecutionTrustContextAsync(
-                        definition,
-                        trustProfileProvider,
-                        effectiveServices,
-                        ct).ConfigureAwait(false);
+                    var executionTrustContext = effectiveServices.RemoteAgentSessionRuntimeIntent is not null
+                        ? effectiveServices.AgentExecutionTrustContext
+                            as Trust.AgentExecutionTrustContext
+                        : await AgentFactory.ResolveExecutionTrustContextAsync(
+                            definition,
+                            effectiveServices.TrustProfileResolver as Trust.ITrustProfileProvider,
+                            effectiveServices,
+                            ct).ConfigureAwait(false);
 
                     if (definition is not null)
                     {

@@ -15,18 +15,21 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
     private readonly IAgentSessionRuntimeContextFactory contextFactory;
     private readonly IAgentDefinitionResolver definitionResolver;
     private readonly TimeProvider timeProvider;
+    private readonly AgentServices? hostServices;
 
     internal DataAccessAgentSessionRuntimeHostFactory(
         IDataAccessLayer dataAccessLayer,
         IRunningAgentChatTable runningChats,
         IAgentSessionRuntimeContextFactory contextFactory,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        AgentServices? hostServices = null)
     {
         this.dataAccessLayer = dataAccessLayer ?? throw new ArgumentNullException(nameof(dataAccessLayer));
         this.runningChats = runningChats ?? throw new ArgumentNullException(nameof(runningChats));
         this.contextFactory = contextFactory ?? throw new ArgumentNullException(nameof(contextFactory));
         this.definitionResolver = new AgentDefinitionResolver(dataAccessLayer);
         this.timeProvider = timeProvider ?? TimeProvider.System;
+        this.hostServices = hostServices;
     }
 
     public async ValueTask<PersistedAgentSessionRuntimeIntent?> LoadIntentAsync(
@@ -61,7 +64,7 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
             {
                 AgentSessionId = new AgentSessionId(intent.AgentSessionId),
                 AgentSessionEntity = data,
-                AgentServices = new AgentServices
+                AgentServices = (this.hostServices ?? new AgentServices()) with
                 {
                     CurrentSessionContext = new CurrentSessionContext
                     {
