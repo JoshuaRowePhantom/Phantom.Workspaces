@@ -24,13 +24,32 @@ public sealed class AgentSessionTransportListener : ITransportListener
     {
         if (request.ValueKind != JsonValueKind.Object
             || !request.TryGetProperty("type", out var type)
-            || type.GetString() != "attach-agent-session")
+            || type.ValueKind != JsonValueKind.String
+            || type.GetString() is not ("attach-agent-session" or "take-over-agent-session"))
             return null;
         lock (this.gate) ObjectDisposedException.ThrowIf(this.disposed, this);
         try
         {
-            var open = AgentSessionProtocolCodec.DeserializeOpen(request);
             var peer = this.peerIdentityProvider.GetRequiredIdentity(channel);
+            if (type.GetString() == "take-over-agent-session")
+            {
+                var takeover = AgentSessionProtocolCodec.DeserializeTakeover(request);
+                await this.host.TakeOverAsync(peer, takeover, ct).ConfigureAwait(false);
+                var frame = AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.CreateFrame(
+                    new RuntimeEpoch { Value = Guid.NewGuid() },
+                    1,
+                    takeover.CorrelationId,
+                    new CommandCompletedEvent
+                    {
+                        CommandId = takeover.CorrelationId,
+                        Result = JsonSerializer.SerializeToElement(new { takenOver = true }),
+                    });
+                await channel.Writer.WriteAsync(
+                    AgentSessionProtocolCodec.SerializeFrame(frame), ct).ConfigureAwait(false);
+                return null;
+            }
+
+            var open = AgentSessionProtocolCodec.DeserializeOpen(request);
             if (open.OpenIntent == AgentSessionOpenIntent.Status)
             {
                 var status = await this.host.GetStatusAsync(peer, open, ct).ConfigureAwait(false);

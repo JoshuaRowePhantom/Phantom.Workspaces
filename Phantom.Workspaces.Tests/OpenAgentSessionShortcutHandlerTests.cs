@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Text.Json;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using Avalonia.Headless.XUnit;
 using Phantom.Workspaces.Agent.Gui;
@@ -10,6 +12,7 @@ using Phantom.Workspaces.Gui.Shared.Utilities;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Core.Manifest;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.ViewModels;
@@ -20,6 +23,53 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class OpenAgentSessionShortcutHandlerTests
 {
+    [Theory]
+    [InlineData(AgentSessionRemoteStatus.Running)]
+    [InlineData(AgentSessionRemoteStatus.NotRunning)]
+    [InlineData(AgentSessionRemoteStatus.Unavailable)]
+    public async Task Handle_RemoteOwnerPrompt_ShowsAuthorizedStatusAndConnectsOnOwner(
+        AgentSessionRemoteStatus status)
+    {
+        var choices = new RecordingOwnerDecisionProvider(
+            AgentSessionOwnerDecision.ConnectOnOwner);
+        var handler = Handler(choices);
+        var transport = new OwnerDecisionTransport(status);
+
+        var result = await handler.ResolveRemoteOwnerAsync(
+            RemoteEntity(),
+            Guid.Parse("11111111-1111-1111-1111-111111111111"),
+            Guid.Parse("22222222-2222-2222-2222-222222222222"),
+            transport,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(status, choices.Status);
+        Assert.Equal(AgentChatAcquisitionMode.StartOrAttachRemote, result.Mode);
+        Assert.Same(transport, result.Transport);
+        Assert.Equal(["attach-agent-session"], transport.RequestTypes);
+    }
+
+    [Fact]
+    public async Task TryCreateAgentSessionTabForRestoreAsync_RemoteOwner_ResumesLocallyAfterTakeover()
+    {
+        var handler = Handler(new RecordingOwnerDecisionProvider(
+            AgentSessionOwnerDecision.ResumeLocally));
+        var transport = new OwnerDecisionTransport(AgentSessionRemoteStatus.Running);
+        var localOwner = Guid.Parse("22222222-2222-2222-2222-222222222222");
+
+        var result = await handler.ResolveRemoteOwnerAsync(
+            RemoteEntity(),
+            Guid.Parse("11111111-1111-1111-1111-111111111111"),
+            localOwner,
+            transport,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(AgentChatAcquisitionMode.Local, result.Mode);
+        Assert.Null(result.Transport);
+        Assert.Equal(localOwner.ToString(), result.Entity.GetProperty("host-profile-entity-id").GetString());
+        Assert.Equal(8, result.Entity.GetProperty("ownership-generation").GetInt64());
+        Assert.Equal(["attach-agent-session", "take-over-agent-session"], transport.RequestTypes);
+    }
+
     [AvaloniaFact(Timeout = 30_000)]
     public async Task ComposeSessionAgentViewModel_AlwaysConfiguresSlashCommands()
     {
@@ -304,6 +354,97 @@ public sealed class OpenAgentSessionShortcutHandlerTests
             }
             """);
         return document.RootElement.Clone();
+    }
+
+    private static OpenAgentSessionShortcutHandler Handler(
+        IAgentSessionOwnerDecisionProvider decisionProvider)
+        => new(
+            new AgentSessionShortcutContext(),
+            MainWindowIntegrationTests.CreateLocalTrustedExecutorSelector(),
+            Moq.Mock.Of<IRunningAgentChatTable>(),
+            decisionProvider);
+
+    private static JsonElement RemoteEntity()
+        => JsonDocument.Parse(
+            """
+            {
+              "agent-session-id":"remote-choice",
+              "host-profile-entity-id":"11111111-1111-1111-1111-111111111111",
+              "ownership-generation":7
+            }
+            """).RootElement.Clone();
+
+    private sealed class RecordingOwnerDecisionProvider(AgentSessionOwnerDecision decision)
+        : IAgentSessionOwnerDecisionProvider
+    {
+        internal AgentSessionRemoteStatus? Status { get; private set; }
+
+        public Task<AgentSessionOwnerDecision> ChooseAsync(
+            AgentSessionOwnerDecisionContext context,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            this.Status = context.Status;
+            return Task.FromResult(decision);
+        }
+    }
+
+    private sealed class OwnerDecisionTransport(AgentSessionRemoteStatus status) : ITransport
+    {
+        internal List<string> RequestTypes { get; } = [];
+
+        public Task<IMessageChannel> ConnectToMessageChannelAsync(
+            JsonElement request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var type = request.GetProperty("type").GetString()!;
+            this.RequestTypes.Add(type);
+            var channel = new OwnerDecisionChannel();
+            if (type == "attach-agent-session")
+            {
+                channel.Send(new SessionStatusEvent { Status = status }, Guid.NewGuid());
+            }
+            else
+            {
+                var takeover = AgentSessionProtocolCodec.DeserializeTakeover(request);
+                channel.Send(
+                    new CommandCompletedEvent { CommandId = takeover.CorrelationId },
+                    takeover.CorrelationId);
+            }
+            return Task.FromResult<IMessageChannel>(channel);
+        }
+
+        public Task<Stream> ConnectToStreamAsync(
+            JsonElement request,
+            CancellationToken ct = default)
+            => throw new NotSupportedException();
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        private sealed class OwnerDecisionChannel : IMessageChannel
+        {
+            private readonly Channel<JsonElement> incoming = Channel.CreateUnbounded<JsonElement>();
+            private readonly Channel<JsonElement> outgoing = Channel.CreateUnbounded<JsonElement>();
+
+            public ChannelWriter<JsonElement> Writer => this.outgoing.Writer;
+            public ChannelReader<JsonElement> Reader => this.incoming.Reader;
+
+            internal void Send(AgentSessionServerEvent value, Guid correlationId)
+                => this.incoming.Writer.TryWrite(AgentSessionProtocolCodec.SerializeFrame(
+                    AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.CreateFrame(
+                        new RuntimeEpoch { Value = Guid.NewGuid() },
+                        1,
+                        correlationId,
+                        value)));
+
+            public ValueTask DisposeAsync()
+            {
+                this.incoming.Writer.TryComplete();
+                this.outgoing.Writer.TryComplete();
+                return ValueTask.CompletedTask;
+            }
+        }
     }
 
     private sealed class SpyRuntimeContextFactory : IAgentSessionRuntimeContextFactory

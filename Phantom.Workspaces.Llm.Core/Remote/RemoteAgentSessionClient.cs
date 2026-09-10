@@ -61,6 +61,7 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
                 ? status.Status
                 : AgentSessionRemoteStatus.Unavailable;
         }
+
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             throw;
@@ -74,6 +75,38 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
             if (channel is not null)
                 await channel.DisposeAsync().ConfigureAwait(false);
         }
+    }
+
+    public static async Task TakeOverAsync(
+        ITransport transport,
+        AgentSessionOpenRequest statusRequest,
+        string newOwningProfileEntityId,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(transport);
+        ArgumentNullException.ThrowIfNull(statusRequest);
+        if (statusRequest.OpenIntent != AgentSessionOpenIntent.Status)
+            throw new ArgumentException("Takeover requires the status request used for owner authorization.", nameof(statusRequest));
+        if (string.IsNullOrWhiteSpace(newOwningProfileEntityId))
+            throw new ArgumentException("The new owning profile is required.", nameof(newOwningProfileEntityId));
+
+        var correlationId = Guid.NewGuid();
+        await using var channel = await transport.ConnectToMessageChannelAsync(
+            AgentSessionProtocolCodec.SerializeTakeover(new AgentSessionTakeoverRequest
+            {
+                AgentSessionId = statusRequest.AgentSessionId,
+                ExpectedOwningProfileEntityId = statusRequest.ExpectedOwningProfileEntityId,
+                ExpectedOwnershipGeneration = statusRequest.ExpectedOwnershipGeneration,
+                NewOwningProfileEntityId = newOwningProfileEntityId,
+                CorrelationId = correlationId,
+            }), ct).ConfigureAwait(false);
+        var frame = AgentSessionProtocolCodec.DeserializeFrame(await channel.Reader.ReadAsync(ct).ConfigureAwait(false));
+        var result = AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(frame);
+        if (result is CommandCompletedEvent && frame.CorrelationId == correlationId)
+            return;
+        if (result is OperationErrorEvent error)
+            throw RemoteAgentSessionException.FromWire(error.Error);
+        throw new RemoteAgentProtocolException("The takeover endpoint returned an unexpected response.");
     }
 
     public async Task ConnectAsync(AgentSessionOpenRequest request, CancellationToken ct = default)
@@ -409,6 +442,12 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
             throw new RemoteAgentProtocolException("A server frame sequence gap or regression was detected.");
 
         var value = AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(frame);
+        if (this.runtimeEpoch is null && value is SessionTerminalEvent terminal)
+        {
+            this.terminal = true;
+            this.ready?.TrySetException(CreateTerminalException(terminal, frame.CorrelationId));
+            return;
+        }
         if (this.runtimeEpoch is null && value is not SessionSnapshotEvent)
             throw new RemoteAgentProtocolException("The first attached-session frame must be a snapshot.");
         this.runtimeEpoch ??= frame.RuntimeEpoch;
@@ -418,6 +457,7 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
             this.reconnecting = false;
             this.ready?.TrySetResult(frame);
         }
+
         if (value is SessionTerminalEvent)
             this.terminal = true;
         if (value is CommandCompletedEvent or OperationErrorEvent)
@@ -458,6 +498,28 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
             }
         }
         this.FrameReceived?.Invoke(this, frame);
+    }
+
+    private static Exception CreateTerminalException(
+        SessionTerminalEvent terminal,
+        Guid correlationId)
+    {
+        var completion = terminal.CompletionState;
+        return RemoteAgentSessionException.FromWire(new RemoteAgentOperationError
+        {
+            Code = completion.TryGetProperty("code", out var code)
+                ? code.GetString() ?? terminal.Reason
+                : terminal.Reason,
+            Operation = completion.TryGetProperty("operation", out var operation)
+                ? operation.GetString() ?? "attach"
+                : "attach",
+            IsRetryable = completion.TryGetProperty("retryable", out var retryable)
+                && retryable.ValueKind is JsonValueKind.True,
+            Message = completion.TryGetProperty("message", out var message)
+                ? message.GetString() ?? "The agent session is unavailable."
+                : "The agent session is unavailable.",
+            CorrelationId = correlationId,
+        });
     }
 
     private async Task<T> SendResultAsync<T>(AgentSessionCommand command, CancellationToken ct)

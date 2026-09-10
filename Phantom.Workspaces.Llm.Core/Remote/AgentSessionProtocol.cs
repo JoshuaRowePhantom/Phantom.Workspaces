@@ -355,6 +355,49 @@ internal static class AgentSessionProtocolCodec
         return JsonSerializer.SerializeToElement(properties, Options);
     }
 
+    internal static JsonElement SerializeTakeover(AgentSessionTakeoverRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (string.IsNullOrWhiteSpace(request.AgentSessionId)
+            || string.IsNullOrWhiteSpace(request.ExpectedOwningProfileEntityId)
+            || request.ExpectedOwnershipGeneration < 0
+            || string.IsNullOrWhiteSpace(request.NewOwningProfileEntityId)
+            || request.CorrelationId == Guid.Empty)
+            throw new ArgumentException("A complete takeover request is required.", nameof(request));
+        return JsonSerializer.SerializeToElement(new
+        {
+            type = "take-over-agent-session",
+            protocolVersion = Version,
+            agentSessionId = request.AgentSessionId,
+            expectedOwningProfileEntityId = request.ExpectedOwningProfileEntityId,
+            expectedOwnershipGeneration = request.ExpectedOwnershipGeneration,
+            newOwningProfileEntityId = request.NewOwningProfileEntityId,
+            correlationId = request.CorrelationId,
+        }, Options);
+    }
+
+    internal static AgentSessionTakeoverRequest DeserializeTakeover(JsonElement value)
+    {
+        var allowed = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "type", "protocol-version", "agent-session-id",
+            "expected-owning-profile-entity-id", "expected-ownership-generation",
+            "new-owning-profile-entity-id", "correlation-id",
+        };
+        RequireObjectAndType(value, "take-over-agent-session", allowed);
+        if (value.GetProperty("type").GetString() != "take-over-agent-session"
+            || value.GetProperty("protocol-version").GetInt32() != Version)
+            throw new RemoteAgentProtocolException("Unsupported takeover request.");
+        var members = value.EnumerateObject()
+            .Where(property => property.Name is not ("type" or "protocol-version"))
+            .ToDictionary(property => property.Name, property => property.Value.Clone());
+        var request = JsonSerializer.Deserialize<AgentSessionTakeoverRequest>(
+            JsonSerializer.Serialize(members, Options), Options)
+            ?? throw new RemoteAgentProtocolException("Takeover request was null.");
+        _ = SerializeTakeover(request);
+        return request;
+    }
+
     internal static AgentSessionOpenRequest DeserializeOpen(JsonElement element)
     {
         RequireObjectAndType(element, "attach-agent-session", OpenNames);

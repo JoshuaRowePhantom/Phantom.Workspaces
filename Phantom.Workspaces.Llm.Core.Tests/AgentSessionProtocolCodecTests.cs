@@ -174,6 +174,30 @@ public sealed class AgentSessionProtocolCodecTests
         Assert.Equal(value, copy);
     }
 
+    [Fact]
+    public void TakeoverCodec_UsesFixedDiscriminatorAndRejectsUnknownMembers()
+    {
+        var value = new AgentSessionTakeoverRequest
+        {
+            AgentSessionId = "session",
+            ExpectedOwningProfileEntityId = "owner",
+            ExpectedOwnershipGeneration = 8,
+            NewOwningProfileEntityId = "new-owner",
+            CorrelationId = Guid.NewGuid(),
+        };
+        var wire = AgentSessionProtocolCodec.SerializeTakeover(value);
+
+        Assert.Equal("take-over-agent-session", wire.GetProperty("type").GetString());
+        Assert.Equal(value, AgentSessionProtocolCodec.DeserializeTakeover(wire));
+        var members = wire.EnumerateObject().ToDictionary(
+            property => property.Name,
+            property => (object?)property.Value.Clone());
+        members["unexpected"] = true;
+        Assert.Throws<RemoteAgentProtocolException>(() =>
+            AgentSessionProtocolCodec.DeserializeTakeover(
+                JsonSerializer.SerializeToElement(members)));
+    }
+
     [Theory]
     [InlineData(AgentSessionOpenIntent.Status, "status")]
     [InlineData(AgentSessionOpenIntent.Start, "start")]

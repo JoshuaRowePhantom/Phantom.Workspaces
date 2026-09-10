@@ -15,6 +15,7 @@ using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Gui.Shared.Utilities;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Llm.SlashCommands;
 using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Services;
@@ -29,6 +30,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
     private readonly AgentSessionShortcutContext agentSessionShortcutContext;
     private readonly ITrustedExecutorSelector trustedExecutorSelector;
     private readonly IRunningAgentChatTable runningAgentChatTable;
+    private readonly IAgentSessionOwnerDecisionProvider ownerDecisionProvider;
 
     /// <summary>
     /// The running-agent-chat table used by this handler. Exposed so co-located view models that
@@ -43,10 +45,25 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         AgentSessionShortcutContext agentSessionShortcutContext,
         ITrustedExecutorSelector trustedExecutorSelector,
         IRunningAgentChatTable runningAgentChatTable)
+        : this(
+            agentSessionShortcutContext,
+            trustedExecutorSelector,
+            runningAgentChatTable,
+            new AgentSessionOwnerDecisionProvider())
+    {
+    }
+
+    internal OpenAgentSessionShortcutHandler(
+        AgentSessionShortcutContext agentSessionShortcutContext,
+        ITrustedExecutorSelector trustedExecutorSelector,
+        IRunningAgentChatTable runningAgentChatTable,
+        IAgentSessionOwnerDecisionProvider ownerDecisionProvider)
     {
         this.agentSessionShortcutContext = agentSessionShortcutContext;
         this.trustedExecutorSelector = trustedExecutorSelector;
         this.runningAgentChatTable = runningAgentChatTable ?? throw new ArgumentNullException(nameof(runningAgentChatTable));
+        this.ownerDecisionProvider = ownerDecisionProvider
+            ?? throw new ArgumentNullException(nameof(ownerDecisionProvider));
     }
 
     public ValueTask DisposeAsync() => lifetime.DisposeAsync();
@@ -267,7 +284,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             : null;
 
         var agentServices = await this.agentSessionShortcutContext.CreateAgentServicesAsync(mainWindowViewModel);
-        var acquisition = await ResolveAcquisitionAsync(
+        var acquisition = await this.ResolveAcquisitionAsync(
             mainWindowViewModel,
             agentSessionEntityData,
             ct);
@@ -276,7 +293,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             new AcquireAgentChatRequest
             {
                 AgentSessionId = new AgentSessionId(agentSessionId!),
-                AgentSessionEntity = agentSessionEntityData,
+                AgentSessionEntity = acquisition.Entity,
                 AgentServices = agentServices,
                 ForegroundScheduler = foregroundScheduler,
                 ToolResourceFactory = agentServices.ToolResourceFactory,
@@ -399,7 +416,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         }
 
         var agentDefinitionResolver = CreateAgentDefinitionResolver(mainWindowViewModel);
-        var acquisition = await ResolveAcquisitionAsync(
+        var acquisition = await this.ResolveAcquisitionAsync(
             mainWindowViewModel,
             agentSessionEntityData,
             ct);
@@ -408,7 +425,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             new AcquireAgentChatRequest
             {
                 AgentSessionId = new AgentSessionId(agentSessionId!),
-                AgentSessionEntity = agentSessionEntityData,
+                AgentSessionEntity = acquisition.Entity,
                 AgentServices = agentServices,
                 ForegroundScheduler = foregroundScheduler,
                 ToolResourceFactory = agentServices.ToolResourceFactory,
@@ -468,9 +485,10 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         return (agent, loggerFactory, lease);
     }
 
-    private static async Task<(
+    internal async Task<(
         AgentChatAcquisitionMode Mode,
-        Phantom.Workspaces.Transport.ITransport? Transport)> ResolveAcquisitionAsync(
+        Phantom.Workspaces.Transport.ITransport? Transport,
+        JsonElement Entity)> ResolveAcquisitionAsync(
         MainWindowViewModel mainWindowViewModel,
         JsonElement agentSessionEntity,
         CancellationToken ct)
@@ -480,14 +498,14 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             || ownerElement.ValueKind != JsonValueKind.String
             || !Guid.TryParse(ownerElement.GetString(), out var owner))
         {
-            return (AgentChatAcquisitionMode.Local, null);
+            return (AgentChatAcquisitionMode.Local, null, agentSessionEntity);
         }
 
         var localOwner = mainWindowViewModel.EntityBroker.EntityRepository
             .WorkspaceEntitySession.UserComputerProfileEntityId;
         if (owner == localOwner.Value)
         {
-            return (AgentChatAcquisitionMode.Local, null);
+            return (AgentChatAcquisitionMode.Local, null, agentSessionEntity);
         }
 
         var composition = mainWindowViewModel.TransportComposition
@@ -498,7 +516,72 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         var transport = await composition.TransportFactoryRegistry.ConnectToAsync(
             descriptor.RootElement,
             ct);
-        return (AgentChatAcquisitionMode.StartOrAttachRemote, transport);
+        return await this.ResolveRemoteOwnerAsync(
+            agentSessionEntity, owner, localOwner.Value, transport, ct);
+    }
+
+    internal async Task<(
+        AgentChatAcquisitionMode Mode,
+        Phantom.Workspaces.Transport.ITransport? Transport,
+        JsonElement Entity)> ResolveRemoteOwnerAsync(
+        JsonElement agentSessionEntity,
+        Guid owner,
+        Guid localOwner,
+        Phantom.Workspaces.Transport.ITransport transport,
+        CancellationToken ct)
+    {
+        var generation = agentSessionEntity.GetProperty("ownership-generation").GetInt64();
+        var statusRequest = new AgentSessionOpenRequest
+        {
+            ProtocolVersion = 1,
+            AgentSessionId = agentSessionEntity.GetProperty("agent-session-id").GetString()
+                ?? throw new InvalidOperationException("The persisted agent session id is missing."),
+            ExpectedOwningProfileEntityId = owner.ToString("D"),
+            ExpectedOwnershipGeneration = generation,
+            OpenIntent = AgentSessionOpenIntent.Status,
+            AttachmentToken = Guid.NewGuid().ToString("N"),
+            Capabilities = [],
+        };
+        var status = await RemoteAgentSessionClient.GetStatusAsync(
+            new AgentSessionStatusRequest
+            {
+                Transport = transport,
+                OpenRequest = statusRequest,
+            },
+            ct);
+        var decision = await this.ownerDecisionProvider.ChooseAsync(
+            new AgentSessionOwnerDecisionContext(status, owner.ToString("D")), ct);
+        if (decision == AgentSessionOwnerDecision.ConnectOnOwner)
+            return (AgentChatAcquisitionMode.StartOrAttachRemote, transport, agentSessionEntity);
+
+        try
+        {
+            await RemoteAgentSessionClient.TakeOverAsync(
+                transport, statusRequest, localOwner.ToString(), ct);
+        }
+        finally
+        {
+            await transport.DisposeAsync();
+        }
+        return (
+            AgentChatAcquisitionMode.Local,
+            null,
+            ReplaceRuntimeOwner(agentSessionEntity, localOwner.ToString(), generation + 1));
+    }
+
+    private static JsonElement ReplaceRuntimeOwner(
+        JsonElement entity,
+        string owner,
+        long generation)
+    {
+        var values = entity.EnumerateObject().ToDictionary(
+            property => property.Name,
+            property => (object?)property.Value.Clone(),
+            StringComparer.Ordinal);
+        values["host-profile-entity-id"] = owner;
+        values["owning-profile-entity-id"] = owner;
+        values["ownership-generation"] = generation;
+        return JsonSerializer.SerializeToElement(values);
     }
 
     private static EntityId ReadHostProfileEntityId(JsonElement entityData)

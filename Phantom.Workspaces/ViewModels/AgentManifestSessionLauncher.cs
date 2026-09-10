@@ -106,7 +106,7 @@ internal static class AgentManifestSessionLauncher
             // Route through IRunningAgentChatTable → AgentChatFactory.GetOrCreateAsync so
             // AgentChatFactory.WithSelfAsFactory injects itself as RunningAgentChatFactory on
             // AgentServices (fix for #1180 / the #1109 guard).
-            lifetime.Run(_ => InitializeSessionTabAsync(
+            lifetime.Run(ct => InitializeSessionTabAsync(
                 openAgentSessionShortcutHandler,
                 mainWindowViewModel,
                 async () =>
@@ -123,11 +123,16 @@ internal static class AgentManifestSessionLauncher
                         agentManifest.Metadata[AgentManifestSecretUseMemoryFactory.EntityIdMetadataKey] =
                             agentSourceEntity.EntityId.ToString();
                     }
+                    var persistedEntity = createdAgentSessionEntity.Data is JsonElement value
+                        ? value
+                        : throw new InvalidOperationException("The created agent session has no persisted data.");
+                    var acquisition = await openAgentSessionShortcutHandler.ResolveAcquisitionAsync(
+                        mainWindowViewModel, persistedEntity, ct);
                     var lease = await openAgentSessionShortcutHandler.RunningAgentChatTable.AcquireAsync(
                         new AcquireAgentChatRequest
                         {
                             AgentSessionId = new AgentSessionId(agentSessionId),
-                            AgentSessionEntity = createdAgentSessionEntity.Data as JsonElement?,
+                            AgentSessionEntity = acquisition.Entity,
                             AgentManifest = agentManifest,
                             Parameters = parameterValues,
                             AgentServices = agentServices,
@@ -136,7 +141,9 @@ internal static class AgentManifestSessionLauncher
                             EntityName = createdAgentSessionEntity.DisplayName,
                             EntityId = createdAgentSessionEntity.EntityId.ToString(),
                             WorkspaceId = loadingTab.WorkspacePaneId,
-                        });
+                            AcquisitionMode = acquisition.Mode,
+                            OwningProfileTransport = acquisition.Transport,
+                        }, ct);
                     loadingTab.SetLease(lease);
                     return (lease.AgentChat, loggerFactory);
                 }, createdAgentSessionEntity, loadingTab, foregroundScheduler));
@@ -144,7 +151,7 @@ internal static class AgentManifestSessionLauncher
         else if (data.TryGetProperty("definition", out var definitionElement))
         {
             var definitionJson = definitionElement.GetRawText();
-            lifetime.Run(_ => InitializeSessionTabAsync(
+            lifetime.Run(ct => InitializeSessionTabAsync(
                 openAgentSessionShortcutHandler,
                 mainWindowViewModel,
                 async () =>
@@ -153,11 +160,16 @@ internal static class AgentManifestSessionLauncher
                     var agentServices = await agentSessionShortcutContext
                         .CreateAgentServicesAsync(mainWindowViewModel, loggerFactory);
                     var agentDefinition = PhantomAgentSchema.AgentDefinitionFromJson(definitionJson);
+                    var persistedEntity = createdAgentSessionEntity.Data is JsonElement value
+                        ? value
+                        : throw new InvalidOperationException("The created agent session has no persisted data.");
+                    var acquisition = await openAgentSessionShortcutHandler.ResolveAcquisitionAsync(
+                        mainWindowViewModel, persistedEntity, ct);
                     var lease = await openAgentSessionShortcutHandler.RunningAgentChatTable.AcquireAsync(
                         new AcquireAgentChatRequest
                         {
                             AgentSessionId = new AgentSessionId(agentSessionId),
-                            AgentSessionEntity = createdAgentSessionEntity.Data as JsonElement?,
+                            AgentSessionEntity = acquisition.Entity,
                             AgentDefinition = agentDefinition,
                             AgentServices = agentServices,
                             ToolResourceFactory = agentServices.ToolResourceFactory,
@@ -165,7 +177,9 @@ internal static class AgentManifestSessionLauncher
                             EntityName = createdAgentSessionEntity.DisplayName,
                             EntityId = createdAgentSessionEntity.EntityId.ToString(),
                             WorkspaceId = loadingTab.WorkspacePaneId,
-                        });
+                            AcquisitionMode = acquisition.Mode,
+                            OwningProfileTransport = acquisition.Transport,
+                        }, ct);
                     loadingTab.SetLease(lease);
                     return (lease.AgentChat, loggerFactory);
                 }, createdAgentSessionEntity, loadingTab, foregroundScheduler));

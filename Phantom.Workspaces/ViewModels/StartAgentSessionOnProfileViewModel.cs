@@ -239,11 +239,16 @@ public sealed class StartAgentSessionOnProfileViewModel : WorkspaceTabViewModel
             return;
         }
 
+        var persistedEntity = createdAgentSessionEntity.Data is JsonElement value
+            ? value
+            : throw new InvalidOperationException("The created agent session has no persisted data.");
+        var acquisition = await this.openAgentSessionShortcutHandler.ResolveAcquisitionAsync(
+            this.mainWindowViewModel, persistedEntity, CancellationToken.None);
         var lease = await this.openAgentSessionShortcutHandler.RunningAgentChatTable.AcquireAsync(
             new AcquireAgentChatRequest
             {
                 AgentSessionId = new AgentSessionId(agentSessionId),
-                AgentSessionEntity = createdAgentSessionEntity.Data as JsonElement?,
+                AgentSessionEntity = acquisition.Entity,
                 AgentDefinition = agentDefinition,
                 AgentServices = agentServices,
                 ToolResourceFactory = agentServices.ToolResourceFactory,
@@ -251,6 +256,8 @@ public sealed class StartAgentSessionOnProfileViewModel : WorkspaceTabViewModel
                 EntityName = createdAgentSessionEntity.DisplayName,
                 EntityId = createdAgentSessionEntity.EntityId.ToString(),
                 WorkspaceId = this.mainWindowViewModel.SelectedWorkspacePane?.Id,
+                AcquisitionMode = acquisition.Mode,
+                OwningProfileTransport = acquisition.Transport,
             });
 
         var agentSessionTab = await this.openAgentSessionShortcutHandler.CreateAgentSessionTabAsync(

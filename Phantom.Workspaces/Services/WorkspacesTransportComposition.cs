@@ -98,6 +98,9 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
         // ICopilotClient here and bridging only its SDK session back over the channel. This is
         // distinct from ChatClientTransportListener above, which remotes the whole AgentChat.
         this.LocalListeners.Register(new Phantom.Workspaces.Llm.Core.Transport.Chat.CopilotClientTransportListener(agentServices));
+        if (runningAgentChats is RunningAgentChatTable runningTable)
+            runningTable.ConfigureLocalRuntimeRegistry(
+                new LocalAgentSessionRuntimeRegistry(dataAccessLayer));
         if (agentSessionTransportListener is null && runningAgentChats is not null)
         {
             var runtimeRegistry = new RemoteAgentSessionRuntimeRegistry(TimeProvider.System);

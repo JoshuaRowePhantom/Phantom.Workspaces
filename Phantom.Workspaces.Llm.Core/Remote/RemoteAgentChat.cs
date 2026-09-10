@@ -86,7 +86,7 @@ public sealed class RemoteAgentChat : IAgentChat
     public event EventHandler? ToolsChanged;
     public event EventHandler? UsageChanged;
     public event EventHandler<AgentChatHistoryItem>? TurnCompleted;
-    private event EventHandler? RetentionChanged;
+    public event EventHandler? RetentionChanged;
 
     public IReadOnlyList<AgentChatToolItem> GetToolSnapshot()
     {
