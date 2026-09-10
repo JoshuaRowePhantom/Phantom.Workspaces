@@ -28,6 +28,7 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
     private readonly AgentServices? services;
     private readonly AgentExecutionTrustContext? trustContext;
     private readonly SemaphoreSlim initializeLock = new(1, 1);
+    private readonly CancellationTokenSource lifetimeCancellation = new();
 
     // Per-component executor binding (issue #1438): the resolved connection-descriptor this MCP
     // server is bound to, and the production router that connects it. When the descriptor is local
@@ -44,6 +45,8 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
     private readonly Func<CancellationToken, Task<AITool[]>> initializeToolsAsync;
 
     private McpClient? client;
+    private IAsyncDisposable? initializingClientTransport;
+    private IAsyncDisposable? connectedClientTransport;
     private AITool[]? cachedTools;
 
     // Remote-executor connection resources (issue #1438), disposed with the provider or cleared on
@@ -103,7 +106,11 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
         CancellationToken cancellationToken)
     {
         _ = context;
-        await this.initializeLock.WaitAsync(cancellationToken);
+        using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            this.lifetimeCancellation.Token);
+        var lifetimeToken = linkedCancellation.Token;
+        await this.initializeLock.WaitAsync(lifetimeToken);
         try
         {
             if (this.initializationFailed)
@@ -119,7 +126,7 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
                 var serverName = string.IsNullOrWhiteSpace(this.tool.ServerName) ? this.tool.Name : this.tool.ServerName;
                 try
                 {
-                    this.cachedTools = await this.initializeToolsAsync(cancellationToken);
+                    this.cachedTools = await this.initializeToolsAsync(lifetimeToken);
                 }
                 catch (Exception ex)
                 {
@@ -178,7 +185,26 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
                     clientIdOverride,
                     this.trustContext,
                     this.services?.ProcessExecutor as IProcessExecutor);
-                return await McpClient.CreateAsync(transport, null, this.loggerFactory, ct);
+                var disposableTransport = transport as IAsyncDisposable;
+                this.initializingClientTransport = disposableTransport;
+                try
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var client = await McpClient.CreateAsync(transport, null, this.loggerFactory, ct);
+                    this.connectedClientTransport = disposableTransport;
+                    Interlocked.CompareExchange(ref this.initializingClientTransport, null, disposableTransport);
+                    return client;
+                }
+                finally
+                {
+                    if (ReferenceEquals(
+                        Interlocked.CompareExchange(ref this.initializingClientTransport, null, disposableTransport),
+                        disposableTransport)
+                        && disposableTransport is not null)
+                    {
+                        await disposableTransport.DisposeAsync();
+                    }
+                }
             },
             logger,
             serverName,
@@ -244,14 +270,31 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        await this.lifetimeCancellation.CancelAsync();
+        var initializingClientTransport = Interlocked.Exchange(ref this.initializingClientTransport, null);
+        if (initializingClientTransport is not null)
+        {
+            await initializingClientTransport.DisposeAsync();
+        }
+
+        await this.initializeLock.WaitAsync();
+        this.initializeLock.Release();
+
         if (this.client is not null)
         {
             await this.client.DisposeAsync();
             this.client = null;
         }
 
+        if (this.connectedClientTransport is not null)
+        {
+            await this.connectedClientTransport.DisposeAsync();
+            this.connectedClientTransport = null;
+        }
+
         await this.DisposeRemoteAsync();
         this.initializeLock.Dispose();
+        this.lifetimeCancellation.Dispose();
     }
 
     // Tears down the remote-executor connection resources (issue #1438). The MCP SDK client owns and

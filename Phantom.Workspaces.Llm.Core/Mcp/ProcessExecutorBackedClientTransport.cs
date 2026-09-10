@@ -17,7 +17,7 @@ namespace Phantom.Workspaces.Llm.Mcp;
 /// diagnostic buffer. A nonzero premature exit faults the transport and disposal always kills the
 /// process tree.
 /// </summary>
-public sealed class ProcessExecutorBackedClientTransport : IClientTransport
+public sealed class ProcessExecutorBackedClientTransport : IClientTransport, IAsyncDisposable
 {
     private const int StderrRollingCapacity = 8 * 1024;
 
@@ -25,8 +25,11 @@ public sealed class ProcessExecutorBackedClientTransport : IClientTransport
     private readonly IProcessExecutor executor;
     private readonly ILoggerFactory loggerFactory;
     private readonly ILogger logger;
+    private readonly CancellationTokenSource lifetimeCancellation = new();
 
     private int connectCount;
+    private int disposed;
+    private ITransport? connectedTransport;
 
     /// <summary>Construct a transport for one MCP stdio server described by <paramref name="request"/>.</summary>
     public ProcessExecutorBackedClientTransport(
@@ -58,14 +61,18 @@ public sealed class ProcessExecutorBackedClientTransport : IClientTransport
                 $"ProcessExecutorBackedClientTransport '{Name}' has already been connected.");
         }
 
-        cancellationToken.ThrowIfCancellationRequested();
+        using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            lifetimeCancellation.Token);
+        var lifetimeToken = linkedCancellation.Token;
+        lifetimeToken.ThrowIfCancellationRequested();
 
         IProcessHandle? handle = null;
         StderrDrainer? stderrDrainer = null;
         CancellationTokenSource? drainCts = null;
         try
         {
-            handle = await executor.StartAsync(request, cancellationToken).ConfigureAwait(false);
+            handle = await executor.StartAsync(request, lifetimeToken).ConfigureAwait(false);
             drainCts = new CancellationTokenSource();
             stderrDrainer = new StderrDrainer(handle.StandardError, logger, Name, drainCts.Token);
             var exitTask = handle.WaitAsync(drainCts.Token);
@@ -74,14 +81,29 @@ public sealed class ProcessExecutorBackedClientTransport : IClientTransport
                 handle.StandardInput,
                 handle.StandardOutput,
                 loggerFactory);
-            var inner = await streamTransport.ConnectAsync(cancellationToken).ConfigureAwait(false);
-            return new ProcessOwnedMcpTransport(
+            var inner = await streamTransport.ConnectAsync(lifetimeToken).ConfigureAwait(false);
+            var ownedTransport = new ProcessOwnedMcpTransport(
                 inner,
                 handle,
                 stderrDrainer,
                 drainCts,
                 exitTask,
                 Name);
+            if (Volatile.Read(ref disposed) != 0)
+            {
+                await ownedTransport.DisposeAsync().ConfigureAwait(false);
+                throw new ObjectDisposedException(nameof(ProcessExecutorBackedClientTransport));
+            }
+
+            Interlocked.Exchange(ref connectedTransport, ownedTransport);
+            if (Volatile.Read(ref disposed) != 0
+                && Interlocked.Exchange(ref connectedTransport, null) is { } racedTransport)
+            {
+                await racedTransport.DisposeAsync().ConfigureAwait(false);
+                throw new ObjectDisposedException(nameof(ProcessExecutorBackedClientTransport));
+            }
+
+            return ownedTransport;
         }
         catch
         {
@@ -93,6 +115,7 @@ public sealed class ProcessExecutorBackedClientTransport : IClientTransport
                     drainCts.Dispose();
                 }
             }
+
             catch
             {
             }
@@ -109,6 +132,23 @@ public sealed class ProcessExecutorBackedClientTransport : IClientTransport
             }
             throw;
         }
+    }
+
+    /// <summary>Disposes a connected process transport, including initialization still in progress.</summary>
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref disposed, 1) != 0)
+        {
+            return;
+        }
+
+        await lifetimeCancellation.CancelAsync().ConfigureAwait(false);
+        if (Interlocked.Exchange(ref connectedTransport, null) is { } transport)
+        {
+            await transport.DisposeAsync().ConfigureAwait(false);
+        }
+
+        lifetimeCancellation.Dispose();
     }
 
     /// <summary>Drains child stderr into the logger and a bounded rolling diagnostic buffer.</summary>
