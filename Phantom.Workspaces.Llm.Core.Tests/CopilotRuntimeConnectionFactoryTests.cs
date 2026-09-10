@@ -95,12 +95,81 @@ public sealed class CopilotRuntimeConnectionFactoryTests
                 new RecordingCompiler(new(false, null, []))));
         client.SetRuntimeConnectionFactoryForTest(connectionFactory);
 
-        var connected = await client.CreateClientOptionsForTestAsync(workingDirectory: null);
-        var session = await client.CreateClientOptionsForTestAsync(@"C:\workspace");
+        var connectedTask = client.CreateClientOptionsForTestAsync(workingDirectory: null);
+        await connectionFactory.Started.Task;
+        var sessionTask = client.CreateClientOptionsForTestAsync(@"C:\workspace");
+        connectionFactory.Release.TrySetResult();
+        var connected = await connectedTask;
+        var session = await sessionTask;
 
         Assert.Equal(1, connectionFactory.CallCount);
         Assert.Same(connected.Connection, session.Connection);
         Assert.Equal(@"C:\workspace", session.WorkingDirectory);
+    }
+
+    [Fact]
+    public async Task CreateConnectionAsync_Cancelled_RemovesUnconsumedEnvelope()
+    {
+        using var files = new RuntimeFiles();
+        using var cancellation = new CancellationTokenSource();
+        var policyPath = Path.Combine(files.LaunchRoot, "cancelled", "policy.json");
+        var policyStore = new CancellingPolicyStore(policyPath, cancellation);
+        var factory = new CopilotRuntimeConnectionFactory(
+            policyStore,
+            files.BaseDirectory,
+            "win-x64");
+        var context = new AgentExecutionTrustContext(
+            new TrustProfile { NetworkCapabilities = [] },
+            new RecordingCompiler(new(true, CreatePolicy(), [])));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => factory.CreateConnectionAsync(
+                context,
+                files.CopilotPath,
+                cancellation.Token));
+
+        Assert.False(File.Exists(policyPath));
+        Assert.Equal(1, policyStore.CreateCount);
+    }
+
+    [Fact]
+    public async Task DisposeAsync_UnconsumedHandoff_DeletesFileOnce()
+    {
+        using var files = new RuntimeFiles();
+        var factory = new CopilotRuntimeConnectionFactory(
+            new CopilotLaunchPolicyStore(files.LaunchRoot, TimeProvider.System),
+            files.BaseDirectory,
+            "win-x64");
+        var context = new AgentExecutionTrustContext(
+            new TrustProfile { NetworkCapabilities = [] },
+            new RecordingCompiler(new(true, CreatePolicy(), [])));
+        var lease = await factory.CreateConnectionAsync(context, files.CopilotPath);
+        var policyPath = lease.PolicyFilePath!;
+
+        await lease.DisposeAsync();
+        await lease.DisposeAsync();
+
+        Assert.False(File.Exists(policyPath));
+    }
+
+    [Fact]
+    public async Task DisposeAsync_TransferredConnection_DoesNotKillSdkRuntime()
+    {
+        using var files = new RuntimeFiles();
+        var store = new CopilotLaunchPolicyStore(files.LaunchRoot, TimeProvider.System);
+        var factory = new CopilotRuntimeConnectionFactory(store, files.BaseDirectory, "win-x64");
+        var context = new AgentExecutionTrustContext(
+            new TrustProfile { NetworkCapabilities = [] },
+            new RecordingCompiler(new(true, CreatePolicy(), [])));
+        var lease = await factory.CreateConnectionAsync(context, files.CopilotPath);
+        var connection = lease.Connection;
+        var policyPath = lease.PolicyFilePath!;
+
+        _ = store.Consume(policyPath, Environment.ProcessId);
+        await lease.DisposeAsync();
+
+        Assert.Same(connection, lease.Connection);
+        Assert.False(File.Exists(policyPath));
     }
 
     internal static MxcProcessPolicy CreatePolicy() =>
@@ -131,16 +200,40 @@ public sealed class CopilotRuntimeConnectionFactoryTests
     private sealed class RecordingConnectionFactory : ICopilotRuntimeConnectionFactory
     {
         public int CallCount { get; private set; }
+        public TaskCompletionSource Started { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public Task<CopilotRuntimeConnectionLease> CreateConnectionAsync(
+        public async Task<CopilotRuntimeConnectionLease> CreateConnectionAsync(
             AgentExecutionTrustContext trustContext,
             string? cliPath,
             CancellationToken cancellationToken = default)
         {
             CallCount++;
-            return Task.FromResult(new CopilotRuntimeConnectionLease(
+            Started.TrySetResult();
+            await Release.Task.WaitAsync(cancellationToken);
+            return new CopilotRuntimeConnectionLease(
                 RuntimeConnection.ForStdio("wrapper.exe", ["--policy", "one"]),
-                policyLease: null));
+                policyLease: null);
+        }
+    }
+
+    private sealed class CancellingPolicyStore(
+        string policyPath,
+        CancellationTokenSource cancellation) : ICopilotLaunchPolicyStore
+    {
+        public int CreateCount { get; private set; }
+
+        public CopilotLaunchPolicyLease Create(
+            MxcProcessPolicy policy,
+            int? parentProcessId = null)
+        {
+            CreateCount++;
+            Directory.CreateDirectory(Path.GetDirectoryName(policyPath)!);
+            File.WriteAllText(policyPath, "policy");
+            cancellation.Cancel();
+            return new CopilotLaunchPolicyLease(policyPath);
         }
     }
 

@@ -50,7 +50,7 @@ public sealed class CopilotRuntimeConnectionLease : IAsyncDisposable
 public sealed class CopilotRuntimeConnectionFactory : ICopilotRuntimeConnectionFactory
 {
     internal const string WrapperFileName = "phantom-copilot-wrapper.exe";
-    private readonly CopilotLaunchPolicyStore policyStore;
+    private readonly ICopilotLaunchPolicyStore policyStore;
     private readonly string baseDirectory;
     private readonly string runtimeIdentifier;
 
@@ -63,7 +63,7 @@ public sealed class CopilotRuntimeConnectionFactory : ICopilotRuntimeConnectionF
     }
 
     internal CopilotRuntimeConnectionFactory(
-        CopilotLaunchPolicyStore policyStore,
+        ICopilotLaunchPolicyStore policyStore,
         string baseDirectory,
         string runtimeIdentifier)
     {
