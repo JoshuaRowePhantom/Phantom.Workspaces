@@ -17,6 +17,18 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 public sealed class ProcessExecutorBackedClientTransportTests
 {
     [Fact]
+    public void Name_ConstructedTransport_ReturnsConfiguredName()
+    {
+        var transport = new ProcessExecutorBackedClientTransport(
+            "restricted-tool",
+            new ProcessExecutionRequest("some.exe"),
+            new StubProcessExecutor(),
+            NullLoggerFactory.Instance);
+
+        Assert.Equal("restricted-tool", transport.Name);
+    }
+
+    [Fact]
     public async Task ConnectAsync_SecondCall_ThrowsInvalidOperation()
     {
         var executor = new StubProcessExecutor();

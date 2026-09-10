@@ -148,6 +148,36 @@ public sealed class ProcessHandleTests
     }
 
     [Fact]
+    public async Task WaitAsync_Cancelled_DoesNotReleaseProcessOwnership()
+    {
+        var backend = new FakeProcessBackend { HasExited = false };
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var handle = new StreamingProcessHandle(backend);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => handle.WaitAsync(cancellation.Token));
+        Assert.False(backend.Disposed);
+        Assert.Equal(0, backend.KillCount);
+
+        await handle.DisposeAsync();
+        Assert.True(backend.Disposed);
+        Assert.Equal(1, backend.KillCount);
+    }
+
+    [Fact]
+    public async Task TerminateAsync_RepeatedCall_KillsTreeOnce()
+    {
+        var backend = new FakeProcessBackend { HasExited = false };
+        await using var handle = new StreamingProcessHandle(backend);
+
+        await handle.TerminateAsync();
+        await handle.TerminateAsync();
+
+        Assert.Equal(1, backend.KillCount);
+    }
+
+    [Fact]
     public async Task ProcessHandle_MxcTimeoutAndMetadata_ArePreserved()
     {
         var metadata = new SandboxOutputMetadata();

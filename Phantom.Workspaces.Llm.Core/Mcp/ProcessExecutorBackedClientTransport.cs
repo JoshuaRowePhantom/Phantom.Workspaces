@@ -65,7 +65,7 @@ public sealed class ProcessExecutorBackedClientTransport : IClientTransport
         CancellationTokenSource? drainCts = null;
         try
         {
-            handle = executor.Start(request);
+            handle = await executor.StartAsync(request, cancellationToken).ConfigureAwait(false);
             drainCts = new CancellationTokenSource();
             stderrDrainer = new StderrDrainer(handle.StandardError, logger, Name, drainCts.Token);
             var exitTask = handle.WaitAsync(drainCts.Token);

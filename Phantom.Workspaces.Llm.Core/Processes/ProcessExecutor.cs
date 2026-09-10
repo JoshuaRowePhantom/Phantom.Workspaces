@@ -124,12 +124,26 @@ public interface IProcessHandle : IAsyncDisposable
     Stream StandardError { get; }
     ProcessLaunchInfo LaunchInfo { get; }
     Task<ProcessExitResult> WaitAsync(CancellationToken cancellationToken = default);
+    Task TerminateAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Kill();
+        return Task.CompletedTask;
+    }
     void Kill();
 }
 
 /// <summary>Starts ordinary or MXC-contained streaming processes.</summary>
 public interface IProcessExecutor
 {
+    Task<IProcessHandle> StartAsync(
+        ProcessExecutionRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(Start(request));
+    }
+
     IProcessHandle Start(ProcessExecutionRequest request);
 }
 
@@ -190,6 +204,27 @@ public sealed class ProcessExecutor : IProcessExecutor
         catch
         {
             backend.Dispose();
+            throw;
+        }
+    }
+
+    /// <inheritdoc/>
+    public async Task<IProcessHandle> StartAsync(
+        ProcessExecutionRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        IProcessHandle? handle = null;
+        try
+        {
+            handle = Start(request);
+            cancellationToken.ThrowIfCancellationRequested();
+            return handle;
+        }
+        catch
+        {
+            if (handle is not null)
+                await handle.DisposeAsync().ConfigureAwait(false);
             throw;
         }
     }
@@ -338,6 +373,7 @@ internal sealed class StreamingProcessHandle : IProcessHandle
     private Task? stdoutPump;
     private Task? stderrPump;
     private bool disposed;
+    private int terminated;
 
     public StreamingProcessHandle(IProcessBackend backend)
     {
@@ -396,7 +432,15 @@ internal sealed class StreamingProcessHandle : IProcessHandle
     public void Kill()
     {
         ObjectDisposedException.ThrowIf(disposed, this);
-        backend.Kill();
+        if (Interlocked.Exchange(ref this.terminated, 1) == 0 && !backend.HasExited)
+            backend.Kill();
+    }
+
+    public Task TerminateAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Kill();
+        return Task.CompletedTask;
     }
 
     public async ValueTask DisposeAsync()
@@ -408,7 +452,7 @@ internal sealed class StreamingProcessHandle : IProcessHandle
         Exception? killError = null;
         try
         {
-            if (!backend.HasExited)
+            if (Interlocked.Exchange(ref this.terminated, 1) == 0 && !backend.HasExited)
                 backend.Kill();
         }
         catch (Exception ex)

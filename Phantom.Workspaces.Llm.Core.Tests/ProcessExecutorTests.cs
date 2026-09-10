@@ -308,16 +308,39 @@ public sealed class ProcessExecutorTests
         var executor = new ProcessExecutor(new RecordingSystemProcessFactory(), new FakeSandboxRunner());
         Assert.Throws<ArgumentException>(() => executor.Start(new ProcessExecutionRequest("")));
     }
+
+    [Fact]
+    public async Task StartAsync_CancelledDuringLaunch_CleansPartialProcess()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var backend = new FakeProcessBackend { HasExited = false };
+        var factory = new RecordingSystemProcessFactory
+        {
+            Process = backend,
+            BeforeReturn = cancellation.Cancel,
+        };
+        var executor = new ProcessExecutor(factory, new FakeSandboxRunner());
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => executor.StartAsync(
+                new ProcessExecutionRequest("tool"),
+                cancellation.Token));
+
+        Assert.True(backend.Disposed);
+        Assert.Equal(1, backend.KillCount);
+    }
 }
 
 internal sealed class RecordingSystemProcessFactory : ISystemProcessFactory
 {
     public ProcessExecutionRequest? Request { get; private set; }
     public IProcessBackend Process { get; set; } = new FakeProcessBackend();
+    public Action? BeforeReturn { get; init; }
 
     public IProcessBackend Start(ProcessExecutionRequest request)
     {
         Request = request;
+        BeforeReturn?.Invoke();
         return Process;
     }
 }
