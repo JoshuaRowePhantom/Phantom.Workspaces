@@ -19,6 +19,8 @@ internal enum WindowsProcessLaunchStage
 
 internal enum WindowsProcessResource
 {
+    PseudoConsoleInputPipe,
+    PseudoConsoleOutputPipe,
     InputPipe,
     OutputPipe,
     PseudoConsole,
@@ -34,6 +36,7 @@ internal sealed record WindowsProcessLaunchEvent
     public required bool Succeeded { get; init; }
     public required int? Win32Error { get; init; }
     public WindowsProcessResource? Resource { get; init; }
+    public uint? PreviousSuspendCount { get; init; }
 }
 
 internal interface IWindowsProcessLaunchObserver

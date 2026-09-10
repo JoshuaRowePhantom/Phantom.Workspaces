@@ -112,6 +112,7 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
     private const uint CREATE_UNICODE_ENVIRONMENT    = 0x00000400;
     private const uint CREATE_SUSPENDED              = 0x00000004;
     private const uint PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016;
+    private const uint STARTF_USESTDHANDLES = 0x00000100;
     private const uint HANDLE_FLAG_INHERIT           = 0x00000001;
     private const uint FILE_FLAG_OVERLAPPED = 0x40000000;
 
@@ -303,12 +304,10 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
         var size = new COORD { X = (short)payload.Columns, Y = (short)payload.Rows };
         int hr = CreatePseudoConsole(size, inputPtySide, outputPtySide, 0, out IntPtr rawHpc);
 
-        // The PTY now owns the pipe ends it was given; dispose our copies
-        inputPtySide.Dispose();
-        outputPtySide.Dispose();
-
         if (hr != 0)
         {
+            inputPtySide.Dispose();
+            outputPtySide.Dispose();
             inputWrite.Dispose();
             outputRead.Dispose();
             throw new Win32Exception(hr, "CreatePseudoConsole failed.");
@@ -321,6 +320,8 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
         SafeProcessHandle? hProcess = null;
         SafeWaitHandle? hThread = null;
         SafeJobHandle? hJob = null;
+        FileStream? outputStream = null;
+        FileStream? inputStream = null;
         try
         {
             bool refAdded = false;
@@ -331,7 +332,14 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
 
                 var startupInfo = new STARTUPINFOEXW
                 {
-                    StartupInfo = new STARTUPINFOW { cb = Marshal.SizeOf<STARTUPINFOEXW>() },
+                    StartupInfo = new STARTUPINFOW
+                    {
+                        cb = Marshal.SizeOf<STARTUPINFOEXW>(),
+                        dwFlags = STARTF_USESTDHANDLES,
+                        hStdInput = IntPtr.Zero,
+                        hStdOutput = IntPtr.Zero,
+                        hStdError = IntPtr.Zero,
+                    },
                     lpAttributeList = attrList,
                 };
 
@@ -368,6 +376,22 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
                     Win32Error = null,
                 });
 
+                // ConHost attaches lazily while CreateProcessW runs. Keep our ConPTY-facing
+                // pipe copies alive until that attachment has completed, then initialize the
+                // caller endpoints before the child can consume or produce stream data.
+                outputStream = new FileStream(
+                    outputRead, FileAccess.Read, bufferSize: 4096, isAsync: true);
+                inputStream = new FileStream(
+                    inputWrite, FileAccess.Write, bufferSize: 4096, isAsync: true);
+                DisposeAndObserve(
+                    inputPtySide,
+                    WindowsProcessResource.PseudoConsoleInputPipe,
+                    options.LaunchObserver);
+                DisposeAndObserve(
+                    outputPtySide,
+                    WindowsProcessResource.PseudoConsoleOutputPipe,
+                    options.LaunchObserver);
+
                 hJob = CreateJob();
                 ThrowIfInjected(options, WindowsProcessLaunchStage.ConfigureJob);
                 ConfigureJob(hJob);
@@ -377,6 +401,7 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
                     Succeeded = true,
                     Win32Error = null,
                 });
+
                 ThrowIfInjected(options, WindowsProcessLaunchStage.AssignJob);
                 if (!AssignProcessToJobObject(hJob, hProcess))
                 {
@@ -397,7 +422,8 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
                 });
 
                 ThrowIfInjected(options, WindowsProcessLaunchStage.ResumeThread);
-                if (ResumeThread(hThread) == uint.MaxValue)
+                var previousSuspendCount = ResumeThread(hThread);
+                if (previousSuspendCount == uint.MaxValue)
                 {
                     var error = Marshal.GetLastWin32Error();
                     options.LaunchObserver?.Observe(new WindowsProcessLaunchEvent
@@ -413,6 +439,7 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
                     Stage = WindowsProcessLaunchStage.ResumeThread,
                     Succeeded = true,
                     Win32Error = null,
+                    PreviousSuspendCount = previousSuspendCount,
                 });
             }
             finally
@@ -430,6 +457,16 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
             DisposeAndObserve(hJob, WindowsProcessResource.Job, options.LaunchObserver);
             DisposeAndObserve(hProcess, WindowsProcessResource.Process, options.LaunchObserver);
             DisposeAndObserve(hThread, WindowsProcessResource.Thread, options.LaunchObserver);
+            DisposeAndObserve(
+                inputPtySide,
+                WindowsProcessResource.PseudoConsoleInputPipe,
+                options.LaunchObserver);
+            DisposeAndObserve(
+                outputPtySide,
+                WindowsProcessResource.PseudoConsoleOutputPipe,
+                options.LaunchObserver);
+            inputStream?.Dispose();
+            outputStream?.Dispose();
             inputWrite.Dispose();
             ObserveReleased(inputWrite, WindowsProcessResource.InputPipe, options.LaunchObserver);
             outputRead.Dispose();
@@ -459,10 +496,8 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
         _hJob = hJob;
         ProcessId = pi.dwProcessId;
 
-        // Caller-side pipe handles are created with FILE_FLAG_OVERLAPPED. Use isAsync: true
-        // so FileStream uses true async I/O with deterministic cancellation and ordering.
-        Output = new FileStream(outputRead, FileAccess.Read, bufferSize: 4096, isAsync: true);
-        Input = new FileStream(inputWrite, FileAccess.Write, bufferSize: 4096, isAsync: true);
+        Output = outputStream;
+        Input = inputStream;
     }
 
     // ── IPseudoTerminal ─────────────────────────────────────────────────────
@@ -616,7 +651,7 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
         WindowsProcessResource resource,
         IWindowsProcessLaunchObserver? observer)
     {
-        if (handle is null)
+        if (handle is null || handle.IsClosed)
             return;
         handle.Dispose();
         ObserveReleased(handle, resource, observer);

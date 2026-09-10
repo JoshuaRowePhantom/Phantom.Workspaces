@@ -1,9 +1,73 @@
+using Phantom.Workspaces.Llm.Shell;
 using Phantom.Workspaces.Testing.Processes;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
 public sealed class ConPtyPseudoTerminalModalSafetyTests
 {
+    [Fact]
+    public async Task ConPtyPseudoTerminal_DrainsRenderedOutputAfterChildExit()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        await using var terminal = new ConPtyPseudoTerminal(new ShellOpenPayload
+        {
+            Command = "cmd.exe",
+            CommandArguments = ["/d", "/c", "echo hello"],
+            Columns = 80,
+            Rows = 24,
+        });
+
+        var result = await terminal.WaitForExitAndDrainOutputAsync();
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("hello", result.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ConPtyPseudoTerminal_RetainsPtyPipeEndsUntilChildAttaches()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var observer = new RecordingLaunchObserver();
+        await using var terminal = ConPtyPseudoTerminal.Start(new()
+        {
+            Payload = new ShellOpenPayload
+            {
+                Command = "cmd.exe",
+                CommandArguments = ["/d", "/c", "exit 0"],
+                Columns = 80,
+                Rows = 24,
+            },
+            ShutdownTimeout = TimeSpan.FromSeconds(5),
+            LaunchObserver = observer,
+        });
+
+        await terminal.WaitForExitAsync();
+
+        var created = observer.IndexOf(
+            WindowsProcessLaunchStage.CreateProcess,
+            resource: null);
+        var inputReleased = observer.IndexOf(
+            WindowsProcessLaunchStage.ReleaseResource,
+            WindowsProcessResource.PseudoConsoleInputPipe);
+        var outputReleased = observer.IndexOf(
+            WindowsProcessLaunchStage.ReleaseResource,
+            WindowsProcessResource.PseudoConsoleOutputPipe);
+        var configured = observer.IndexOf(
+            WindowsProcessLaunchStage.ConfigureJob,
+            resource: null);
+
+        Assert.True(created < inputReleased);
+        Assert.True(created < outputReleased);
+        Assert.True(inputReleased < configured);
+        Assert.True(outputReleased < configured);
+        var resumed = observer.Single(WindowsProcessLaunchStage.ResumeThread);
+        Assert.Equal(1u, resumed.PreviousSuspendCount);
+    }
+
     [Fact]
     public async Task ConPtyPseudoTerminal_ReadyChild_ReportsReadinessHandshake()
     {
@@ -94,5 +158,27 @@ public sealed class ConPtyPseudoTerminalModalSafetyTests
         Assert.True(result.InputHandleClosed);
         Assert.True(result.OutputHandleClosed);
         Assert.True(result.AttributeListReleased);
+    }
+
+    private sealed class RecordingLaunchObserver : IWindowsProcessLaunchObserver
+    {
+        private readonly List<WindowsProcessLaunchEvent> events = [];
+
+        public void Observe(WindowsProcessLaunchEvent launchEvent) => events.Add(launchEvent);
+
+        public int IndexOf(
+            WindowsProcessLaunchStage stage,
+            WindowsProcessResource? resource)
+        {
+            var index = events.FindIndex(
+                launchEvent => launchEvent.Stage == stage
+                    && launchEvent.Resource == resource
+                    && launchEvent.Succeeded);
+            Assert.True(index >= 0, $"Missing successful {stage}/{resource} observation.");
+            return index;
+        }
+
+        public WindowsProcessLaunchEvent Single(WindowsProcessLaunchStage stage) =>
+            Assert.Single(events, launchEvent => launchEvent.Stage == stage && launchEvent.Succeeded);
     }
 }
