@@ -180,6 +180,40 @@ internal static class CopilotSessionTransportFrames
             ? value.GetString()
             : null;
 
+    public static bool TryGetTrustProfileReference(
+        JsonElement request,
+        out Phantom.Workspaces.Llm.Trust.AgentExecutionTrustProfileReference? reference)
+    {
+        reference = null;
+        JsonElement profile = default;
+        JsonElement revision = default;
+        var hasProfile = request.ValueKind == JsonValueKind.Object
+            && request.TryGetProperty(TrustProfileProperty, out profile);
+        var hasRevision = request.ValueKind == JsonValueKind.Object
+            && request.TryGetProperty(ExpectedTrustProfileRevisionProperty, out revision);
+        if (!hasProfile && !hasRevision)
+        {
+            return false;
+        }
+
+        if (!hasProfile
+            || !hasRevision
+            || profile.ValueKind != JsonValueKind.String
+            || revision.ValueKind != JsonValueKind.String
+            || string.IsNullOrWhiteSpace(profile.GetString())
+            || string.IsNullOrWhiteSpace(revision.GetString()))
+        {
+            throw new InvalidOperationException(
+                "Remote Copilot trust intent requires non-empty string profile and revision fields.");
+        }
+
+        reference = new Phantom.Workspaces.Llm.Trust.AgentExecutionTrustProfileReference(
+            "trust-profile",
+            profile.GetString()!,
+            revision.GetString()!);
+        return true;
+    }
+
     private static void ApplyBaseConfig(SessionConfigBase config, JsonElement configElement)
     {
         if (configElement.ValueKind != JsonValueKind.Object)

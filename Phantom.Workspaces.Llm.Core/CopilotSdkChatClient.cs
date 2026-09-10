@@ -1532,29 +1532,31 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     // Issue #1443: resolves model.options.executor (via the shared executor-bindings path) and, when
     // it maps to a non-local connection-descriptor, connects a transport and builds a session-only
     // remote ICopilotClient. Returns null — so the caller uses the in-process CLI factory — when no
-    // bindings/registry are wired, when the name is unbound, or when the descriptor is local.
+    // bindings/registry are wired or when the descriptor is local. A named but missing binding
+    // fails closed before any local or remote client is opened.
     private async Task<ICopilotClient?> TryCreateRemoteClientAsync(CancellationToken cancellationToken)
     {
-        if (this.executorBindings is null || this.executorTransportFactoryRegistry is null)
+        if (this.executorBindings is null)
         {
+            if (!string.IsNullOrWhiteSpace(this.modelExecutorName))
+            {
+                throw new InvalidOperationException(
+                    $"Executor binding '{this.modelExecutorName}' could not be resolved.");
+            }
+
             return null;
         }
 
-        JsonElement descriptor;
-        try
-        {
-            descriptor = this.executorBindings.ResolveComponent(this.modelExecutorName);
-        }
-        catch (InvalidOperationException)
-        {
-            // An unbound executor name falls back to the local in-process session rather than failing
-            // session creation; the manifest pre-pass is responsible for surfacing binding errors.
-            return null;
-        }
+        var descriptor = this.executorBindings.ResolveComponent(this.modelExecutorName);
 
         if (IsLocalDescriptor(descriptor))
         {
             return null;
+        }
+        if (this.executorTransportFactoryRegistry is null)
+        {
+            throw new InvalidOperationException(
+                "Remote Copilot execution requires a configured executor transport registry.");
         }
         var reference = this.executionTrustContext?.RemoteReference;
         if (this.executionTrustContext is not null && reference is null)
@@ -1571,13 +1573,19 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
     private static bool IsLocalDescriptor(JsonElement descriptor)
     {
-        if (descriptor.ValueKind != JsonValueKind.Object)
+        if (descriptor.ValueKind != JsonValueKind.Object
+            || !descriptor.TryGetProperty("type", out var type)
+            || type.ValueKind != JsonValueKind.String
+            || string.IsNullOrWhiteSpace(type.GetString()))
         {
-            return true;
+            throw new InvalidOperationException(
+                "The Copilot executor binding is malformed.");
         }
 
-        return !descriptor.TryGetProperty("type", out var type)
-            || string.Equals(type.GetString(), ExecutionTargetResolver.LocalDescriptorType, StringComparison.OrdinalIgnoreCase);
+        return string.Equals(
+            type.GetString(),
+            ExecutionTargetResolver.LocalDescriptorType,
+            StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

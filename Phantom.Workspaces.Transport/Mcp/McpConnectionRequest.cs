@@ -226,12 +226,26 @@ public static class McpConnectionRequest
             return false;
         }
 
-        var reference = GetString(connection, TrustProfileRefProperty);
-        if (string.IsNullOrWhiteSpace(reference))
+        var hasReference = connection.TryGetProperty(TrustProfileRefProperty, out var referenceElement);
+        var hasRevision = connection.TryGetProperty(TrustProfileRevisionProperty, out var revisionElement);
+        if (!hasReference && !hasRevision)
+        {
             return false;
+        }
 
-        trustProfileRef = reference;
-        expectedRevision = GetString(connection, TrustProfileRevisionProperty);
+        if (!hasReference
+            || !hasRevision
+            || referenceElement.ValueKind != JsonValueKind.String
+            || revisionElement.ValueKind != JsonValueKind.String
+            || string.IsNullOrWhiteSpace(referenceElement.GetString())
+            || string.IsNullOrWhiteSpace(revisionElement.GetString()))
+        {
+            throw new InvalidOperationException(
+                "Remote MCP trust intent requires non-empty string profile and revision fields.");
+        }
+
+        trustProfileRef = referenceElement.GetString()!;
+        expectedRevision = revisionElement.GetString()!;
         return true;
     }
 

@@ -1,5 +1,7 @@
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm.Trust;
+using System.Buffers.Binary;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -85,13 +87,23 @@ internal sealed class DataAccessLayerTrustProfileResolver
     {
         var revisions = new SortedDictionary<string, string>(StringComparer.Ordinal);
         Visit(profileName);
-        if (revisions.Count == 1)
-            return revisions[profileName];
+        if (revisions.Count == 1
+            && long.TryParse(
+                revisions[profileName],
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out var numericRevision)
+            && numericRevision >= 0)
+        {
+            return numericRevision.ToString(CultureInfo.InvariantCulture);
+        }
 
         var material = string.Join(
             "\n",
             revisions.Select(static item => $"{item.Key}\0{item.Value}"));
-        return $"sha256:{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material))).ToLowerInvariant()}";
+        var digest = SHA256.HashData(Encoding.UTF8.GetBytes(material));
+        var stableRevision = BinaryPrimitives.ReadInt64LittleEndian(digest) & long.MaxValue;
+        return stableRevision.ToString(CultureInfo.InvariantCulture);
 
         void Visit(string name)
         {

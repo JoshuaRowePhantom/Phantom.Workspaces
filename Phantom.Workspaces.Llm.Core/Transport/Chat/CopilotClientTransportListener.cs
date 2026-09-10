@@ -76,86 +76,79 @@ public sealed class CopilotClientTransportListener : ITransportListener
             return null;
         }
 
-        var profileReference = CopilotSessionTransportFrames.GetString(
-            request,
-            CopilotSessionTransportFrames.TrustProfileProperty);
-        var expectedRevision = CopilotSessionTransportFrames.GetString(
-            request,
-            CopilotSessionTransportFrames.ExpectedTrustProfileRevisionProperty);
-        if ((profileReference is null) != (expectedRevision is null))
-        {
-            throw new InvalidOperationException(
-                "Remote Copilot trust intent requires both a profile and expected revision.");
-        }
-
         CopilotRuntimeConnectionLease? selection = null;
-        if (profileReference is not null)
+        ICopilotClient? client = null;
+        try
         {
-            if (this.trustProfileResolver is null || this.policyCompiler is null)
+            if (CopilotSessionTransportFrames.TryGetTrustProfileReference(
+                    request,
+                    out var profileReference))
             {
-                throw new InvalidOperationException(
-                    "The remote Copilot host cannot resolve or compile the requested trust profile.");
-            }
-            try
-            {
+                if (this.trustProfileResolver is null || this.policyCompiler is null)
+                {
+                    throw new InvalidOperationException(
+                        "The remote Copilot host cannot resolve or compile the requested trust profile.");
+                }
+
                 var trustContext = new AgentExecutionTrustContext(
-                    new AgentExecutionTrustProfileReference(
-                        "trust-profile",
-                        profileReference,
-                        expectedRevision),
+                    profileReference!,
                     this.trustProfileResolver,
                     this.policyCompiler);
                 selection = await this.runtimeConnectionFactory
                     .CreateConnectionAsync(trustContext, cliPath: null, ct)
                     .ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+
+            var options = new CopilotClientOptions
             {
-                throw;
-            }
-            catch
-            {
-                throw new InvalidOperationException(
-                    "Remote Copilot launch was denied by host policy.");
-            }
-        }
-        var options = new CopilotClientOptions
-        {
-            Mode = CopilotClientMode.CopilotCli,
-            Connection = selection?.Connection,
-        };
-        ICopilotClient? client = null;
-        try
-        {
+                Mode = CopilotClientMode.CopilotCli,
+                Connection = selection?.Connection,
+            };
             client = this.clientFactory.Create(options);
             await client.StartAsync(ct).ConfigureAwait(false);
             return new CopilotSessionTransportHost(client, channel, ct, selection);
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            await DisposeFailedLaunchAsync(client, selection).ConfigureAwait(false);
+            throw;
+        }
         catch
         {
-            if (client is not null)
-            {
-                try
-                {
-                    await client.DisposeAsync().ConfigureAwait(false);
-                }
-                catch
-                {
-                }
-            }
-            try
-            {
-                if (selection is not null)
-                    await selection.DisposeAsync().ConfigureAwait(false);
-            }
-            catch
-            {
-            }
-            throw;
+            await DisposeFailedLaunchAsync(client, selection).ConfigureAwait(false);
+            throw new InvalidOperationException(
+                "Remote Copilot launch was denied by host policy.");
         }
     }
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+    private static async Task DisposeFailedLaunchAsync(
+        ICopilotClient? client,
+        CopilotRuntimeConnectionLease? selection)
+    {
+        if (client is not null)
+        {
+            try
+            {
+                await client.DisposeAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+            }
+        }
+
+        if (selection is not null)
+        {
+            try
+            {
+                await selection.DisposeAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+            }
+        }
+    }
 
     /// <summary>Serves a single channel: reads client request frames and drives a local SDK session.</summary>
     private sealed class CopilotSessionTransportHost : IAsyncDisposable

@@ -3,6 +3,7 @@ using System.Collections.Specialized;
 using System.Collections.Immutable;
 using System.Security;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using Microsoft.Extensions.AI;
 using AgentSchema;
@@ -1754,6 +1755,85 @@ public sealed class RunningAgentChatTableTests
         await context.GetCompilationAsync(TestContext.Current.CancellationToken);
         Assert.Equal(1, resolver.CallCount);
         Assert.Equal(1, compiler.CallCount);
+    }
+
+    [Fact]
+    public async Task Takeover_NewHost_RehydratesPersistedIntentAndRecompilesIndependently()
+    {
+        const string persistedIntent =
+            """
+            {
+              "agent-session-id": "takeover-trust-context",
+              "host-profile-entity-id": "11111111-1111-1111-1111-111111111111",
+              "ownership-generation": 4,
+              "trust-profile-reference": "restricted",
+              "expected-trust-profile-revision": 12
+            }
+            """;
+        var oldFactory = new FakeRunningAgentChatFactory();
+        var oldResolver = new RuntimeTrustResolver("12");
+        var oldCompiler = new RuntimeTrustCompiler();
+        var oldTable = new RunningAgentChatTable(
+            oldFactory,
+            new AgentSessionRuntimeContextFactory(null));
+
+        await using (var oldLease = await oldTable.AcquireAsync(
+                         new AcquireAgentChatRequest
+                         {
+                             AgentSessionId = new AgentSessionId("takeover-trust-context"),
+                             AgentSessionEntity = JsonDocument.Parse(persistedIntent).RootElement.Clone(),
+                             AgentDefinition = CreateTestDefinition("takeover-old"),
+                             AgentServices = new AgentServices
+                             {
+                                 TrustProfileResolver = oldResolver,
+                                 TrustProfilePolicyCompiler = oldCompiler,
+                             },
+                         },
+                         TestContext.Current.CancellationToken))
+        {
+            var oldContext = Assert.IsType<AgentExecutionTrustContext>(
+                oldFactory.LastServices!.AgentExecutionTrustContext);
+            await oldContext.GetCompilationAsync(TestContext.Current.CancellationToken);
+        }
+
+        var newFactory = new FakeRunningAgentChatFactory();
+        var newResolver = new RuntimeTrustResolver("12");
+        var newCompiler = new RuntimeTrustCompiler();
+        var newTable = new RunningAgentChatTable(
+            newFactory,
+            new AgentSessionRuntimeContextFactory(null));
+        var takeoverEntity = JsonNode.Parse(persistedIntent)!.AsObject();
+        takeoverEntity["host-profile-entity-id"] = "22222222-2222-2222-2222-222222222222";
+        takeoverEntity["ownership-generation"] = 5;
+
+        await using var newLease = await newTable.AcquireAsync(
+            new AcquireAgentChatRequest
+            {
+                AgentSessionId = new AgentSessionId("takeover-trust-context"),
+                AgentSessionEntity = JsonSerializer.SerializeToElement(takeoverEntity),
+                AgentDefinition = CreateTestDefinition("takeover-new"),
+                AgentServices = new AgentServices
+                {
+                    TrustProfileResolver = newResolver,
+                    TrustProfilePolicyCompiler = newCompiler,
+                },
+            },
+            TestContext.Current.CancellationToken);
+        var newContext = Assert.IsType<AgentExecutionTrustContext>(
+            newFactory.LastServices!.AgentExecutionTrustContext);
+        await newContext.GetCompilationAsync(TestContext.Current.CancellationToken);
+
+        Assert.NotSame(
+            oldFactory.LastServices!.AgentExecutionTrustContext,
+            newContext);
+        Assert.Equal(1, oldResolver.CallCount);
+        Assert.Equal(1, oldCompiler.CallCount);
+        Assert.Equal(1, newResolver.CallCount);
+        Assert.Equal(1, newCompiler.CallCount);
+        var currentSession = Assert.IsType<CurrentSessionContext>(
+            newFactory.LastServices.CurrentSessionContext);
+        Assert.Equal(5, currentSession.OwnershipGeneration);
+        Assert.Equal("22222222-2222-2222-2222-222222222222", currentSession.OwningProfileEntityId);
     }
 
     [Fact]

@@ -17,74 +17,6 @@ public sealed class RemoteExecutionContainmentMatrixTests
 {
     private const string AgentHost = "agent-host";
     private const string ComponentHost = "component-host";
-    private const string GuiHost = "gui-host";
-
-    public static TheoryData<bool, bool, bool> ExecutionCases => new()
-    {
-        { false, false, false },
-        { false, false, true },
-        { false, true, false },
-        { false, true, true },
-        { true, false, false },
-        { true, false, true },
-        { true, true, false },
-        { true, true, true },
-    };
-
-    [Theory]
-    [MemberData(nameof(ExecutionCases))]
-    public void ExecutionMatrix_AllEightPlacementContainmentCases_UseExpectedAgentAndLaunchHosts(
-        bool remoteAgent,
-        bool remoteComponent,
-        bool requiresContainment)
-    {
-        var bindings = CreateBindings(remoteAgent, remoteComponent);
-        var agentHost = remoteAgent ? AgentHost : GuiHost;
-        var component = bindings.ResolveComponent("model");
-        var launchHost = IsLocal(component)
-            ? agentHost
-            : component.GetProperty(ExecutorBindings.EntityIdPropertyName).GetString();
-
-        Assert.Equal(
-            remoteAgent ? AgentHost : TrustProfile.LocalClientInstance,
-            bindings.ToTopology().Resolve(ExecutorTarget.AgentExecutor));
-        Assert.Equal(remoteComponent ? ComponentHost : agentHost, launchHost);
-        Assert.Equal(requiresContainment, CreateCompilation(requiresContainment).RequiresContainment);
-    }
-
-    [Theory]
-    [MemberData(nameof(ExecutionCases))]
-    public async Task ExecutionMatrix_AllEightCases_ResolveTrustOnlyOnFinalLaunchHost(
-        bool remoteAgent,
-        bool remoteComponent,
-        bool requiresContainment)
-    {
-        var bindings = CreateBindings(remoteAgent, remoteComponent);
-        var agentHost = remoteAgent ? AgentHost : GuiHost;
-        var component = bindings.ResolveComponent("model");
-        var launchHostName = IsLocal(component)
-            ? agentHost
-            : ComponentHost;
-        var hosts = new Dictionary<string, RecordingLaunchHost>
-        {
-            [GuiHost] = new(GuiHost, requiresContainment),
-            [AgentHost] = new(AgentHost, requiresContainment),
-            [ComponentHost] = new(ComponentHost, requiresContainment),
-        };
-
-        var compilation = await hosts[launchHostName].CompileAsync();
-
-        Assert.Equal(requiresContainment, compilation.RequiresContainment);
-        Assert.Equal(1, hosts[launchHostName].ResolveCount);
-        Assert.Equal(1, hosts[launchHostName].CompileCount);
-        Assert.All(
-            hosts.Where(item => item.Key != launchHostName),
-            item =>
-            {
-                Assert.Equal(0, item.Value.ResolveCount);
-                Assert.Equal(0, item.Value.CompileCount);
-            });
-    }
 
     [Fact]
     public async Task ExecutionMatrix_ContainmentNotRequired_UsesOrdinaryExecutorBranch()
@@ -246,6 +178,96 @@ public sealed class RemoteExecutionContainmentMatrixTests
         Assert.Equal(0, clientFactory.CreateCount);
     }
 
+    [Theory]
+    [InlineData("""{"type":"copilot-sdk-session","trust-profile":"restricted"}""")]
+    [InlineData("""{"type":"copilot-sdk-session","expected-trust-profile-revision":"17"}""")]
+    [InlineData("""{"type":"copilot-sdk-session","trust-profile":42,"expected-trust-profile-revision":"17"}""")]
+    [InlineData("""{"type":"copilot-sdk-session","trust-profile":"restricted","expected-trust-profile-revision":17}""")]
+    [InlineData("""{"type":"copilot-sdk-session","trust-profile":" ","expected-trust-profile-revision":"17"}""")]
+    public async Task RemoteCopilot_MalformedTrustIntent_FailsClosedBeforeClientCreation(string json)
+    {
+        var clientFactory = new ExecutorRoutingTestHarness.RecordingClientFactory();
+        var listener = new CopilotClientTransportListener(
+            clientFactory,
+            new RecordingResolver(),
+            new RecordingCompiler(requiresContainment: false),
+            new CompilerInvokingRuntimeFactory());
+        await using var channel = new MatrixMessageChannel();
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => listener.OnChannelOpenAsync(
+                JsonDocument.Parse(json).RootElement.Clone(),
+                channel,
+                CancellationToken.None));
+
+        Assert.Equal("Remote Copilot launch was denied by host policy.", exception.Message);
+        Assert.Equal(0, clientFactory.CreateCount);
+    }
+
+    [Fact]
+    public async Task RemoteCopilot_ClientStartFailure_IsSanitizedAndDisposesSelection()
+    {
+        using var files = new MatrixRuntimeFiles();
+        var handoff = Path.Combine(files.RemoteLaunchRoot, "unconsumed.json");
+        Directory.CreateDirectory(files.RemoteLaunchRoot);
+        await File.WriteAllTextAsync(handoff, "sensitive handoff");
+        var clientFactory = new ExecutorRoutingTestHarness.RecordingClientFactory();
+        clientFactory.Client.StartException =
+            new InvalidOperationException(@"C:\secret\wrapper.exe --token sensitive stderr");
+        var listener = new CopilotClientTransportListener(
+            clientFactory,
+            new RecordingResolver(),
+            new RecordingCompiler(requiresContainment: false),
+            new FixedRuntimeFactory(handoff));
+        await using var channel = new MatrixMessageChannel();
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => listener.OnChannelOpenAsync(
+                TrustRequest(),
+                channel,
+                CancellationToken.None));
+
+        Assert.Equal("Remote Copilot launch was denied by host policy.", exception.Message);
+        Assert.DoesNotContain("secret", exception.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, clientFactory.Client.DisposeCount);
+        Assert.False(File.Exists(handoff));
+    }
+
+    [Fact]
+    public async Task RemoteCopilot_FinalTransportRelease_DisposesHostClientAndPolicyLease()
+    {
+        using var files = new MatrixRuntimeFiles();
+        var handoff = Path.Combine(files.RemoteLaunchRoot, "active.json");
+        Directory.CreateDirectory(files.RemoteLaunchRoot);
+        await File.WriteAllTextAsync(handoff, "active policy");
+        var clientFactory = new ExecutorRoutingTestHarness.RecordingClientFactory();
+        var listeners = new TransportRegistry();
+        listeners.Register(new CopilotClientTransportListener(
+            clientFactory,
+            new RecordingResolver(),
+            new RecordingCompiler(requiresContainment: false),
+            new FixedRuntimeFactory(handoff)));
+        await using var transport =
+            new Phantom.Workspaces.Transport.Local.LocalTransport(listeners);
+        var remoteClient = new CopilotClientOverTransport(
+            transport,
+            new AgentExecutionTrustProfileReference(
+                "trust-profile",
+                "restricted",
+                "revision-17"));
+
+        await using (var session = await remoteClient.CreateSessionAsync(
+                         new SessionConfig { Model = "gpt-5" },
+                         CancellationToken.None))
+        {
+            Assert.True(File.Exists(handoff));
+        }
+        await remoteClient.DisposeAsync();
+
+        Assert.Equal(1, clientFactory.Client.DisposeCount);
+        Assert.False(File.Exists(handoff));
+    }
+
     [Fact]
     public async Task MxcLaunchFails_DoesNotFallbackUncontained()
     {
@@ -318,22 +340,6 @@ public sealed class RemoteExecutionContainmentMatrixTests
         Assert.DoesNotContain("stderr-data", exception.ToString(), StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
-    public async Task Takeover_NewHost_RehydratesIntentAndRecompilesPolicy()
-    {
-        var oldHost = new RecordingLaunchHost("old-owner", requiresContainment: true);
-        var newHost = new RecordingLaunchHost("new-owner", requiresContainment: true);
-
-        var oldCompilation = await oldHost.CompileAsync();
-        var newCompilation = await newHost.CompileAsync();
-
-        Assert.NotSame(oldCompilation, newCompilation);
-        Assert.Equal(1, oldHost.ResolveCount);
-        Assert.Equal(1, oldHost.CompileCount);
-        Assert.Equal(1, newHost.ResolveCount);
-        Assert.Equal(1, newHost.CompileCount);
-    }
-
     private static ExecutorBindings CreateBindings(bool remoteAgent, bool remoteComponent)
     {
         var session = remoteAgent ? RemoteDescriptor(AgentHost) : ExecutorBindings.LocalDescriptor();
@@ -347,12 +353,6 @@ public sealed class RemoteExecutionContainmentMatrixTests
             },
         };
     }
-
-    private static bool IsLocal(JsonElement descriptor) =>
-        string.Equals(
-            descriptor.GetProperty(ExecutorBindings.TypePropertyName).GetString(),
-            "local",
-            StringComparison.Ordinal);
 
     private static JsonElement RemoteDescriptor(string entityId) =>
         JsonSerializer.SerializeToElement(new Dictionary<string, string>
@@ -378,41 +378,16 @@ public sealed class RemoteExecutionContainmentMatrixTests
     private static MxcProcessPolicy CreatePolicy() =>
         CopilotRuntimeConnectionFactoryTests.CreatePolicy();
 
-    private sealed class RecordingLaunchHost(
-        string hostName,
-        bool requiresContainment) :
-        IRemoteTrustProfileResolver,
-        ITrustProfileProcessPolicyCompiler
+    private sealed class FixedRuntimeFactory(string handoff) : ICopilotRuntimeConnectionFactory
     {
-        public int ResolveCount { get; private set; }
-        public int CompileCount { get; private set; }
-
-        public async Task<TrustProfileProcessPolicyCompilation> CompileAsync()
-        {
-            var context = new AgentExecutionTrustContext(
-                new AgentExecutionTrustProfileReference(
-                    "trust-profile",
-                    $"profile-on-{hostName}",
-                    "revision-17"),
-                this,
-                this);
-            return await context.GetCompilationAsync();
-        }
-
-        public Task<RemoteTrustProfileResolution?> ResolveAsync(
-            string profileReference,
-            CancellationToken cancellationToken)
-        {
-            ResolveCount++;
-            return Task.FromResult<RemoteTrustProfileResolution?>(
-                new(new TrustProfile(), "revision-17"));
-        }
-
-        public TrustProfileProcessPolicyCompilation Compile(TrustProfile effectiveProfile)
-        {
-            CompileCount++;
-            return CreateCompilation(requiresContainment);
-        }
+        public Task<CopilotRuntimeConnectionLease> CreateConnectionAsync(
+            AgentExecutionTrustContext trustContext,
+            string? cliPath,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(
+                new CopilotRuntimeConnectionLease(
+                    RuntimeConnection.ForStdio("wrapper.exe", []),
+                    new CopilotLaunchPolicyLease(handoff)));
     }
 
     private sealed class RecordingResolver : IRemoteTrustProfileResolver

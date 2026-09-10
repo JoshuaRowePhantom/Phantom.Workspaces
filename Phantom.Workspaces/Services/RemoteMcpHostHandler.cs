@@ -52,21 +52,39 @@ public sealed class RemoteMcpHostHandler
     public async Task<IAsyncDisposable?> OpenAsync(JsonElement request, IMessageChannel channel, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(channel);
+        try
+        {
+            return await this.OpenCoreAsync(request, channel, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            throw new InvalidOperationException(
+                "Remote MCP launch was denied by host policy.");
+        }
+    }
 
+    private async Task<IAsyncDisposable?> OpenCoreAsync(
+        JsonElement request,
+        IMessageChannel channel,
+        CancellationToken ct)
+    {
         // #1477: never accept a caller-supplied compiled policy. Policy compilation is authoritative
         // on this launch host only.
         McpConnectionRequest.RejectCompiledPolicyProperty(request);
+
+        // Parse security-sensitive intent before deciding whether the connection is hostable. A
+        // partial or malformed descriptor must never be reinterpreted as an unconstrained request.
+        var trustContext = await this.ResolveTrustContextAsync(request, ct).ConfigureAwait(false);
 
         var tool = await this.ResolveConnectionAsync(request, ct).ConfigureAwait(false);
         if (tool is null)
         {
             return null;
         }
-
-        // #1477: when the request references a stored trust profile, this launch host resolves and
-        // compiles it locally (so the mutation-vs-launch race is closed on the host) and threads
-        // the resulting AgentExecutionTrustContext through the shared factory.
-        var trustContext = await this.ResolveTrustContextAsync(request, ct).ConfigureAwait(false);
 
         var serverTransport = await McpTransportFactory.CreateMcpTransportAsync(
             tool,
@@ -77,10 +95,19 @@ public sealed class RemoteMcpHostHandler
             trustContext: trustContext,
             processExecutor: this.services?.ProcessExecutor as IProcessExecutor).ConfigureAwait(false);
 
+        // Process-backed transports launch lazily from ConnectAsync. Connect them inside this
+        // sanitized request boundary so wrapper/executor failures are returned safely instead of
+        // faulting an unobserved relay after the remote open has already succeeded.
+        if (serverTransport is ProcessExecutorBackedClientTransport)
+        {
+            var connected = await serverTransport.ConnectAsync(ct).ConfigureAwait(false);
+            serverTransport = new PreconnectedClientTransport(serverTransport.Name, connected);
+        }
+
         var delegatingServer = new DelegatingMcpServer(serverTransport);
         var incoming = McpChannelClientTransport.CreateServerTransport(channel);
         var cts = new CancellationTokenSource();
-        var relay = Task.Run(() => delegatingServer.RunAsync(incoming, cts.Token), CancellationToken.None);
+        var relay = delegatingServer.RunAsync(incoming, cts.Token);
         return new HostSession(delegatingServer, incoming, cts, relay);
     }
 
@@ -155,6 +182,29 @@ public sealed class RemoteMcpHostHandler
         }
 
         return McpConnectionRequest.ToTool(request);
+    }
+
+    private sealed class PreconnectedClientTransport(
+        string name,
+        ModelContextProtocol.Protocol.ITransport transport)
+        : ModelContextProtocol.Client.IClientTransport
+    {
+        private int connected;
+
+        public string Name { get; } = name;
+
+        public Task<ModelContextProtocol.Protocol.ITransport> ConnectAsync(
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (Interlocked.Exchange(ref this.connected, 1) != 0)
+            {
+                throw new InvalidOperationException(
+                    "The preconnected MCP transport has already been consumed.");
+            }
+
+            return Task.FromResult(transport);
+        }
     }
 
     private sealed class HostSession(

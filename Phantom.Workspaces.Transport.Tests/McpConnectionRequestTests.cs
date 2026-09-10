@@ -71,5 +71,23 @@ public sealed class McpConnectionRequestTests
         McpConnectionRequest.RejectCompiledPolicyProperty(wire);
     }
 
+    [Theory]
+    [InlineData("""{"type":"mcp","connection":{"trust-profile-ref":"restricted"}}""")]
+    [InlineData("""{"type":"mcp","connection":{"trust-profile-revision":"7"}}""")]
+    [InlineData("""{"type":"mcp","connection":{"trust-profile-ref":42,"trust-profile-revision":"7"}}""")]
+    [InlineData("""{"type":"mcp","connection":{"trust-profile-ref":"restricted","trust-profile-revision":7}}""")]
+    [InlineData("""{"type":"mcp","connection":{"trust-profile-ref":" ","trust-profile-revision":"7"}}""")]
+    [InlineData("""{"type":"mcp","connection":{"trust-profile-ref":"restricted","trust-profile-revision":" "}}""")]
+    public void RemoteRequest_MalformedTrustIntent_FailsClosed(string json)
+    {
+        var request = Parse(json);
+
+        Assert.Throws<InvalidOperationException>(
+            () => McpConnectionRequest.TryGetTrustProfileReference(
+                request,
+                out _,
+                out _));
+    }
+
     private static JsonElement Parse(string json) => JsonDocument.Parse(json).RootElement.Clone();
 }

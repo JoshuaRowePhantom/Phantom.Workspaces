@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text.Json;
 using System.Threading.Tasks;
 using AgentSchema;
@@ -53,18 +54,19 @@ internal static class AgentManifestSessionLauncher
         var agentSessionId = Guid.NewGuid().ToString("n");
         JsonElement? sessionExecutor = null;
         JsonElement? executorComponentBindings = null;
+        SelectedTrustProfile? selectedTrustProfile = null;
         if (data.TryGetProperty("manifest", out var persistedManifest))
         {
+            selectedTrustProfile = await ResolveSelectedTrustProfileAsync(
+                mainWindowViewModel,
+                parameterSelections);
             var executorResources = ExecutorResource.ParseManifestResources(persistedManifest.GetRawText());
             if (executorResources.Count > 0)
             {
-                var trustProfile = await ResolveSelectedTrustProfileAsync(
-                    mainWindowViewModel,
-                    parameterSelections);
                 var bindings = ExecutorBindings.Build(
                     executorResources,
                     parameterSelections ?? new Dictionary<string, JsonElement>(StringComparer.Ordinal),
-                    trustProfile);
+                    selectedTrustProfile?.Profile);
                 sessionExecutor = bindings.SessionExecutor;
                 executorComponentBindings = bindings.ToPersistableMap();
             }
@@ -77,7 +79,11 @@ internal static class AgentManifestSessionLauncher
             parameterValues,
             parameterSelections,
             sessionExecutor: sessionExecutor,
-            executorComponentBindings: executorComponentBindings);
+            executorComponentBindings: executorComponentBindings,
+            trustProfileReference: selectedTrustProfile is null
+                ? null
+                : JsonSerializer.SerializeToElement(selectedTrustProfile.Reference),
+            expectedTrustProfileRevision: selectedTrustProfile?.Revision);
 
         if (createdAgentSessionEntity is null)
         {
@@ -188,7 +194,7 @@ internal static class AgentManifestSessionLauncher
         return createdAgentSessionEntity;
     }
 
-    private static async Task<Phantom.Workspaces.Llm.Trust.TrustProfile?> ResolveSelectedTrustProfileAsync(
+    private static async Task<SelectedTrustProfile?> ResolveSelectedTrustProfileAsync(
         MainWindowViewModel mainWindowViewModel,
         IReadOnlyDictionary<string, JsonElement>? parameterSelections)
     {
@@ -204,12 +210,29 @@ internal static class AgentManifestSessionLauncher
             {
                 var resolver = new DataAccessLayerTrustProfileResolver(
                     mainWindowViewModel.EntityBroker.EntityRepository.DataAccessLayer);
-                return await resolver.ResolveAsync(profileName);
+                var resolved = await resolver.ResolveVersionedAsync(profileName);
+                if (!long.TryParse(
+                        resolved.Revision,
+                        NumberStyles.None,
+                        CultureInfo.InvariantCulture,
+                        out var revision)
+                    || revision < 0)
+                {
+                    throw new InvalidOperationException(
+                        $"Trust profile '{profileName}' has an invalid persisted revision.");
+                }
+
+                return new SelectedTrustProfile(resolved.Profile, profileName, revision);
             }
         }
 
         return null;
     }
+
+    private sealed record SelectedTrustProfile(
+        Phantom.Workspaces.Llm.Trust.TrustProfile Profile,
+        string Reference,
+        long Revision);
 
     private static async Task InitializeSessionTabAsync(
         OpenAgentSessionShortcutHandler openAgentSessionShortcutHandler,

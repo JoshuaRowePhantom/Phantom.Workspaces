@@ -112,6 +112,27 @@ public sealed class AgentExecutionTrustContextTests
         Assert.Equal(1, resolver.CallCount);
     }
 
+    [Fact]
+    public async Task GetCompilationAsync_CompilerFailure_IsCachedAndNeverDowngraded()
+    {
+        var resolver = new RecordingResolver(
+            _ => Task.FromResult<RemoteTrustProfileResolution?>(
+                new(new TrustProfile(), "7")));
+        var compiler = new ThrowingCompiler();
+        var context = new AgentExecutionTrustContext(
+            new AgentExecutionTrustProfileReference("trust-profile", "restricted", "7"),
+            resolver,
+            compiler);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await context.GetCompilationAsync());
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await context.GetCompilationAsync());
+
+        Assert.Equal(1, resolver.CallCount);
+        Assert.Equal(1, compiler.CallCount);
+    }
+
     private sealed class RecordingResolver(
         Func<CancellationToken, Task<RemoteTrustProfileResolution?>> resolve)
         : IRemoteTrustProfileResolver
@@ -136,6 +157,17 @@ public sealed class AgentExecutionTrustContextTests
         {
             CallCount++;
             return result;
+        }
+    }
+
+    private sealed class ThrowingCompiler : ITrustProfileProcessPolicyCompiler
+    {
+        public int CallCount { get; private set; }
+
+        public TrustProfileProcessPolicyCompilation Compile(TrustProfile effectiveProfile)
+        {
+            CallCount++;
+            throw new InvalidOperationException("sensitive compiler diagnostic");
         }
     }
 }

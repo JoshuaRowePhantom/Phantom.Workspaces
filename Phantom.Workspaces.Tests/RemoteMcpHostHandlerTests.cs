@@ -147,6 +147,7 @@ public sealed class RemoteMcpHostHandlerTests
         Assert.Equal(1, compiler.CompileCalls);
         Assert.NotNull(launched.MxcPolicy);
         await handle!.DisposeAsync();
+        Assert.Equal(1, executor.Handle.DisposeCount);
     }
 
     [Fact]
@@ -173,7 +174,7 @@ public sealed class RemoteMcpHostHandlerTests
                 channel,
                 Ct()));
 
-        Assert.Contains("revision", ex.Message);
+        Assert.Equal("Remote MCP launch was denied by host policy.", ex.Message);
     }
 
     [Fact]
@@ -194,7 +195,74 @@ public sealed class RemoteMcpHostHandlerTests
                 channel,
                 Ct()));
 
-        Assert.Contains("expected revision", exception.Message, StringComparison.Ordinal);
+        Assert.Equal("Remote MCP launch was denied by host policy.", exception.Message);
+    }
+
+    [Theory]
+    [InlineData("""{"type":"mcp","connection":{"server-name":"srv","endpoint":"stdio://?command=cmd","trust-profile-ref":"restricted"}}""")]
+    [InlineData("""{"type":"mcp","connection":{"server-name":"srv","endpoint":"stdio://?command=cmd","trust-profile-revision":"7"}}""")]
+    [InlineData("""{"type":"mcp","connection":{"server-name":"srv","endpoint":"stdio://?command=cmd","trust-profile-ref":42,"trust-profile-revision":"7"}}""")]
+    [InlineData("""{"type":"mcp","connection":{"server-name":"srv","endpoint":"stdio://?command=cmd","trust-profile-ref":"restricted","trust-profile-revision":7}}""")]
+    public async Task RemoteStdio_MalformedTrustIntent_FailsBeforeProcessLaunch(string json)
+    {
+        var executor = new RecordingProcessExecutor();
+        var handler = new RemoteMcpHostHandler(new Phantom.Workspaces.Llm.AgentServices
+        {
+            TrustProfileResolver = new FakeRemoteTrustProfileResolver(
+                new RemoteTrustProfileResolution(new TrustProfile(), Revision: "7")),
+            TrustProfilePolicyCompiler = new RecordingPolicyCompiler(),
+            ProcessExecutor = executor,
+        });
+        await using var channel = new StubMessageChannel();
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => handler.OpenAsync(Json(json), channel, Ct()));
+
+        Assert.Equal("Remote MCP launch was denied by host policy.", exception.Message);
+        Assert.Equal(0, executor.StartCalls);
+    }
+
+    [Fact]
+    public async Task RemoteStdio_CompilerFailure_IsSanitizedAndDoesNotLaunch()
+    {
+        var executor = new RecordingProcessExecutor();
+        var handler = new RemoteMcpHostHandler(new Phantom.Workspaces.Llm.AgentServices
+        {
+            TrustProfileResolver = new FakeRemoteTrustProfileResolver(
+                new RemoteTrustProfileResolution(new TrustProfile(), Revision: "7")),
+            TrustProfilePolicyCompiler = new ThrowingPolicyCompiler(),
+            ProcessExecutor = executor,
+        });
+        await using var channel = new StubMessageChannel();
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => handler.OpenAsync(
+                Json("""{"type":"mcp","connection":{"server-name":"srv","endpoint":"stdio://?command=cmd","trust-profile-ref":"restricted","trust-profile-revision":"7"}}"""),
+                channel,
+                Ct()));
+
+        Assert.Equal("Remote MCP launch was denied by host policy.", exception.Message);
+        Assert.DoesNotContain("secret", exception.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, executor.StartCalls);
+    }
+
+    [Fact]
+    public async Task RemoteStdio_ExecutorFailure_IsReturnedSanitized()
+    {
+        var handler = new RemoteMcpHostHandler(new Phantom.Workspaces.Llm.AgentServices
+        {
+            ProcessExecutor = new ThrowingProcessExecutor(),
+        });
+        await using var channel = new StubMessageChannel();
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => handler.OpenAsync(
+                Json("""{"type":"mcp","connection":{"server-name":"srv","endpoint":"stdio://?command=cmd"}}"""),
+                channel,
+                Ct()));
+
+        Assert.Equal("Remote MCP launch was denied by host policy.", exception.Message);
+        Assert.DoesNotContain("secret", exception.ToString(), StringComparison.OrdinalIgnoreCase);
     }
 
     private sealed class FakeRemoteTrustProfileResolver
@@ -233,24 +301,43 @@ public sealed class RemoteMcpHostHandlerTests
                     PermissiveMode: false));
             return new TrustProfileProcessPolicyCompilation(true, policy, []);
         }
+
+    }
+
+    private sealed class ThrowingPolicyCompiler : ITrustProfileProcessPolicyCompiler
+    {
+        public TrustProfileProcessPolicyCompilation Compile(TrustProfile effectiveProfile)
+            => throw new InvalidOperationException(
+                @"C:\secret\policy.json --token sensitive stderr");
     }
 
     private sealed class RecordingProcessExecutor : IProcessExecutor
     {
         public TaskCompletionSource<ProcessExecutionRequest> Started { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int StartCalls { get; private set; }
+        public StubProcessHandle Handle { get; } = new();
 
         public IProcessHandle Start(ProcessExecutionRequest request)
         {
+            StartCalls++;
             Started.TrySetResult(request);
-            return new StubProcessHandle();
+            return Handle;
         }
+    }
+
+    private sealed class ThrowingProcessExecutor : IProcessExecutor
+    {
+        public IProcessHandle Start(ProcessExecutionRequest request)
+            => throw new InvalidOperationException(
+                @"C:\secret\mcp.exe --token sensitive stderr");
     }
 
     private sealed class StubProcessHandle : IProcessHandle
     {
         private readonly TaskCompletionSource<ProcessExitResult> exit =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int DisposeCount { get; private set; }
 
         public Stream StandardInput { get; } = new MemoryStream();
         public Stream StandardOutput { get; } = new MemoryStream();
@@ -280,6 +367,7 @@ public sealed class RemoteMcpHostHandlerTests
         public void Kill() => exit.TrySetResult(ProcessExitResult.Create(-1, false, null));
         public ValueTask DisposeAsync()
         {
+            DisposeCount++;
             exit.TrySetResult(ProcessExitResult.Create(0, false, null));
             return ValueTask.CompletedTask;
         }

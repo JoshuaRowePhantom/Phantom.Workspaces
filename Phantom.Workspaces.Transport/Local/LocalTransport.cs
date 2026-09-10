@@ -9,6 +9,7 @@ public sealed class LocalTransport : ITransport
     private readonly Action<IMessageChannel>? authenticateServerChannel;
     private readonly object gate = new();
     private readonly List<LocalMessageChannel> channels = [];
+    private readonly List<Task> channelSessions = [];
     private readonly List<Stream> streams = [];
     private bool disposed;
 
@@ -22,31 +23,56 @@ public sealed class LocalTransport : ITransport
 
     public Task<IMessageChannel> ConnectToMessageChannelAsync(JsonElement request, CancellationToken ct = default)
     {
-        this.ThrowIfDisposed();
-
         var (clientChannel, serverChannel) = LocalMessageChannel.CreatePair();
         this.authenticateServerChannel?.Invoke(serverChannel);
+        var sessionCompletion = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         lock (this.gate)
         {
+            if (this.disposed)
+            {
+                throw new ObjectDisposedException(nameof(LocalTransport));
+            }
+
             this.channels.Add(clientChannel);
+            this.channelSessions.Add(sessionCompletion.Task);
         }
 
         _ = Task.Run(async () =>
         {
+            IAsyncDisposable? lease = null;
             try
             {
-                var lease = await this.registry.OnChannelOpenAsync(request.Clone(), serverChannel, ct).ConfigureAwait(false);
+                lease = await this.registry.OnChannelOpenAsync(request.Clone(), serverChannel, ct).ConfigureAwait(false);
                 if (lease is null)
                 {
                     clientChannel.Complete(new TransportException("No local listener handled the channel request."));
                     serverChannel.Complete();
                     return;
                 }
+
+                await serverChannel.Reader.Completion.ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 clientChannel.Complete(ex);
                 serverChannel.Complete(ex);
+            }
+            finally
+            {
+                if (lease is not null)
+                {
+                    try
+                    {
+                        await lease.DisposeAsync().ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                    }
+                }
+
+                await serverChannel.DisposeAsync().ConfigureAwait(false);
+                sessionCompletion.TrySetResult();
             }
         }, CancellationToken.None);
 
@@ -85,6 +111,7 @@ public sealed class LocalTransport : ITransport
     public async ValueTask DisposeAsync()
     {
         List<LocalMessageChannel> channelSnapshot;
+        List<Task> channelSessionSnapshot;
         List<Stream> streamSnapshot;
         lock (this.gate)
         {
@@ -95,8 +122,10 @@ public sealed class LocalTransport : ITransport
 
             this.disposed = true;
             channelSnapshot = [.. this.channels];
+            channelSessionSnapshot = [.. this.channelSessions];
             streamSnapshot = [.. this.streams];
             this.channels.Clear();
+            this.channelSessions.Clear();
             this.streams.Clear();
         }
 
@@ -108,6 +137,14 @@ public sealed class LocalTransport : ITransport
         foreach (var stream in streamSnapshot)
         {
             await stream.DisposeAsync().ConfigureAwait(false);
+        }
+
+        try
+        {
+            await Task.WhenAll(channelSessionSnapshot).ConfigureAwait(false);
+        }
+        catch
+        {
         }
     }
 

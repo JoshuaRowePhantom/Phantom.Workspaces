@@ -59,7 +59,9 @@ public sealed class AgentSessionShortcutContext
         IReadOnlyDictionary<string, JsonElement>? parameterSelections = null,
         EntityId? hostProfileEntityId = null,
         JsonElement? sessionExecutor = null,
-        JsonElement? executorComponentBindings = null)
+        JsonElement? executorComponentBindings = null,
+        JsonElement? trustProfileReference = null,
+        long? expectedTrustProfileRevision = null)
     {
         var workspaceEntitySession = mainWindowViewModel.EntityBroker.EntityRepository.WorkspaceEntitySession;
         var executionContext = new CurrentExecutionContextProvider(this.userComputerProfileOverride);
@@ -88,6 +90,8 @@ public sealed class AgentSessionShortcutContext
             SessionExecutor = sessionExecutor,
             ExecutorComponentBindings = executorComponentBindings,
             ParameterSelections = parameterSelections,
+            TrustProfileReference = trustProfileReference,
+            ExpectedTrustProfileRevision = expectedTrustProfileRevision,
         };
         var agentSessionEntityData = AgentSessionEntityFactory.CreateEntityData(createEntityDataRequest);
         var createAgentSessionResult = await mainWindowViewModel.EntityBroker.UpdateAsync(

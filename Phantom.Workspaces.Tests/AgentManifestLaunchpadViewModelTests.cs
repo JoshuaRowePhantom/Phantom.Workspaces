@@ -592,6 +592,29 @@ public sealed class AgentManifestLaunchpadViewModelTests
             Assert.True(workerBinding.TryGetProperty("type", out var workerType));
             Assert.Equal(JsonValueKind.String, workerType.ValueKind);
             Assert.False(string.IsNullOrWhiteSpace(workerType.GetString()));
+
+            // #1490: the selected trust profile is authoritative runtime intent, not merely an
+            // input to the binding pre-pass. It must survive the production creation path so first
+            // materialization can enforce the exact revision observed by the creator.
+            Assert.Equal(
+                "issue-1440-remote",
+                data.GetProperty("trust-profile-reference").GetString());
+            var expectedRevision = data
+                .GetProperty("expected-trust-profile-revision")
+                .GetInt64();
+            Assert.True(expectedRevision >= 0);
+
+            var runtimeContext = new AgentSessionRuntimeContextFactory(
+                new TransportFactoryRegistry())
+                .Create(
+                    data,
+                    broker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId);
+            Assert.Equal(
+                "issue-1440-remote",
+                runtimeContext.Intent.TrustProfileReference);
+            Assert.Equal(
+                expectedRevision,
+                runtimeContext.Intent.ExpectedTrustProfileRevision);
             Assert.Equal(data.GetRawText(), spy.LastRequest?.AgentSessionEntity?.GetRawText());
         }
     }
