@@ -29,9 +29,9 @@ public sealed class Retry1485ContractTests
         var hostContext = new CurrentSessionContext
         {
             AgentSessionId = "remote-metadata",
-            Owner = "host-A",
+            OwningProfileEntityId = "host-A",
             OwnershipGeneration = 2,
-            RuntimeEpoch = 4,
+            RuntimeEpoch = new RuntimeEpoch { Value = Guid.NewGuid() },
         };
 
         var request = new AcquireAgentChatRequest
@@ -234,30 +234,66 @@ public sealed class Retry1485ContractTests
     [Fact]
     public void CurrentSessionContext_ValidOwnerGenerationEpoch_PreservesOwningHostIdentity()
     {
+        var epoch = new RuntimeEpoch { Value = Guid.NewGuid() };
         var ctx = new CurrentSessionContext
         {
             AgentSessionId = "s-1",
-            Owner = "host-A",
+            OwningProfileEntityId = "host-A",
             OwnershipGeneration = 3,
-            RuntimeEpoch = 5,
+            RuntimeEpoch = epoch,
         };
         Assert.Equal("s-1", ctx.AgentSessionId);
-        Assert.Equal("host-A", ctx.Owner);
+        Assert.Equal("host-A", ctx.OwningProfileEntityId);
         Assert.Equal(3, ctx.OwnershipGeneration);
-        Assert.Equal(5, ctx.RuntimeEpoch);
+        Assert.Equal(epoch, ctx.RuntimeEpoch);
     }
 
     [Fact]
     public void CurrentSessionContext_BlankOwner_RejectsInitialization()
-        => Assert.Throws<ArgumentException>(() => new CurrentSessionContext { AgentSessionId = "s-1", Owner = "   " });
+        => Assert.Throws<ArgumentException>(() => new CurrentSessionContext
+        {
+            AgentSessionId = "s-1",
+            OwningProfileEntityId = "   ",
+            OwnershipGeneration = 0,
+        });
 
     [Fact]
     public void CurrentSessionContext_NegativeGeneration_RejectsInitialization()
-        => Assert.Throws<ArgumentOutOfRangeException>(() => new CurrentSessionContext { AgentSessionId = "s-1", OwnershipGeneration = -1 });
+        => Assert.Throws<ArgumentOutOfRangeException>(() => new CurrentSessionContext
+        {
+            AgentSessionId = "s-1",
+            OwningProfileEntityId = "host-A",
+            OwnershipGeneration = -1,
+        });
 
     [Fact]
-    public void CurrentSessionContext_NegativeEpoch_RejectsInitialization()
-        => Assert.Throws<ArgumentOutOfRangeException>(() => new CurrentSessionContext { AgentSessionId = "s-1", RuntimeEpoch = -1 });
+    public void CurrentSessionContext_RuntimeEpochAbsent_PreservesNull()
+    {
+        var context = new CurrentSessionContext
+        {
+            AgentSessionId = "s-1",
+            OwningProfileEntityId = "host-A",
+            OwnershipGeneration = 0,
+        };
+
+        Assert.Null(context.RuntimeEpoch);
+    }
+
+    [Fact]
+    public void CurrentSessionContext_OwnerAndGeneration_AreMarkedRequired()
+    {
+        var required = typeof(CurrentSessionContext).GetProperties()
+            .Where(property => property.CustomAttributes.Any(attribute =>
+                attribute.AttributeType == typeof(System.Runtime.CompilerServices.RequiredMemberAttribute)))
+            .Select(property => property.Name)
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.Contains(nameof(CurrentSessionContext.OwningProfileEntityId), required);
+        Assert.Contains(nameof(CurrentSessionContext.OwnershipGeneration), required);
+        Assert.DoesNotContain(nameof(CurrentSessionContext.RuntimeEpoch), required);
+        Assert.Equal(typeof(RuntimeEpoch?), typeof(CurrentSessionContext)
+            .GetProperty(nameof(CurrentSessionContext.RuntimeEpoch))!.PropertyType);
+    }
 
     [Fact]
     public void CurrentSessionContext_AttachmentPeer_DoesNotReplaceHostIdentity()
@@ -265,9 +301,9 @@ public sealed class Retry1485ContractTests
         var hostContext = new CurrentSessionContext
         {
             AgentSessionId = "attach-host",
-            Owner = "host-A",
+            OwningProfileEntityId = "host-A",
             OwnershipGeneration = 2,
-            RuntimeEpoch = 4,
+            RuntimeEpoch = new RuntimeEpoch { Value = Guid.NewGuid() },
         };
 
         var request = new AcquireAgentChatRequest
@@ -281,9 +317,9 @@ public sealed class Retry1485ContractTests
         };
 
         var forwarded = Assert.IsType<CurrentSessionContext>(request.AgentServices!.CurrentSessionContext);
-        Assert.Equal("host-A", forwarded.Owner);
+        Assert.Equal("host-A", forwarded.OwningProfileEntityId);
         Assert.Equal(2, forwarded.OwnershipGeneration);
-        Assert.Equal(4, forwarded.RuntimeEpoch);
+        Assert.Equal(hostContext.RuntimeEpoch, forwarded.RuntimeEpoch);
     }
 
     [Fact]

@@ -33,6 +33,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
     private readonly IRunningAgentChatTable runningAgentChatTable;
     private readonly IAgentSessionOwnerDecisionProvider ownerDecisionProvider;
     private readonly ITransportFactoryRegistry? transportFactoryRegistry;
+    private readonly Func<Action, Task> invokeOnUiThreadAsync;
 
     /// <summary>
     /// The running-agent-chat table used by this handler. Exposed so co-located view models that
@@ -61,7 +62,8 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         ITrustedExecutorSelector trustedExecutorSelector,
         IRunningAgentChatTable runningAgentChatTable,
         IAgentSessionOwnerDecisionProvider ownerDecisionProvider,
-        ITransportFactoryRegistry? transportFactoryRegistry = null)
+        ITransportFactoryRegistry? transportFactoryRegistry = null,
+        Func<Action, Task>? invokeOnUiThreadAsync = null)
     {
         this.agentSessionShortcutContext = agentSessionShortcutContext;
         this.trustedExecutorSelector = trustedExecutorSelector;
@@ -69,6 +71,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         this.ownerDecisionProvider = ownerDecisionProvider
             ?? throw new ArgumentNullException(nameof(ownerDecisionProvider));
         this.transportFactoryRegistry = transportFactoryRegistry;
+        this.invokeOnUiThreadAsync = invokeOnUiThreadAsync ?? InvokeOnUiThreadAsync;
     }
 
     public ValueTask DisposeAsync() => lifetime.DisposeAsync();
@@ -138,35 +141,81 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         TaskScheduler foregroundScheduler,
         CancellationToken ct)
     {
+        (AgentViewModel agent, ObservableLoggerFactory loggerFactory, RunningAgentChatLease? lease)? result = null;
+        var published = false;
         try
         {
-            var result = await this.TryBuildAgentAsync(
+            result = await this.TryBuildAgentAsync(
                 mainWindowViewModel, agentSessionEntity, tab, foregroundScheduler, ct);
-            await Dispatcher.UIThread.InvokeAsync(() =>
+            ct.ThrowIfCancellationRequested();
+            await this.invokeOnUiThreadAsync(() =>
             {
+                ct.ThrowIfCancellationRequested();
                 if (result is var (agent, loggerFactory, lease))
                 {
                     if (lease is not null)
                     {
                         tab.SetLease(lease);
                     }
+                    ct.ThrowIfCancellationRequested();
                     tab.SetReady(agent, loggerFactory);
+                    published = true;
                 }
                 else
                 {
                     tab.SetFailed("Could not load agent session: missing required entity data.");
+                    published = true;
                 }
 
                 mainWindowViewModel.NotifyAgentTabStateChanged();
             });
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
         catch (Exception ex)
         {
-            await Dispatcher.UIThread.InvokeAsync(() =>
+            await this.invokeOnUiThreadAsync(() =>
             {
+                if (ct.IsCancellationRequested)
+                {
+                    return;
+                }
+
                 tab.SetFailed(ex.Message);
                 mainWindowViewModel.NotifyAgentTabStateChanged();
             });
+        }
+        finally
+        {
+            if (!published && result is { } unpublished)
+            {
+                await DisposeUnpublishedResultAsync(unpublished);
+            }
+        }
+    }
+
+    private static async Task InvokeOnUiThreadAsync(Action action)
+        => await Dispatcher.UIThread.InvokeAsync(action);
+
+    private static async Task DisposeUnpublishedResultAsync(
+        (AgentViewModel agent, ObservableLoggerFactory loggerFactory, RunningAgentChatLease? lease) result)
+    {
+        try
+        {
+            if (result.lease is not null)
+            {
+                await result.agent.DisposeViewResourcesAsync();
+                await result.lease.DisposeAsync();
+            }
+            else
+            {
+                await result.agent.DisposeAsync();
+            }
+        }
+        finally
+        {
+            result.loggerFactory.Dispose();
         }
     }
 

@@ -74,22 +74,22 @@ public sealed class AgentSessionShortcutContext
             workspaceEntitySession,
             new EntityTypeName("agent-session"),
             sessionObjectSimpleName);
-        var agentSessionEntityData = AgentSessionEntityFactory.CreateEntityData(
-            new CreateAgentSessionEntityDataRequest
-            {
-                AgentDefinitionEntityId = agentDefinitionEntity.EntityId,
-                AgentDisplayName = agentDefinitionEntity.DisplayName,
-                AgentSessionId = agentSessionId,
-                AgentSessionNames = agentSessionNames,
-                CurrentTime = currentTime,
-                ComputerName = computerName,
-                HostProfileEntityId = hostProfileEntityId
-                    ?? mainWindowViewModel.EntityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId,
-                ParameterValues = parameterValues,
-                SessionExecutor = sessionExecutor,
-                ExecutorComponentBindings = executorComponentBindings,
-                ParameterSelections = parameterSelections,
-            });
+        var createEntityDataRequest = new CreateAgentSessionEntityDataRequest
+        {
+            AgentDefinitionEntityId = agentDefinitionEntity.EntityId,
+            AgentDisplayName = agentDefinitionEntity.DisplayName,
+            AgentSessionId = agentSessionId,
+            AgentSessionNames = agentSessionNames,
+            CurrentTime = currentTime,
+            ComputerName = computerName,
+            HostProfileEntityId = hostProfileEntityId
+                ?? mainWindowViewModel.EntityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId,
+            ParameterValues = parameterValues,
+            SessionExecutor = sessionExecutor,
+            ExecutorComponentBindings = executorComponentBindings,
+            ParameterSelections = parameterSelections,
+        };
+        var agentSessionEntityData = AgentSessionEntityFactory.CreateEntityData(createEntityDataRequest);
         var createAgentSessionResult = await mainWindowViewModel.EntityBroker.UpdateAsync(
             new UpdateRequest
             {

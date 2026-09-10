@@ -59,6 +59,9 @@ public sealed class AgentSessionShortcutContextTests
             userName: userName,
             computerName: computerName,
             effectiveComputerName: computerName,
+            owningProfileEntityId: entityBroker.EntityRepository.WorkspaceEntitySession
+                .UserComputerProfileEntityId.ToString(),
+            ownershipGeneration: 0,
             cancellationToken: CancellationToken.None);
 
         Assert.NotNull(expected.User);
@@ -382,4 +385,3 @@ public sealed class AgentSessionShortcutContextTests
         await Task.CompletedTask;
     }
 }
-

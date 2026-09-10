@@ -79,7 +79,12 @@ public sealed class AgentSessionToolsetTests
             new AgentServices { ChatClientOverride = childClient },
             TaskScheduler.Default);
 
-        var currentSessionContext = new CurrentSessionContext { AgentSessionId = "parent-session" };
+        var currentSessionContext = new CurrentSessionContext
+        {
+            AgentSessionId = "parent-session",
+            OwningProfileEntityId = "test-profile",
+            OwnershipGeneration = 0,
+        };
 
         var parentChat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
         {
@@ -588,7 +593,12 @@ public sealed class AgentSessionToolsetTests
         await using var toolset2 = Assert.IsType<AgentSessionToolset>(
             await ToolsetFactory.CreateAgentSessionToolsetFactory(
                     setup1.ParentChat,
-                    new CurrentSessionContext { AgentSessionId = "parent-session" },
+                    new CurrentSessionContext
+                    {
+                        AgentSessionId = "parent-session",
+                        OwningProfileEntityId = "test-profile",
+                        OwnershipGeneration = 0,
+                    },
                     factory,
                     null)
                 .CreateToolsetAsync(new AgentSchema.CustomTool { Kind = "agent-session" }, new AgentServices()));
@@ -737,7 +747,12 @@ public sealed class AgentSessionToolsetTests
         IAgentPersistenceStore store,
         AgentChatFactory factory)
     {
-        var currentSessionContext = new CurrentSessionContext { AgentSessionId = "parent-session" };
+        var currentSessionContext = new CurrentSessionContext
+        {
+            AgentSessionId = "parent-session",
+            OwningProfileEntityId = "test-profile",
+            OwnershipGeneration = 0,
+        };
 
         var parentChat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
         {

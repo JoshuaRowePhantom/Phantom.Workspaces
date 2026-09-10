@@ -60,6 +60,9 @@ public static class AgentServicesComposition
             userName: executionContext.UserName,
             computerName: executionContext.ComputerName,
             effectiveComputerName: executionContext.EffectiveComputerName,
+            owningProfileEntityId: mainWindowViewModel.EntityBroker.EntityRepository
+                .WorkspaceEntitySession.UserComputerProfileEntityId.ToString(),
+            ownershipGeneration: 0,
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         var workspaceGuiContextProvider = new WorkspaceGuiContextProvider(

@@ -136,7 +136,12 @@ public sealed class ToolsetFactoryTests
     public async Task CreateAgentSessionToolsetFactory_WhenKindMatches_ReturnsAgentSessionToolset()
     {
         var runningFactory = new StubRunningAgentChatFactory();
-        var sessionContext = new CurrentSessionContext { AgentSessionId = "test-session" };
+        var sessionContext = new CurrentSessionContext
+        {
+            AgentSessionId = "test-session",
+            OwningProfileEntityId = "test-profile",
+            OwnershipGeneration = 0,
+        };
         var chatRef = new AgentChatRef();
         var agentServices = new AgentServices
         {
@@ -175,7 +180,12 @@ public sealed class ToolsetFactoryTests
         var factory = ToolsetFactory.CreateAgentSessionToolsetFactory();
         var agentServices = new AgentServices
         {
-            CurrentSessionContext = new CurrentSessionContext { AgentSessionId = "test-session" },
+            CurrentSessionContext = new CurrentSessionContext
+            {
+                AgentSessionId = "test-session",
+                OwningProfileEntityId = "test-profile",
+                OwnershipGeneration = 0,
+            },
             CurrentAgentChatRef = new AgentChatRef(),
         };
 
@@ -206,7 +216,12 @@ public sealed class ToolsetFactoryTests
         var agentServices = new AgentServices
         {
             RunningAgentChatFactory = new StubRunningAgentChatFactory(),
-            CurrentSessionContext = new CurrentSessionContext { AgentSessionId = "test-session" },
+            CurrentSessionContext = new CurrentSessionContext
+            {
+                AgentSessionId = "test-session",
+                OwningProfileEntityId = "test-profile",
+                OwnershipGeneration = 0,
+            },
         };
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>

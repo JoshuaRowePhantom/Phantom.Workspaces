@@ -2,6 +2,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Llm.Remote;
 
 namespace Phantom.Workspaces.Llm;
 
@@ -17,8 +18,9 @@ public static class CurrentSessionContextFactory
     /// <summary>
     /// Resolves the host's current <c>user</c>, <c>computer</c>, and <c>computer-user-profiles</c>
     /// entities from <paramref name="dataAccessLayer"/> and returns a <see cref="CurrentSessionContext"/>
-    /// carrying them alongside <paramref name="agentSessionId"/>. Any entity that cannot be resolved is
-    /// left <c>null</c> (the tool renders those members as an explicit JSON null, never dropping them).
+    /// carrying them alongside <paramref name="agentSessionId"/> and the authoritative owning runtime
+    /// identity. Any entity that cannot be resolved is left <c>null</c> (the tool renders those
+    /// members as an explicit JSON null, never dropping them).
     /// </summary>
     public static async Task<CurrentSessionContext> CreateForHostAsync(
         string agentSessionId,
@@ -26,6 +28,9 @@ public static class CurrentSessionContextFactory
         string userName,
         string computerName,
         string effectiveComputerName,
+        string owningProfileEntityId,
+        long ownershipGeneration,
+        RuntimeEpoch? runtimeEpoch = null,
         EntityName? agentDefinitionReference = null,
         CancellationToken cancellationToken = default)
     {
@@ -43,6 +48,9 @@ public static class CurrentSessionContextFactory
         return new CurrentSessionContext
         {
             AgentSessionId = agentSessionId,
+            OwningProfileEntityId = owningProfileEntityId,
+            OwnershipGeneration = ownershipGeneration,
+            RuntimeEpoch = runtimeEpoch,
             UserComputerProfile = userComputerProfile,
             User = user,
             Computer = computer,

@@ -503,9 +503,9 @@ public sealed class RunningAgentChatTableTests
         var hostContext = new CurrentSessionContext
         {
             AgentSessionId = "remote-metadata",
-            Owner = "host-A",
+            OwningProfileEntityId = "host-A",
             OwnershipGeneration = 2,
-            RuntimeEpoch = 4,
+            RuntimeEpoch = new RuntimeEpoch { Value = Guid.NewGuid() },
         };
         var entity = JsonDocument.Parse(
             """{"host-profile-entity-id":"11111111-1111-1111-1111-111111111111","ownership-generation":2}""").RootElement.Clone();

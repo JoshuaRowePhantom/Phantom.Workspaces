@@ -23,6 +23,71 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class OpenAgentSessionShortcutHandlerTests
 {
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task DisposeAsync_InitializationInFlight_CancelsWithoutPublishingReadyTab()
+    {
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = MainWindowIntegrationTests.GetEntityBroker(viewModel);
+        var definitionEntity = await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(
+            entityBroker,
+            new EntityId("bbbb1488-0000-4000-8000-000000000001"),
+            """
+            {
+              "entity-id": "bbbb1488-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "cancel-before-ready"]],
+              "display-name": { "default": "Cancel Before Ready" },
+              "definition": {
+                "kind": "prompt",
+                "name": "cancel-before-ready",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+        var context = new AgentSessionShortcutContext();
+        var sessionEntity = await context.CreateAgentSessionEntityAsync(
+            viewModel,
+            definitionEntity,
+            "cancel-before-ready");
+        Assert.NotNull(sessionEntity);
+
+        var table = MainWindowIntegrationTests.CreateTestRunningAgentChatTable();
+        var publicationQueued = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowPublication = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new OpenAgentSessionShortcutHandler(
+            context,
+            MainWindowIntegrationTests.CreateLocalTrustedExecutorSelector(),
+            table,
+            new AgentSessionOwnerDecisionProvider(),
+            transportFactoryRegistry: null,
+            async callback =>
+            {
+                publicationQueued.TrySetResult();
+                await allowPublication.Task;
+                callback();
+            });
+
+        Assert.True(await handler.Handle(viewModel, Shortcut.Open, sessionEntity!));
+        await publicationQueued.Task.WaitAsync(
+            TimeSpan.FromSeconds(30),
+            TestContext.Current.CancellationToken);
+
+        var tab = Assert.Single(viewModel.WorkspacePanes
+            .SelectMany(static pane => pane.Tabs)
+            .OfType<AgentSessionWorkspaceTabViewModel>());
+        var disposeTask = handler.DisposeAsync().AsTask();
+        allowPublication.TrySetResult();
+        await disposeTask;
+
+        Assert.Equal(AgentTabState.Loading, tab.State);
+        Assert.Null(tab.Agent);
+        Assert.Null(tab.Lease);
+        Assert.Empty(table.RunningSessions);
+    }
+
     [Theory]
     [InlineData(AgentSessionRemoteStatus.Running)]
     [InlineData(AgentSessionRemoteStatus.NotRunning)]

@@ -139,7 +139,12 @@ public static class AgentFactory
             return supplied with { AgentSessionId = sessionId };
         }
 
-        return new CurrentSessionContext { AgentSessionId = sessionId };
+        return new CurrentSessionContext
+        {
+            AgentSessionId = sessionId,
+            OwningProfileEntityId = "unbound",
+            OwnershipGeneration = 0,
+        };
     }
 
     /// <summary>

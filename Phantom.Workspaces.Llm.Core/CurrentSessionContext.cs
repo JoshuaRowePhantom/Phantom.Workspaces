@@ -1,4 +1,5 @@
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Llm.Remote;
 
 namespace Phantom.Workspaces.Llm;
 
@@ -11,9 +12,8 @@ namespace Phantom.Workspaces.Llm;
 public sealed record CurrentSessionContext
 {
     private readonly string agentSessionId = string.Empty;
-    private readonly string? owner;
+    private readonly string owningProfileEntityId = string.Empty;
     private readonly long ownershipGeneration;
-    private readonly long runtimeEpoch;
 
     /// <summary>The running agent session identifier, stable across resumes.</summary>
     public required string AgentSessionId
@@ -44,40 +44,21 @@ public sealed record CurrentSessionContext
     public EntityName? AgentDefinitionReference { get; init; }
 
     /// <summary>
-    /// #1485: owning host identity. Set by the host that currently owns the session. An attachment
-    /// peer (viewer) leaves this member unmodified so remote proxies preserve the owning host's
-    /// identity rather than replacing it with the viewer's.
+    /// Persisted owning profile entity id. Attachment peers preserve this host identity rather
+    /// than replacing it with their own profile.
     /// </summary>
-    public string? Owner
+    public required string OwningProfileEntityId
     {
-        get => this.owner;
+        get => this.owningProfileEntityId;
         init
         {
-            if (value is not null && string.IsNullOrWhiteSpace(value))
-            {
-                throw new ArgumentException("Owner must be null or non-blank.", nameof(value));
-            }
-
-            this.owner = value;
-        }
-    }
-
-    /// <summary>
-    /// Persisted owning profile entity id. This is the property-based remote-session name; the
-    /// legacy <see cref="Owner"/> alias remains for source compatibility.
-    /// </summary>
-    public string? OwningProfileEntityId
-    {
-        get => this.owner;
-        init
-        {
-            if (value is not null && string.IsNullOrWhiteSpace(value))
+            if (string.IsNullOrWhiteSpace(value))
             {
                 throw new ArgumentException(
-                    "OwningProfileEntityId must be null or non-blank.",
+                    "OwningProfileEntityId must be non-blank.",
                     nameof(value));
             }
-            this.owner = value;
+            this.owningProfileEntityId = value;
         }
     }
 
@@ -85,7 +66,7 @@ public sealed record CurrentSessionContext
     /// #1485: monotonically increasing ownership generation. Bumped when ownership transfers to a
     /// new host. Must be nonnegative.
     /// </summary>
-    public long OwnershipGeneration
+    public required long OwnershipGeneration
     {
         get => this.ownershipGeneration;
         init
@@ -99,19 +80,8 @@ public sealed record CurrentSessionContext
     }
 
     /// <summary>
-    /// #1485: runtime epoch. Bumped whenever the host restarts or resumes the session process.
-    /// Must be nonnegative.
+    /// Runtime epoch assigned once a host runtime exists. A context may be composed before startup,
+    /// in which case this remains null.
     /// </summary>
-    public long RuntimeEpoch
-    {
-        get => this.runtimeEpoch;
-        init
-        {
-            if (value < 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(value), "RuntimeEpoch must be nonnegative.");
-            }
-            this.runtimeEpoch = value;
-        }
-    }
+    public RuntimeEpoch? RuntimeEpoch { get; init; }
 }
