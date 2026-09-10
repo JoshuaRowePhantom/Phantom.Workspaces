@@ -126,6 +126,61 @@ public sealed class AgentSessionTransportListenerTests
             It.IsAny<string>(), It.IsAny<long>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    [Fact]
+    public async Task OnChannelOpenAsync_Takeover_AuthorizesPersistsAndAcknowledges()
+    {
+        var registry = new Mock<IRemoteAgentSessionRuntimeRegistry>();
+        registry.Setup(value => value.TryGetAsync(
+                "session", 1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((RemoteAgentSessionLease?)null);
+        var replacement = Intent() with
+        {
+            OwningProfileEntityId = "22222222-2222-2222-2222-222222222222",
+            OwnershipGeneration = 2,
+        };
+        var runtime = new RemoteAgentSessionLease(
+            "session", 2, Epoch, Chat().Object, false, Snapshot);
+        registry.Setup(value => value.GetOrStartAsync(
+                replacement, It.IsAny<Func<CancellationToken, Task<RemoteAgentSessionLease>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(runtime);
+        var factory = new Mock<IAgentSessionRuntimeHostFactory>();
+        factory.Setup(value => value.TryTakeOverAsync(
+                It.IsAny<AgentSessionTakeoverRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        factory.Setup(value => value.LoadIntentAsync("session", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(replacement);
+        var provider = new Mock<ITransportPeerIdentityProvider>();
+        provider.Setup(value => value.GetRequiredIdentity(It.IsAny<IMessageChannel>())).Returns(Peer());
+        await using var listener = new AgentSessionTransportListener(
+            new RemoteAgentSessionHost(AllowingAuthorizer().Object, registry.Object, factory.Object),
+            provider.Object);
+        await using var channel = new TestChannel();
+        var request = new AgentSessionTakeoverRequest
+        {
+            AgentSessionId = "session",
+            ExpectedOwningProfileEntityId = Open().ExpectedOwningProfileEntityId,
+            ExpectedOwnershipGeneration = 1,
+            NewOwningProfileEntityId = replacement.OwningProfileEntityId,
+            CorrelationId = Guid.NewGuid(),
+        };
+
+        Assert.Null(await listener.OnChannelOpenAsync(
+            AgentSessionProtocolCodec.SerializeTakeover(request),
+            channel,
+            TestContext.Current.CancellationToken));
+
+        var frame = AgentSessionProtocolCodec.DeserializeFrame(
+            await channel.Output.ReadAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(request.CorrelationId, frame.CorrelationId);
+        Assert.IsType<CommandCompletedEvent>(
+            AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(frame));
+        factory.Verify(value => value.TryTakeOverAsync(
+            It.Is<AgentSessionTakeoverRequest>(actual =>
+                actual.NewOwningProfileEntityId == replacement.OwningProfileEntityId),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
     private static AgentSessionTransportListener Listener(
         out Mock<IRemoteAgentSessionRuntimeRegistry> registry,
         out Mock<IAgentSessionRuntimeHostFactory> factory)
