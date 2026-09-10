@@ -161,7 +161,6 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
             lease.SessionId,
             lease.AgentChat,
             onDispose: lease.DisposeAsync,
-            localAgentChat: lease.LocalAgentChat,
             afterDispose: () =>
             {
                 var disposedEntry = this.FindEntry(sessionId);

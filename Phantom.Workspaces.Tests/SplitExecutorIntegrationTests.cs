@@ -146,6 +146,7 @@ public sealed class SplitExecutorIntegrationTests
         var runtimeFactory = new AgentSessionRuntimeContextFactory(registry);
         var chatFactory = new CapturingRunningAgentChatFactory();
         var table = new RunningAgentChatTable(chatFactory, runtimeFactory);
+        Assert.IsNotType<AgentChat>(chatFactory.AgentChat);
 
         var sessionEntity = JsonDocument.Parse(
             $$"""
@@ -186,6 +187,7 @@ public sealed class SplitExecutorIntegrationTests
         try
         {
             Assert.Same(chatFactory.AgentChat, lease.AgentChat);
+            Assert.Equal(1, chatFactory.GetOrCreateCallCount);
 
             // The effective services reaching the running-chat factory carry the reconstructed
             // ExecutorBindings and the shared transport registry.
@@ -274,6 +276,7 @@ public sealed class SplitExecutorIntegrationTests
         public AgentServices? LastServices { get; private set; }
         public IAgentChat AgentChat { get; } = Mock.Of<IAgentChat>();
         public int DisposeCallCount => Volatile.Read(ref this.disposeCallCount);
+        public int GetOrCreateCallCount { get; private set; }
 
         public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, bool registerAsRunningAgent = true, CancellationToken ct = default)
             => Task.FromResult(new RunningAgentChatLease(
@@ -304,6 +307,7 @@ public sealed class SplitExecutorIntegrationTests
             bool registerAsRunningAgent = true,
             CancellationToken ct = default)
         {
+            this.GetOrCreateCallCount++;
             LastServices = services;
             return GetAsync(sessionId, ct: ct);
         }
