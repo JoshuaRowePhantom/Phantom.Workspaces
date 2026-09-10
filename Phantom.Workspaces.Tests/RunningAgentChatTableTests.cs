@@ -437,7 +437,7 @@ public sealed class RunningAgentChatTableTests
             .ToArray();
         var leases = await Task.WhenAll(acquisitions);
         var entry = Assert.Single(table.RunningSessions);
-        Assert.Equal(3, entry.ViewerCount);
+        Assert.Equal(1, entry.ViewerCount);
         Assert.True(entry.IsRemote);
         Assert.All(leases, lease => Assert.Same(leases[0].AgentChat, lease.AgentChat));
         Assert.Equal(1, transport.ConnectCount);

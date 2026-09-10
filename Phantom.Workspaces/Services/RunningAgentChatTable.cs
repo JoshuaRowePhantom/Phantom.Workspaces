@@ -240,7 +240,7 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                 this,
                 key,
                 chat,
-                context.Intent.ContinueInBackground,
+                chat.ContinueInBackground,
                 scheduler);
             await RunOnSchedulerAsync(
                 scheduler,
@@ -254,8 +254,8 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                         request.EntityId,
                         request.WorkspaceId);
                     row.SetIsRemote(true);
-                    row.SetContinueInBackground(context.Intent.ContinueInBackground);
-                    row.SetViewerCount(0);
+                    row.SetContinueInBackground(chat.ContinueInBackground);
+                    row.SetViewerCount(chat.ViewerCount);
                     session.Row = row;
                     this._runningSessions.Add(row);
                 },
@@ -571,14 +571,7 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         internal async Task<RunningAgentChatLease> AcquireAsync(CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
-            await RunOnSchedulerAsync(
-                this.ForegroundScheduler,
-                () =>
-                {
-                    this.viewerCount++;
-                    this.Row?.SetViewerCount(this.viewerCount);
-                },
-                ct).ConfigureAwait(false);
+            Interlocked.Increment(ref this.viewerCount);
             return new RunningAgentChatLease(
                 this.Key.SessionId,
                 this.Chat,
@@ -588,14 +581,7 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         internal async ValueTask ReleaseAsync()
         {
             var remaining = 0;
-            await RunOnSchedulerAsync(
-                this.ForegroundScheduler,
-                () =>
-                {
-                    remaining = --this.viewerCount;
-                    this.Row?.SetViewerCount(remaining);
-                },
-                CancellationToken.None).ConfigureAwait(false);
+            remaining = Interlocked.Decrement(ref this.viewerCount);
             if (remaining == 0 && !this.continueInBackground)
                 await this.table.RemoveRemoteAsync(this).ConfigureAwait(false);
         }
