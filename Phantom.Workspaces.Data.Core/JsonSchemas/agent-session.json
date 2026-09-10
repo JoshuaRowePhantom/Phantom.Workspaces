@@ -38,9 +38,9 @@
       "description": "Trust profile selected for reconstructing runtime trust intent."
     },
     "expected-trust-profile-revision": {
-      "type": "integer",
-      "minimum": 0,
-      "description": "Expected revision of the selected trust profile."
+      "type": "string",
+      "minLength": 1,
+      "description": "Opaque expected concurrency revision of the selected trust profile."
     },
     "continue-in-background": {
       "type": "boolean",

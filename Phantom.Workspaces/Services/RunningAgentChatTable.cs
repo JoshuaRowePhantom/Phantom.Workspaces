@@ -1,6 +1,5 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
-using System.Globalization;
 using System.Text.Json;
 using AgentSchema;
 using Phantom.Workspaces.Data;
@@ -196,7 +195,7 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         var reference = new AgentExecutionTrustProfileReference(
             "trust-profile",
             intent.TrustProfileReference,
-            intent.ExpectedTrustProfileRevision.Value.ToString(CultureInfo.InvariantCulture));
+            intent.ExpectedTrustProfileRevision);
         if (services?.TrustProfileResolver is IRemoteTrustProfileResolver resolver
             && services.TrustProfilePolicyCompiler is ITrustProfileProcessPolicyCompiler compiler)
         {

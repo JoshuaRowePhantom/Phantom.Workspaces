@@ -50,7 +50,7 @@ public static class AgentSessionEntityFactory
             throw new ArgumentOutOfRangeException(nameof(request), "Ownership generation must not be negative.");
         }
 
-        if (request.TrustProfileReference.HasValue != request.ExpectedTrustProfileRevision.HasValue)
+        if (request.TrustProfileReference.HasValue != (request.ExpectedTrustProfileRevision is not null))
         {
             throw new ArgumentException(
                 "Trust profile reference and expected revision must both be present or both be absent.",
@@ -64,9 +64,12 @@ public static class AgentSessionEntityFactory
             throw new ArgumentException("Trust profile reference must be a non-empty string.", nameof(request));
         }
 
-        if (request.ExpectedTrustProfileRevision < 0)
+        if (request.ExpectedTrustProfileRevision is { } expectedRevision
+            && string.IsNullOrWhiteSpace(expectedRevision))
         {
-            throw new ArgumentOutOfRangeException(nameof(request), "Expected trust profile revision must not be negative.");
+            throw new ArgumentException(
+                "Expected trust profile revision must be a non-empty string.",
+                nameof(request));
         }
 
         var entityId = new EntityId();

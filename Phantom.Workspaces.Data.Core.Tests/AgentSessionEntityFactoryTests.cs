@@ -106,7 +106,7 @@ public sealed class AgentSessionEntityFactoryTests
             () => AgentSessionEntityFactory.CreateEntityData(ValidRequest() with
             {
                 TrustProfileReference = null,
-                ExpectedTrustProfileRevision = 1,
+                ExpectedTrustProfileRevision = "revision-1",
             }));
 
         Assert.Contains("both", exception.Message, StringComparison.Ordinal);
@@ -119,7 +119,7 @@ public sealed class AgentSessionEntityFactoryTests
             () => AgentSessionEntityFactory.CreateEntityData(ValidRequest() with
             {
                 TrustProfileReference = JsonString("   "),
-                ExpectedTrustProfileRevision = 1,
+                ExpectedTrustProfileRevision = "revision-1",
             }));
 
         Assert.Contains("non-empty string", exception.Message, StringComparison.Ordinal);
@@ -132,20 +132,20 @@ public sealed class AgentSessionEntityFactoryTests
             () => AgentSessionEntityFactory.CreateEntityData(ValidRequest() with
             {
                 TrustProfileReference = JsonRaw("42"),
-                ExpectedTrustProfileRevision = 1,
+                ExpectedTrustProfileRevision = "revision-1",
             }));
 
         Assert.Contains("non-empty string", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void AgentSessionEntityFactory_CreateEntityData_NegativeExpectedTrustProfileRevision_ThrowsArgumentOutOfRangeException()
+    public void AgentSessionEntityFactory_CreateEntityData_BlankExpectedTrustProfileRevision_ThrowsArgumentException()
     {
-        var exception = Assert.Throws<ArgumentOutOfRangeException>(
+        var exception = Assert.Throws<ArgumentException>(
             () => AgentSessionEntityFactory.CreateEntityData(ValidRequest() with
             {
                 TrustProfileReference = JsonString("trusted/default"),
-                ExpectedTrustProfileRevision = -1,
+                ExpectedTrustProfileRevision = " ",
             }));
 
         Assert.Contains("Expected trust profile revision", exception.Message, StringComparison.Ordinal);

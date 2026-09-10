@@ -36,7 +36,7 @@ public sealed record PersistedAgentSessionRuntimeIntent
 
     public string? TrustProfileReference { get; init; } = null;
 
-    public long? ExpectedTrustProfileRevision { get; init; } = null;
+    public string? ExpectedTrustProfileRevision { get; init; } = null;
 
     public bool ContinueInBackground { get; init; } = false;
 }

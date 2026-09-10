@@ -74,7 +74,7 @@ public sealed class AgentSessionRuntimeContextFactory : IAgentSessionRuntimeCont
         var continueInBackground = ReadBoolean(agentSessionEntity, "continue-in-background") ?? false;
         var trustProfileReference = ReadOptionalString(agentSessionEntity, "trust-profile-reference");
         var expectedTrustProfileRevision =
-            ReadNonnegativeInt64(agentSessionEntity, "expected-trust-profile-revision");
+            ReadRevision(agentSessionEntity, "expected-trust-profile-revision");
         if ((trustProfileReference is null) != (expectedTrustProfileRevision is null))
         {
             throw Invalid("trust-profile-reference/expected-trust-profile-revision");
@@ -235,6 +235,29 @@ public sealed class AgentSessionRuntimeContextFactory : IAgentSessionRuntimeCont
         }
 
         return result;
+    }
+
+    private static string? ReadRevision(JsonElement entity, string propertyName)
+    {
+        if (!entity.TryGetProperty(propertyName, out var value))
+        {
+            return null;
+        }
+
+        if (value.ValueKind == JsonValueKind.String
+            && !string.IsNullOrWhiteSpace(value.GetString()))
+        {
+            return value.GetString();
+        }
+
+        if (value.ValueKind == JsonValueKind.Number
+            && value.TryGetInt64(out var legacyRevision)
+            && legacyRevision >= 0)
+        {
+            return legacyRevision.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        throw Invalid(propertyName);
     }
 
     private static bool? ReadBoolean(JsonElement entity, string propertyName)

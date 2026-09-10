@@ -423,10 +423,19 @@ public sealed class AgentSessionRuntimeContextFactoryTests
     public void Create_TrustIntent_PreservesReferenceAndExpectedRevision()
     {
         var context = new AgentSessionRuntimeContextFactory(null).Create(SessionJson(
-            ""","trust-profile-reference":"trusted/default","expected-trust-profile-revision":7"""));
+            ",\"trust-profile-reference\":\"trusted/default\",\"expected-trust-profile-revision\":\"revision-7\""));
 
         Assert.Equal("trusted/default", context.Intent.TrustProfileReference);
-        Assert.Equal(7, context.Intent.ExpectedTrustProfileRevision);
+        Assert.Equal("revision-7", context.Intent.ExpectedTrustProfileRevision);
+    }
+
+    [Fact]
+    public void Create_LegacyNumericTrustRevision_PreservesCompatibleTextValue()
+    {
+        var context = new AgentSessionRuntimeContextFactory(null).Create(SessionJson(
+            ""","trust-profile-reference":"trusted/default","expected-trust-profile-revision":7"""));
+
+        Assert.Equal("7", context.Intent.ExpectedTrustProfileRevision);
     }
 
     [Fact]
@@ -478,7 +487,7 @@ public sealed class AgentSessionRuntimeContextFactoryTests
             ExecutorComponentBindings = Json("""{"worker":{"type":"local"}}"""),
             OwnershipGeneration = 4,
             TrustProfileReference = trustReference,
-            ExpectedTrustProfileRevision = 9,
+            ExpectedTrustProfileRevision = "revision-9",
             ContinueInBackground = true,
         });
 
@@ -486,7 +495,7 @@ public sealed class AgentSessionRuntimeContextFactoryTests
         Assert.Equal(4, data.GetProperty("ownership-generation").GetInt64());
         Assert.Equal("local", data.GetProperty("executor-bindings").GetProperty("session").GetProperty("type").GetString());
         Assert.Equal("trusted/high", data.GetProperty("trust-profile-reference").GetString());
-        Assert.Equal(9, data.GetProperty("expected-trust-profile-revision").GetInt64());
+        Assert.Equal("revision-9", data.GetProperty("expected-trust-profile-revision").GetString());
         Assert.True(data.GetProperty("continue-in-background").GetBoolean());
     }
 

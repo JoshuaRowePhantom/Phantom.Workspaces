@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Text.Json;
 using System.Threading.Tasks;
 using AgentSchema;
@@ -211,18 +210,12 @@ internal static class AgentManifestSessionLauncher
                 var resolver = new DataAccessLayerTrustProfileResolver(
                     mainWindowViewModel.EntityBroker.EntityRepository.DataAccessLayer);
                 var resolved = await resolver.ResolveVersionedAsync(profileName);
-                if (!long.TryParse(
-                        resolved.Revision,
-                        NumberStyles.None,
-                        CultureInfo.InvariantCulture,
-                        out var revision)
-                    || revision < 0)
-                {
-                    throw new InvalidOperationException(
-                        $"Trust profile '{profileName}' has an invalid persisted revision.");
-                }
-
-                return new SelectedTrustProfile(resolved.Profile, profileName, revision);
+                return new SelectedTrustProfile(
+                    resolved.Profile,
+                    profileName,
+                    resolved.Revision
+                        ?? throw new InvalidOperationException(
+                            $"Trust profile '{profileName}' has no persisted revision."));
             }
         }
 
@@ -232,7 +225,7 @@ internal static class AgentManifestSessionLauncher
     private sealed record SelectedTrustProfile(
         Phantom.Workspaces.Llm.Trust.TrustProfile Profile,
         string Reference,
-        long Revision);
+        string Revision);
 
     private static async Task InitializeSessionTabAsync(
         OpenAgentSessionShortcutHandler openAgentSessionShortcutHandler,

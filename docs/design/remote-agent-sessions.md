@@ -1598,7 +1598,7 @@ The data DTO is serialization-only: setters are `init`, validate through the rea
 runtime policy. `JsonSchemas/agent-session.json` retains the existing
 `host-profile-entity-id` and `executor-bindings` fields and adds
 `ownership-generation` (integer, minimum zero, default zero), `trust-profile-reference`,
-`expected-trust-profile-revision` (integer, minimum zero), and
+`expected-trust-profile-revision` (non-empty opaque string), and
 `continue-in-background` (boolean, default false). Trust reference/revision must be both present or
 both absent. `AgentSessionEntityFactory.CreateEntityData(request)` requires
 `HostProfileEntityId` for every new entity; `OwnershipGeneration`, trust-reference/revision, and

@@ -18,7 +18,7 @@ public sealed record AgentSessionRuntimeIntentData
     public string? TrustProfileReference { get; init; } = null;
 
     [JsonPropertyName("expected-trust-profile-revision")]
-    public long? ExpectedTrustProfileRevision { get; init; } = null;
+    public string? ExpectedTrustProfileRevision { get; init; } = null;
 
     [JsonPropertyName("continue-in-background")]
     public bool ContinueInBackground { get; init; } = false;

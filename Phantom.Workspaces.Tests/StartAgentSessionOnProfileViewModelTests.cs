@@ -49,9 +49,25 @@ public sealed class StartAgentSessionOnProfileViewModelTests
           "definition": {
             "kind": "prompt",
             "name": "issue-1309-definition",
+            "metadata": { "trust-profile": "issue-1490-direct-definition" },
             "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
             "tools": []
           }
+        }
+        """;
+
+    private const string TrustProfileEntityJson =
+        """
+        {
+          "entity-id": "b1309003-0000-4000-8000-000000000003",
+          "entity-types": ["entity", "llm-trust-profile"],
+          "names": [["tests", "trust-profiles", "issue-1490-direct-definition"]],
+          "display-name": { "default": "Issue 1490 Direct Definition Trust" },
+          "hosting-workspaces-client-instances": ["*"],
+          "filesystem-paths": [],
+          "network-capabilities": [],
+          "https-proxy-policy": { "mode": "disabled" },
+          "allowed-mcp-tool-call-schemas": [ {} ]
         }
         """;
 
@@ -80,6 +96,12 @@ public sealed class StartAgentSessionOnProfileViewModelTests
             Assert.True(spy.AcquireCallCount >= 1, "IRunningAgentChatTable.AcquireAsync was not invoked.");
             Assert.NotNull(spy.LastRequest?.AgentSessionEntity);
             Assert.NotNull(sessionTab.Lease);
+            var persisted = spy.LastRequest!.AgentSessionEntity!.Value;
+            Assert.Equal(
+                "issue-1490-direct-definition",
+                persisted.GetProperty("trust-profile-reference").GetString());
+            Assert.False(string.IsNullOrWhiteSpace(
+                persisted.GetProperty("expected-trust-profile-revision").GetString()));
 
             // The chat is registered under its session id, including when the selected profile
             // owns the new session and acquisition therefore produces a remote proxy.
@@ -147,6 +169,10 @@ public sealed class StartAgentSessionOnProfileViewModelTests
             broker,
             new EntityId("b1309002-0000-4000-8000-000000000002"),
             DefinitionEntityJson);
+        await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(
+            broker,
+            new EntityId("b1309003-0000-4000-8000-000000000003"),
+            TrustProfileEntityJson);
 
         var agentSessionShortcutContext = new AgentSessionShortcutContext();
         var store = new InMemoryAgentPersistenceStore();

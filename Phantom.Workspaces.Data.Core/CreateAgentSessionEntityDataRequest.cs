@@ -30,7 +30,7 @@ public sealed record CreateAgentSessionEntityDataRequest
 
     public JsonElement? TrustProfileReference { get; init; } = null;
 
-    public long? ExpectedTrustProfileRevision { get; init; } = null;
+    public string? ExpectedTrustProfileRevision { get; init; } = null;
 
     public bool ContinueInBackground { get; init; } = false;
 }

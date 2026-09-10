@@ -601,8 +601,8 @@ public sealed class AgentManifestLaunchpadViewModelTests
                 data.GetProperty("trust-profile-reference").GetString());
             var expectedRevision = data
                 .GetProperty("expected-trust-profile-revision")
-                .GetInt64();
-            Assert.True(expectedRevision >= 0);
+                .GetString();
+            Assert.False(string.IsNullOrWhiteSpace(expectedRevision));
 
             var runtimeContext = new AgentSessionRuntimeContextFactory(
                 new TransportFactoryRegistry())

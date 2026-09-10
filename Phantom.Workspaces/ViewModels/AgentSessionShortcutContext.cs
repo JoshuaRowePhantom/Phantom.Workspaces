@@ -10,6 +10,7 @@ using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Tools;
+using Phantom.Workspaces.Llm.Trust;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -61,9 +62,28 @@ public sealed class AgentSessionShortcutContext
         JsonElement? sessionExecutor = null,
         JsonElement? executorComponentBindings = null,
         JsonElement? trustProfileReference = null,
-        long? expectedTrustProfileRevision = null)
+        string? expectedTrustProfileRevision = null)
     {
         var workspaceEntitySession = mainWindowViewModel.EntityBroker.EntityRepository.WorkspaceEntitySession;
+        if (trustProfileReference is null
+            && expectedTrustProfileRevision is null
+            && agentDefinitionEntity.Data is JsonElement sourceData
+            && sourceData.TryGetProperty("definition", out var definitionData))
+        {
+            var definition = PhantomAgentSchema.AgentDefinitionFromJson(definitionData.GetRawText());
+            var reference = AgentTrustProfileResolver.GetProfileReference(definition);
+            if (!string.IsNullOrWhiteSpace(reference))
+            {
+                var resolver = new DataAccessLayerTrustProfileResolver(
+                    mainWindowViewModel.EntityBroker.EntityRepository.DataAccessLayer);
+                var resolved = await resolver.ResolveVersionedAsync(reference);
+                trustProfileReference = JsonSerializer.SerializeToElement(reference);
+                expectedTrustProfileRevision = resolved.Revision
+                    ?? throw new InvalidOperationException(
+                        $"Trust profile '{reference}' has no persisted revision.");
+            }
+        }
+
         var executionContext = new CurrentExecutionContextProvider(this.userComputerProfileOverride);
         var computerName = executionContext.EffectiveComputerName;
         var currentTime = this.timeProvider.GetUtcNow();
