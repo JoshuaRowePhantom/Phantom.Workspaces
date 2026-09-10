@@ -1,10 +1,14 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
+using System.Collections.Immutable;
 using System.Security;
 using System.Text.Json;
+using System.Threading.Channels;
+using Microsoft.Extensions.AI;
 using AgentSchema;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Llm.Core.Manifest;
 using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Services;
@@ -333,8 +337,12 @@ public sealed class RunningAgentChatTableTests
     {
         var factory = new FakeRunningAgentChatFactory();
         var table = new RunningAgentChatTable(factory, new FakeRuntimeContextFactory());
-        var transport = Mock.Of<ITransport>();
-        var cursor = new ReplayCursor { Epoch = "epoch-4", GlobalSequence = 9 };
+        var transport = new SnapshotTransport("remote-metadata");
+        var cursor = new ReplayCursor
+        {
+            Epoch = new RuntimeEpoch { Value = Guid.NewGuid() },
+            Sequence = 9,
+        };
         var hostContext = new CurrentSessionContext
         {
             AgentSessionId = "remote-metadata",
@@ -359,14 +367,13 @@ public sealed class RunningAgentChatTableTests
         var entry = Assert.Single(table.RunningSessions);
 
         Assert.True(entry.IsRemote);
-        Assert.IsType<RemoteAgentChatProxy>(lease.AgentChat);
-        Assert.NotSame(lease.AgentChat, lease.LocalAgentChat);
-        Assert.Equal(lease.LocalAgentChat.Information.AgentDefinition.ToJson(), lease.AgentChat.Information.AgentDefinition.ToJson());
+        Assert.IsType<RemoteAgentChat>(lease.AgentChat);
+        Assert.Throws<InvalidOperationException>(() => lease.LocalAgentChat);
+        Assert.Equal("remote-metadata", lease.AgentChat.Information.AgentSessionId);
         Assert.Same(transport, request.OwningProfileTransport);
-        Assert.Same(cursor, request.ReplayCursor);
+        Assert.Equal(cursor, request.ReplayCursor);
         Assert.Equal(AgentChatAcquisitionMode.AttachRemote, request.AcquisitionMode);
-        Assert.Same(hostContext, factory.LastServices!.CurrentSessionContext);
-        Assert.Equal("host-A", ((CurrentSessionContext)factory.LastServices.CurrentSessionContext!).Owner);
+        Assert.Null(factory.LastServices);
     }
 
     [Fact]
@@ -409,12 +416,12 @@ public sealed class RunningAgentChatTableTests
     }
 
     [Fact]
-    public async Task AcquireAsync_LocalAndRemotePairs_FinalReleaseEndsEachViewerLifetime()
+    public async Task AcquireAsync_ConcurrentSameRemoteRuntime_ReturnsLeasesForOneProxy()
     {
         var factory = new FakeRunningAgentChatFactory();
         var table = new RunningAgentChatTable(factory, new FakeRuntimeContextFactory());
-        var sessionId = new AgentSessionId("shared-pair");
-        var localRequest = Request(sessionId, entityName: "Shared");
+        var sessionId = new AgentSessionId("shared-remote");
+        var transport = new SnapshotTransport(sessionId.Value);
         var remoteRequest = new AcquireAgentChatRequest
         {
             AgentSessionId = sessionId,
@@ -422,27 +429,212 @@ public sealed class RunningAgentChatTableTests
             AgentSessionEntity = JsonDocument.Parse(
                 """{"host-profile-entity-id":"11111111-1111-1111-1111-111111111111","ownership-generation":2}""").RootElement.Clone(),
             AcquisitionMode = AgentChatAcquisitionMode.AttachRemote,
-            OwningProfileTransport = Mock.Of<ITransport>(),
+            OwningProfileTransport = transport,
         };
 
-        var localFirst = await table.AcquireAsync(localRequest, TestContext.Current.CancellationToken);
-        var remoteFirst = await table.AcquireAsync(remoteRequest, TestContext.Current.CancellationToken);
-        var remoteSecond = await table.AcquireAsync(remoteRequest, TestContext.Current.CancellationToken);
+        var acquisitions = Enumerable.Range(0, 3)
+            .Select(_ => table.AcquireAsync(remoteRequest, TestContext.Current.CancellationToken))
+            .ToArray();
+        var leases = await Task.WhenAll(acquisitions);
         var entry = Assert.Single(table.RunningSessions);
         Assert.Equal(3, entry.ViewerCount);
         Assert.True(entry.IsRemote);
-        Assert.IsType<AgentChat>(localFirst.AgentChat);
-        Assert.IsType<RemoteAgentChatProxy>(remoteFirst.AgentChat);
-        Assert.IsType<RemoteAgentChatProxy>(remoteSecond.AgentChat);
+        Assert.All(leases, lease => Assert.Same(leases[0].AgentChat, lease.AgentChat));
+        Assert.Equal(1, transport.ConnectCount);
 
-        await localFirst.DisposeAsync();
-        await remoteFirst.DisposeAsync();
+        await leases[0].DisposeAsync();
+        await leases[1].DisposeAsync();
         Assert.Single(table.RunningSessions);
         Assert.Equal(1, entry.ViewerCount);
         Assert.True(entry.IsRemote);
 
-        await remoteSecond.DisposeAsync();
+        await leases[2].DisposeAsync();
         Assert.Empty(table.RunningSessions);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_CancelledBeforeRemoteSnapshot_AddsNoRunningRow()
+    {
+        var table = new RunningAgentChatTable(
+            new FakeRunningAgentChatFactory(),
+            new FakeRuntimeContextFactory());
+        var transport = new SnapshotTransport.BlockingTransport();
+        using var cancellation = new CancellationTokenSource();
+        var acquiring = table.AcquireAsync(
+            new AcquireAgentChatRequest
+            {
+                AgentSessionId = new AgentSessionId("cancelled-remote"),
+                EntityName = "Cancelled",
+                AgentSessionEntity = JsonDocument.Parse(
+                    """{"host-profile-entity-id":"11111111-1111-1111-1111-111111111111","ownership-generation":2}""").RootElement.Clone(),
+                AcquisitionMode = AgentChatAcquisitionMode.AttachRemote,
+                OwningProfileTransport = transport,
+            },
+            cancellation.Token);
+
+        await transport.Connected.WaitAsync(TestContext.Current.CancellationToken);
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => acquiring);
+        Assert.Empty(table.RunningSessions);
+        Assert.True(transport.ChannelDisposed);
+    }
+
+    [Fact]
+    public async Task TerminateAsync_MissingSession_ReturnsFalse()
+    {
+        var table = new RunningAgentChatTable(new FakeRunningAgentChatFactory());
+
+        Assert.False(await table.TerminateAsync(
+            new AgentSessionId("missing"),
+            TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task SetContinueInBackgroundAsync_MissingSession_ThrowsArgumentException()
+    {
+        var table = new RunningAgentChatTable(new FakeRunningAgentChatFactory());
+
+        await Assert.ThrowsAsync<ArgumentException>(() => table.SetContinueInBackgroundAsync(
+            new AgentSessionId("missing"),
+            true,
+            TestContext.Current.CancellationToken));
+    }
+
+    private sealed class SnapshotTransport : ITransport
+    {
+        private readonly SnapshotChannel channel;
+
+        internal SnapshotTransport(string sessionId)
+        {
+            this.channel = new SnapshotChannel(sessionId);
+        }
+
+        internal sealed class BlockingTransport : ITransport
+        {
+            private readonly BlockingChannel channel = new();
+            internal Task Connected => this.channel.Connected.Task;
+            internal bool ChannelDisposed => this.channel.Disposed;
+
+            public Task<IMessageChannel> ConnectToMessageChannelAsync(
+                JsonElement request,
+                CancellationToken ct = default)
+            {
+                this.channel.Connected.TrySetResult();
+                return Task.FromResult<IMessageChannel>(this.channel);
+            }
+
+            public Task<Stream> ConnectToStreamAsync(JsonElement request, CancellationToken ct = default)
+                => throw new NotSupportedException();
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
+
+        private sealed class BlockingChannel : IMessageChannel
+        {
+            private readonly Channel<JsonElement> outgoing = Channel.CreateUnbounded<JsonElement>();
+            private readonly Channel<JsonElement> incoming = Channel.CreateUnbounded<JsonElement>();
+            internal TaskCompletionSource Connected { get; } =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            internal bool Disposed { get; private set; }
+            public ChannelWriter<JsonElement> Writer => this.outgoing.Writer;
+            public ChannelReader<JsonElement> Reader => this.incoming.Reader;
+            public ValueTask DisposeAsync()
+            {
+                this.Disposed = true;
+                this.outgoing.Writer.TryComplete();
+                this.incoming.Writer.TryComplete();
+                return ValueTask.CompletedTask;
+            }
+        }
+
+        internal int ConnectCount { get; private set; }
+
+        public Task<IMessageChannel> ConnectToMessageChannelAsync(
+            JsonElement request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            this.ConnectCount++;
+            return Task.FromResult<IMessageChannel>(this.channel);
+        }
+
+        public Task<Stream> ConnectToStreamAsync(JsonElement request, CancellationToken ct = default)
+            => throw new NotSupportedException();
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class SnapshotChannel : IMessageChannel
+    {
+        private readonly Channel<JsonElement> outgoing = Channel.CreateUnbounded<JsonElement>();
+        private readonly Channel<JsonElement> incoming = Channel.CreateUnbounded<JsonElement>();
+
+        internal SnapshotChannel(string sessionId)
+        {
+            var epoch = new RuntimeEpoch { Value = Guid.NewGuid() };
+            var snapshot = new AgentSessionSnapshot
+            {
+                Information = new AgentInformation
+                {
+                    AgentSessionId = sessionId,
+                    AgentId = "agent",
+                    Name = "remote-agent",
+                    DisplayName = "Remote agent",
+                    Description = "Remote test agent",
+                    AcceptsUserInput = true,
+                    CurrentModelId = "echo",
+                    AgentDefinition = CreateTestAgentDefinition(),
+                },
+                Usage = new Usage(),
+                InputQueues = new AgentInputQueuesSnapshot
+                {
+                    Revision = 0,
+                    Queues =
+                    [
+                        Queue("immediate", true, false),
+                        Queue("default", false, true),
+                    ],
+                },
+                IsBusy = false,
+                History = [],
+                RunningItems = [],
+                Tools = [],
+                Subagents = [],
+                Modals = [],
+                ContinueInBackground = false,
+                ViewerCount = 1,
+            };
+            this.incoming.Writer.TryWrite(
+                AgentSessionProtocolCodec.SerializeFrame(
+                    AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.CreateFrame(
+                        epoch,
+                        1,
+                        Guid.NewGuid(),
+                        new SessionSnapshotEvent { Snapshot = snapshot })));
+        }
+
+        public ChannelWriter<JsonElement> Writer => this.outgoing.Writer;
+        public ChannelReader<JsonElement> Reader => this.incoming.Reader;
+
+        public ValueTask DisposeAsync()
+        {
+            this.outgoing.Writer.TryComplete();
+            this.incoming.Writer.TryComplete();
+            return ValueTask.CompletedTask;
+        }
+
+        private static AgentInputQueueSnapshot Queue(string id, bool immediate, bool isDefault)
+            => new()
+            {
+                QueueId = id,
+                Name = id,
+                IsDefault = isDefault,
+                IsImmediate = immediate,
+                Immediacy = immediate ? AgentInputQueueImmediacy.Immediate : AgentInputQueueImmediacy.Queue,
+                Priority = 0,
+                Revision = 0,
+                Items = ImmutableArray<AgentInputItemSnapshot>.Empty,
+            };
     }
 
     [Fact]

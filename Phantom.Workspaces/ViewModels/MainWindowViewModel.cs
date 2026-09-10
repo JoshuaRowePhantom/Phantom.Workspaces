@@ -3445,7 +3445,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                             entity.EntityId.Value.ToString();
                         var agentTab = await this.openAgentSessionShortcutHandler
                             .TryCreateAgentSessionTabForRestoreAsync(
-                                this, entity, tabId, title: restoredAgentTitle, dockRegion: null);
+                                new CreateAgentSessionTabForRestoreRequest
+                                {
+                                    MainWindowViewModel = this,
+                                    AgentSessionEntity = entity,
+                                    TabId = tabId,
+                                    Title = restoredAgentTitle,
+                                    DockRegion = null,
+                                });
                         if (agentTab is not null)
                         {
                             agentTab.IsTitleExplicit = agentDesc.IsTitleExplicit;
@@ -4603,4 +4610,3 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         await base.DisposeAsync();
     }
 }
-

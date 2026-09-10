@@ -3,6 +3,7 @@ using AgentSchema;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Transport;
 
 namespace Phantom.Workspaces.Services;

@@ -5660,7 +5660,14 @@ public sealed class MainWindowIntegrationTests
             CreateTestRunningAgentChatTable());
 
         var tab = await handler.TryCreateAgentSessionTabForRestoreAsync(
-            viewModel, agentSessionEntity, "agent-empty-title-tab", title: "", dockRegion: "full");
+            new CreateAgentSessionTabForRestoreRequest
+            {
+                MainWindowViewModel = viewModel,
+                AgentSessionEntity = agentSessionEntity,
+                TabId = "agent-empty-title-tab",
+                Title = "",
+                DockRegion = "full",
+            });
         try
         {
             Assert.NotNull(tab);
@@ -9088,9 +9095,12 @@ public sealed class MainWindowIntegrationTests
         ActivateWorkspacePaneAtIndex(viewModel, paneBIndex.ToString());
         var tabB = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
             await handler.TryCreateAgentSessionTabForRestoreAsync(
-                viewModel,
-                agentSessionEntity!,
-                $"{workspaceIdB}-{agentSessionEntity!.EntityId}"));
+                new CreateAgentSessionTabForRestoreRequest
+                {
+                    MainWindowViewModel = viewModel,
+                    AgentSessionEntity = agentSessionEntity!,
+                    TabId = $"{workspaceIdB}-{agentSessionEntity!.EntityId}",
+                }));
         await viewModel.OpenTabAsync(tabB);
 
         await WaitForAgentReadyAsync(tabA);
@@ -12263,6 +12273,5 @@ public sealed class MainWindowIntegrationTests
     }
 
 }
-
 
 

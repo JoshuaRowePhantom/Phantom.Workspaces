@@ -57,6 +57,26 @@ public sealed record CurrentSessionContext
             {
                 throw new ArgumentException("Owner must be null or non-blank.", nameof(value));
             }
+
+            this.owner = value;
+        }
+    }
+
+    /// <summary>
+    /// Persisted owning profile entity id. This is the property-based remote-session name; the
+    /// legacy <see cref="Owner"/> alias remains for source compatibility.
+    /// </summary>
+    public string? OwningProfileEntityId
+    {
+        get => this.owner;
+        init
+        {
+            if (value is not null && string.IsNullOrWhiteSpace(value))
+            {
+                throw new ArgumentException(
+                    "OwningProfileEntityId must be null or non-blank.",
+                    nameof(value));
+            }
             this.owner = value;
         }
     }

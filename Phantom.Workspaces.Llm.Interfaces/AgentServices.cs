@@ -172,6 +172,12 @@ public sealed record AgentServices : IServiceProvider
     public object? ExecutionTrustContext { get; init; }
 
     /// <summary>
+    /// Persisted session trust intent composed at the running-session acquisition boundary.
+    /// This separate seam keeps host execution state out of persisted entities.
+    /// </summary>
+    public object? AgentExecutionTrustContext { get; init; }
+
+    /// <summary>
      /// Optional remote-runtime intent supplied by the host for a remote-proxy chat (issue #1485).
      /// Typed as <see langword="object"/> to avoid a reverse project reference from
      /// <c>Phantom.Workspaces.Llm.Interfaces</c> to <c>Phantom.Workspaces.Llm.Core</c>; consuming
@@ -179,6 +185,11 @@ public sealed record AgentServices : IServiceProvider
      /// present. When null, the host runs everything in-process against the local engine.
      /// </summary>
     public object? RemoteRuntimeIntent { get; init; }
+
+    /// <summary>
+    /// Persisted remote-session runtime intent composed by the owning host.
+    /// </summary>
+    public object? RemoteAgentSessionRuntimeIntent { get; init; }
 
     public object? GetService(Type serviceType)
     {

@@ -1,4 +1,5 @@
 using Phantom.Workspaces.Transport;
+using Phantom.Workspaces.Llm.Remote;
 
 namespace Phantom.Workspaces.Services;
 

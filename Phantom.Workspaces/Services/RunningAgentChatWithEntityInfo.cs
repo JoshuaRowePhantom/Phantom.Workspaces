@@ -10,20 +10,23 @@ namespace Phantom.Workspaces.Services;
 /// </summary>
 public sealed class RunningAgentChatWithEntityInfo : INotifyPropertyChanged
 {
-    private readonly RunningAgentChat _chat;
+    private readonly RunningAgentChat? _chat;
+    private readonly AgentSessionId _sessionId;
+    private readonly bool _isSubAgent;
+    private readonly Func<CancellationToken, Task<RunningAgentChatLease>>? acquireLease;
     private bool _continueInBackground;
     private int _viewerCount = 1;
     private bool _isRemote;
 
     /// <summary>The agent session identifier.</summary>
-    public AgentSessionId SessionId => _chat.SessionId;
+    public AgentSessionId SessionId => _chat?.SessionId ?? _sessionId;
 
     /// <summary>
     /// <see langword="true"/> when the underlying <see cref="RunningAgentChat"/> is a sub-agent.
     /// The running-agent brain popup filters these out (issue #1205) as a belt-and-braces
     /// safeguard against sub-agents leaking into the top-level session list.
     /// </summary>
-    public bool IsSubAgent => _chat.IsSubAgent;
+    public bool IsSubAgent => _chat?.IsSubAgent ?? _isSubAgent;
 
     /// <summary>The display name of the agent entity that owns this session.</summary>
     public string EntityName { get; }
@@ -77,6 +80,24 @@ public sealed class RunningAgentChatWithEntityInfo : INotifyPropertyChanged
     internal RunningAgentChatWithEntityInfo(RunningAgentChat chat, string entityName, string? entityId, string? workspaceId = null)
     {
         _chat = chat;
+        _sessionId = chat.SessionId;
+        _isSubAgent = chat.IsSubAgent;
+        EntityName = entityName;
+        EntityId = entityId;
+        WorkspaceId = workspaceId;
+    }
+
+    internal RunningAgentChatWithEntityInfo(
+        AgentSessionId sessionId,
+        bool isSubAgent,
+        Func<CancellationToken, Task<RunningAgentChatLease>> acquireLease,
+        string entityName,
+        string? entityId,
+        string? workspaceId = null)
+    {
+        _sessionId = sessionId;
+        _isSubAgent = isSubAgent;
+        this.acquireLease = acquireLease ?? throw new ArgumentNullException(nameof(acquireLease));
         EntityName = entityName;
         EntityId = entityId;
         WorkspaceId = workspaceId;
@@ -89,7 +110,12 @@ public sealed class RunningAgentChatWithEntityInfo : INotifyPropertyChanged
     /// </summary>
     public async Task<RunningAgentChatLease> AcquireLeaseAsync(CancellationToken ct = default)
     {
-        var lease = await _chat.AcquireLeaseAsync(ct).ConfigureAwait(false);
+        if (this.acquireLease is not null)
+        {
+            return await this.acquireLease(ct).ConfigureAwait(false);
+        }
+
+        var lease = await _chat!.AcquireLeaseAsync(ct).ConfigureAwait(false);
         this.IncrementViewerCount();
         return new RunningAgentChatLease(
             lease.SessionId,

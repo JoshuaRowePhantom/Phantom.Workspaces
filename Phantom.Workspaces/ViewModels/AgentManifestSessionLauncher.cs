@@ -138,7 +138,7 @@ internal static class AgentManifestSessionLauncher
                             WorkspaceId = loadingTab.WorkspacePaneId,
                         });
                     loadingTab.SetLease(lease);
-                    return (lease.LocalAgentChat, loggerFactory);
+                    return (lease.AgentChat, loggerFactory);
                 }, createdAgentSessionEntity, loadingTab, foregroundScheduler));
         }
         else if (data.TryGetProperty("definition", out var definitionElement))
@@ -167,7 +167,7 @@ internal static class AgentManifestSessionLauncher
                             WorkspaceId = loadingTab.WorkspacePaneId,
                         });
                     loadingTab.SetLease(lease);
-                    return (lease.LocalAgentChat, loggerFactory);
+                    return (lease.AgentChat, loggerFactory);
                 }, createdAgentSessionEntity, loadingTab, foregroundScheduler));
         }
 
@@ -200,7 +200,7 @@ internal static class AgentManifestSessionLauncher
     private static async Task InitializeSessionTabAsync(
         OpenAgentSessionShortcutHandler openAgentSessionShortcutHandler,
         MainWindowViewModel mainWindowViewModel,
-        Func<Task<(AgentChat AgentChat, ObservableLoggerFactory LoggerFactory)>> createChatAsync,
+        Func<Task<(IAgentChat AgentChat, ObservableLoggerFactory LoggerFactory)>> createChatAsync,
         SubscribedEntityViewModel createdAgentSessionEntity,
         AgentSessionWorkspaceTabViewModel loadingTab,
         TaskScheduler foregroundScheduler)

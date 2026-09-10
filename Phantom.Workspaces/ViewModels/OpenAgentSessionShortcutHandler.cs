@@ -103,7 +103,8 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
 
         // Complete initialization in the background
         var foregroundScheduler = SynchronizationContextTaskScheduler.FromCurrent();
-        lifetime.Run(ct => InitializeTabInBackgroundAsync(mainWindowViewModel, entityViewModel, loadingTab, foregroundScheduler));
+        lifetime.Run(ct => InitializeTabInBackgroundAsync(
+            mainWindowViewModel, entityViewModel, loadingTab, foregroundScheduler, ct));
 
         return true;
     }
@@ -112,11 +113,13 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         MainWindowViewModel mainWindowViewModel,
         SubscribedEntityViewModel agentSessionEntity,
         AgentSessionWorkspaceTabViewModel tab,
-        TaskScheduler foregroundScheduler)
+        TaskScheduler foregroundScheduler,
+        CancellationToken ct)
     {
         try
         {
-            var result = await this.TryBuildAgentAsync(mainWindowViewModel, agentSessionEntity, tab, foregroundScheduler);
+            var result = await this.TryBuildAgentAsync(
+                mainWindowViewModel, agentSessionEntity, tab, foregroundScheduler, ct);
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 if (result is var (agent, loggerFactory, lease))
@@ -156,20 +159,22 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        return await this.TryCreateAgentSessionTabForRestoreAsync(
+        return await this.TryCreateAgentSessionTabForRestoreCoreAsync(
             request.MainWindowViewModel,
             request.AgentSessionEntity,
             request.TabId,
             request.Title,
-            request.DockRegion);
+            request.DockRegion,
+            ct);
     }
 
-    public async Task<AgentSessionWorkspaceTabViewModel?> TryCreateAgentSessionTabForRestoreAsync(
+    private async Task<AgentSessionWorkspaceTabViewModel?> TryCreateAgentSessionTabForRestoreCoreAsync(
         MainWindowViewModel mainWindowViewModel,
         SubscribedEntityViewModel agentSessionEntity,
         string? tabId = null,
         string? title = null,
-        string? dockRegion = null)
+        string? dockRegion = null,
+        CancellationToken ct = default)
     {
         string? agentSessionId = null;
         if (agentSessionEntity.Data is System.Text.Json.JsonElement entityDataElement
@@ -195,9 +200,20 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         };
 
         var foregroundScheduler = SynchronizationContextTaskScheduler.FromCurrent();
-        lifetime.Run(ct => InitializeTabInBackgroundAsync(mainWindowViewModel, agentSessionEntity, loadingTab, foregroundScheduler));
+        lifetime.Run(lifetimeCt => InitializeRestoredTabAsync(lifetimeCt));
 
         return loadingTab;
+
+        async Task InitializeRestoredTabAsync(CancellationToken lifetimeCt)
+        {
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, lifetimeCt);
+            await InitializeTabInBackgroundAsync(
+                mainWindowViewModel,
+                agentSessionEntity,
+                loadingTab,
+                foregroundScheduler,
+                linked.Token);
+        }
     }
 
     /// <summary>
@@ -215,7 +231,14 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         string? dockRegion)
     {
         return await this.TryCreateAgentSessionTabForRestoreAsync(
-            mainWindowViewModel, entityViewModel, tabId, title, dockRegion);
+            new CreateAgentSessionTabForRestoreRequest
+            {
+                MainWindowViewModel = mainWindowViewModel,
+                AgentSessionEntity = entityViewModel,
+                TabId = tabId,
+                Title = title,
+                DockRegion = dockRegion,
+            });
     }
 
     /// <summary>
@@ -227,7 +250,8 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         MainWindowViewModel mainWindowViewModel,
         SubscribedEntityViewModel agentSessionEntity,
         string resumePrompt,
-        TaskScheduler foregroundScheduler)
+        TaskScheduler foregroundScheduler,
+        CancellationToken ct = default)
     {
         if (agentSessionEntity.Data is not JsonElement agentSessionEntityData
             || !agentSessionEntityData.TryGetProperty("agent-session-id", out var agentSessionIdElement)
@@ -243,6 +267,10 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             : null;
 
         var agentServices = await this.agentSessionShortcutContext.CreateAgentServicesAsync(mainWindowViewModel);
+        var acquisition = await ResolveAcquisitionAsync(
+            mainWindowViewModel,
+            agentSessionEntityData,
+            ct);
 
         var lease = await this.runningAgentChatTable.AcquireAsync(
             new AcquireAgentChatRequest
@@ -259,9 +287,29 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
                 // #1135: For auto-resume, the session's owning workspace is the currently-selected
                 // pane at auto-resume time (the pane the tab will be restored into).
                 WorkspaceId = mainWindowViewModel.SelectedWorkspacePane?.Id,
-            });
+                AcquisitionMode = acquisition.Mode,
+                OwningProfileTransport = acquisition.Transport,
+            },
+            ct);
 
-        lease.LocalAgentChat.EnqueueUserMessage(resumePrompt);
+        if (lease.AgentChat is AgentChat localChat)
+        {
+            localChat.EnqueueUserMessage(resumePrompt);
+        }
+        else
+        {
+            var queues = lease.AgentChat.InputQueues;
+            await queues.EnqueueAsync(
+                new EnqueueAgentInputRequest
+                {
+                    TargetQueueId = queues.DefaultQueue.Snapshot.QueueId,
+                    Messages = [new Microsoft.Extensions.AI.ChatMessage(
+                        Microsoft.Extensions.AI.ChatRole.User,
+                        resumePrompt)],
+                    CommandId = Guid.NewGuid(),
+                    ExpectedRevision = queues.Snapshot.Revision,
+                });
+        }
         return lease;
     }
 
@@ -316,7 +364,8 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         MainWindowViewModel mainWindowViewModel,
         SubscribedEntityViewModel agentSessionEntity,
         AgentSessionWorkspaceTabViewModel tab,
-        TaskScheduler foregroundScheduler)
+        TaskScheduler foregroundScheduler,
+        CancellationToken ct = default)
     {
         if (agentSessionEntity.Data is not JsonElement agentSessionEntityData
             || !agentSessionEntityData.TryGetProperty("agent-session-id", out var agentSessionIdElement)
@@ -350,6 +399,10 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         }
 
         var agentDefinitionResolver = CreateAgentDefinitionResolver(mainWindowViewModel);
+        var acquisition = await ResolveAcquisitionAsync(
+            mainWindowViewModel,
+            agentSessionEntityData,
+            ct);
 
         var lease = await this.runningAgentChatTable.AcquireAsync(
             new AcquireAgentChatRequest
@@ -368,8 +421,11 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
                 // #1135: Stamp the pane the session was started/opened in so cross-workspace
                 // status-button clicks (running-agent brain) can switch to it before focusing.
                 WorkspaceId = tab.WorkspacePaneId,
-            });
-        var agentChat = lease.LocalAgentChat;
+                AcquisitionMode = acquisition.Mode,
+                OwningProfileTransport = acquisition.Transport,
+            },
+            ct);
+        var agentChat = lease.AgentChat;
 
         // #1429: build + wire slash commands through the single GUI session-composition seam so this
         // path can never diverge from the other launch paths.
@@ -410,6 +466,39 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         }
 
         return (agent, loggerFactory, lease);
+    }
+
+    private static async Task<(
+        AgentChatAcquisitionMode Mode,
+        Phantom.Workspaces.Transport.ITransport? Transport)> ResolveAcquisitionAsync(
+        MainWindowViewModel mainWindowViewModel,
+        JsonElement agentSessionEntity,
+        CancellationToken ct)
+    {
+        if (!agentSessionEntity.TryGetProperty("ownership-generation", out _)
+            || !agentSessionEntity.TryGetProperty("host-profile-entity-id", out var ownerElement)
+            || ownerElement.ValueKind != JsonValueKind.String
+            || !Guid.TryParse(ownerElement.GetString(), out var owner))
+        {
+            return (AgentChatAcquisitionMode.Local, null);
+        }
+
+        var localOwner = mainWindowViewModel.EntityBroker.EntityRepository
+            .WorkspaceEntitySession.UserComputerProfileEntityId;
+        if (owner == localOwner.Value)
+        {
+            return (AgentChatAcquisitionMode.Local, null);
+        }
+
+        var composition = mainWindowViewModel.TransportComposition
+            ?? throw new InvalidOperationException(
+                "The persisted agent session is owned by another profile, but remote transport is unavailable.");
+        using var descriptor = JsonDocument.Parse(
+            $$"""{"type":"user-computer-profile","entity-id":"{{owner:D}}"}""");
+        var transport = await composition.TransportFactoryRegistry.ConnectToAsync(
+            descriptor.RootElement,
+            ct);
+        return (AgentChatAcquisitionMode.StartOrAttachRemote, transport);
     }
 
     private static EntityId ReadHostProfileEntityId(JsonElement entityData)
@@ -591,11 +680,15 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             .FirstOrDefault()
             ?? throw new InvalidOperationException("Cloned agent session could not be loaded.");
         return await this.TryCreateAgentSessionTabForRestoreAsync(
-                mainWindowViewModel,
-                cloneEntity,
-                tabId: $"{mainWindowViewModel.SelectedWorkspacePane?.Id}-{cloneEntityId}",
-                title: cloneName,
-                dockRegion: currentTab.DockRegion)
+                new CreateAgentSessionTabForRestoreRequest
+                {
+                    MainWindowViewModel = mainWindowViewModel,
+                    AgentSessionEntity = cloneEntity,
+                    TabId = $"{mainWindowViewModel.SelectedWorkspacePane?.Id}-{cloneEntityId}",
+                    Title = cloneName,
+                    DockRegion = currentTab.DockRegion,
+                },
+                cancellationToken)
             .ConfigureAwait(false)
             ?? throw new InvalidOperationException("Cloned agent session tab could not be created.");
     }
@@ -781,5 +874,3 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
     }
 
 }
-
-

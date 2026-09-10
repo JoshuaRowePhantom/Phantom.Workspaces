@@ -4,6 +4,7 @@ using AgentSchema;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.Remote;
 using IRunningAgentChatFactory = Phantom.Workspaces.Llm.IRunningAgentChatFactory;
 
 namespace Phantom.Workspaces.Services;
@@ -26,7 +27,8 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
     private readonly IAgentSessionRuntimeContextFactory runtimeContextFactory;
     private readonly Dictionary<AgentSessionId, (string EntityName, string? EntityId, string? WorkspaceId)> _entityInfo = new();
     private readonly Dictionary<AgentSessionId, RunningAgentChatLease> _continueInBackgroundLeases = new();
-    private readonly Dictionary<AgentSessionId, int> _remoteViewerCounts = new();
+    private readonly Dictionary<RemoteRuntimeKey, Task<RemoteRunningSession>> remoteSessions = new();
+    private readonly Dictionary<AgentSessionId, SemaphoreSlim> localAcquisitionGates = new();
     private readonly object _entityInfoLock = new();
     private readonly ObservableCollection<RunningAgentChatWithEntityInfo> _runningSessions = new();
 
@@ -51,6 +53,35 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         ArgumentNullException.ThrowIfNull(request);
         ValidateAcquisitionRequest(request);
         var sessionId = request.AgentSessionId;
+        if (request.AcquisitionMode != AgentChatAcquisitionMode.Local)
+        {
+            return await this.AcquireRemoteAsync(request, ct).ConfigureAwait(false);
+        }
+        SemaphoreSlim localGate;
+        lock (this._entityInfoLock)
+        {
+            if (!this.localAcquisitionGates.TryGetValue(sessionId, out localGate!))
+            {
+                localGate = new SemaphoreSlim(1, 1);
+                this.localAcquisitionGates.Add(sessionId, localGate);
+            }
+        }
+        await localGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            return await this.AcquireLocalAsync(request, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            localGate.Release();
+        }
+    }
+
+    private async Task<RunningAgentChatLease> AcquireLocalAsync(
+        AcquireAgentChatRequest request,
+        CancellationToken ct)
+    {
+        var sessionId = request.AgentSessionId;
         // Store entity info before calling the factory so the CollectionChanged handler can read it
         // when the factory posts the Add mutation on the foreground scheduler.
         lock (_entityInfoLock)
@@ -65,31 +96,28 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         // services; invalid or nonlocal-without-registry bindings must fail acquisition here rather
         // than silently downgrade to local execution.
         var services = request.AgentServices;
+        var continueInBackground = false;
         if (!isRunning && request.AgentSessionEntity is { } entity)
         {
             var localProfileEntityId = (services?.CurrentSessionContext as CurrentSessionContext)
                 ?.UserComputerProfile?.EntityId;
             var runtimeContext = this.runtimeContextFactory.Create(entity, localProfileEntityId);
+            if (entity.TryGetProperty("ownership-generation", out _)
+                && localProfileEntityId is { } localOwner
+                && !string.Equals(
+                    runtimeContext.Intent.OwningProfileEntityId,
+                    localOwner.ToString(),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    "The persisted agent session is owned by another profile and requires remote acquisition.");
+            }
+            continueInBackground = runtimeContext.Intent.ContinueInBackground;
             services = (services ?? new AgentServices()) with
             {
                 ExecutorBindings = runtimeContext.Intent.ExecutorBindings,
                 ExecutorTransportFactoryRegistry = runtimeContext.TransportFactoryRegistry,
-            };
-        }
-
-        if (request.AcquisitionMode != AgentChatAcquisitionMode.Local)
-        {
-            services = (services ?? new AgentServices()) with
-            {
-                RemoteRuntimeIntent = new RemoteRuntimeIntent
-                {
-                    AcquisitionMode = request.AcquisitionMode,
-                    OwningProfileTransport = request.OwningProfileTransport
-                        ?? throw new ArgumentException(
-                            "Remote acquisition requires an owning profile transport.",
-                            nameof(request)),
-                    ReplayCursor = request.ReplayCursor,
-                },
+                RemoteAgentSessionRuntimeIntent = runtimeContext.Intent,
             };
         }
 
@@ -104,78 +132,156 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
             ct: ct);
 
         var entry = this.FindEntry(sessionId);
-        var isRemote = request.AcquisitionMode != AgentChatAcquisitionMode.Local;
-        var viewerCount = 0;
         if (entry is not null)
         {
-            if (isRemote)
-            {
-                lock (_entityInfoLock)
-                {
-                    _remoteViewerCounts.TryGetValue(sessionId, out viewerCount);
-                    viewerCount++;
-                    _remoteViewerCounts[sessionId] = viewerCount;
-                }
-            }
-
-            entry.SetIsRemote(viewerCount > 0);
             entry.IncrementViewerCount();
-        }
-
-        AgentChat? localAgentChat = null;
-        RemoteAgentChatProxy? remoteProxy = null;
-        IAgentChat exposedAgentChat = lease.AgentChat;
-        if (isRemote)
-        {
-            localAgentChat = lease.LocalAgentChat;
-            if (RemoteAgentChatProxy.TryOpen(localAgentChat, isAuthorized: true, out var proxy)
-                && proxy is not null)
+            if (!isRunning && continueInBackground)
             {
-                remoteProxy = proxy;
-                exposedAgentChat = proxy;
+                var retainedLease = await _factory.GetAsync(
+                    sessionId,
+                    registerAsRunningAgent: false,
+                    ct).ConfigureAwait(false);
+                lock (this._entityInfoLock)
+                    this._continueInBackgroundLeases[sessionId] = retainedLease;
+                entry.SetContinueInBackground(true);
             }
         }
 
         return new RunningAgentChatLease(
             lease.SessionId,
-            exposedAgentChat,
+            lease.AgentChat,
             onDispose: lease.DisposeAsync,
-            localAgentChat: localAgentChat,
+            localAgentChat: lease.LocalAgentChat,
             afterDispose: () =>
             {
                 var disposedEntry = this.FindEntry(sessionId);
                 if (disposedEntry is not null)
                 {
-                    if (isRemote)
-                    {
-                        lock (_entityInfoLock)
-                        {
-                            if (_remoteViewerCounts.TryGetValue(sessionId, out var remaining) && remaining > 1)
-                            {
-                                _remoteViewerCounts[sessionId] = remaining - 1;
-                                remaining--;
-                            }
-                            else
-                            {
-                                _remoteViewerCounts.Remove(sessionId);
-                                remaining = 0;
-                            }
-
-                            disposedEntry.SetIsRemote(remaining > 0);
-                        }
-                    }
-
                     disposedEntry.DecrementViewerCount();
                 }
-
-                if (remoteProxy is not null)
-                {
-                    return remoteProxy.DisposeAsync();
-                }
-
                 return ValueTask.CompletedTask;
             });
     }
+
+    private async Task<RunningAgentChatLease> AcquireRemoteAsync(
+        AcquireAgentChatRequest request,
+        CancellationToken ct)
+    {
+        var entity = request.AgentSessionEntity!.Value;
+        var context = this.runtimeContextFactory.Create(entity);
+        var key = new RemoteRuntimeKey(
+            request.AgentSessionId,
+            context.Intent.OwningProfileEntityId,
+            context.Intent.OwnershipGeneration);
+        Task<RemoteRunningSession> creation;
+        lock (this._entityInfoLock)
+        {
+            if (!this.remoteSessions.TryGetValue(key, out creation!))
+            {
+                creation = this.CreateRemoteSessionAsync(key, request, context, ct);
+                this.remoteSessions.Add(key, creation);
+            }
+        }
+
+        RemoteRunningSession session;
+        try
+        {
+            session = await creation.WaitAsync(ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            lock (this._entityInfoLock)
+            {
+                if (this.remoteSessions.TryGetValue(key, out var current)
+                    && ReferenceEquals(current, creation))
+                {
+                    this.remoteSessions.Remove(key);
+                }
+            }
+            throw;
+        }
+
+        return await session.AcquireAsync(ct).ConfigureAwait(false);
+    }
+
+    private async Task<RemoteRunningSession> CreateRemoteSessionAsync(
+        RemoteRuntimeKey key,
+        AcquireAgentChatRequest request,
+        AgentSessionRuntimeContext context,
+        CancellationToken ct)
+    {
+        var client = new RemoteAgentSessionClient(request.OwningProfileTransport!);
+        RemoteAgentChat? chat = null;
+        try
+        {
+            chat = await RemoteAgentChat.AttachAsync(
+                new RemoteAgentChatAttachOptions
+                {
+                    Client = client,
+                    OpenRequest = new AgentSessionOpenRequest
+                    {
+                        ProtocolVersion = 1,
+                        AgentSessionId = key.SessionId.Value,
+                        ExpectedOwningProfileEntityId = key.Owner,
+                        ExpectedOwnershipGeneration = key.Generation,
+                        OpenIntent = request.AcquisitionMode == AgentChatAcquisitionMode.AttachRemote
+                            ? AgentSessionOpenIntent.Attach
+                            : AgentSessionOpenIntent.StartOrAttach,
+                        AttachmentToken = Guid.NewGuid().ToString("N"),
+                        ReplayCursor = request.ReplayCursor,
+                        Capabilities = [],
+                    },
+                    ForegroundScheduler = request.ForegroundScheduler ?? TaskScheduler.Current,
+                },
+                ct).ConfigureAwait(false);
+
+            var scheduler = request.ForegroundScheduler ?? TaskScheduler.Current;
+            var session = new RemoteRunningSession(
+                this,
+                key,
+                chat,
+                context.Intent.ContinueInBackground,
+                scheduler);
+            await RunOnSchedulerAsync(
+                scheduler,
+                () =>
+                {
+                    var row = new RunningAgentChatWithEntityInfo(
+                        key.SessionId,
+                        false,
+                        session.AcquireAsync,
+                        request.EntityName,
+                        request.EntityId,
+                        request.WorkspaceId);
+                    row.SetIsRemote(true);
+                    row.SetContinueInBackground(context.Intent.ContinueInBackground);
+                    row.SetViewerCount(0);
+                    session.Row = row;
+                    this._runningSessions.Add(row);
+                },
+                ct).ConfigureAwait(false);
+            return session;
+        }
+
+        catch
+        {
+            if (chat is not null)
+                await chat.DisposeAsync().ConfigureAwait(false);
+            else
+                await client.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private static Task RunOnSchedulerAsync(
+        TaskScheduler? scheduler,
+        Action action,
+        CancellationToken ct)
+        => Task.Factory.StartNew(
+            action,
+            ct,
+            TaskCreationOptions.DenyChildAttach,
+            scheduler ?? TaskScheduler.Current);
 
     private static void ValidateAcquisitionRequest(AcquireAgentChatRequest request)
     {
@@ -295,7 +401,8 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                         _runningSessions.RemoveAt(i);
                         lock (_entityInfoLock)
                         {
-                            _remoteViewerCounts.Remove(removed.SessionId);
+                            _entityInfo.Remove(removed.SessionId);
+                            localAcquisitionGates.Remove(removed.SessionId);
                         }
                         break;
                     }
@@ -316,6 +423,12 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
     public async Task<bool> TerminateAsync(
         AgentSessionId sessionId, CancellationToken ct = default)
     {
+        var remote = this.FindRemoteSession(sessionId);
+        if (remote is not null)
+        {
+            await remote.TerminateAsync(ct).ConfigureAwait(false);
+            return true;
+        }
         return await _factory.TerminateAsync(sessionId, ct).ConfigureAwait(false);
     }
 
@@ -324,14 +437,6 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         AgentSessionId sessionId, bool continueInBackground,
         CancellationToken ct = default)
     {
-        foreach (var entry in _runningSessions)
-        {
-            if (entry.SessionId == sessionId)
-            {
-                entry.SetContinueInBackground(continueInBackground);
-                break;
-            }
-        }
         return this.SetContinueInBackgroundCoreAsync(sessionId, continueInBackground, ct);
     }
 
@@ -340,12 +445,26 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         bool continueInBackground,
         CancellationToken ct)
     {
+        var entry = this.FindEntry(sessionId)
+            ?? throw new ArgumentException("The agent session is not running.", nameof(sessionId));
+        if (entry.IsSubAgent)
+            throw new ArgumentException("Subagent retention cannot be changed directly.", nameof(sessionId));
+
+        var remote = this.FindRemoteSession(sessionId);
+        if (remote is not null)
+        {
+            await remote.SetContinueInBackgroundAsync(continueInBackground, ct).ConfigureAwait(false);
+            entry.SetContinueInBackground(continueInBackground);
+            return;
+        }
+
         if (continueInBackground)
         {
             lock (_entityInfoLock)
             {
                 if (_continueInBackgroundLeases.ContainsKey(sessionId))
                 {
+                    entry.SetContinueInBackground(true);
                     return;
                 }
             }
@@ -362,6 +481,7 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                 _continueInBackgroundLeases[sessionId] = lease;
             }
 
+            entry.SetContinueInBackground(true);
             return;
         }
 
@@ -378,6 +498,7 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         {
             await pinnedLease.DisposeAsync().ConfigureAwait(false);
         }
+        entry.SetContinueInBackground(false);
     }
 
     private RunningAgentChatWithEntityInfo? FindEntry(AgentSessionId sessionId)
@@ -391,5 +512,106 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         }
 
         return null;
+    }
+
+    private RemoteRunningSession? FindRemoteSession(AgentSessionId sessionId)
+    {
+        lock (this._entityInfoLock)
+        {
+            foreach (var pair in this.remoteSessions)
+            {
+                if (pair.Key.SessionId == sessionId && pair.Value.IsCompletedSuccessfully)
+                    return pair.Value.Result;
+            }
+        }
+        return null;
+    }
+
+    private async Task RemoveRemoteAsync(RemoteRunningSession session)
+    {
+        lock (this._entityInfoLock)
+            this.remoteSessions.Remove(session.Key);
+        if (session.Row is { } row)
+        {
+            await RunOnSchedulerAsync(
+                session.ForegroundScheduler,
+                () => this._runningSessions.Remove(row),
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        await session.Chat.DetachAsync().ConfigureAwait(false);
+    }
+
+    private readonly record struct RemoteRuntimeKey(AgentSessionId SessionId, string Owner, long Generation);
+
+    private sealed class RemoteRunningSession
+    {
+        private readonly RunningAgentChatTable table;
+        private int viewerCount;
+        private bool continueInBackground;
+
+        internal RemoteRunningSession(
+            RunningAgentChatTable table,
+            RemoteRuntimeKey key,
+            RemoteAgentChat chat,
+            bool continueInBackground,
+            TaskScheduler foregroundScheduler)
+        {
+            this.table = table;
+            this.Key = key;
+            this.Chat = chat;
+            this.continueInBackground = continueInBackground;
+            this.ForegroundScheduler = foregroundScheduler;
+        }
+
+        internal RemoteRuntimeKey Key { get; }
+        internal RemoteAgentChat Chat { get; }
+        internal TaskScheduler ForegroundScheduler { get; }
+        internal RunningAgentChatWithEntityInfo? Row { get; set; }
+
+        internal async Task<RunningAgentChatLease> AcquireAsync(CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            await RunOnSchedulerAsync(
+                this.ForegroundScheduler,
+                () =>
+                {
+                    this.viewerCount++;
+                    this.Row?.SetViewerCount(this.viewerCount);
+                },
+                ct).ConfigureAwait(false);
+            return new RunningAgentChatLease(
+                this.Key.SessionId,
+                this.Chat,
+                this.ReleaseAsync);
+        }
+
+        internal async ValueTask ReleaseAsync()
+        {
+            var remaining = 0;
+            await RunOnSchedulerAsync(
+                this.ForegroundScheduler,
+                () =>
+                {
+                    remaining = --this.viewerCount;
+                    this.Row?.SetViewerCount(remaining);
+                },
+                CancellationToken.None).ConfigureAwait(false);
+            if (remaining == 0 && !this.continueInBackground)
+                await this.table.RemoveRemoteAsync(this).ConfigureAwait(false);
+        }
+
+        internal async Task TerminateAsync(CancellationToken ct)
+        {
+            await this.Chat.TerminateAsync(ct).ConfigureAwait(false);
+            await this.table.RemoveRemoteAsync(this).ConfigureAwait(false);
+        }
+
+        internal async Task SetContinueInBackgroundAsync(bool value, CancellationToken ct)
+        {
+            await this.Chat.SetContinueInBackgroundAsync(value, ct).ConfigureAwait(false);
+            this.continueInBackground = value;
+            if (!value && this.viewerCount == 0)
+                await this.table.RemoveRemoteAsync(this).ConfigureAwait(false);
+        }
     }
 }
