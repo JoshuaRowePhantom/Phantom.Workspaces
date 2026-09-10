@@ -74,7 +74,15 @@ public sealed class McpToolIntegrationTests
             ("test-mcp", server.BoundUrl.ToString()),
             recordRunningText: seenRunningTexts);
 
-        Assert.Contains(seenRunningTexts, text => text == "Loading mcp server test-mcp");
+        await chat.Initialization;
+
+        string[] seenRunningTextsSnapshot;
+        lock (seenRunningTexts)
+        {
+            seenRunningTextsSnapshot = [.. seenRunningTexts];
+        }
+
+        Assert.Contains(seenRunningTextsSnapshot, text => text == "Loading mcp server test-mcp");
     }
 
     [Fact]
@@ -83,6 +91,8 @@ public sealed class McpToolIntegrationTests
         await using var server = await TestMcpServerProcess.StartAsync();
 
         await using var chat = await CreateMcpChatAsync(("test-mcp", server.BoundUrl.ToString()));
+
+        await chat.Initialization;
 
         Assert.Empty(chat.RunningItems);
     }
@@ -93,6 +103,8 @@ public sealed class McpToolIntegrationTests
         await using var server = await TestMcpServerProcess.StartAsync();
 
         await using var chat = await CreateMcpChatAsync(("test-mcp", server.BoundUrl.ToString()));
+
+        await chat.Initialization;
 
         Assert.Contains(
             chat.History,
@@ -106,6 +118,8 @@ public sealed class McpToolIntegrationTests
         // exception and the failed step (server) name into unpersisted history, rather than a
         // generic "Agent startup failed" summary (issue #1072).
         await using var chat = await CreateMcpChatAsync(("bad-mcp", "http://127.0.0.1:1"));
+
+        await chat.Initialization;
 
         var diagnostics = chat.History.Select(DiagnosticText).ToArray();
         Assert.Contains(diagnostics, text =>
@@ -265,6 +279,8 @@ public sealed class McpToolIntegrationTests
             },
             PersistenceStoreFactory = (_, _) => ValueTask.FromResult<IAgentPersistenceStore>(new InMemoryAgentPersistenceStore()),
         });
+
+        await chat.Initialization;
 
         Assert.Contains(
             chat.History,
