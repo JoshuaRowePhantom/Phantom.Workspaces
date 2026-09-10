@@ -30,6 +30,16 @@ if (args.Length >= 2 && args[0] == "--child-ready-event")
     return 0;
 }
 
+if (args.Length >= 3 && args[0] == "--child-wait-events")
+{
+    using var ready = EventWaitHandle.OpenExisting(args[1]);
+    using var release = EventWaitHandle.OpenExisting(args[2]);
+    ready.Set();
+    Console.WriteLine("PROBE_READY");
+    release.WaitOne();
+    return 0;
+}
+
 var options = ParseOptions(args);
 var scenario = Enum.Parse<WindowsProbeScenario>(options["scenario"]);
 var pathCategory = Enum.Parse<WindowsProcessPathCategory>(options["path-category"]);
@@ -37,13 +47,7 @@ var mechanism = Enum.Parse<WindowsLaunchMechanism>(options["mechanism"]);
 var timeout = TimeSpan.FromMilliseconds(long.Parse(
     options["timeout-ms"],
     System.Globalization.CultureInfo.InvariantCulture));
-var containment = options.TryGetValue("containment-type", out var containmentType)
-    ? new WindowsContainmentDescriptor
-    {
-        PolicyType = containmentType,
-        PolicyIdentity = options["containment-identity"],
-    }
-    : null;
+WindowsContainmentDescriptor? containment = null;
 
 WindowsChildProcessProbeResult result;
 try
@@ -140,22 +144,30 @@ static async Task<WindowsChildProcessProbeResult> RunTimeoutTreeAsync(
     WindowsLaunchMechanism mechanism,
     WindowsContainmentDescriptor? containment)
 {
+    var readyName = $"Local\\PhantomProbeReady-{Guid.NewGuid():N}";
+    var releaseName = $"Local\\PhantomProbeRelease-{Guid.NewGuid():N}";
+    using var readyEvent = new EventWaitHandle(false, EventResetMode.ManualReset, readyName);
+    using var releaseEvent = new EventWaitHandle(false, EventResetMode.ManualReset, releaseName);
     var startInfo = new ProcessStartInfo
     {
-        FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
+        FileName = Environment.ProcessPath!,
         UseShellExecute = false,
         CreateNoWindow = true,
         RedirectStandardOutput = true,
         RedirectStandardError = true,
     };
-    startInfo.ArgumentList.Add("/d");
-    startInfo.ArgumentList.Add("/c");
-    startInfo.ArgumentList.Add("echo PROBE_READY & pause");
+    startInfo.ArgumentList.Add("--child-wait-events");
+    startInfo.ArgumentList.Add(readyName);
+    startInfo.ArgumentList.Add(releaseName);
     using var process = Process.Start(startInfo)
         ?? throw new InvalidOperationException("Timeout child launch failed.");
-    var readiness = await process.StandardOutput.ReadLineAsync();
+    var outputTask = process.StandardOutput.ReadToEndAsync();
+    var errorTask = process.StandardError.ReadToEndAsync();
+    var readyObserved = readyEvent.WaitOne(TimeSpan.FromSeconds(10));
     process.Kill(entireProcessTree: true);
     await process.WaitForExitAsync();
+    var output = await outputTask;
+    var error = await errorTask;
     return Result(
         pathCategory,
         mechanism,
@@ -163,9 +175,10 @@ static async Task<WindowsChildProcessProbeResult> RunTimeoutTreeAsync(
         created: true,
         createError: null,
         exitCode: unchecked((int)0xC000013A),
-        standardOutput: readiness ?? string.Empty,
+        standardOutput: output,
+        standardError: error,
         timedOut: true,
-        ready: readiness?.Contains("PROBE_READY", StringComparison.Ordinal) == true);
+        ready: readyObserved);
 }
 
 [SupportedOSPlatform("windows")]
@@ -248,13 +261,14 @@ static async Task<WindowsChildProcessProbeResult> RunProcessExecutorAsync(
             cleanupCompleted: true);
     }
 
-    var executable = shim
-        ? Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe"
-        : Environment.ProcessPath!;
-    IReadOnlyList<string> arguments = shim
-        ? ["/d", "/s", "/c", Path.Combine(AppContext.BaseDirectory, "FixedProbe.cmd")]
-        : ["--child-exit", "0"];
-    var request = new ProcessExecutionRequest(executable, arguments)
+    var resolved = shim
+        ? Phantom.Workspaces.Llm.Mcp.StdioCommandResolver.Resolve(
+            Path.Combine(AppContext.BaseDirectory, "FixedProbe.cmd"),
+            [])
+        : new Phantom.Workspaces.Llm.Mcp.StdioCommandResolver.ResolvedCommand(
+            Environment.ProcessPath!,
+            ["--child-exit", "0"]);
+    var request = new ProcessExecutionRequest(resolved.Executable, resolved.Arguments)
     {
         PathCategory = shim
             ? ProcessPathCategory.ResolvedCommandShim

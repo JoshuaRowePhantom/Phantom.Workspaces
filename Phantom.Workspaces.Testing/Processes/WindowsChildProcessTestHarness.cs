@@ -142,12 +142,6 @@ public static class WindowsChildProcessTestHarness
             .Append(" --path-category ").Append(request.PathCategory)
             .Append(" --mechanism ").Append(request.LaunchMechanism)
             .Append(" --timeout-ms ").Append(checked((long)request.Timeout.TotalMilliseconds));
-        if (request.Containment is not null)
-        {
-            commandLine.Append(" --containment-type ").Append(request.Containment.PolicyType)
-                .Append(" --containment-identity ").Append(request.Containment.PolicyIdentity);
-        }
-
         ProcessInformation processInfo = default;
         var created = CreateProcess(
             probePath,
@@ -214,6 +208,7 @@ public static class WindowsChildProcessTestHarness
             {
                 BrokerCreateProcessSucceeded = true,
                 BrokerCreateProcessWin32Error = null,
+                Containment = request.Containment,
                 JobConfigured = true,
                 JobAssigned = jobAssigned,
                 ResumeSucceeded = resumed,
@@ -230,8 +225,8 @@ public static class WindowsChildProcessTestHarness
         }
     }
 
-    public static string NormalizeUnsignedNtStatus(int? exitCode) =>
-        exitCode is < 0 ? $"0x{unchecked((uint)exitCode.Value):X8}" : null!;
+    public static string? NormalizeUnsignedNtStatus(int? exitCode) =>
+        exitCode is < 0 ? $"0x{unchecked((uint)exitCode.Value):X8}" : null;
 
     private static WindowsChildProcessProbeResult FailedBrokerResult(
         WindowsChildProcessProbeRequest request,

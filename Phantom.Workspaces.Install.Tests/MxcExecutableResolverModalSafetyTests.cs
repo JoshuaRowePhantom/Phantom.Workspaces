@@ -2,6 +2,7 @@ using Phantom.Workspaces.Testing.Processes;
 
 namespace Phantom.Workspaces.Install.Tests;
 
+[Collection(MxcIntegrationCollection.Name)]
 public sealed class MxcExecutableResolverModalSafetyTests
 {
     [Theory]
@@ -13,10 +14,6 @@ public sealed class MxcExecutableResolverModalSafetyTests
     {
         if (!OperatingSystem.IsWindows())
             return;
-        if (scenario == WindowsProbeScenario.MxcCommandShim
-            && Environment.GetEnvironmentVariable("MXC_E2E_HOST_PREPPED") != "1")
-            return;
-
         var result = await WindowsChildProcessTestHarness.RunAsync(new()
         {
             Scenario = scenario,
@@ -31,6 +28,14 @@ public sealed class MxcExecutableResolverModalSafetyTests
                 }
                 : null,
         });
+
+        if (scenario == WindowsProbeScenario.MxcCommandShim
+            && Environment.GetEnvironmentVariable("MXC_E2E_HOST_PREPPED") != "1")
+        {
+            Assert.False(result.CreateProcessSucceeded);
+            Assert.Equal("MXC capability unavailable", result.StandardError);
+            return;
+        }
 
         Assert.Equal(0, result.ExitCode);
         Assert.True(result.ReadinessHandshakeObserved);

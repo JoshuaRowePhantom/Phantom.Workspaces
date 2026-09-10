@@ -2,6 +2,12 @@ using Phantom.Workspaces.Testing.Processes;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
+[CollectionDefinition("MXC process isolation", DisableParallelization = true)]
+public sealed class MxcProcessIsolationCollection
+{
+}
+
+[Collection("MXC process isolation")]
 public sealed class WindowsChildProcessIsolationTests
 {
     public static TheoryData<WindowsProbeScenario, WindowsLaunchMechanism> Matrix => new()
@@ -24,10 +30,6 @@ public sealed class WindowsChildProcessIsolationTests
     {
         if (!OperatingSystem.IsWindows())
             return;
-        if (scenario is WindowsProbeScenario.MxcProcessExecutor or WindowsProbeScenario.MxcCommandShim
-            && Environment.GetEnvironmentVariable("MXC_E2E_HOST_PREPPED") != "1")
-            return;
-
         var result = await WindowsChildProcessTestHarness.RunAsync(new()
         {
             Scenario = scenario,
@@ -43,6 +45,14 @@ public sealed class WindowsChildProcessIsolationTests
                 : null,
         });
 
+        if (scenario is WindowsProbeScenario.MxcProcessExecutor or WindowsProbeScenario.MxcCommandShim
+            && Environment.GetEnvironmentVariable("MXC_E2E_HOST_PREPPED") != "1")
+        {
+            Assert.False(result.CreateProcessSucceeded);
+            Assert.Equal("MXC capability unavailable", result.StandardError);
+            return;
+        }
+
         Assert.Equal(0, result.ExitCode);
         Assert.True(result.ReadinessHandshakeObserved);
         Assert.Equal(mechanism, result.LaunchMechanism);
@@ -54,9 +64,6 @@ public sealed class WindowsChildProcessIsolationTests
     {
         if (!OperatingSystem.IsWindows())
             return;
-        if (Environment.GetEnvironmentVariable("MXC_E2E_HOST_PREPPED") != "1")
-            return;
-
         var result = await WindowsChildProcessTestHarness.RunAsync(new()
         {
             Scenario = WindowsProbeScenario.MxcProcessExecutor,
@@ -69,6 +76,13 @@ public sealed class WindowsChildProcessIsolationTests
                 PolicyIdentity = "fixed-probe-v1",
             },
         });
+
+        if (Environment.GetEnvironmentVariable("MXC_E2E_HOST_PREPPED") != "1")
+        {
+            Assert.False(result.CreateProcessSucceeded);
+            Assert.Equal("MXC capability unavailable", result.StandardError);
+            return;
+        }
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("ProcessContainer", result.Containment?.PolicyType);
