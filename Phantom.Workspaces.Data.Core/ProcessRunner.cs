@@ -67,6 +67,7 @@ internal sealed record ProcessRunnerWindowsTestOptions
     public IProcessRunnerWindowsObserver? Observer { get; init; }
     public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
     public Action<string>? StandardOutputObserver { get; init; }
+    public Func<Task>? BeforeFailureCleanupWaitAsync { get; init; }
 }
 
 /// <summary>Controls whether a child process tree is killed when the parent process exits.</summary>
@@ -423,13 +424,9 @@ public static class ProcessRunner
         }
         catch
         {
-            if (process is not null
-                && Win32.GetExitCodeProcess(process, out var code)
-                && code == Win32.STILL_ACTIVE)
-            {
-                Win32.TerminateProcess(process, 0xC000013A);
-                Win32.WaitForProcessAsync(process, CancellationToken.None).GetAwaiter().GetResult();
-            }
+            await TerminateActiveProcessAsync(
+                process,
+                parameters.WindowsTestOptions?.BeforeFailureCleanupWaitAsync).ConfigureAwait(false);
             throw;
         }
         finally
@@ -444,6 +441,24 @@ public static class ProcessRunner
             DisposeAndObserve(observer, process, ProcessRunnerWindowsResource.Process);
             DisposeAndObserve(observer, job, ProcessRunnerWindowsResource.Job);
         }
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static async Task TerminateActiveProcessAsync(
+        SafeProcessHandle? process,
+        Func<Task>? beforeWaitAsync)
+    {
+        if (process is null
+            || !Win32.GetExitCodeProcess(process, out var code)
+            || code != Win32.STILL_ACTIVE)
+        {
+            return;
+        }
+
+        Win32.TerminateProcess(process, 0xC000013A);
+        if (beforeWaitAsync is not null)
+            await beforeWaitAsync().ConfigureAwait(false);
+        await Win32.WaitForProcessAsync(process, CancellationToken.None).ConfigureAwait(false);
     }
 
     private static void ThrowIfInjected(

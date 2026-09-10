@@ -1,9 +1,86 @@
+using System.ComponentModel;
+
 using Phantom.Workspaces.Testing.Processes;
 
 namespace Phantom.Workspaces.Data.Tests;
 
 public sealed class ProcessRunnerModalSafetyTests
 {
+    [Theory]
+    [InlineData(nameof(ProcessRunnerWindowsStage.ConfigureJob))]
+    [InlineData(nameof(ProcessRunnerWindowsStage.AssignJob))]
+    [InlineData(nameof(ProcessRunnerWindowsStage.ResumeThread))]
+    public async Task ProcessRunner_LaunchStageFailure_CleanupDoesNotSynchronouslyBlockCaller(
+        string failureStageName)
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var failureStage = Enum.Parse<ProcessRunnerWindowsStage>(failureStageName);
+        var cleanupCanContinue = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var cleanupStarted = false;
+        var observer = new RecordingObserver();
+        var originalContext = SynchronizationContext.Current;
+        var uiContext = new RejectingSynchronizationContext();
+        Task<ProcessResult> operation;
+        try
+        {
+            SynchronizationContext.SetSynchronizationContext(uiContext);
+            operation = ProcessRunner.RunProcessAsync(new RunProcessParameters(
+                Command: "cmd.exe",
+                Arguments: ["/d", "/c", "exit", "0"],
+                KillOnClose: KillOnCloseAction.KillTree)
+            {
+                WindowsTestOptions = new()
+                {
+                    InjectFailureAt = failureStage,
+                    Observer = observer,
+                    BeforeFailureCleanupWaitAsync = () =>
+                    {
+                        cleanupStarted = true;
+                        return cleanupCanContinue.Task;
+                    },
+                },
+            });
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(originalContext);
+        }
+
+        Assert.True(cleanupStarted);
+        Assert.False(operation.IsCompleted);
+        string[] expectedStages = failureStage switch
+        {
+            ProcessRunnerWindowsStage.ConfigureJob =>
+                ["CreateProcess:True", "ConfigureJob:False"],
+            ProcessRunnerWindowsStage.AssignJob =>
+                ["CreateProcess:True", "ConfigureJob:True", "AssignJob:False"],
+            ProcessRunnerWindowsStage.ResumeThread =>
+                ["CreateProcess:True", "ConfigureJob:True", "AssignJob:True", "ResumeThread:False"],
+            _ => throw new ArgumentOutOfRangeException(nameof(failureStageName)),
+        };
+        Assert.Equal(
+            expectedStages,
+            observer.Events.Select(processEvent => $"{processEvent.Stage}:{processEvent.Succeeded}"));
+        Assert.DoesNotContain(
+            observer.Events,
+            processEvent => processEvent.Stage == ProcessRunnerWindowsStage.ReleaseResource);
+
+        cleanupCanContinue.SetResult();
+
+        var exception = await Assert.ThrowsAsync<Win32Exception>(() => operation);
+        Assert.Equal(31, exception.NativeErrorCode);
+        Assert.Equal($"Injected {failureStage} failure.", exception.Message);
+        Assert.Equal(0, uiContext.CallbackCount);
+        AssertReleased(observer, ProcessRunnerWindowsResource.Process, 1);
+        AssertReleased(observer, ProcessRunnerWindowsResource.Thread, 1);
+        AssertReleased(observer, ProcessRunnerWindowsResource.Job, 1);
+        AssertReleased(observer, ProcessRunnerWindowsResource.StandardOutputPipe, 2);
+        AssertReleased(observer, ProcessRunnerWindowsResource.StandardErrorPipe, 2);
+    }
+
     [Theory]
     [InlineData(WindowsProbeScenario.ProcessRunnerNoJob, false)]
     [InlineData(WindowsProbeScenario.ProcessRunnerKillTree, true)]
@@ -103,4 +180,55 @@ public sealed class ProcessRunnerModalSafetyTests
             LaunchMechanism = WindowsLaunchMechanism.JobRunner,
             Timeout = TimeSpan.FromSeconds(10),
         });
+
+    private static void AssertReleased(
+        RecordingObserver observer,
+        ProcessRunnerWindowsResource resource,
+        int expectedCount)
+    {
+        var releases = observer.Events.Where(
+            processEvent => processEvent.Stage == ProcessRunnerWindowsStage.ReleaseResource
+                && processEvent.Resource == resource).ToArray();
+        Assert.Equal(expectedCount, releases.Length);
+        Assert.All(releases, processEvent => Assert.True(processEvent.Succeeded));
+    }
+
+    private sealed class RecordingObserver : IProcessRunnerWindowsObserver
+    {
+        private readonly List<ProcessRunnerWindowsEvent> events = [];
+
+        public IReadOnlyList<ProcessRunnerWindowsEvent> Events
+        {
+            get
+            {
+                lock (events)
+                    return events.ToArray();
+            }
+        }
+
+        public void Observe(ProcessRunnerWindowsEvent processEvent)
+        {
+            lock (events)
+                events.Add(processEvent);
+        }
+    }
+
+    private sealed class RejectingSynchronizationContext : SynchronizationContext
+    {
+        private int callbackCount;
+
+        public int CallbackCount => Volatile.Read(ref callbackCount);
+
+        public override void Post(SendOrPostCallback d, object? state)
+        {
+            Interlocked.Increment(ref callbackCount);
+            throw new InvalidOperationException("Failure cleanup captured the caller context.");
+        }
+
+        public override void Send(SendOrPostCallback d, object? state)
+        {
+            Interlocked.Increment(ref callbackCount);
+            throw new InvalidOperationException("Failure cleanup synchronously dispatched to the caller.");
+        }
+    }
 }
