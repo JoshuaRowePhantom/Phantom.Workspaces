@@ -10,12 +10,14 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Microsoft.Extensions.AI;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text.Json;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using Dock.Avalonia.Controls;
 using global::Dock.Model.Controls;
@@ -24,8 +26,10 @@ using Dock.Serializer.SystemTextJson;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Gui.Shared.Utilities;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Llm.Shell;
 using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Llm.Trust;
@@ -34,6 +38,7 @@ using Phantom.Workspaces.Services.Notifications;
 using Phantom.Workspaces.Services.Navigation;
 using Phantom.Workspaces.Services.Secrets;
 using Phantom.Workspaces.Trust;
+using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.ViewModels;
 using AgentViewModel = Phantom.Workspaces.Agent.Gui.ViewModels.AgentViewModel;
 
@@ -6867,6 +6872,432 @@ public sealed class MainWindowIntegrationTests
         Assert.True(shutdownIndex > onFaultDelayIndex, "shutdown must run after onFaultDelay (and after LogError).");
     }
 
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task Handle_OwnerIsRemoteConnectChoice_AttachesOnOwner()
+    {
+        var fixture = await CreateRemoteOwnerOpeningFixtureAsync(
+            AgentSessionOwnerDecision.ConnectOnOwner,
+            "direct-connect");
+        await using var viewModel = fixture.ViewModel;
+        await using var handler = fixture.Handler;
+
+        Assert.True(await handler.Handle(viewModel, Shortcut.Open, fixture.SessionEntity));
+        var tab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
+            viewModel.SelectedWorkspacePane.SelectedTab);
+        await WaitForAgentReadyAsync(tab);
+
+        Assert.True(tab.State == AgentTabState.Ready, tab.LoadError);
+        Assert.IsType<RemoteAgentChat>(tab.Lease!.AgentChat);
+        Assert.Equal(
+            [AgentSessionOpenIntent.Status, AgentSessionOpenIntent.StartOrAttach],
+            fixture.Transport.OpenIntents);
+        Assert.Equal(AgentChatAcquisitionMode.StartOrAttachRemote, fixture.Table.LastRequest!.AcquisitionMode);
+        Assert.NotNull(fixture.Table.LastRequest.AgentSessionEntity);
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task Handle_OwnerIsRemoteResumeChoice_CompletesTakeoverBeforeLocalAcquire()
+    {
+        var fixture = await CreateRemoteOwnerOpeningFixtureAsync(
+            AgentSessionOwnerDecision.ResumeLocally,
+            "direct-resume");
+        await using var viewModel = fixture.ViewModel;
+        await using var handler = fixture.Handler;
+
+        Assert.True(await handler.Handle(viewModel, Shortcut.Open, fixture.SessionEntity));
+        var tab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
+            viewModel.SelectedWorkspacePane.SelectedTab);
+        await WaitForAgentReadyAsync(tab);
+
+        Assert.True(tab.State == AgentTabState.Ready, tab.LoadError);
+        Assert.IsType<AgentChat>(tab.Lease!.AgentChat);
+        Assert.Equal(["attach-agent-session", "take-over-agent-session"], fixture.Transport.RequestTypes);
+        Assert.Equal(AgentChatAcquisitionMode.Local, fixture.Table.LastRequest!.AcquisitionMode);
+        Assert.Equal(
+            fixture.LocalOwner.ToString(),
+            fixture.Table.LastRequest.AgentSessionEntity!.Value
+                .GetProperty("host-profile-entity-id").GetString());
+        Assert.Equal(8, fixture.Table.LastRequest.AgentSessionEntity.Value
+            .GetProperty("ownership-generation").GetInt64());
+    }
+
+    [AvaloniaTheory(Timeout = 30_000)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RestorePipeline_RemoteOwnerConnectChoice_AttachesThroughAcquireAsync(
+        bool useShortcutOverride)
+    {
+        var fixture = await CreateRemoteOwnerOpeningFixtureAsync(
+            AgentSessionOwnerDecision.ConnectOnOwner,
+            useShortcutOverride ? "restore-override" : "restore-helper");
+        await using var viewModel = fixture.ViewModel;
+        await using var handler = fixture.Handler;
+
+        var restored = useShortcutOverride
+            ? await handler.TryCreateTabForRestoreAsync(
+                viewModel, fixture.SessionEntity, "restored", "Restored", "full")
+            : await handler.TryCreateAgentSessionTabForRestoreAsync(
+                new CreateAgentSessionTabForRestoreRequest
+                {
+                    MainWindowViewModel = viewModel,
+                    AgentSessionEntity = fixture.SessionEntity,
+                    TabId = "restored",
+                    Title = "Restored",
+                    DockRegion = "full",
+                },
+                TestContext.Current.CancellationToken);
+        var tab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(restored);
+        await WaitForAgentReadyAsync(tab);
+
+        Assert.True(tab.State == AgentTabState.Ready, tab.LoadError);
+        Assert.IsType<RemoteAgentChat>(tab.Lease!.AgentChat);
+        Assert.Equal(AgentChatAcquisitionMode.StartOrAttachRemote, fixture.Table.LastRequest!.AcquisitionMode);
+        Assert.NotNull(fixture.Table.LastRequest.AgentSessionEntity);
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task AutoResume_RemoteOwnerResumeChoice_TakesOverBeforeAcquireAsync()
+    {
+        var fixture = await CreateRemoteOwnerOpeningFixtureAsync(
+            AgentSessionOwnerDecision.ResumeLocally,
+            "auto-resume");
+        await using var viewModel = fixture.ViewModel;
+        await using var handler = fixture.Handler;
+
+        await using var lease = await handler.TryStartAutoResumeAsync(
+            viewModel,
+            fixture.SessionEntity,
+            "Continue the persisted task.",
+            SynchronizationContextTaskScheduler.FromCurrent());
+
+        Assert.NotNull(lease);
+        Assert.IsType<AgentChat>(lease.AgentChat);
+        Assert.Equal(["attach-agent-session", "take-over-agent-session"], fixture.Transport.RequestTypes);
+        Assert.Equal(AgentChatAcquisitionMode.Local, fixture.Table.LastRequest!.AcquisitionMode);
+        Assert.NotNull(fixture.Table.LastRequest.AgentSessionEntity);
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task FreshLaunch_PersistedLocalOwner_FlowsThroughProductionAcquireAsync()
+    {
+        var innerTable = CreateTestRunningAgentChatTable();
+        var table = new RecordingRunningAgentChatTable(innerTable);
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
+        await using var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
+        await viewModel.InitializeAsync();
+        await using var lifetime = new ViewModelLifetime();
+
+        var broker = GetEntityBroker(viewModel);
+        var definitionId = new EntityId(Guid.NewGuid());
+        var definition = await UpsertEntityAndLoadAsync(
+            broker,
+            definitionId,
+            $$"""
+            {
+              "entity-id": "{{definitionId}}",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "fresh-owner-pipeline"]],
+              "display-name": { "default": "Fresh owner pipeline" },
+              "definition": {
+                "kind": "prompt",
+                "name": "fresh-owner-pipeline",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+        var context = new AgentSessionShortcutContext();
+        await using var handler = new OpenAgentSessionShortcutHandler(
+            context,
+            CreateLocalTrustedExecutorSelector(),
+            table);
+
+        var created = await AgentManifestSessionLauncher.LaunchAsync(
+            lifetime,
+            viewModel,
+            context,
+            handler,
+            definition,
+            parameterValues: null,
+            parameterSelections: null);
+        Assert.NotNull(created);
+        var tab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
+            viewModel.SelectedWorkspacePane.SelectedTab);
+        await WaitForAgentReadyAsync(tab);
+
+        Assert.True(tab.State == AgentTabState.Ready, tab.LoadError);
+        Assert.Equal(AgentChatAcquisitionMode.Local, table.LastRequest!.AcquisitionMode);
+        Assert.NotNull(table.LastRequest.AgentSessionEntity);
+        Assert.Equal(
+            broker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId.ToString(),
+            table.LastRequest.AgentSessionEntity.Value
+                .GetProperty("host-profile-entity-id").GetString());
+    }
+
+    private static async Task<RemoteOwnerOpeningFixture> CreateRemoteOwnerOpeningFixtureAsync(
+        AgentSessionOwnerDecision decision,
+        string suffix)
+    {
+        var store = new InMemoryAgentPersistenceStore();
+        var factory = new AgentChatFactory(
+            store,
+            new AgentServices(),
+            SynchronizationContextTaskScheduler.FromCurrent());
+        var innerTable = new RunningAgentChatTable(factory);
+        var table = new RecordingRunningAgentChatTable(innerTable);
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
+        var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
+        await viewModel.InitializeAsync();
+
+        var broker = GetEntityBroker(viewModel);
+        var definitionId = new EntityId(Guid.NewGuid());
+        await UpsertEntityAndLoadAsync(
+            broker,
+            definitionId,
+            $$"""
+            {
+              "entity-id": "{{definitionId}}",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "{{suffix}}"]],
+              "display-name": { "default": "Remote owner {{suffix}}" },
+              "definition": {
+                "kind": "prompt",
+                "name": "{{suffix}}",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var remoteOwner = Guid.Parse("11111111-1111-1111-1111-111111111111");
+        var sessionId = $"owner-pipeline-{suffix}-{Guid.NewGuid():N}";
+        var sessionEntityId = new EntityId(Guid.NewGuid());
+        var sessionEntity = await UpsertEntityAndLoadAsync(
+            broker,
+            sessionEntityId,
+            $$"""
+            {
+              "entity-id": "{{sessionEntityId}}",
+              "entity-types": ["entity", "agent-session"],
+              "names": [["tests", "agent-sessions", "{{suffix}}"]],
+              "display-name": { "default": "Remote owner {{suffix}}" },
+              "agent-source-entity-id": "{{definitionId}}",
+              "agent-session-id": "{{sessionId}}",
+              "host-profile-entity-id": "{{remoteOwner}}",
+              "ownership-generation": 7,
+              "executor-bindings": { "session": { "type": "local" }, "components": {} },
+              "continue-in-background": false
+            }
+            """);
+
+        var transport = new OwnerPipelineTransport();
+        var registry = new TransportFactoryRegistry();
+        registry.Register(new SingleTransportFactory(transport));
+        var choices = new FixedOwnerDecisionProvider(decision);
+        var handler = new OpenAgentSessionShortcutHandler(
+            new AgentSessionShortcutContext(),
+            CreateLocalTrustedExecutorSelector(),
+            table,
+            choices,
+            registry);
+        var localOwner = broker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId.Value;
+        return new RemoteOwnerOpeningFixture(
+            viewModel, handler, table, transport, sessionEntity, localOwner);
+    }
+
+    private sealed record RemoteOwnerOpeningFixture(
+        MainWindowViewModel ViewModel,
+        OpenAgentSessionShortcutHandler Handler,
+        RecordingRunningAgentChatTable Table,
+        OwnerPipelineTransport Transport,
+        SubscribedEntityViewModel SessionEntity,
+        Guid LocalOwner);
+
+    internal sealed class FixedOwnerDecisionProvider(AgentSessionOwnerDecision decision)
+        : IAgentSessionOwnerDecisionProvider
+    {
+        public Task<AgentSessionOwnerDecision> ChooseAsync(
+            AgentSessionOwnerDecisionContext context,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(decision);
+        }
+    }
+
+    private sealed class RecordingRunningAgentChatTable(IRunningAgentChatTable inner)
+        : IRunningAgentChatTable
+    {
+        internal AcquireAgentChatRequest? LastRequest { get; private set; }
+        public ObservableCollection<RunningAgentChatWithEntityInfo> RunningSessions
+            => inner.RunningSessions;
+
+        public Task<RunningAgentChatLease> AcquireAsync(
+            AcquireAgentChatRequest request,
+            CancellationToken ct = default)
+        {
+            this.LastRequest = request;
+            return inner.AcquireAsync(request, ct);
+        }
+
+        public Task<bool> TerminateAsync(AgentSessionId sessionId, CancellationToken ct = default)
+            => inner.TerminateAsync(sessionId, ct);
+
+        public Task SetContinueInBackgroundAsync(
+            AgentSessionId sessionId,
+            bool continueInBackground,
+            CancellationToken ct = default)
+            => inner.SetContinueInBackgroundAsync(sessionId, continueInBackground, ct);
+    }
+
+    internal sealed class SingleTransportFactory(ITransport transport) : ITransportFactory
+    {
+        public Task<ITransport?> ConnectToAsync(
+            JsonElement connectionDescriptor,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<ITransport?>(transport);
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    internal sealed class OwnerPipelineTransport : ITransport
+    {
+        internal List<string> RequestTypes { get; } = [];
+        internal List<AgentSessionOpenIntent> OpenIntents { get; } = [];
+
+        public Task<IMessageChannel> ConnectToMessageChannelAsync(
+            JsonElement request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var type = request.GetProperty("type").GetString()!;
+            this.RequestTypes.Add(type);
+            var channel = new OwnerPipelineChannel();
+            if (type == "attach-agent-session")
+            {
+                var open = AgentSessionProtocolCodec.DeserializeOpen(request);
+                this.OpenIntents.Add(open.OpenIntent);
+                if (open.OpenIntent == AgentSessionOpenIntent.Status)
+                {
+                    channel.Send(new SessionStatusEvent { Status = AgentSessionRemoteStatus.Running });
+                }
+                else
+                {
+                    channel.Send(new SessionSnapshotEvent
+                    {
+                        Snapshot = CreateRemoteSnapshot(open.AgentSessionId),
+                    });
+                }
+            }
+            else
+            {
+                var takeover = AgentSessionProtocolCodec.DeserializeTakeover(request);
+                channel.Send(
+                    new CommandCompletedEvent { CommandId = takeover.CorrelationId },
+                    takeover.CorrelationId);
+            }
+            return Task.FromResult<IMessageChannel>(channel);
+        }
+
+        public Task<Stream> ConnectToStreamAsync(
+            JsonElement request,
+            CancellationToken ct = default)
+            => throw new NotSupportedException();
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class OwnerPipelineChannel : IMessageChannel
+    {
+        private readonly Channel<JsonElement> incoming = Channel.CreateUnbounded<JsonElement>();
+        private readonly Channel<JsonElement> outgoing = Channel.CreateUnbounded<JsonElement>();
+        private readonly RuntimeEpoch epoch = new() { Value = Guid.NewGuid() };
+        private long sequence;
+
+        public ChannelWriter<JsonElement> Writer => this.outgoing.Writer;
+        public ChannelReader<JsonElement> Reader => this.incoming.Reader;
+
+        internal void Send(AgentSessionServerEvent value, Guid? correlationId = null)
+            => this.incoming.Writer.TryWrite(AgentSessionProtocolCodec.SerializeFrame(
+                AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.CreateFrame(
+                    this.epoch,
+                    Interlocked.Increment(ref this.sequence),
+                    correlationId ?? Guid.NewGuid(),
+                    value)));
+
+        public ValueTask DisposeAsync()
+        {
+            this.incoming.Writer.TryComplete();
+            this.outgoing.Writer.TryComplete();
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private static AgentSessionSnapshot CreateRemoteSnapshot(string sessionId)
+        => new()
+        {
+            Information = new AgentInformation
+            {
+                AgentSessionId = sessionId,
+                AgentId = "remote-agent",
+                Name = "remote-agent",
+                DisplayName = "Remote agent",
+                Description = "Remote integration agent",
+                AcceptsUserInput = true,
+                CurrentModelId = "echo",
+                AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(
+                    """
+                    {
+                      "kind": "prompt",
+                      "name": "remote-agent",
+                      "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                      "tools": []
+                    }
+                    """),
+            },
+            Usage = new Usage(),
+            InputQueues = new AgentInputQueuesSnapshot
+            {
+                Revision = 0,
+                Queues =
+                [
+                    new AgentInputQueueSnapshot
+                    {
+                        QueueId = "immediate",
+                        Name = "immediate",
+                        IsDefault = false,
+                        IsImmediate = true,
+                        Immediacy = AgentInputQueueImmediacy.Immediate,
+                        Priority = 0,
+                        Revision = 0,
+                        Items = [],
+                    },
+                    new AgentInputQueueSnapshot
+                    {
+                        QueueId = "default",
+                        Name = "default",
+                        IsDefault = true,
+                        IsImmediate = false,
+                        Immediacy = AgentInputQueueImmediacy.Queue,
+                        Priority = 0,
+                        Revision = 0,
+                        Items = [],
+                    },
+                ],
+            },
+            IsBusy = false,
+            History = [],
+            RunningItems = [],
+            Tools = [],
+            Subagents = [],
+            Modals = [],
+            ContinueInBackground = false,
+            ViewerCount = 1,
+        };
+
     private static RepositorySource CreateInMemoryRepositorySource()
     {
         return new UnknownRepositorySource();
@@ -12273,5 +12704,3 @@ public sealed class MainWindowIntegrationTests
     }
 
 }
-
-

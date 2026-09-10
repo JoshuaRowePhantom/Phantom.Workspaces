@@ -20,6 +20,7 @@ using Phantom.Workspaces.Llm.SlashCommands;
 using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Navigation;
+using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Utilities;
 
 namespace Phantom.Workspaces.ViewModels;
@@ -31,6 +32,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
     private readonly ITrustedExecutorSelector trustedExecutorSelector;
     private readonly IRunningAgentChatTable runningAgentChatTable;
     private readonly IAgentSessionOwnerDecisionProvider ownerDecisionProvider;
+    private readonly ITransportFactoryRegistry? transportFactoryRegistry;
 
     /// <summary>
     /// The running-agent-chat table used by this handler. Exposed so co-located view models that
@@ -49,7 +51,8 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             agentSessionShortcutContext,
             trustedExecutorSelector,
             runningAgentChatTable,
-            new AgentSessionOwnerDecisionProvider())
+            new AgentSessionOwnerDecisionProvider(),
+            null)
     {
     }
 
@@ -57,13 +60,15 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         AgentSessionShortcutContext agentSessionShortcutContext,
         ITrustedExecutorSelector trustedExecutorSelector,
         IRunningAgentChatTable runningAgentChatTable,
-        IAgentSessionOwnerDecisionProvider ownerDecisionProvider)
+        IAgentSessionOwnerDecisionProvider ownerDecisionProvider,
+        ITransportFactoryRegistry? transportFactoryRegistry = null)
     {
         this.agentSessionShortcutContext = agentSessionShortcutContext;
         this.trustedExecutorSelector = trustedExecutorSelector;
         this.runningAgentChatTable = runningAgentChatTable ?? throw new ArgumentNullException(nameof(runningAgentChatTable));
         this.ownerDecisionProvider = ownerDecisionProvider
             ?? throw new ArgumentNullException(nameof(ownerDecisionProvider));
+        this.transportFactoryRegistry = transportFactoryRegistry;
     }
 
     public ValueTask DisposeAsync() => lifetime.DisposeAsync();
@@ -508,12 +513,13 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             return (AgentChatAcquisitionMode.Local, null, agentSessionEntity);
         }
 
-        var composition = mainWindowViewModel.TransportComposition
+        var registry = this.transportFactoryRegistry
+            ?? mainWindowViewModel.TransportComposition?.TransportFactoryRegistry
             ?? throw new InvalidOperationException(
                 "The persisted agent session is owned by another profile, but remote transport is unavailable.");
         using var descriptor = JsonDocument.Parse(
             $$"""{"type":"user-computer-profile","entity-id":"{{owner:D}}"}""");
-        var transport = await composition.TransportFactoryRegistry.ConnectToAsync(
+        var transport = await registry.ConnectToAsync(
             descriptor.RootElement,
             ct);
         return await this.ResolveRemoteOwnerAsync(

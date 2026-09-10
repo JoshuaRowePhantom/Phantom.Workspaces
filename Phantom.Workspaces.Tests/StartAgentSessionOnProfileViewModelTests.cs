@@ -58,9 +58,10 @@ public sealed class StartAgentSessionOnProfileViewModelTests
     [AvaloniaFact(Timeout = 15_000)]
     public async Task CreateDefinitionSession_RegistersRootChatInRunningAgentChatTable()
     {
-        var (viewModel, vm, spy, inner) = await OpenProfileTabAsync();
+        var (viewModel, vm, spy, inner, _, handler) = await OpenProfileTabAsync(remoteOwner: true);
 
         await using (viewModel)
+        await using (handler)
         {
             // Wait for LoadAgentSourcesAsync to populate the definition source.
             var definition = await WaitForAgentSourceAsync(
@@ -80,14 +81,14 @@ public sealed class StartAgentSessionOnProfileViewModelTests
             Assert.NotNull(spy.LastRequest?.AgentSessionEntity);
             Assert.NotNull(sessionTab.Lease);
 
-            // The chat is registered under its session id so GetAsync returns the same live
-            // in-memory instance (not a duplicate hydrated from persistence).
+            // The chat is registered under its session id, including when the selected profile
+            // owns the new session and acquisition therefore produces a remote proxy.
             var liveChat = sessionTab.Lease!.AgentChat;
             var sessionId = new AgentSessionId(liveChat.Information.AgentSessionId);
-            var lookupLease = await ((IRunningAgentChatFactory)GetFactory(inner)).GetAsync(
-                sessionId,
-                registerAsRunningAgent: false,
-                CancellationToken.None);
+            var runningSession = Assert.Single(inner.RunningSessions);
+            Assert.Equal(sessionId, runningSession.SessionId);
+            var lookupLease = await runningSession.AcquireLeaseAsync(
+                TestContext.Current.CancellationToken);
             await using (lookupLease)
             {
                 Assert.Same(liveChat, lookupLease.AgentChat);
@@ -95,7 +96,44 @@ public sealed class StartAgentSessionOnProfileViewModelTests
         }
     }
 
-    private static async Task<(MainWindowViewModel ViewModel, StartAgentSessionOnProfileViewModel Vm, SpyRunningAgentChatTable Spy, RunningAgentChatTable Inner)> OpenProfileTabAsync()
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task CreateDefinitionSession_RemoteProfile_AppliesOwnerDecisionAndAcquiresRemoteRuntime()
+    {
+        var (viewModel, vm, spy, _, transport, handler) = await OpenProfileTabAsync(remoteOwner: true);
+
+        await using (viewModel)
+        await using (handler)
+        {
+            var definition = await WaitForAgentSourceAsync(
+                vm,
+                new EntityId("b1309002-0000-4000-8000-000000000002"));
+            vm.SelectedAgentSource = definition;
+
+            vm.CreateSessionCommand.Execute(null);
+
+            var sessionTab = await MainWindowIntegrationTests.WaitForSelectedTabAsync<AgentSessionWorkspaceTabViewModel>(
+                viewModel.SelectedWorkspacePane);
+            await MainWindowIntegrationTests.WaitForAgentReadyAsync(sessionTab);
+
+            Assert.True(sessionTab.State == AgentTabState.Ready, sessionTab.LoadError);
+            Assert.IsType<Phantom.Workspaces.Llm.Remote.RemoteAgentChat>(sessionTab.Lease!.AgentChat);
+            Assert.Equal(AgentChatAcquisitionMode.StartOrAttachRemote, spy.LastRequest!.AcquisitionMode);
+            Assert.NotNull(spy.LastRequest.AgentSessionEntity);
+            Assert.Equal(
+                [Phantom.Workspaces.Llm.Remote.AgentSessionOpenIntent.Status,
+                 Phantom.Workspaces.Llm.Remote.AgentSessionOpenIntent.StartOrAttach],
+                transport!.OpenIntents);
+        }
+    }
+
+    private static async Task<(
+        MainWindowViewModel ViewModel,
+        StartAgentSessionOnProfileViewModel Vm,
+        SpyRunningAgentChatTable Spy,
+        RunningAgentChatTable Inner,
+        MainWindowIntegrationTests.OwnerPipelineTransport? Transport,
+        OpenAgentSessionShortcutHandler Handler)> OpenProfileTabAsync(
+        bool remoteOwner = false)
     {
         var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
@@ -116,10 +154,28 @@ public sealed class StartAgentSessionOnProfileViewModelTests
         var registryProvider = new TransportFactoryRegistryProvider(new TransportFactoryRegistry());
         var inner = new RunningAgentChatTable(factory, AgentSessionRuntimeContextFactory.FromProvider(registryProvider));
         var spy = new SpyRunningAgentChatTable(inner);
-        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
-            agentSessionShortcutContext,
-            MainWindowIntegrationTests.CreateLocalTrustedExecutorSelector(),
-            spy);
+        MainWindowIntegrationTests.OwnerPipelineTransport? transport = null;
+        OpenAgentSessionShortcutHandler openAgentSessionShortcutHandler;
+        if (remoteOwner)
+        {
+            transport = new MainWindowIntegrationTests.OwnerPipelineTransport();
+            var transportRegistry = new TransportFactoryRegistry();
+            transportRegistry.Register(new MainWindowIntegrationTests.SingleTransportFactory(transport));
+            openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
+                agentSessionShortcutContext,
+                MainWindowIntegrationTests.CreateLocalTrustedExecutorSelector(),
+                spy,
+                new MainWindowIntegrationTests.FixedOwnerDecisionProvider(
+                    AgentSessionOwnerDecision.ConnectOnOwner),
+                transportRegistry);
+        }
+        else
+        {
+            openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
+                agentSessionShortcutContext,
+                MainWindowIntegrationTests.CreateLocalTrustedExecutorSelector(),
+                spy);
+        }
 
         var vm = new StartAgentSessionOnProfileViewModel(
             viewModel,
@@ -135,7 +191,7 @@ public sealed class StartAgentSessionOnProfileViewModelTests
         };
 
         await viewModel.OpenTabAsync(vm);
-        return (viewModel, vm, spy, inner);
+        return (viewModel, vm, spy, inner, transport, openAgentSessionShortcutHandler);
     }
 
     private static async Task<StartAgentSessionOnProfileViewModel.AgentSourceItem> WaitForAgentSourceAsync(
@@ -155,15 +211,6 @@ public sealed class StartAgentSessionOnProfileViewModelTests
             await Task.Yield();
         }
         throw new TimeoutException($"Agent source for {entityId} did not appear.");
-    }
-
-    private static IRunningAgentChatFactory GetFactory(RunningAgentChatTable table)
-    {
-        var field = typeof(RunningAgentChatTable).GetField(
-            "_factory",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        Assert.NotNull(field);
-        return Assert.IsAssignableFrom<IRunningAgentChatFactory>(field!.GetValue(table));
     }
 
     private sealed class SpyRunningAgentChatTable : IRunningAgentChatTable

@@ -113,29 +113,23 @@ public sealed class DataAccessAgentSessionRuntimeHostFactoryTests
                 writes.Add(data);
                 return SuccessfulUpdate(entity, data, $"revision-{writes.Count}");
             });
-        var chat = new Mock<IAgentChat>();
-        var queues = new Mock<IAgentInputQueues>();
-        queues.SetupGet(value => value.Snapshot).Returns(
-            new AgentInputQueuesSnapshot { Revision = 0, Queues = [] });
-        chat.SetupGet(value => value.InputQueues).Returns(queues.Object);
-        chat.SetupGet(value => value.RunningItems).Returns(new AgentChatRunningItemCollection());
-        chat.SetupGet(value => value.SubAgents).Returns(
-            new ReadOnlyObservableCollection<IRunningSubAgent>(new ObservableCollection<IRunningSubAgent>()));
-        chat.SetupGet(value => value.Modals).Returns(
-            new ReadOnlyObservableCollection<AgentChatModal>(new ObservableCollection<AgentChatModal>()));
-        chat.Setup(value => value.GetToolSnapshot()).Returns([]);
-        var lifetime = new RunningAgentChatLease(
-            new AgentSessionId("session"), chat.Object, () => ValueTask.CompletedTask);
-        var running = new Mock<IRunningAgentChatTable>();
-        running.Setup(value => value.AcquireAsync(
-                It.IsAny<AcquireAgentChatRequest>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(lifetime);
+        var chatFactory = new AgentChatFactory(
+            new InMemoryAgentPersistenceStore(),
+            new AgentServices(),
+            TaskScheduler.Default);
+        var running = new RecordingRunningAgentChatTable(new RunningAgentChatTable(chatFactory));
         var factory = new DataAccessAgentSessionRuntimeHostFactory(
-            layer.Object, running.Object, new AgentSessionRuntimeContextFactory(null), time);
+            layer.Object, running, new AgentSessionRuntimeContextFactory(null), time);
         var intent = (await factory.LoadIntentAsync("session", TestContext.Current.CancellationToken))!;
 
         await using var runtime = await factory.StartAsync(intent, TestContext.Current.CancellationToken);
 
+        Assert.NotNull(running.LastRequest);
+        Assert.Equal(AgentChatAcquisitionMode.Local, running.LastRequest.AcquisitionMode);
+        Assert.NotNull(running.LastRequest.AgentSessionEntity);
+        Assert.Equal("session", running.LastRequest.AgentSessionEntity.Value
+            .GetProperty("agent-session-id").GetString());
+        Assert.Single(running.RunningSessions);
         Assert.Equal("interrupted", writes[0].GetProperty("runtime-state").GetString());
         Assert.Equal("33333333-3333-3333-3333-333333333333",
             writes[0].GetProperty("last-stopped-runtime-epoch").GetString());
@@ -180,6 +174,18 @@ public sealed class DataAccessAgentSessionRuntimeHostFactoryTests
             ["host-profile-entity-id"] = Owner,
             ["ownership-generation"] = 3,
             ["continue-in-background"] = true,
+            ["definition"] = new Dictionary<string, object?>
+            {
+                ["kind"] = "prompt",
+                ["name"] = "non-gui-owner-pipeline",
+                ["model"] = new Dictionary<string, object?>
+                {
+                    ["id"] = "echo",
+                    ["provider"] = "echo",
+                    ["apiType"] = "Echo",
+                },
+                ["tools"] = Array.Empty<object>(),
+            },
         };
         if (leaseExpiry is not null)
         {
@@ -229,4 +235,29 @@ public sealed class DataAccessAgentSessionRuntimeHostFactoryTests
         NewOwningProfileEntityId = NewOwner,
         CorrelationId = Guid.NewGuid(),
     };
+
+    private sealed class RecordingRunningAgentChatTable(IRunningAgentChatTable inner)
+        : IRunningAgentChatTable
+    {
+        internal AcquireAgentChatRequest? LastRequest { get; private set; }
+        public ObservableCollection<RunningAgentChatWithEntityInfo> RunningSessions
+            => inner.RunningSessions;
+
+        public Task<RunningAgentChatLease> AcquireAsync(
+            AcquireAgentChatRequest request,
+            CancellationToken ct = default)
+        {
+            this.LastRequest = request;
+            return inner.AcquireAsync(request, ct);
+        }
+
+        public Task<bool> TerminateAsync(AgentSessionId sessionId, CancellationToken ct = default)
+            => inner.TerminateAsync(sessionId, ct);
+
+        public Task SetContinueInBackgroundAsync(
+            AgentSessionId sessionId,
+            bool continueInBackground,
+            CancellationToken ct = default)
+            => inner.SetContinueInBackgroundAsync(sessionId, continueInBackground, ct);
+    }
 }
