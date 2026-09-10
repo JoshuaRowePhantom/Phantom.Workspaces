@@ -194,6 +194,10 @@ internal sealed class RecordingProcessExecutor : IProcessExecutor
             CreationStatusAvailable = true,
             CreateProcessSucceeded = true,
             CreateProcessWin32Error = null,
+            SdkSpawnSucceeded = null,
+            JobConfigured = null,
+            JobAssigned = null,
+            ResumeSucceeded = null,
         };
         public Task<ProcessExitResult> WaitAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(ProcessExitResult.Create(0, false, null));

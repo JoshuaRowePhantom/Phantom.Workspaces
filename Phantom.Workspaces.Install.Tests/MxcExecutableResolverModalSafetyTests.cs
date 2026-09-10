@@ -27,6 +27,8 @@ public sealed class MxcExecutableResolverModalSafetyTests
         {
             Assert.False(result.CreationStatusAvailable);
             Assert.Null(result.CreateProcessSucceeded);
+            Assert.Null(result.SdkSpawnSucceeded);
+            Assert.Null(result.Containment);
             Assert.Equal("MXC capability unavailable", result.StandardError);
             return;
         }
@@ -34,12 +36,22 @@ public sealed class MxcExecutableResolverModalSafetyTests
         Assert.Equal(0, result.ExitCode);
         Assert.True(result.ReadinessHandshakeObserved);
         Assert.Contains("PROBE_READY", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Equal(WindowsProcessPathCategory.FixedCommandShim, result.PathCategory);
+        Assert.NotNull(result.ExecutableImageIdentity);
         if (scenario == WindowsProbeScenario.MxcCommandShim)
         {
             Assert.False(result.CreationStatusAvailable);
             Assert.Null(result.CreateProcessSucceeded);
-            Assert.Equal("ProcessContainer", result.Containment?.PolicyType);
-            Assert.Equal("compiled-mxc-policy", result.Containment?.PolicyIdentity);
+            Assert.True(result.SdkSpawnSucceeded);
+            Assert.Null(result.JobConfigured);
+            Assert.Null(result.JobAssigned);
+            Assert.Null(result.ResumeSucceeded);
+            Assert.True(result.CleanupCompleted);
+            Assert.Equal("ProcessContainerContainment", result.Containment?.PolicyType);
+            Assert.StartsWith(
+                "ProcessContainerContainment:",
+                result.Containment?.PolicyIdentity,
+                StringComparison.Ordinal);
         }
     }
 }

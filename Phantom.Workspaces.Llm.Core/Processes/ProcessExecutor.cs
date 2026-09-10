@@ -73,6 +73,10 @@ public sealed record ProcessLaunchInfo
     public required bool CreationStatusAvailable { get; init; }
     public required bool? CreateProcessSucceeded { get; init; }
     public required int? CreateProcessWin32Error { get; init; }
+    public required bool? SdkSpawnSucceeded { get; init; }
+    public required bool? JobConfigured { get; init; }
+    public required bool? JobAssigned { get; init; }
+    public required bool? ResumeSucceeded { get; init; }
     public ProcessContainmentInfo? Containment { get; init; }
 
 
@@ -83,6 +87,10 @@ public sealed record ProcessLaunchInfo
         $"creationAvailable={CreationStatusAvailable}",
         $"created={CreateProcessSucceeded?.ToString() ?? "unavailable"}",
         $"win32={CreateProcessWin32Error?.ToString() ?? "none"}",
+        $"sdkSpawn={SdkSpawnSucceeded?.ToString() ?? "unavailable"}",
+        $"jobConfigured={JobConfigured?.ToString() ?? "unavailable"}",
+        $"jobAssigned={JobAssigned?.ToString() ?? "unavailable"}",
+        $"resumed={ResumeSucceeded?.ToString() ?? "unavailable"}",
         $"containmentType={Containment?.PolicyType ?? "none"}",
         $"containmentIdentity={Containment?.PolicyIdentity ?? "none"}");
 }
@@ -171,8 +179,8 @@ public sealed class ProcessExecutor : IProcessExecutor
             }
             backend = new SandboxProcessBackend(
                 sandboxRunner.Spawn(sandboxRequest),
-                request.PathCategory,
-                request.MxcPolicy is null ? "compiled-mxc-policy" : "portable-mxc-policy-v1");
+                sandboxRequest,
+                request.PathCategory);
         }
 
         try
@@ -311,13 +319,11 @@ internal interface IProcessBackend : IDisposable
     bool CreationStatusAvailable => !IsContained;
     bool? CreateProcessSucceeded => IsContained ? null : true;
     int? CreateProcessWin32Error => null;
-    ProcessContainmentInfo? Containment => IsContained
-        ? new ProcessContainmentInfo
-        {
-            PolicyType = "ProcessContainer",
-            PolicyIdentity = "mxc-policy-v1",
-        }
-        : null;
+    bool? SdkSpawnSucceeded => IsContained ? true : null;
+    bool? JobConfigured => null;
+    bool? JobAssigned => null;
+    bool? ResumeSucceeded => null;
+    ProcessContainmentInfo? Containment => null;
     bool HasExited { get; }
     Task<ProcessExitResult> WaitAsync(CancellationToken cancellationToken);
     void Kill();
@@ -347,6 +353,10 @@ internal sealed class StreamingProcessHandle : IProcessHandle
             CreationStatusAvailable = backend.CreationStatusAvailable,
             CreateProcessSucceeded = backend.CreateProcessSucceeded,
             CreateProcessWin32Error = backend.CreateProcessWin32Error,
+            SdkSpawnSucceeded = backend.SdkSpawnSucceeded,
+            JobConfigured = backend.JobConfigured,
+            JobAssigned = backend.JobAssigned,
+            ResumeSucceeded = backend.ResumeSucceeded,
             Containment = backend.Containment,
         };
 
@@ -599,6 +609,10 @@ internal sealed class SystemProcessBackend(
     public bool CreationStatusAvailable => true;
     public bool? CreateProcessSucceeded => true;
     public int? CreateProcessWin32Error => null;
+    public bool? SdkSpawnSucceeded => null;
+    public bool? JobConfigured => null;
+    public bool? JobAssigned => null;
+    public bool? ResumeSucceeded => null;
     public ProcessContainmentInfo? Containment => null;
     public bool HasExited => process.HasExited;
 
@@ -639,8 +653,8 @@ internal sealed class SystemProcessBackend(
 
 internal sealed class SandboxProcessBackend(
     ISandboxProcess process,
-    ProcessPathCategory pathCategory,
-    string policyIdentity) : IProcessBackend
+    SandboxRequest effectiveRequest,
+    ProcessPathCategory pathCategory) : IProcessBackend
 {
     private readonly Stream standardInput = process.StandardInput ?? Stream.Null;
     private readonly Stream standardOutput = process.StandardOutput ?? Stream.Null;
@@ -657,10 +671,17 @@ internal sealed class SandboxProcessBackend(
     public bool CreationStatusAvailable => false;
     public bool? CreateProcessSucceeded => null;
     public int? CreateProcessWin32Error => null;
+    public bool? SdkSpawnSucceeded => true;
+    public bool? JobConfigured => null;
+    public bool? JobAssigned => null;
+    public bool? ResumeSucceeded => null;
     public ProcessContainmentInfo? Containment { get; } = new()
     {
-        PolicyType = "ProcessContainer",
-        PolicyIdentity = policyIdentity,
+        PolicyType = effectiveRequest.Containment.GetType().Name,
+        PolicyIdentity = string.Concat(
+            effectiveRequest.Containment.GetType().Name,
+            ":",
+            effectiveRequest.Policy.Version),
     };
     public bool HasExited => process.TryGetExitCode(out _);
 

@@ -76,16 +76,21 @@ public sealed record WindowsChildProcessProbeResult
     public required string StandardOutput { get; init; }
     public required string StandardError { get; init; }
     public required string TerminalOutput { get; init; }
+    public required string? ExecutableImageIdentity { get; init; }
     public required bool TimedOut { get; init; }
     public required bool ReadinessHandshakeObserved { get; init; }
     public required WindowsProcessPathCategory PathCategory { get; init; }
     public required WindowsLaunchMechanism LaunchMechanism { get; init; }
     public WindowsContainmentDescriptor? Containment { get; init; }
-    public required bool JobConfigured { get; init; }
-    public required bool JobAssigned { get; init; }
-    public required bool ResumeSucceeded { get; init; }
-    public required bool InnerJobAssigned { get; init; }
-    public required bool CleanupCompleted { get; init; }
+    public required bool BrokerJobConfigured { get; init; }
+    public required bool BrokerJobAssigned { get; init; }
+    public required bool BrokerResumeSucceeded { get; init; }
+    public required bool? SdkSpawnSucceeded { get; init; }
+    public required bool? JobConfigured { get; init; }
+    public required bool? JobAssigned { get; init; }
+    public required bool? ResumeSucceeded { get; init; }
+    public required bool? InnerJobAssigned { get; init; }
+    public required bool? CleanupCompleted { get; init; }
     public required bool ChildExitObserved { get; init; }
     public required bool DescendantExitObserved { get; init; }
     public required bool ProcessHandleClosed { get; init; }
@@ -106,13 +111,15 @@ public sealed record WindowsChildProcessProbeResult
         $"win32={CreateProcessWin32Error?.ToString() ?? "none"}",
         $"exit={ExitCode?.ToString() ?? "none"}",
         $"status={UnsignedNtStatus ?? "none"}",
+        $"image={ExecutableImageIdentity ?? "unavailable"}",
         $"timedOut={TimedOut}",
         $"ready={ReadinessHandshakeObserved}",
         $"containmentType={Containment?.PolicyType ?? "none"}",
         $"containmentIdentity={Containment?.PolicyIdentity ?? "none"}",
-        $"jobConfigured={JobConfigured}",
-        $"jobAssigned={JobAssigned}",
-        $"resumed={ResumeSucceeded}");
+        $"sdkSpawn={SdkSpawnSucceeded?.ToString() ?? "unavailable"}",
+        $"jobConfigured={JobConfigured?.ToString() ?? "unavailable"}",
+        $"jobAssigned={JobAssigned?.ToString() ?? "unavailable"}",
+        $"resumed={ResumeSucceeded?.ToString() ?? "unavailable"}");
 }
 
 public static class WindowsChildProcessTestHarness
@@ -240,17 +247,10 @@ public static class WindowsChildProcessTestHarness
             {
                 BrokerCreateProcessSucceeded = true,
                 BrokerCreateProcessWin32Error = null,
-                JobConfigured = true,
-                JobAssigned = jobAssigned,
-                ResumeSucceeded = resumed,
-                TerminalOutput = string.Concat(
-                    result.TerminalOutput,
-                    stdout.AsSpan(0, jsonStart).Trim().ToString()),
+                BrokerJobConfigured = true,
+                BrokerJobAssigned = jobAssigned,
+                BrokerResumeSucceeded = resumed,
                 StandardError = string.Concat(result.StandardError, stderr),
-                ReadinessHandshakeObserved = result.ReadinessHandshakeObserved
-                    || stdout.AsSpan(0, jsonStart).Contains(
-                        "PROBE_READY",
-                        StringComparison.Ordinal),
             };
         }
         finally
@@ -334,14 +334,19 @@ public static class WindowsChildProcessTestHarness
                 StandardOutput = remainingOutput,
                 StandardError = error,
                 TerminalOutput = readiness,
+                ExecutableImageIdentity = null,
                 TimedOut = true,
                 ReadinessHandshakeObserved = true,
                 PathCategory = request.PathCategory,
                 LaunchMechanism = request.LaunchMechanism,
                 Containment = null,
-                JobConfigured = true,
-                JobAssigned = true,
-                ResumeSucceeded = true,
+                BrokerJobConfigured = true,
+                BrokerJobAssigned = true,
+                BrokerResumeSucceeded = true,
+                SdkSpawnSucceeded = null,
+                JobConfigured = null,
+                JobAssigned = null,
+                ResumeSucceeded = null,
                 InnerJobAssigned = false,
                 CleanupCompleted = job.IsClosed
                     && broker.IsClosed
@@ -379,16 +384,21 @@ public static class WindowsChildProcessTestHarness
         StandardOutput = string.Empty,
         StandardError = string.Empty,
         TerminalOutput = string.Empty,
+        ExecutableImageIdentity = null,
         TimedOut = false,
         ReadinessHandshakeObserved = false,
         PathCategory = request.PathCategory,
         LaunchMechanism = request.LaunchMechanism,
         Containment = request.Containment,
-        JobConfigured = true,
-        JobAssigned = false,
-        ResumeSucceeded = false,
-        InnerJobAssigned = false,
-        CleanupCompleted = true,
+        BrokerJobConfigured = true,
+        BrokerJobAssigned = false,
+        BrokerResumeSucceeded = false,
+        SdkSpawnSucceeded = null,
+        JobConfigured = null,
+        JobAssigned = null,
+        ResumeSucceeded = null,
+        InnerJobAssigned = null,
+        CleanupCompleted = null,
         ChildExitObserved = true,
         DescendantExitObserved = true,
         ProcessHandleClosed = true,

@@ -1,7 +1,9 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Mxc.Sdk;
@@ -34,6 +36,7 @@ if (args.Length >= 2 && args[0] == "--child-ready-event")
     using var ready = EventWaitHandle.OpenExisting(args[1]);
     ready.Set();
     Console.WriteLine("PROBE_READY");
+    Console.Out.Flush();
     return 0;
 }
 
@@ -43,6 +46,7 @@ if (args.Length >= 3 && args[0] == "--child-wait-events")
     using var release = EventWaitHandle.OpenExisting(args[2]);
     ready.Set();
     Console.WriteLine("PROBE_READY");
+    Console.Out.Flush();
     release.WaitOne();
     return 0;
 }
@@ -78,7 +82,21 @@ if (args.Length >= 4 && args[0] == "--timeout-parent")
 
 var options = ParseOptions(args);
 var scenario = Enum.Parse<WindowsProbeScenario>(options["scenario"]);
-var pathCategory = Enum.Parse<WindowsProcessPathCategory>(options["path-category"]);
+var pathCategory = scenario switch
+{
+    WindowsProbeScenario.CommandShim or WindowsProbeScenario.MxcCommandShim =>
+        WindowsProcessPathCategory.FixedCommandShim,
+    WindowsProbeScenario.ConPtyLaunchFailure =>
+        WindowsProcessPathCategory.FixedMissingBinary,
+    WindowsProbeScenario.Direct
+        or WindowsProbeScenario.ConPty
+        or WindowsProbeScenario.OrdinaryProcessExecutor
+        or WindowsProbeScenario.MxcProcessExecutor
+        or WindowsProbeScenario.ProcessRunnerNoJob
+        or WindowsProbeScenario.ProcessRunnerKillTree =>
+        WindowsProcessPathCategory.SystemBinary,
+    _ => WindowsProcessPathCategory.FixedProbeBinary,
+};
 var mechanism = Enum.Parse<WindowsLaunchMechanism>(options["mechanism"]);
 var timeout = TimeSpan.FromMilliseconds(long.Parse(
     options["timeout-ms"],
@@ -92,7 +110,7 @@ try
     {
         WindowsProbeScenario.NormalChild or WindowsProbeScenario.Direct =>
             scenario == WindowsProbeScenario.Direct
-                ? RunDirectCreateProcess(pathCategory, mechanism)
+                ? await RunDirectCreateProcessAsync(pathCategory, mechanism)
                 : await RunOrdinaryAsync(0, scenario, pathCategory, mechanism, containment),
         WindowsProbeScenario.FailingChild =>
             await RunFailFastAsync(pathCategory, mechanism, containment),
@@ -240,27 +258,30 @@ static async Task<WindowsChildProcessProbeResult> RunFailFastAsync(
         ready: stdout.Contains("PROBE_READY", StringComparison.Ordinal));
 }
 
-static WindowsChildProcessProbeResult RunDirectCreateProcess(
+static async Task<WindowsChildProcessProbeResult> RunDirectCreateProcessAsync(
     WindowsProcessPathCategory pathCategory,
     WindowsLaunchMechanism mechanism)
 {
-    var readyName = $"Local\\PhantomDirectReady-{Guid.NewGuid():N}";
-    using var ready = new EventWaitHandle(false, EventResetMode.ManualReset, readyName);
     var commandInterpreter = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
-    var probe = Environment.ProcessPath
-        ?? throw new InvalidOperationException("Probe executable path is unavailable.");
+    using var output = new AnonymousPipeServerStream(
+        PipeDirection.In,
+        HandleInheritability.Inheritable);
     var commandLine = new StringBuilder(
-        $"\"{commandInterpreter}\" /d /s /c \"\"{probe}\" --child-ready-event {readyName}\"");
+        $"\"{commandInterpreter}\" /d /s /c \"echo PROBE_READY\"");
     var startup = new NativeMethods.StartupInfo
     {
         Cb = Marshal.SizeOf<NativeMethods.StartupInfo>(),
+        Flags = 0x00000100,
+        StdInput = NativeMethods.GetStdHandle(-10),
+        StdOutput = output.ClientSafePipeHandle.DangerousGetHandle(),
+        StdError = output.ClientSafePipeHandle.DangerousGetHandle(),
     };
     var created = NativeMethods.CreateProcess(
         commandInterpreter,
         commandLine,
         IntPtr.Zero,
         IntPtr.Zero,
-        false,
+        true,
         NativeMethods.CreateNoWindow | NativeMethods.CreateUnicodeEnvironment,
         IntPtr.Zero,
         null,
@@ -275,17 +296,19 @@ static WindowsChildProcessProbeResult RunDirectCreateProcess(
             false,
             Marshal.GetLastWin32Error(),
             null,
-            jobAssigned: false,
-            resumed: false);
+            jobAssigned: null,
+            resumed: null);
     }
 
+    output.DisposeLocalCopyOfClientHandle();
     using var process = new Microsoft.Win32.SafeHandles.SafeProcessHandle(
         processInformation.Process,
         ownsHandle: true);
     using var thread = new Microsoft.Win32.SafeHandles.SafeWaitHandle(
         processInformation.Thread,
         ownsHandle: true);
-    ready.WaitOne();
+    using var reader = new StreamReader(output, Encoding.UTF8);
+    var standardOutput = await reader.ReadToEndAsync();
     NativeMethods.WaitForSingleObject(process, uint.MaxValue);
     if (!NativeMethods.GetExitCodeProcess(process, out var rawExitCode))
         throw new Win32Exception(Marshal.GetLastWin32Error(), "Direct child exit status was unavailable.");
@@ -296,9 +319,10 @@ static WindowsChildProcessProbeResult RunDirectCreateProcess(
         true,
         null,
         unchecked((int)rawExitCode),
-        ready: true,
-        jobAssigned: false,
-        resumed: true);
+        standardOutput: standardOutput,
+        ready: standardOutput.Contains("PROBE_READY", StringComparison.Ordinal),
+        jobAssigned: null,
+        resumed: null);
 }
 
 static async Task<WindowsChildProcessProbeResult> RunTimeoutTreeAsync(
@@ -355,17 +379,26 @@ static async Task<WindowsChildProcessProbeResult> RunConPtyAsync(
     {
         Command = missingImage
             ? Path.Combine(AppContext.BaseDirectory, "fixed-missing-probe.exe")
-            : Environment.ProcessPath!,
+            : injectedFailure is null
+                ? Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe"
+                : Environment.ProcessPath!,
         CommandArguments = missingImage
             ? []
-            : ["--child-ready-event", readyName],
+            : injectedFailure is null
+                ? [
+                    "/d",
+                    "/c",
+                    $"{Environment.ProcessPath} --child-ready-event {readyName}",
+                ]
+                : ["--child-exit", "0"],
         Columns = 80,
         Rows = 24,
     };
 
+    ConPtyPseudoTerminal? terminal = null;
     try
     {
-        await using var terminal = ConPtyPseudoTerminal.Start(new ConPtyStartOptions
+        terminal = ConPtyPseudoTerminal.Start(new ConPtyStartOptions
         {
             Payload = payload,
             ShutdownTimeout = timeout,
@@ -373,7 +406,11 @@ static async Task<WindowsChildProcessProbeResult> RunConPtyAsync(
             InjectFailureAt = injectedFailure,
         });
         var readyObserved = ready.WaitOne(timeout);
-        var exitCode = await terminal.WaitForExitAsync();
+        using var drainTimeout = new CancellationTokenSource(timeout);
+        var (exitCode, terminalOutput) =
+            await terminal.WaitForExitAndDrainOutputAsync(drainTimeout.Token);
+        await terminal.DisposeAsync();
+        terminal = null;
         return Result(
             pathCategory,
             mechanism,
@@ -381,10 +418,13 @@ static async Task<WindowsChildProcessProbeResult> RunConPtyAsync(
             true,
             null,
             exitCode,
-            terminalOutput: string.Empty,
+            terminalOutput: terminalOutput,
             ready: readyObserved,
+            jobConfigured: observer.Succeeded(WindowsProcessLaunchStage.ConfigureJob),
             jobAssigned: observer.Succeeded(WindowsProcessLaunchStage.AssignJob),
-            resumed: observer.Succeeded(WindowsProcessLaunchStage.ResumeThread));
+            resumed: observer.Succeeded(WindowsProcessLaunchStage.ResumeThread),
+            innerJobAssigned: observer.Succeeded(WindowsProcessLaunchStage.AssignJob),
+            cleanupCompleted: observer.AllConPtyResourcesReleased);
     }
     catch (Win32Exception ex) when (missingImage || injectedFailure is not null)
     {
@@ -400,8 +440,7 @@ static async Task<WindowsChildProcessProbeResult> RunConPtyAsync(
             expected.Add(WindowsProcessResource.Process);
             expected.Add(WindowsProcessResource.Thread);
         }
-        if (injectedFailure is WindowsProcessLaunchStage.AssignJob
-            or WindowsProcessLaunchStage.ResumeThread)
+        if (injectedFailure is not null)
         {
             expected.Add(WindowsProcessResource.Job);
         }
@@ -414,8 +453,10 @@ static async Task<WindowsChildProcessProbeResult> RunConPtyAsync(
             ex.NativeErrorCode,
             null,
             cleanupCompleted: expected.All(observer.Released),
+            jobConfigured: observer.Succeeded(WindowsProcessLaunchStage.ConfigureJob),
             jobAssigned: observer.Succeeded(WindowsProcessLaunchStage.AssignJob),
             resumed: observer.Succeeded(WindowsProcessLaunchStage.ResumeThread),
+            innerJobAssigned: observer.Succeeded(WindowsProcessLaunchStage.AssignJob),
             processHandleClosed: !expected.Contains(WindowsProcessResource.Process)
                 || observer.Released(WindowsProcessResource.Process),
             threadHandleClosed: !expected.Contains(WindowsProcessResource.Thread)
@@ -427,6 +468,11 @@ static async Task<WindowsChildProcessProbeResult> RunConPtyAsync(
             outputHandleClosed: observer.Released(WindowsProcessResource.OutputPipe),
             attributeListReleased: observer.Released(WindowsProcessResource.AttributeList),
             failureStage: observer.FailedStage?.ToString());
+    }
+    finally
+    {
+        if (terminal is not null)
+            await terminal.DisposeAsync();
     }
 }
 
@@ -447,7 +493,10 @@ static async Task<WindowsChildProcessProbeResult> RunProcessExecutorAsync(
             null,
             null,
             standardError: "MXC capability unavailable",
-            cleanupCompleted: true,
+            jobConfigured: null,
+            jobAssigned: null,
+            resumed: null,
+            cleanupCompleted: null,
             creationStatusAvailable: false);
     }
 
@@ -456,13 +505,13 @@ static async Task<WindowsChildProcessProbeResult> RunProcessExecutorAsync(
             Path.Combine(AppContext.BaseDirectory, "FixedProbe.cmd"),
             [])
         : new Phantom.Workspaces.Llm.Mcp.StdioCommandResolver.ResolvedCommand(
-            Environment.ProcessPath!,
-            ["--child-exit", "0"]);
+            Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
+            ["/d", "/s", "/c", "echo PROBE_READY"]);
     var request = new ProcessExecutionRequest(resolved.Executable, resolved.Arguments)
     {
         PathCategory = shim
             ? ProcessPathCategory.ResolvedCommandShim
-            : ProcessPathCategory.FixedProbeBinary,
+            : ProcessPathCategory.SystemBinary,
         Mxc = mxc
             ? new MxcProcessConfiguration(
                 new SandboxPolicy { Version = SchemaVersions.LatestStable },
@@ -470,29 +519,46 @@ static async Task<WindowsChildProcessProbeResult> RunProcessExecutorAsync(
             : null,
     };
     var executor = new ProcessExecutor();
-    await using var handle = executor.Start(request);
-    var stdoutTask = ReadStreamAsync(handle.StandardOutput);
-    var stderrTask = ReadStreamAsync(handle.StandardError);
-    var exit = await handle.WaitAsync();
-    var stdout = await stdoutTask;
-    var stderr = await stderrTask;
+    var handle = executor.Start(request);
+    var launch = handle.LaunchInfo;
+    string stdout;
+    string stderr;
+    ProcessExitResult exit;
+    try
+    {
+        var stdoutTask = ReadStreamAsync(handle.StandardOutput);
+        var stderrTask = ReadStreamAsync(handle.StandardError);
+        exit = await handle.WaitAsync();
+        stdout = await stdoutTask;
+        stderr = await stderrTask;
+    }
+    finally
+    {
+        await handle.DisposeAsync();
+    }
+
     return Result(
         pathCategory,
         mechanism,
         containment,
-        handle.LaunchInfo.CreateProcessSucceeded,
-        handle.LaunchInfo.CreateProcessWin32Error,
+        launch.CreateProcessSucceeded,
+        launch.CreateProcessWin32Error,
         exit.ExitCode,
         stdout,
         stderr,
         ready: stdout.Contains("PROBE_READY", StringComparison.Ordinal),
-        creationStatusAvailable: handle.LaunchInfo.CreationStatusAvailable,
-        observedContainment: handle.LaunchInfo.Containment is null
+        sdkSpawnSucceeded: launch.SdkSpawnSucceeded,
+        jobConfigured: launch.JobConfigured,
+        jobAssigned: launch.JobAssigned,
+        resumed: launch.ResumeSucceeded,
+        cleanupCompleted: true,
+        creationStatusAvailable: launch.CreationStatusAvailable,
+        observedContainment: launch.Containment is null
             ? null
             : new WindowsContainmentDescriptor
             {
-                PolicyType = handle.LaunchInfo.Containment.PolicyType,
-                PolicyIdentity = handle.LaunchInfo.Containment.PolicyIdentity,
+                PolicyType = launch.Containment.PolicyType,
+                PolicyIdentity = launch.Containment.PolicyIdentity,
             });
 }
 
@@ -506,7 +572,7 @@ static async Task<WindowsChildProcessProbeResult> RunProcessRunnerAsync(
     {
         var ordinaryResult = await ProcessRunner.RunProcessAsync(new RunProcessParameters(
             Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
-            ["/d", "/c", "echo PROBE_READY"],
+            ["/d", "/s", "/c", "echo PROBE_READY"],
             KillOnCloseAction.None));
         return Result(
             pathCategory,
@@ -518,7 +584,10 @@ static async Task<WindowsChildProcessProbeResult> RunProcessRunnerAsync(
             ordinaryResult.StandardOut,
             ordinaryResult.StandardError,
             ready: ordinaryResult.StandardOut.Contains("PROBE_READY", StringComparison.Ordinal),
-            innerJobAssigned: false);
+            jobConfigured: null,
+            jobAssigned: null,
+            resumed: null,
+            innerJobAssigned: null);
     }
 
     var observer = new ProcessRunnerRecordingObserver();
@@ -546,10 +615,16 @@ static async Task<WindowsChildProcessProbeResult> RunProcessRunnerAsync(
 
     try
     {
+        var executable = injectedStage is null
+            ? Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe"
+            : Environment.ProcessPath!;
+        IReadOnlyList<string> arguments = injectedStage is null
+            ? ["/d", "/s", "/c", "echo PROBE_READY"]
+            : ["--child-exit", "0"];
         var result = await ProcessRunner.RunProcessAsync(
             new RunProcessParameters(
-                Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
-                ["/d", "/c", "echo PROBE_READY"],
+                executable,
+                arguments,
                 KillOnCloseAction.KillTree)
             {
                 WindowsTestOptions = new ProcessRunnerWindowsTestOptions
@@ -568,6 +643,9 @@ static async Task<WindowsChildProcessProbeResult> RunProcessRunnerAsync(
             result.StandardOut,
             result.StandardError,
             ready: result.StandardOut.Contains("PROBE_READY", StringComparison.Ordinal),
+            jobConfigured: observer.Succeeded(ProcessRunnerWindowsStage.ConfigureJob),
+            jobAssigned: observer.Succeeded(ProcessRunnerWindowsStage.AssignJob),
+            resumed: observer.Succeeded(ProcessRunnerWindowsStage.ResumeThread),
             innerJobAssigned: result.JobAssigned);
     }
     catch (Win32Exception ex) when (injectedStage is not null)
@@ -656,6 +734,9 @@ static async Task<WindowsChildProcessProbeResult> RunProcessRunnerTimeoutTreeAsy
         unchecked((int)0xC000013A),
         timedOut: !cancel,
         ready: true,
+        jobConfigured: observer.Succeeded(ProcessRunnerWindowsStage.ConfigureJob),
+        jobAssigned: observer.Succeeded(ProcessRunnerWindowsStage.AssignJob),
+        resumed: observer.Succeeded(ProcessRunnerWindowsStage.ResumeThread),
         innerJobAssigned: true,
         cleanupCompleted: observer.AllResourcesReleased,
         childExitObserved: child.HasExited,
@@ -707,6 +788,7 @@ static WindowsChildProcessProbeResult ProcessRunnerFailureResult(
         observer.Succeeded(ProcessRunnerWindowsStage.CreateProcess),
         error,
         null,
+        jobConfigured: observer.Succeeded(ProcessRunnerWindowsStage.ConfigureJob),
         jobAssigned: observer.Succeeded(ProcessRunnerWindowsStage.AssignJob),
         resumed: observer.Succeeded(ProcessRunnerWindowsStage.ResumeThread),
         innerJobAssigned: observer.Succeeded(ProcessRunnerWindowsStage.AssignJob),
@@ -731,10 +813,12 @@ static WindowsChildProcessProbeResult Result(
     string terminalOutput = "",
     bool timedOut = false,
     bool ready = false,
-    bool jobAssigned = true,
-    bool resumed = true,
-    bool innerJobAssigned = false,
-    bool cleanupCompleted = true,
+    bool? sdkSpawnSucceeded = null,
+    bool? jobConfigured = null,
+    bool? jobAssigned = null,
+    bool? resumed = null,
+    bool? innerJobAssigned = null,
+    bool? cleanupCompleted = true,
     bool creationStatusAvailable = true,
     WindowsContainmentDescriptor? observedContainment = null,
     bool childExitObserved = true,
@@ -750,6 +834,9 @@ static WindowsChildProcessProbeResult Result(
 {
     BrokerCreateProcessSucceeded = true,
     BrokerCreateProcessWin32Error = null,
+    BrokerJobConfigured = false,
+    BrokerJobAssigned = false,
+    BrokerResumeSucceeded = false,
     CreationStatusAvailable = creationStatusAvailable,
     CreateProcessSucceeded = created,
     CreateProcessWin32Error = createError,
@@ -758,12 +845,14 @@ static WindowsChildProcessProbeResult Result(
     StandardOutput = standardOutput,
     StandardError = standardError,
     TerminalOutput = terminalOutput,
+    ExecutableImageIdentity = GetExecutableImageIdentity(pathCategory),
     TimedOut = timedOut,
     ReadinessHandshakeObserved = ready,
     PathCategory = pathCategory,
     LaunchMechanism = mechanism,
     Containment = observedContainment ?? containment,
-    JobConfigured = true,
+    SdkSpawnSucceeded = sdkSpawnSucceeded,
+    JobConfigured = jobConfigured,
     JobAssigned = jobAssigned,
     ResumeSucceeded = resumed,
     InnerJobAssigned = innerJobAssigned,
@@ -779,6 +868,24 @@ static WindowsChildProcessProbeResult Result(
     AttributeListReleased = attributeListReleased,
     FailureStage = failureStage,
 };
+
+static string? GetExecutableImageIdentity(WindowsProcessPathCategory pathCategory)
+{
+    var path = pathCategory switch
+    {
+        WindowsProcessPathCategory.FixedProbeBinary => Environment.ProcessPath,
+        WindowsProcessPathCategory.FixedCommandShim =>
+            Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
+        WindowsProcessPathCategory.SystemBinary =>
+            Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
+        _ => null,
+    };
+    if (path is null || !File.Exists(path))
+        return null;
+
+    using var stream = File.OpenRead(path);
+    return Convert.ToHexString(SHA256.HashData(stream));
+}
 
 static async Task<string> ReadStreamAsync(Stream stream)
 {
@@ -811,6 +918,9 @@ internal sealed class RecordingObserver : IWindowsProcessLaunchObserver
 
     public WindowsProcessLaunchStage? FailedStage =>
         events.LastOrDefault(launchEvent => !launchEvent.Succeeded)?.Stage;
+
+    public bool AllConPtyResourcesReleased =>
+        Enum.GetValues<WindowsProcessResource>().All(Released);
 }
 
 internal sealed class ProcessRunnerRecordingObserver : IProcessRunnerWindowsObserver
@@ -969,4 +1079,8 @@ internal static partial class NativeMethods
 
     [DllImport("kernel32.dll")]
     internal static extern uint GetErrorMode();
+
+    [DllImport("kernel32.dll")]
+    internal static extern IntPtr GetStdHandle(int standardHandle);
+
 }

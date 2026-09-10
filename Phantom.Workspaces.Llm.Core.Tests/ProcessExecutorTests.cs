@@ -188,7 +188,7 @@ public sealed class ProcessExecutorTests
     }
 
     [Fact]
-    public void ProcessExecutor_MxcWarning_PreservesDiagnostic()
+    public void ProcessExecutor_MxcWarning_DerivesDiagnosticsFromEffectiveLaunch()
     {
         var sandboxProcess = new FakeSandboxProcess
         {
@@ -208,8 +208,37 @@ public sealed class ProcessExecutorTests
         Assert.Equal(ProcessLaunchMechanism.MxcSpawn, handle.LaunchInfo.LaunchMechanism);
         Assert.False(handle.LaunchInfo.CreationStatusAvailable);
         Assert.Null(handle.LaunchInfo.CreateProcessSucceeded);
-        Assert.Equal("ProcessContainer", handle.LaunchInfo.Containment?.PolicyType);
-        Assert.Equal("compiled-mxc-policy", handle.LaunchInfo.Containment?.PolicyIdentity);
+        Assert.True(handle.LaunchInfo.SdkSpawnSucceeded);
+        Assert.Null(handle.LaunchInfo.JobConfigured);
+        Assert.Null(handle.LaunchInfo.JobAssigned);
+        Assert.Null(handle.LaunchInfo.ResumeSucceeded);
+        Assert.Equal("ProcessContainment", handle.LaunchInfo.Containment?.PolicyType);
+        Assert.Equal(
+            "ProcessContainment:0.8.0-alpha",
+            handle.LaunchInfo.Containment?.PolicyIdentity);
+    }
+
+    [Fact]
+    public void ProcessExecutor_ExplicitMxcContainment_ReportsEffectiveTypeAndPolicy()
+    {
+        var executor = new ProcessExecutor(
+            new RecordingSystemProcessFactory(),
+            new FakeSandboxRunner());
+
+        var handle = executor.Start(new ProcessExecutionRequest("tool")
+        {
+            Mxc = new MxcProcessConfiguration(
+                new SandboxPolicy { Version = "0.8.0-alpha" },
+                new ProcessContainerContainment { LeastPrivilege = true }),
+        });
+
+        Assert.True(handle.LaunchInfo.SdkSpawnSucceeded);
+        Assert.Equal(
+            "ProcessContainerContainment",
+            handle.LaunchInfo.Containment?.PolicyType);
+        Assert.Equal(
+            "ProcessContainerContainment:0.8.0-alpha",
+            handle.LaunchInfo.Containment?.PolicyIdentity);
     }
 
     [Fact]

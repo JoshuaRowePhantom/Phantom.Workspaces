@@ -265,6 +265,10 @@ public sealed class RemoteMcpHostHandlerTests
             CreationStatusAvailable = false,
             CreateProcessSucceeded = null,
             CreateProcessWin32Error = null,
+            SdkSpawnSucceeded = true,
+            JobConfigured = null,
+            JobAssigned = null,
+            ResumeSucceeded = null,
             Containment = new ProcessContainmentInfo
             {
                 PolicyType = "ProcessContainer",

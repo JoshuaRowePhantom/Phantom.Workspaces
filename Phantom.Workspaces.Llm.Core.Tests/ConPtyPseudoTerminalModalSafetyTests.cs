@@ -18,11 +18,21 @@ public sealed class ConPtyPseudoTerminalModalSafetyTests
             Timeout = TimeSpan.FromSeconds(10),
         });
 
-        Assert.Equal(0, result.ExitCode);
-        Assert.True(result.ReadinessHandshakeObserved);
+        Assert.True(
+            result.ExitCode == 0,
+            $"{result.ToSanitizedDiagnostic()}; error={result.StandardError}; terminal={result.TerminalOutput}");
+        Assert.True(
+            result.ReadinessHandshakeObserved,
+            $"{result.ToSanitizedDiagnostic()}; terminal={result.TerminalOutput}");
+        Assert.NotEmpty(result.TerminalOutput);
         Assert.Equal(WindowsLaunchMechanism.CreateProcessWithConPty, result.LaunchMechanism);
+        Assert.True(result.JobConfigured);
         Assert.True(result.JobAssigned);
         Assert.True(result.ResumeSucceeded);
+        Assert.True(result.InnerJobAssigned);
+        Assert.True(result.CleanupCompleted);
+        Assert.True(result.BrokerJobAssigned);
+        Assert.True(result.BrokerResumeSucceeded);
     }
 
     [Fact]
@@ -49,12 +59,15 @@ public sealed class ConPtyPseudoTerminalModalSafetyTests
     }
 
     [Theory]
-    [InlineData(WindowsProbeScenario.ConPtyConfigureFailure, "ConfigureJob")]
-    [InlineData(WindowsProbeScenario.ConPtyAssignFailure, "AssignJob")]
-    [InlineData(WindowsProbeScenario.ConPtyResumeFailure, "ResumeThread")]
+    [InlineData(WindowsProbeScenario.ConPtyConfigureFailure, "ConfigureJob", false, false, false)]
+    [InlineData(WindowsProbeScenario.ConPtyAssignFailure, "AssignJob", true, false, false)]
+    [InlineData(WindowsProbeScenario.ConPtyResumeFailure, "ResumeThread", true, true, false)]
     public async Task ConPtyPseudoTerminal_LaunchStageFailure_ClosesEveryCreatedNativeHandle(
         WindowsProbeScenario scenario,
-        string failureStage)
+        string failureStage,
+        bool jobConfigured,
+        bool jobAssigned,
+        bool resumed)
     {
         if (!OperatingSystem.IsWindows())
             return;
@@ -69,6 +82,10 @@ public sealed class ConPtyPseudoTerminalModalSafetyTests
 
         Assert.True(result.CreateProcessSucceeded);
         Assert.Equal(failureStage, result.FailureStage);
+        Assert.Equal(jobConfigured, result.JobConfigured);
+        Assert.Equal(jobAssigned, result.JobAssigned);
+        Assert.Equal(resumed, result.ResumeSucceeded);
+        Assert.Equal(jobAssigned, result.InnerJobAssigned);
         Assert.True(result.CleanupCompleted);
         Assert.True(result.ProcessHandleClosed);
         Assert.True(result.ThreadHandleClosed);

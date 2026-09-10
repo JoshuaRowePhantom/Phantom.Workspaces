@@ -368,8 +368,9 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
                     Win32Error = null,
                 });
 
+                hJob = CreateJob();
                 ThrowIfInjected(options, WindowsProcessLaunchStage.ConfigureJob);
-                hJob = CreateConfiguredJob();
+                ConfigureJob(hJob);
                 options.LaunchObserver?.Observe(new WindowsProcessLaunchEvent
                 {
                     Stage = WindowsProcessLaunchStage.ConfigureJob,
@@ -516,6 +517,39 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
         return tcs.Task;
     }
 
+    internal async Task<(int ExitCode, string Output)> WaitForExitAndDrainOutputAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var outputTask = DrainOutputAsync(Output, cancellationToken);
+        var exitCode = await WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        ReleasePseudoConsole();
+        var output = await outputTask.ConfigureAwait(false);
+        return (exitCode, output);
+    }
+
+    private static async Task<string> DrainOutputAsync(
+        Stream output,
+        CancellationToken cancellationToken)
+    {
+        using var reader = new StreamReader(
+            output,
+            Encoding.UTF8,
+            detectEncodingFromByteOrderMarks: true,
+            bufferSize: 4096,
+            leaveOpen: true);
+        var text = new StringBuilder();
+        var buffer = new char[4096];
+        while (true)
+        {
+            var count = await reader.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+            if (count == 0)
+                break;
+            text.Append(buffer, 0, count);
+        }
+
+        return text.ToString();
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_disposed)
@@ -544,14 +578,13 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
         }
         finally
         {
+            ReleasePseudoConsole();
             var outputHandle = ((FileStream)Output).SafeFileHandle;
             await Output.DisposeAsync().ConfigureAwait(false);
             ObserveReleased(
                 outputHandle,
                 WindowsProcessResource.OutputPipe,
                 _launchObserver);
-            _hPC.Dispose();
-            ObserveReleased(_hPC, WindowsProcessResource.PseudoConsole, _launchObserver);
             _hThread.Dispose();
             ObserveReleased(_hThread, WindowsProcessResource.Thread, _launchObserver);
             _hProcess.Dispose();
@@ -601,6 +634,15 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
             Win32Error = null,
             Resource = resource,
         });
+    }
+
+    private void ReleasePseudoConsole()
+    {
+        if (_hPC.IsClosed)
+            return;
+
+        _hPC.Dispose();
+        ObserveReleased(_hPC, WindowsProcessResource.PseudoConsole, _launchObserver);
     }
 
     /// <summary>
@@ -718,12 +760,16 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
         return list;
     }
 
-    private static SafeJobHandle CreateConfiguredJob()
+    private static SafeJobHandle CreateJob()
     {
         var job = CreateJobObjectW(IntPtr.Zero, null);
         if (job.IsInvalid)
             throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateJobObjectW failed.");
+        return job;
+    }
 
+    private static void ConfigureJob(SafeJobHandle job)
+    {
         var information = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
         information.BasicLimitInformation.LimitFlags =
             JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
@@ -735,16 +781,10 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
             if (!SetInformationJobObject(job, 9, pointer, (uint)size))
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "SetInformationJobObject failed.");
         }
-        catch
-        {
-            job.Dispose();
-            throw;
-        }
         finally
         {
             Marshal.FreeHGlobal(pointer);
         }
-        return job;
     }
 
     private static string BuildCommandLine(ShellOpenPayload payload)

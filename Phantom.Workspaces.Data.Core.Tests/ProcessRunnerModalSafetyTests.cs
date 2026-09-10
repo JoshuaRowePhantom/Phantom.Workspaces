@@ -24,7 +24,16 @@ public sealed class ProcessRunnerModalSafetyTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.True(result.ReadinessHandshakeObserved);
-        Assert.Equal(expectsInnerJob, result.InnerJobAssigned);
+        Assert.Equal(expectsInnerJob ? true : null, result.InnerJobAssigned);
+        Assert.Equal(
+            expectsInnerJob ? true : null,
+            result.JobConfigured);
+        Assert.Equal(
+            expectsInnerJob ? true : null,
+            result.JobAssigned);
+        Assert.Equal(
+            expectsInnerJob ? true : null,
+            result.ResumeSucceeded);
     }
 
     [Fact]

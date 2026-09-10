@@ -19,9 +19,12 @@ public sealed class WindowsChildProcessTestHarnessTests
         Assert.NotEqual(0, result.ExitCode);
         Assert.True(result.ReadinessHandshakeObserved);
         Assert.False(result.TimedOut);
-        Assert.True(result.JobConfigured);
-        Assert.True(result.JobAssigned);
-        Assert.True(result.ResumeSucceeded);
+        Assert.True(result.BrokerJobConfigured);
+        Assert.True(result.BrokerJobAssigned);
+        Assert.True(result.BrokerResumeSucceeded);
+        Assert.Null(result.JobConfigured);
+        Assert.Null(result.JobAssigned);
+        Assert.Null(result.ResumeSucceeded);
         Assert.True(result.CleanupCompleted);
     }
 
@@ -91,7 +94,7 @@ public sealed class WindowsChildProcessTestHarnessTests
     private static WindowsChildProcessProbeRequest Request(WindowsProbeScenario scenario) => new()
     {
         Scenario = scenario,
-        PathCategory = WindowsProcessPathCategory.SystemBinary,
+        PathCategory = WindowsProcessPathCategory.FixedProbeBinary,
         LaunchMechanism = WindowsLaunchMechanism.DirectCreateProcess,
         Timeout = scenario == WindowsProbeScenario.TimeoutTree
             ? TimeSpan.FromMilliseconds(250)
