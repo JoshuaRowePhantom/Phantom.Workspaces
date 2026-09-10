@@ -112,20 +112,56 @@ public sealed class RunningAgentChatWithEntityInfo : INotifyPropertyChanged
     {
         if (this.acquireLease is not null)
         {
-            return await this.acquireLease(ct).ConfigureAwait(false);
+            var delegatedLease = await this.acquireLease(ct).ConfigureAwait(false);
+            try
+            {
+                ct.ThrowIfCancellationRequested();
+                return delegatedLease;
+            }
+            catch
+            {
+                await delegatedLease.DisposeAsync().ConfigureAwait(false);
+                throw;
+            }
         }
 
         var lease = await _chat!.AcquireLeaseAsync(ct).ConfigureAwait(false);
-        this.IncrementViewerCount();
-        return new RunningAgentChatLease(
-            lease.SessionId,
-            lease.LocalAgentChat,
-            onDispose: lease.DisposeAsync,
-            afterDispose: () =>
+        var viewerCountIncremented = false;
+        var ownershipTransferred = false;
+        try
+        {
+            ct.ThrowIfCancellationRequested();
+            viewerCountIncremented = true;
+            this.IncrementViewerCount();
+            var result = new RunningAgentChatLease(
+                lease.SessionId,
+                lease.AgentChat,
+                onDispose: lease.DisposeAsync,
+                afterDispose: () =>
+                {
+                    this.DecrementViewerCount();
+                    return ValueTask.CompletedTask;
+                });
+            ownershipTransferred = true;
+            return result;
+        }
+        finally
+        {
+            if (!ownershipTransferred)
             {
-                this.DecrementViewerCount();
-                return ValueTask.CompletedTask;
-            });
+                try
+                {
+                    if (viewerCountIncremented)
+                    {
+                        this.DecrementViewerCount();
+                    }
+                }
+                finally
+                {
+                    await lease.DisposeAsync().ConfigureAwait(false);
+                }
+            }
+        }
     }
 
     internal void SetContinueInBackground(bool value)

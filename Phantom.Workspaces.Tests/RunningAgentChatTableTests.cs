@@ -192,6 +192,69 @@ public sealed class RunningAgentChatTableTests
             => await (await chatTask.ConfigureAwait(false)).DisposeAsync();
     }
 
+    private sealed class CommonSurfaceRunningAgentChatFactory : IRunningAgentChatFactory
+    {
+        private readonly IAgentChat agentChat = Mock.Of<IAgentChat>();
+        private RunningAgentChat? entry;
+        private int activeLeaseCount;
+        private int disposeCallCount;
+
+        public ObservableCollection<RunningAgentChat> RunningSessions { get; } = [];
+        public IAgentChat AgentChat => this.agentChat;
+        public int ActiveLeaseCount => Volatile.Read(ref this.activeLeaseCount);
+        public int DisposeCallCount => Volatile.Read(ref this.disposeCallCount);
+        public Action? AfterLeaseAcquired { get; set; }
+
+        public Task<RunningAgentChatLease> GetAsync(
+            AgentSessionId sessionId,
+            bool registerAsRunningAgent = true,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (Interlocked.Increment(ref this.activeLeaseCount) == 1 && registerAsRunningAgent)
+            {
+                this.entry = new RunningAgentChat(sessionId, this);
+                this.RunningSessions.Add(this.entry);
+            }
+
+            var lease = new RunningAgentChatLease(
+                sessionId,
+                this.agentChat,
+                () =>
+                {
+                    Interlocked.Increment(ref this.disposeCallCount);
+                    if (Interlocked.Decrement(ref this.activeLeaseCount) == 0 && this.entry is not null)
+                    {
+                        this.RunningSessions.Remove(this.entry);
+                        this.entry = null;
+                    }
+                    return ValueTask.CompletedTask;
+                });
+            this.AfterLeaseAcquired?.Invoke();
+            return Task.FromResult(lease);
+        }
+
+        public Task<RunningAgentChatLease> CreateAsync(
+            AgentDefinition definition,
+            AgentSessionId sessionId,
+            AgentServices? services = null,
+            string? displayNameOverride = null,
+            string? descriptionOverride = null,
+            string? nameOverride = null,
+            CancellationToken ct = default)
+            => this.GetAsync(sessionId, ct: ct);
+
+        public Task<RunningAgentChatLease> GetOrCreateAsync(
+            AgentSessionId sessionId,
+            AgentDefinition? definition = null,
+            AgentServices? services = null,
+            string? displayNameOverride = null,
+            string? descriptionOverride = null,
+            bool registerAsRunningAgent = true,
+            CancellationToken ct = default)
+            => this.GetAsync(sessionId, registerAsRunningAgent, ct);
+    }
+
     private static AgentDefinition CreateTestAgentDefinition()
         => AgentDefinitionLoader.LoadAgentFromJson(
             """
@@ -1342,6 +1405,135 @@ public sealed class RunningAgentChatTableTests
         // Dispose the second lease — session remains alive (lease from AcquireAsync still held)
         await secondLease.DisposeAsync();
         Assert.Single(table.RunningSessions);
+    }
+
+    [Fact]
+    public async Task RunningAgentChatWithEntityInfo_AcquireLeaseAsync_PreservesCommonAgentChatSurface()
+    {
+        var factory = new CommonSurfaceRunningAgentChatFactory();
+        var table = new RunningAgentChatTable(factory);
+        var sessionId = new AgentSessionId("session-common-surface-row");
+        var initialLease = await table.AcquireAsync(
+            Request(sessionId, entityName: "Common Surface"),
+            TestContext.Current.CancellationToken);
+
+        try
+        {
+            var row = Assert.Single(table.RunningSessions);
+            var rowLease = await row.AcquireLeaseAsync(TestContext.Current.CancellationToken);
+            try
+            {
+                Assert.Same(factory.AgentChat, rowLease.AgentChat);
+                Assert.IsNotType<AgentChat>(rowLease.AgentChat);
+                Assert.Equal(2, factory.ActiveLeaseCount);
+                Assert.Equal(2, row.ViewerCount);
+            }
+            finally
+            {
+                await rowLease.DisposeAsync();
+            }
+
+            Assert.Equal(1, factory.ActiveLeaseCount);
+            Assert.Equal(1, row.ViewerCount);
+        }
+        finally
+        {
+            await initialLease.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task RunningAgentChatWithEntityInfo_AcquireLeaseAsync_FailureDisposesAcquiredLease()
+    {
+        var factory = new CommonSurfaceRunningAgentChatFactory();
+        var table = new RunningAgentChatTable(factory);
+        var sessionId = new AgentSessionId("session-row-acquire-failure");
+        var initialLease = await table.AcquireAsync(
+            Request(sessionId, entityName: "Failure Cleanup"),
+            TestContext.Current.CancellationToken);
+
+        try
+        {
+            var row = Assert.Single(table.RunningSessions);
+            row.PropertyChanged += ThrowOnViewerCountChange;
+
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => row.AcquireLeaseAsync(TestContext.Current.CancellationToken));
+
+            Assert.Equal(1, factory.ActiveLeaseCount);
+            Assert.Equal(1, factory.DisposeCallCount);
+            Assert.Equal(1, row.ViewerCount);
+        }
+        finally
+        {
+            await initialLease.DisposeAsync();
+        }
+
+        static void ThrowOnViewerCountChange(object? sender, System.ComponentModel.PropertyChangedEventArgs args)
+        {
+            if (args.PropertyName == nameof(RunningAgentChatWithEntityInfo.ViewerCount))
+                throw new InvalidOperationException("Injected viewer-count publication failure.");
+        }
+    }
+
+    [Fact]
+    public async Task RunningAgentChatWithEntityInfo_AcquireLeaseAsync_CancellationAfterAcquisitionDisposesLease()
+    {
+        var factory = new CommonSurfaceRunningAgentChatFactory();
+        var table = new RunningAgentChatTable(factory);
+        var sessionId = new AgentSessionId("session-row-acquire-cancelled");
+        var initialLease = await table.AcquireAsync(
+            Request(sessionId, entityName: "Cancellation Cleanup"),
+            TestContext.Current.CancellationToken);
+
+        try
+        {
+            var row = Assert.Single(table.RunningSessions);
+            using var cancellation = new CancellationTokenSource();
+            factory.AfterLeaseAcquired = cancellation.Cancel;
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => row.AcquireLeaseAsync(cancellation.Token));
+
+            Assert.Equal(1, factory.ActiveLeaseCount);
+            Assert.Equal(1, factory.DisposeCallCount);
+            Assert.Equal(1, row.ViewerCount);
+        }
+        finally
+        {
+            await initialLease.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task RunningAgentChatWithEntityInfo_AcquireLeaseAsync_DelegatedCancellationDisposesLease()
+    {
+        var sessionId = new AgentSessionId("session-delegated-row-acquire-cancelled");
+        using var cancellation = new CancellationTokenSource();
+        var disposeCallCount = 0;
+        var row = new RunningAgentChatWithEntityInfo(
+            sessionId,
+            isSubAgent: false,
+            _ =>
+            {
+                var lease = new RunningAgentChatLease(
+                    sessionId,
+                    Mock.Of<IAgentChat>(),
+                    () =>
+                    {
+                        Interlocked.Increment(ref disposeCallCount);
+                        return ValueTask.CompletedTask;
+                    });
+                cancellation.Cancel();
+                return Task.FromResult(lease);
+            },
+            "Delegated Cancellation",
+            entityId: null);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => row.AcquireLeaseAsync(cancellation.Token));
+
+        Assert.Equal(1, disposeCallCount);
     }
 
     [Fact]
