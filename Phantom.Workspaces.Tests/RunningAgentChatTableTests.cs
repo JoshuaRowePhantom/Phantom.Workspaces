@@ -28,6 +28,7 @@ public sealed class RunningAgentChatTableTests
     private sealed class FakeRunningAgentChatFactory : IRunningAgentChatFactory
     {
         private readonly TaskScheduler _foregroundScheduler;
+        private readonly Func<Task<AgentChat>, Task> disposeChatAsync;
         private readonly Dictionary<AgentSessionId, (int RefCount, RunningAgentChat Entry, Task<AgentChat> ChatTask)> _sessions = new();
 
         public ObservableCollection<RunningAgentChat> RunningSessions { get; } = new();
@@ -36,9 +37,12 @@ public sealed class RunningAgentChatTableTests
         public bool IsSubAgent { get; init; }
         public int TerminateCallCount { get; private set; }
 
-        public FakeRunningAgentChatFactory(TaskScheduler? foregroundScheduler = null)
+        public FakeRunningAgentChatFactory(
+            TaskScheduler? foregroundScheduler = null,
+            Func<Task<AgentChat>, Task>? disposeChatAsync = null)
         {
             _foregroundScheduler = foregroundScheduler ?? TaskScheduler.Default;
+            this.disposeChatAsync = disposeChatAsync ?? DisposeChatAsync;
         }
 
         public async Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, bool registerAsRunningAgent = true, CancellationToken ct = default)
@@ -124,18 +128,20 @@ public sealed class RunningAgentChatTableTests
             ct.ThrowIfCancellationRequested();
             this.TerminateCallCount++;
             RunningAgentChat? entry;
+            Task<AgentChat> chatTask;
             lock (this._sessions)
             {
                 if (!this._sessions.Remove(sessionId, out var existing))
                     return false;
                 entry = existing.Entry;
-                _ = DisposeChatAsync(existing.ChatTask);
+                chatTask = existing.ChatTask;
             }
             await Task.Factory.StartNew(
                 () => this.RunningSessions.Remove(entry),
                 CancellationToken.None,
                 TaskCreationOptions.None,
                 this._foregroundScheduler);
+            await this.disposeChatAsync(chatTask).ConfigureAwait(false);
             return true;
         }
 
@@ -143,6 +149,7 @@ public sealed class RunningAgentChatTableTests
         {
             bool shouldRemove;
             RunningAgentChat? entryToRemove;
+            Task<AgentChat>? chatTaskToDispose;
 
             lock (_sessions)
             {
@@ -156,13 +163,14 @@ public sealed class RunningAgentChatTableTests
                     _sessions.Remove(sessionId);
                     shouldRemove = true;
                     entryToRemove = existing.Entry;
-                    _ = DisposeChatAsync(existing.ChatTask);
+                    chatTaskToDispose = existing.ChatTask;
                 }
                 else
                 {
                     _sessions[sessionId] = (existing.RefCount - 1, existing.Entry, existing.ChatTask);
                     shouldRemove = false;
                     entryToRemove = null;
+                    chatTaskToDispose = null;
                 }
             }
 
@@ -173,6 +181,10 @@ public sealed class RunningAgentChatTableTests
                     CancellationToken.None,
                     TaskCreationOptions.None,
                     _foregroundScheduler);
+            }
+            if (chatTaskToDispose is not null)
+            {
+                await this.disposeChatAsync(chatTaskToDispose).ConfigureAwait(false);
             }
         }
 
@@ -216,6 +228,77 @@ public sealed class RunningAgentChatTableTests
             WasInvoked = true;
             return TryExecuteTask(task);
         }
+    }
+
+    private sealed class PausableScheduler : TaskScheduler
+    {
+        private readonly Queue<Task> queuedTasks = new();
+        private TaskCompletionSource taskQueued =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private volatile bool paused;
+
+        internal int QueuedTaskCount
+        {
+            get
+            {
+                lock (this.queuedTasks)
+                    return this.queuedTasks.Count;
+            }
+        }
+
+        internal void Pause()
+        {
+            this.paused = true;
+            this.taskQueued = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+
+        internal Task WaitForQueuedTaskAsync(CancellationToken ct) =>
+            this.taskQueued.Task.WaitAsync(ct);
+
+        internal void RunNext()
+        {
+            Task task;
+            lock (this.queuedTasks)
+                task = this.queuedTasks.Dequeue();
+            this.TryExecuteTask(task);
+        }
+
+        internal void Resume()
+        {
+            this.paused = false;
+            while (true)
+            {
+                Task? task;
+                lock (this.queuedTasks)
+                    task = this.queuedTasks.TryDequeue(out var queued) ? queued : null;
+                if (task is null)
+                    return;
+                this.TryExecuteTask(task);
+            }
+        }
+
+        protected override IEnumerable<Task>? GetScheduledTasks()
+        {
+            lock (this.queuedTasks)
+                return this.queuedTasks.ToArray();
+        }
+
+        protected override void QueueTask(Task task)
+        {
+            if (!this.paused)
+            {
+                this.TryExecuteTask(task);
+                return;
+            }
+
+            lock (this.queuedTasks)
+                this.queuedTasks.Enqueue(task);
+            this.taskQueued.TrySetResult();
+        }
+
+        protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued) =>
+            !this.paused && this.TryExecuteTask(task);
     }
 
     private static AcquireAgentChatRequest Request(
@@ -324,6 +407,37 @@ public sealed class RunningAgentChatTableTests
         await lease.DisposeAsync();
 
         Assert.Empty(table.RunningSessions);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_LastLeaseDisposed_AwaitsChatTeardown()
+    {
+        var disposalStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowDisposal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var factory = new FakeRunningAgentChatFactory(
+            new CapturingScheduler(),
+            async chatTask =>
+            {
+                disposalStarted.TrySetResult();
+                await allowDisposal.Task.ConfigureAwait(false);
+                await (await chatTask.ConfigureAwait(false)).DisposeAsync();
+            });
+        var table = new RunningAgentChatTable(factory);
+        var lease = await table.AcquireAsync(
+            Request(new AgentSessionId("await-release-teardown")),
+            TestContext.Current.CancellationToken);
+
+        var disposing = lease.DisposeAsync().AsTask();
+        await disposalStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
+        try
+        {
+            Assert.False(disposing.IsCompleted);
+        }
+        finally
+        {
+            allowDisposal.TrySetResult();
+            await disposing;
+        }
     }
 
     [Fact]
@@ -575,6 +689,45 @@ public sealed class RunningAgentChatTableTests
     }
 
     [Fact]
+    public async Task AcquireAsync_RemoteRetention_AppliesWithinOrderedFrameWithoutBackgroundWork()
+    {
+        var scheduler = new PausableScheduler();
+        var transport = new SnapshotTransport("remote-drain");
+        var table = new RunningAgentChatTable(
+            new FakeRunningAgentChatFactory(), new FakeRuntimeContextFactory());
+        var lease = await table.AcquireAsync(
+            RemoteRequest("remote-drain", transport, scheduler),
+            TestContext.Current.CancellationToken);
+        scheduler.Pause();
+        transport.Send(
+            new SessionRetentionChangedEvent
+            {
+                ContinueInBackground = false,
+                ViewerCount = 0,
+            },
+            2,
+            Guid.NewGuid());
+
+        await scheduler.WaitForQueuedTaskAsync(TestContext.Current.CancellationToken);
+        scheduler.RunNext();
+        Assert.Equal(0, scheduler.QueuedTaskCount);
+        Assert.Equal(0, Assert.Single(table.RunningSessions).ViewerCount);
+
+        var disposing = lease.DisposeAsync().AsTask();
+        try
+        {
+            Assert.Equal(1, scheduler.QueuedTaskCount);
+            Assert.False(disposing.IsCompleted);
+        }
+        finally
+        {
+            scheduler.Resume();
+            await disposing;
+        }
+        Assert.Empty(table.RunningSessions);
+    }
+
+    [Fact]
     public async Task TerminateAsync_RemoteSession_SendsTerminateNotDetach()
     {
         var transport = new SnapshotTransport("terminate-remote");
@@ -623,6 +776,40 @@ public sealed class RunningAgentChatTableTests
 
         Assert.True(await table.TerminateAsync(sessionId, TestContext.Current.CancellationToken));
         Assert.Equal(1, factory.TerminateCallCount);
+    }
+
+    [Fact]
+    public async Task TerminateAsync_LocalSession_AwaitsOwningRuntimeTeardown()
+    {
+        var disposalStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowDisposal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var factory = new FakeRunningAgentChatFactory(
+            new CapturingScheduler(),
+            async chatTask =>
+            {
+                disposalStarted.TrySetResult();
+                await allowDisposal.Task.ConfigureAwait(false);
+                await (await chatTask.ConfigureAwait(false)).DisposeAsync();
+            });
+        var table = new RunningAgentChatTable(factory);
+        var lease = await table.AcquireAsync(
+            Request(new AgentSessionId("await-termination-teardown")),
+            TestContext.Current.CancellationToken);
+
+        var terminating = table.TerminateAsync(
+            lease.SessionId,
+            TestContext.Current.CancellationToken);
+        await disposalStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
+        try
+        {
+            Assert.False(terminating.IsCompleted);
+        }
+        finally
+        {
+            allowDisposal.TrySetResult();
+            await terminating;
+            await lease.DisposeAsync();
+        }
     }
 
     [Fact]

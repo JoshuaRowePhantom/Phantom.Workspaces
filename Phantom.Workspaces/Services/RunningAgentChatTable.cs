@@ -499,15 +499,22 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
             }
 
             var lease = await _factory.GetAsync(sessionId, registerAsRunningAgent: false, ct).ConfigureAwait(false);
+            RunningAgentChatLease? redundantLease = null;
             lock (_entityInfoLock)
             {
                 if (_continueInBackgroundLeases.ContainsKey(sessionId))
                 {
-                    _ = lease.DisposeAsync();
-                    return;
+                    redundantLease = lease;
                 }
-
-                _continueInBackgroundLeases[sessionId] = lease;
+                else
+                {
+                    _continueInBackgroundLeases[sessionId] = lease;
+                }
+            }
+            if (redundantLease is not null)
+            {
+                await redundantLease.DisposeAsync().ConfigureAwait(false);
+                return;
             }
 
             entry.SetContinueInBackground(true);
@@ -625,7 +632,6 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         {
             await this.Chat.SetContinueInBackgroundAsync(value, ct).ConfigureAwait(false);
             this.continueInBackground = value;
-            await this.PublishMetadataAsync(ct).ConfigureAwait(false);
             if (!value && this.viewerCount == 0)
                 await this.table.RemoveRemoteAsync(this).ConfigureAwait(false);
         }
@@ -634,18 +640,11 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
 
         private void OnRetentionChanged(object? sender, EventArgs args)
         {
+            // RemoteAgentChat applies every protocol frame on ForegroundScheduler before raising
+            // this event, so publishing here preserves ordering without orphaning another task.
             this.continueInBackground = this.Chat.ContinueInBackground;
-            _ = this.PublishMetadataAsync(CancellationToken.None);
+            this.Row?.SetContinueInBackground(this.Chat.ContinueInBackground);
+            this.Row?.SetViewerCount(this.Chat.ViewerCount);
         }
-
-        private Task PublishMetadataAsync(CancellationToken ct)
-            => RunOnSchedulerAsync(
-                this.ForegroundScheduler,
-                () =>
-                {
-                    this.Row?.SetContinueInBackground(this.Chat.ContinueInBackground);
-                    this.Row?.SetViewerCount(this.Chat.ViewerCount);
-                },
-                ct);
     }
 }
