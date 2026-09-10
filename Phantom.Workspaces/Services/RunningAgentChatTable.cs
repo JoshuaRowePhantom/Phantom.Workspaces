@@ -29,7 +29,7 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
     private readonly IAgentSessionRuntimeContextFactory runtimeContextFactory;
     private readonly Dictionary<AgentSessionId, (string EntityName, string? EntityId, string? WorkspaceId)> _entityInfo = new();
     private readonly Dictionary<AgentSessionId, RunningAgentChatLease> _continueInBackgroundLeases = new();
-    private readonly Dictionary<RemoteRuntimeKey, Task<RemoteRunningSession>> remoteSessions = new();
+    private readonly Dictionary<RemoteRuntimeKey, RemoteAcquisitionFlight> remoteSessions = new();
     private readonly Dictionary<AgentSessionId, RemoteRunningSession> publishedRemoteSessions = new();
     private readonly Dictionary<AgentSessionId, JsonElement> localRuntimeEntities = new();
     private readonly Dictionary<AgentSessionId, SemaphoreSlim> localAcquisitionGates = new();
@@ -126,6 +126,10 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                 ExecutorBindings = runtimeContext.Intent.ExecutorBindings,
                 ExecutorTransportFactoryRegistry = runtimeContext.TransportFactoryRegistry,
                 RemoteAgentSessionRuntimeIntent = runtimeContext.Intent,
+                CurrentSessionContext = CreateCurrentSessionContext(
+                    services?.CurrentSessionContext as CurrentSessionContext,
+                    sessionId,
+                    runtimeContext.Intent),
             };
             lock (this._entityInfoLock)
                 this.localRuntimeEntities[sessionId] = entity.Clone();
@@ -182,36 +186,105 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
             request.AgentSessionId,
             context.Intent.OwningProfileEntityId,
             context.Intent.OwnershipGeneration);
-        Task<RemoteRunningSession> creation;
+        RemoteAcquisitionFlight flight;
         lock (this._entityInfoLock)
         {
-            if (!this.remoteSessions.TryGetValue(key, out creation!))
+            if (!this.remoteSessions.TryGetValue(key, out flight!))
             {
-                creation = this.CreateRemoteSessionAsync(key, request, context, ct);
-                this.remoteSessions.Add(key, creation);
+                flight = new RemoteAcquisitionFlight(
+                    cancellationToken => this.CreateRemoteSessionAsync(
+                        key,
+                        request,
+                        context,
+                        cancellationToken));
+                this.remoteSessions.Add(key, flight);
             }
+            flight.AddWaiter();
         }
 
-        RemoteRunningSession session;
+        var cancelledWaiter = false;
         try
         {
-            session = await creation.WaitAsync(ct).ConfigureAwait(false);
+            var session = await flight.Creation.WaitAsync(ct).ConfigureAwait(false);
+            return await session.AcquireAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            cancelledWaiter = true;
+            throw;
         }
         catch
         {
+            this.RemoveFailedRemoteFlight(key, flight);
+            throw;
+        }
+        finally
+        {
+            var drainCancelledFlight = false;
+            lock (this._entityInfoLock)
+            {
+                if (flight.RemoveWaiter() == 0
+                    && cancelledWaiter
+                    && !flight.Creation.IsCompleted)
+                {
+                    drainCancelledFlight = true;
+                }
+            }
+
+            if (drainCancelledFlight)
+            {
+                flight.Cancel();
+                try
+                {
+                    await flight.Creation.ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Preserve the waiter's cancellation while still draining owned cleanup.
+                }
+                this.RemoveFailedRemoteFlight(key, flight);
+            }
+        }
+    }
+
+    private void RemoveFailedRemoteFlight(
+        RemoteRuntimeKey key,
+        RemoteAcquisitionFlight flight)
+    {
+        if (!flight.Creation.IsCompletedSuccessfully)
+        {
+            var removed = false;
             lock (this._entityInfoLock)
             {
                 if (this.remoteSessions.TryGetValue(key, out var current)
-                    && ReferenceEquals(current, creation))
+                    && ReferenceEquals(current, flight))
                 {
                     this.remoteSessions.Remove(key);
+                    removed = true;
                 }
             }
-            throw;
+            if (removed)
+                flight.Dispose();
         }
-
-        return await session.AcquireAsync(ct).ConfigureAwait(false);
     }
+
+    private static CurrentSessionContext CreateCurrentSessionContext(
+        CurrentSessionContext? existing,
+        AgentSessionId sessionId,
+        PersistedAgentSessionRuntimeIntent intent)
+        => existing is null
+            ? new CurrentSessionContext
+            {
+                AgentSessionId = sessionId.Value,
+                OwningProfileEntityId = intent.OwningProfileEntityId,
+                OwnershipGeneration = intent.OwnershipGeneration,
+            }
+            : existing with
+            {
+                AgentSessionId = sessionId.Value,
+                OwningProfileEntityId = intent.OwningProfileEntityId,
+                OwnershipGeneration = intent.OwnershipGeneration,
+            };
 
     private async Task<RemoteRunningSession> CreateRemoteSessionAsync(
         RemoteRuntimeKey key,
@@ -561,7 +634,8 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         session.Unsubscribe();
         lock (this._entityInfoLock)
         {
-            this.remoteSessions.Remove(session.Key);
+            if (this.remoteSessions.Remove(session.Key, out var flight))
+                flight.Dispose();
             if (this.publishedRemoteSessions.TryGetValue(session.Key.SessionId, out var published)
                 && ReferenceEquals(published, session))
                 this.publishedRemoteSessions.Remove(session.Key.SessionId);
@@ -577,6 +651,28 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
     }
 
     private readonly record struct RemoteRuntimeKey(AgentSessionId SessionId, string Owner, long Generation);
+
+    private sealed class RemoteAcquisitionFlight : IDisposable
+    {
+        private readonly CancellationTokenSource cancellation = new();
+        private int waiterCount;
+
+        internal RemoteAcquisitionFlight(
+            Func<CancellationToken, Task<RemoteRunningSession>> create)
+        {
+            this.Creation = create(this.cancellation.Token);
+        }
+
+        internal Task<RemoteRunningSession> Creation { get; }
+
+        internal void AddWaiter() => this.waiterCount++;
+
+        internal int RemoveWaiter() => --this.waiterCount;
+
+        internal void Cancel() => this.cancellation.Cancel();
+
+        public void Dispose() => this.cancellation.Dispose();
+    }
 
     private sealed class RemoteRunningSession
     {

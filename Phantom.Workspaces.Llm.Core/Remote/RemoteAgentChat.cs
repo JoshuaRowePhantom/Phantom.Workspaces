@@ -26,6 +26,7 @@ public sealed class RemoteAgentChat : IAgentChat
     private readonly RemoteInputQueues inputQueues;
     private readonly object frameApplicationLock = new();
     private Task frameApplication = Task.CompletedTask;
+    private Task? disposalTask;
     private bool disposed;
     private bool detached;
     private AgentInformation information;
@@ -171,37 +172,37 @@ public sealed class RemoteAgentChat : IAgentChat
         if (this.detached) return;
         this.detached = true;
         await this.client.DetachAsync(ct).ConfigureAwait(false);
-        await this.DisposeCoreAsync().ConfigureAwait(false);
+        await this.DisposeAsync().ConfigureAwait(false);
     }
 
     public object? GetService(Type serviceType) => null;
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (this.disposed) return;
-        await this.DisposeCoreAsync().ConfigureAwait(false);
+        lock (this.frameApplicationLock)
+        {
+            this.disposalTask ??= this.BeginDisposeLocked();
+            return new ValueTask(this.disposalTask);
+        }
     }
 
-    private async ValueTask DisposeCoreAsync()
+    private Task BeginDisposeLocked()
     {
-        if (this.disposed) return;
         this.disposed = true;
         this.client.FrameReceived -= this.OnFrameReceived;
         this.client.UnexpectedlyDisconnected -= this.OnUnexpectedlyDisconnected;
+        return this.DisposeCoreAsync(this.frameApplication);
+    }
+
+    private async Task DisposeCoreAsync(Task pendingFrameApplication)
+    {
         await this.client.DisposeAsync().ConfigureAwait(false);
+        await pendingFrameApplication.ConfigureAwait(false);
     }
 
     private void OnFrameReceived(object? sender, AgentSessionServerFrame frame)
     {
-        Task application;
-        lock (this.frameApplicationLock)
-        {
-            application = this.frameApplication = this.frameApplication.ContinueWith(
-                _ => this.ApplyFrame(frame),
-                CancellationToken.None,
-                TaskContinuationOptions.DenyChildAttach,
-                this.foregroundScheduler);
-        }
+        var application = this.QueueForeground(() => this.ApplyFrame(frame));
         _ = application.ContinueWith(
                 task =>
                 {
@@ -369,14 +370,25 @@ public sealed class RemoteAgentChat : IAgentChat
     {
         this.ThrowIfDisposed();
         if (string.IsNullOrWhiteSpace(text)) return;
-        _ = Task.Factory.StartNew(
+        _ = this.QueueForeground(
             () => this.History.Add(new AgentChatHistoryItem
             {
                 Role = role, Timestamp = DateTimeOffset.UtcNow, Contents = [new TextContent(text)],
-            }),
-            CancellationToken.None,
-            TaskCreationOptions.DenyChildAttach,
-            this.foregroundScheduler);
+            }));
+    }
+
+    private Task QueueForeground(Action action)
+    {
+        lock (this.frameApplicationLock)
+        {
+            if (this.disposed)
+                return Task.CompletedTask;
+            return this.frameApplication = this.frameApplication.ContinueWith(
+                _ => action(),
+                CancellationToken.None,
+                TaskContinuationOptions.DenyChildAttach,
+                this.foregroundScheduler);
+        }
     }
 
     private static T Deserialize<T>(JsonElement value)

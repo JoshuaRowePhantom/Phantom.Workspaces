@@ -434,6 +434,35 @@ public sealed partial class RemoteAgentChatTests
         Assert.False(transport.Outgoing.TryRead(out _));
     }
 
+    [Fact]
+    public async Task DisposeAsync_QueuedForegroundFrame_AwaitsSchedulerOwnership()
+    {
+        var transport = new TestTransport();
+        var scheduler = new ManuallyReversedTaskScheduler();
+        var attaching = RemoteAgentChat.AttachAsync(new RemoteAgentChatAttachOptions
+        {
+            Client = new RemoteAgentSessionClient(transport),
+            OpenRequest = AgentSessionProtocolCodecTests.Open(),
+            ForegroundScheduler = scheduler,
+        });
+        await transport.SendAsync(Frame(1, new SessionSnapshotEvent
+        {
+            Snapshot = AgentSessionProtocolCodecTests.Snapshot(),
+        }));
+        await scheduler.Queued;
+        scheduler.RunNewest();
+        var chat = await attaching;
+
+        await transport.SendAsync(Frame(2, new BusyChangedEvent { IsBusy = true }));
+        await scheduler.Queued;
+        var disposing = chat.DisposeAsync().AsTask();
+
+        Assert.False(disposing.IsCompleted);
+        scheduler.RunNewest();
+        await disposing;
+        Assert.True(transport.ChannelDisposed);
+    }
+
     private static async Task<(TestTransport Transport, RemoteAgentChat Chat)> AttachAsync(AgentSessionSnapshot snapshot)
     {
         var transport = new TestTransport();

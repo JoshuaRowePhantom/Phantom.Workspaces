@@ -138,6 +138,14 @@ public sealed class DataAccessAgentSessionRuntimeHostFactoryTests
         Assert.NotEqual(
             "33333333-3333-3333-3333-333333333333",
             writes[1].GetProperty("runtime-epoch").GetString());
+        var context = Assert.IsType<CurrentSessionContext>(
+            running.LastRequest.AgentServices!.CurrentSessionContext);
+        Assert.Equal("session", context.AgentSessionId);
+        Assert.Equal(Owner, context.OwningProfileEntityId);
+        Assert.Equal(3, context.OwnershipGeneration);
+        Assert.Equal(
+            writes[1].GetProperty("runtime-epoch").GetString(),
+            context.RuntimeEpoch?.Value.ToString("D"));
     }
 
     private static DataAccessAgentSessionRuntimeHostFactory Factory(

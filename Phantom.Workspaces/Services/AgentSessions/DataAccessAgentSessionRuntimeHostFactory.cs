@@ -60,6 +60,16 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
             {
                 AgentSessionId = new AgentSessionId(intent.AgentSessionId),
                 AgentSessionEntity = data,
+                AgentServices = new AgentServices
+                {
+                    CurrentSessionContext = new CurrentSessionContext
+                    {
+                        AgentSessionId = intent.AgentSessionId,
+                        OwningProfileEntityId = intent.OwningProfileEntityId,
+                        OwnershipGeneration = intent.OwnershipGeneration,
+                        RuntimeEpoch = state.Epoch,
+                    },
+                },
                 AgentDefinitionResolver = this.definitionResolver,
                 EntityId = persisted.EntityId.ToString(),
                 EntityName = intent.AgentSessionId,

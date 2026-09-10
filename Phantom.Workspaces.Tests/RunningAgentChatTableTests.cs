@@ -610,6 +610,65 @@ public sealed class RunningAgentChatTableTests
     }
 
     [Fact]
+    public async Task AcquireAsync_CancelledRemoteWaiter_PreservesSharedSingleFlight()
+    {
+        var table = new RunningAgentChatTable(
+            new FakeRunningAgentChatFactory(),
+            new FakeRuntimeContextFactory());
+        var transport = new GatedSnapshotTransport("shared-after-waiter-cancellation");
+        var request = RemoteRequest("shared-after-waiter-cancellation", transport);
+        using var cancelledWaiter = new CancellationTokenSource();
+
+        var first = table.AcquireAsync(request, cancelledWaiter.Token);
+        var second = table.AcquireAsync(request, TestContext.Current.CancellationToken);
+        await transport.Connected.WaitAsync(TestContext.Current.CancellationToken);
+
+        cancelledWaiter.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first);
+        var third = table.AcquireAsync(request, TestContext.Current.CancellationToken);
+        transport.PublishSnapshot();
+
+        var leases = await Task.WhenAll(second, third);
+        try
+        {
+            Assert.Same(leases[0].AgentChat, leases[1].AgentChat);
+            Assert.Single(table.RunningSessions);
+            Assert.Equal(1, transport.ConnectCount);
+        }
+        finally
+        {
+            await leases[0].DisposeAsync();
+            await leases[1].DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task AcquireAsync_FinalCancelledRemoteWaiter_AwaitsFlightCleanup()
+    {
+        var table = new RunningAgentChatTable(
+            new FakeRunningAgentChatFactory(),
+            new FakeRuntimeContextFactory());
+        var transport = new GatedSnapshotTransport("cancelled-flight-cleanup")
+        {
+            PauseCancellationCleanup = true,
+        };
+        using var cancellation = new CancellationTokenSource();
+        var acquiring = table.AcquireAsync(
+            RemoteRequest("cancelled-flight-cleanup", transport),
+            cancellation.Token);
+        await transport.Connected.WaitAsync(TestContext.Current.CancellationToken);
+
+        cancellation.Cancel();
+        await transport.CancellationObserved.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.False(acquiring.IsCompleted);
+
+        transport.AllowCancellationCleanup();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => acquiring);
+        Assert.Empty(table.RunningSessions);
+        Assert.Equal(1, transport.ConnectCount);
+    }
+
+    [Fact]
     public async Task AcquireAsync_CancelledBeforeRemoteSnapshot_AddsNoRunningRow()
     {
         var table = new RunningAgentChatTable(
@@ -999,20 +1058,83 @@ public sealed class RunningAgentChatTableTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
+    private sealed class GatedSnapshotTransport(string sessionId) : ITransport
+    {
+        private readonly SnapshotChannel channel = new(sessionId, publishSnapshot: false);
+        private readonly TaskCompletionSource releaseConnection =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource allowCancellationCleanup =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal TaskCompletionSource ConnectedSource { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource CancellationObservedSource { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal Task Connected => this.ConnectedSource.Task;
+        internal Task CancellationObserved => this.CancellationObservedSource.Task;
+        internal int ConnectCount { get; private set; }
+        internal bool PauseCancellationCleanup { get; init; }
+
+        internal void PublishSnapshot()
+        {
+            this.channel.PublishSnapshot();
+            this.releaseConnection.TrySetResult();
+        }
+
+        internal void AllowCancellationCleanup()
+            => this.allowCancellationCleanup.TrySetResult();
+
+        public async Task<IMessageChannel> ConnectToMessageChannelAsync(
+            JsonElement request,
+            CancellationToken ct = default)
+        {
+            this.ConnectCount++;
+            this.ConnectedSource.TrySetResult();
+            try
+            {
+                await this.releaseConnection.Task.WaitAsync(ct);
+                return this.channel;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                this.CancellationObservedSource.TrySetResult();
+                if (this.PauseCancellationCleanup)
+                    await this.allowCancellationCleanup.Task;
+                throw;
+            }
+        }
+
+        public Task<Stream> ConnectToStreamAsync(
+            JsonElement request,
+            CancellationToken ct = default)
+            => throw new NotSupportedException();
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
     private sealed class SnapshotChannel : IMessageChannel
     {
         private readonly Channel<JsonElement> outgoing = Channel.CreateUnbounded<JsonElement>();
         private readonly Channel<JsonElement> incoming = Channel.CreateUnbounded<JsonElement>();
         private readonly RuntimeEpoch epoch;
 
-        internal SnapshotChannel(string sessionId)
+        private readonly string sessionId;
+
+        internal SnapshotChannel(string sessionId, bool publishSnapshot = true)
         {
+            this.sessionId = sessionId;
             this.epoch = new RuntimeEpoch { Value = Guid.NewGuid() };
+            if (publishSnapshot)
+                this.PublishSnapshot();
+        }
+
+        internal void PublishSnapshot()
+        {
             var snapshot = new AgentSessionSnapshot
             {
                 Information = new AgentInformation
                 {
-                    AgentSessionId = sessionId,
+                    AgentSessionId = this.sessionId,
                     AgentId = "agent",
                     Name = "remote-agent",
                     DisplayName = "Remote agent",
@@ -1365,6 +1487,47 @@ public sealed class RunningAgentChatTableTests
         Assert.Equal(1, runtimeFactory.CreateCallCount);
         Assert.NotSame(originalServices, factory.LastServices);
         Assert.IsType<ExecutorBindings>(factory.LastServices!.ExecutorBindings);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_PersistedSession_PropagatesAuthoritativeRuntimeIdentityToFactory()
+    {
+        var factory = new FakeRunningAgentChatFactory();
+        var table = new RunningAgentChatTable(
+            factory,
+            new AgentSessionRuntimeContextFactory(null));
+        var epoch = new RuntimeEpoch { Value = Guid.NewGuid() };
+        var originalContext = new CurrentSessionContext
+        {
+            AgentSessionId = "composition-placeholder",
+            OwningProfileEntityId = "composition-placeholder",
+            OwnershipGeneration = 0,
+            RuntimeEpoch = epoch,
+        };
+
+        await using var lease = await table.AcquireAsync(
+            new AcquireAgentChatRequest
+            {
+                AgentSessionId = new AgentSessionId("authoritative-runtime-context"),
+                AgentSessionEntity = JsonDocument.Parse(
+                    """
+                    {
+                      "agent-session-id": "authoritative-runtime-context",
+                      "host-profile-entity-id": "11111111-1111-1111-1111-111111111111",
+                      "ownership-generation": 17
+                    }
+                    """).RootElement.Clone(),
+                AgentDefinition = CreateTestDefinition("authoritative-runtime-context"),
+                AgentServices = new AgentServices { CurrentSessionContext = originalContext },
+            },
+            TestContext.Current.CancellationToken);
+
+        var context = Assert.IsType<CurrentSessionContext>(
+            factory.LastServices!.CurrentSessionContext);
+        Assert.Equal("authoritative-runtime-context", context.AgentSessionId);
+        Assert.Equal("11111111-1111-1111-1111-111111111111", context.OwningProfileEntityId);
+        Assert.Equal(17, context.OwnershipGeneration);
+        Assert.Equal(epoch, context.RuntimeEpoch);
     }
 
     [Fact]
