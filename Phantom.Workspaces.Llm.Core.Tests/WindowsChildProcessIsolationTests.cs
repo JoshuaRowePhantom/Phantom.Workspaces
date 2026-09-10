@@ -36,19 +36,13 @@ public sealed class WindowsChildProcessIsolationTests
             PathCategory = WindowsProcessPathCategory.SystemBinary,
             LaunchMechanism = mechanism,
             Timeout = TimeSpan.FromSeconds(20),
-            Containment = scenario is WindowsProbeScenario.MxcProcessExecutor or WindowsProbeScenario.MxcCommandShim
-                ? new WindowsContainmentDescriptor
-                {
-                    PolicyType = "ProcessContainer",
-                    PolicyIdentity = "fixed-probe-v1",
-                }
-                : null,
         });
 
         if (scenario is WindowsProbeScenario.MxcProcessExecutor or WindowsProbeScenario.MxcCommandShim
             && Environment.GetEnvironmentVariable("MXC_E2E_HOST_PREPPED") != "1")
         {
-            Assert.False(result.CreateProcessSucceeded);
+            Assert.False(result.CreationStatusAvailable);
+            Assert.Null(result.CreateProcessSucceeded);
             Assert.Equal("MXC capability unavailable", result.StandardError);
             return;
         }
@@ -56,6 +50,18 @@ public sealed class WindowsChildProcessIsolationTests
         Assert.Equal(0, result.ExitCode);
         Assert.True(result.ReadinessHandshakeObserved);
         Assert.Equal(mechanism, result.LaunchMechanism);
+        if (scenario is WindowsProbeScenario.MxcProcessExecutor or WindowsProbeScenario.MxcCommandShim)
+        {
+            Assert.False(result.CreationStatusAvailable);
+            Assert.Null(result.CreateProcessSucceeded);
+            Assert.Equal("ProcessContainer", result.Containment?.PolicyType);
+            Assert.Equal("compiled-mxc-policy", result.Containment?.PolicyIdentity);
+        }
+        else
+        {
+            Assert.True(result.CreationStatusAvailable);
+            Assert.True(result.CreateProcessSucceeded);
+        }
         Assert.DoesNotContain(Environment.UserName, result.ToSanitizedDiagnostic(), StringComparison.OrdinalIgnoreCase);
     }
 
@@ -70,22 +76,20 @@ public sealed class WindowsChildProcessIsolationTests
             PathCategory = WindowsProcessPathCategory.SystemBinary,
             LaunchMechanism = WindowsLaunchMechanism.MxcSpawn,
             Timeout = TimeSpan.FromSeconds(20),
-            Containment = new WindowsContainmentDescriptor
-            {
-                PolicyType = "ProcessContainer",
-                PolicyIdentity = "fixed-probe-v1",
-            },
         });
 
         if (Environment.GetEnvironmentVariable("MXC_E2E_HOST_PREPPED") != "1")
         {
-            Assert.False(result.CreateProcessSucceeded);
+            Assert.False(result.CreationStatusAvailable);
+            Assert.Null(result.CreateProcessSucceeded);
             Assert.Equal("MXC capability unavailable", result.StandardError);
             return;
         }
 
         Assert.Equal(0, result.ExitCode);
+        Assert.False(result.CreationStatusAvailable);
+        Assert.Null(result.CreateProcessSucceeded);
         Assert.Equal("ProcessContainer", result.Containment?.PolicyType);
-        Assert.Equal("fixed-probe-v1", result.Containment?.PolicyIdentity);
+        Assert.Equal("compiled-mxc-policy", result.Containment?.PolicyIdentity);
     }
 }

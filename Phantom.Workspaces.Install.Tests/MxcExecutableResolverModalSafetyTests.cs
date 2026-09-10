@@ -20,19 +20,13 @@ public sealed class MxcExecutableResolverModalSafetyTests
             PathCategory = WindowsProcessPathCategory.FixedCommandShim,
             LaunchMechanism = mechanism,
             Timeout = TimeSpan.FromSeconds(20),
-            Containment = scenario == WindowsProbeScenario.MxcCommandShim
-                ? new WindowsContainmentDescriptor
-                {
-                    PolicyType = "ProcessContainer",
-                    PolicyIdentity = "fixed-probe-v1",
-                }
-                : null,
         });
 
         if (scenario == WindowsProbeScenario.MxcCommandShim
             && Environment.GetEnvironmentVariable("MXC_E2E_HOST_PREPPED") != "1")
         {
-            Assert.False(result.CreateProcessSucceeded);
+            Assert.False(result.CreationStatusAvailable);
+            Assert.Null(result.CreateProcessSucceeded);
             Assert.Equal("MXC capability unavailable", result.StandardError);
             return;
         }
@@ -40,5 +34,12 @@ public sealed class MxcExecutableResolverModalSafetyTests
         Assert.Equal(0, result.ExitCode);
         Assert.True(result.ReadinessHandshakeObserved);
         Assert.Contains("PROBE_READY", result.StandardOutput, StringComparison.Ordinal);
+        if (scenario == WindowsProbeScenario.MxcCommandShim)
+        {
+            Assert.False(result.CreationStatusAvailable);
+            Assert.Null(result.CreateProcessSucceeded);
+            Assert.Equal("ProcessContainer", result.Containment?.PolicyType);
+            Assert.Equal("compiled-mxc-policy", result.Containment?.PolicyIdentity);
+        }
     }
 }

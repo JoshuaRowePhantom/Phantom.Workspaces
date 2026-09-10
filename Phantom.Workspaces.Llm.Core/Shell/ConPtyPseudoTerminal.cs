@@ -101,6 +101,9 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
     private static extern bool TerminateProcess(SafeProcessHandle hProcess, uint uExitCode);
 
     [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint WaitForSingleObject(SafeProcessHandle hHandle, uint dwMilliseconds);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(IntPtr hObject);
 
     // ── Constants ───────────────────────────────────────────────────────────
@@ -239,6 +242,7 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
     private readonly SafeWaitHandle _hThread;
     private readonly SafeJobHandle _hJob;
     private readonly TimeSpan _shutdownTimeout;
+    private readonly IWindowsProcessLaunchObserver? _launchObserver;
     private bool _disposed;
 
     public Stream Output { get; }
@@ -278,6 +282,7 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
         if (options.ShutdownTimeout <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(options), "Shutdown timeout must be positive.");
         _shutdownTimeout = options.ShutdownTimeout;
+        _launchObserver = options.LaunchObserver;
 
         // PTY input pipe: ConPTY reads from inputPtySide (synchronous), caller writes to inputWrite (overlapped/async)
         var (inputPtySide, inputWrite) = CreateOverlappedPtyPipe(callerReads: false);
@@ -363,6 +368,7 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
                     Win32Error = null,
                 });
 
+                ThrowIfInjected(options, WindowsProcessLaunchStage.ConfigureJob);
                 hJob = CreateConfiguredJob();
                 options.LaunchObserver?.Observe(new WindowsProcessLaunchEvent
                 {
@@ -370,6 +376,7 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
                     Succeeded = true,
                     Win32Error = null,
                 });
+                ThrowIfInjected(options, WindowsProcessLaunchStage.AssignJob);
                 if (!AssignProcessToJobObject(hJob, hProcess))
                 {
                     var error = Marshal.GetLastWin32Error();
@@ -388,6 +395,7 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
                     Win32Error = null,
                 });
 
+                ThrowIfInjected(options, WindowsProcessLaunchStage.ResumeThread);
                 if (ResumeThread(hThread) == uint.MaxValue)
                 {
                     var error = Marshal.GetLastWin32Error();
@@ -414,12 +422,19 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
         catch
         {
             if (hProcess is not null && !hProcess.IsInvalid)
+            {
                 TerminateProcess(hProcess, 0xC000013A);
-            hJob?.Dispose();
-            hProcess?.Dispose();
-            hThread?.Dispose();
+                WaitForSingleObject(hProcess, uint.MaxValue);
+            }
+            DisposeAndObserve(hJob, WindowsProcessResource.Job, options.LaunchObserver);
+            DisposeAndObserve(hProcess, WindowsProcessResource.Process, options.LaunchObserver);
+            DisposeAndObserve(hThread, WindowsProcessResource.Thread, options.LaunchObserver);
             inputWrite.Dispose();
+            ObserveReleased(inputWrite, WindowsProcessResource.InputPipe, options.LaunchObserver);
             outputRead.Dispose();
+            ObserveReleased(outputRead, WindowsProcessResource.OutputPipe, options.LaunchObserver);
+            _hPC.Dispose();
+            ObserveReleased(_hPC, WindowsProcessResource.PseudoConsole, options.LaunchObserver);
             throw;
         }
         finally
@@ -428,6 +443,13 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
             {
                 DeleteProcThreadAttributeList(attrList);
                 Marshal.FreeHGlobal(attrList);
+                options.LaunchObserver?.Observe(new WindowsProcessLaunchEvent
+                {
+                    Stage = WindowsProcessLaunchStage.ReleaseResource,
+                    Succeeded = true,
+                    Win32Error = null,
+                    Resource = WindowsProcessResource.AttributeList,
+                });
             }
         }
 
@@ -501,8 +523,14 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
 
         _disposed = true;
 
+        var inputHandle = ((FileStream)Input).SafeFileHandle;
         await Input.DisposeAsync().ConfigureAwait(false);
+        ObserveReleased(
+            inputHandle,
+            WindowsProcessResource.InputPipe,
+            _launchObserver);
         _hJob.Dispose();
+        ObserveReleased(_hJob, WindowsProcessResource.Job, _launchObserver);
 
         using var shutdown = new CancellationTokenSource(_shutdownTimeout);
         try
@@ -516,14 +544,64 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
         }
         finally
         {
+            var outputHandle = ((FileStream)Output).SafeFileHandle;
             await Output.DisposeAsync().ConfigureAwait(false);
+            ObserveReleased(
+                outputHandle,
+                WindowsProcessResource.OutputPipe,
+                _launchObserver);
             _hPC.Dispose();
+            ObserveReleased(_hPC, WindowsProcessResource.PseudoConsole, _launchObserver);
             _hThread.Dispose();
+            ObserveReleased(_hThread, WindowsProcessResource.Thread, _launchObserver);
             _hProcess.Dispose();
+            ObserveReleased(_hProcess, WindowsProcessResource.Process, _launchObserver);
         }
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────
+
+    private static void ThrowIfInjected(
+        ConPtyStartOptions options,
+        WindowsProcessLaunchStage stage)
+    {
+        if (options.InjectFailureAt != stage)
+            return;
+
+        const int errorGenFailure = 31;
+        options.LaunchObserver?.Observe(new WindowsProcessLaunchEvent
+        {
+            Stage = stage,
+            Succeeded = false,
+            Win32Error = errorGenFailure,
+        });
+        throw new Win32Exception(errorGenFailure, $"Injected {stage} failure.");
+    }
+
+    private static void DisposeAndObserve(
+        SafeHandle? handle,
+        WindowsProcessResource resource,
+        IWindowsProcessLaunchObserver? observer)
+    {
+        if (handle is null)
+            return;
+        handle.Dispose();
+        ObserveReleased(handle, resource, observer);
+    }
+
+    private static void ObserveReleased(
+        SafeHandle handle,
+        WindowsProcessResource resource,
+        IWindowsProcessLaunchObserver? observer)
+    {
+        observer?.Observe(new WindowsProcessLaunchEvent
+        {
+            Stage = WindowsProcessLaunchStage.ReleaseResource,
+            Succeeded = handle.IsClosed,
+            Win32Error = null,
+            Resource = resource,
+        });
+    }
 
     /// <summary>
     /// Creates a pipe pair where the ConPTY-owned end is synchronous (as required by ConPTY)

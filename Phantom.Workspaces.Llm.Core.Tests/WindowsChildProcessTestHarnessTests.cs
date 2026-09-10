@@ -3,6 +3,7 @@ using Phantom.Workspaces.Testing.Processes;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
+[Collection("MXC process isolation")]
 public sealed class WindowsChildProcessTestHarnessTests
 {
     [Fact]
@@ -15,7 +16,8 @@ public sealed class WindowsChildProcessTestHarnessTests
 
         Assert.True(result.BrokerCreateProcessSucceeded);
         Assert.True(result.CreateProcessSucceeded);
-        Assert.Equal(3, result.ExitCode);
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.True(result.ReadinessHandshakeObserved);
         Assert.False(result.TimedOut);
         Assert.True(result.JobConfigured);
         Assert.True(result.JobAssigned);
@@ -78,6 +80,11 @@ public sealed class WindowsChildProcessTestHarnessTests
         Assert.True(result.TimedOut);
         Assert.True(result.ReadinessHandshakeObserved);
         Assert.True(result.CleanupCompleted);
+        Assert.True(result.ChildExitObserved);
+        Assert.True(result.DescendantExitObserved);
+        Assert.True(result.JobHandleClosed);
+        Assert.True(result.ProcessHandleClosed);
+        Assert.True(result.ThreadHandleClosed);
         Assert.Equal("0xC000013A", result.UnsignedNtStatus);
     }
 
@@ -86,7 +93,9 @@ public sealed class WindowsChildProcessTestHarnessTests
         Scenario = scenario,
         PathCategory = WindowsProcessPathCategory.SystemBinary,
         LaunchMechanism = WindowsLaunchMechanism.DirectCreateProcess,
-        Timeout = TimeSpan.FromSeconds(10),
+        Timeout = scenario == WindowsProbeScenario.TimeoutTree
+            ? TimeSpan.FromMilliseconds(250)
+            : TimeSpan.FromSeconds(10),
     };
 
     [DllImport("kernel32.dll")]

@@ -209,6 +209,7 @@ public sealed class ProcessExecutorTests
         Assert.False(handle.LaunchInfo.CreationStatusAvailable);
         Assert.Null(handle.LaunchInfo.CreateProcessSucceeded);
         Assert.Equal("ProcessContainer", handle.LaunchInfo.Containment?.PolicyType);
+        Assert.Equal("compiled-mxc-policy", handle.LaunchInfo.Containment?.PolicyIdentity);
     }
 
     [Fact]

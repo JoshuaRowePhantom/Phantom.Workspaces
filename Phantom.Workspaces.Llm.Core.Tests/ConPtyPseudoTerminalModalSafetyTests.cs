@@ -42,5 +42,40 @@ public sealed class ConPtyPseudoTerminalModalSafetyTests
         Assert.False(result.CreateProcessSucceeded);
         Assert.NotNull(result.CreateProcessWin32Error);
         Assert.True(result.CleanupCompleted);
+        Assert.True(result.PseudoConsoleHandleClosed);
+        Assert.True(result.InputHandleClosed);
+        Assert.True(result.OutputHandleClosed);
+        Assert.True(result.AttributeListReleased);
+    }
+
+    [Theory]
+    [InlineData(WindowsProbeScenario.ConPtyConfigureFailure, "ConfigureJob")]
+    [InlineData(WindowsProbeScenario.ConPtyAssignFailure, "AssignJob")]
+    [InlineData(WindowsProbeScenario.ConPtyResumeFailure, "ResumeThread")]
+    public async Task ConPtyPseudoTerminal_LaunchStageFailure_ClosesEveryCreatedNativeHandle(
+        WindowsProbeScenario scenario,
+        string failureStage)
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var result = await WindowsChildProcessTestHarness.RunAsync(new()
+        {
+            Scenario = scenario,
+            PathCategory = WindowsProcessPathCategory.FixedProbeBinary,
+            LaunchMechanism = WindowsLaunchMechanism.CreateProcessWithConPty,
+            Timeout = TimeSpan.FromSeconds(10),
+        });
+
+        Assert.True(result.CreateProcessSucceeded);
+        Assert.Equal(failureStage, result.FailureStage);
+        Assert.True(result.CleanupCompleted);
+        Assert.True(result.ProcessHandleClosed);
+        Assert.True(result.ThreadHandleClosed);
+        Assert.True(result.JobHandleClosed);
+        Assert.True(result.PseudoConsoleHandleClosed);
+        Assert.True(result.InputHandleClosed);
+        Assert.True(result.OutputHandleClosed);
+        Assert.True(result.AttributeListReleased);
     }
 }

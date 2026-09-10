@@ -21,6 +21,14 @@ public enum WindowsProbeScenario
     MxcCommandShim,
     ProcessRunnerNoJob,
     ProcessRunnerKillTree,
+    ProcessRunnerTimeoutTree,
+    ProcessRunnerCancellationTree,
+    ProcessRunnerConfigureFailure,
+    ProcessRunnerAssignFailure,
+    ProcessRunnerResumeFailure,
+    ConPtyConfigureFailure,
+    ConPtyAssignFailure,
+    ConPtyResumeFailure,
 }
 
 public enum WindowsProcessPathCategory
@@ -60,7 +68,8 @@ public sealed record WindowsChildProcessProbeResult
 {
     public required bool BrokerCreateProcessSucceeded { get; init; }
     public required int? BrokerCreateProcessWin32Error { get; init; }
-    public required bool CreateProcessSucceeded { get; init; }
+    public required bool CreationStatusAvailable { get; init; }
+    public required bool? CreateProcessSucceeded { get; init; }
     public required int? CreateProcessWin32Error { get; init; }
     public required int? ExitCode { get; init; }
     public required string? UnsignedNtStatus { get; init; }
@@ -77,12 +86,23 @@ public sealed record WindowsChildProcessProbeResult
     public required bool ResumeSucceeded { get; init; }
     public required bool InnerJobAssigned { get; init; }
     public required bool CleanupCompleted { get; init; }
+    public required bool ChildExitObserved { get; init; }
+    public required bool DescendantExitObserved { get; init; }
+    public required bool ProcessHandleClosed { get; init; }
+    public required bool ThreadHandleClosed { get; init; }
+    public required bool JobHandleClosed { get; init; }
+    public required bool PseudoConsoleHandleClosed { get; init; }
+    public required bool InputHandleClosed { get; init; }
+    public required bool OutputHandleClosed { get; init; }
+    public required bool AttributeListReleased { get; init; }
+    public string? FailureStage { get; init; }
 
     public string ToSanitizedDiagnostic() => string.Join(
         "; ",
         $"path={PathCategory}",
         $"mechanism={LaunchMechanism}",
-        $"created={CreateProcessSucceeded}",
+        $"creationAvailable={CreationStatusAvailable}",
+        $"created={CreateProcessSucceeded?.ToString() ?? "unavailable"}",
         $"win32={CreateProcessWin32Error?.ToString() ?? "none"}",
         $"exit={ExitCode?.ToString() ?? "none"}",
         $"status={UnsignedNtStatus ?? "none"}",
@@ -177,6 +197,18 @@ public static class WindowsChildProcessTestHarness
 
             stdoutWrite.Dispose();
             stderrWrite.Dispose();
+            if (request.Scenario == WindowsProbeScenario.TimeoutTree)
+            {
+                return await ObserveTimeoutCleanupAsync(
+                    request,
+                    process,
+                    thread,
+                    job,
+                    stdoutRead,
+                    stderrRead,
+                    cancellationToken).ConfigureAwait(false);
+            }
+
             var stdoutTask = ReadAllAsync(stdoutRead, cancellationToken);
             var stderrTask = ReadAllAsync(stderrRead, cancellationToken);
 
@@ -208,7 +240,6 @@ public static class WindowsChildProcessTestHarness
             {
                 BrokerCreateProcessSucceeded = true,
                 BrokerCreateProcessWin32Error = null,
-                Containment = request.Containment,
                 JobConfigured = true,
                 JobAssigned = jobAssigned,
                 ResumeSucceeded = resumed,
@@ -216,13 +247,119 @@ public static class WindowsChildProcessTestHarness
                     result.TerminalOutput,
                     stdout.AsSpan(0, jsonStart).Trim().ToString()),
                 StandardError = string.Concat(result.StandardError, stderr),
+                ReadinessHandshakeObserved = result.ReadinessHandshakeObserved
+                    || stdout.AsSpan(0, jsonStart).Contains(
+                        "PROBE_READY",
+                        StringComparison.Ordinal),
             };
         }
         finally
         {
-            if (!GetExitCodeProcess(process, out var exitCode) || exitCode == StillActive)
+            if (!process.IsClosed
+                && (!GetExitCodeProcess(process, out var exitCode) || exitCode == StillActive))
                 TerminateProcess(process, 0xC000013A);
         }
+    }
+
+    private static async Task<WindowsChildProcessProbeResult> ObserveTimeoutCleanupAsync(
+            WindowsChildProcessProbeRequest request,
+            SafeProcessHandle broker,
+            SafeWaitHandle brokerThread,
+            SafeFileHandle job,
+            SafeFileHandle stdoutHandle,
+            SafeFileHandle stderrHandle,
+            CancellationToken cancellationToken)
+        {
+            using var stdout = new StreamReader(
+                new FileStream(stdoutHandle, FileAccess.Read, 4096, isAsync: false),
+                Encoding.UTF8);
+            using var stderr = new StreamReader(
+                new FileStream(stderrHandle, FileAccess.Read, 4096, isAsync: false),
+                Encoding.UTF8);
+            var stderrTask = stderr.ReadToEndAsync(cancellationToken);
+            var readiness = await stdout.ReadLineAsync(cancellationToken).ConfigureAwait(false);
+            if (readiness is null || !readiness.StartsWith("TIMEOUT_READY:", StringComparison.Ordinal))
+                throw new InvalidDataException("The timeout probe did not report its process tree.");
+
+            var ids = readiness.Split(':');
+            if (ids.Length != 3
+                || !uint.TryParse(ids[1], out var childId)
+                || !uint.TryParse(ids[2], out var descendantId))
+            {
+                throw new InvalidDataException("The timeout probe reported an invalid process tree.");
+            }
+
+            using var child = OpenProcess(Synchronize, false, childId);
+            using var descendant = OpenProcess(Synchronize, false, descendantId);
+            if (child.IsInvalid || descendant.IsInvalid)
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to observe the timeout process tree.");
+
+            using var timeout = new CancellationTokenSource(request.Timeout);
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                timeout.Token);
+            try
+            {
+                await WaitForProcessAsync(broker, linked.Token).ConfigureAwait(false);
+                throw new InvalidDataException("The timeout probe exited before its harness timeout.");
+            }
+            catch (OperationCanceledException) when (
+                timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                job.Dispose();
+            }
+
+            await Task.WhenAll(
+                WaitForProcessAsync(broker, CancellationToken.None),
+                WaitForProcessAsync(child, CancellationToken.None),
+                WaitForProcessAsync(descendant, CancellationToken.None)).ConfigureAwait(false);
+            var remainingOutput = await stdout.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+            var error = await stderrTask.ConfigureAwait(false);
+
+            stdout.Dispose();
+            stderr.Dispose();
+            child.Dispose();
+            descendant.Dispose();
+            brokerThread.Dispose();
+            broker.Dispose();
+            return new WindowsChildProcessProbeResult
+            {
+                BrokerCreateProcessSucceeded = true,
+                BrokerCreateProcessWin32Error = null,
+                CreationStatusAvailable = true,
+                CreateProcessSucceeded = true,
+                CreateProcessWin32Error = null,
+                ExitCode = unchecked((int)0xC000013A),
+                UnsignedNtStatus = "0xC000013A",
+                StandardOutput = remainingOutput,
+                StandardError = error,
+                TerminalOutput = readiness,
+                TimedOut = true,
+                ReadinessHandshakeObserved = true,
+                PathCategory = request.PathCategory,
+                LaunchMechanism = request.LaunchMechanism,
+                Containment = null,
+                JobConfigured = true,
+                JobAssigned = true,
+                ResumeSucceeded = true,
+                InnerJobAssigned = false,
+                CleanupCompleted = job.IsClosed
+                    && broker.IsClosed
+                    && brokerThread.IsClosed
+                    && child.IsClosed
+                    && descendant.IsClosed
+                    && stdoutHandle.IsClosed
+                    && stderrHandle.IsClosed,
+                ChildExitObserved = true,
+                DescendantExitObserved = true,
+                ProcessHandleClosed = broker.IsClosed,
+                ThreadHandleClosed = brokerThread.IsClosed,
+                JobHandleClosed = job.IsClosed,
+                PseudoConsoleHandleClosed = true,
+                InputHandleClosed = stderrHandle.IsClosed,
+                OutputHandleClosed = stdoutHandle.IsClosed,
+                AttributeListReleased = true,
+            };
     }
 
     public static string? NormalizeUnsignedNtStatus(int? exitCode) =>
@@ -234,6 +371,7 @@ public static class WindowsChildProcessTestHarness
     {
         BrokerCreateProcessSucceeded = false,
         BrokerCreateProcessWin32Error = error,
+        CreationStatusAvailable = true,
         CreateProcessSucceeded = false,
         CreateProcessWin32Error = null,
         ExitCode = null,
@@ -251,6 +389,15 @@ public static class WindowsChildProcessTestHarness
         ResumeSucceeded = false,
         InnerJobAssigned = false,
         CleanupCompleted = true,
+        ChildExitObserved = true,
+        DescendantExitObserved = true,
+        ProcessHandleClosed = true,
+        ThreadHandleClosed = true,
+        JobHandleClosed = true,
+        PseudoConsoleHandleClosed = true,
+        InputHandleClosed = true,
+        OutputHandleClosed = true,
+        AttributeListReleased = true,
     };
 
     private static SafeFileHandle CreateOutputPipe(out SafeFileHandle write)
@@ -473,6 +620,14 @@ public static class WindowsChildProcessTestHarness
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool TerminateProcess(SafeProcessHandle process, uint exitCode);
+
+    private const uint Synchronize = 0x00100000;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern SafeProcessHandle OpenProcess(
+        uint desiredAccess,
+        bool inheritHandle,
+        uint processId);
 
     [DllImport("kernel32.dll")]
     private static extern IntPtr GetStdHandle(int standardHandle);

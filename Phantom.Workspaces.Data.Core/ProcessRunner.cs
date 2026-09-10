@@ -24,7 +24,50 @@ public sealed record RunProcessParameters(
     KillOnCloseAction KillOnClose = KillOnCloseAction.None,
     string? WorkingDirectory = null,
     TimeSpan? Timeout = null,
-    IReadOnlyDictionary<string, string>? EnvironmentVariables = null);
+    IReadOnlyDictionary<string, string>? EnvironmentVariables = null)
+{
+    internal ProcessRunnerWindowsTestOptions? WindowsTestOptions { get; init; }
+}
+
+internal enum ProcessRunnerWindowsStage
+{
+    CreateProcess,
+    ConfigureJob,
+    AssignJob,
+    ResumeThread,
+    ReleaseResource,
+}
+
+internal enum ProcessRunnerWindowsResource
+{
+    StandardOutputPipe,
+    StandardErrorPipe,
+    Process,
+    Thread,
+    Job,
+}
+
+internal sealed record ProcessRunnerWindowsEvent
+{
+    public required ProcessRunnerWindowsStage Stage { get; init; }
+    public required bool Succeeded { get; init; }
+    public int? Win32Error { get; init; }
+    public uint? ProcessId { get; init; }
+    public ProcessRunnerWindowsResource? Resource { get; init; }
+}
+
+internal interface IProcessRunnerWindowsObserver
+{
+    void Observe(ProcessRunnerWindowsEvent processEvent);
+}
+
+internal sealed record ProcessRunnerWindowsTestOptions
+{
+    public ProcessRunnerWindowsStage? InjectFailureAt { get; init; }
+    public IProcessRunnerWindowsObserver? Observer { get; init; }
+    public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
+    public Action<string>? StandardOutputObserver { get; init; }
+}
 
 /// <summary>Controls whether a child process tree is killed when the parent process exits.</summary>
 public enum KillOnCloseAction
@@ -214,12 +257,14 @@ public static class ProcessRunner
         StreamReader reader,
         List<string> lines,
         List<string> combined,
-        object combinedLock)
+        object combinedLock,
+        Action<string>? lineObserver = null)
     {
         string? line;
         while ((line = await reader.ReadLineAsync().ConfigureAwait(false)) != null)
         {
             lines.Add(line);
+            lineObserver?.Invoke(line);
             lock (combinedLock)
             {
                 combined.Add(line);
@@ -229,113 +274,225 @@ public static class ProcessRunner
 
     [SupportedOSPlatform("windows")]
     private static async Task<ProcessResult> RunWindowsContainedAsync(
-                RunProcessParameters parameters,
-                CancellationToken cancellationToken)
+        RunProcessParameters parameters,
+        CancellationToken cancellationToken)
+    {
+        var observer = parameters.WindowsTestOptions?.Observer;
+        SafeFileHandle? stdoutRead = null;
+        SafeFileHandle? stdoutWrite = null;
+        SafeFileHandle? stderrRead = null;
+        SafeFileHandle? stderrWrite = null;
+        JobObjectSafeHandle? job = null;
+        SafeProcessHandle? process = null;
+        SafeWaitHandle? thread = null;
+        var environment = IntPtr.Zero;
+        try
+        {
+            stdoutRead = Win32.CreateOutputPipe(out stdoutWrite);
+            stderrRead = Win32.CreateOutputPipe(out stderrWrite);
+            job = Win32.CreateJob();
+
+            var startup = new Win32.STARTUPINFO
             {
-                using var stdoutRead = Win32.CreateOutputPipe(out var stdoutWrite);
-                using var stderrRead = Win32.CreateOutputPipe(out var stderrWrite);
-                using var stdoutWriteLifetime = stdoutWrite;
-                using var stderrWriteLifetime = stderrWrite;
-                using var job = Win32.CreateConfiguredJob();
-
-                var startup = new Win32.STARTUPINFO
-                {
-                    cb = Marshal.SizeOf<Win32.STARTUPINFO>(),
-                    dwFlags = Win32.STARTF_USESTDHANDLES,
-                    hStdInput = Win32.GetStdHandle(Win32.STD_INPUT_HANDLE),
-                    hStdOutput = stdoutWrite.DangerousGetHandle(),
-                    hStdError = stderrWrite.DangerousGetHandle(),
-                };
-                var commandLine = new StringBuilder();
-                AppendWindowsArgument(commandLine, parameters.Command);
-                foreach (var argument in parameters.Arguments)
-                {
-                    commandLine.Append(' ');
-                    AppendWindowsArgument(commandLine, argument);
-                }
-
-                var environment = Win32.CreateEnvironmentBlock(parameters.EnvironmentVariables);
-                try
-                {
-                    if (!Win32.CreateProcessW(
-                            null,
-                            commandLine,
-                            IntPtr.Zero,
-                            IntPtr.Zero,
-                            true,
-                            Win32.CREATE_SUSPENDED | Win32.CREATE_NO_WINDOW | Win32.CREATE_UNICODE_ENVIRONMENT,
-                            environment,
-                            parameters.WorkingDirectory,
-                            ref startup,
-                            out var processInformation))
-                    {
-                        throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateProcessW failed.");
-                    }
-
-                    using var process = new SafeProcessHandle(processInformation.hProcess, ownsHandle: true);
-                    using var thread = new SafeWaitHandle(processInformation.hThread, ownsHandle: true);
-                    try
-                    {
-                        if (!Win32.AssignProcessToJobObject(job, process))
-                            throw new Win32Exception(Marshal.GetLastWin32Error(), "AssignProcessToJobObject failed.");
-                        if (Win32.ResumeThread(thread) == uint.MaxValue)
-                            throw new Win32Exception(Marshal.GetLastWin32Error(), "ResumeThread failed.");
-
-                        stdoutWrite.Dispose();
-                        stderrWrite.Dispose();
-                        using var stdoutReader = new StreamReader(
-                            new FileStream(stdoutRead, FileAccess.Read, 4096, isAsync: false));
-                        using var stderrReader = new StreamReader(
-                            new FileStream(stderrRead, FileAccess.Read, 4096, isAsync: false));
-                        var stdoutLines = new List<string>();
-                        var stderrLines = new List<string>();
-                        var combinedLines = new List<string>();
-                        var combinedLock = new object();
-                        var stdoutTask = ReadLinesAsync(stdoutReader, stdoutLines, combinedLines, combinedLock);
-                        var stderrTask = ReadLinesAsync(stderrReader, stderrLines, combinedLines, combinedLock);
-
-                        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                        if (parameters.Timeout is { } timeout)
-                            linked.CancelAfter(timeout);
-                        try
-                        {
-                            await Win32.WaitForProcessAsync(process, linked.Token).ConfigureAwait(false);
-                        }
-                        catch (OperationCanceledException)
-                        {
-                            job.Dispose();
-                            await Win32.WaitForProcessAsync(process, CancellationToken.None).ConfigureAwait(false);
-                            await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
-                            cancellationToken.ThrowIfCancellationRequested();
-                            throw new TimeoutException(
-                                $"Process did not complete within the allotted {parameters.Timeout}.");
-                        }
-
-                        await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
-                        if (!Win32.GetExitCodeProcess(process, out var rawExitCode))
-                            throw new Win32Exception(Marshal.GetLastWin32Error(), "GetExitCodeProcess failed.");
-                        var exitCode = unchecked((int)rawExitCode);
-                        return new ProcessResult(
-                            exitCode,
-                            string.Join(Environment.NewLine, stdoutLines),
-                            string.Join(Environment.NewLine, stderrLines),
-                            string.Join(Environment.NewLine, combinedLines),
-                            JobAssigned: true,
-                            UnsignedNtStatus: NormalizeUnsignedStatus(exitCode));
-                    }
-                    catch
-                    {
-                        if (Win32.GetExitCodeProcess(process, out var code) && code == Win32.STILL_ACTIVE)
-                            Win32.TerminateProcess(process, 0xC000013A);
-                        throw;
-                    }
-                }
-                finally
-                {
-                    if (environment != IntPtr.Zero)
-                        Marshal.FreeHGlobal(environment);
-                }
+                cb = Marshal.SizeOf<Win32.STARTUPINFO>(),
+                dwFlags = Win32.STARTF_USESTDHANDLES,
+                hStdInput = Win32.GetStdHandle(Win32.STD_INPUT_HANDLE),
+                hStdOutput = stdoutWrite.DangerousGetHandle(),
+                hStdError = stderrWrite.DangerousGetHandle(),
+            };
+            var commandLine = new StringBuilder();
+            AppendWindowsArgument(commandLine, parameters.Command);
+            foreach (var argument in parameters.Arguments)
+            {
+                commandLine.Append(' ');
+                AppendWindowsArgument(commandLine, argument);
             }
+
+            environment = Win32.CreateEnvironmentBlock(parameters.EnvironmentVariables);
+            if (!Win32.CreateProcessW(
+                    null,
+                    commandLine,
+                    IntPtr.Zero,
+                    IntPtr.Zero,
+                    true,
+                    Win32.CREATE_SUSPENDED | Win32.CREATE_NO_WINDOW | Win32.CREATE_UNICODE_ENVIRONMENT,
+                    environment,
+                    parameters.WorkingDirectory,
+                    ref startup,
+                    out var processInformation))
+            {
+                var error = Marshal.GetLastWin32Error();
+                ObserveStage(observer, ProcessRunnerWindowsStage.CreateProcess, false, error);
+                throw new Win32Exception(error, "CreateProcessW failed.");
+            }
+
+            process = new SafeProcessHandle(processInformation.hProcess, ownsHandle: true);
+            thread = new SafeWaitHandle(processInformation.hThread, ownsHandle: true);
+            ObserveStage(
+                observer,
+                ProcessRunnerWindowsStage.CreateProcess,
+                true,
+                processId: processInformation.dwProcessId);
+
+            ThrowIfInjected(parameters, ProcessRunnerWindowsStage.ConfigureJob);
+            Win32.ConfigureJob(job);
+            ObserveStage(observer, ProcessRunnerWindowsStage.ConfigureJob, true);
+
+            ThrowIfInjected(parameters, ProcessRunnerWindowsStage.AssignJob);
+            if (!Win32.AssignProcessToJobObject(job, process))
+            {
+                var error = Marshal.GetLastWin32Error();
+                ObserveStage(observer, ProcessRunnerWindowsStage.AssignJob, false, error);
+                throw new Win32Exception(error, "AssignProcessToJobObject failed.");
+            }
+            ObserveStage(observer, ProcessRunnerWindowsStage.AssignJob, true);
+
+            ThrowIfInjected(parameters, ProcessRunnerWindowsStage.ResumeThread);
+            if (Win32.ResumeThread(thread) == uint.MaxValue)
+            {
+                var error = Marshal.GetLastWin32Error();
+                ObserveStage(observer, ProcessRunnerWindowsStage.ResumeThread, false, error);
+                throw new Win32Exception(error, "ResumeThread failed.");
+            }
+            ObserveStage(observer, ProcessRunnerWindowsStage.ResumeThread, true);
+
+            stdoutWrite.Dispose();
+            stderrWrite.Dispose();
+            using var stdoutReader = new StreamReader(
+                new FileStream(stdoutRead, FileAccess.Read, 4096, isAsync: false));
+            using var stderrReader = new StreamReader(
+                new FileStream(stderrRead, FileAccess.Read, 4096, isAsync: false));
+            var stdoutLines = new List<string>();
+            var stderrLines = new List<string>();
+            var combinedLines = new List<string>();
+            var combinedLock = new object();
+            var stdoutTask = ReadLinesAsync(
+                stdoutReader,
+                stdoutLines,
+                combinedLines,
+                combinedLock,
+                parameters.WindowsTestOptions?.StandardOutputObserver);
+            var stderrTask = ReadLinesAsync(stderrReader, stderrLines, combinedLines, combinedLock);
+
+            using var timeoutCancellation = parameters.Timeout is { } timeout
+                ? new CancellationTokenSource(
+                    timeout,
+                    parameters.WindowsTestOptions?.TimeProvider ?? TimeProvider.System)
+                : null;
+            using var linked = timeoutCancellation is null
+                ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
+                : CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken,
+                    timeoutCancellation.Token);
+            try
+            {
+                await Win32.WaitForProcessAsync(process, linked.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (
+                timeoutCancellation?.IsCancellationRequested == true
+                && !cancellationToken.IsCancellationRequested)
+            {
+                job.Dispose();
+                ObserveReleased(observer, job, ProcessRunnerWindowsResource.Job);
+                await Win32.WaitForProcessAsync(process, CancellationToken.None).ConfigureAwait(false);
+                await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
+                throw new TimeoutException(
+                    $"Process did not complete within the allotted {parameters.Timeout}.");
+            }
+            catch (OperationCanceledException)
+            {
+                job.Dispose();
+                ObserveReleased(observer, job, ProcessRunnerWindowsResource.Job);
+                await Win32.WaitForProcessAsync(process, CancellationToken.None).ConfigureAwait(false);
+                await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                throw;
+            }
+
+            await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
+            if (!Win32.GetExitCodeProcess(process, out var rawExitCode))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "GetExitCodeProcess failed.");
+            var exitCode = unchecked((int)rawExitCode);
+            return new ProcessResult(
+                exitCode,
+                string.Join(Environment.NewLine, stdoutLines),
+                string.Join(Environment.NewLine, stderrLines),
+                string.Join(Environment.NewLine, combinedLines),
+                JobAssigned: true,
+                UnsignedNtStatus: NormalizeUnsignedStatus(exitCode));
+        }
+        catch
+        {
+            if (process is not null
+                && Win32.GetExitCodeProcess(process, out var code)
+                && code == Win32.STILL_ACTIVE)
+            {
+                Win32.TerminateProcess(process, 0xC000013A);
+                Win32.WaitForProcessAsync(process, CancellationToken.None).GetAwaiter().GetResult();
+            }
+            throw;
+        }
+        finally
+        {
+            if (environment != IntPtr.Zero)
+                Marshal.FreeHGlobal(environment);
+            DisposeAndObserve(observer, stdoutWrite, ProcessRunnerWindowsResource.StandardOutputPipe);
+            DisposeAndObserve(observer, stderrWrite, ProcessRunnerWindowsResource.StandardErrorPipe);
+            DisposeAndObserve(observer, stdoutRead, ProcessRunnerWindowsResource.StandardOutputPipe);
+            DisposeAndObserve(observer, stderrRead, ProcessRunnerWindowsResource.StandardErrorPipe);
+            DisposeAndObserve(observer, thread, ProcessRunnerWindowsResource.Thread);
+            DisposeAndObserve(observer, process, ProcessRunnerWindowsResource.Process);
+            DisposeAndObserve(observer, job, ProcessRunnerWindowsResource.Job);
+        }
+    }
+
+    private static void ThrowIfInjected(
+        RunProcessParameters parameters,
+        ProcessRunnerWindowsStage stage)
+    {
+        if (parameters.WindowsTestOptions?.InjectFailureAt != stage)
+            return;
+
+        const int errorGenFailure = 31;
+        ObserveStage(parameters.WindowsTestOptions.Observer, stage, false, errorGenFailure);
+        throw new Win32Exception(errorGenFailure, $"Injected {stage} failure.");
+    }
+
+    private static void ObserveStage(
+        IProcessRunnerWindowsObserver? observer,
+        ProcessRunnerWindowsStage stage,
+        bool succeeded,
+        int? error = null,
+        uint? processId = null) =>
+        observer?.Observe(new ProcessRunnerWindowsEvent
+        {
+            Stage = stage,
+            Succeeded = succeeded,
+            Win32Error = error,
+            ProcessId = processId,
+        });
+
+    private static void DisposeAndObserve(
+        IProcessRunnerWindowsObserver? observer,
+        SafeHandle? handle,
+        ProcessRunnerWindowsResource resource)
+    {
+        if (handle is null)
+            return;
+        handle.Dispose();
+        ObserveReleased(observer, handle, resource);
+    }
+
+    private static void ObserveReleased(
+        IProcessRunnerWindowsObserver? observer,
+        SafeHandle handle,
+        ProcessRunnerWindowsResource resource) =>
+        observer?.Observe(new ProcessRunnerWindowsEvent
+        {
+            Stage = ProcessRunnerWindowsStage.ReleaseResource,
+            Succeeded = handle.IsClosed,
+            Resource = resource,
+        });
 
     private static string? NormalizeUnsignedStatus(int exitCode) =>
                 exitCode < 0 ? $"0x{unchecked((uint)exitCode):X8}" : null;
@@ -557,12 +714,16 @@ public static class ProcessRunner
             return read;
         }
 
-        public static JobObjectSafeHandle CreateConfiguredJob()
+        public static JobObjectSafeHandle CreateJob()
         {
             var job = CreateJobObject(IntPtr.Zero, null);
             if (job.IsInvalid)
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateJobObject failed.");
+            return job;
+        }
 
+        public static void ConfigureJob(JobObjectSafeHandle job)
+        {
             var information = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
             information.BasicLimitInformation.LimitFlags =
                 JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
@@ -582,16 +743,10 @@ public static class ProcessRunner
                         "SetInformationJobObject failed.");
                 }
             }
-            catch
-            {
-                job.Dispose();
-                throw;
-            }
             finally
             {
                 Marshal.FreeHGlobal(pointer);
             }
-            return job;
         }
 
         public static IntPtr CreateEnvironmentBlock(
