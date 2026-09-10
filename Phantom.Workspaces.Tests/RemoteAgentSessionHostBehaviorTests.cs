@@ -411,6 +411,51 @@ public sealed partial class RemoteAgentSessionHostTests
     }
 
     [Fact]
+    public async Task TakeOverAsync_WaitsForOldTerminalPersistenceBeforeOwnershipExchange()
+    {
+        var persistenceStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowPersistence = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var oldRuntime = Runtime(persistTerminalAsync: async _ =>
+        {
+            persistenceStarted.SetResult();
+            await allowPersistence.Task;
+        });
+        await using var registry = new RemoteAgentSessionRuntimeRegistry(TimeProvider.System);
+        await registry.GetOrStartAsync(Intent(), _ => Task.FromResult(oldRuntime));
+        var factory = new Mock<IAgentSessionRuntimeHostFactory>();
+        var replacement = Runtime();
+        var request = Takeover();
+        factory.Setup(value => value.TryTakeOverAsync(
+                request, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        factory.Setup(value => value.LoadIntentAsync(
+                request.AgentSessionId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Intent() with
+            {
+                OwningProfileEntityId = request.NewOwningProfileEntityId,
+                OwnershipGeneration = 2,
+            });
+        factory.Setup(value => value.StartAsync(
+                It.IsAny<PersistedAgentSessionRuntimeIntent>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(replacement);
+        var host = new RemoteAgentSessionHost(Allow(), registry, factory.Object);
+
+        var takeover = host.TakeOverAsync(Peer(), request);
+        await persistenceStarted.Task;
+
+        factory.Verify(value => value.TryTakeOverAsync(
+            It.IsAny<AgentSessionTakeoverRequest>(), It.IsAny<CancellationToken>()), Times.Never);
+        allowPersistence.SetResult();
+        await takeover;
+
+        factory.Verify(value => value.TryTakeOverAsync(
+            request, It.IsAny<CancellationToken>()), Times.Once);
+        Assert.Same(replacement, await registry.TryGetAsync("session", 2));
+    }
+
+    [Fact]
     public async Task OwnershipLease_HostCrashExpires_RecoveryMarksOldEpochStoppedBeforeRestart()
     {
         var order = new List<string>();
@@ -550,8 +595,9 @@ public sealed partial class RemoteAgentSessionHostTests
             AttachmentToken = "lost", Channel = new DuplexChannel(),
         });
         await attachment.MarkTransportLostAsync();
+        var released = attachment.Released;
         time.Advance(TimeSpan.FromSeconds(5));
-        await Task.Yield();
+        await released;
         var host = new RemoteAgentSessionHost(Allow(), registry, Mock.Of<IAgentSessionRuntimeHostFactory>());
         await Assert.ThrowsAsync<AgentSessionUnavailableException>(() =>
             host.OpenAsync(new OpenAgentSessionHostRequest

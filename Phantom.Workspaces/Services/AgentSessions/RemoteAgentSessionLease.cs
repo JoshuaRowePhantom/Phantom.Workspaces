@@ -292,6 +292,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
                     return;
                 this.attachments.Remove(token);
                 state.GraceTimer?.Dispose();
+                state.Released.TrySetResult();
                 changed = true;
                 if (!this.fenced && this.attachments.Count == 0 && !this.continueInBackground)
                     terminationTask = this.BeginTerminationUnderLock("runtime-stopped");
@@ -315,6 +316,15 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
                 && !state.Disconnected
                     ? state.Channel
                     : null;
+    }
+
+    internal Task GetReleaseTask(string token, long generation)
+    {
+        lock (this.gate)
+            return this.attachments.TryGetValue(token, out var state)
+                && state.Generation == generation
+                    ? state.Released.Task
+                    : Task.CompletedTask;
     }
 
     internal async ValueTask PublishToAttachmentAsync(
@@ -391,7 +401,17 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         lock (this.gate) states = this.attachments.Values.ToArray();
         foreach (var state in states) state.GraceTimer?.Dispose();
 
-        this.Chat.Interrupt();
+        if (this.ownershipLease is not null)
+        {
+            try { await this.ownershipLease.QuiesceAsync().ConfigureAwait(false); }
+            catch { }
+        }
+        try
+        {
+            if (this.Chat.IsBusy)
+                this.Chat.Interrupt();
+        }
+        catch { }
         this.Chat.InformationChanged -= this.OnInformationChanged;
         this.Chat.UsageChanged -= this.OnUsageChanged;
         this.Chat.ToolsChanged -= this.OnToolsChanged;
@@ -420,6 +440,8 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         {
             try { await this.ownershipLease.ReleaseAsync().ConfigureAwait(false); }
             catch { }
+            try { await this.ownershipLease.DisposeAsync().ConfigureAwait(false); }
+            catch { }
         }
         var terminal = this.Replay.Append(Guid.NewGuid(), new SessionTerminalEvent
         {
@@ -430,21 +452,32 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
                 failed = this.terminalReason == "runtime-failed",
             }),
         });
+        var serializedTerminal = AgentSessionProtocolCodec.SerializeFrame(terminal);
         foreach (var state in states)
         {
             if (!state.Disconnected)
             {
-                try { await state.Channel.Writer.WriteAsync(AgentSessionProtocolCodec.SerializeFrame(terminal)).ConfigureAwait(false); }
-                catch (System.Threading.Channels.ChannelClosedException) { }
+                try { state.Channel.Writer.TryWrite(serializedTerminal); }
+                catch { }
             }
-            await state.Channel.DisposeAsync().ConfigureAwait(false);
+            try { await state.Channel.DisposeAsync().ConfigureAwait(false); }
+            catch { }
         }
         lock (this.gate)
         {
+            foreach (var state in this.attachments.Values)
+                state.Released.TrySetResult();
             this.attachments.Clear();
             this.hasTerminated = true;
         }
-        this.Terminated?.Invoke(this, EventArgs.Empty);
+        if (this.Terminated is { } terminated)
+        {
+            foreach (EventHandler handler in terminated.GetInvocationList())
+            {
+                try { handler(this, EventArgs.Empty); }
+                catch { }
+            }
+        }
     }
 
     private sealed class AttachmentState(IMessageChannel channel)
@@ -453,6 +486,8 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         internal bool Disconnected { get; set; }
         internal ITimer? GraceTimer { get; set; }
         internal long Generation { get; set; } = 1;
+        internal TaskCompletionSource Released { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     internal readonly record struct InitialAttachmentState(
@@ -596,6 +631,7 @@ internal sealed class RemoteAgentAttachmentLease : IAsyncDisposable
     }
 
     internal ProtocolReplayCursor Cursor { get; }
+    internal Task Released => this.owner.GetReleaseTask(this.token, this.generation);
 
     internal ValueTask PublishAsync(AgentSessionServerEvent value, CancellationToken ct = default)
         => this.owner.PublishToAttachmentAsync(this.token, value, ct);

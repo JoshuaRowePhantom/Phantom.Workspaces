@@ -44,6 +44,56 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
     }
 
     [Fact]
+    public async Task GetOrStartAsync_CancelledWaiter_DoesNotRemoveSharedFactory()
+    {
+        await using var registry = new RemoteAgentSessionRuntimeRegistry(TimeProvider.System);
+        var ready = new TaskCompletionSource<RemoteAgentSessionLease>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        Task<RemoteAgentSessionLease> Start(CancellationToken _)
+        {
+            Interlocked.Increment(ref calls);
+            return ready.Task;
+        }
+
+        var first = registry.GetOrStartAsync(
+            Intent(), Start, TestContext.Current.CancellationToken).AsTask();
+        using var cancellation = new CancellationTokenSource();
+        var cancelled = registry.GetOrStartAsync(Intent(), Start, cancellation.Token).AsTask();
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelled);
+        var third = registry.GetOrStartAsync(
+            Intent(), Start, TestContext.Current.CancellationToken).AsTask();
+
+        var lease = Lease(background: true);
+        ready.SetResult(lease);
+
+        Assert.Same(lease, await first);
+        Assert.Same(lease, await third);
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public async Task DisposeAsync_StartupInFlight_DisposesLeaseAndRejectsWaitingCaller()
+    {
+        var registry = new RemoteAgentSessionRuntimeRegistry(TimeProvider.System);
+        var ready = new TaskCompletionSource<RemoteAgentSessionLease>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var pending = registry.GetOrStartAsync(
+            Intent(), _ => ready.Task, TestContext.Current.CancellationToken).AsTask();
+        var dispose = registry.DisposeAsync().AsTask();
+        var chat = Chat();
+        var lease = Lease(background: true, chat: chat.Object);
+
+        ready.SetResult(lease);
+
+        await dispose;
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => pending);
+        Assert.True(lease.IsFenced);
+        chat.Verify(value => value.DisposeAsync(), Times.Once);
+    }
+
+    [Fact]
     public async Task TryGetAsync_WrongGeneration_ReturnsNull()
     {
         await using var registry = new RemoteAgentSessionRuntimeRegistry(TimeProvider.System);
@@ -160,8 +210,9 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
         await using var lease = Lease(true, chat: chat.Object, time: time);
         var attachment = lease.Attach(Attach("a"));
         await attachment.MarkTransportLostAsync();
+        var released = attachment.Released;
         time.Advance(TimeSpan.FromSeconds(5));
-        await Task.Yield();
+        await released;
         Assert.Equal(0, lease.ViewerCount);
         Assert.False(lease.IsFenced);
         chat.Verify(value => value.DisposeAsync(), Times.Never);
@@ -223,6 +274,60 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
         Assert.True(await terminate);
         Assert.True(lease.IsFenced);
         Assert.Throws<InvalidOperationException>(() => lease.Attach(Attach("late")));
+    }
+
+    [Fact]
+    public async Task TryTerminateAsync_FencedCleanupRejectsConcurrentAttachAndPreferenceChange()
+    {
+        var persistenceStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowPersistence = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var lease = Lease(true, persistTerminal: async _ =>
+        {
+            persistenceStarted.SetResult();
+            await allowPersistence.Task;
+        });
+
+        var terminate = lease.TryTerminateAsync(TestContext.Current.CancellationToken).AsTask();
+        await persistenceStarted.Task;
+
+        Assert.True(lease.IsFenced);
+        Assert.Throws<InvalidOperationException>(() => lease.Attach(Attach("late")));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            lease.SetContinueInBackgroundAsync(false, TestContext.Current.CancellationToken).AsTask());
+
+        allowPersistence.SetResult();
+        Assert.True(await terminate);
+    }
+
+    [Fact]
+    public async Task TryTerminateAsync_CancelledWaiter_DoesNotCancelCommittedCleanup()
+    {
+        var persistenceStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowPersistence = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var terminated = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var chat = Chat();
+        await using var lease = Lease(true, chat: chat.Object, persistTerminal: async _ =>
+        {
+            persistenceStarted.SetResult();
+            await allowPersistence.Task;
+        });
+        lease.Terminated += (_, _) => terminated.SetResult();
+        using var cancellation = new CancellationTokenSource();
+        var terminate = lease.TryTerminateAsync(cancellation.Token).AsTask();
+        await persistenceStarted.Task;
+
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => terminate);
+        allowPersistence.SetResult();
+        await terminated.Task;
+
+        Assert.True(lease.HasTerminated);
+        chat.Verify(value => value.DisposeAsync(), Times.Once);
     }
 
     [Fact]
@@ -316,6 +421,104 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
         Assert.True(lease.IsFenced);
     }
 
+    [Fact]
+    public async Task RuntimeDispose_InterruptAndChannelFailures_DoNotStrandRemainingCleanup()
+    {
+        var order = new List<string>();
+        var chat = Chat();
+        chat.SetupGet(value => value.IsBusy).Returns(true);
+        chat.Setup(value => value.Interrupt())
+            .Callback(() => order.Add("interrupt"))
+            .Throws(new InvalidOperationException("interrupt failed"));
+        chat.Setup(value => value.DisposeAsync())
+            .Callback(() => order.Add("runtime"))
+            .Returns(ValueTask.CompletedTask);
+        var failing = new ThrowingChannel(() => order.Add("failing-channel"));
+        var remaining = new TestChannel(() => order.Add("remaining-channel"));
+        await using var lease = Lease(true, chat: chat.Object, persistTerminal: _ =>
+        {
+            order.Add("persist");
+            return ValueTask.CompletedTask;
+        });
+        lease.Attach(new AttachRemoteAgentSessionRequest
+        {
+            AttachmentToken = "failing",
+            Channel = failing,
+        });
+        lease.Attach(new AttachRemoteAgentSessionRequest
+        {
+            AttachmentToken = "remaining",
+            Channel = remaining,
+        });
+
+        await lease.DisposeAsync();
+
+        Assert.Equal(
+            ["interrupt", "runtime", "persist", "failing-channel", "remaining-channel"],
+            order);
+        Assert.True(remaining.IsDisposed);
+        Assert.True(lease.HasTerminated);
+    }
+
+    [Fact]
+    public async Task RuntimeDispose_InactiveTurn_DoesNotInterrupt()
+    {
+        var chat = Chat();
+        chat.SetupGet(value => value.IsBusy).Returns(false);
+        await using var lease = Lease(true, chat: chat.Object);
+
+        await lease.DisposeAsync();
+
+        chat.Verify(value => value.Interrupt(), Times.Never);
+        chat.Verify(value => value.DisposeAsync(), Times.Once);
+    }
+
+    [Fact]
+    public async Task RuntimeDispose_InFlightOwnershipRenewal_QuiescesBeforeTerminalPersistence()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-09-09T00:00:00Z"));
+        var renewalStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var renewalExited = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var persisted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var ownership = new AgentSessionOwnershipLease(
+            time,
+            async ct =>
+            {
+                renewalStarted.SetResult();
+                try
+                {
+                    await new TaskCompletionSource().Task.WaitAsync(ct);
+                    return null;
+                }
+                finally
+                {
+                    renewalExited.SetResult();
+                }
+            },
+            _ => ValueTask.CompletedTask,
+            _ => ValueTask.CompletedTask);
+        ownership.Start(time.GetUtcNow() + TimeSpan.FromSeconds(30));
+        await using var lease = new RemoteAgentSessionLease(
+            "session", 1, Epoch(), Chat().Object, true, () => null!,
+            persistTerminalAsync: _ =>
+            {
+                Assert.True(renewalExited.Task.IsCompleted);
+                persisted.SetResult();
+                return ValueTask.CompletedTask;
+            },
+            timeProvider: time,
+            ownershipLease: ownership);
+        time.Advance(TimeSpan.FromSeconds(10));
+        await renewalStarted.Task;
+
+        await lease.DisposeAsync();
+
+        Assert.True(persisted.Task.IsCompleted);
+    }
+
     private static PersistedAgentSessionRuntimeIntent Intent() => new()
     {
         AgentSessionId = "session",
@@ -378,6 +581,20 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
             onDispose?.Invoke();
             this.channel.Writer.TryComplete();
             return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class ThrowingChannel(Action onDispose) : IMessageChannel
+    {
+        private readonly Channel<JsonElement> channel = Channel.CreateUnbounded<JsonElement>();
+        public ChannelWriter<JsonElement> Writer => this.channel.Writer;
+        public ChannelReader<JsonElement> Reader => this.channel.Reader;
+
+        public ValueTask DisposeAsync()
+        {
+            onDispose();
+            this.channel.Writer.TryComplete();
+            return ValueTask.FromException(new InvalidOperationException("channel cleanup failed"));
         }
     }
 }

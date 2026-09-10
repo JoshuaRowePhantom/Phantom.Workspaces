@@ -10,9 +10,11 @@ internal sealed class AgentSessionOwnershipLease : IAsyncDisposable
     private readonly Func<CancellationToken, ValueTask> fenceAsync;
     private readonly Func<CancellationToken, ValueTask> releaseAsync;
     private readonly CancellationTokenSource cancellation = new();
-    private ITimer? timer;
+    private readonly object gate = new();
     private Task? runTask;
+    private Task? quiesceTask;
     private DateTimeOffset confirmedExpiry;
+    private int fencing;
     private int released;
 
     internal AgentSessionOwnershipLease(
@@ -40,21 +42,33 @@ internal sealed class AgentSessionOwnershipLease : IAsyncDisposable
     internal async ValueTask ReleaseAsync(CancellationToken ct = default)
     {
         if (Interlocked.Exchange(ref this.released, 1) != 0) return;
-        this.cancellation.Cancel();
-        this.timer?.Dispose();
+        await this.QuiesceAsync().ConfigureAwait(false);
         await this.releaseAsync(ct).ConfigureAwait(false);
+    }
+
+    internal ValueTask QuiesceAsync()
+    {
+        lock (this.gate)
+            return new ValueTask(this.quiesceTask ??= this.QuiesceCoreAsync());
     }
 
     public async ValueTask DisposeAsync()
     {
-        this.cancellation.Cancel();
-        this.timer?.Dispose();
-        if (this.runTask is not null)
-        {
-            try { await this.runTask.ConfigureAwait(false); }
-            catch (OperationCanceledException) { }
-        }
+        await this.QuiesceAsync().ConfigureAwait(false);
         this.cancellation.Dispose();
+    }
+
+    private async Task QuiesceCoreAsync()
+    {
+        this.cancellation.Cancel();
+        if (Volatile.Read(ref this.fencing) != 0)
+            return;
+        var running = this.runTask;
+        if (running is not null)
+        {
+            try { await running.ConfigureAwait(false); }
+            catch (OperationCanceledException) when (this.cancellation.IsCancellationRequested) { }
+        }
     }
 
     private async Task RunAsync(CancellationToken ct)
@@ -62,11 +76,53 @@ internal sealed class AgentSessionOwnershipLease : IAsyncDisposable
         var interval = RenewalInterval;
         while (!ct.IsCancellationRequested)
         {
-            await this.WaitForTimerAsync(interval, ct).ConfigureAwait(false);
+            var now = this.timeProvider.GetUtcNow();
+            var safetyDeadline = this.confirmedExpiry - SafetyMargin;
+            var untilSafetyDeadline = safetyDeadline - now;
+            if (untilSafetyDeadline <= TimeSpan.Zero)
+            {
+                await this.FenceAsync(ct).ConfigureAwait(false);
+                return;
+            }
+
+            await this.DelayAsync(
+                interval < untilSafetyDeadline ? interval : untilSafetyDeadline,
+                ct).ConfigureAwait(false);
+            now = this.timeProvider.GetUtcNow();
+            if (now >= safetyDeadline)
+            {
+                await this.FenceAsync(ct).ConfigureAwait(false);
+                return;
+            }
+
             DateTimeOffset? renewed = null;
-            try { renewed = await this.renewAsync(ct).ConfigureAwait(false); }
+            using var renewalCancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            using var deadlineCancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var renewal = this.renewAsync(renewalCancellation.Token).AsTask();
+            var deadline = this.DelayAsync(
+                safetyDeadline - now, deadlineCancellation.Token);
+            try
+            {
+                if (await Task.WhenAny(renewal, deadline).ConfigureAwait(false) != renewal)
+                {
+                    renewalCancellation.Cancel();
+                    await this.FenceAsync(ct).ConfigureAwait(false);
+                    try { await renewal.ConfigureAwait(false); }
+                    catch (OperationCanceledException) when (renewalCancellation.IsCancellationRequested) { }
+                    catch { }
+                    return;
+                }
+                deadlineCancellation.Cancel();
+                renewed = await renewal.ConfigureAwait(false);
+            }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch { }
+            finally
+            {
+                deadlineCancellation.Cancel();
+                try { await deadline.ConfigureAwait(false); }
+                catch (OperationCanceledException) when (deadlineCancellation.IsCancellationRequested) { }
+            }
 
             if (renewed is { } expiry && expiry > this.timeProvider.GetUtcNow())
             {
@@ -76,18 +132,19 @@ internal sealed class AgentSessionOwnershipLease : IAsyncDisposable
             }
             if (this.timeProvider.GetUtcNow() >= this.confirmedExpiry - SafetyMargin)
             {
-                await this.fenceAsync(ct).ConfigureAwait(false);
+                await this.FenceAsync(ct).ConfigureAwait(false);
                 return;
             }
             interval = RetryInterval;
         }
     }
 
-    private async Task WaitForTimerAsync(TimeSpan dueTime, CancellationToken ct)
+    private async Task FenceAsync(CancellationToken ct)
     {
-        var elapsed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        this.timer?.Dispose();
-        this.timer = this.timeProvider.CreateTimer(_ => elapsed.TrySetResult(), null, dueTime, Timeout.InfiniteTimeSpan);
-        await elapsed.Task.WaitAsync(ct).ConfigureAwait(false);
+        Volatile.Write(ref this.fencing, 1);
+        await this.fenceAsync(ct).ConfigureAwait(false);
     }
+
+    private Task DelayAsync(TimeSpan dueTime, CancellationToken ct)
+        => Task.Delay(dueTime, this.timeProvider, ct);
 }

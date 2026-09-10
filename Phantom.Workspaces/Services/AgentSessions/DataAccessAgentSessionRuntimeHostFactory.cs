@@ -116,13 +116,21 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
     {
         var entity = await this.FindAsync(request.AgentSessionId, ct).ConfigureAwait(false);
         if (entity?.Data is not JsonElement data
-            || ReadLong(data, "ownership-generation") != request.ExpectedOwnershipGeneration)
+            || ReadLong(data, "ownership-generation") != request.ExpectedOwnershipGeneration
+            || !string.Equals(
+                ReadString(data, "owning-profile-entity-id")
+                    ?? ReadString(data, "host-profile-entity-id"),
+                request.ExpectedOwningProfileEntityId,
+                StringComparison.OrdinalIgnoreCase))
             return false;
-        if (data.TryGetProperty("runtime-lease-expiry", out var expiryValue)
-            && expiryValue.ValueKind == JsonValueKind.String
-            && DateTimeOffset.TryParse(expiryValue.GetString(), out var expiry)
-            && expiry > this.timeProvider.GetUtcNow())
-            return false;
+        var hasEpoch = ReadString(data, "runtime-epoch") is not null;
+        var hasLease = data.TryGetProperty("runtime-lease-expiry", out _);
+        if (hasEpoch || hasLease)
+        {
+            if (!TryReadLeaseExpiry(data, out var expiry)
+                || expiry > this.timeProvider.GetUtcNow())
+                return false;
+        }
 
         var replacement = Merge(data, new Dictionary<string, object?>
         {
@@ -181,6 +189,14 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
 
     private static long? ReadLong(JsonElement data, string name)
         => data.TryGetProperty(name, out var value) && value.TryGetInt64(out var number) ? number : null;
+
+    private static bool TryReadLeaseExpiry(JsonElement data, out DateTimeOffset expiry)
+    {
+        expiry = default;
+        return data.TryGetProperty("runtime-lease-expiry", out var value)
+            && value.ValueKind == JsonValueKind.String
+            && DateTimeOffset.TryParse(value.GetString(), out expiry);
+    }
 
     private static JsonElement Merge(JsonElement source, IReadOnlyDictionary<string, object?> updates)
     {
@@ -246,10 +262,13 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
             PersistedAgentSessionRuntimeIntent intent, CancellationToken ct)
         {
             var now = this.timeProvider.GetUtcNow();
-            if (ReadString(this.data, "runtime-epoch") is { } abandoned
-                && this.data.TryGetProperty("runtime-lease-expiry", out var oldExpiry)
-                && DateTimeOffset.TryParse(oldExpiry.GetString(), out var oldExpiryValue))
+            var abandoned = ReadString(this.data, "runtime-epoch");
+            var hasLease = this.data.TryGetProperty("runtime-lease-expiry", out _);
+            if (abandoned is not null || hasLease)
             {
+                if (abandoned is null
+                    || !TryReadLeaseExpiry(this.data, out var oldExpiryValue))
+                    throw new AgentSessionTakeoverBlockedException();
                 if (oldExpiryValue > now)
                     throw new AgentSessionTakeoverBlockedException();
                 await this.ReplaceAsync(new Dictionary<string, object?>

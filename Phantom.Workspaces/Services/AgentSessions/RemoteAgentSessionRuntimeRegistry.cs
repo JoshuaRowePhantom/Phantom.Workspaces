@@ -66,17 +66,31 @@ internal sealed class RemoteAgentSessionRuntimeRegistry :
             try
             {
                 lease = await entry.StartTask.WaitAsync(ct).ConfigureAwait(false);
-                lock (this.gate) entry.Lease ??= lease;
             }
             catch
             {
-                lock (this.gate)
-                    if (this.entries.TryGetValue(key, out var current) && ReferenceEquals(current, entry))
-                    {
-                        this.entries.Remove(key);
-                        entry.MarkRemoved();
-                    }
+                if (entry.StartTask.IsFaulted || entry.StartTask.IsCanceled)
+                    this.RemoveEntry(key, entry);
                 throw;
+            }
+
+            bool rejectStartedLease;
+            lock (this.gate)
+            {
+                rejectStartedLease = this.disposed;
+                if (rejectStartedLease)
+                {
+                    entry.MarkRemoved();
+                }
+                else
+                {
+                    entry.Lease ??= lease;
+                }
+            }
+            if (rejectStartedLease)
+            {
+                await lease.DisposeAsync().ConfigureAwait(false);
+                throw new ObjectDisposedException(nameof(RemoteAgentSessionRuntimeRegistry));
             }
 
             lease.Terminated -= this.OnTerminated;
@@ -138,6 +152,18 @@ internal sealed class RemoteAgentSessionRuntimeRegistry :
         {
             var key = new RuntimeKey(lease.SessionId, lease.OwnershipGeneration);
             if (this.entries.TryGetValue(key, out var entry) && ReferenceEquals(entry.Lease, lease))
+            {
+                this.entries.Remove(key);
+                entry.MarkRemoved();
+            }
+        }
+    }
+
+    private void RemoveEntry(RuntimeKey key, RegistryEntry entry)
+    {
+        lock (this.gate)
+        {
+            if (this.entries.TryGetValue(key, out var current) && ReferenceEquals(current, entry))
             {
                 this.entries.Remove(key);
                 entry.MarkRemoved();

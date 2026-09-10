@@ -142,40 +142,51 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
     private async Task TakeOverCoreAsync(
         TransportPeerIdentity peer, AgentSessionTakeoverRequest request, CancellationToken ct)
     {
-        var decision = await this.authorizer.AuthorizeAsync(peer, new AgentSessionAuthorizationRequest
+        var openGate = this.openGates.GetOrAdd(
+            request.AgentSessionId, static _ => new SemaphoreSlim(1, 1));
+        await openGate.WaitAsync(ct).ConfigureAwait(false);
+        try
         {
-            AgentSessionId = request.AgentSessionId,
-            ExpectedOwningProfileEntityId = request.ExpectedOwningProfileEntityId,
-            ExpectedOwnershipGeneration = request.ExpectedOwnershipGeneration,
-            Operation = AgentSessionAuthorizationOperation.Takeover,
-            NewOwningProfileEntityId = request.NewOwningProfileEntityId,
-        }, ct).ConfigureAwait(false);
-        if (!decision.IsAllowed) throw new AgentSessionUnavailableException();
-
-        var existing = await this.runtimeRegistry.TryGetAsync(
-            request.AgentSessionId, request.ExpectedOwnershipGeneration, ct).ConfigureAwait(false);
-        if (existing is not null
-            && !await this.runtimeRegistry.TryTerminateAsync(new TerminateAgentSessionRuntimeRequest
+            var decision = await this.authorizer.AuthorizeAsync(peer, new AgentSessionAuthorizationRequest
             {
-                SessionId = request.AgentSessionId,
-                OwnershipGeneration = request.ExpectedOwnershipGeneration,
-                Epoch = existing.Epoch,
-            }, ct).ConfigureAwait(false))
-            throw new AgentSessionTakeoverBlockedException();
-        if (!await this.runtimeFactory.TryTakeOverAsync(request, ct).ConfigureAwait(false))
-            throw new AgentSessionTakeoverBlockedException();
-        var replacement = await this.runtimeFactory.LoadIntentAsync(request.AgentSessionId, ct).ConfigureAwait(false);
-        if (replacement is null
-            || replacement.OwnershipGeneration != request.ExpectedOwnershipGeneration + 1
-            || !string.Equals(
-                replacement.OwningProfileEntityId,
-                request.NewOwningProfileEntityId,
-                StringComparison.OrdinalIgnoreCase))
-            throw new AgentSessionTakeoverBlockedException();
-        await this.runtimeRegistry.GetOrStartAsync(
-            replacement,
-            token => this.runtimeFactory.StartAsync(replacement, token),
-            ct).ConfigureAwait(false);
+                AgentSessionId = request.AgentSessionId,
+                ExpectedOwningProfileEntityId = request.ExpectedOwningProfileEntityId,
+                ExpectedOwnershipGeneration = request.ExpectedOwnershipGeneration,
+                Operation = AgentSessionAuthorizationOperation.Takeover,
+                NewOwningProfileEntityId = request.NewOwningProfileEntityId,
+            }, ct).ConfigureAwait(false);
+            if (!decision.IsAllowed) throw new AgentSessionUnavailableException();
+
+            var existing = await this.runtimeRegistry.TryGetAsync(
+                request.AgentSessionId, request.ExpectedOwnershipGeneration, ct).ConfigureAwait(false);
+            if (existing is not null
+                && !await this.runtimeRegistry.TryTerminateAsync(new TerminateAgentSessionRuntimeRequest
+                {
+                    SessionId = request.AgentSessionId,
+                    OwnershipGeneration = request.ExpectedOwnershipGeneration,
+                    Epoch = existing.Epoch,
+                }, ct).ConfigureAwait(false))
+                throw new AgentSessionTakeoverBlockedException();
+            if (!await this.runtimeFactory.TryTakeOverAsync(request, ct).ConfigureAwait(false))
+                throw new AgentSessionTakeoverBlockedException();
+            var replacement = await this.runtimeFactory.LoadIntentAsync(
+                request.AgentSessionId, ct).ConfigureAwait(false);
+            if (replacement is null
+                || replacement.OwnershipGeneration != request.ExpectedOwnershipGeneration + 1
+                || !string.Equals(
+                    replacement.OwningProfileEntityId,
+                    request.NewOwningProfileEntityId,
+                    StringComparison.OrdinalIgnoreCase))
+                throw new AgentSessionTakeoverBlockedException();
+            await this.runtimeRegistry.GetOrStartAsync(
+                replacement,
+                token => this.runtimeFactory.StartAsync(replacement, token),
+                ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            openGate.Release();
+        }
     }
 
     private async ValueTask HandleCommandAsync(
@@ -188,8 +199,6 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
     {
         try
         {
-            if (command.RuntimeEpoch != runtime.Epoch)
-                throw new AgentSessionUnavailableException();
             var operation = command switch
             {
             SetToolEnabledCommand => AgentSessionAuthorizationOperation.SetToolState,
@@ -209,6 +218,8 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
             ChildAgentId = command is OpenSubagentCommand child ? child.AgentId : null,
             }, ct).ConfigureAwait(false);
             if (!authorized.IsAllowed) throw new AgentSessionUnavailableException();
+            if (command.RuntimeEpoch != runtime.Epoch)
+                throw new AgentSessionUnavailableException();
 
             if (command is TerminateSessionCommand)
             {

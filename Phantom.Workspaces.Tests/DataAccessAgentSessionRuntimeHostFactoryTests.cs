@@ -44,6 +44,37 @@ public sealed class DataAccessAgentSessionRuntimeHostFactoryTests
     }
 
     [Fact]
+    public async Task TryTakeOverAsync_StaleExpectedOwner_FailsClosedWithoutMutation()
+    {
+        var layer = Layer(Entity());
+        var factory = Factory(layer.Object);
+        var request = Takeover() with
+        {
+            ExpectedOwningProfileEntityId = "55555555-5555-5555-5555-555555555555",
+        };
+
+        Assert.False(await factory.TryTakeOverAsync(
+            request, TestContext.Current.CancellationToken));
+
+        layer.Verify(value => value.UpdateAsync(
+            It.IsAny<UpdateRequest>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task TryTakeOverAsync_MalformedPersistedLease_FailsClosedWithoutMutation()
+    {
+        var entity = EntityWithLeaseValue("not-an-authoritative-timestamp");
+        var layer = Layer(entity);
+        var factory = Factory(layer.Object);
+
+        Assert.False(await factory.TryTakeOverAsync(
+            Takeover(), TestContext.Current.CancellationToken));
+
+        layer.Verify(value => value.UpdateAsync(
+            It.IsAny<UpdateRequest>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task StartAsync_StaleIntentGeneration_FailsBeforeAcquiringRuntimeOrLease()
     {
         var layer = Layer(Entity());
@@ -58,6 +89,26 @@ public sealed class DataAccessAgentSessionRuntimeHostFactoryTests
 
         await Assert.ThrowsAsync<AgentSessionUnavailableException>(
             () => factory.StartAsync(stale, TestContext.Current.CancellationToken));
+
+        running.Verify(value => value.AcquireAsync(
+            It.IsAny<AcquireAgentChatRequest>(), It.IsAny<CancellationToken>()), Times.Never);
+        layer.Verify(value => value.UpdateAsync(
+            It.IsAny<UpdateRequest>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task StartAsync_AbandonedEpochWithoutAuthoritativeExpiry_FailsClosed()
+    {
+        var entity = EntityWithLeaseValue(null);
+        var layer = Layer(entity);
+        var running = new Mock<IRunningAgentChatTable>();
+        var factory = new DataAccessAgentSessionRuntimeHostFactory(
+            layer.Object, running.Object, new AgentSessionRuntimeContextFactory(null));
+        var intent = (await factory.LoadIntentAsync(
+            "session", TestContext.Current.CancellationToken))!;
+
+        await Assert.ThrowsAsync<AgentSessionTakeoverBlockedException>(
+            () => factory.StartAsync(intent, TestContext.Current.CancellationToken));
 
         running.Verify(value => value.AcquireAsync(
             It.IsAny<AcquireAgentChatRequest>(), It.IsAny<CancellationToken>()), Times.Never);
@@ -210,6 +261,19 @@ public sealed class DataAccessAgentSessionRuntimeHostFactoryTests
             Relationships = [],
             MatchingClauseIdentifiers = [],
         };
+    }
+
+    private static QueryEntitySnapshot EntityWithLeaseValue(string? leaseExpiry)
+    {
+        var entity = Entity();
+        var values = entity.Data!.Value.EnumerateObject().ToDictionary(
+            property => property.Name,
+            property => (object?)property.Value.Clone(),
+            StringComparer.Ordinal);
+        values["runtime-epoch"] = "33333333-3333-3333-3333-333333333333";
+        if (leaseExpiry is not null)
+            values["runtime-lease-expiry"] = leaseExpiry;
+        return entity with { Data = JsonSerializer.SerializeToElement(values) };
     }
 
     private static UpdateResult SuccessfulUpdate(
