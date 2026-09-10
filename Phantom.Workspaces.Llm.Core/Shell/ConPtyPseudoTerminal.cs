@@ -82,10 +82,32 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool GetProcessHandleCount(SafeProcessHandle hProcess, out uint pdwHandleCount);
 
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeJobHandle CreateJobObjectW(IntPtr lpJobAttributes, string? lpName);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetInformationJobObject(
+        SafeJobHandle hJob, int jobObjectInfoClass, IntPtr lpJobObjectInfo,
+        uint cbJobObjectInfoLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool AssignProcessToJobObject(
+        SafeJobHandle hJob, SafeProcessHandle hProcess);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint ResumeThread(SafeWaitHandle hThread);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool TerminateProcess(SafeProcessHandle hProcess, uint uExitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr hObject);
+
     // ── Constants ───────────────────────────────────────────────────────────
 
     private const uint EXTENDED_STARTUPINFO_PRESENT  = 0x00080000;
     private const uint CREATE_UNICODE_ENVIRONMENT    = 0x00000400;
+    private const uint CREATE_SUSPENDED              = 0x00000004;
     private const uint PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016;
     private const uint HANDLE_FLAG_INHERIT           = 0x00000001;
     private const uint FILE_FLAG_OVERLAPPED = 0x40000000;
@@ -99,6 +121,8 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
     private const uint GENERIC_WRITE = 0x40000000;
     private const uint OPEN_EXISTING = 3;
     private const uint FILE_ATTRIBUTE_NORMAL = 0x00000080;
+    private const uint JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION = 0x00000400;
+    private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
 
     // ── Structures ──────────────────────────────────────────────────────────
 
@@ -156,6 +180,42 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
         public uint dwThreadId;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JOBOBJECT_BASIC_LIMIT_INFORMATION
+    {
+        public long PerProcessUserTimeLimit;
+        public long PerJobUserTimeLimit;
+        public uint LimitFlags;
+        public nuint MinimumWorkingSetSize;
+        public nuint MaximumWorkingSetSize;
+        public uint ActiveProcessLimit;
+        public nuint Affinity;
+        public uint PriorityClass;
+        public uint SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IO_COUNTERS
+    {
+        public ulong ReadOperationCount;
+        public ulong WriteOperationCount;
+        public ulong OtherOperationCount;
+        public ulong ReadTransferCount;
+        public ulong WriteTransferCount;
+        public ulong OtherTransferCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+    {
+        public JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation;
+        public IO_COUNTERS IoInfo;
+        public nuint ProcessMemoryLimit;
+        public nuint JobMemoryLimit;
+        public nuint PeakProcessMemoryUsed;
+        public nuint PeakJobMemoryUsed;
+    }
+
     // ── SafeHandle Implementations ─────────────────────────────────────────
 
     private sealed class SafePseudoConsoleHandle : SafeHandle
@@ -166,11 +226,19 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
         protected override bool ReleaseHandle() { ClosePseudoConsole(handle); return true; }
     }
 
+    private sealed class SafeJobHandle : SafeHandleZeroOrMinusOneIsInvalid
+    {
+        public SafeJobHandle() : base(ownsHandle: true) { }
+        protected override bool ReleaseHandle() => CloseHandle(handle);
+    }
+
     // ── Fields ──────────────────────────────────────────────────────────────
 
     private readonly SafePseudoConsoleHandle _hPC;
     private readonly SafeProcessHandle _hProcess;
     private readonly SafeWaitHandle _hThread;
+    private readonly SafeJobHandle _hJob;
+    private readonly TimeSpan _shutdownTimeout;
     private bool _disposed;
 
     public Stream Output { get; }
@@ -192,8 +260,24 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
     // ── Constructor ─────────────────────────────────────────────────────────
 
     public ConPtyPseudoTerminal(ShellOpenPayload payload)
+        : this(new ConPtyStartOptions
+        {
+            Payload = payload,
+            ShutdownTimeout = TimeSpan.FromSeconds(5),
+        })
     {
+    }
+
+    internal static ConPtyPseudoTerminal Start(ConPtyStartOptions options) => new(options);
+
+    private ConPtyPseudoTerminal(ConPtyStartOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        var payload = options.Payload;
         ArgumentNullException.ThrowIfNull(payload);
+        if (options.ShutdownTimeout <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(options), "Shutdown timeout must be positive.");
+        _shutdownTimeout = options.ShutdownTimeout;
 
         // PTY input pipe: ConPTY reads from inputPtySide (synchronous), caller writes to inputWrite (overlapped/async)
         var (inputPtySide, inputWrite) = CreateOverlappedPtyPipe(callerReads: false);
@@ -231,6 +315,7 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
         PROCESS_INFORMATION pi = default;
         SafeProcessHandle? hProcess = null;
         SafeWaitHandle? hThread = null;
+        SafeJobHandle? hJob = null;
         try
         {
             bool refAdded = false;
@@ -252,18 +337,74 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
                         commandLine,
                         IntPtr.Zero, IntPtr.Zero,
                         false,
-                        EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
+                        EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED,
                         IntPtr.Zero,
                         payload.WorkingDirectory,
                         ref startupInfo,
                         out pi))
                 {
-                    throw new Win32Exception(Marshal.GetLastWin32Error(), $"CreateProcessW failed for '{commandLine}'.");
+                    var error = Marshal.GetLastWin32Error();
+                    options.LaunchObserver?.Observe(new WindowsProcessLaunchEvent
+                    {
+                        Stage = WindowsProcessLaunchStage.CreateProcess,
+                        Succeeded = false,
+                        Win32Error = error,
+                    });
+                    throw new Win32Exception(error, "CreateProcessW failed for the requested shell.");
                 }
 
                 // Wrap raw handles into SafeHandles immediately
                 hProcess = new SafeProcessHandle(pi.hProcess, ownsHandle: true);
                 hThread = new SafeWaitHandle(pi.hThread, ownsHandle: true);
+                options.LaunchObserver?.Observe(new WindowsProcessLaunchEvent
+                {
+                    Stage = WindowsProcessLaunchStage.CreateProcess,
+                    Succeeded = true,
+                    Win32Error = null,
+                });
+
+                hJob = CreateConfiguredJob();
+                options.LaunchObserver?.Observe(new WindowsProcessLaunchEvent
+                {
+                    Stage = WindowsProcessLaunchStage.ConfigureJob,
+                    Succeeded = true,
+                    Win32Error = null,
+                });
+                if (!AssignProcessToJobObject(hJob, hProcess))
+                {
+                    var error = Marshal.GetLastWin32Error();
+                    options.LaunchObserver?.Observe(new WindowsProcessLaunchEvent
+                    {
+                        Stage = WindowsProcessLaunchStage.AssignJob,
+                        Succeeded = false,
+                        Win32Error = error,
+                    });
+                    throw new Win32Exception(error, "AssignProcessToJobObject failed.");
+                }
+                options.LaunchObserver?.Observe(new WindowsProcessLaunchEvent
+                {
+                    Stage = WindowsProcessLaunchStage.AssignJob,
+                    Succeeded = true,
+                    Win32Error = null,
+                });
+
+                if (ResumeThread(hThread) == uint.MaxValue)
+                {
+                    var error = Marshal.GetLastWin32Error();
+                    options.LaunchObserver?.Observe(new WindowsProcessLaunchEvent
+                    {
+                        Stage = WindowsProcessLaunchStage.ResumeThread,
+                        Succeeded = false,
+                        Win32Error = error,
+                    });
+                    throw new Win32Exception(error, "ResumeThread failed.");
+                }
+                options.LaunchObserver?.Observe(new WindowsProcessLaunchEvent
+                {
+                    Stage = WindowsProcessLaunchStage.ResumeThread,
+                    Succeeded = true,
+                    Win32Error = null,
+                });
             }
             finally
             {
@@ -272,6 +413,9 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
         }
         catch
         {
+            if (hProcess is not null && !hProcess.IsInvalid)
+                TerminateProcess(hProcess, 0xC000013A);
+            hJob?.Dispose();
             hProcess?.Dispose();
             hThread?.Dispose();
             inputWrite.Dispose();
@@ -289,6 +433,7 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
 
         _hProcess = hProcess;
         _hThread = hThread;
+        _hJob = hJob;
         ProcessId = pi.dwProcessId;
 
         // Caller-side pipe handles are created with FILE_FLAG_OVERLAPPED. Use isAsync: true
@@ -357,11 +502,25 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
         _disposed = true;
 
         await Input.DisposeAsync().ConfigureAwait(false);
-        await Output.DisposeAsync().ConfigureAwait(false);
+        _hJob.Dispose();
 
-        _hPC.Dispose();
-        _hThread.Dispose();
-        _hProcess.Dispose();
+        using var shutdown = new CancellationTokenSource(_shutdownTimeout);
+        try
+        {
+            await WaitForExitAsync(shutdown.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (shutdown.IsCancellationRequested)
+        {
+            TerminateProcess(_hProcess, 0xC000013A);
+            await WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        finally
+        {
+            await Output.DisposeAsync().ConfigureAwait(false);
+            _hPC.Dispose();
+            _hThread.Dispose();
+            _hProcess.Dispose();
+        }
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────
@@ -479,6 +638,35 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
         }
 
         return list;
+    }
+
+    private static SafeJobHandle CreateConfiguredJob()
+    {
+        var job = CreateJobObjectW(IntPtr.Zero, null);
+        if (job.IsInvalid)
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateJobObjectW failed.");
+
+        var information = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
+        information.BasicLimitInformation.LimitFlags =
+            JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        var size = Marshal.SizeOf(information);
+        var pointer = Marshal.AllocHGlobal(size);
+        try
+        {
+            Marshal.StructureToPtr(information, pointer, false);
+            if (!SetInformationJobObject(job, 9, pointer, (uint)size))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "SetInformationJobObject failed.");
+        }
+        catch
+        {
+            job.Dispose();
+            throw;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(pointer);
+        }
+        return job;
     }
 
     private static string BuildCommandLine(ShellOpenPayload payload)

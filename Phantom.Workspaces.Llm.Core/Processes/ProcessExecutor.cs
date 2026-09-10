@@ -36,19 +36,77 @@ public sealed record ProcessExecutionRequest(
 
     /// <summary>Optional portable MXC policy compiled from an effective trust profile.</summary>
     public MxcProcessPolicy? MxcPolicy { get; init; }
+
+    /// <summary>Non-secret category used in launch diagnostics instead of the executable path.</summary>
+    public ProcessPathCategory PathCategory { get; init; } = ProcessPathCategory.CallerProvided;
+}
+
+public enum ProcessPathCategory
+{
+    CallerProvided,
+    SystemBinary,
+    FixedProbeBinary,
+    ResolvedCommandShim,
+    PackagedTool,
+}
+
+public enum ProcessLaunchMechanism
+{
+    OrdinaryProcess,
+    MxcSpawn,
+}
+
+public sealed record ProcessContainmentInfo
+{
+    public required string PolicyType { get; init; }
+    public required string PolicyIdentity { get; init; }
 }
 
 /// <summary>Information available immediately after launch.</summary>
-public sealed record ProcessLaunchInfo(
-    int? ProcessId,
-    bool IsContained,
-    IReadOnlyList<string> Warnings);
+public sealed record ProcessLaunchInfo
+{
+    public required int? ProcessId { get; init; }
+    public required bool IsContained { get; init; }
+    public required IReadOnlyList<string> Warnings { get; init; }
+    public required ProcessPathCategory PathCategory { get; init; }
+    public required ProcessLaunchMechanism LaunchMechanism { get; init; }
+    public required bool CreationStatusAvailable { get; init; }
+    public required bool? CreateProcessSucceeded { get; init; }
+    public required int? CreateProcessWin32Error { get; init; }
+    public ProcessContainmentInfo? Containment { get; init; }
+
+
+    public string ToSanitizedDiagnostic() => string.Join(
+        "; ",
+        $"path={PathCategory}",
+        $"mechanism={LaunchMechanism}",
+        $"creationAvailable={CreationStatusAvailable}",
+        $"created={CreateProcessSucceeded?.ToString() ?? "unavailable"}",
+        $"win32={CreateProcessWin32Error?.ToString() ?? "none"}",
+        $"containmentType={Containment?.PolicyType ?? "none"}",
+        $"containmentIdentity={Containment?.PolicyIdentity ?? "none"}");
+}
 
 /// <summary>The terminal outcome and diagnostics of a child process.</summary>
-public sealed record ProcessExitResult(
-    int ExitCode,
-    bool TimedOut,
-    SandboxOutputMetadata? OutputMetadata);
+public sealed record ProcessExitResult
+{
+    public required int ExitCode { get; init; }
+    public required string? UnsignedNtStatus { get; init; }
+    public required bool TimedOut { get; init; }
+    public required SandboxOutputMetadata? OutputMetadata { get; init; }
+
+
+    internal static ProcessExitResult Create(
+        int exitCode,
+        bool timedOut,
+        SandboxOutputMetadata? outputMetadata) => new()
+    {
+        ExitCode = exitCode,
+        UnsignedNtStatus = exitCode < 0 ? $"0x{unchecked((uint)exitCode):X8}" : null,
+        TimedOut = timedOut,
+        OutputMetadata = outputMetadata,
+    };
+}
 
 /// <summary>An owned live process with separate standard streams.</summary>
 public interface IProcessHandle : IAsyncDisposable
@@ -111,7 +169,10 @@ public sealed class ProcessExecutor : IProcessExecutor
                 foreach (var (name, value) in request.MxcPolicy.EnvironmentOverrides)
                     sandboxRequest.Environment[name] = value;
             }
-            backend = new SandboxProcessBackend(sandboxRunner.Spawn(sandboxRequest));
+            backend = new SandboxProcessBackend(
+                sandboxRunner.Spawn(sandboxRequest),
+                request.PathCategory,
+                request.MxcPolicy is null ? "compiled-mxc-policy" : "portable-mxc-policy-v1");
         }
 
         try
@@ -244,6 +305,19 @@ internal interface IProcessBackend : IDisposable
     Stream StandardOutput { get; }
     Stream StandardError { get; }
     IReadOnlyList<string> Warnings { get; }
+    ProcessPathCategory PathCategory => ProcessPathCategory.CallerProvided;
+    ProcessLaunchMechanism LaunchMechanism =>
+        IsContained ? ProcessLaunchMechanism.MxcSpawn : ProcessLaunchMechanism.OrdinaryProcess;
+    bool CreationStatusAvailable => !IsContained;
+    bool? CreateProcessSucceeded => IsContained ? null : true;
+    int? CreateProcessWin32Error => null;
+    ProcessContainmentInfo? Containment => IsContained
+        ? new ProcessContainmentInfo
+        {
+            PolicyType = "ProcessContainer",
+            PolicyIdentity = "mxc-policy-v1",
+        }
+        : null;
     bool HasExited { get; }
     Task<ProcessExitResult> WaitAsync(CancellationToken cancellationToken);
     void Kill();
@@ -263,10 +337,18 @@ internal sealed class StreamingProcessHandle : IProcessHandle
     {
         this.backend = backend;
         StandardInput = backend.StandardInput;
-        LaunchInfo = new ProcessLaunchInfo(
-            backend.ProcessId,
-            backend.IsContained,
-            backend.Warnings);
+        LaunchInfo = new ProcessLaunchInfo
+        {
+            ProcessId = backend.ProcessId,
+            IsContained = backend.IsContained,
+            Warnings = backend.Warnings,
+            PathCategory = backend.PathCategory,
+            LaunchMechanism = backend.LaunchMechanism,
+            CreationStatusAvailable = backend.CreationStatusAvailable,
+            CreateProcessSucceeded = backend.CreateProcessSucceeded,
+            CreateProcessWin32Error = backend.CreateProcessWin32Error,
+            Containment = backend.Containment,
+        };
 
         // Start pumps eagerly so an untaken stdout/stderr pipe cannot deadlock the child, even
         // when no caller ever inspects StandardOutput or StandardError.
@@ -491,7 +573,7 @@ internal sealed class SystemProcessFactory : ISystemProcessFactory
         {
             if (!process.Start())
                 throw new InvalidOperationException($"Failed to start process '{request.Executable}'.");
-            return new SystemProcessBackend(process, request.Timeout);
+            return new SystemProcessBackend(process, request.Timeout, request.PathCategory);
         }
         catch
         {
@@ -501,7 +583,10 @@ internal sealed class SystemProcessFactory : ISystemProcessFactory
     }
 }
 
-internal sealed class SystemProcessBackend(Process process, TimeSpan? timeout) : IProcessBackend
+internal sealed class SystemProcessBackend(
+    Process process,
+    TimeSpan? timeout,
+    ProcessPathCategory pathCategory) : IProcessBackend
 {
     public int? ProcessId => process.Id;
     public bool IsContained => false;
@@ -509,6 +594,12 @@ internal sealed class SystemProcessBackend(Process process, TimeSpan? timeout) :
     public Stream StandardOutput => process.StandardOutput.BaseStream;
     public Stream StandardError => process.StandardError.BaseStream;
     public IReadOnlyList<string> Warnings => [];
+    public ProcessPathCategory PathCategory => pathCategory;
+    public ProcessLaunchMechanism LaunchMechanism => ProcessLaunchMechanism.OrdinaryProcess;
+    public bool CreationStatusAvailable => true;
+    public bool? CreateProcessSucceeded => true;
+    public int? CreateProcessWin32Error => null;
+    public ProcessContainmentInfo? Containment => null;
     public bool HasExited => process.HasExited;
 
     public async Task<ProcessExitResult> WaitAsync(CancellationToken cancellationToken)
@@ -516,7 +607,7 @@ internal sealed class SystemProcessBackend(Process process, TimeSpan? timeout) :
         if (timeout is null)
         {
             await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
-            return new ProcessExitResult(process.ExitCode, false, null);
+            return ProcessExitResult.Create(process.ExitCode, false, null);
         }
 
         using var timeoutCancellation = new CancellationTokenSource(timeout.Value);
@@ -526,14 +617,14 @@ internal sealed class SystemProcessBackend(Process process, TimeSpan? timeout) :
         try
         {
             await process.WaitForExitAsync(linkedCancellation.Token).ConfigureAwait(false);
-            return new ProcessExitResult(process.ExitCode, false, null);
+            return ProcessExitResult.Create(process.ExitCode, false, null);
         }
         catch (OperationCanceledException) when (
             timeoutCancellation.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
             Kill();
             await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
-            return new ProcessExitResult(process.ExitCode, true, null);
+            return ProcessExitResult.Create(process.ExitCode, true, null);
         }
     }
 
@@ -546,7 +637,10 @@ internal sealed class SystemProcessBackend(Process process, TimeSpan? timeout) :
     public void Dispose() => process.Dispose();
 }
 
-internal sealed class SandboxProcessBackend(ISandboxProcess process) : IProcessBackend
+internal sealed class SandboxProcessBackend(
+    ISandboxProcess process,
+    ProcessPathCategory pathCategory,
+    string policyIdentity) : IProcessBackend
 {
     private readonly Stream standardInput = process.StandardInput ?? Stream.Null;
     private readonly Stream standardOutput = process.StandardOutput ?? Stream.Null;
@@ -558,12 +652,22 @@ internal sealed class SandboxProcessBackend(ISandboxProcess process) : IProcessB
     public Stream StandardOutput => standardOutput;
     public Stream StandardError => standardError;
     public IReadOnlyList<string> Warnings => process.Warnings;
+    public ProcessPathCategory PathCategory => pathCategory;
+    public ProcessLaunchMechanism LaunchMechanism => ProcessLaunchMechanism.MxcSpawn;
+    public bool CreationStatusAvailable => false;
+    public bool? CreateProcessSucceeded => null;
+    public int? CreateProcessWin32Error => null;
+    public ProcessContainmentInfo? Containment { get; } = new()
+    {
+        PolicyType = "ProcessContainer",
+        PolicyIdentity = policyIdentity,
+    };
     public bool HasExited => process.TryGetExitCode(out _);
 
     public async Task<ProcessExitResult> WaitAsync(CancellationToken cancellationToken)
     {
         var result = await process.WaitAsync(cancellationToken).ConfigureAwait(false);
-        return new ProcessExitResult(
+        return ProcessExitResult.Create(
             result.ExitCode,
             result.TimedOut,
             process.OutputMetadata);

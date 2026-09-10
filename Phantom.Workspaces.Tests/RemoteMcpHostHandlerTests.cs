@@ -255,13 +255,28 @@ public sealed class RemoteMcpHostHandlerTests
         public Stream StandardInput { get; } = new MemoryStream();
         public Stream StandardOutput { get; } = new MemoryStream();
         public Stream StandardError { get; } = new MemoryStream();
-        public ProcessLaunchInfo LaunchInfo { get; } = new(1234, true, []);
+        public ProcessLaunchInfo LaunchInfo { get; } = new()
+        {
+            ProcessId = 1234,
+            IsContained = true,
+            Warnings = [],
+            PathCategory = ProcessPathCategory.CallerProvided,
+            LaunchMechanism = ProcessLaunchMechanism.MxcSpawn,
+            CreationStatusAvailable = false,
+            CreateProcessSucceeded = null,
+            CreateProcessWin32Error = null,
+            Containment = new ProcessContainmentInfo
+            {
+                PolicyType = "ProcessContainer",
+                PolicyIdentity = "test-policy",
+            },
+        };
         public Task<ProcessExitResult> WaitAsync(CancellationToken cancellationToken = default)
             => exit.Task.WaitAsync(cancellationToken);
-        public void Kill() => exit.TrySetResult(new ProcessExitResult(-1, false, null));
+        public void Kill() => exit.TrySetResult(ProcessExitResult.Create(-1, false, null));
         public ValueTask DisposeAsync()
         {
-            exit.TrySetResult(new ProcessExitResult(0, false, null));
+            exit.TrySetResult(ProcessExitResult.Create(0, false, null));
             return ValueTask.CompletedTask;
         }
     }

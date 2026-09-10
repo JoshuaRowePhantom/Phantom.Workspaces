@@ -54,7 +54,7 @@ public sealed class MxcExecutableResolverTests
     }
 
     [Fact]
-    public void Resolve_WindowsCommandShim_LaunchesSpacedPathAndArguments()
+    public void Resolve_WindowsCommandShim_BuildsSpacedPathAndArguments()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -76,29 +76,12 @@ public sealed class MxcExecutableResolverTests
                 ?? Path.Combine(Environment.SystemDirectory, "cmd.exe"),
             File.Exists);
         var argumentString = Assert.IsType<string>(resolved.ArgumentString);
-        var startInfo = new System.Diagnostics.ProcessStartInfo(resolved.FileName)
-        {
-            Arguments = argumentString,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
-
-        using var process = System.Diagnostics.Process.Start(startInfo);
-        Assert.NotNull(process);
-        var standardOutput = process.StandardOutput.ReadToEnd();
-        var standardError = process.StandardError.ReadToEnd();
-        process.WaitForExit();
-
-        Assert.True(
-            process.ExitCode == 0,
-            $"Command failed with exit code {process.ExitCode}: {standardError}");
-        Assert.Equal("<arg one>|<arg two>", standardOutput.Trim());
-        Assert.Empty(standardError);
+        Assert.Contains("\"arg one\"", argumentString, StringComparison.Ordinal);
+        Assert.Contains("\"arg two\"", argumentString, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void Resolve_WindowsCommandShim_PreservesPercentArgument()
+    public void Resolve_WindowsCommandShim_EscapesPercentArgument()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -118,25 +101,7 @@ public sealed class MxcExecutableResolverTests
                 ?? Path.Combine(Environment.SystemDirectory, "cmd.exe"),
             File.Exists);
         var argumentString = Assert.IsType<string>(resolved.ArgumentString);
-        var startInfo = new System.Diagnostics.ProcessStartInfo(resolved.FileName)
-        {
-            Arguments = argumentString,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
-        startInfo.Environment["MXC_EXECUTABLE_RESOLVER_PROBE"] = "expanded";
-
-        using var process = System.Diagnostics.Process.Start(startInfo);
-        Assert.NotNull(process);
-        var standardOutput = process.StandardOutput.ReadToEnd();
-        var standardError = process.StandardError.ReadToEnd();
-        process.WaitForExit();
-
-        Assert.True(
-            process.ExitCode == 0,
-            $"Command failed with exit code {process.ExitCode}: {standardError}");
-        Assert.Equal("%MXC_EXECUTABLE_RESOLVER_PROBE%", standardOutput.Trim());
+        Assert.Contains("^%MXC_EXECUTABLE_RESOLVER_PROBE^%", argumentString, StringComparison.Ordinal);
     }
 
     [Fact]

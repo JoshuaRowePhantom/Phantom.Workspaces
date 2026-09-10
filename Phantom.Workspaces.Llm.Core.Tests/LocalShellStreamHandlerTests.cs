@@ -184,9 +184,19 @@ internal sealed class RecordingProcessExecutor : IProcessExecutor
         public Stream StandardInput { get; } = new MemoryStream();
         public Stream StandardOutput { get; } = new MemoryStream();
         public Stream StandardError { get; } = new MemoryStream();
-        public ProcessLaunchInfo LaunchInfo { get; } = new(1, false, []);
+        public ProcessLaunchInfo LaunchInfo { get; } = new()
+        {
+            ProcessId = 1,
+            IsContained = false,
+            Warnings = [],
+            PathCategory = ProcessPathCategory.CallerProvided,
+            LaunchMechanism = ProcessLaunchMechanism.OrdinaryProcess,
+            CreationStatusAvailable = true,
+            CreateProcessSucceeded = true,
+            CreateProcessWin32Error = null,
+        };
         public Task<ProcessExitResult> WaitAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(new ProcessExitResult(0, false, null));
+            Task.FromResult(ProcessExitResult.Create(0, false, null));
         public void Kill() { }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

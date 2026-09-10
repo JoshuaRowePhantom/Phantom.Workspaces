@@ -153,7 +153,7 @@ public sealed class ProcessHandleTests
         var metadata = new SandboxOutputMetadata();
         var backend = new FakeProcessBackend
         {
-            WaitResult = new ProcessExitResult(-1, true, metadata),
+            WaitResult = ProcessExitResult.Create(-1, true, metadata),
         };
         await using var handle = new StreamingProcessHandle(backend);
 
@@ -307,11 +307,12 @@ internal sealed class FakeProcessBackend : IProcessBackend
     public Stream StandardOutput { get; init; } = new MemoryStream();
     public Stream StandardError { get; init; } = new MemoryStream();
     public IReadOnlyList<string> Warnings { get; init; } = [];
+    public ProcessPathCategory PathCategory { get; init; } = ProcessPathCategory.CallerProvided;
     public bool HasExited { get; set; } = true;
     public int KillCount { get; private set; }
     public bool Disposed { get; private set; }
     public Exception? KillException { get; init; }
-    public ProcessExitResult WaitResult { get; init; } = new(0, false, null);
+    public ProcessExitResult WaitResult { get; init; } = ProcessExitResult.Create(0, false, null);
 
     public Task<ProcessExitResult> WaitAsync(CancellationToken cancellationToken) =>
         cancellationToken.IsCancellationRequested

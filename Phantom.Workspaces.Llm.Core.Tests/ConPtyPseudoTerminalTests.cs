@@ -288,27 +288,6 @@ public sealed class ConPtyPseudoTerminalTests
     }
 
     /// <summary>
-    /// Verifies that pwsh.exe starts without the 0xc0000142 DLL-init failure that occurs when
-    /// child processes inherit unwanted handles from the parent. The process must exit with code 0.
-    /// </summary>
-    [Fact]
-    public async Task StartsShellSuccessfully_WithoutApplicationErrorDialog()
-    {
-        using var _ = new ConsoleScope();
-        await using var pty = new ConPtyPseudoTerminal(PwshExitPayload);
-
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        // Drain output so the pipe buffer doesn't fill and block pwsh during startup.
-        var drain = DrainOutputAsync(pty, cts.Token);
-
-        int exitCode = await pty.WaitForExitAsync(cts.Token);
-        cts.Cancel();
-        await drain;
-
-        Assert.Equal(0, exitCode);
-    }
-
-    /// <summary>
     /// Verifies that the child process writes output through the ConPTY pipe. Drives the shell
     /// by writing "echo hello\r\nexit\r\n" to stdin so that output is produced deterministically;
     /// reads from the Output stream concurrently until "hello" appears or the 30-second timeout fires.

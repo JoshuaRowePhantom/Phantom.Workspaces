@@ -207,7 +207,17 @@ public sealed class ProcessExecutorBackedClientTransportTests
             stderr.ReadObserved = () => stderrRead.TrySetResult();
             if (seededStderr is not null)
                 stderr.WriteInitial(seededStderr);
-            LaunchInfo = new ProcessLaunchInfo(1234, false, []);
+            LaunchInfo = new ProcessLaunchInfo
+            {
+                ProcessId = 1234,
+                IsContained = false,
+                Warnings = [],
+                PathCategory = ProcessPathCategory.CallerProvided,
+                LaunchMechanism = ProcessLaunchMechanism.OrdinaryProcess,
+                CreationStatusAvailable = true,
+                CreateProcessSucceeded = true,
+                CreateProcessWin32Error = null,
+            };
         }
 
         public bool Disposed { get; private set; }
@@ -217,14 +227,14 @@ public sealed class ProcessExecutorBackedClientTransportTests
         public Stream StandardError => stderr;
         public ProcessLaunchInfo LaunchInfo { get; }
         public Task<ProcessExitResult> WaitAsync(CancellationToken cancellationToken = default) => exit.Task;
-        public void Kill() => exit.TrySetResult(new ProcessExitResult(-1, false, null));
+        public void Kill() => exit.TrySetResult(ProcessExitResult.Create(-1, false, null));
 
         public void Exit(int exitCode, string stderrText)
         {
             stderr.WriteInitial(System.Text.Encoding.UTF8.GetBytes(stderrText + "\n"));
             stderr.Complete();
             stdout.Complete();
-            exit.TrySetResult(new ProcessExitResult(exitCode, false, null));
+            exit.TrySetResult(ProcessExitResult.Create(exitCode, false, null));
         }
 
         public ValueTask DisposeAsync()
@@ -232,7 +242,7 @@ public sealed class ProcessExecutorBackedClientTransportTests
             Disposed = true;
             stderr.Complete();
             stdout.Complete();
-            exit.TrySetResult(new ProcessExitResult(0, false, null));
+            exit.TrySetResult(ProcessExitResult.Create(0, false, null));
             return ValueTask.CompletedTask;
         }
     }

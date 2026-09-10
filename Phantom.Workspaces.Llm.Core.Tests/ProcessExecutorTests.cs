@@ -205,6 +205,34 @@ public sealed class ProcessExecutorTests
         });
 
         Assert.Equal(["DACL mutation was required."], handle.LaunchInfo.Warnings);
+        Assert.Equal(ProcessLaunchMechanism.MxcSpawn, handle.LaunchInfo.LaunchMechanism);
+        Assert.False(handle.LaunchInfo.CreationStatusAvailable);
+        Assert.Null(handle.LaunchInfo.CreateProcessSucceeded);
+        Assert.Equal("ProcessContainer", handle.LaunchInfo.Containment?.PolicyType);
+    }
+
+    [Fact]
+    public async Task ProcessExecutor_StatusDllInitFailed_NormalizesUnsignedNtStatus()
+    {
+        var backend = new FakeProcessBackend
+        {
+            WaitResult = ProcessExitResult.Create(unchecked((int)0xC0000142), false, null),
+            PathCategory = ProcessPathCategory.FixedProbeBinary,
+        };
+        var executor = new ProcessExecutor(
+            new RecordingSystemProcessFactory { Process = backend },
+            new FakeSandboxRunner());
+
+        await using var handle = executor.Start(new ProcessExecutionRequest("fixed-probe")
+        {
+            PathCategory = ProcessPathCategory.FixedProbeBinary,
+        });
+        var result = await handle.WaitAsync();
+
+        Assert.Equal(unchecked((int)0xC0000142), result.ExitCode);
+        Assert.Equal("0xC0000142", result.UnsignedNtStatus);
+        Assert.Equal(ProcessPathCategory.FixedProbeBinary, handle.LaunchInfo.PathCategory);
+        Assert.DoesNotContain("fixed-probe", handle.LaunchInfo.ToSanitizedDiagnostic(), StringComparison.Ordinal);
     }
 
     [Fact]
