@@ -45,11 +45,6 @@ public interface IAgentChat : IAsyncDisposable, IServiceProvider
     void Interrupt();
 }
 
-public interface IAsyncInterruptibleAgentChat
-{
-    Task InterruptAsync(CancellationToken ct = default);
-}
-
 /// <summary>
 /// Immutable snapshot of session-level LLM token/cost usage.
 /// A metric of <see langword="null"/> means the provider did not report that value;

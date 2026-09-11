@@ -316,10 +316,7 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
                 await using var lease = await session.AcquireLeaseAsync(ct).ConfigureAwait(false);
                 if (lease.AgentChat.RunningItems.Count > 0)
                 {
-                    if (lease.AgentChat is IAsyncInterruptibleAgentChat remoteChat)
-                        await remoteChat.InterruptAsync(ct).ConfigureAwait(false);
-                    else
-                        lease.AgentChat.Interrupt();
+                    lease.AgentChat.Interrupt();
                 }
             },
             async ct =>

@@ -46,4 +46,18 @@ public sealed class AgentChatInterfaceTests
             typeof(IAgentChat).GetMethods(BindingFlags.Public | BindingFlags.Instance),
             method => method.Name.Contains("Steer", StringComparison.OrdinalIgnoreCase));
     }
+
+    [Fact]
+    public void IAgentChat_ExposesOnlyApprovedInterruptCommand()
+    {
+        var interrupt = Assert.Single(
+            typeof(IAgentChat).GetMethods(BindingFlags.Public | BindingFlags.Instance),
+            method => method.Name == nameof(IAgentChat.Interrupt));
+
+        Assert.Equal(typeof(void), interrupt.ReturnType);
+        Assert.Empty(interrupt.GetParameters());
+        Assert.Null(typeof(IAgentChat).Assembly.GetType(
+            "Phantom.Workspaces.Llm.IAsyncInterruptibleAgentChat",
+            throwOnError: false));
+    }
 }

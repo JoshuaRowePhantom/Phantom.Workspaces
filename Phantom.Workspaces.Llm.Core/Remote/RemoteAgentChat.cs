@@ -14,7 +14,7 @@ public sealed record RemoteAgentChatAttachOptions
     public required TaskScheduler ForegroundScheduler { get; init; }
 }
 
-public sealed class RemoteAgentChat : IAgentChat, IAsyncInterruptibleAgentChat
+public sealed class RemoteAgentChat : IAgentChat
 {
     private readonly RemoteAgentSessionClient client;
     private readonly TaskScheduler foregroundScheduler;
@@ -139,13 +139,7 @@ public sealed class RemoteAgentChat : IAgentChat, IAsyncInterruptibleAgentChat
     public void Interrupt()
     {
         this.ThrowIfDisposed();
-        _ = this.InterruptAsync();
-    }
-
-    public Task InterruptAsync(CancellationToken ct = default)
-    {
-        this.ThrowIfDisposed();
-        return this.client.InterruptAsync(Guid.NewGuid(), ct);
+        _ = this.client.InterruptAsync(Guid.NewGuid());
     }
 
     public async Task TerminateAsync(CancellationToken ct = default)
