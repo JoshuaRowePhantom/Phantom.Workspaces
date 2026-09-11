@@ -68,6 +68,7 @@ internal sealed record ProcessRunnerWindowsTestOptions
     public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
     public Action<string>? StandardOutputObserver { get; init; }
     public Func<Task>? BeforeFailureCleanupWaitAsync { get; init; }
+    public Func<Task, CancellationToken, Task>? OutputDrainDecorator { get; init; }
 }
 
 /// <summary>Controls whether a child process tree is killed when the parent process exits.</summary>
@@ -78,8 +79,8 @@ public enum KillOnCloseAction
 
     /// <summary>
     /// On Windows, assigns the child to a Job Object with
-    /// <c>JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE</c> so the entire process tree is killed when the
-    /// parent process exits unexpectedly.
+    /// <c>JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE</c> so the complete process tree is terminated before
+    /// the runner completes or when the parent process exits unexpectedly.
     /// </summary>
     KillTree,
 }
@@ -89,6 +90,8 @@ public enum KillOnCloseAction
 /// </summary>
 public static class ProcessRunner
 {
+    private static readonly TimeSpan OutputDrainTimeout = TimeSpan.FromSeconds(5);
+
     /// <summary>
     /// Starts <paramref name="parameters.Command"/> with the supplied arguments, captures stdout
     /// and stderr concurrently to avoid deadlock, and returns a <see cref="ProcessResult"/> when
@@ -259,15 +262,16 @@ public static class ProcessRunner
         List<string> lines,
         List<string> combined,
         object combinedLock,
+        CancellationToken cancellationToken = default,
         Action<string>? lineObserver = null)
     {
         string? line;
-        while ((line = await reader.ReadLineAsync().ConfigureAwait(false)) != null)
+        while ((line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false)) != null)
         {
-            lines.Add(line);
             lineObserver?.Invoke(line);
             lock (combinedLock)
             {
+                lines.Add(line);
                 combined.Add(line);
             }
         }
@@ -367,13 +371,23 @@ public static class ProcessRunner
             var stderrLines = new List<string>();
             var combinedLines = new List<string>();
             var combinedLock = new object();
+            using var outputCancellation = new CancellationTokenSource();
             var stdoutTask = ReadLinesAsync(
                 stdoutReader,
                 stdoutLines,
                 combinedLines,
                 combinedLock,
+                outputCancellation.Token,
                 parameters.WindowsTestOptions?.StandardOutputObserver);
-            var stderrTask = ReadLinesAsync(stderrReader, stderrLines, combinedLines, combinedLock);
+            var stderrTask = ReadLinesAsync(
+                stderrReader,
+                stderrLines,
+                combinedLines,
+                combinedLock,
+                outputCancellation.Token);
+            var outputTask = Task.WhenAll(stdoutTask, stderrTask);
+            if (parameters.WindowsTestOptions?.OutputDrainDecorator is { } decorateOutputDrain)
+                outputTask = decorateOutputDrain(outputTask, outputCancellation.Token);
 
             using var timeoutCancellation = parameters.Timeout is { } timeout
                 ? new CancellationTokenSource(
@@ -385,40 +399,74 @@ public static class ProcessRunner
                 : CancellationTokenSource.CreateLinkedTokenSource(
                     cancellationToken,
                     timeoutCancellation.Token);
+            var timedOut = false;
+            var cancelled = false;
+            uint rawExitCode = 0;
             try
             {
                 await Win32.WaitForProcessAsync(process, linked.Token).ConfigureAwait(false);
+                if (!Win32.GetExitCodeProcess(process, out rawExitCode))
+                    throw new Win32Exception(
+                        Marshal.GetLastWin32Error(),
+                        "GetExitCodeProcess failed.");
             }
             catch (OperationCanceledException) when (
                 timeoutCancellation?.IsCancellationRequested == true
                 && !cancellationToken.IsCancellationRequested)
             {
-                job.Dispose();
-                ObserveReleased(observer, job, ProcessRunnerWindowsResource.Job);
-                await Win32.WaitForProcessAsync(process, CancellationToken.None).ConfigureAwait(false);
-                await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
-                throw new TimeoutException(
-                    $"Process did not complete within the allotted {parameters.Timeout}.");
+                timedOut = true;
             }
             catch (OperationCanceledException)
             {
-                job.Dispose();
-                ObserveReleased(observer, job, ProcessRunnerWindowsResource.Job);
-                await Win32.WaitForProcessAsync(process, CancellationToken.None).ConfigureAwait(false);
-                await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
-                cancellationToken.ThrowIfCancellationRequested();
-                throw;
+                cancelled = true;
             }
 
-            await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
-            if (!Win32.GetExitCodeProcess(process, out var rawExitCode))
-                throw new Win32Exception(Marshal.GetLastWin32Error(), "GetExitCodeProcess failed.");
+            CloseJob(observer, job);
+            job = null;
+            if (timedOut || cancelled)
+                await Win32.WaitForProcessAsync(process, CancellationToken.None).ConfigureAwait(false);
+
+            var outputDrained = await CompleteOutputDrainsAsync(
+                outputTask,
+                outputCancellation,
+                stdoutReader,
+                stderrReader,
+                stdoutRead,
+                stderrRead,
+                parameters.WindowsTestOptions?.TimeProvider ?? TimeProvider.System)
+                .ConfigureAwait(false);
+            var standardOutput = JoinLines(stdoutLines, combinedLock);
+            var standardError = JoinLines(stderrLines, combinedLock);
+            var combinedOutput = JoinLines(combinedLines, combinedLock);
+
+            if (cancelled)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                throw new OperationCanceledException(cancellationToken);
+            }
+            if (timedOut)
+            {
+                throw new TimeoutException(
+                    $"Process did not complete within the allotted {parameters.Timeout}."
+                    + $"\nPartial standard output:\n{standardOutput}"
+                    + $"\nPartial standard error:\n{standardError}");
+            }
+            if (!outputDrained)
+            {
+                throw new TimeoutException(
+                    $"Process '{parameters.Command}' exited, but its redirected output handles"
+                    + $" did not close within {OutputDrainTimeout}. The contained process tree was"
+                    + " terminated and the pipe reads were cancelled."
+                    + $"\nPartial standard output:\n{standardOutput}"
+                    + $"\nPartial standard error:\n{standardError}");
+            }
+
             var exitCode = unchecked((int)rawExitCode);
             return new ProcessResult(
                 exitCode,
-                string.Join(Environment.NewLine, stdoutLines),
-                string.Join(Environment.NewLine, stderrLines),
-                string.Join(Environment.NewLine, combinedLines),
+                standardOutput,
+                standardError,
+                combinedOutput,
                 JobAssigned: true,
                 UnsignedNtStatus: NormalizeUnsignedStatus(exitCode));
         }
@@ -441,6 +489,60 @@ public static class ProcessRunner
             DisposeAndObserve(observer, process, ProcessRunnerWindowsResource.Process);
             DisposeAndObserve(observer, job, ProcessRunnerWindowsResource.Job);
         }
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static void CloseJob(
+        IProcessRunnerWindowsObserver? observer,
+        JobObjectSafeHandle job)
+    {
+        job.Dispose();
+        ObserveReleased(observer, job, ProcessRunnerWindowsResource.Job);
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static async Task<bool> CompleteOutputDrainsAsync(
+        Task outputTask,
+        CancellationTokenSource outputCancellation,
+        StreamReader stdoutReader,
+        StreamReader stderrReader,
+        SafeFileHandle stdoutRead,
+        SafeFileHandle stderrRead,
+        TimeProvider timeProvider)
+    {
+        try
+        {
+            await outputTask.WaitAsync(OutputDrainTimeout, timeProvider).ConfigureAwait(false);
+            return true;
+        }
+        catch (TimeoutException)
+        {
+            outputCancellation.Cancel();
+            Win32.CancelIoEx(stdoutRead, IntPtr.Zero);
+            Win32.CancelIoEx(stderrRead, IntPtr.Zero);
+            stdoutReader.Dispose();
+            stderrReader.Dispose();
+            stdoutRead.Dispose();
+            stderrRead.Dispose();
+            try
+            {
+                await outputTask.WaitAsync(OutputDrainTimeout, timeProvider).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (
+                ex is OperationCanceledException
+                    or ObjectDisposedException
+                    or IOException
+                    or TimeoutException)
+            {
+            }
+            return false;
+        }
+    }
+
+    private static string JoinLines(List<string> lines, object gate)
+    {
+        lock (gate)
+            return string.Join(Environment.NewLine, lines);
     }
 
     [SupportedOSPlatform("windows")]
@@ -707,6 +809,9 @@ public static class ProcessRunner
 
         [DllImport("kernel32.dll", SetLastError = true)]
         public static extern bool TerminateProcess(SafeProcessHandle hProcess, uint uExitCode);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool CancelIoEx(SafeFileHandle hFile, IntPtr lpOverlapped);
 
         [DllImport("kernel32.dll")]
         public static extern IntPtr GetStdHandle(int nStdHandle);

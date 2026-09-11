@@ -80,6 +80,29 @@ if (args.Length >= 4 && args[0] == "--timeout-parent")
     return 0;
 }
 
+if (args.Length >= 4 && args[0] == "--exiting-parent")
+{
+    using var descendantReady = EventWaitHandle.OpenExisting(args[1]);
+    using var parentRelease = args[2] == "-"
+        ? null
+        : EventWaitHandle.OpenExisting(args[2]);
+    using var descendant = Process.Start(new ProcessStartInfo
+    {
+        FileName = Environment.ProcessPath!,
+        UseShellExecute = false,
+        CreateNoWindow = true,
+        ArgumentList = { "--timeout-leaf", args[1], args[3] },
+    }) ?? throw new InvalidOperationException("Retained-pipe descendant launch failed.");
+    descendantReady.WaitOne();
+    Console.WriteLine($"EXITING_PARENT_DESCENDANT:{descendant.Id}");
+    Console.WriteLine("parent-stdout");
+    Console.Error.WriteLine("parent-stderr");
+    Console.Out.Flush();
+    Console.Error.Flush();
+    parentRelease?.WaitOne();
+    return 23;
+}
+
 var options = ParseOptions(args);
 var scenario = Enum.Parse<WindowsProbeScenario>(options["scenario"]);
 var pathCategory = scenario switch
@@ -162,6 +185,8 @@ try
         WindowsProbeScenario.ProcessRunnerNoJob =>
             await RunProcessRunnerAsync(scenario, pathCategory, mechanism, containment),
         WindowsProbeScenario.ProcessRunnerKillTree =>
+            await RunProcessRunnerAsync(scenario, pathCategory, mechanism, containment),
+        WindowsProbeScenario.ProcessRunnerExitedParentTree =>
             await RunProcessRunnerAsync(scenario, pathCategory, mechanism, containment),
         WindowsProbeScenario.ProcessRunnerTimeoutTree
             or WindowsProbeScenario.ProcessRunnerCancellationTree
@@ -612,6 +637,14 @@ static async Task<WindowsChildProcessProbeResult> RunProcessRunnerAsync(
             containment,
             scenario == WindowsProbeScenario.ProcessRunnerCancellationTree);
     }
+    if (scenario == WindowsProbeScenario.ProcessRunnerExitedParentTree)
+    {
+        return await RunProcessRunnerExitedParentTreeAsync(
+            observer,
+            pathCategory,
+            mechanism,
+            containment);
+    }
 
     try
     {
@@ -656,6 +689,86 @@ static async Task<WindowsChildProcessProbeResult> RunProcessRunnerAsync(
             mechanism,
             containment,
             ex.NativeErrorCode);
+    }
+}
+
+static async Task<WindowsChildProcessProbeResult> RunProcessRunnerExitedParentTreeAsync(
+    ProcessRunnerRecordingObserver observer,
+    WindowsProcessPathCategory pathCategory,
+    WindowsLaunchMechanism mechanism,
+    WindowsContainmentDescriptor? containment)
+{
+    var descendantReadyName = $"Local\\PhantomRunnerDescendantReady-{Guid.NewGuid():N}";
+    var parentReleaseName = $"Local\\PhantomRunnerParentRelease-{Guid.NewGuid():N}";
+    var descendantReleaseName = $"Local\\PhantomRunnerDescendantRelease-{Guid.NewGuid():N}";
+    using var descendantReady = new EventWaitHandle(
+        false,
+        EventResetMode.ManualReset,
+        descendantReadyName);
+    using var parentRelease = new EventWaitHandle(
+        false,
+        EventResetMode.ManualReset,
+        parentReleaseName);
+    using var descendantRelease = new EventWaitHandle(
+        false,
+        EventResetMode.ManualReset,
+        descendantReleaseName);
+    Process? descendant = null;
+    var run = ProcessRunner.RunProcessAsync(
+        new RunProcessParameters(
+            Environment.ProcessPath!,
+            [
+                "--exiting-parent",
+                descendantReadyName,
+                parentReleaseName,
+                descendantReleaseName,
+            ],
+            KillOnCloseAction.KillTree)
+        {
+            WindowsTestOptions = new ProcessRunnerWindowsTestOptions
+            {
+                Observer = observer,
+                StandardOutputObserver = line =>
+                {
+                    if (!line.StartsWith("EXITING_PARENT_DESCENDANT:", StringComparison.Ordinal))
+                        return;
+
+                    var descendantId = int.Parse(
+                        line["EXITING_PARENT_DESCENDANT:".Length..],
+                        System.Globalization.CultureInfo.InvariantCulture);
+                    descendant = Process.GetProcessById(descendantId);
+                    parentRelease.Set();
+                },
+            },
+        });
+
+    var result = await run;
+    using (descendant)
+    {
+        return Result(
+            pathCategory,
+            mechanism,
+            containment,
+            true,
+            null,
+            result.ExitCode,
+            result.StandardOut,
+            result.StandardError,
+            ready: result.StandardOut.Contains("parent-stdout", StringComparison.Ordinal),
+            jobConfigured: observer.Succeeded(ProcessRunnerWindowsStage.ConfigureJob),
+            jobAssigned: observer.Succeeded(ProcessRunnerWindowsStage.AssignJob),
+            resumed: observer.Succeeded(ProcessRunnerWindowsStage.ResumeThread),
+            innerJobAssigned: result.JobAssigned,
+            cleanupCompleted: observer.AllResourcesReleased,
+            childExitObserved: true,
+            descendantExitObserved: descendant?.HasExited == true,
+            processHandleClosed: observer.Released(ProcessRunnerWindowsResource.Process),
+            threadHandleClosed: observer.Released(ProcessRunnerWindowsResource.Thread),
+            jobHandleClosed: observer.Released(ProcessRunnerWindowsResource.Job),
+            inputHandleClosed: true,
+            outputHandleClosed:
+                observer.Released(ProcessRunnerWindowsResource.StandardOutputPipe)
+                && observer.Released(ProcessRunnerWindowsResource.StandardErrorPipe));
     }
 }
 

@@ -185,6 +185,62 @@ public sealed class MxcRuntimePayloadTests
 
         Assert.True(result.ExitCode == 0, result.StandardError);
         Assert.Contains("runtime payload validation passed", result.StandardOutput, StringComparison.Ordinal);
+
+        var runtimeConfig = Path.Combine(
+            MxcRepositoryTestSupport.Root.FullName,
+            "Phantom.Workspaces.Containers",
+            "bin",
+            "Release",
+            "net10.0",
+            "win-x64",
+            "Phantom.Workspaces.Containers.runtimeconfig.json");
+        Assert.True(File.Exists(runtimeConfig), $"Expected publish output '{runtimeConfig}'.");
+        using var unlocked = File.Open(runtimeConfig, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public async Task InvokeAsync_ExitedParentWithInheritedPipeWriter_CompletesWithDiagnostics(
+        int _)
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var descendantReadyName = $"Local\\MxcInvokeDescendantReady-{Guid.NewGuid():N}";
+        var descendantReleaseName = $"Local\\MxcInvokeDescendantRelease-{Guid.NewGuid():N}";
+        using var descendantReady = new EventWaitHandle(
+            false,
+            EventResetMode.ManualReset,
+            descendantReadyName);
+        using var descendantRelease = new EventWaitHandle(
+            false,
+            EventResetMode.ManualReset,
+            descendantReleaseName);
+        var probe = Path.Combine(
+            AppContext.BaseDirectory,
+            "Phantom.Workspaces.Test.WindowsProcessProbe.exe");
+
+        var result = await MxcRepositoryTestSupport.InvokeAsync(
+            probe,
+            "--exiting-parent",
+            descendantReadyName,
+            "-",
+            descendantReleaseName);
+
+        Assert.Equal(23, result.ExitCode);
+        Assert.Contains("parent-stdout", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("parent-stderr", result.StandardError, StringComparison.Ordinal);
+        var descendantLine = Assert.Single(
+            result.StandardOutput.Split(
+                Environment.NewLine,
+                StringSplitOptions.RemoveEmptyEntries),
+            line => line.StartsWith("EXITING_PARENT_DESCENDANT:", StringComparison.Ordinal));
+        var descendantId = int.Parse(
+            descendantLine["EXITING_PARENT_DESCENDANT:".Length..],
+            System.Globalization.CultureInfo.InvariantCulture);
+        Assert.False(MxcRepositoryTestSupport.IsProcessRunning(descendantId));
     }
 
     [Fact]
@@ -317,15 +373,38 @@ internal static class MxcRepositoryTestSupport
     internal static async Task<ProcessResult> InvokeAsync(string fileName, params string[] arguments)
     {
         var startInfo = CreateStartInfo(fileName, arguments);
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException($"Failed to start {fileName}.");
-        var standardOutput = process.StandardOutput.ReadToEndAsync();
-        var standardError = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
+        if (!string.IsNullOrEmpty(startInfo.Arguments))
+        {
+            throw new InvalidOperationException(
+                "Contained asynchronous commands must resolve to an executable, not a command script.");
+        }
+
+        var result = await ProcessRunner.RunProcessAsync(new RunProcessParameters(
+            Command: startInfo.FileName,
+            Arguments: startInfo.ArgumentList.ToArray(),
+            KillOnClose: KillOnCloseAction.KillTree,
+            WorkingDirectory: startInfo.WorkingDirectory,
+            EnvironmentVariables: new Dictionary<string, string>
+            {
+                ["PATH"] = startInfo.Environment["PATH"] ?? string.Empty,
+            }));
         return new ProcessResult(
-            process.ExitCode,
-            await standardOutput,
-            await standardError);
+            result.ExitCode,
+            result.StandardOut,
+            result.StandardError);
+    }
+
+    internal static bool IsProcessRunning(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
     }
 
     private static ProcessStartInfo CreateStartInfo(string fileName, IEnumerable<string> arguments)
