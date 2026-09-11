@@ -196,16 +196,62 @@ public sealed class MxcRuntimePayloadTests
         Assert.True(result.ExitCode == 0, result.StandardError);
         Assert.Contains("runtime payload validation passed", result.StandardOutput, StringComparison.Ordinal);
 
-        var runtimeConfigs = Directory.GetFiles(
+        var copilotResult = MxcRepositoryTestSupport.InvokePowerShell(
+            "packaging", "validate", "Assert-CopilotRuntimePayload.ps1",
+            "-PayloadDirectory", payload.Path,
+            "-RuntimeIdentifier", "win-x64",
+            "-SkipStartupSmoke");
+
+        Assert.True(copilotResult.ExitCode == 0, copilotResult.StandardError);
+        Assert.Contains(
+            "Copilot runtime payload validation passed",
+            copilotResult.StandardOutput,
+            StringComparison.Ordinal);
+
+        var containerOutputDirectory = Path.Combine(
             buildArtifacts.Path,
+            "bin",
+            "Phantom.Workspaces.Containers");
+        var containerRuntimeConfigs = Directory.GetFiles(
+            containerOutputDirectory,
             "*.runtimeconfig.json",
             SearchOption.AllDirectories);
+        var containerRuntimeConfig = Assert.Single(
+            containerRuntimeConfigs);
+        Assert.Equal(
+            "Phantom.Workspaces.Containers.runtimeconfig.json",
+            Path.GetFileName(containerRuntimeConfig),
+            ignoreCase: true);
         Assert.Contains(
-            runtimeConfigs,
+            $"{Path.DirectorySeparatorChar}release_win-x64{Path.DirectorySeparatorChar}",
+            containerRuntimeConfig,
+            StringComparison.OrdinalIgnoreCase);
+
+        var wrapperPublishDirectory = Path.Combine(
+            buildArtifacts.Path,
+            "obj",
+            "Phantom.Workspaces",
+            "release_win-x64",
+            "copilot-wrapper");
+        var wrapperPublishFiles = Directory.GetFiles(
+            wrapperPublishDirectory,
+            "*",
+            SearchOption.AllDirectories);
+        var duplicateWrapperRelativePaths = wrapperPublishFiles
+            .Select(path => Path.GetRelativePath(wrapperPublishDirectory, path))
+            .GroupBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() > 1)
+            .Select(group => group.Key)
+            .ToArray();
+        Assert.Empty(duplicateWrapperRelativePaths);
+        var wrapperExecutable = Assert.Single(
+            wrapperPublishFiles,
             path => Path.GetFileName(path).Equals(
-                "Phantom.Workspaces.Containers.runtimeconfig.json",
-                StringComparison.OrdinalIgnoreCase));
-        Assert.All(runtimeConfigs, MxcRepositoryTestSupport.AssertExclusivelyOpenable);
+                    "phantom-copilot-wrapper.exe",
+                    StringComparison.OrdinalIgnoreCase));
+        Assert.True(new FileInfo(wrapperExecutable).Length > 0);
+
+        Assert.All(containerRuntimeConfigs, MxcRepositoryTestSupport.AssertExclusivelyOpenable);
         Assert.All(
             Directory.GetFiles(payload.Path, "*.runtimeconfig.json", SearchOption.TopDirectoryOnly),
             MxcRepositoryTestSupport.AssertExclusivelyOpenable);

@@ -72,7 +72,7 @@
           Condition="'$(RuntimeIdentifier)' == 'win-x64'">
     <PropertyGroup>
       <_CopilotWrapperProject>$(MSBuildProjectDirectory)\..\Phantom.Workspaces.Copilot.Cli.Wrapper\Phantom.Workspaces.Copilot.Cli.Wrapper.csproj</_CopilotWrapperProject>
-      <_CopilotWrapperPublishDir>$(MSBuildProjectDirectory)\obj\$(Configuration)\$(TargetFramework)\$(RuntimeIdentifier)\copilot-wrapper\</_CopilotWrapperPublishDir>
+      <_CopilotWrapperPublishDir>$(IntermediateOutputPath)copilot-wrapper\</_CopilotWrapperPublishDir>
       <_CopilotWrapperExecutable>$(_CopilotWrapperPublishDir)phantom-copilot-wrapper.exe</_CopilotWrapperExecutable>
     </PropertyGroup>
     <MSBuild Projects="$(_CopilotWrapperProject)"
