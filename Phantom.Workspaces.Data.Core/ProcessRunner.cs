@@ -454,8 +454,12 @@ public static class ProcessRunner
 
             if (cancelled)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                throw new OperationCanceledException(cancellationToken);
+                throw new OperationCanceledException(
+                    $"Process '{parameters.Command}' was cancelled."
+                    + $"\nPartial standard output:\n{standardOutput}"
+                    + $"\nPartial standard error:\n{standardError}",
+                    innerException: null,
+                    cancellationToken);
             }
             if (timedOut)
             {

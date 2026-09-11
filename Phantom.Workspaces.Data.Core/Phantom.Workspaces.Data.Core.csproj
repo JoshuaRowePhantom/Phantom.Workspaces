@@ -24,6 +24,7 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Phantom.Workspaces.Data.Core.Tests" />
+    <InternalsVisibleTo Include="Phantom.Workspaces.Install.Tests" />
     <InternalsVisibleTo Include="Phantom.Workspaces.Test.WindowsProcessProbe" />
   </ItemGroup>
 </Project>
