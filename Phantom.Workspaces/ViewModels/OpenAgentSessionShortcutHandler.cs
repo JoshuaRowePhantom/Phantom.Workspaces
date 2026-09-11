@@ -393,7 +393,19 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             request.MainWindowViewModel,
             request.AgentSessionEntity,
             request.AgentChat,
-            request.RemoteProfileDisplayName);
+            remoteProfileDisplayName: null);
+    }
+
+    internal async Task<AgentSessionWorkspaceTabViewModel> CreateAgentSessionTabWithRemoteProfileAsync(
+        CreateAgentSessionTabRequest request,
+        string? remoteProfileDisplayName)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return await this.CreateAgentSessionTabAsync(
+            request.MainWindowViewModel,
+            request.AgentSessionEntity,
+            request.AgentChat,
+            remoteProfileDisplayName);
     }
 
     private async Task<AgentSessionWorkspaceTabViewModel> CreateAgentSessionTabAsync(

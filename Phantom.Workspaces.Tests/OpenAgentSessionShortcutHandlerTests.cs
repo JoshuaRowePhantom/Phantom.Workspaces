@@ -23,6 +23,24 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class OpenAgentSessionShortcutHandlerTests
 {
+    [Fact]
+    public void CreateAgentSessionTabRequest_PublicContract_HasExactlySpecifiedProperties()
+    {
+        var properties = typeof(CreateAgentSessionTabRequest)
+            .GetProperties()
+            .Select(static property => property.Name)
+            .Order()
+            .ToArray();
+
+        Assert.Equal(
+            [
+                nameof(CreateAgentSessionTabRequest.AgentChat),
+                nameof(CreateAgentSessionTabRequest.AgentSessionEntity),
+                nameof(CreateAgentSessionTabRequest.MainWindowViewModel),
+            ],
+            properties);
+    }
+
     [AvaloniaFact(Timeout = 30_000)]
     public async Task DisposeAsync_InitializationInFlight_CancelsWithoutPublishingReadyTab()
     {

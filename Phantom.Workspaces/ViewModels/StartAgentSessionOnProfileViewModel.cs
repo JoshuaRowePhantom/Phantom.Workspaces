@@ -264,14 +264,14 @@ public sealed class StartAgentSessionOnProfileViewModel : WorkspaceTabViewModel
                 OwningProfileTransport = acquisition.Transport,
             });
 
-        var agentSessionTab = await this.openAgentSessionShortcutHandler.CreateAgentSessionTabAsync(
+        var agentSessionTab = await this.openAgentSessionShortcutHandler.CreateAgentSessionTabWithRemoteProfileAsync(
             new CreateAgentSessionTabRequest
             {
                 MainWindowViewModel = this.mainWindowViewModel,
                 AgentSessionEntity = createdAgentSessionEntity,
                 AgentChat = lease.AgentChat,
-                RemoteProfileDisplayName = acquisition.RemoteProfileDisplayName,
-            });
+            },
+            acquisition.RemoteProfileDisplayName);
         agentSessionTab.SetLease(lease);
 
         await this.tabService.ReplaceTabAsync(this, agentSessionTab);
