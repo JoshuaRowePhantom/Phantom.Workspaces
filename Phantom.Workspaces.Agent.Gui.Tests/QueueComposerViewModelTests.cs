@@ -206,6 +206,12 @@ public sealed class QueueComposerViewModelTests
 
         composer.SubmitCommand.Execute(null);
         await Assert.IsType<AsyncRelayCommand>(composer.SubmitCommand).LastExecutionTask!;
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Any(item =>
+                item.Contents.OfType<TextContent>().Any(content =>
+                    content.Text.Contains("could not be submitted", StringComparison.Ordinal))),
+            "submission failure diagnostic to reach history");
 
         Assert.Equal("preserve me", composer.InputText);
         Assert.Contains(chat.History, item =>
