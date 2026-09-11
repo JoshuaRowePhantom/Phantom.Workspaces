@@ -15,7 +15,10 @@ public sealed record ProcessResult(
     string StandardError,
     string StandardOutAndError,
     bool JobAssigned = false,
-    string? UnsignedNtStatus = null);
+    string? UnsignedNtStatus = null,
+    bool? DirectProcessInJob = null,
+    uint? ActiveJobProcessesBeforeCleanup = null,
+    uint? ActiveJobProcessesAfterCleanup = null);
 
 /// <summary>Parameters for a <see cref="ProcessRunner.RunProcessAsync"/> invocation.</summary>
 public sealed record RunProcessParameters(
@@ -290,6 +293,8 @@ public static class ProcessRunner
         JobObjectSafeHandle? job = null;
         SafeProcessHandle? process = null;
         SafeWaitHandle? thread = null;
+        var jobAssigned = false;
+        var directProcessInJob = false;
         var environment = IntPtr.Zero;
         try
         {
@@ -350,7 +355,9 @@ public static class ProcessRunner
                 ObserveStage(observer, ProcessRunnerWindowsStage.AssignJob, false, error);
                 throw new Win32Exception(error, "AssignProcessToJobObject failed.");
             }
+            jobAssigned = true;
             ObserveStage(observer, ProcessRunnerWindowsStage.AssignJob, true);
+            directProcessInJob = Win32.IsProcessMember(job, process);
 
             ThrowIfInjected(parameters, ProcessRunnerWindowsStage.ResumeThread);
             if (Win32.ResumeThread(thread) == uint.MaxValue)
@@ -421,10 +428,16 @@ public static class ProcessRunner
                 cancelled = true;
             }
 
+            var activeJobProcessesBeforeCleanup = Win32.GetActiveJobProcessCount(job);
+            await TerminateJobAndWaitForEmptyAsync(job).ConfigureAwait(false);
+            var activeJobProcessesAfterCleanup = Win32.GetActiveJobProcessCount(job);
+            if (activeJobProcessesAfterCleanup != 0)
+            {
+                throw new InvalidOperationException(
+                    $"Contained process cleanup left {activeJobProcessesAfterCleanup} active job members.");
+            }
             CloseJob(observer, job);
             job = null;
-            if (timedOut || cancelled)
-                await Win32.WaitForProcessAsync(process, CancellationToken.None).ConfigureAwait(false);
 
             var outputDrained = await CompleteOutputDrainsAsync(
                 outputTask,
@@ -468,13 +481,22 @@ public static class ProcessRunner
                 standardError,
                 combinedOutput,
                 JobAssigned: true,
-                UnsignedNtStatus: NormalizeUnsignedStatus(exitCode));
+                UnsignedNtStatus: NormalizeUnsignedStatus(exitCode),
+                DirectProcessInJob: directProcessInJob,
+                ActiveJobProcessesBeforeCleanup: activeJobProcessesBeforeCleanup,
+                ActiveJobProcessesAfterCleanup: activeJobProcessesAfterCleanup);
         }
         catch
         {
             await TerminateActiveProcessAsync(
                 process,
                 parameters.WindowsTestOptions?.BeforeFailureCleanupWaitAsync).ConfigureAwait(false);
+            if (jobAssigned && job is not null)
+            {
+                await TerminateJobAndWaitForEmptyAsync(job).ConfigureAwait(false);
+                CloseJob(observer, job);
+                job = null;
+            }
             throw;
         }
         finally
@@ -489,6 +511,19 @@ public static class ProcessRunner
             DisposeAndObserve(observer, process, ProcessRunnerWindowsResource.Process);
             DisposeAndObserve(observer, job, ProcessRunnerWindowsResource.Job);
         }
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static async Task TerminateJobAndWaitForEmptyAsync(JobObjectSafeHandle job)
+    {
+        if (!Win32.TerminateJobObject(job, 0xC000013A))
+        {
+            throw new Win32Exception(
+                Marshal.GetLastWin32Error(),
+                "TerminateJobObject failed.");
+        }
+
+        await Win32.WaitForHandleAsync(job, CancellationToken.None).ConfigureAwait(false);
     }
 
     [SupportedOSPlatform("windows")]
@@ -673,7 +708,21 @@ public static class ProcessRunner
 
         public enum JOBOBJECTINFOCLASS
         {
+            JobObjectBasicAccountingInformation = 1,
             JobObjectExtendedLimitInformation = 9,
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct JOBOBJECT_BASIC_ACCOUNTING_INFORMATION
+        {
+            public long TotalUserTime;
+            public long TotalKernelTime;
+            public long ThisPeriodTotalUserTime;
+            public long ThisPeriodTotalKernelTime;
+            public uint TotalPageFaultCount;
+            public uint TotalProcesses;
+            public uint ActiveProcesses;
+            public uint TotalTerminatedProcesses;
         }
 
         [StructLayout(LayoutKind.Sequential)]
@@ -763,11 +812,33 @@ public static class ProcessRunner
 
         [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool IsProcessInJob(
+            SafeProcessHandle processHandle,
+            JobObjectSafeHandle jobHandle,
+            [MarshalAs(UnmanagedType.Bool)] out bool result);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool SetInformationJobObject(
             JobObjectSafeHandle hJob,
             JOBOBJECTINFOCLASS infoClass,
             IntPtr lpJobObjectInfo,
             uint cbJobObjectInfoLength);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool QueryInformationJobObject(
+            JobObjectSafeHandle hJob,
+            JOBOBJECTINFOCLASS infoClass,
+            IntPtr lpJobObjectInfo,
+            uint cbJobObjectInfoLength,
+            out uint lpReturnLength);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool TerminateJobObject(
+            JobObjectSafeHandle hJob,
+            uint uExitCode);
 
         [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
@@ -893,6 +964,11 @@ public static class ProcessRunner
 
         public static Task WaitForProcessAsync(
             SafeProcessHandle process,
+            CancellationToken cancellationToken) =>
+            WaitForHandleAsync(process, cancellationToken);
+
+        public static Task WaitForHandleAsync(
+            SafeHandle handle,
             CancellationToken cancellationToken)
         {
             var completion = new TaskCompletionSource(
@@ -900,7 +976,7 @@ public static class ProcessRunner
             var waitHandle = new EventWaitHandle(false, EventResetMode.ManualReset)
             {
                 SafeWaitHandle = new SafeWaitHandle(
-                    process.DangerousGetHandle(),
+                    handle.DangerousGetHandle(),
                     ownsHandle: false),
             };
             RegisteredWaitHandle? registration = null;
@@ -924,6 +1000,48 @@ public static class ProcessRunner
             cancellationRegistration = cancellationToken.Register(
                 () => Complete(() => completion.TrySetCanceled(cancellationToken)));
             return completion.Task;
+        }
+
+        public static bool IsProcessMember(
+            JobObjectSafeHandle job,
+            SafeProcessHandle process)
+        {
+            if (!IsProcessInJob(process, job, out var result))
+            {
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(),
+                    "IsProcessInJob failed.");
+            }
+            if (!result)
+                throw new InvalidOperationException("The direct process is not a member of its containment job.");
+            return true;
+        }
+
+        public static uint GetActiveJobProcessCount(JobObjectSafeHandle job)
+        {
+            var size = Marshal.SizeOf<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>();
+            var pointer = Marshal.AllocHGlobal(size);
+            try
+            {
+                if (!QueryInformationJobObject(
+                        job,
+                        JOBOBJECTINFOCLASS.JobObjectBasicAccountingInformation,
+                        pointer,
+                        (uint)size,
+                        out _))
+                {
+                    throw new Win32Exception(
+                        Marshal.GetLastWin32Error(),
+                        "QueryInformationJobObject failed.");
+                }
+
+                return Marshal.PtrToStructure<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>(pointer)
+                    .ActiveProcesses;
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(pointer);
+            }
         }
     }
 }

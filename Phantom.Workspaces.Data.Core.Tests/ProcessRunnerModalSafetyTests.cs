@@ -164,6 +164,9 @@ public sealed class ProcessRunnerModalSafetyTests
         Assert.Equal(23, result.ExitCode);
         Assert.Contains("parent-stdout", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("parent-stderr", result.StandardError, StringComparison.Ordinal);
+        Assert.True(result.DirectProcessInJob);
+        Assert.Equal(2U, result.ActiveJobProcessesBeforeCleanup);
+        Assert.Equal(0U, result.ActiveJobProcessesAfterCleanup);
         Assert.True(result.DescendantExitObserved);
         Assert.True(result.CleanupCompleted);
         Assert.True(result.ProcessHandleClosed);
