@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Runtime.ExceptionServices;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Transport;
@@ -627,9 +628,34 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
         var cancellation = Interlocked.Exchange(ref this.pumpCancellation, null);
         cancellation?.Cancel();
         var activeChannel = Interlocked.Exchange(ref this.channel, null);
-        if (activeChannel is not null)
-            await activeChannel.DisposeAsync().ConfigureAwait(false);
-        cancellation?.Dispose();
+        var activePump = Interlocked.Exchange(ref this.pump, null);
+        Exception? primaryFailure = null;
+        try
+        {
+            if (activeChannel is not null)
+                await activeChannel.DisposeAsync().ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            primaryFailure = exception;
+        }
+
+        try
+        {
+            if (activePump is not null)
+                await activePump.ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            primaryFailure ??= exception;
+        }
+        finally
+        {
+            cancellation?.Dispose();
+        }
+
+        if (primaryFailure is not null)
+            ExceptionDispatchInfo.Capture(primaryFailure).Throw();
     }
 
     private void ThrowIfDisposed()

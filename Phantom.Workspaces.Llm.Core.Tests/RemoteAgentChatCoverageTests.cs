@@ -355,7 +355,9 @@ public sealed partial class RemoteAgentChatTests
         await using (chat)
         {
             chat.Interrupt();
-            Assert.IsType<InterruptCommand>(AgentSessionProtocolCodec.DeserializeCommand(await transport.Outgoing.ReadAsync()));
+            var command = Assert.IsType<InterruptCommand>(
+                AgentSessionProtocolCodec.DeserializeCommand(await transport.Outgoing.ReadAsync()));
+            await CompleteAsync(transport, 2, command);
         }
     }
 

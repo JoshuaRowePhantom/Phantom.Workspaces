@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Collections.Immutable;
+using System.Runtime.ExceptionServices;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Llm.SlashCommands;
@@ -189,6 +190,7 @@ public sealed class RemoteAgentChat : IAgentChat
     private Task BeginDisposeLocked()
     {
         this.disposed = true;
+        this.inputQueues.StopAccepting(new ObjectDisposedException(nameof(RemoteAgentChat)));
         this.client.FrameReceived -= this.OnFrameReceived;
         this.client.UnexpectedlyDisconnected -= this.OnUnexpectedlyDisconnected;
         return this.DisposeCoreAsync(this.frameApplication);
@@ -196,8 +198,36 @@ public sealed class RemoteAgentChat : IAgentChat
 
     private async Task DisposeCoreAsync(Task pendingFrameApplication)
     {
-        await this.client.DisposeAsync().ConfigureAwait(false);
-        await pendingFrameApplication.ConfigureAwait(false);
+        Exception? primaryFailure = null;
+        try
+        {
+            await this.client.DisposeAsync().ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            primaryFailure = exception;
+        }
+
+        try
+        {
+            await this.inputQueues.DrainAsync().ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            primaryFailure ??= exception;
+        }
+
+        try
+        {
+            await pendingFrameApplication.ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            primaryFailure ??= exception;
+        }
+
+        if (primaryFailure is not null)
+            ExceptionDispatchInfo.Capture(primaryFailure).Throw();
     }
 
     private void OnFrameReceived(object? sender, AgentSessionServerFrame frame)
@@ -321,6 +351,10 @@ public sealed class RemoteAgentChat : IAgentChat
                 this.ViewerCount = e.ViewerCount;
                 this.RetentionChanged?.Invoke(this, EventArgs.Empty);
                 break;
+            case SessionTerminalEvent:
+                this.inputQueues.StopAccepting(
+                    new RemoteAgentProtocolException("The remote session is terminal."));
+                break;
         }
     }
 
@@ -421,7 +455,10 @@ public sealed class RemoteAgentChat : IAgentChat
         private readonly object sync = new();
         private readonly Dictionary<string, RemoteInputQueue> queues = new(StringComparer.Ordinal);
         private readonly List<(long Revision, TaskCompletionSource Completion)> revisionWaiters = [];
+        private readonly HashSet<IOwnedOperation> operations = [];
         private AgentInputQueuesSnapshot snapshot;
+        private Exception? stoppedFailure;
+        private bool accepting = true;
 
         public AgentInputQueuesSnapshot Snapshot => this.snapshot;
         public IReadOnlyList<IAgentInputQueue> Queues => this.snapshot.Queues.Select(q => (IAgentInputQueue)this.queues[q.QueueId]).ToArray();
@@ -486,10 +523,53 @@ public sealed class RemoteAgentChat : IAgentChat
             });
         }
 
+        internal void StopAccepting(Exception failure)
+        {
+            ArgumentNullException.ThrowIfNull(failure);
+            TaskCompletionSource[] waiters;
+            lock (this.sync)
+            {
+                if (!this.accepting) return;
+                this.accepting = false;
+                this.stoppedFailure = failure;
+                waiters = this.revisionWaiters.Select(waiter => waiter.Completion).ToArray();
+                this.revisionWaiters.Clear();
+            }
+
+            foreach (var waiter in waiters)
+                waiter.TrySetException(failure);
+        }
+
+        internal Task DrainAsync()
+        {
+            lock (this.sync)
+                return Task.WhenAll(this.operations.Select(operation => operation.Drained));
+        }
+
         private static NotSupportedException RemoteOnly()
             => new("Remote queue commands are asynchronous.");
 
-        private async Task<AgentInputQueueCommandResult> ExecuteAsync(
+        private Task<AgentInputQueueCommandResult> ExecuteAsync(
+            Func<Task<AgentInputQueueCommandResult>> operation, CancellationToken ct)
+        {
+            OwnedOperation<AgentInputQueueCommandResult> owned;
+            lock (this.sync)
+            {
+                if (!this.accepting)
+                    return CreateObservedFailure<AgentInputQueueCommandResult>(
+                        this.stoppedFailure ?? new ObjectDisposedException(nameof(RemoteAgentChat)));
+
+                owned = new OwnedOperation<AgentInputQueueCommandResult>(
+                    () => this.ExecuteCoreAsync(operation, ct),
+                    this.CompleteOperation);
+                this.operations.Add(owned);
+            }
+
+            owned.Start();
+            return owned.Completion;
+        }
+
+        private async Task<AgentInputQueueCommandResult> ExecuteCoreAsync(
             Func<Task<AgentInputQueueCommandResult>> operation, CancellationToken ct)
         {
             var result = await operation().ConfigureAwait(false);
@@ -506,15 +586,94 @@ public sealed class RemoteAgentChat : IAgentChat
                 return result;
 
             Task wait;
+            TaskCompletionSource completion;
             lock (this.sync)
             {
+                if (!this.accepting)
+                    throw this.stoppedFailure ?? new ObjectDisposedException(nameof(RemoteAgentChat));
                 if (this.snapshot.Revision >= result.Revision) return result;
-                var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                 this.revisionWaiters.Add((result.Revision, completion));
                 wait = completion.Task;
             }
-            await wait.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                await wait.WaitAsync(ct).ConfigureAwait(false);
+            }
+            finally
+            {
+                lock (this.sync)
+                    this.revisionWaiters.RemoveAll(waiter => ReferenceEquals(waiter.Completion, completion));
+            }
             return result;
+        }
+
+        private void CompleteOperation(IOwnedOperation operation)
+        {
+            lock (this.sync)
+                this.operations.Remove(operation);
+        }
+
+        private static Task<T> CreateObservedFailure<T>(Exception failure)
+        {
+            var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+            completion.SetException(failure);
+            _ = completion.Task.Exception;
+            return completion.Task;
+        }
+
+        private interface IOwnedOperation
+        {
+            Task Drained { get; }
+        }
+
+        private sealed class OwnedOperation<T> : IOwnedOperation
+        {
+            private readonly Func<Task<T>> operation;
+            private readonly Action<IOwnedOperation> completed;
+            private readonly TaskCompletionSource start =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource<T> completion =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource drained =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly Task driver;
+
+            internal OwnedOperation(Func<Task<T>> operation, Action<IOwnedOperation> completed)
+            {
+                this.operation = operation;
+                this.completed = completed;
+                this.driver = this.RunAsync();
+            }
+
+            internal Task<T> Completion => this.completion.Task;
+            public Task Drained => this.drained.Task;
+
+            internal void Start() => this.start.SetResult();
+
+            private async Task RunAsync()
+            {
+                await this.start.Task.ConfigureAwait(false);
+                try
+                {
+                    this.completion.TrySetResult(await this.operation().ConfigureAwait(false));
+                }
+                catch (OperationCanceledException exception)
+                {
+                    this.completion.TrySetCanceled(exception.CancellationToken);
+                }
+                catch (Exception exception)
+                {
+                    this.completion.TrySetException(exception);
+                }
+                finally
+                {
+                    if (this.completion.Task.IsFaulted)
+                        _ = this.completion.Task.Exception;
+                    this.drained.TrySetResult();
+                    this.completed(this);
+                }
+            }
         }
     }
 
