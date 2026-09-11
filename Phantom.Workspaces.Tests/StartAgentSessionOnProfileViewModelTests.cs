@@ -139,6 +139,7 @@ public sealed class StartAgentSessionOnProfileViewModelTests
 
             Assert.True(sessionTab.State == AgentTabState.Ready, sessionTab.LoadError);
             Assert.IsType<Phantom.Workspaces.Llm.Remote.RemoteAgentChat>(sessionTab.Lease!.AgentChat);
+            Assert.Equal("Issue 1309 Profile", sessionTab.RemoteProfileDisplayName);
             Assert.Equal(AgentChatAcquisitionMode.StartOrAttachRemote, spy.LastRequest!.AcquisitionMode);
             Assert.NotNull(spy.LastRequest.AgentSessionEntity);
             Assert.Equal(

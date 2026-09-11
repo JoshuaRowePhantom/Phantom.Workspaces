@@ -128,6 +128,23 @@ public sealed class NotificationsViewModelTests
     }
 
     [Fact]
+    public void HasUnread_AnyUnreadKind_ReturnsTrueUntilAllKindsRead()
+    {
+        var service = new NotificationService(new FakeActiveTabProvider());
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
+        service.Notify(InterestingNotification(Tab("tab"), "idle") with { Kind = "chat-idle" });
+        service.Notify(InterestingNotification(Tab("tab"), "modal") with { Kind = "modal-pending" });
+
+        service.MarkRead(new NotificationTargetRequest { TabId = "tab", Kind = "chat-idle" });
+        Assert.True(viewModel.HasUnread);
+        Assert.Equal(1, viewModel.UnreadCount);
+
+        service.MarkRead(new NotificationTargetRequest { TabId = "tab", Kind = "modal-pending" });
+        Assert.False(viewModel.HasUnread);
+        Assert.Equal(0, viewModel.UnreadCount);
+    }
+
+    [Fact]
     public void OnNotificationsChanged_WhenNotificationMarkedRead_ClearsRowAttentionIndicator()
     {
         var provider = new FakeActiveTabProvider();
@@ -240,6 +257,20 @@ public sealed class NotificationsViewModelTests
 
         Assert.False(viewModel.IsOpen);
         Assert.False(viewModel.IsAutoClosing);
+    }
+
+    [Fact]
+    public void OnNotificationsChanged_WhenOneKindRemoved_RemovesOnlyMatchingVisibleRow()
+    {
+        var service = new NotificationService(new FakeActiveTabProvider());
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
+        service.Notify(InterestingNotification(Tab("tab-1"), "idle") with { Kind = "chat-idle" });
+        service.Notify(InterestingNotification(Tab("tab-1"), "modal") with { Kind = "modal-pending" });
+
+        service.Remove(new NotificationTargetRequest { TabId = "tab-1", Kind = "modal-pending" });
+
+        var row = Assert.Single(viewModel.Rows);
+        Assert.Equal("chat-idle", row.Kind);
     }
 
     [Fact]

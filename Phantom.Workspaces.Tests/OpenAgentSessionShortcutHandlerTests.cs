@@ -114,6 +114,27 @@ public sealed class OpenAgentSessionShortcutHandlerTests
     }
 
     [Fact]
+    public async Task ResolveRemoteOwner_CancelledDecision_DisposesUntransferredTransport()
+    {
+        var choices = new BlockingOwnerDecisionProvider();
+        var handler = Handler(choices);
+        var transport = new OwnerDecisionTransport(AgentSessionRemoteStatus.Running);
+        using var cancellation = new CancellationTokenSource();
+        var resolving = handler.ResolveRemoteOwnerAsync(
+            RemoteEntity(),
+            Guid.Parse("11111111-1111-1111-1111-111111111111"),
+            Guid.Parse("22222222-2222-2222-2222-222222222222"),
+            transport,
+            cancellation.Token);
+        await choices.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
+
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => resolving);
+        Assert.True(transport.IsDisposed);
+    }
+
+    [Fact]
     public async Task TryCreateAgentSessionTabForRestoreAsync_RemoteOwner_ResumesLocallyAfterTakeover()
     {
         var handler = Handler(new RecordingOwnerDecisionProvider(
@@ -454,9 +475,28 @@ public sealed class OpenAgentSessionShortcutHandlerTests
         }
     }
 
+    private sealed class BlockingOwnerDecisionProvider : IAgentSessionOwnerDecisionProvider
+    {
+        internal TaskCompletionSource Started { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<AgentSessionOwnerDecision> ChooseAsync(
+            AgentSessionOwnerDecisionContext context,
+            CancellationToken ct)
+        {
+            this.Started.TrySetResult();
+            var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var registration = ct.Register(cancelled.SetResult);
+            await cancelled.Task;
+            ct.ThrowIfCancellationRequested();
+            throw new InvalidOperationException("The cancellation token should have stopped the decision.");
+        }
+    }
+
     private sealed class OwnerDecisionTransport(AgentSessionRemoteStatus status) : ITransport
     {
         internal List<string> RequestTypes { get; } = [];
+        internal bool IsDisposed { get; private set; }
 
         public Task<IMessageChannel> ConnectToMessageChannelAsync(
             JsonElement request,
@@ -485,7 +525,11 @@ public sealed class OpenAgentSessionShortcutHandlerTests
             CancellationToken ct = default)
             => throw new NotSupportedException();
 
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public ValueTask DisposeAsync()
+        {
+            this.IsDisposed = true;
+            return ValueTask.CompletedTask;
+        }
 
         private sealed class OwnerDecisionChannel : IMessageChannel
         {

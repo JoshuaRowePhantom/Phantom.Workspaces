@@ -10,8 +10,8 @@ public sealed class InputQueueGroupViewModel : ViewModelBase, IDisposable, IQueu
     private readonly InputQueueViewModel parent;
     private readonly string queueId;
     private readonly RelayCommand toggleComposerCommand;
-    private readonly RelayCommand removeQueueCommand;
-    private readonly RelayCommand<QueueImmediacyOption> setImmediacyCommand;
+    private readonly ICommand removeQueueCommand;
+    private readonly ICommand setImmediacyCommand;
     private readonly object itemsLock = new();
     private bool isComposerVisible;
 
@@ -23,8 +23,14 @@ public sealed class InputQueueGroupViewModel : ViewModelBase, IDisposable, IQueu
         this.Composer.HideOwnerComposerAction = this.HideComposer;
         this.Items = [];
         this.toggleComposerCommand = new RelayCommand(this.ToggleComposer);
-        this.removeQueueCommand = new RelayCommand(this.RemoveQueue);
-        this.setImmediacyCommand = new RelayCommand<QueueImmediacyOption>(this.SetImmediacy);
+        this.removeQueueCommand = new AsyncRelayCommand(
+            _ => this.parent.ExecuteQueueBooleanOperationWithFeedbackAsync(
+                () => this.RemoveQueueAsync()));
+        this.setImmediacyCommand = new AsyncRelayCommand(
+            parameter => parameter is QueueImmediacyOption option
+                ? this.parent.ExecuteQueueOperationWithFeedbackAsync(
+                    () => this.parent.SetQueueImmediacyAsync(this.queueId, option.Value))
+                : Task.CompletedTask);
         this.Refresh();
     }
 
@@ -124,6 +130,11 @@ public sealed class InputQueueGroupViewModel : ViewModelBase, IDisposable, IQueu
 
         this.parent.RemoveInputQueue(this.queueId);
     }
+
+    private Task<bool> RemoveQueueAsync() =>
+        this.IsDefault
+            ? Task.FromResult(true)
+            : this.parent.RemoveInputQueueAsync(this.queueId);
 
     public void Refresh()
     {

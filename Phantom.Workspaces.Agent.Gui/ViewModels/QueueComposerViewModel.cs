@@ -26,6 +26,7 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
     private bool isFormattedMode;
     private bool showChatInputHelpText = true;
     private CancellationTokenSource? completionsCts;
+    private long draftVersion;
 
     /// <summary>
     /// When set, called with the raw input text when the user submits text starting with '/'.
@@ -53,10 +54,17 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
         this.parent = parent;
         this.targetQueueId = targetQueueId;
         this.IsDefaultComposer = isDefaultComposer;
-        this.SubmitCommand = new RelayCommand(this.Submit);
-        this.SubmitToNewQueueCommand = new RelayCommand(() => this.SubmitToNewQueue());
-        this.CreateNewQueueCommand = new RelayCommand(this.CreateNewQueue);
-        this.SetImmediacyCommand = new RelayCommand<QueueImmediacyOption>(this.SetQueueImmediacy);
+        this.SubmitCommand = new AsyncRelayCommand(
+            _ => this.SubmitWithFeedbackAsync(() => this.SubmitAsync()));
+        this.SubmitToNewQueueCommand = new AsyncRelayCommand(
+            _ => this.SubmitWithFeedbackAsync(() => this.SubmitToNewQueueAsync()));
+        this.CreateNewQueueCommand = new AsyncRelayCommand(
+            _ => this.parent.ExecuteQueueOperationWithFeedbackAsync(() => this.CreateNewQueueAsync()));
+        this.SetImmediacyCommand = new AsyncRelayCommand(
+            parameter => parameter is QueueImmediacyOption option
+                ? this.parent.ExecuteQueueOperationWithFeedbackAsync(
+                    () => this.SetQueueImmediacyAsync(option))
+                : Task.CompletedTask);
     }
 
     public event EventHandler? FocusPrimaryControlRequested;
@@ -123,6 +131,7 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
         {
             if (this.SetProperty(ref this.inputText, value))
             {
+                this.draftVersion++;
                 this.OnInputTextChanged(value);
             }
         }
@@ -319,19 +328,64 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
 
     public void Submit()
     {
-        this.Submit(this.targetQueueId);
+        this.SubmitCommand.Execute(null);
     }
 
     public bool Submit(string targetQueueId)
     {
+        var hasContent = !string.IsNullOrWhiteSpace(this.SanitizeText(this.InputText))
+            || this.attachments.Count > 0;
+        _ = this.SubmitWithFeedbackAsync(() => this.SubmitAsync(targetQueueId));
+        return hasContent;
+    }
+
+    public Task<bool> SubmitAsync(CancellationToken ct = default) =>
+        this.SubmitAsync(this.targetQueueId, ct);
+
+    internal void ReportSubmissionFailure() =>
+        this.parent.ReportSubmissionFailure();
+
+    internal async Task SubmitWithFeedbackAsync(Func<Task<bool>> submit)
+    {
+        var hadContent = !string.IsNullOrWhiteSpace(this.SanitizeText(this.InputText))
+            || this.attachments.Count > 0;
+        try
+        {
+            if (!await submit().ConfigureAwait(false) && hadContent)
+                this.ReportSubmissionFailure();
+        }
+        catch (Exception exception) when (
+            exception is OperationCanceledException
+                or ObjectDisposedException
+                or InvalidOperationException
+                or Phantom.Workspaces.Llm.Remote.RemoteAgentSessionException
+                or Phantom.Workspaces.Llm.Remote.RemoteAgentProtocolException)
+        {
+            this.ReportSubmissionFailure();
+        }
+    }
+
+    public async Task<bool> SubmitAsync(string targetQueueId, CancellationToken ct = default)
+    {
+        var submittedVersion = this.draftVersion;
+        var submittedAttachments = this.attachments.ToArray();
         var text = this.SanitizeText(this.InputText);
-        if (string.IsNullOrWhiteSpace(text) && this.attachments.Count == 0)
+        if (string.IsNullOrWhiteSpace(text) && submittedAttachments.Length == 0)
         {
             return false;
         }
 
-        this.SubmitContent(text, targetQueueId);
-        this.InputText = string.Empty;
+        if (!await this.SubmitContentAsync(text, submittedAttachments, targetQueueId, ct))
+        {
+            return false;
+        }
+
+        var draftUnchanged = this.draftVersion == submittedVersion;
+        this.RemoveSubmittedAttachments(submittedAttachments, removePlaceholderText: !draftUnchanged);
+        if (draftUnchanged)
+        {
+            this.InputText = string.Empty;
+        }
         return true;
     }
 
@@ -346,22 +400,48 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
         var input = this.InputText ?? string.Empty;
         var clampedCaret = Math.Clamp(caretIndex, 0, input.Length);
         newCaretIndex = clampedCaret;
-
-        var before = input.Substring(0, clampedCaret);
-        var after = input.Substring(clampedCaret);
-
-        var text = this.SanitizeText(before);
+        var text = this.SanitizeText(input.Substring(0, clampedCaret));
         if (string.IsNullOrWhiteSpace(text) && this.attachments.Count == 0)
         {
             return false;
         }
 
-        this.SubmitContent(text, targetQueueId);
-
-        // Retain everything after the caret and place the caret at the start of it,
-        // rather than hard-clearing the box the way Submit does.
-        this.InputText = after;
+        _ = this.SubmitBeforeCursorAsync(targetQueueId, clampedCaret, CancellationToken.None);
         newCaretIndex = 0;
+        return true;
+    }
+
+    internal Task<bool> SubmitBeforeCursorAsync(int caretIndex, CancellationToken ct = default) =>
+        this.SubmitBeforeCursorAsync(this.targetQueueId, caretIndex, ct);
+
+    internal async Task<bool> SubmitBeforeCursorAsync(
+        string targetQueueId,
+        int caretIndex,
+        CancellationToken ct = default)
+    {
+        var input = this.InputText ?? string.Empty;
+        var submittedVersion = this.draftVersion;
+        var submittedAttachments = this.attachments.ToArray();
+        var clampedCaret = Math.Clamp(caretIndex, 0, input.Length);
+        var text = this.SanitizeText(input.Substring(0, clampedCaret));
+        if (string.IsNullOrWhiteSpace(text) && submittedAttachments.Length == 0)
+        {
+            return false;
+        }
+
+        if (!await this.SubmitContentAsync(text, submittedAttachments, targetQueueId, ct))
+        {
+            return false;
+        }
+
+        // Never overwrite edits made while the owner was deciding the mutation.
+        var draftUnchanged = this.draftVersion == submittedVersion
+            && string.Equals(this.InputText, input, StringComparison.Ordinal);
+        this.RemoveSubmittedAttachments(submittedAttachments, removePlaceholderText: !draftUnchanged);
+        if (draftUnchanged)
+        {
+            this.InputText = input.Substring(clampedCaret);
+        }
         return true;
     }
 
@@ -370,18 +450,22 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
     /// interception on the default composer, history commit, queue append, attachments)
     /// without clearing the input box — the caller decides what the box becomes.
     /// </summary>
-    private void SubmitContent(string text, string targetQueueId)
+    private async Task<bool> SubmitContentAsync(
+        string text,
+        IReadOnlyList<AIContent> submittedAttachments,
+        string targetQueueId,
+        CancellationToken ct)
     {
         // Intercept slash commands on the default (primary) composer. Non-default queue
         // composers are used to append steering messages; slash commands are not applicable there.
         if (this.IsDefaultComposer
             && text.StartsWith('/')
-            && this.attachments.Count == 0
+            && submittedAttachments.Count == 0
             && this.SlashCommandInterceptorAsync is { } interceptor)
         {
             this.ResetHistoryNavigation();
-            _ = interceptor(text);
-            return;
+            await interceptor(text);
+            return true;
         }
 
         var contents = new List<AIContent>();
@@ -390,16 +474,21 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
             contents.Add(new TextContent(text));
         }
 
-        contents.AddRange(this.attachments);
+        contents.AddRange(submittedAttachments);
+        var result = await this.parent.AppendToQueueAsync(targetQueueId, contents, ct);
+        if (result.Status != AgentInputQueueCommandStatus.Applied)
+        {
+            return false;
+        }
+
         this.CommitToHistory(text);
-        this.parent.AppendToQueue(targetQueueId, contents);
-        this.ClearAttachments();
         this.IsFormattedMode = false;
         if (!this.IsDefaultComposer)
         {
             this.HideOwnerComposerAction?.Invoke();
             this.parent.HideQueueComposer(targetQueueId);
         }
+        return true;
     }
 
     public bool SubmitToMostRecentQueue()
@@ -412,6 +501,11 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
         return false;
     }
 
+    public Task<bool> SubmitToMostRecentQueueAsync(CancellationToken ct = default) =>
+        this.IsDefaultComposer
+            ? this.parent.SubmitToMostRecentQueueAsync(ct)
+            : Task.FromResult(false);
+
     public bool SubmitToNewQueue()
     {
         if (this.IsDefaultComposer)
@@ -422,6 +516,11 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
         return false;
     }
 
+    public Task<bool> SubmitToNewQueueAsync(CancellationToken ct = default) =>
+        this.IsDefaultComposer
+            ? this.parent.SubmitToNewQueueAsync(ct)
+            : Task.FromResult(false);
+
     public void CreateNewQueue()
     {
         if (this.IsDefaultComposer)
@@ -429,6 +528,12 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
             this.parent.CreateNewQueue();
         }
     }
+
+    public Task CreateNewQueueAsync(CancellationToken ct = default) =>
+        this.IsDefaultComposer ? this.parent.CreateNewQueueAsync(ct) : Task.CompletedTask;
+
+    private Task SetQueueImmediacyAsync(QueueImmediacyOption option) =>
+        this.parent.SetQueueImmediacyAsync(this.targetQueueId, option.Value);
 
     public void ToggleHoldAllQueues()=> this.parent.ToggleHoldAllQueues();
 
@@ -581,14 +686,33 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
         this.RaisePropertyChanged(nameof(this.AttachmentPreviews));
     }
 
+    private void RemoveSubmittedAttachments(
+        IReadOnlyList<AIContent> submittedAttachments,
+        bool removePlaceholderText)
+    {
+        foreach (var submittedAttachment in submittedAttachments)
+        {
+            var index = this.attachments.FindIndex(
+                attachment => ReferenceEquals(attachment, submittedAttachment));
+            if (index < 0)
+            {
+                continue;
+            }
+
+            var placeholder = this.RemoveAttachmentAt(index);
+            if (removePlaceholderText)
+            {
+                this.InputText = this.RemovePlaceholderText(this.InputText, placeholder);
+            }
+        }
+
+        this.RaisePropertyChanged(nameof(this.HasAttachments));
+        this.RaisePropertyChanged(nameof(this.AttachmentPreviews));
+    }
+
     public void RefreshQueueState()
     {
         this.RaisePropertyChanged(nameof(this.SelectedImmediacyOption));
-    }
-
-    private void SetQueueImmediacy(QueueImmediacyOption option)
-    {
-        this.parent.SetQueueImmediacy(this.targetQueueId, option.Value);
     }
 
     private AgentInputQueueSnapshot TargetQueueSnapshot

@@ -203,8 +203,30 @@ public sealed partial class RemoteAgentSessionClientTests
         {
             Reason = "user-requested",
             CompletionState = JsonDocument.Parse("""{"state":"completed"}""").RootElement.Clone(),
-        }, command.CorrelationId));
+        }, Guid.NewGuid()));
         await operation;
+    }
+
+    [Fact]
+    public async Task TerminalFrame_PendingNonTerminateCommand_FailsWithoutHanging()
+    {
+        var transport = new TestTransport();
+        await using var client = await ConnectAsync(transport);
+        var operation = client.SetContinueInBackgroundAsync(new SetAgentSessionRetentionRequest
+        {
+            ContinueInBackground = true,
+            CommandId = Guid.NewGuid(),
+        });
+        _ = Assert.IsType<SetContinueInBackgroundCommand>(
+            AgentSessionProtocolCodec.DeserializeCommand(await transport.ServerReadAsync()));
+
+        await transport.ServerSendAsync(Frame(2, new SessionTerminalEvent
+        {
+            Reason = "runtime-stopped",
+            CompletionState = JsonDocument.Parse("""{"state":"completed"}""").RootElement.Clone(),
+        }, Guid.NewGuid()));
+
+        await Assert.ThrowsAsync<RemoteAgentProtocolException>(() => operation);
     }
 
     [Fact]

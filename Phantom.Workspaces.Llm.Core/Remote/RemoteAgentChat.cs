@@ -14,7 +14,7 @@ public sealed record RemoteAgentChatAttachOptions
     public required TaskScheduler ForegroundScheduler { get; init; }
 }
 
-public sealed class RemoteAgentChat : IAgentChat
+public sealed class RemoteAgentChat : IAgentChat, IAsyncInterruptibleAgentChat
 {
     private readonly RemoteAgentSessionClient client;
     private readonly TaskScheduler foregroundScheduler;
@@ -30,6 +30,8 @@ public sealed class RemoteAgentChat : IAgentChat
     private Task? disposalTask;
     private bool disposed;
     private bool detached;
+    private bool isConnected = true;
+    private bool isTerminal;
     private AgentInformation information;
     private Usage usage;
 
@@ -37,7 +39,7 @@ public sealed class RemoteAgentChat : IAgentChat
     {
         this.client = client;
         this.foregroundScheduler = foregroundScheduler;
-        this.inputQueues = new RemoteInputQueues(client, foregroundScheduler);
+        this.inputQueues = new RemoteInputQueues(client, this.QueueForeground);
         this.SubAgents = new(this.subagents);
         this.Modals = new(this.modals);
         this.client.FrameReceived += this.OnFrameReceived;
@@ -83,12 +85,15 @@ public sealed class RemoteAgentChat : IAgentChat
     public ISlashCommandRegistry SlashCommands => this.slashCommands;
     public bool ContinueInBackground { get; private set; }
     public int ViewerCount { get; private set; }
+    internal bool IsConnected => this.isConnected;
+    internal bool IsTerminal => this.isTerminal;
 
     public event EventHandler? InformationChanged;
     public event EventHandler? ToolsChanged;
     public event EventHandler? UsageChanged;
     public event EventHandler<AgentChatHistoryItem>? TurnCompleted;
     public event EventHandler? RetentionChanged;
+    internal event EventHandler? RuntimeStateChanged;
 
     public IReadOnlyList<AgentChatToolItem> GetToolSnapshot()
     {
@@ -134,14 +139,39 @@ public sealed class RemoteAgentChat : IAgentChat
     public void Interrupt()
     {
         this.ThrowIfDisposed();
-        _ = this.client.InterruptAsync(Guid.NewGuid());
+        _ = this.InterruptAsync();
     }
 
-    public Task TerminateAsync(CancellationToken ct = default)
-        => this.client.TerminateAsync(new TerminateAgentSessionRequest
+    public Task InterruptAsync(CancellationToken ct = default)
+    {
+        this.ThrowIfDisposed();
+        return this.client.InterruptAsync(Guid.NewGuid(), ct);
+    }
+
+    public async Task TerminateAsync(CancellationToken ct = default)
+    {
+        this.ThrowIfDisposed();
+        var applied = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnChanged(object? sender, EventArgs args)
         {
-            Reason = "user-requested", CommandId = Guid.NewGuid(),
-        }, ct);
+            if (this.IsTerminal) applied.TrySetResult();
+        }
+
+        this.RuntimeStateChanged += OnChanged;
+        try
+        {
+            await this.client.TerminateAsync(new TerminateAgentSessionRequest
+            {
+                Reason = "user-requested", CommandId = Guid.NewGuid(),
+            }, ct).ConfigureAwait(false);
+            if (this.IsTerminal) applied.TrySetResult();
+            await applied.Task.WaitAsync(ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            this.RuntimeStateChanged -= OnChanged;
+        }
+    }
 
     public async Task SetContinueInBackgroundAsync(bool continueInBackground, CancellationToken ct = default)
     {
@@ -172,8 +202,29 @@ public sealed class RemoteAgentChat : IAgentChat
     {
         if (this.detached) return;
         this.detached = true;
-        await this.client.DetachAsync(ct).ConfigureAwait(false);
-        await this.DisposeAsync().ConfigureAwait(false);
+        Exception? primaryFailure = null;
+        try
+        {
+            await this.client.DetachAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            primaryFailure = exception;
+        }
+
+        try
+        {
+            await this.DisposeAsync().ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            primaryFailure = primaryFailure is null
+                ? exception
+                : new AggregateException(primaryFailure, exception);
+        }
+
+        if (primaryFailure is not null)
+            ExceptionDispatchInfo.Capture(primaryFailure).Throw();
     }
 
     public object? GetService(Type serviceType) => null;
@@ -190,6 +241,7 @@ public sealed class RemoteAgentChat : IAgentChat
     private Task BeginDisposeLocked()
     {
         this.disposed = true;
+        this.SetConnected(false);
         this.inputQueues.StopAccepting(new ObjectDisposedException(nameof(RemoteAgentChat)));
         this.client.FrameReceived -= this.OnFrameReceived;
         this.client.UnexpectedlyDisconnected -= this.OnUnexpectedlyDisconnected;
@@ -245,7 +297,10 @@ public sealed class RemoteAgentChat : IAgentChat
     }
 
     private void OnUnexpectedlyDisconnected(object? sender, EventArgs e)
-        => _ = this.ReconnectAsync();
+    {
+        this.SetConnected(false);
+        _ = this.ReconnectAsync();
+    }
 
     private async Task ReconnectAsync()
     {
@@ -257,6 +312,7 @@ public sealed class RemoteAgentChat : IAgentChat
             try
             {
                 await this.client.ReconnectAsync().ConfigureAwait(false);
+                await this.QueueForeground(() => this.SetConnected(true)).ConfigureAwait(false);
                 return;
             }
             catch (InvalidOperationException)
@@ -321,6 +377,7 @@ public sealed class RemoteAgentChat : IAgentChat
                 break;
             case BusyChangedEvent e:
                 this.IsBusy = e.IsBusy;
+                this.RuntimeStateChanged?.Invoke(this, EventArgs.Empty);
                 break;
             case ToolsSnapshotEvent e:
                 this.ReplaceTools(e.Tools);
@@ -352,6 +409,12 @@ public sealed class RemoteAgentChat : IAgentChat
                 this.RetentionChanged?.Invoke(this, EventArgs.Empty);
                 break;
             case SessionTerminalEvent:
+                this.IsBusy = false;
+                this.RunningItems.Clear();
+                this.runningById.Clear();
+                this.modals.Clear();
+                this.isTerminal = true;
+                this.RuntimeStateChanged?.Invoke(this, EventArgs.Empty);
                 this.inputQueues.StopAccepting(
                     new RemoteAgentProtocolException("The remote session is terminal."));
                 break;
@@ -366,6 +429,8 @@ public sealed class RemoteAgentChat : IAgentChat
         this.information = CloneInformation(snapshot.Information);
         this.usage = snapshot.Usage;
         this.IsBusy = snapshot.IsBusy;
+        this.isTerminal = false;
+        this.SetConnected(true);
         this.ContinueInBackground = snapshot.ContinueInBackground;
         this.ViewerCount = snapshot.ViewerCount;
         this.History.Clear();
@@ -383,8 +448,51 @@ public sealed class RemoteAgentChat : IAgentChat
         this.inputQueues.Replace(snapshot.InputQueues);
         this.ReplaceTools(snapshot.Tools);
         this.ReplaceSubagents(snapshot.Subagents);
-        this.modals.Clear();
-        foreach (var modal in snapshot.Modals) this.modals.Add(modal);
+        this.ReconcileModals(snapshot.Modals);
+    }
+
+    private void SetConnected(bool value)
+    {
+        if (this.isConnected == value)
+        {
+            return;
+        }
+
+        this.isConnected = value;
+        this.RuntimeStateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void ReconcileModals(IReadOnlyList<AgentChatModal> desired)
+    {
+        for (var index = 0; index < desired.Count; index++)
+        {
+            var modal = desired[index];
+            var currentIndex = this.modals
+                .Select((value, valueIndex) => (value, valueIndex))
+                .FirstOrDefault(item => string.Equals(item.value.Id, modal.Id, StringComparison.Ordinal))
+                .valueIndex;
+            if (currentIndex < index
+                || currentIndex >= this.modals.Count
+                || !string.Equals(this.modals[currentIndex].Id, modal.Id, StringComparison.Ordinal))
+            {
+                this.modals.Insert(index, modal);
+                continue;
+            }
+
+            if (currentIndex != index)
+            {
+                this.modals.Move(currentIndex, index);
+            }
+            if (!Equals(this.modals[index], modal))
+            {
+                this.modals[index] = modal;
+            }
+        }
+
+        while (this.modals.Count > desired.Count)
+        {
+            this.modals.RemoveAt(this.modals.Count - 1);
+        }
     }
 
     private void ReplaceTools(IReadOnlyList<JsonElement> values)
@@ -450,7 +558,7 @@ public sealed class RemoteAgentChat : IAgentChat
 
     private sealed class RemoteInputQueues(
         RemoteAgentSessionClient client,
-        TaskScheduler foregroundScheduler) : IAgentInputQueues
+        Func<Action, Task> queueForeground) : IAgentInputQueues
     {
         private readonly object sync = new();
         private readonly Dictionary<string, RemoteInputQueue> queues = new(StringComparer.Ordinal);
@@ -575,11 +683,11 @@ public sealed class RemoteAgentChat : IAgentChat
             var result = await operation().ConfigureAwait(false);
             if (result.CurrentSnapshot is { } current)
             {
-                await Task.Factory.StartNew(
-                    () => this.Replace(current),
-                    CancellationToken.None,
-                    TaskCreationOptions.DenyChildAttach,
-                    foregroundScheduler).ConfigureAwait(false);
+                await queueForeground(() =>
+                {
+                    if (current.Revision >= this.snapshot.Revision)
+                        this.Replace(current);
+                }).ConfigureAwait(false);
                 return result;
             }
             if (result.Status is not (AgentInputQueueCommandStatus.Applied or AgentInputQueueCommandStatus.Duplicate))

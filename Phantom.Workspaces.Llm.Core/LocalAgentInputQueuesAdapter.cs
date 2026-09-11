@@ -524,6 +524,12 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
 
                 var revision = this.manager.BumpAggregateRevision();
                 this.RefreshSnapshotLocked();
+                this.manager.NotifyQueueStateChanged(
+                    source.Underlying,
+                    AgentInputQueueManager.QueueStateChangeKind.ItemRemoved);
+                this.manager.NotifyQueueStateChanged(
+                    target.Underlying,
+                    AgentInputQueueManager.QueueStateChangeKind.ItemAdded);
                 return new AgentInputQueueCommandResult
                 {
                     CommandId = request.CommandId,

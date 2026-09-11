@@ -908,9 +908,15 @@ public sealed class RunningAgentBrainViewModelTests
 
         // A running item makes the agent's IsChatRunning true; the handler resolves the matching
         // tab and reflects it onto the row.
-        chat.CreateRunningItem(MakeRunningItem());
+        var running = chat.CreateRunningItem(MakeRunningItem());
 
         Assert.True(row.IsThinking);
+        Assert.True(row.IsInterruptEnabled);
+
+        chat.CompleteRunningItem(running, writeToHistory: false);
+
+        Assert.False(row.IsThinking);
+        Assert.False(row.IsInterruptEnabled);
 
         vm.Dispose();
     }

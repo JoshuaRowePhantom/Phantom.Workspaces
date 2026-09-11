@@ -39,8 +39,10 @@ public sealed class AcquireAgentChatRequest
     public AgentChatAcquisitionMode AcquisitionMode { get; init; } = AgentChatAcquisitionMode.Local;
 
     /// <summary>
-    /// Non-owned reference to the transport that anchors the owning profile for a remote
-    /// acquisition (issue #1485). The request does not clone or dispose the transport.
+    /// Transport that anchors the owning profile for a remote acquisition (issue #1485).
+    /// Ownership transfers to the running-session table when acquisition begins. The table
+    /// disposes both the accepted transport and redundant transports coalesced into an existing
+    /// single-flight acquisition.
     /// </summary>
     public ITransport? OwningProfileTransport { get; init; } = null;
 

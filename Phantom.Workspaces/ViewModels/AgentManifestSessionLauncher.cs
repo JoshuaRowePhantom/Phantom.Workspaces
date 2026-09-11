@@ -7,6 +7,7 @@ using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Gui.Shared.Utilities;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Llm.Core.Manifest;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Secrets;
@@ -131,8 +132,12 @@ internal static class AgentManifestSessionLauncher
                     var persistedEntity = createdAgentSessionEntity.Data is JsonElement value
                         ? value
                         : throw new InvalidOperationException("The created agent session has no persisted data.");
-                    var acquisition = await openAgentSessionShortcutHandler.ResolveAcquisitionAsync(
-                        mainWindowViewModel, persistedEntity, ct);
+                    var acquisition = await openAgentSessionShortcutHandler.OpenPersistedSessionAsync(
+                        mainWindowViewModel,
+                        persistedEntity,
+                        AgentSessionOpenIntent.StartOrAttach,
+                        ct);
+                    loadingTab.SetRemoteProfileDisplayName(acquisition.RemoteProfileDisplayName);
                     var lease = await openAgentSessionShortcutHandler.RunningAgentChatTable.AcquireAsync(
                         new AcquireAgentChatRequest
                         {
@@ -168,8 +173,12 @@ internal static class AgentManifestSessionLauncher
                     var persistedEntity = createdAgentSessionEntity.Data is JsonElement value
                         ? value
                         : throw new InvalidOperationException("The created agent session has no persisted data.");
-                    var acquisition = await openAgentSessionShortcutHandler.ResolveAcquisitionAsync(
-                        mainWindowViewModel, persistedEntity, ct);
+                    var acquisition = await openAgentSessionShortcutHandler.OpenPersistedSessionAsync(
+                        mainWindowViewModel,
+                        persistedEntity,
+                        AgentSessionOpenIntent.StartOrAttach,
+                        ct);
+                    loadingTab.SetRemoteProfileDisplayName(acquisition.RemoteProfileDisplayName);
                     var lease = await openAgentSessionShortcutHandler.RunningAgentChatTable.AcquireAsync(
                         new AcquireAgentChatRequest
                         {

@@ -50,7 +50,16 @@ internal sealed class MainWindowTabNavigator : ITabNavigator
 
             if (options.MarkNotificationRead)
             {
-                this.notifications.MarkRead(path.TabId!);
+                this.notifications.MarkRead(new NotificationTargetRequest
+                {
+                    TabId = path.TabId!,
+                    Kind = "chat-idle",
+                });
+                this.notifications.MarkRead(new NotificationTargetRequest
+                {
+                    TabId = path.TabId!,
+                    Kind = "legacy",
+                });
             }
 
             if (options.PushHistory && !this.host.NavigatingViaHistory)

@@ -2586,7 +2586,16 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                     this.SelectedWorkspacePane = targetPane;
                 }
                 this.dockFactory.SetActiveDockable(existingDocument);
-                this.notificationService.MarkRead(tab.Id);
+                this.notificationService.MarkRead(new NotificationTargetRequest
+                {
+                    TabId = tab.Id,
+                    Kind = "chat-idle",
+                });
+                this.notificationService.MarkRead(new NotificationTargetRequest
+                {
+                    TabId = tab.Id,
+                    Kind = "legacy",
+                });
                 this.dockFactory.SetFocusedDockable(documentDock, existingDocument);
                 // Set SelectedTab directly so GoToPane notification-read works even when the
                 // ItemsSource/ItemContainerGenerator pipeline is inactive (e.g. headless tests).
@@ -4375,12 +4384,30 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 ?? paneDoc.WorkspacePane.Tabs.FirstOrDefault();
             if (activeTab is not null)
             {
-                this.notificationService.MarkRead(activeTab.Id);
+                this.notificationService.MarkRead(new NotificationTargetRequest
+                {
+                    TabId = activeTab.Id,
+                    Kind = "chat-idle",
+                });
+                this.notificationService.MarkRead(new NotificationTargetRequest
+                {
+                    TabId = activeTab.Id,
+                    Kind = "legacy",
+                });
             }
         }
         else if (e.Dockable is WorkspaceDocument doc)
         {
-            this.notificationService.MarkRead(doc.Id);
+            this.notificationService.MarkRead(new NotificationTargetRequest
+            {
+                TabId = doc.Id,
+                Kind = "chat-idle",
+            });
+            this.notificationService.MarkRead(new NotificationTargetRequest
+            {
+                TabId = doc.Id,
+                Kind = "legacy",
+            });
             // Update the selected tab on the pane that owns this document
             var ownerPane = this.WorkspacePanes.FirstOrDefault(
                 p => p.Tabs.Any(t => string.Equals(t.Id, doc.Id, StringComparison.Ordinal)));

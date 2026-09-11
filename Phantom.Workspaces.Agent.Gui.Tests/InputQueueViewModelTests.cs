@@ -3,6 +3,7 @@ using Avalonia.Media;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Remote;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
@@ -358,6 +359,97 @@ public sealed class InputQueueViewModelTests
         Assert.Empty(queue.Items);
         Assert.Equal("edited with image", Assert.IsType<TextContent>(chat.History[0].Contents[0]).Text);
         Assert.Equal("image/png", Assert.IsType<DataContent>(chat.History[0].Contents[1]).MediaType);
+    }
+
+    [Fact]
+    public async Task SaveAndSendImmediately_MoveRejected_PreservesEditedSourceItem()
+    {
+        await using var chat = await CreateChatAsync();
+        var queue = chat.QueueManager.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
+        var wrappedChat = new InputQueuesOverrideAgentChat(
+            chat,
+            new RejectingMoveInputQueues(((IAgentChat)chat).InputQueues));
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions
+        {
+            AgentChat = wrappedChat,
+        });
+        viewModel.AppendToQueue(queue.Queue.QueueId, "original");
+        var entry = Assert.Single(viewModel.Queues.Single(group => group.QueueId == queue.Queue.QueueId).Items);
+        entry.EditCommand.Execute(null);
+        entry.EditText = "edited";
+
+        await WaitForQueueFailureAsync(
+            chat.History,
+            () => entry.SaveAndSendImmediatelyAsync(TestContext.Current.CancellationToken));
+
+        Assert.True(entry.IsEditing);
+        Assert.Equal("edited", Assert.Single(queue.Items).Text);
+        Assert.Contains(chat.History, item =>
+            item.Contents.OfType<TextContent>().Any(content =>
+                content.Text.Contains("queue change could not be applied", StringComparison.Ordinal)));
+        viewModel.Dispose();
+    }
+
+    [Fact]
+    public async Task QueueRowCommands_RemoteFailures_AreObservedAndReported()
+    {
+        await using var chat = await CreateChatAsync();
+        var queue = chat.QueueManager.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
+        var setupViewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        await setupViewModel.AppendToQueueAsync(
+            queue.Queue.QueueId,
+            [new TextContent("original")],
+            TestContext.Current.CancellationToken);
+        setupViewModel.Dispose();
+        var wrappedChat = new InputQueuesOverrideAgentChat(
+            chat,
+            new FaultingInputQueues(((IAgentChat)chat).InputQueues));
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions
+        {
+            AgentChat = wrappedChat,
+        });
+        var group = viewModel.Queues.Single(value => value.QueueId == queue.Queue.QueueId);
+        var entry = Assert.Single(group.Items);
+
+        await WaitForQueueFailureAsync(
+            chat.History,
+            () =>
+            {
+                entry.RemoveCommand.Execute(null);
+                return Assert.IsType<AsyncRelayCommand>(entry.RemoveCommand).LastExecutionTask!;
+            });
+        Assert.Equal(1, QueueFailureCount(chat));
+
+        entry.EditCommand.Execute(null);
+        entry.EditText = "edited";
+        await WaitForQueueFailureAsync(
+            chat.History,
+            () =>
+            {
+                entry.SaveEditCommand.Execute(null);
+                return Assert.IsType<AsyncRelayCommand>(entry.SaveEditCommand).LastExecutionTask!;
+            });
+        Assert.True(entry.IsEditing);
+        Assert.Equal(2, QueueFailureCount(chat));
+
+        await WaitForQueueFailureAsync(
+            chat.History,
+            () =>
+            {
+                group.SetImmediacyCommand.Execute(group.QueuedImmediacyOption);
+                return Assert.IsType<AsyncRelayCommand>(group.SetImmediacyCommand).LastExecutionTask!;
+            });
+        Assert.Equal(3, QueueFailureCount(chat));
+
+        await WaitForQueueFailureAsync(
+            chat.History,
+            () =>
+            {
+                group.RemoveQueueCommand.Execute(null);
+                return Assert.IsType<AsyncRelayCommand>(group.RemoveQueueCommand).LastExecutionTask!;
+            });
+        Assert.Equal(4, QueueFailureCount(chat));
+        viewModel.Dispose();
     }
 
     [Fact]
@@ -765,5 +857,181 @@ public sealed class InputQueueViewModelTests
         Assert.Empty(exceptions);
 
         viewModel.Dispose();
+    }
+
+    private sealed class RejectingMoveInputQueues(IAgentInputQueues inner) : IAgentInputQueues
+    {
+        public AgentInputQueuesSnapshot Snapshot => inner.Snapshot;
+        public IReadOnlyList<IAgentInputQueue> Queues => inner.Queues;
+        public IAgentInputQueue DefaultQueue => inner.DefaultQueue;
+        public IAgentInputQueue ImmediateQueue => inner.ImmediateQueue;
+        public event EventHandler? Changed
+        {
+            add => inner.Changed += value;
+            remove => inner.Changed -= value;
+        }
+
+        public Task<AgentInputQueueCommandResult> CreateQueueAsync(CreateAgentInputQueueRequest request, CancellationToken ct = default) => inner.CreateQueueAsync(request, ct);
+        public Task<AgentInputQueueCommandResult> DeleteQueueAsync(DeleteAgentInputQueueRequest request, CancellationToken ct = default) => inner.DeleteQueueAsync(request, ct);
+        public Task<AgentInputQueueCommandResult> EnqueueAsync(EnqueueAgentInputRequest request, CancellationToken ct = default) => inner.EnqueueAsync(request, ct);
+        public Task<AgentInputQueueCommandResult> EditAsync(EditAgentInputQueueItemRequest request, CancellationToken ct = default) => inner.EditAsync(request, ct);
+        public Task<AgentInputQueueCommandResult> RemoveAsync(RemoveAgentInputQueueItemRequest request, CancellationToken ct = default) => inner.RemoveAsync(request, ct);
+        public Task<AgentInputQueueCommandResult> MoveAsync(MoveAgentInputQueueItemRequest request, CancellationToken ct = default)
+            => Task.FromResult(new AgentInputQueueCommandResult
+            {
+                CommandId = request.CommandId,
+                Status = AgentInputQueueCommandStatus.Rejected,
+                Revision = inner.Snapshot.Revision,
+                ErrorCode = AgentInputQueueErrorCodes.UnknownQueue,
+            });
+        public Task<AgentInputQueueCommandResult> ConfigureAsync(ConfigureAgentInputQueueRequest request, CancellationToken ct = default) => inner.ConfigureAsync(request, ct);
+        public AgentInputQueueCommandResult CreateQueue(CreateAgentInputQueueRequest request) => inner.CreateQueue(request);
+        public AgentInputQueueCommandResult DeleteQueue(DeleteAgentInputQueueRequest request) => inner.DeleteQueue(request);
+        public AgentInputQueueCommandResult Enqueue(EnqueueAgentInputRequest request) => inner.Enqueue(request);
+        public AgentInputQueueCommandResult Edit(EditAgentInputQueueItemRequest request) => inner.Edit(request);
+        public AgentInputQueueCommandResult Remove(RemoveAgentInputQueueItemRequest request) => inner.Remove(request);
+        public AgentInputQueueCommandResult Move(MoveAgentInputQueueItemRequest request) => new()
+        {
+            CommandId = request.CommandId,
+            Status = AgentInputQueueCommandStatus.Rejected,
+            Revision = inner.Snapshot.Revision,
+            ErrorCode = AgentInputQueueErrorCodes.UnknownQueue,
+        };
+        public AgentInputQueueCommandResult Configure(ConfigureAgentInputQueueRequest request) => inner.Configure(request);
+    }
+
+    private sealed class FaultingInputQueues(IAgentInputQueues inner) : IAgentInputQueues
+    {
+        public AgentInputQueuesSnapshot Snapshot => inner.Snapshot;
+        public IReadOnlyList<IAgentInputQueue> Queues => inner.Queues;
+        public IAgentInputQueue DefaultQueue => inner.DefaultQueue;
+        public IAgentInputQueue ImmediateQueue => inner.ImmediateQueue;
+        public event EventHandler? Changed
+        {
+            add => inner.Changed += value;
+            remove => inner.Changed -= value;
+        }
+
+        public Task<AgentInputQueueCommandResult> CreateQueueAsync(
+            CreateAgentInputQueueRequest request,
+            CancellationToken ct = default) => Fail();
+        public Task<AgentInputQueueCommandResult> DeleteQueueAsync(
+            DeleteAgentInputQueueRequest request,
+            CancellationToken ct = default) => Fail();
+        public Task<AgentInputQueueCommandResult> EnqueueAsync(
+            EnqueueAgentInputRequest request,
+            CancellationToken ct = default) => inner.EnqueueAsync(request, ct);
+        public Task<AgentInputQueueCommandResult> EditAsync(
+            EditAgentInputQueueItemRequest request,
+            CancellationToken ct = default) => Fail();
+        public Task<AgentInputQueueCommandResult> RemoveAsync(
+            RemoveAgentInputQueueItemRequest request,
+            CancellationToken ct = default) => Fail();
+        public Task<AgentInputQueueCommandResult> MoveAsync(
+            MoveAgentInputQueueItemRequest request,
+            CancellationToken ct = default) => Fail();
+        public Task<AgentInputQueueCommandResult> ConfigureAsync(
+            ConfigureAgentInputQueueRequest request,
+            CancellationToken ct = default) => Fail();
+        public AgentInputQueueCommandResult CreateQueue(CreateAgentInputQueueRequest request) =>
+            throw Failure();
+        public AgentInputQueueCommandResult DeleteQueue(DeleteAgentInputQueueRequest request) =>
+            throw Failure();
+        public AgentInputQueueCommandResult Enqueue(EnqueueAgentInputRequest request) =>
+            inner.Enqueue(request);
+        public AgentInputQueueCommandResult Edit(EditAgentInputQueueItemRequest request) =>
+            throw Failure();
+        public AgentInputQueueCommandResult Remove(RemoveAgentInputQueueItemRequest request) =>
+            throw Failure();
+        public AgentInputQueueCommandResult Move(MoveAgentInputQueueItemRequest request) =>
+            throw Failure();
+        public AgentInputQueueCommandResult Configure(ConfigureAgentInputQueueRequest request) =>
+            throw Failure();
+
+        private static Task<AgentInputQueueCommandResult> Fail() =>
+            Task.FromException<AgentInputQueueCommandResult>(Failure());
+
+        private static RemoteAgentProtocolException Failure() =>
+            new("The remote session channel closed.");
+    }
+
+    private static int QueueFailureCount(AgentChat chat) =>
+        chat.History.Count(IsQueueFailure);
+
+    private static bool IsQueueFailure(AgentChatHistoryItem item) =>
+        item.Contents
+            .OfType<TextContent>()
+            .Any(content => content.Text.Contains(
+                "queue change could not be applied",
+                StringComparison.Ordinal));
+
+    private static async Task WaitForQueueFailureAsync(
+        System.Collections.Specialized.INotifyCollectionChanged history,
+        Func<Task> operation)
+    {
+        var added = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnCollectionChanged(
+            object? sender,
+            System.Collections.Specialized.NotifyCollectionChangedEventArgs args)
+        {
+            if (args.NewItems?.OfType<AgentChatHistoryItem>().Any(IsQueueFailure) is true)
+                added.TrySetResult();
+        }
+
+        history.CollectionChanged += OnCollectionChanged;
+        try
+        {
+            await operation();
+            await added.Task.WaitAsync(TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            history.CollectionChanged -= OnCollectionChanged;
+        }
+    }
+
+    private sealed class InputQueuesOverrideAgentChat(
+        IAgentChat inner,
+        IAgentInputQueues inputQueues) : IAgentChat
+    {
+        public AgentInformation Information => inner.Information;
+        public Usage Usage => inner.Usage;
+        public bool IsBusy => inner.IsBusy;
+        public AgentChatHistoryCollection History => inner.History;
+        public Task HistoryPopulated => inner.HistoryPopulated;
+        public AgentChatRunningItemCollection RunningItems => inner.RunningItems;
+        public IAgentInputQueues InputQueues { get; } = inputQueues;
+        public System.Collections.ObjectModel.ReadOnlyObservableCollection<IRunningSubAgent> SubAgents => inner.SubAgents;
+        public System.Collections.ObjectModel.ReadOnlyObservableCollection<AgentChatModal> Modals => inner.Modals;
+        public Phantom.Workspaces.Llm.SlashCommands.ISlashCommandRegistry SlashCommands => inner.SlashCommands;
+        public event EventHandler? InformationChanged
+        {
+            add => inner.InformationChanged += value;
+            remove => inner.InformationChanged -= value;
+        }
+        public event EventHandler? ToolsChanged
+        {
+            add => inner.ToolsChanged += value;
+            remove => inner.ToolsChanged -= value;
+        }
+        public event EventHandler? UsageChanged
+        {
+            add => inner.UsageChanged += value;
+            remove => inner.UsageChanged -= value;
+        }
+        public event EventHandler<AgentChatHistoryItem>? TurnCompleted
+        {
+            add => inner.TurnCompleted += value;
+            remove => inner.TurnCompleted -= value;
+        }
+        public IReadOnlyList<AgentChatToolItem> GetToolSnapshot() => inner.GetToolSnapshot();
+        public Task SetToolEnabledAsync(string toolId, bool enabled, CancellationToken ct = default) => inner.SetToolEnabledAsync(toolId, enabled, ct);
+        public Task RespondToModalAsync(string modalId, System.Text.Json.JsonElement response, CancellationToken ct = default) => inner.RespondToModalAsync(modalId, response, ct);
+        public void EnqueueSystemNote(string text) => inner.EnqueueSystemNote(text);
+        public void EnqueueHelpNote(string text) => inner.EnqueueHelpNote(text);
+        public void EnqueueTransientDiagnostic(string text) => inner.EnqueueTransientDiagnostic(text);
+        public void Interrupt() => inner.Interrupt();
+        public object? GetService(Type serviceType) => inner.GetService(serviceType);
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

@@ -90,7 +90,10 @@
                 </Border>
                 <controls:AgentChatInputQueueControl DockPanel.Dock="Bottom"
                                                      DataContext="{Binding InputQueue}"
+                                                     IsEnabled="{Binding !Agent.IsInputGated}"
                                                      IsVisible="{Binding InputQueue, Converter={x:Static converters:NotNullConverter.Instance}}"/>
+                <controls:AgentSessionModalStackControl DockPanel.Dock="Bottom"
+                                                        DataContext="{Binding Agent}"/>
                 <controls:AgentChatOutputControl DataContext="{Binding Agent}"/>
             </DockPanel>
         </DataTemplate>

@@ -338,11 +338,11 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             : null;
 
         var agentServices = await this.agentSessionShortcutContext.CreateAgentServicesAsync(mainWindowViewModel);
-        var acquisition = await this.ResolveAcquisitionAsync(
+        var acquisition = await this.OpenPersistedSessionAsync(
             mainWindowViewModel,
             agentSessionEntityData,
+            AgentSessionOpenIntent.StartOrAttach,
             ct);
-
         var lease = await this.runningAgentChatTable.AcquireAsync(
             new AcquireAgentChatRequest
             {
@@ -392,13 +392,15 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         return await this.CreateAgentSessionTabAsync(
             request.MainWindowViewModel,
             request.AgentSessionEntity,
-            request.AgentChat);
+            request.AgentChat,
+            request.RemoteProfileDisplayName);
     }
 
     private async Task<AgentSessionWorkspaceTabViewModel> CreateAgentSessionTabAsync(
         MainWindowViewModel mainWindowViewModel,
         SubscribedEntityViewModel agentSessionEntity,
-        IAgentChat agentChat)
+        IAgentChat agentChat,
+        string? remoteProfileDisplayName)
     {
         // #1122: Capture the UI-thread scheduler synchronously before any awaits so it truly
         // reflects the calling thread's SynchronizationContext, then thread it through to
@@ -416,6 +418,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             AgentSessionId = agentChat.Information.AgentSessionId,
             WorkspacePaneId = mainWindowViewModel.SelectedWorkspacePane?.Id,
         };
+        tab.SetRemoteProfileDisplayName(remoteProfileDisplayName);
         // #1429: materialize through the single seam so slash commands are wired on this path too.
         var agent = this.ComposeSessionAgentViewModel(
             new ComposeSessionAgentViewModelOptions
@@ -470,10 +473,12 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         }
 
         var agentDefinitionResolver = CreateAgentDefinitionResolver(mainWindowViewModel);
-        var acquisition = await this.ResolveAcquisitionAsync(
+        var acquisition = await this.OpenPersistedSessionAsync(
             mainWindowViewModel,
             agentSessionEntityData,
+            AgentSessionOpenIntent.StartOrAttach,
             ct);
+        tab.SetRemoteProfileDisplayName(acquisition.RemoteProfileDisplayName);
 
         var lease = await this.runningAgentChatTable.AcquireAsync(
             new AcquireAgentChatRequest
@@ -542,9 +547,11 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
     internal async Task<(
         AgentChatAcquisitionMode Mode,
         Phantom.Workspaces.Transport.ITransport? Transport,
-        JsonElement Entity)> ResolveAcquisitionAsync(
+        JsonElement Entity,
+        string? RemoteProfileDisplayName)> OpenPersistedSessionAsync(
         MainWindowViewModel mainWindowViewModel,
         JsonElement agentSessionEntity,
+        AgentSessionOpenIntent openIntent,
         CancellationToken ct)
     {
         if (!agentSessionEntity.TryGetProperty("ownership-generation", out _)
@@ -552,16 +559,18 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             || ownerElement.ValueKind != JsonValueKind.String
             || !Guid.TryParse(ownerElement.GetString(), out var owner))
         {
-            return (AgentChatAcquisitionMode.Local, null, agentSessionEntity);
+            return (AgentChatAcquisitionMode.Local, null, agentSessionEntity, null);
         }
 
         var localOwner = mainWindowViewModel.EntityBroker.EntityRepository
             .WorkspaceEntitySession.UserComputerProfileEntityId;
         if (owner == localOwner.Value)
         {
-            return (AgentChatAcquisitionMode.Local, null, agentSessionEntity);
+            return (AgentChatAcquisitionMode.Local, null, agentSessionEntity, null);
         }
 
+        var ownerProfiles = await mainWindowViewModel.EntityBroker.GetEntitiesAsync([new EntityId(owner)]);
+        var remoteProfileDisplayName = ownerProfiles.FirstOrDefault()?.DisplayName;
         var registry = this.transportFactoryRegistry
             ?? mainWindowViewModel.TransportComposition?.TransportFactoryRegistry
             ?? throw new InvalidOperationException(
@@ -571,8 +580,13 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         var transport = await registry.ConnectToAsync(
             descriptor.RootElement,
             ct);
-        return await this.ResolveRemoteOwnerAsync(
-            agentSessionEntity, owner, localOwner.Value, transport, ct);
+        var acquisition = await this.ResolveRemoteOwnerAsync(
+            agentSessionEntity, owner, localOwner.Value, transport, openIntent, ct);
+        return (
+            acquisition.Mode,
+            acquisition.Transport,
+            acquisition.Entity,
+            acquisition.Mode == AgentChatAcquisitionMode.Local ? null : remoteProfileDisplayName);
     }
 
     internal async Task<(
@@ -584,44 +598,72 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         Guid localOwner,
         Phantom.Workspaces.Transport.ITransport transport,
         CancellationToken ct)
-    {
-        var generation = agentSessionEntity.GetProperty("ownership-generation").GetInt64();
-        var statusRequest = new AgentSessionOpenRequest
-        {
-            ProtocolVersion = 1,
-            AgentSessionId = agentSessionEntity.GetProperty("agent-session-id").GetString()
-                ?? throw new InvalidOperationException("The persisted agent session id is missing."),
-            ExpectedOwningProfileEntityId = owner.ToString("D"),
-            ExpectedOwnershipGeneration = generation,
-            OpenIntent = AgentSessionOpenIntent.Status,
-            AttachmentToken = Guid.NewGuid().ToString("N"),
-            Capabilities = [],
-        };
-        var status = await RemoteAgentSessionClient.GetStatusAsync(
-            new AgentSessionStatusRequest
-            {
-                Transport = transport,
-                OpenRequest = statusRequest,
-            },
+        => await this.ResolveRemoteOwnerAsync(
+            agentSessionEntity,
+            owner,
+            localOwner,
+            transport,
+            AgentSessionOpenIntent.StartOrAttach,
             ct);
-        var decision = await this.ownerDecisionProvider.ChooseAsync(
-            new AgentSessionOwnerDecisionContext(status, owner.ToString("D")), ct);
-        if (decision == AgentSessionOwnerDecision.ConnectOnOwner)
-            return (AgentChatAcquisitionMode.StartOrAttachRemote, transport, agentSessionEntity);
 
+    private async Task<(
+        AgentChatAcquisitionMode Mode,
+        Phantom.Workspaces.Transport.ITransport? Transport,
+        JsonElement Entity)> ResolveRemoteOwnerAsync(
+        JsonElement agentSessionEntity,
+        Guid owner,
+        Guid localOwner,
+        Phantom.Workspaces.Transport.ITransport transport,
+        AgentSessionOpenIntent openIntent,
+        CancellationToken ct)
+    {
+        var transferTransport = false;
         try
         {
+            var generation = agentSessionEntity.GetProperty("ownership-generation").GetInt64();
+            var statusRequest = new AgentSessionOpenRequest
+            {
+                ProtocolVersion = 1,
+                AgentSessionId = agentSessionEntity.GetProperty("agent-session-id").GetString()
+                    ?? throw new InvalidOperationException("The persisted agent session id is missing."),
+                ExpectedOwningProfileEntityId = owner.ToString("D"),
+                ExpectedOwnershipGeneration = generation,
+                OpenIntent = AgentSessionOpenIntent.Status,
+                AttachmentToken = Guid.NewGuid().ToString("N"),
+                Capabilities = [],
+            };
+            var status = await RemoteAgentSessionClient.GetStatusAsync(
+                new AgentSessionStatusRequest
+                {
+                    Transport = transport,
+                    OpenRequest = statusRequest,
+                },
+                ct);
+            var decision = await this.ownerDecisionProvider.ChooseAsync(
+                new AgentSessionOwnerDecisionContext(status, owner.ToString("D")), ct);
+            if (decision == AgentSessionOwnerDecision.ConnectOnOwner)
+            {
+                transferTransport = true;
+                return (
+                    openIntent == AgentSessionOpenIntent.Attach
+                        ? AgentChatAcquisitionMode.AttachRemote
+                        : AgentChatAcquisitionMode.StartOrAttachRemote,
+                    transport,
+                    agentSessionEntity);
+            }
+
             await RemoteAgentSessionClient.TakeOverAsync(
                 transport, statusRequest, localOwner.ToString(), ct);
+            return (
+                AgentChatAcquisitionMode.Local,
+                null,
+                ReplaceRuntimeOwner(agentSessionEntity, localOwner.ToString(), generation + 1));
         }
         finally
         {
-            await transport.DisposeAsync();
+            if (!transferTransport)
+                await transport.DisposeAsync();
         }
-        return (
-            AgentChatAcquisitionMode.Local,
-            null,
-            ReplaceRuntimeOwner(agentSessionEntity, localOwner.ToString(), generation + 1));
     }
 
     private static JsonElement ReplaceRuntimeOwner(

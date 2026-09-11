@@ -1,4 +1,5 @@
 using System.Windows.Input;
+using Phantom.Workspaces.Services;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -7,8 +8,23 @@ namespace Phantom.Workspaces.ViewModels;
 /// </summary>
 public sealed class RunningAgentRowViewModel : ViewModelBase
 {
-    private bool isThinking;
     private readonly TimeProvider timeProvider;
+    private readonly AsyncRelayCommand? interruptCommand;
+    private readonly AsyncRelayCommand? terminateCommand;
+    private readonly AsyncRelayCommand? setContinueInBackgroundCommand;
+    private bool isThinking;
+    private bool isRemote;
+    private bool continueInBackground;
+    private int viewerCount;
+    private bool isBackgroundOptionEnabled;
+    private bool isInterruptEnabled;
+    private bool isTerminateEnabled;
+    private bool isTerminationPending;
+    private string? lastOperationError;
+    private bool canSetContinueInBackground;
+    private bool isConnected = true;
+    private bool isTerminal;
+    private bool isBackgroundUpdatePending;
 
     public RunningAgentRowViewModel(
         string sessionKey,
@@ -17,15 +33,8 @@ public sealed class RunningAgentRowViewModel : ViewModelBase
         bool isThinking,
         ICommand activateCommand,
         TimeProvider? timeProvider = null)
+        : this(sessionKey, workspacePaneTitle, tabTitle, null, true, isThinking, activateCommand, timeProvider)
     {
-        this.timeProvider = timeProvider ?? TimeProvider.System;
-        this.SessionKey = sessionKey;
-        this.WorkspacePaneTitle = workspacePaneTitle;
-        this.TabTitle = tabTitle;
-        this.isThinking = isThinking;
-        this.HasOpenTab = true;
-        this.ActivateCommand = activateCommand;
-        this.LastActivityAt = this.timeProvider.GetUtcNow().UtcDateTime;
     }
 
     public RunningAgentRowViewModel(
@@ -33,47 +42,267 @@ public sealed class RunningAgentRowViewModel : ViewModelBase
         string entityName,
         ICommand activateCommand,
         TimeProvider? timeProvider = null)
+        : this(sessionKey, string.Empty, string.Empty, entityName, false, false, activateCommand, timeProvider)
+    {
+    }
+
+    internal RunningAgentRowViewModel(
+        RunningAgentChatWithEntityInfo session,
+        string? workspacePaneTitle,
+        string? tabTitle,
+        string? entityName,
+        bool hasOpenTab,
+        bool isThinking,
+        ICommand activateCommand,
+        Func<CancellationToken, Task> interruptAsync,
+        Func<CancellationToken, Task> terminateAsync,
+        Func<bool, CancellationToken, Task> setContinueInBackgroundAsync,
+        TimeProvider? timeProvider = null)
+        : this(
+            session.SessionId.Value,
+            workspacePaneTitle ?? string.Empty,
+            tabTitle ?? string.Empty,
+            entityName,
+            hasOpenTab,
+            isThinking,
+            activateCommand,
+            timeProvider)
+    {
+        this.interruptCommand = new AsyncRelayCommand(
+            _ => this.InterruptAsync(interruptAsync),
+            _ => this.IsInterruptEnabled);
+        this.terminateCommand = new AsyncRelayCommand(
+            _ => this.TerminateAsync(terminateAsync),
+            _ => this.IsTerminateEnabled);
+        this.setContinueInBackgroundCommand = new AsyncRelayCommand(
+            parameter => parameter is bool value
+                ? this.SetContinueInBackgroundAsync(value, setContinueInBackgroundAsync)
+                : Task.CompletedTask,
+            parameter => parameter is bool && this.IsBackgroundOptionEnabled);
+        this.InterruptCommand = this.interruptCommand;
+        this.TerminateCommand = this.terminateCommand;
+        this.SetContinueInBackgroundCommand = this.setContinueInBackgroundCommand;
+        this.UpdateRuntimeMetadata(session, isThinking);
+    }
+
+    private RunningAgentRowViewModel(
+        string sessionKey,
+        string workspacePaneTitle,
+        string tabTitle,
+        string? entityName,
+        bool hasOpenTab,
+        bool isThinking,
+        ICommand activateCommand,
+        TimeProvider? timeProvider)
     {
         this.timeProvider = timeProvider ?? TimeProvider.System;
         this.SessionKey = sessionKey;
+        this.WorkspacePaneTitle = workspacePaneTitle;
+        this.TabTitle = tabTitle;
         this.EntityName = entityName;
-        this.WorkspacePaneTitle = string.Empty;
-        this.TabTitle = string.Empty;
-        this.HasOpenTab = false;
+        this.HasOpenTab = hasOpenTab;
+        this.isThinking = isThinking;
         this.ActivateCommand = activateCommand;
+        this.InterruptCommand = new RelayCommand(_ => { }, _ => false);
+        this.TerminateCommand = new RelayCommand(_ => { }, _ => false);
+        this.SetContinueInBackgroundCommand = new RelayCommand(_ => { }, _ => false);
         this.LastActivityAt = this.timeProvider.GetUtcNow().UtcDateTime;
     }
 
     /// <summary>The session key, used for deduplication across workspace panes.</summary>
     public string SessionKey { get; }
-
-    /// <summary>The workspace pane title (only meaningful when <see cref="HasOpenTab"/> is true).</summary>
     public string WorkspacePaneTitle { get; }
-
-    /// <summary>The tab title (only meaningful when <see cref="HasOpenTab"/> is true).</summary>
     public string TabTitle { get; }
-
-    /// <summary>True if the agent has an open tab; false when using the fallback label.</summary>
     public bool HasOpenTab { get; }
-
-    /// <summary>The agent entity name, shown as a fallback when <see cref="HasOpenTab"/> is false.</summary>
     public string? EntityName { get; }
 
-    /// <summary>Whether the agent is actively thinking (drives the pulsating brain icon).</summary>
     public bool IsThinking
     {
         get => this.isThinking;
         internal set => this.SetProperty(ref this.isThinking, value);
     }
 
+    public bool IsRemote
+    {
+        get => this.isRemote;
+        private set => this.SetProperty(ref this.isRemote, value);
+    }
+
+    public bool ContinueInBackground
+    {
+        get => this.continueInBackground;
+        private set => this.SetProperty(ref this.continueInBackground, value);
+    }
+
+    public int ViewerCount
+    {
+        get => this.viewerCount;
+        private set => this.SetProperty(ref this.viewerCount, value);
+    }
+
+    public bool IsBackgroundOptionEnabled
+    {
+        get => this.isBackgroundOptionEnabled;
+        private set
+        {
+            if (this.SetProperty(ref this.isBackgroundOptionEnabled, value))
+            {
+                this.setContinueInBackgroundCommand?.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    public bool IsInterruptEnabled
+    {
+        get => this.isInterruptEnabled;
+        private set
+        {
+            if (this.SetProperty(ref this.isInterruptEnabled, value))
+            {
+                this.interruptCommand?.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    public bool IsTerminateEnabled
+    {
+        get => this.isTerminateEnabled;
+        private set
+        {
+            if (this.SetProperty(ref this.isTerminateEnabled, value))
+            {
+                this.terminateCommand?.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    /// <summary>True while an explicit terminate request is awaiting the owner result.</summary>
+    public bool IsTerminationPending
+    {
+        get => this.isTerminationPending;
+        private set => this.SetProperty(ref this.isTerminationPending, value);
+    }
+
+    /// <summary>A stable, non-transport error message for a failed row operation.</summary>
+    public string? LastOperationError
+    {
+        get => this.lastOperationError;
+        private set => this.SetProperty(ref this.lastOperationError, value);
+    }
+
     /// <summary>The time of the most recent history activity for this session, used for sorting.</summary>
     internal DateTime LastActivityAt { get; private set; }
 
-    internal void UpdateLastActivityAt(DateTime at)
+    internal void UpdateLastActivityAt(DateTime at) => this.LastActivityAt = at;
+
+    internal void UpdateRuntimeMetadata(RunningAgentChatWithEntityInfo session, bool isActiveInterruptibleTurn)
     {
-        this.LastActivityAt = at;
+        this.IsRemote = session.IsRemote;
+        this.ContinueInBackground = session.ContinueInBackground;
+        this.ViewerCount = session.ViewerCount;
+        this.canSetContinueInBackground = session.CanSetContinueInBackground;
+        this.isConnected = session.IsConnected;
+        this.isTerminal = session.IsTerminal;
+        this.IsThinking = isActiveInterruptibleTurn;
+        this.UpdateCommandAvailability();
+    }
+
+    internal void MarkDisconnected()
+    {
+        this.IsInterruptEnabled = false;
+        this.IsTerminateEnabled = false;
+        this.IsBackgroundOptionEnabled = false;
+    }
+
+    private async Task TerminateAsync(Func<CancellationToken, Task> terminateAsync)
+    {
+        this.IsTerminationPending = true;
+        this.IsInterruptEnabled = false;
+        this.IsTerminateEnabled = false;
+        this.IsBackgroundOptionEnabled = false;
+        this.LastOperationError = null;
+        try
+        {
+            await terminateAsync(CancellationToken.None);
+        }
+        catch (OperationCanceledException)
+        {
+            this.IsTerminationPending = false;
+            this.UpdateCommandAvailability();
+        }
+        catch
+        {
+            this.LastOperationError = "Unable to terminate agent session.";
+            this.IsTerminationPending = false;
+            this.UpdateCommandAvailability();
+        }
+    }
+
+    private async Task InterruptAsync(Func<CancellationToken, Task> interruptAsync)
+    {
+        this.LastOperationError = null;
+        try
+        {
+            await interruptAsync(CancellationToken.None);
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancellation leaves authoritative row state unchanged.
+        }
+        catch
+        {
+            this.LastOperationError = "Unable to interrupt agent.";
+        }
+    }
+
+    private async Task SetContinueInBackgroundAsync(
+        bool value,
+        Func<bool, CancellationToken, Task> setContinueInBackgroundAsync)
+    {
+        this.isBackgroundUpdatePending = true;
+        this.IsBackgroundOptionEnabled = false;
+        // A ToggleButton changes its visual state before ICommand executes. Reassert the
+        // authoritative source value immediately so a pending/rejected request never appears
+        // checked optimistically.
+        this.RaisePropertyChanged(nameof(this.ContinueInBackground));
+        this.LastOperationError = null;
+        try
+        {
+            await setContinueInBackgroundAsync(value, CancellationToken.None);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch
+        {
+            this.LastOperationError = "Unable to update agent session.";
+        }
+        finally
+        {
+            this.isBackgroundUpdatePending = false;
+            this.UpdateCommandAvailability();
+            this.RaisePropertyChanged(nameof(this.ContinueInBackground));
+        }
+    }
+
+    private void UpdateCommandAvailability()
+    {
+        this.IsInterruptEnabled =
+            !this.IsTerminationPending && this.IsThinking && this.isConnected && !this.isTerminal;
+        this.IsTerminateEnabled =
+            !this.IsTerminationPending && this.isConnected && !this.isTerminal;
+        this.IsBackgroundOptionEnabled =
+            !this.IsTerminationPending
+            &&
+            !this.isBackgroundUpdatePending
+            && this.canSetContinueInBackground
+            && this.isConnected
+            && !this.isTerminal;
     }
 
     /// <summary>Navigates to the agent tab or opens a new one when clicked.</summary>
     public ICommand ActivateCommand { get; }
+    public ICommand InterruptCommand { get; }
+    public ICommand TerminateCommand { get; }
+    public ICommand SetContinueInBackgroundCommand { get; }
 }

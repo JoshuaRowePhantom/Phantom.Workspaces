@@ -141,7 +141,8 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
 
             if (registerAsRunningAgent)
             {
-                await PostToForegroundAsync(() => _runningSessions.Add(new RunningAgentChat(sessionId, this)));
+                await PostToForegroundAsync(() => _runningSessions.Add(
+                    new RunningAgentChat(sessionId, this, newChat!)));
             }
             return MakeLease(sessionId, newChat!);
         }
@@ -208,7 +209,8 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
 
             if (registerAsRunningAgent)
             {
-                await PostToForegroundAsync(() => _runningSessions.Add(new RunningAgentChat(sessionId, this)));
+                await PostToForegroundAsync(() => _runningSessions.Add(
+                    new RunningAgentChat(sessionId, this, newChat!)));
             }
             return MakeLease(sessionId, newChat!);
         }
@@ -265,7 +267,8 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
             _gate.Release();
         }
 
-        await PostToForegroundAsync(() => _runningSessions.Add(new RunningAgentChat(sessionId, this)));
+        await PostToForegroundAsync(() => _runningSessions.Add(
+            new RunningAgentChat(sessionId, this, newChat!)));
         return MakeLease(sessionId, newChat!);
     }
 

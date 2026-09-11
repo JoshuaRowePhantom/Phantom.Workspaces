@@ -5,6 +5,7 @@ namespace Phantom.Workspaces.Services.Notifications;
 public sealed record NotificationEntry
 {
     public required string TabKey { get; init; }
+    public required string Kind { get; init; }
     public required TabDescriptor TabDescriptor { get; init; }
     public required string Heading { get; init; }
     public required string Description { get; init; }

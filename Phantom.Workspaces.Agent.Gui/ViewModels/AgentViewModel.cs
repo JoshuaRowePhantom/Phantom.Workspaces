@@ -2,6 +2,7 @@ using AgentSchema;
 using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
@@ -30,9 +31,9 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private readonly List<RunningAgentChatLease> subAgentLeases = [];
     private readonly ObservableCollection<IRunningSubAgentDisplay> subAgentDisplayItems = [];
     private readonly ObservableCollection<AgentDetailDocumentItem> allDetailContents = [];
-    private readonly ObservableCollection<AgentSessionModalViewModel> modalProjectionSource = [];
+    private readonly ObservableCollection<AgentSessionModalViewModel> modalSource = [];
     private readonly Dictionary<AgentViewModel, NotifyCollectionChangedEventHandler> subAgentDetailSubscriptions = new();
-    private readonly Dictionary<AgentViewModel, NotifyCollectionChangedEventHandler> subAgentModalSubscriptions = new();
+    private readonly Dictionary<AgentViewModel, PropertyChangedEventHandler> subAgentModalSubscriptions = new();
     private readonly ObservableCollection<AgentEditorNavigationItemViewModel> subAgentAllChildren = [];
     private readonly AgentEditorNavigationItemViewModel chatDetailsNavItem;
     private readonly AgentEditorNavigationItemViewModel toolsNavItem;
@@ -105,12 +106,16 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.subAgentsBrowserDetail = new SubAgentBrowserViewModel(agentChat.SubAgents);
         this.subAgentsContainerDetail = new SubAgentsContainerViewModel(this.subAgentsBrowserDetail);
         this.SubAgentDisplays = new ReadOnlyObservableCollection<IRunningSubAgentDisplay>(this.subAgentDisplayItems);
-        this.ModalProjection = new ReadOnlyObservableCollection<AgentSessionModalViewModel>(this.modalProjectionSource);
+        this.Modals = new ReadOnlyObservableCollection<AgentSessionModalViewModel>(this.modalSource);
         this.InterruptCommand = new RelayCommand(agentChat.Interrupt);
         this.ToggleReasoningVisibilityCommand = new RelayCommand(this.ToggleReasoningVisibility);
         this.RequestOpenLogWindowCommand = new RelayCommand(this.RequestOpenLogWindow);
         this.InputQueue = agentChat.Information.AcceptsUserInput
-            ? new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = agentChat })
+            ? new InputQueueViewModel(new InputQueueViewModelOptions
+            {
+                AgentChat = agentChat,
+                ForegroundScheduler = foregroundScheduler,
+            })
             : null;
         this.ToggleHoldAllQueuesCommand = new RelayCommand(() => this.InputQueue?.ToggleHoldAllQueuesCommand.Execute(null));
         this.HoldAllQueuesCommand = new RelayCommand(() => this.InputQueue?.HoldAllQueuesCommand.Execute(null));
@@ -282,7 +287,14 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     public IAgentChat AgentChat => this.agentChat;
 
-    public ReadOnlyObservableCollection<AgentSessionModalViewModel> ModalProjection { get; }
+    /// <summary>
+    /// The unresolved modal stack for this editor's own chat. Descendant stacks are rendered and
+    /// gated by their own editors, while contributing only to the root aggregate state.
+    /// </summary>
+    public ReadOnlyObservableCollection<AgentSessionModalViewModel> Modals { get; }
+
+    /// <summary>Compatibility alias for callers compiled against the initial common-chat surface.</summary>
+    public ReadOnlyObservableCollection<AgentSessionModalViewModel> ModalProjection => this.Modals;
 
     internal AgentChat LocalAgentChat => (AgentChat)this.agentChat;
 
@@ -320,7 +332,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     public bool IsInputGated => this.agentChat.Modals.Count > 0;
 
-    public bool HasModalsNeedingInput => this.ModalProjection.Count > 0;
+    public bool HasModalsNeedingInput =>
+        this.Modals.Count > 0 || this.subAgentViewModels.Any(agent => agent.HasModalsNeedingInput);
 
     public ReadOnlyObservableCollection<AgentChatHistoryItem> History => this.agentChat.History;
 
@@ -493,17 +506,23 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     public Task RespondToModalAsync(string modalId, JsonElement response, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modalId);
-        var owner = this.FindModalOwner(modalId)
-            ?? throw new ArgumentException($"Unknown modal id '{modalId}'.", nameof(modalId));
-        return owner.agentChat.RespondToModalAsync(modalId, response, ct);
+        if (!this.agentChat.Modals.Any(modal => string.Equals(modal.Id, modalId, StringComparison.Ordinal)))
+        {
+            throw new ArgumentException($"Unknown modal id '{modalId}'.", nameof(modalId));
+        }
+
+        return this.agentChat.RespondToModalAsync(modalId, response, ct);
     }
 
     public void DismissModal(string modalId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modalId);
-        var owner = this.FindModalOwner(modalId)
-            ?? throw new ArgumentException($"Unknown modal id '{modalId}'.", nameof(modalId));
-        if (owner.agentChat is AgentChat localAgentChat)
+        if (!this.agentChat.Modals.Any(modal => string.Equals(modal.Id, modalId, StringComparison.Ordinal)))
+        {
+            throw new ArgumentException($"Unknown modal id '{modalId}'.", nameof(modalId));
+        }
+
+        if (this.agentChat is AgentChat localAgentChat)
         {
             localAgentChat.PublishModalDismiss(modalId);
         }
@@ -709,7 +728,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.subAgentDetailSubscriptions.Clear();
         foreach (var (subAgentViewModel, handler) in this.subAgentModalSubscriptions)
         {
-            ((INotifyCollectionChanged)subAgentViewModel.ModalProjection).CollectionChanged -= handler;
+            subAgentViewModel.PropertyChanged -= handler;
         }
         this.subAgentModalSubscriptions.Clear();
         this.InputQueue?.Dispose();
@@ -835,8 +854,14 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         // agent it falls through to ancestor resolution logic in NavigateToSubAgent.
         subAgentViewModel.NavigateToAgentHandler = this.NavigateToAgentHandler;
         this.subAgentViewModels.Add(subAgentViewModel);
-        NotifyCollectionChangedEventHandler modalHandler = (_, _) => this.RefreshModalProjection();
-        ((INotifyCollectionChanged)subAgentViewModel.ModalProjection).CollectionChanged += modalHandler;
+        PropertyChangedEventHandler modalHandler = (_, e) =>
+        {
+            if (e.PropertyName == nameof(HasModalsNeedingInput))
+            {
+                this.RaisePropertyChanged(nameof(this.HasModalsNeedingInput));
+            }
+        };
+        subAgentViewModel.PropertyChanged += modalHandler;
         this.subAgentModalSubscriptions[subAgentViewModel] = modalHandler;
         // Recursively aggregate the sub-agent's flat detail-content collection into this agent's
         // collection so every sub-agent node (and its descendants) has a first-class cached document
@@ -901,7 +926,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         }
         if (this.subAgentModalSubscriptions.TryGetValue(subAgentViewModel, out var modalHandler))
         {
-            ((INotifyCollectionChanged)subAgentViewModel.ModalProjection).CollectionChanged -= modalHandler;
+            subAgentViewModel.PropertyChanged -= modalHandler;
             this.subAgentModalSubscriptions.Remove(subAgentViewModel);
         }
 
@@ -909,7 +934,33 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         {
             this.allDetailContents.Remove(item);
         }
+        this.subAgentViewModels.Remove(subAgentViewModel);
+        this.subAgentsContainerDetail.RemoveSlot(agentId);
+        var display = this.subAgentDisplayItems.FirstOrDefault(
+            item => string.Equals(item.AgentId, agentId, StringComparison.Ordinal));
+        if (display is not null)
+        {
+            this.subAgentDisplayItems.Remove(display);
+            if (display is IDisposable disposable)
+                disposable.Dispose();
+        }
         this.RefreshModalProjection();
+        _ = this.DisposeRemovedSubAgentViewModelAsync(subAgentViewModel);
+    }
+
+    private async Task DisposeRemovedSubAgentViewModelAsync(AgentViewModel subAgentViewModel)
+    {
+        try
+        {
+            await subAgentViewModel.DisposeViewResourcesAsync().ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            this.logger.LogError(
+                exception,
+                "Failed to dispose removed sub-agent view resources for {AgentId}",
+                subAgentViewModel.AgentChat.Information.AgentId);
+        }
     }
 
     private void AddSubAgentSlotLazy(SubAgent stub)
@@ -1102,27 +1153,40 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     private void RefreshModalProjection()
     {
-        this.modalProjectionSource.Clear();
+        var existing = this.modalSource.ToDictionary(modal => modal.Id, StringComparer.Ordinal);
+        var desired = new List<AgentSessionModalViewModel>(this.agentChat.Modals.Count);
         foreach (var modal in this.agentChat.Modals)
         {
-            this.modalProjectionSource.Add(new AgentSessionModalViewModel(this, modal, isDescendant: false));
+            if (existing.TryGetValue(modal.Id, out var current)
+                && string.Equals(current.Title, modal.Title, StringComparison.Ordinal)
+                && string.Equals(current.Body, modal.Body, StringComparison.Ordinal)
+                && ModalContentEquals(current.Content, modal.Content))
+            {
+                desired.Add(current);
+            }
+            else
+            {
+                desired.Add(new AgentSessionModalViewModel(this, modal));
+            }
         }
 
-        foreach (var child in this.subAgentViewModels)
+        for (var index = this.modalSource.Count - 1; index >= 0; index--)
         {
-            foreach (var modal in child.ModalProjection)
+            if (!desired.Contains(this.modalSource[index]))
             {
-                this.modalProjectionSource.Add(new AgentSessionModalViewModel(
-                    child.FindModalOwner(modal.Id) ?? child,
-                    new AgentChatModal
-                    {
-                        Id = modal.Id,
-                        OwnerAgentId = modal.OwnerAgentId,
-                        Title = modal.Title,
-                        Body = modal.Body,
-                        Content = modal.Content,
-                    },
-                    isDescendant: true));
+                this.modalSource.RemoveAt(index);
+            }
+        }
+        for (var index = 0; index < desired.Count; index++)
+        {
+            var currentIndex = this.modalSource.IndexOf(desired[index]);
+            if (currentIndex < 0)
+            {
+                this.modalSource.Insert(index, desired[index]);
+            }
+            else if (currentIndex != index)
+            {
+                this.modalSource.Move(currentIndex, index);
             }
         }
 
@@ -1130,24 +1194,21 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.RaisePropertyChanged(nameof(this.HasModalsNeedingInput));
     }
 
-    private AgentViewModel? FindModalOwner(string modalId)
-    {
-        if (this.agentChat.Modals.Any(modal => string.Equals(modal.Id, modalId, StringComparison.Ordinal)))
+    private static bool ModalContentEquals(
+        AgentChatModalContent left,
+        AgentChatModalContent right)
+        => (left, right) switch
         {
-            return this;
-        }
-
-        foreach (var child in this.subAgentViewModels)
-        {
-            var owner = child.FindModalOwner(modalId);
-            if (owner is not null)
-            {
-                return owner;
-            }
-        }
-
-        return null;
-    }
+            (MultipleChoiceModalContent leftChoices, MultipleChoiceModalContent rightChoices) =>
+                leftChoices.AllowsMultiple == rightChoices.AllowsMultiple
+                && leftChoices.Options.Count == rightChoices.Options.Count
+                && leftChoices.Options.Zip(rightChoices.Options).All(pair =>
+                    string.Equals(
+                        pair.First.GetRawText(),
+                        pair.Second.GetRawText(),
+                        StringComparison.Ordinal)),
+            _ => Equals(left, right),
+        };
 
     private sealed class ToolsCollectionTransformer : CollectionTransformer<AgentChatToolViewModel, AgentEditorNavigationItemViewModel>
     {

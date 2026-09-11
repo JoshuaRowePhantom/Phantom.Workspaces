@@ -27,6 +27,7 @@ public sealed class NotificationRowViewModelTests
             new NotificationEntry
             {
                 TabKey = "tab-1",
+                Kind = "legacy",
                 TabDescriptor = new TabDescriptor { TabId = "Tab 1", TabTitle = tabTitle },
                 Heading = heading,
                 Description = description,
@@ -196,4 +197,3 @@ public sealed class NotificationRowViewModelTests
         Assert.True(row.ShowsAttentionIndicator);
     }
 }
-

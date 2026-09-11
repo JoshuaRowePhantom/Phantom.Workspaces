@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using AgentSchema;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
@@ -661,6 +662,26 @@ public sealed class RunningAgentChatTableTests
         }
 
         Assert.Empty(factory.RunningSessions);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_RemoteContextFailure_DisposesTransferredTransport()
+    {
+        var contextFactory = new Mock<IAgentSessionRuntimeContextFactory>();
+        contextFactory
+            .Setup(value => value.Create(It.IsAny<JsonElement>()))
+            .Throws(new InvalidOperationException("invalid persisted runtime"));
+        var table = new RunningAgentChatTable(
+            new FakeRunningAgentChatFactory(),
+            contextFactory.Object);
+        var transport = new SnapshotTransport("invalid-context");
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => table.AcquireAsync(
+            RemoteRequest("invalid-context", transport),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(1, transport.DisposeCount);
+        Assert.Empty(table.RunningSessions);
         Assert.Empty(table.RunningSessions);
     }
 
@@ -699,6 +720,34 @@ public sealed class RunningAgentChatTableTests
 
         await leases[2].DisposeAsync();
         Assert.Empty(table.RunningSessions);
+        Assert.Equal(1, transport.DisposeCount);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_RedundantSingleFlightTransport_IsDisposed()
+    {
+        var table = new RunningAgentChatTable(
+            new FakeRunningAgentChatFactory(),
+            new FakeRuntimeContextFactory());
+        var accepted = new GatedSnapshotTransport("redundant-transport");
+        var redundant = new SnapshotTransport("redundant-transport");
+
+        var first = table.AcquireAsync(
+            RemoteRequest("redundant-transport", accepted),
+            TestContext.Current.CancellationToken);
+        await accepted.Connected.WaitAsync(TestContext.Current.CancellationToken);
+        var second = table.AcquireAsync(
+            RemoteRequest("redundant-transport", redundant),
+            TestContext.Current.CancellationToken);
+        await redundant.Disposed.WaitAsync(TestContext.Current.CancellationToken);
+        accepted.PublishSnapshot();
+
+        var leases = await Task.WhenAll(first, second);
+        Assert.Equal(1, redundant.DisposeCount);
+        Assert.Equal(0, redundant.ConnectCount);
+        await leases[0].DisposeAsync();
+        await leases[1].DisposeAsync();
+        Assert.Equal(1, accepted.DisposeCount);
     }
 
     [Fact]
@@ -789,6 +838,96 @@ public sealed class RunningAgentChatTableTests
     }
 
     [Fact]
+    public async Task AcquireAsync_CancelledDuringRemotePublication_RemovesUnleasedSession()
+    {
+        var table = new RunningAgentChatTable(
+            new FakeRunningAgentChatFactory(),
+            new FakeRuntimeContextFactory());
+        var transport = new SnapshotTransport("cancelled-after-publication");
+        using var cancellation = new CancellationTokenSource();
+        table.RunningSessions.CollectionChanged += (_, args) =>
+        {
+            if (args.Action == NotifyCollectionChangedAction.Add)
+                cancellation.Cancel();
+        };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => table.AcquireAsync(
+            RemoteRequest("cancelled-after-publication", transport),
+            cancellation.Token));
+        await transport.Disposed.WaitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Empty(table.RunningSessions);
+        Assert.Equal(1, transport.DisposeCount);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_FinalCancelledWaiter_DoesNotCancelNewAcquisition()
+    {
+        var table = new RunningAgentChatTable(
+            new FakeRunningAgentChatFactory(),
+            new FakeRuntimeContextFactory());
+        var cancelledTransport = new GatedSnapshotTransport("cancelled-then-reacquired")
+        {
+            PauseCancellationCleanup = true,
+        };
+        var replacementTransport = new SnapshotTransport("cancelled-then-reacquired");
+        using var cancellation = new CancellationTokenSource();
+        var cancelledAcquisition = table.AcquireAsync(
+            RemoteRequest("cancelled-then-reacquired", cancelledTransport),
+            cancellation.Token);
+        await cancelledTransport.Connected.WaitAsync(TestContext.Current.CancellationToken);
+
+        cancellation.Cancel();
+        await cancelledTransport.CancellationObserved.WaitAsync(TestContext.Current.CancellationToken);
+        var replacementLease = await table.AcquireAsync(
+            RemoteRequest("cancelled-then-reacquired", replacementTransport),
+            TestContext.Current.CancellationToken);
+
+        cancelledTransport.AllowCancellationCleanup();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelledAcquisition);
+        Assert.Single(table.RunningSessions);
+        Assert.Equal(1, replacementTransport.ConnectCount);
+        Assert.Equal(0, replacementTransport.DisposeCount);
+
+        await replacementLease.DisposeAsync();
+        Assert.Equal(1, replacementTransport.DisposeCount);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_ConcurrentWithFinalRelease_UsesReplacementSession()
+    {
+        var scheduler = new PausableScheduler();
+        var firstTransport = new SnapshotTransport("release-reacquire");
+        var table = new RunningAgentChatTable(
+            new FakeRunningAgentChatFactory(),
+            new FakeRuntimeContextFactory());
+        var firstLease = await table.AcquireAsync(
+            RemoteRequest("release-reacquire", firstTransport, scheduler),
+            TestContext.Current.CancellationToken);
+        scheduler.Pause();
+
+        var releasing = firstLease.DisposeAsync().AsTask();
+        await scheduler.WaitForQueuedTaskAsync(TestContext.Current.CancellationToken);
+        var replacementTransport = new SnapshotTransport("release-reacquire");
+        var reacquiring = table.AcquireAsync(
+            RemoteRequest("release-reacquire", replacementTransport, scheduler),
+            TestContext.Current.CancellationToken);
+        Assert.False(reacquiring.IsCompleted);
+
+        scheduler.RunNext();
+        scheduler.Resume();
+        var replacementLease = await reacquiring;
+        await releasing;
+
+        Assert.Equal(1, firstTransport.DisposeCount);
+        Assert.Equal(0, replacementTransport.DisposeCount);
+        Assert.Single(table.RunningSessions);
+
+        await replacementLease.DisposeAsync();
+        Assert.Equal(1, replacementTransport.DisposeCount);
+    }
+
+    [Fact]
     public async Task AcquireAsync_RemoteAuthorizationDenied_AddsNoRunningRow()
     {
         var table = new RunningAgentChatTable(
@@ -837,6 +976,65 @@ public sealed class RunningAgentChatTableTests
         Assert.True(scheduler.WasInvoked);
         Assert.True(row.ContinueInBackground);
         Assert.Equal(4, row.ViewerCount);
+    }
+
+    [Fact]
+    public async Task SetContinueInBackgroundAsync_ConcurrentFinalRelease_WaitsForAcknowledgement()
+    {
+        var transport = new SnapshotTransport("retention-release-race");
+        var table = new RunningAgentChatTable(
+            new FakeRunningAgentChatFactory(), new FakeRuntimeContextFactory());
+        var lease = await table.AcquireAsync(
+            RemoteRequest("retention-release-race", transport),
+            TestContext.Current.CancellationToken);
+        var row = Assert.Single(table.RunningSessions);
+
+        var retention = table.SetContinueInBackgroundAsync(
+            row.SessionId, true, TestContext.Current.CancellationToken);
+        var command = Assert.IsType<SetContinueInBackgroundCommand>(
+            await transport.ReadCommandAsync(TestContext.Current.CancellationToken));
+        var release = lease.DisposeAsync().AsTask();
+        Assert.False(release.IsCompleted);
+        Assert.Single(table.RunningSessions);
+
+        transport.Send(
+            new SessionRetentionChangedEvent
+            {
+                ContinueInBackground = true,
+                ViewerCount = 0,
+            },
+            2,
+            command.CorrelationId);
+        transport.Send(
+            new CommandCompletedEvent { CommandId = command.CommandId },
+            3,
+            command.CorrelationId);
+        await retention;
+        await release;
+
+        Assert.True(Assert.Single(table.RunningSessions).ContinueInBackground);
+        Assert.Equal(0, transport.DisposeCount);
+
+        var disableRetention = table.SetContinueInBackgroundAsync(
+            row.SessionId, false, TestContext.Current.CancellationToken);
+        var disableCommand = Assert.IsType<SetContinueInBackgroundCommand>(
+            await transport.ReadCommandAsync(TestContext.Current.CancellationToken));
+        transport.Send(
+            new SessionRetentionChangedEvent
+            {
+                ContinueInBackground = false,
+                ViewerCount = 0,
+            },
+            4,
+            disableCommand.CorrelationId);
+        transport.Send(
+            new CommandCompletedEvent { CommandId = disableCommand.CommandId },
+            5,
+            disableCommand.CorrelationId);
+        await disableRetention;
+
+        Assert.Empty(table.RunningSessions);
+        Assert.Equal(1, transport.DisposeCount);
     }
 
     [Fact]
@@ -904,6 +1102,129 @@ public sealed class RunningAgentChatTableTests
         Assert.True(await operation);
         Assert.Empty(table.RunningSessions);
         await lease.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task OwnerTerminalEvent_UnpublishesRemoteSessionWithoutClosingViewer()
+    {
+        var transport = new SnapshotTransport("owner-terminal");
+        var table = new RunningAgentChatTable(
+            new FakeRunningAgentChatFactory(), new FakeRuntimeContextFactory());
+        var lease = await table.AcquireAsync(
+            RemoteRequest("owner-terminal", transport),
+            TestContext.Current.CancellationToken);
+        var removed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        table.RunningSessions.CollectionChanged += (_, args) =>
+        {
+            if (args.Action == NotifyCollectionChangedAction.Remove)
+                removed.TrySetResult();
+        };
+
+        transport.Send(
+            new SessionTerminalEvent
+            {
+                Reason = "owner-stopped",
+                CompletionState = JsonSerializer.SerializeToElement(new { state = "completed" }),
+            },
+            2,
+            Guid.NewGuid());
+        await removed.Task.WaitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Empty(table.RunningSessions);
+        Assert.True(Assert.IsType<RemoteAgentChat>(lease.AgentChat).IsTerminal);
+        await lease.DisposeAsync();
+        Assert.Equal(1, transport.DisposeCount);
+    }
+
+    [Fact]
+    public async Task OwnerTerminalEvent_DisposesRetainedViewerlessRemoteSession()
+    {
+        var transport = new SnapshotTransport("retained-terminal");
+        var table = new RunningAgentChatTable(
+            new FakeRunningAgentChatFactory(), new FakeRuntimeContextFactory());
+        var lease = await table.AcquireAsync(
+            RemoteRequest("retained-terminal", transport),
+            TestContext.Current.CancellationToken);
+        var retention = table.SetContinueInBackgroundAsync(
+            lease.SessionId, true, TestContext.Current.CancellationToken);
+        var command = Assert.IsType<SetContinueInBackgroundCommand>(
+            await transport.ReadCommandAsync(TestContext.Current.CancellationToken));
+        transport.Send(
+            new SessionRetentionChangedEvent
+            {
+                ContinueInBackground = true,
+                ViewerCount = 0,
+            },
+            2,
+            command.CorrelationId);
+        transport.Send(
+            new CommandCompletedEvent { CommandId = command.CommandId },
+            3,
+            command.CorrelationId);
+        await retention;
+        await lease.DisposeAsync();
+        Assert.Single(table.RunningSessions);
+
+        transport.Send(
+            new SessionTerminalEvent
+            {
+                Reason = "owner-stopped",
+                CompletionState = JsonSerializer.SerializeToElement(new { state = "completed" }),
+            },
+            4,
+            Guid.NewGuid());
+        await transport.Disposed.WaitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Empty(table.RunningSessions);
+        Assert.Equal(1, transport.DisposeCount);
+    }
+
+    [Fact]
+    public async Task OwnerTerminalEvent_TransportDisposalFailure_IsObservedAndLogged()
+    {
+        var disposalFailure = new InvalidOperationException("transport disposal failed");
+        var transport = new SnapshotTransport("terminal-cleanup-failure", disposalFailure);
+        var logger = new SignalingLogger<RunningAgentChatTable>();
+        var table = new RunningAgentChatTable(
+            new FakeRunningAgentChatFactory(),
+            new FakeRuntimeContextFactory(),
+            logger);
+        var lease = await table.AcquireAsync(
+            RemoteRequest("terminal-cleanup-failure", transport),
+            TestContext.Current.CancellationToken);
+        var retention = table.SetContinueInBackgroundAsync(
+            lease.SessionId, true, TestContext.Current.CancellationToken);
+        var command = Assert.IsType<SetContinueInBackgroundCommand>(
+            await transport.ReadCommandAsync(TestContext.Current.CancellationToken));
+        transport.Send(
+            new SessionRetentionChangedEvent
+            {
+                ContinueInBackground = true,
+                ViewerCount = 0,
+            },
+            2,
+            command.CorrelationId);
+        transport.Send(
+            new CommandCompletedEvent { CommandId = command.CommandId },
+            3,
+            command.CorrelationId);
+        await retention;
+        await lease.DisposeAsync();
+
+        transport.Send(
+            new SessionTerminalEvent
+            {
+                Reason = "owner-stopped",
+                CompletionState = JsonSerializer.SerializeToElement(new { state = "completed" }),
+            },
+            4,
+            Guid.NewGuid());
+        var logEntry = await logger.Logged.Task.WaitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Same(disposalFailure, logEntry.Exception);
+        Assert.Equal(LogLevel.Error, logEntry.Level);
+        Assert.Empty(table.RunningSessions);
+        Assert.Equal(1, transport.DisposeCount);
     }
 
     [Fact]
@@ -985,6 +1306,50 @@ public sealed class RunningAgentChatTableTests
         Assert.Equal(1, registry.Writes);
         Assert.True(registry.LastValue);
         Assert.True(row.ContinueInBackground);
+    }
+
+    [Fact]
+    public async Task SetContinueInBackgroundAsync_ConcurrentLocalFinalRelease_KeepsPublishedSession()
+    {
+        var persistenceStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowPersistence = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var registry = new Mock<ILocalAgentSessionRuntimeRegistry>();
+        registry.Setup(value => value.SetContinueInBackgroundAsync(
+                It.IsAny<AgentSessionId>(),
+                It.IsAny<JsonElement>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(async () =>
+            {
+                persistenceStarted.TrySetResult();
+                await allowPersistence.Task;
+            });
+        var table = new RunningAgentChatTable(
+            new FakeRunningAgentChatFactory(), new FakeRuntimeContextFactory());
+        table.ConfigureLocalRuntimeRegistry(registry.Object);
+        var sessionId = new AgentSessionId("local-retention-release-race");
+        var lease = await table.AcquireAsync(new AcquireAgentChatRequest
+        {
+            AgentSessionId = sessionId,
+            AgentSessionEntity = JsonDocument.Parse(
+                """{"entity-id":"11111111-1111-1111-1111-111111111114","agent-session-id":"local-retention-release-race"}""").RootElement.Clone(),
+        }, TestContext.Current.CancellationToken);
+
+        var retention = table.SetContinueInBackgroundAsync(
+            sessionId, true, TestContext.Current.CancellationToken);
+        await persistenceStarted.Task;
+        var release = lease.DisposeAsync().AsTask();
+        Assert.False(release.IsCompleted);
+        Assert.Single(table.RunningSessions);
+
+        allowPersistence.TrySetResult();
+        await retention;
+        await release;
+
+        Assert.True(Assert.Single(table.RunningSessions).ContinueInBackground);
+        await table.SetContinueInBackgroundAsync(
+            sessionId, false, TestContext.Current.CancellationToken);
+        Assert.Empty(table.RunningSessions);
     }
 
     [Fact]
@@ -1085,9 +1450,12 @@ public sealed class RunningAgentChatTableTests
     {
         private readonly SnapshotChannel channel;
 
-        internal SnapshotTransport(string sessionId)
+        private readonly Exception? disposalFailure;
+
+        internal SnapshotTransport(string sessionId, Exception? disposalFailure = null)
         {
             this.channel = new SnapshotChannel(sessionId);
+            this.disposalFailure = disposalFailure;
         }
 
         internal sealed class BlockingTransport : ITransport
@@ -1128,6 +1496,10 @@ public sealed class RunningAgentChatTableTests
         }
 
         internal int ConnectCount { get; private set; }
+        internal int DisposeCount { get; private set; }
+        internal TaskCompletionSource DisposedSource { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal Task Disposed => this.DisposedSource.Task;
 
         internal Task<AgentSessionCommand> ReadCommandAsync(CancellationToken ct)
             => this.channel.ReadCommandAsync(ct);
@@ -1147,7 +1519,37 @@ public sealed class RunningAgentChatTableTests
         public Task<Stream> ConnectToStreamAsync(JsonElement request, CancellationToken ct = default)
             => throw new NotSupportedException();
 
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public ValueTask DisposeAsync()
+        {
+            this.DisposeCount++;
+            this.DisposedSource.TrySetResult();
+            return this.disposalFailure is null
+                ? ValueTask.CompletedTask
+                : ValueTask.FromException(this.disposalFailure);
+        }
+    }
+
+    private sealed class SignalingLogger<T> : ILogger<T>
+    {
+        internal TaskCompletionSource<TestLogger<T>.LogEntry> Logged { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            this.Logged.TrySetResult(new TestLogger<T>.LogEntry(
+                logLevel,
+                exception,
+                formatter(state, exception)));
+        }
     }
 
     private sealed class GatedSnapshotTransport(string sessionId) : ITransport
@@ -1165,6 +1567,7 @@ public sealed class RunningAgentChatTableTests
         internal Task Connected => this.ConnectedSource.Task;
         internal Task CancellationObserved => this.CancellationObservedSource.Task;
         internal int ConnectCount { get; private set; }
+        internal int DisposeCount { get; private set; }
         internal bool PauseCancellationCleanup { get; init; }
 
         internal void PublishSnapshot()
@@ -1201,7 +1604,11 @@ public sealed class RunningAgentChatTableTests
             CancellationToken ct = default)
             => throw new NotSupportedException();
 
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public ValueTask DisposeAsync()
+        {
+            this.DisposeCount++;
+            return ValueTask.CompletedTask;
+        }
     }
 
     private sealed class SnapshotChannel : IMessageChannel

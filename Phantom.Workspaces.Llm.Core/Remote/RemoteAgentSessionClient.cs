@@ -376,8 +376,14 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
     {
         if (this.disposed) return;
         this.disposed = true;
-        await this.CloseChannelAsync().ConfigureAwait(false);
-        this.lifecycleGate.Dispose();
+        try
+        {
+            await this.CloseChannelAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            this.lifecycleGate.Dispose();
+        }
     }
 
     private async Task OpenChannelAsync(AgentSessionOpenRequest request, CancellationToken ct)
@@ -489,13 +495,14 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
                     throw new RemoteAgentProtocolException("An operation error contained a mismatched correlation id.");
             }
         }
-        else if (value is SessionTerminalEvent
-            && this.pending.TryGetValue(frame.CorrelationId, out var terminalCommand))
+        else if (value is SessionTerminalEvent)
         {
-            if (terminalCommand.AcceptTerminal)
+            foreach (var (correlationId, pendingCommand) in this.pending)
             {
-                this.pending.TryRemove(frame.CorrelationId, out _);
-                terminalCommand.Completion.TrySetResult(frame);
+                if (this.pending.TryRemove(correlationId, out _))
+                {
+                    pendingCommand.Completion.TrySetResult(frame);
+                }
             }
         }
         this.FrameReceived?.Invoke(this, frame);

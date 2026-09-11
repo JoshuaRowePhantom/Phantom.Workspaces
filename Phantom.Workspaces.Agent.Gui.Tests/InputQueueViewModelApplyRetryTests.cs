@@ -6,15 +6,8 @@ using Phantom.Workspaces.Llm;
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
 /// <summary>
-/// Coverage for the retry-on-Conflict data flow in <see cref="InputQueueViewModel"/> (issue #1485).
-///
-/// Owner-side UI commands read <c>IAgentInputQueues.Snapshot.Revision</c> and then call the
-/// adapter, which re-reads the aggregate revision under lock. If the revision advances between
-/// those two steps (for example, a legacy Configure firing on a sibling queue, or the background
-/// dequeue loop bumping the aggregate), the adapter returns <see cref="AgentInputQueueCommandStatus.Conflict"/>
-/// and the pre-fix single-shot Apply silently dropped the mutation. These tests exercise the
-/// retry helper directly with a controllable command lambda so each retry-loop branch is
-/// covered as a real behaviour (not a reflection assertion).
+/// Coverage for owner-acknowledged queue commands. UI projections only reconcile after an
+/// immutable result or Changed delta; conflicts are not retried against a stale user intent.
 /// </summary>
 public sealed class InputQueueViewModelApplyRetryTests
 {
@@ -38,67 +31,81 @@ public sealed class InputQueueViewModelApplyRetryTests
             new CreateAgentChatRequest { AgentDefinition = CreateTestAgentDefinition() });
 
     [Fact]
-    public async Task Apply_ConflictOnFirstAttempts_RetriesWithFreshRevisionAndReturnsApplied()
+    public async Task ApplyAsync_Conflict_DoesNotRetryStaleIntent()
     {
         await using var chat = await CreateChatAsync();
         var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var observedCommandIds = new List<Guid>();
         var observedRevisions = new List<long>();
 
-        var result = viewModel.Apply((commandId, expectedRevision) =>
+        var result = await viewModel.ApplyAsync((commandId, expectedRevision) =>
         {
             observedCommandIds.Add(commandId);
             observedRevisions.Add(expectedRevision);
-            // Simulate an aggregate-revision race for the first two attempts, then apply.
-            if (observedCommandIds.Count < 3)
-            {
-                return new AgentInputQueueCommandResult
-                {
-                    CommandId = commandId,
-                    Status = AgentInputQueueCommandStatus.Conflict,
-                    Revision = expectedRevision + 1,
-                };
-            }
-            return new AgentInputQueueCommandResult
-            {
-                CommandId = commandId,
-                Status = AgentInputQueueCommandStatus.Applied,
-                Revision = expectedRevision + 1,
-            };
-        });
-
-        Assert.Equal(AgentInputQueueCommandStatus.Applied, result.Status);
-        Assert.Equal(3, observedCommandIds.Count);
-        // Every attempt gets a distinct command id so the adapter cannot replay the cached
-        // Conflict from an earlier attempt.
-        Assert.Equal(3, observedCommandIds.Distinct().Count());
-        // Every attempt reads the current Snapshot.Revision fresh (not a captured local).
-        // Under this single-threaded test the observed revisions are identical, and they
-        // all equal the live snapshot revision after the operation.
-        Assert.All(observedRevisions, r => Assert.Equal(observedRevisions[0], r));
-    }
-
-    [Fact]
-    public async Task Apply_PersistentConflict_ExhaustsRetryBudgetAndReturnsLastConflict()
-    {
-        await using var chat = await CreateChatAsync();
-        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
-        var attemptCount = 0;
-
-        var result = viewModel.Apply((commandId, expectedRevision) =>
-        {
-            attemptCount++;
-            return new AgentInputQueueCommandResult
+            return Task.FromResult(new AgentInputQueueCommandResult
             {
                 CommandId = commandId,
                 Status = AgentInputQueueCommandStatus.Conflict,
                 Revision = expectedRevision + 1,
-            };
-        });
+            });
+        }, TestContext.Current.CancellationToken);
 
-        // Retry budget is bounded so a stuck aggregate cannot deadlock the UI thread.
         Assert.Equal(AgentInputQueueCommandStatus.Conflict, result.Status);
-        Assert.Equal(8, attemptCount);
+        Assert.Single(observedCommandIds);
+        Assert.Single(observedRevisions);
+    }
+
+    [Fact]
+    public async Task ApplyAsync_OlderConflict_DoesNotRegressAcknowledgedRevision()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var snapshot = ((IAgentChat)chat).InputQueues.Snapshot;
+
+        await viewModel.ApplyAsync((commandId, _) => Task.FromResult(new AgentInputQueueCommandResult
+        {
+            CommandId = commandId,
+            Status = AgentInputQueueCommandStatus.Conflict,
+            Revision = 5,
+            CurrentSnapshot = snapshot with { Revision = 5 },
+        }), TestContext.Current.CancellationToken);
+        await viewModel.ApplyAsync((commandId, _) => Task.FromResult(new AgentInputQueueCommandResult
+        {
+            CommandId = commandId,
+            Status = AgentInputQueueCommandStatus.Conflict,
+            Revision = 4,
+            CurrentSnapshot = snapshot with { Revision = 4 },
+        }), TestContext.Current.CancellationToken);
+
+        long? observedRevision = null;
+        await viewModel.ApplyAsync((commandId, expectedRevision) =>
+        {
+            observedRevision = expectedRevision;
+            return Task.FromResult(new AgentInputQueueCommandResult
+            {
+                CommandId = commandId,
+                Status = AgentInputQueueCommandStatus.Rejected,
+                Revision = expectedRevision,
+            });
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(5, observedRevision);
+    }
+
+    [Fact]
+    public async Task ApplyAsync_Cancelled_LeavesProjectionUnchanged()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var before = viewModel.Queues.Count;
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            viewModel.ApplyAsync(
+                (_, _) => throw new InvalidOperationException("The cancelled operation must not be invoked."),
+                cancellation.Token));
+        Assert.Equal(before, viewModel.Queues.Count);
     }
 
     [Fact]
@@ -108,16 +115,16 @@ public sealed class InputQueueViewModelApplyRetryTests
         var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var attemptCount = 0;
 
-        var result = viewModel.Apply((commandId, expectedRevision) =>
+        var result = await viewModel.ApplyAsync((commandId, expectedRevision) =>
         {
             attemptCount++;
-            return new AgentInputQueueCommandResult
+            return Task.FromResult(new AgentInputQueueCommandResult
             {
                 CommandId = commandId,
                 Status = AgentInputQueueCommandStatus.Applied,
                 Revision = expectedRevision + 1,
-            };
-        });
+            });
+        }, TestContext.Current.CancellationToken);
 
         Assert.Equal(AgentInputQueueCommandStatus.Applied, result.Status);
         Assert.Equal(1, attemptCount);
@@ -130,17 +137,17 @@ public sealed class InputQueueViewModelApplyRetryTests
         var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var attemptCount = 0;
 
-        var result = viewModel.Apply((commandId, expectedRevision) =>
+        var result = await viewModel.ApplyAsync((commandId, expectedRevision) =>
         {
             attemptCount++;
-            return new AgentInputQueueCommandResult
+            return Task.FromResult(new AgentInputQueueCommandResult
             {
                 CommandId = commandId,
                 Status = AgentInputQueueCommandStatus.Rejected,
                 Revision = expectedRevision,
                 ErrorCode = AgentInputQueueErrorCodes.UnknownItem,
-            };
-        });
+            });
+        }, TestContext.Current.CancellationToken);
 
         // Rejected is a permanent failure (bad ids, protected queue, etc.); retrying would
         // just repeat the same reject with a different command id, so the loop must stop.

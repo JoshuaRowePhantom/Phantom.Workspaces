@@ -54,6 +54,16 @@ public sealed class SubAgentsContainerViewModel : ViewModelBase
         return slot;
     }
 
+    internal void RemoveSlot(string agentId)
+    {
+        var slot = this.slotSource.FirstOrDefault(
+            value => string.Equals(value.AgentId, agentId, StringComparison.Ordinal));
+        if (slot is not null)
+            this.slotSource.Remove(slot);
+        if (this.slotSource.All(value => !value.IsSelected))
+            this.IsShowingBrowser = true;
+    }
+
     public void SuppressSort()
     {
         this.resumeSortCts?.Cancel();

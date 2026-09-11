@@ -7,6 +7,7 @@ using System.Linq;
 using System.Windows.Input;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Navigation;
 
@@ -37,6 +38,12 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
     // aggregate `IsAnyAgentPulsating` (issue #1305) recomputes whenever any row's IsThinking flips,
     // including on row replacement (tab ↔ fallback) and row removal.
     private readonly Dictionary<string, (RunningAgentRowViewModel Row, PropertyChangedEventHandler Handler)> rowThinkingSubscriptions
+        = new(StringComparer.Ordinal);
+
+    // The running-table entry is the authoritative source for remote retention and viewer
+    // metadata. Keep this independent of the optional open-tab subscriptions so fallback rows
+    // receive the same updates.
+    private readonly Dictionary<string, (RunningAgentChatWithEntityInfo Session, PropertyChangedEventHandler Handler)> sessionMetadataSubscriptions
         = new(StringComparer.Ordinal);
 
     // History subscriptions: sessionKey → (history, handler)
@@ -165,6 +172,7 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
 
             this.UnsubscribeRowThinking(key);
             this.UnsubscribeRow(key);
+            this.UnsubscribeSessionMetadata(key);
         }
 
         // Add or update a row for each active session
@@ -186,10 +194,11 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
             if (existing is null)
             {
                 var row = hasTab
-                    ? this.CreateTabRow(sessionKey, tabInfo)
+                    ? this.CreateTabRow(session, tabInfo)
                     : this.CreateFallbackRow(session);
                 this.Rows.Add(row);
                 this.SubscribeRowThinking(row);
+                this.SubscribeSessionMetadata(session);
                 if (hasTab)
                 {
                     this.SubscribeRow(sessionKey, tabInfo.Tab);
@@ -201,8 +210,9 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
                 this.UnsubscribeRowThinking(sessionKey);
                 this.UnsubscribeRow(sessionKey);
                 var rowIndex = this.IndexOfRow(sessionKey);
-                var replacement = this.CreateTabRow(sessionKey, tabInfo);
+                var replacement = this.CreateTabRow(session, tabInfo);
                 this.Rows[rowIndex] = replacement;
+                existing = replacement;
                 this.SubscribeRowThinking(replacement);
                 this.SubscribeRow(sessionKey, tabInfo.Tab);
             }
@@ -214,12 +224,19 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
                 var rowIndex = this.IndexOfRow(sessionKey);
                 var replacement = this.CreateFallbackRow(session);
                 this.Rows[rowIndex] = replacement;
+                existing = replacement;
                 this.SubscribeRowThinking(replacement);
             }
             else if (hasTab)
             {
                 existing.IsThinking = tabInfo.Tab.Agent?.IsChatRunning ?? false;
             }
+
+            var activeTurn = session.IsInterruptible
+                || (hasTab && tabInfo.Tab.Agent?.IsChatRunning == true);
+            existing ??= this.Rows.FirstOrDefault(row =>
+                string.Equals(row.SessionKey, sessionKey, StringComparison.Ordinal));
+            existing?.UpdateRuntimeMetadata(session, activeTurn);
         }
 
         this.RaisePropertyChanged(nameof(this.HasRows));
@@ -227,8 +244,9 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
         this.RecomputeIsAnyAgentPulsating();
     }
 
-    private RunningAgentRowViewModel CreateTabRow(string sessionKey, AgentTabInfo tabInfo)
+    private RunningAgentRowViewModel CreateTabRow(RunningAgentChatWithEntityInfo session, AgentTabInfo tabInfo)
     {
+        var sessionKey = session.SessionId.Value;
         var capturedTabId = tabInfo.Tab.Id;
         var capturedPaneId = tabInfo.PaneId;
 
@@ -244,13 +262,14 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
                 new NavigationOptions { OpenEntityIfNoTab = true, FocusWindow = true });
         });
 
-        return new RunningAgentRowViewModel(
-            sessionKey: sessionKey,
-            workspacePaneTitle: tabInfo.PaneTitle,
-            tabTitle: tabInfo.Tab.Title,
-            isThinking: tabInfo.Tab.Agent?.IsChatRunning ?? false,
-            activateCommand: activateCmd,
-            timeProvider: this.timeProvider);
+        return this.CreateRuntimeRow(
+            session,
+            tabInfo.PaneTitle,
+            tabInfo.Tab.Title,
+            entityName: null,
+            hasOpenTab: true,
+            isThinking: session.IsInterruptible || tabInfo.Tab.Agent?.IsChatRunning == true,
+            activateCommand: activateCmd);
     }
 
     private RunningAgentRowViewModel CreateFallbackRow(RunningAgentChatWithEntityInfo session)
@@ -265,11 +284,93 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
                 new NavigationOptions { OpenEntityIfNoTab = true, FocusWindow = true });
         });
 
-        return new RunningAgentRowViewModel(
-            sessionKey: capturedSessionKey,
+        return this.CreateRuntimeRow(
+            session,
+            workspacePaneTitle: null,
+            tabTitle: null,
             entityName: session.EntityName,
-            activateCommand: activateCmd,
-            timeProvider: this.timeProvider);
+            hasOpenTab: false,
+            isThinking: session.IsInterruptible,
+            activateCommand: activateCmd);
+    }
+
+    private RunningAgentRowViewModel CreateRuntimeRow(
+        RunningAgentChatWithEntityInfo session,
+        string? workspacePaneTitle,
+        string? tabTitle,
+        string? entityName,
+        bool hasOpenTab,
+        bool isThinking,
+        ICommand activateCommand)
+    {
+        return new RunningAgentRowViewModel(
+            session,
+            workspacePaneTitle,
+            tabTitle,
+            entityName,
+            hasOpenTab,
+            isThinking,
+            activateCommand,
+            async ct =>
+            {
+                await using var lease = await session.AcquireLeaseAsync(ct).ConfigureAwait(false);
+                if (lease.AgentChat.RunningItems.Count > 0)
+                {
+                    if (lease.AgentChat is IAsyncInterruptibleAgentChat remoteChat)
+                        await remoteChat.InterruptAsync(ct).ConfigureAwait(false);
+                    else
+                        lease.AgentChat.Interrupt();
+                }
+            },
+            async ct =>
+            {
+                var terminated = await this.table.TerminateAsync(session.SessionId, ct).ConfigureAwait(false);
+                if (!terminated)
+                {
+                    throw new InvalidOperationException("The agent session is no longer running.");
+                }
+            },
+            (value, ct) => this.table.SetContinueInBackgroundAsync(session.SessionId, value, ct),
+            this.timeProvider);
+    }
+
+    private void SubscribeSessionMetadata(RunningAgentChatWithEntityInfo session)
+    {
+        var key = session.SessionId.Value;
+        if (this.sessionMetadataSubscriptions.ContainsKey(key))
+        {
+            return;
+        }
+
+        PropertyChangedEventHandler handler = (_, _) => this.dispatch(() =>
+        {
+            if (this._disposed)
+            {
+                return;
+            }
+
+            var row = this.Rows.FirstOrDefault(candidate =>
+                string.Equals(candidate.SessionKey, key, StringComparison.Ordinal));
+            if (row is not null)
+            {
+                var active = this.getAllAgentTabs().FirstOrDefault(tab =>
+                    string.Equals(tab.Tab.AgentSessionId, key, StringComparison.Ordinal));
+                row.UpdateRuntimeMetadata(
+                    session,
+                    session.IsInterruptible
+                        || (active is { Tab: not null } && active.Tab.Agent?.IsChatRunning == true));
+            }
+        });
+        session.PropertyChanged += handler;
+        this.sessionMetadataSubscriptions[key] = (session, handler);
+    }
+
+    private void UnsubscribeSessionMetadata(string key)
+    {
+        if (this.sessionMetadataSubscriptions.Remove(key, out var subscription))
+        {
+            subscription.Session.PropertyChanged -= subscription.Handler;
+        }
     }
 
     /// <summary>
@@ -378,7 +479,14 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
                 if (row is not null && this.getAllAgentTabs().FirstOrDefault(
                         t => string.Equals(t.Tab.AgentSessionId, sessionKey, StringComparison.Ordinal)) is { Tab: not null } info)
                 {
-                    row.IsThinking = info.Tab.Agent?.IsChatRunning ?? false;
+                    var session = this.table.RunningSessions.FirstOrDefault(candidate =>
+                        string.Equals(candidate.SessionId.Value, sessionKey, StringComparison.Ordinal));
+                    if (session is not null)
+                    {
+                        row.UpdateRuntimeMetadata(
+                            session,
+                            session.IsInterruptible || info.Tab.Agent?.IsChatRunning == true);
+                    }
                 }
             });
         };
@@ -492,5 +600,12 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
         }
 
         this.historySubscriptions.Clear();
+
+        foreach (var (session, handler) in this.sessionMetadataSubscriptions.Values)
+        {
+            session.PropertyChanged -= handler;
+        }
+
+        this.sessionMetadataSubscriptions.Clear();
     }
 }

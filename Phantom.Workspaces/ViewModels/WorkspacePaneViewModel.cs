@@ -12,6 +12,7 @@ using Dock.Model.Core;
 using Dock.Model.Mvvm.Controls;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Services.Navigation;
+using Phantom.Workspaces.Services.Notifications;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -422,7 +423,16 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
 
         this.environment?.DockFactory.SetActiveDockable(nextDoc);
         this.environment?.DockFactory.SetFocusedDockable(documentDock, nextDoc);
-        this.environment?.NotificationService.MarkRead(nextDoc.Id);
+        this.environment?.NotificationService.MarkRead(new NotificationTargetRequest
+        {
+            TabId = nextDoc.Id,
+            Kind = "chat-idle",
+        });
+        this.environment?.NotificationService.MarkRead(new NotificationTargetRequest
+        {
+            TabId = nextDoc.Id,
+            Kind = "legacy",
+        });
     }
 
     /// <summary>#1341: the per-pane portion of <c>MainWindowViewModel.OnDockableTabClosed</c> —

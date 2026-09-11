@@ -198,14 +198,16 @@ public sealed class AgentViewModelRetryTests
             Content = new ApprovalModalContent { ApproveLabel = "Y", RejectLabel = "N" },
         };
         chat.PublishModal(modal);
-        Assert.Single(vm.ModalProjection);
+        Assert.Single(vm.Modals);
         Assert.True(vm.IsInputGated);
-        var respondTask = vm.RespondToModalAsync("m", default, TestContext.Current.CancellationToken);
+        var response = System.Text.Json.JsonDocument.Parse("true").RootElement.Clone();
+        var modalViewModel = Assert.Single(vm.Modals);
+        var respondTask = modalViewModel.RespondAsync(response, TestContext.Current.CancellationToken);
         Assert.False(respondTask.IsCompleted);
-        Assert.Single(vm.ModalProjection);
+        Assert.Single(vm.Modals);
         vm.DismissModal("m");
         await respondTask;
-        Assert.Empty(vm.ModalProjection);
+        Assert.Empty(vm.Modals);
         Assert.False(vm.IsInputGated);
     }
 
@@ -227,9 +229,11 @@ public sealed class AgentViewModelRetryTests
         Assert.Single(chat.Modals);
         using var cts = new CancellationTokenSource();
         cts.Cancel();
+        var response = System.Text.Json.JsonDocument.Parse("true").RootElement.Clone();
+        var modalViewModel = Assert.Single(vm.Modals);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => vm.RespondToModalAsync("m", default, cts.Token));
-        Assert.Single(vm.ModalProjection);
+            () => modalViewModel.RespondAsync(response, cts.Token));
+        Assert.Single(vm.Modals);
         Assert.True(vm.IsInputGated);
     }
 
@@ -252,9 +256,66 @@ public sealed class AgentViewModelRetryTests
 
         childChat.PublishModal(modal);
 
-        var projected = Assert.Single(root.ModalProjection);
-        Assert.Equal(modal.Id, projected.Id);
+        Assert.Empty(root.Modals);
+        Assert.True(root.HasModalsNeedingInput);
         Assert.Empty(rootChat.Modals);
+    }
+
+    [Fact]
+    public async Task RemovedSubAgent_WithModal_ClearsRootAggregate()
+    {
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var rootChat = CreateChat(MakeDefinition());
+        await using var childChat = CreateChat(MakeDefinition());
+        await using var root = this.CreateViewModel(rootChat, loggerFactory);
+        var child = await ((ISubAgentTable)rootChat).Add(childChat);
+        childChat.PublishModal(new AgentChatModal
+        {
+            Id = "removed-child-modal",
+            OwnerAgentId = childChat.AgentId,
+            Title = "Child",
+            Body = "Needs input",
+            Content = new FreeformModalContent { IsRequired = true },
+        });
+        Assert.True(root.HasModalsNeedingInput);
+
+        var field = typeof(AgentChat).GetField(
+            "subAgentItems",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        var items = Assert.IsType<ObservableCollection<IRunningSubAgent>>(field!.GetValue(rootChat));
+        items.Remove(child);
+
+        Assert.False(root.HasModalsNeedingInput);
+    }
+
+    [Fact]
+    public async Task AgentSessionModalViewModel_RespondAsync_InvalidOption_RejectsBeforeTransport()
+    {
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var chat = CreateChat(MakeDefinition());
+        await using var vm = this.CreateViewModel(chat, loggerFactory);
+        chat.PublishModal(new AgentChatModal
+        {
+            Id = "choice",
+            OwnerAgentId = "owner",
+            Title = "Choose",
+            Body = "Choose one",
+            Content = new MultipleChoiceModalContent
+            {
+                Options =
+                [
+                    System.Text.Json.JsonDocument.Parse("\"yes\"").RootElement.Clone(),
+                ],
+                AllowsMultiple = false,
+            },
+        });
+
+        var modal = Assert.Single(vm.Modals);
+        var invalid = System.Text.Json.JsonDocument.Parse("\"no\"").RootElement.Clone();
+
+        await Assert.ThrowsAsync<ArgumentException>(() => modal.RespondAsync(invalid, TestContext.Current.CancellationToken));
+        Assert.Single(vm.Modals);
+        Assert.True(vm.IsInputGated);
     }
 
     [Fact]
@@ -361,6 +422,73 @@ public sealed class AgentViewModelRetryTests
     }
 
     [Fact]
+    public async Task InputQueueViewModel_CommandPending_RemoteQueue_DoesNotMutateProjectionOptimistically()
+    {
+        var source = new DeferredQueues();
+        await using var remote = new RemoteAgentChatProxy(new StubAgentChat(source, MakeDefinition()));
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions
+        {
+            AgentChat = remote,
+            HiddenBuiltInQueueId = "not-the-default-queue",
+            ForegroundScheduler = this.foregroundScheduler,
+        });
+
+        var pending = viewModel.AppendToQueueAsync(
+            "queue-1",
+            [new TextContent("pending")],
+            TestContext.Current.CancellationToken);
+
+        Assert.False(pending.IsCompleted);
+        Assert.Empty(Assert.Single(viewModel.Queues).Items);
+
+        source.CompletePending();
+        await pending;
+
+        Assert.Single(Assert.Single(viewModel.Queues).Items);
+    }
+
+    [Fact]
+    public async Task InputQueueViewModel_CommandConflict_ReplacesProjectionFromAuthoritativeSnapshot()
+    {
+        var source = new DeferredQueues { ConflictNextEnqueue = true };
+        await using var remote = new RemoteAgentChatProxy(new StubAgentChat(source, MakeDefinition()));
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions
+        {
+            AgentChat = remote,
+            HiddenBuiltInQueueId = "not-the-default-queue",
+            ForegroundScheduler = this.foregroundScheduler,
+        });
+
+        var result = await viewModel.AppendToQueueAsync(
+            "queue-1",
+            [new TextContent("stale")],
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(AgentInputQueueCommandStatus.Conflict, result.Status);
+        Assert.Empty(Assert.Single(viewModel.Queues).Items);
+        Assert.Equal(source.Snapshot.Revision, remote.InputQueues.Snapshot.Revision);
+    }
+
+    [Fact]
+    public async Task InputQueueViewModel_Dispose_UnsubscribesChangedWithoutDisposingOwnedAggregate()
+    {
+        var source = new DeferredQueues();
+        await using var remote = new RemoteAgentChatProxy(new StubAgentChat(source, MakeDefinition()));
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions
+        {
+            AgentChat = remote,
+            HiddenBuiltInQueueId = "not-the-default-queue",
+            ForegroundScheduler = this.foregroundScheduler,
+        });
+
+        viewModel.Dispose();
+        source.RaiseChanged();
+
+        Assert.NotNull(remote.InputQueues);
+        await Task.CompletedTask;
+    }
+
+    [Fact]
     public async Task CommandConflict_StaleRevision_RefreshesFromAuthoritativeSnapshot()
     {
         var source = new DeferredQueues();
@@ -398,6 +526,32 @@ public sealed class AgentViewModelRetryTests
         source.ReleaseCompletion();
         await pending;
         Assert.Equal(source.Snapshot.Revision, observedRevisions.Single());
+    }
+
+    [Fact]
+    public async Task QueueComposer_AcknowledgedSubmission_RemovesOnlySubmittedAttachments()
+    {
+        var source = new DeferredQueues();
+        await using var remote = new RemoteAgentChatProxy(new StubAgentChat(source, MakeDefinition()));
+        var viewModel = new InputQueueViewModel(new InputQueueViewModelOptions
+        {
+            AgentChat = remote,
+            HiddenBuiltInQueueId = "not-the-default-queue",
+        });
+        var composer = viewModel.DefaultComposer;
+        composer.AppendImageAttachment([1], "image/png", 1, 1, "submitted.png");
+        composer.InputText += " message";
+
+        var submission = composer.SubmitAsync(TestContext.Current.CancellationToken);
+        composer.AppendImageAttachment([2], "image/png", 2, 2, "new.png");
+        source.CompletePending();
+
+        Assert.True(await submission);
+        Assert.True(composer.HasAttachments);
+        Assert.Single(composer.AttachmentPreviews);
+        Assert.DoesNotContain("submitted.png", composer.InputText, StringComparison.Ordinal);
+        Assert.Contains("new.png", composer.InputText, StringComparison.Ordinal);
+        viewModel.Dispose();
     }
 
     [Fact]
@@ -480,8 +634,10 @@ public sealed class AgentViewModelRetryTests
         private readonly DeferredQueue queue;
         private TaskCompletionSource<AgentInputQueueCommandResult>? pendingCompletion;
         private Guid pendingCommandId;
+        private EnqueueAgentInputRequest? pendingRequest;
         private long revision;
         public string? LastItemId { get; private set; }
+        public bool ConflictNextEnqueue { get; init; }
 
         public DeferredQueues()
         {
@@ -518,6 +674,16 @@ public sealed class AgentViewModelRetryTests
 
         public Task<AgentInputQueueCommandResult> EnqueueAsync(EnqueueAgentInputRequest request, CancellationToken ct = default)
         {
+            if (this.ConflictNextEnqueue)
+            {
+                return Task.FromResult(new AgentInputQueueCommandResult
+                {
+                    CommandId = request.CommandId,
+                    Status = AgentInputQueueCommandStatus.Conflict,
+                    Revision = this.Snapshot.Revision,
+                    CurrentSnapshot = this.Snapshot,
+                });
+            }
             if (request.ExpectedRevision != this.Snapshot.Revision)
             {
                 return Task.FromResult(new AgentInputQueueCommandResult
@@ -531,6 +697,7 @@ public sealed class AgentViewModelRetryTests
 
             this.pendingCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
             this.pendingCommandId = request.CommandId;
+            this.pendingRequest = request;
             this.LastItemId = Guid.NewGuid().ToString("N");
             return this.pendingCompletion.Task;
         }
@@ -547,6 +714,18 @@ public sealed class AgentViewModelRetryTests
             this.Apply(request);
             this.ReleaseCompletion();
         }
+
+        public void CompletePending()
+        {
+            if (this.pendingRequest is not { } request)
+            {
+                throw new InvalidOperationException("No pending queue command.");
+            }
+
+            this.CompleteApplied(request);
+        }
+
+        public void RaiseChanged() => this.Changed?.Invoke(this, EventArgs.Empty);
 
         public void ReleaseCompletion()
         {

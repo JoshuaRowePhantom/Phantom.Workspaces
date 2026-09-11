@@ -30,7 +30,9 @@ public sealed class VsCodeCliInvokerTests
             lock (this.calls) { this.calls.Add(notification); }
         }
         public void Remove(string tabId) { }
+        public void Remove(NotificationTargetRequest request) { }
         public void MarkRead(string tabId) { }
+        public void MarkRead(NotificationTargetRequest request) { }
     }
 
     [Fact]

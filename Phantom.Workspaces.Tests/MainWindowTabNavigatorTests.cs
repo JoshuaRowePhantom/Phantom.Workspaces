@@ -62,9 +62,16 @@ public sealed class MainWindowTabNavigatorTests
     private sealed class FakeNotifications : INotificationService
     {
         public List<string> MarkedRead { get; } = [];
+        public List<NotificationTargetRequest> MarkedTargets { get; } = [];
         public void Notify(Notification notification) { }
         public void Remove(string tabId) { }
+        public void Remove(NotificationTargetRequest request) { }
         public void MarkRead(string tabId) => this.MarkedRead.Add(tabId);
+        public void MarkRead(NotificationTargetRequest request)
+        {
+            this.MarkedRead.Add(request.TabId);
+            this.MarkedTargets.Add(request);
+        }
         public IReadOnlyList<NotificationEntry> Notifications => [];
         public bool HasActiveRun => false;
         public event System.EventHandler? NotificationsChanged { add { } remove { } }
@@ -101,7 +108,7 @@ public sealed class MainWindowTabNavigatorTests
             new NavigationTarget { Path = UiPath.ForTab(null, "tab-1") },
             new NavigationOptions { MarkNotificationRead = true });
 
-        Assert.Equal(new[] { "tab-1" }, notifications.MarkedRead);
+        Assert.Equal(["chat-idle", "legacy"], notifications.MarkedTargets.Select(value => value.Kind));
     }
 
     [Fact]
@@ -246,7 +253,7 @@ public sealed class MainWindowTabNavigatorTests
         await navigator.NavigateAsync(new NavigationTarget { Path = UiPath.ForTab(null, "tab-1") });
 
         Assert.Single(history.Pushed);
-        Assert.Equal(new[] { "tab-1" }, notifications.MarkedRead);
+        Assert.Equal(["chat-idle", "legacy"], notifications.MarkedTargets.Select(value => value.Kind));
     }
 
     [Fact]

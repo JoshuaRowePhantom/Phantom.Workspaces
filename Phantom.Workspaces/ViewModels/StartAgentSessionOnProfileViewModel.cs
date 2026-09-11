@@ -9,6 +9,7 @@ using AgentSchema;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Services;
 
@@ -242,8 +243,11 @@ public sealed class StartAgentSessionOnProfileViewModel : WorkspaceTabViewModel
         var persistedEntity = createdAgentSessionEntity.Data is JsonElement value
             ? value
             : throw new InvalidOperationException("The created agent session has no persisted data.");
-        var acquisition = await this.openAgentSessionShortcutHandler.ResolveAcquisitionAsync(
-            this.mainWindowViewModel, persistedEntity, CancellationToken.None);
+        var acquisition = await this.openAgentSessionShortcutHandler.OpenPersistedSessionAsync(
+            this.mainWindowViewModel,
+            persistedEntity,
+            AgentSessionOpenIntent.StartOrAttach,
+            CancellationToken.None);
         var lease = await this.openAgentSessionShortcutHandler.RunningAgentChatTable.AcquireAsync(
             new AcquireAgentChatRequest
             {
@@ -266,6 +270,7 @@ public sealed class StartAgentSessionOnProfileViewModel : WorkspaceTabViewModel
                 MainWindowViewModel = this.mainWindowViewModel,
                 AgentSessionEntity = createdAgentSessionEntity,
                 AgentChat = lease.AgentChat,
+                RemoteProfileDisplayName = acquisition.RemoteProfileDisplayName,
             });
         agentSessionTab.SetLease(lease);
 

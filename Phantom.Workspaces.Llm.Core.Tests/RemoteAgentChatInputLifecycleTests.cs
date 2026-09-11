@@ -43,7 +43,7 @@ public sealed partial class RemoteAgentChatTests
     }
 
     [Fact]
-    public async Task InputQueues_TerminalChannelClose_PropagatesPrimaryOperationFailure()
+    public async Task InputQueues_TerminalBeforeChannelClose_PropagatesTerminalFailure()
     {
         var (transport, chat) = await AttachLifecycleChatAsync();
         await using (chat)
@@ -64,7 +64,7 @@ public sealed partial class RemoteAgentChatTests
             transport.CompleteServer();
 
             var failure = await Assert.ThrowsAsync<RemoteAgentProtocolException>(() => operation);
-            Assert.Equal("The remote session channel closed.", failure.Message);
+            Assert.Equal("The session terminated before command completion.", failure.Message);
         }
     }
 
@@ -107,6 +107,22 @@ public sealed partial class RemoteAgentChatTests
         Assert.True(transport.ChannelDisposed);
         Assert.True(operation.IsCompleted);
         await Assert.ThrowsAsync<RemoteAgentProtocolException>(() => operation);
+    }
+
+    [Fact]
+    public async Task DetachAsync_CancelledWrite_StillDisposesChannelWithoutDisposingBorrowedTransport()
+    {
+        var (transport, chat) = await AttachLifecycleChatAsync();
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        transport.FailNextClientWrite(new OperationCanceledException(cancellation.Token));
+
+        var error = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => chat.DetachAsync(cancellation.Token));
+
+        Assert.Equal(cancellation.Token, error.CancellationToken);
+        Assert.True(transport.ChannelDisposed);
+        Assert.False(transport.TransportDisposed);
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -155,6 +171,7 @@ public sealed partial class RemoteAgentChatTests
         private readonly LifecycleChannel channel = new();
 
         public bool ChannelDisposed => this.channel.Disposed;
+        public bool TransportDisposed { get; private set; }
 
         public Task<IMessageChannel> ConnectToMessageChannelAsync(
             JsonElement request,
@@ -167,7 +184,11 @@ public sealed partial class RemoteAgentChatTests
         public Task<Stream> ConnectToStreamAsync(JsonElement request, CancellationToken ct = default)
             => throw new NotSupportedException();
 
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public ValueTask DisposeAsync()
+        {
+            this.TransportDisposed = true;
+            return ValueTask.CompletedTask;
+        }
         public ValueTask SendServerAsync(JsonElement value) => this.channel.ServerWrites.Writer.WriteAsync(value);
         public ValueTask<JsonElement> ReadClientWriteAsync() => this.channel.ClientWrites.Reader.ReadAsync();
         public void CompleteServer() => this.channel.ServerWrites.Writer.TryComplete();

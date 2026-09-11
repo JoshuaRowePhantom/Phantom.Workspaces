@@ -7,6 +7,7 @@ public sealed record InputQueueViewModelOptions
     public required IAgentChat AgentChat { get; init; }
     public string? DefaultQueueId { get; init; }
     public string? HiddenBuiltInQueueId { get; init; }
+    public TaskScheduler? ForegroundScheduler { get; init; } = null;
 }
 
 internal sealed record RemoveQueueItemContentRequest

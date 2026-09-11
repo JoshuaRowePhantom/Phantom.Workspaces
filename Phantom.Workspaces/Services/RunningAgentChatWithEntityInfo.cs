@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Collections.Specialized;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
 
@@ -17,6 +18,11 @@ public sealed class RunningAgentChatWithEntityInfo : INotifyPropertyChanged
     private bool _continueInBackground;
     private int _viewerCount = 1;
     private bool _isRemote;
+    private bool _canSetContinueInBackground;
+    private bool _isInterruptible;
+    private bool _isConnected = true;
+    private bool _isTerminal;
+    private readonly INotifyCollectionChanged? runningItems;
 
     /// <summary>The agent session identifier.</summary>
     public AgentSessionId SessionId => _chat?.SessionId ?? _sessionId;
@@ -74,6 +80,30 @@ public sealed class RunningAgentChatWithEntityInfo : INotifyPropertyChanged
         init => _viewerCount = value;
     }
 
+    internal bool CanSetContinueInBackground
+    {
+        get => _canSetContinueInBackground;
+        init => _canSetContinueInBackground = value;
+    }
+
+    internal bool IsInterruptible
+    {
+        get => _isInterruptible;
+        init => _isInterruptible = value;
+    }
+
+    internal bool IsConnected
+    {
+        get => _isConnected;
+        init => _isConnected = value;
+    }
+
+    internal bool IsTerminal
+    {
+        get => _isTerminal;
+        init => _isTerminal = value;
+    }
+
     /// <inheritdoc/>
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -85,6 +115,12 @@ public sealed class RunningAgentChatWithEntityInfo : INotifyPropertyChanged
         EntityName = entityName;
         EntityId = entityId;
         WorkspaceId = workspaceId;
+        this.runningItems = chat.AgentChat?.RunningItems;
+        if (this.runningItems is not null)
+        {
+            this._isInterruptible = chat.AgentChat!.RunningItems.Count > 0;
+            this.runningItems.CollectionChanged += this.OnRunningItemsChanged;
+        }
     }
 
     internal RunningAgentChatWithEntityInfo(
@@ -199,6 +235,32 @@ public sealed class RunningAgentChatWithEntityInfo : INotifyPropertyChanged
         this.PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsRemote)));
     }
 
+    internal void SetCanSetContinueInBackground(bool value) =>
+        this.SetBoolean(
+            ref this._canSetContinueInBackground,
+            value,
+            nameof(this.CanSetContinueInBackground));
+
+    internal void SetIsInterruptible(bool value) =>
+        this.SetBoolean(ref this._isInterruptible, value, nameof(this.IsInterruptible));
+
+    internal void SetIsConnected(bool value) =>
+        this.SetBoolean(ref this._isConnected, value, nameof(this.IsConnected));
+
+    internal void SetIsTerminal(bool value) =>
+        this.SetBoolean(ref this._isTerminal, value, nameof(this.IsTerminal));
+
+    private void SetBoolean(ref bool field, bool value, string propertyName)
+    {
+        if (field == value)
+        {
+            return;
+        }
+
+        field = value;
+        this.PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+    }
+
     /// <summary>
     /// #1485: bump the viewer count. Used by <c>RunningAgentChatTable</c> on lease
     /// acquisition/release so viewer counts reflect actual attach state.
@@ -211,4 +273,15 @@ public sealed class RunningAgentChatWithEntityInfo : INotifyPropertyChanged
     /// final-lease teardown proceeds; when true, the running chat survives with zero viewers.
     /// </summary>
     internal void DecrementViewerCount() => this.SetViewerCount(Math.Max(0, _viewerCount - 1));
+
+    internal void Dispose()
+    {
+        if (this.runningItems is not null)
+        {
+            this.runningItems.CollectionChanged -= this.OnRunningItemsChanged;
+        }
+    }
+
+    private void OnRunningItemsChanged(object? sender, NotifyCollectionChangedEventArgs e) =>
+        this.SetIsInterruptible(this._chat?.AgentChat?.RunningItems.Count > 0);
 }

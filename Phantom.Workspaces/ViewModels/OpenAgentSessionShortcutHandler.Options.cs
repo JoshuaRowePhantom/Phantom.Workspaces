@@ -19,6 +19,7 @@ public sealed record CreateAgentSessionTabRequest
     public required MainWindowViewModel MainWindowViewModel { get; init; }
     public required SubscribedEntityViewModel AgentSessionEntity { get; init; }
     public required IAgentChat AgentChat { get; init; }
+    public string? RemoteProfileDisplayName { get; init; }
 }
 
 public sealed record ComposeSessionAgentViewModelOptions

@@ -7,6 +7,7 @@ using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Secrets;
@@ -313,7 +314,8 @@ public partial class App : Application
             var applicationServices = new ApplicationServices(
                 new RunningAgentChatTable(
                     agentChatFactory,
-                    Services.AgentSessionRuntimeContextFactory.FromProvider(transportFactoryRegistryProvider)),
+                    Services.AgentSessionRuntimeContextFactory.FromProvider(transportFactoryRegistryProvider),
+                    loggerFactory.CreateLogger<RunningAgentChatTable>()),
                 agentPersistenceStoreCache,
                 loggerFactory: loggerFactory,
                 logDirectoryProvider: logDirectoryProvider,

@@ -32,9 +32,11 @@ public sealed class InputQueueEntryViewModel : ViewModelBase
         this.Text = ReadText(item.Messages);
         this.editText = this.Text;
         this.attachments = this.CreateAttachments(item.Messages);
-        this.RemoveCommand = new RelayCommand(this.Remove);
+        this.RemoveCommand = new AsyncRelayCommand(
+            _ => this.parent.ExecuteQueueCommandWithFeedbackAsync(() => this.RemoveAsync()));
         this.EditCommand = new RelayCommand(this.BeginEdit);
-        this.SaveEditCommand = new RelayCommand(this.SaveEdit);
+        this.SaveEditCommand = new AsyncRelayCommand(
+            _ => this.parent.ExecuteQueueOperationWithFeedbackAsync(() => this.SaveEditAsync()));
         this.CancelEditCommand = new RelayCommand(this.CancelEdit);
     }
 
@@ -95,7 +97,8 @@ public sealed class InputQueueEntryViewModel : ViewModelBase
         this.RaisePropertyChanged(nameof(this.Text));
     }
 
-    private void Remove() => this.parent.RemoveQueueItem(this.queueId, this.ItemId);
+    private Task<AgentInputQueueCommandResult> RemoveAsync() =>
+        this.parent.RemoveQueueItemAsync(this.queueId, this.ItemId);
 
     private void RemoveAttachment(int contentIndex) => this.parent.RemoveQueueItemContent(new RemoveQueueItemContentRequest
     {
@@ -111,16 +114,37 @@ public sealed class InputQueueEntryViewModel : ViewModelBase
         this.EditStarted?.Invoke(this, EventArgs.Empty);
     }
 
-    public void SaveEdit()
+    public void SaveEdit() =>
+        _ = this.parent.ExecuteQueueOperationWithFeedbackAsync(() => this.SaveEditAsync());
+
+    public async Task SaveEditAsync(CancellationToken ct = default)
     {
-        this.parent.UpdateQueueItem(this.queueId, this.ItemId, this.EditText);
-        this.IsEditing = false;
+        var result = await this.parent.UpdateQueueItemAsync(
+            this.queueId,
+            this.ItemId,
+            this.EditText,
+            ct);
+        if (result.Status == AgentInputQueueCommandStatus.Applied)
+        {
+            this.IsEditing = false;
+        }
+        else
+        {
+            this.parent.ReportQueueOperationFailure();
+        }
     }
 
-    public void SaveAndSendImmediately()
+    public void SaveAndSendImmediately() =>
+        _ = this.parent.ExecuteQueueOperationWithFeedbackAsync(
+            () => this.SaveAndSendImmediatelyAsync());
+
+    public async Task SaveAndSendImmediatelyAsync(CancellationToken ct = default)
     {
-        this.parent.SendQueueItemImmediately(this.queueId, this.ItemId, this.EditText);
-        this.IsEditing = false;
+        await this.parent.SendQueueItemImmediatelyAsync(this.queueId, this.ItemId, this.EditText, ct);
+        if (!this.parent.TryGetItemSnapshot(this.queueId, this.ItemId, out _))
+        {
+            this.IsEditing = false;
+        }
     }
 
     public void CancelEdit()

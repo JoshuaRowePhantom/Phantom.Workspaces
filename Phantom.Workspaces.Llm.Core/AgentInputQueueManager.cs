@@ -77,6 +77,12 @@ public sealed class AgentInputQueueManager
     {
         ArgumentNullException.ThrowIfNull(queue);
         Interlocked.Increment(ref this.aggregateRevision);
+        this.NotifyQueueStateChanged(queue, kind);
+    }
+
+    internal void NotifyQueueStateChanged(AgentInputQueue queue, QueueStateChangeKind kind)
+    {
+        ArgumentNullException.ThrowIfNull(queue);
         this.QueueStateChanged?.Invoke(
             this,
             new QueueStateChangedEventArgs

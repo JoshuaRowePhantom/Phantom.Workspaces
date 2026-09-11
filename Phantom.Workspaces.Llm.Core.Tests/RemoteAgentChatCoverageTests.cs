@@ -289,6 +289,49 @@ public sealed partial class RemoteAgentChatTests
     }
 
     [Fact]
+    public async Task InputQueues_OlderCommandSnapshot_DoesNotReplaceNewerQueueEvent()
+    {
+        var (transport, chat) = await AttachAsync();
+        await using (chat)
+        {
+            var operation = chat.InputQueues.DeleteQueueAsync(new DeleteAgentInputQueueRequest
+            {
+                QueueId = "missing",
+                ExpectedRevision = 1,
+                CommandId = Guid.NewGuid(),
+            });
+            var command = AgentSessionProtocolCodec.DeserializeCommand(
+                await transport.Outgoing.ReadAsync());
+            var queueChanged = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            chat.InputQueues.Changed += (_, _) =>
+            {
+                if (chat.InputQueues.Snapshot.Revision == 6)
+                    queueChanged.TrySetResult();
+            };
+            await transport.SendAsync(Frame(2, new QueueChangedEvent
+            {
+                Revision = 6,
+                Queues = [],
+                RemovedQueueIds = [],
+            }));
+            await queueChanged.Task;
+            var stale = AgentSessionProtocolCodecTests.Snapshot().InputQueues with { Revision = 5 };
+
+            await CompleteAsync(transport, 3, command, new AgentInputQueueCommandResult
+            {
+                CommandId = command.CommandId,
+                Status = AgentInputQueueCommandStatus.Conflict,
+                ErrorCode = "conflict",
+                Revision = 5,
+                CurrentSnapshot = stale,
+            });
+            await operation;
+
+            Assert.Equal(6, chat.InputQueues.Snapshot.Revision);
+        }
+    }
+
+    [Fact]
     public async Task InputQueues_CommandPending_DoesNotMutateProjection()
     {
         var (transport, chat) = await AttachAsync();
@@ -395,15 +438,67 @@ public sealed partial class RemoteAgentChatTests
         var (transport, chat) = await AttachAsync();
         await using (chat)
         {
+            var stateApplied = Event(chat, nameof(chat.InformationChanged));
+            await transport.SendAsync(Frame(2, new StreamingStartedEvent
+            {
+                RunId = "active",
+                Item = JsonSerializer.SerializeToElement(
+                    new AgentChatHistoryItem
+                    {
+                        Role = ChatRole.Assistant,
+                        Contents = [new TextContent("running")],
+                    },
+                    AIJsonUtilities.DefaultOptions),
+            }));
+            await transport.SendAsync(Frame(3, new ModalRaisedEvent { Modal = Modal() }));
+            await transport.SendAsync(Frame(4, new BusyChangedEvent { IsBusy = true }));
+            await transport.SendAsync(Frame(5, new AgentInformationChangedEvent
+            {
+                Information = AgentSessionProtocolCodecTests.Snapshot().Information,
+            }));
+            await stateApplied;
+            Assert.Single(chat.RunningItems);
+            Assert.Single(chat.Modals);
+            Assert.True(chat.IsBusy);
+
             var operation = chat.TerminateAsync();
             var command = AgentSessionProtocolCodec.DeserializeCommand(await transport.Outgoing.ReadAsync());
-            await CompleteAsync(transport, 2, command);
+            await CompleteAsync(transport, 6, command);
             Assert.False(operation.IsCompleted);
-            await transport.SendAsync(Frame(3, new SessionTerminalEvent
+            await transport.SendAsync(Frame(7, new SessionTerminalEvent
             {
                 Reason = "done", CompletionState = JsonDocument.Parse("""{"state":"completed"}""").RootElement.Clone(),
             }, command.CorrelationId));
             await operation;
+            Assert.Empty(chat.RunningItems);
+            Assert.Empty(chat.Modals);
+            Assert.False(chat.IsBusy);
+        }
+    }
+
+    [Fact]
+    public async Task Snapshot_WithUnchangedModal_PreservesCollectionIdentity()
+    {
+        var snapshot = AgentSessionProtocolCodecTests.Snapshot() with { Modals = [Modal()] };
+        var (transport, chat) = await AttachAsync(snapshot);
+        await using (chat)
+        {
+            var original = Assert.Single(chat.Modals);
+            var changes = new List<NotifyCollectionChangedAction>();
+            ((INotifyCollectionChanged)chat.Modals).CollectionChanged +=
+                (_, args) => changes.Add(args.Action);
+            var applied = Event(chat, nameof(chat.InformationChanged));
+
+            await transport.SendAsync(Frame(2, new SessionSnapshotEvent { Snapshot = snapshot }));
+            await transport.SendAsync(Frame(3, new AgentInformationChangedEvent
+            {
+                Information = snapshot.Information with { DisplayName = "Applied" },
+            }));
+            await applied;
+
+            Assert.Same(original, Assert.Single(chat.Modals));
+            Assert.DoesNotContain(NotifyCollectionChangedAction.Reset, changes);
+            Assert.DoesNotContain(NotifyCollectionChangedAction.Remove, changes);
         }
     }
 

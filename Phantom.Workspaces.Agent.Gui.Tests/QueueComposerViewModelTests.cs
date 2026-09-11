@@ -29,7 +29,9 @@ public sealed class QueueComposerViewModelTests
         composer.InputText = "hello world";
 
         // Caret sits just after "hello " (index 6): submit "hello", keep "world".
-        var submitted = composer.SubmitBeforeCursor(caretIndex: 6);
+        var submitted = await composer.SubmitBeforeCursorAsync(
+            caretIndex: 6,
+            TestContext.Current.CancellationToken);
 
         Assert.True(submitted);
         Assert.Equal("world", composer.InputText);
@@ -52,7 +54,9 @@ public sealed class QueueComposerViewModelTests
 
         composer.InputText = "complete message";
 
-        var submitted = composer.SubmitBeforeCursor(caretIndex: composer.InputText.Length);
+        var submitted = await composer.SubmitBeforeCursorAsync(
+            caretIndex: composer.InputText.Length,
+            TestContext.Current.CancellationToken);
 
         Assert.True(submitted);
         Assert.Equal(string.Empty, composer.InputText);
@@ -75,7 +79,9 @@ public sealed class QueueComposerViewModelTests
 
         composer.InputText = "keep me";
 
-        var submitted = composer.SubmitBeforeCursor(caretIndex: 0);
+        var submitted = await composer.SubmitBeforeCursorAsync(
+            caretIndex: 0,
+            TestContext.Current.CancellationToken);
 
         Assert.False(submitted);
         Assert.Equal("keep me", composer.InputText);
@@ -103,7 +109,9 @@ public sealed class QueueComposerViewModelTests
 
         // "/model gpt" before the caret, " keep this" retained after.
         composer.InputText = "/model gpt keep this";
-        var submitted = composer.SubmitBeforeCursor(caretIndex: "/model gpt".Length);
+        var submitted = await composer.SubmitBeforeCursorAsync(
+            caretIndex: "/model gpt".Length,
+            TestContext.Current.CancellationToken);
 
         await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
@@ -125,12 +133,84 @@ public sealed class QueueComposerViewModelTests
 
         composer.InputText = "hello world";
 
-        var submitted = composer.SubmitBeforeCursor(caretIndex: 6, out var newCaretIndex);
+        var submitted = await composer.SubmitBeforeCursorAsync(
+            caretIndex: 6,
+            TestContext.Current.CancellationToken);
+        var newCaretIndex = 0;
 
         Assert.True(submitted);
         Assert.Equal("world", composer.InputText);
         Assert.Equal(0, newCaretIndex);
 
+        inputQueue.Dispose();
+    }
+
+    [Fact]
+    public async Task SubmitBeforeCursorAsync_CancelledMutation_PreservesEntireDraft()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var composer = inputQueue.DefaultComposer;
+        composer.InputText = "hello world";
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            composer.SubmitBeforeCursorAsync(caretIndex: 6, cancellation.Token));
+
+        Assert.Equal("hello world", composer.InputText);
+        inputQueue.Dispose();
+    }
+
+    [Fact]
+    public async Task SubmitBeforeCursorAsync_DraftChangesWhilePending_AreNotOverwritten()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var composer = inputQueue.DefaultComposer;
+        var invoked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        composer.SlashCommandInterceptorAsync = _ =>
+        {
+            invoked.TrySetResult();
+            return release.Task;
+        };
+        composer.InputText = "/help keep";
+
+        var submission = composer.SubmitBeforeCursorAsync(
+            caretIndex: "/help".Length,
+            TestContext.Current.CancellationToken);
+        await invoked.Task.WaitAsync(TestContext.Current.CancellationToken);
+        composer.AppendImageAttachment([0], "image/png", 1, 1, "new.png");
+        var editedDraft = composer.InputText;
+        release.TrySetResult();
+
+        Assert.True(await submission);
+        Assert.Equal(editedDraft, composer.InputText);
+        Assert.True(composer.HasAttachments);
+        inputQueue.Dispose();
+    }
+
+    [Fact]
+    public async Task SubmitCommand_RejectedQueue_PreservesDraftAndReportsFailure()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var queue = chat.QueueManager.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
+        var composer = new QueueComposerViewModel(inputQueue, queue.Queue.QueueId, isDefaultComposer: false);
+        inputQueue.RemoveInputQueue(queue.Queue.QueueId);
+        composer.InputText = "preserve me";
+
+        composer.SubmitCommand.Execute(null);
+        await Assert.IsType<AsyncRelayCommand>(composer.SubmitCommand).LastExecutionTask!;
+
+        Assert.Equal("preserve me", composer.InputText);
+        Assert.Contains(chat.History, item =>
+            item.Contents.OfType<TextContent>().Any(content =>
+                content.Text.Contains("could not be submitted", StringComparison.Ordinal)));
         inputQueue.Dispose();
     }
 

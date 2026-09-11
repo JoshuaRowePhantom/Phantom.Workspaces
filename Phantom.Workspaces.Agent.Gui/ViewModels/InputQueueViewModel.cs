@@ -20,6 +20,8 @@ public sealed class InputQueueViewModel : ViewModelBase
 {
     private readonly IAgentChat agentChat;
     private readonly IAgentInputQueues inputQueues;
+    private readonly TaskScheduler foregroundScheduler;
+    private AgentInputQueuesSnapshot? acknowledgedSnapshot;
     private readonly Dictionary<string, InputQueueGroupViewModel> queueViewModels = new(StringComparer.Ordinal);
     private readonly List<string> queueUseHistory = [];
     // #1485: serialize RefreshQueues so concurrent Changed notifications delivered on
@@ -35,30 +37,42 @@ public sealed class InputQueueViewModel : ViewModelBase
     private readonly ICommand submitToMostRecentQueueCommand;
     private readonly ICommand submitToNewQueueCommand;
     private readonly ICommand createNewQueueCommand;
-    private int ignoredQueueChangedEvents;
+    private bool disposed;
 
     public InputQueueViewModel(InputQueueViewModelOptions options)
         : this(
             (options ?? throw new ArgumentNullException(nameof(options))).AgentChat,
             options.DefaultQueueId ?? options.AgentChat.InputQueues.DefaultQueue.Snapshot.QueueId,
-            options.HiddenBuiltInQueueId ?? options.AgentChat.InputQueues.ImmediateQueue.Snapshot.QueueId)
+            options.HiddenBuiltInQueueId ?? options.AgentChat.InputQueues.ImmediateQueue.Snapshot.QueueId,
+            options.ForegroundScheduler ?? TaskScheduler.Current)
     {
     }
 
-    private InputQueueViewModel(IAgentChat agentChat, string defaultQueueId, string? hiddenBuiltInQueueId)
+    private InputQueueViewModel(
+        IAgentChat agentChat,
+        string defaultQueueId,
+        string? hiddenBuiltInQueueId,
+        TaskScheduler foregroundScheduler)
     {
         this.agentChat = agentChat ?? throw new ArgumentNullException(nameof(agentChat));
         this.inputQueues = agentChat.InputQueues;
+        this.foregroundScheduler = foregroundScheduler ?? throw new ArgumentNullException(nameof(foregroundScheduler));
         this.DefaultQueueId = defaultQueueId;
         this.hiddenBuiltInQueueId = hiddenBuiltInQueueId;
         this.DefaultComposer = new QueueComposerViewModel(this, this.DefaultQueueId, isDefaultComposer: true);
         this.SubmitToDefaultQueueCommand = this.DefaultComposer.SubmitCommand;
-        this.holdAllQueuesCommand = new RelayCommand(this.HoldAllQueues);
-        this.unholdAllQueuesCommand = new RelayCommand(this.UnholdAllQueues);
-        this.toggleHoldAllQueuesCommand = new RelayCommand(this.ToggleHoldAllQueues);
-        this.submitToMostRecentQueueCommand = new RelayCommand(() => this.SubmitToMostRecentQueue());
-        this.submitToNewQueueCommand = new RelayCommand(() => this.SubmitToNewQueue());
-        this.createNewQueueCommand = new RelayCommand(this.CreateNewQueue);
+        this.holdAllQueuesCommand = new AsyncRelayCommand(
+            _ => this.ExecuteQueueOperationWithFeedbackAsync(() => this.HoldAllQueuesAsync()));
+        this.unholdAllQueuesCommand = new AsyncRelayCommand(
+            _ => this.ExecuteQueueOperationWithFeedbackAsync(() => this.UnholdAllQueuesAsync()));
+        this.toggleHoldAllQueuesCommand = new AsyncRelayCommand(
+            _ => this.ExecuteQueueOperationWithFeedbackAsync(() => this.ToggleHoldAllQueuesAsync()));
+        this.submitToMostRecentQueueCommand = new AsyncRelayCommand(
+            _ => this.DefaultComposer.SubmitWithFeedbackAsync(() => this.SubmitToMostRecentQueueAsync()));
+        this.submitToNewQueueCommand = new AsyncRelayCommand(
+            _ => this.DefaultComposer.SubmitWithFeedbackAsync(() => this.SubmitToNewQueueAsync()));
+        this.createNewQueueCommand = new AsyncRelayCommand(
+            _ => this.ExecuteQueueOperationWithFeedbackAsync(() => this.CreateNewQueueAsync()));
         this.inputQueues.Changed += this.OnQueuesChanged;
         this.RefreshQueues();
     }
@@ -78,6 +92,54 @@ public sealed class InputQueueViewModel : ViewModelBase
     public ObservableCollection<InputQueueGroupViewModel> Queues { get; } = [];
 
     public IReadOnlyList<AgentInputQueueSnapshot> InputQueues => this.GetVisibleQueues();
+
+    internal void ReportSubmissionFailure() =>
+        this.agentChat.EnqueueTransientDiagnostic(
+            "The message could not be submitted. Your draft was preserved.");
+
+    internal void ReportQueueOperationFailure() =>
+        this.agentChat.EnqueueTransientDiagnostic(
+            "The queue change could not be applied. Try again.");
+
+    internal async Task ExecuteQueueOperationWithFeedbackAsync(Func<Task> operation)
+    {
+        try
+        {
+            await operation().ConfigureAwait(false);
+        }
+        catch (Exception exception) when (IsExpectedQueueOperationFailure(exception))
+        {
+            this.ReportQueueOperationFailure();
+        }
+    }
+
+    internal async Task ExecuteQueueCommandWithFeedbackAsync(
+        Func<Task<AgentInputQueueCommandResult>> operation)
+    {
+        try
+        {
+            var result = await operation().ConfigureAwait(false);
+            if (result.Status != AgentInputQueueCommandStatus.Applied)
+                this.ReportQueueOperationFailure();
+        }
+        catch (Exception exception) when (IsExpectedQueueOperationFailure(exception))
+        {
+            this.ReportQueueOperationFailure();
+        }
+    }
+
+    internal async Task ExecuteQueueBooleanOperationWithFeedbackAsync(Func<Task<bool>> operation)
+    {
+        try
+        {
+            if (!await operation().ConfigureAwait(false))
+                this.ReportQueueOperationFailure();
+        }
+        catch (Exception exception) when (IsExpectedQueueOperationFailure(exception))
+        {
+            this.ReportQueueOperationFailure();
+        }
+    }
 
     public string InputText
     {
@@ -133,31 +195,55 @@ public sealed class InputQueueViewModel : ViewModelBase
         this.DefaultComposer.Submit();
     }
 
+    public Task SubmitToDefaultQueueAsync(CancellationToken ct = default) =>
+        this.DefaultComposer.SubmitAsync(ct);
+
     public bool SubmitToMostRecentQueue()
+    {
+        var hasContent = !string.IsNullOrWhiteSpace(this.InputText)
+            || this.DefaultComposer.HasAttachments;
+        _ = this.DefaultComposer.SubmitWithFeedbackAsync(() => this.SubmitToMostRecentQueueAsync());
+        return hasContent;
+    }
+
+    public async Task<bool> SubmitToMostRecentQueueAsync(CancellationToken ct = default)
     {
         var queueId = this.queueUseHistory.FirstOrDefault(q => q != this.DefaultQueueId && this.TryGetQueueSnapshot(q, out _));
         if (queueId is not null)
         {
-            return this.DefaultComposer.Submit(queueId);
+            return await this.SubmitDefaultComposerOnForegroundAsync(queueId, ct).ConfigureAwait(false);
         }
 
         if (this.TryGetQueueSnapshot(this.DefaultQueueId, out var defaultQueue) && defaultQueue.IsImmediate)
         {
-            var newQueue = this.CreateQueue(
+            var newQueue = await this.CreateQueueAsync(
                 this.InputQueues.All(static q => q.Immediacy == AgentInputQueueImmediacy.Held)
-                    ? AgentInputQueueImmediacy.Held
-                    : AgentInputQueueImmediacy.Queue);
+                    ? AgentInputQueueImmediacy.Held : AgentInputQueueImmediacy.Queue,
+                ct).ConfigureAwait(false);
             if (newQueue is not null)
             {
-                this.RecordQueueUse(newQueue);
-                return this.DefaultComposer.Submit(newQueue);
+                return await this.RunOnForegroundAsync(
+                    async () =>
+                    {
+                        this.RecordQueueUse(newQueue);
+                        return await this.DefaultComposer.SubmitAsync(newQueue, ct);
+                    },
+                    ct).ConfigureAwait(false);
             }
         }
 
-        return this.DefaultComposer.Submit(this.DefaultQueueId);
+        return await this.SubmitDefaultComposerOnForegroundAsync(this.DefaultQueueId, ct).ConfigureAwait(false);
     }
 
     public bool SubmitToNewQueue()
+    {
+        var hasContent = !string.IsNullOrWhiteSpace(this.InputText)
+            || this.DefaultComposer.HasAttachments;
+        _ = this.DefaultComposer.SubmitWithFeedbackAsync(() => this.SubmitToNewQueueAsync());
+        return hasContent;
+    }
+
+    public async Task<bool> SubmitToNewQueueAsync(CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(this.InputText))
         {
@@ -166,51 +252,81 @@ public sealed class InputQueueViewModel : ViewModelBase
 
         // Ctrl+Shift+Q always stages the new queue in the Held state so the user can configure,
         // reorder, or release it before any work is dispatched (issue #1070).
-        var queueId = this.CreateQueue(AgentInputQueueImmediacy.Held);
-        return queueId is not null && this.DefaultComposer.Submit(queueId);
+        var queueId = await this.CreateQueueAsync(AgentInputQueueImmediacy.Held, ct).ConfigureAwait(false);
+        return queueId is not null
+            && await this.SubmitDefaultComposerOnForegroundAsync(queueId, ct).ConfigureAwait(false);
     }
 
     public void CreateNewQueue()
     {
-        var queueId = this.CreateQueue(
+        _ = this.ExecuteQueueOperationWithFeedbackAsync(() => this.CreateNewQueueAsync());
+    }
+
+    public async Task CreateNewQueueAsync(CancellationToken ct = default)
+    {
+        var queueId = await this.CreateQueueAsync(
             this.InputQueues.All(static queue => queue.Immediacy == AgentInputQueueImmediacy.Held)
-                ? AgentInputQueueImmediacy.Held
-                : AgentInputQueueImmediacy.Queue);
+                ? AgentInputQueueImmediacy.Held : AgentInputQueueImmediacy.Queue,
+            ct).ConfigureAwait(false);
         if (queueId is not null)
         {
-            this.RecordQueueUse(queueId);
+            await this.RunOnForegroundAsync(
+                () =>
+                {
+                    this.RecordQueueUse(queueId);
+                    return Task.CompletedTask;
+                },
+                ct).ConfigureAwait(false);
         }
     }
 
     public void ToggleHoldAllQueues()
     {
+        _ = this.ExecuteQueueOperationWithFeedbackAsync(() => this.ToggleHoldAllQueuesAsync());
+    }
+
+    public Task ToggleHoldAllQueuesAsync(CancellationToken ct = default)
+    {
         if (this.InputQueues.Count == 0)
         {
-            return;
+            return Task.CompletedTask;
         }
 
         var holdAll = this.InputQueues.Any(static queue => queue.Immediacy != AgentInputQueueImmediacy.Held);
-        this.SetAllQueuesHeld(holdAll);
+        return this.SetAllQueuesHeldAsync(holdAll, ct);
     }
 
     public void HoldAllQueues()
     {
-        this.SetAllQueuesHeld(held: true);
+        _ = this.ExecuteQueueOperationWithFeedbackAsync(() => this.HoldAllQueuesAsync());
     }
 
     public void UnholdAllQueues()
     {
-        this.SetAllQueuesHeld(held: false);
+        _ = this.ExecuteQueueOperationWithFeedbackAsync(() => this.UnholdAllQueuesAsync());
     }
 
+    public Task HoldAllQueuesAsync(CancellationToken ct = default) => this.SetAllQueuesHeldAsync(held: true, ct: ct);
+
+    public Task UnholdAllQueuesAsync(CancellationToken ct = default) => this.SetAllQueuesHeldAsync(held: false, ct: ct);
+
     public void SetQueueImmediacy(string queueId, AgentInputQueueImmediacy immediacy)
+    {
+        _ = this.ExecuteQueueOperationWithFeedbackAsync(
+            () => this.SetQueueImmediacyAsync(queueId, immediacy));
+    }
+
+    public async Task SetQueueImmediacyAsync(
+        string queueId,
+        AgentInputQueueImmediacy immediacy,
+        CancellationToken ct = default)
     {
         if (!this.TryGetQueueSnapshot(queueId, out var snapshot))
         {
             return;
         }
 
-        this.Apply((commandId, expectedRevision) => this.inputQueues.Configure(new ConfigureAgentInputQueueRequest
+        var result = await this.ApplyAsync((commandId, expectedRevision) => this.inputQueues.ConfigureAsync(new ConfigureAgentInputQueueRequest
         {
             QueueId = queueId,
             Configuration = new AgentInputQueueConfiguration
@@ -222,12 +338,14 @@ public sealed class InputQueueViewModel : ViewModelBase
             },
             CommandId = commandId,
             ExpectedRevision = expectedRevision,
-        }));
-        this.RefreshQueue(queueId);
+        }, ct), ct).ConfigureAwait(false);
+        if (result.Status != AgentInputQueueCommandStatus.Applied)
+            this.ReportQueueOperationFailure();
     }
 
     public void Dispose()
     {
+        this.disposed = true;
         this.inputQueues.Changed -= this.OnQueuesChanged;
         lock (this.queuesLock)
         {
@@ -240,24 +358,37 @@ public sealed class InputQueueViewModel : ViewModelBase
 
     public void RemoveQueueItem(string queueId, string itemId)
     {
-        this.Apply((commandId, expectedRevision) => this.inputQueues.Remove(new RemoveAgentInputQueueItemRequest
+        _ = this.ExecuteQueueCommandWithFeedbackAsync(
+            () => this.RemoveQueueItemAsync(queueId, itemId));
+    }
+
+    public Task<AgentInputQueueCommandResult> RemoveQueueItemAsync(
+        string queueId,
+        string itemId,
+        CancellationToken ct = default)
+        => this.ApplyAsync((commandId, expectedRevision) => this.inputQueues.RemoveAsync(new RemoveAgentInputQueueItemRequest
         {
             QueueId = queueId,
             ItemId = itemId,
             CommandId = commandId,
             ExpectedRevision = expectedRevision,
-        }));
-        this.RefreshQueue(queueId);
-    }
+        }, ct), ct);
 
     public bool RemoveInputQueue(string queueId)
     {
-        var result = this.Apply((commandId, expectedRevision) => this.inputQueues.DeleteQueue(new DeleteAgentInputQueueRequest
+        _ = this.ExecuteQueueBooleanOperationWithFeedbackAsync(
+            () => this.RemoveInputQueueAsync(queueId));
+        return true;
+    }
+
+    public async Task<bool> RemoveInputQueueAsync(string queueId, CancellationToken ct = default)
+    {
+        var result = await this.ApplyAsync((commandId, expectedRevision) => this.inputQueues.DeleteQueueAsync(new DeleteAgentInputQueueRequest
         {
             QueueId = queueId,
             CommandId = commandId,
             ExpectedRevision = expectedRevision,
-        }));
+        }, ct), ct).ConfigureAwait(false);
 
         if (result.Status != AgentInputQueueCommandStatus.Applied)
         {
@@ -276,32 +407,64 @@ public sealed class InputQueueViewModel : ViewModelBase
 
     public void UpdateQueueItem(string queueId, string itemId, string text)
     {
+        _ = this.ExecuteQueueCommandWithFeedbackAsync(
+            () => this.UpdateQueueItemAsync(queueId, itemId, text));
+    }
+
+    public Task<AgentInputQueueCommandResult> UpdateQueueItemAsync(
+        string queueId,
+        string itemId,
+        string text,
+        CancellationToken ct = default)
+    {
         if (!this.TryGetItemSnapshot(queueId, itemId, out var item))
         {
-            return;
+            return Task.FromResult(RejectedResult());
         }
 
-        this.Apply((commandId, expectedRevision) => this.inputQueues.Edit(new EditAgentInputQueueItemRequest
+        return this.ApplyAsync((commandId, expectedRevision) => this.inputQueues.EditAsync(new EditAgentInputQueueItemRequest
         {
             QueueId = queueId,
             ItemId = itemId,
             Messages = UpdateMessages(item.Messages, text),
             CommandId = commandId,
             ExpectedRevision = expectedRevision,
-        }));
-        this.RefreshQueue(queueId);
+        }, ct), ct);
     }
 
     public void SendQueueItemImmediately(string queueId, string itemId, string text)
     {
-        if (!this.TryGetItemSnapshot(queueId, itemId, out var item))
+        _ = this.ExecuteQueueOperationWithFeedbackAsync(
+            () => this.SendQueueItemImmediatelyAsync(queueId, itemId, text));
+    }
+
+    public async Task SendQueueItemImmediatelyAsync(
+        string queueId,
+        string itemId,
+        string text,
+        CancellationToken ct = default)
+    {
+        var edited = await this.UpdateQueueItemAsync(queueId, itemId, text, ct).ConfigureAwait(false);
+        if (edited.Status != AgentInputQueueCommandStatus.Applied
+            || string.Equals(queueId, this.DefaultQueueId, StringComparison.Ordinal))
         {
+            if (edited.Status != AgentInputQueueCommandStatus.Applied)
+                this.ReportQueueOperationFailure();
             return;
         }
 
-        var contents = UpdateMessages(item.Messages, text)[0].Contents.ToArray();
-        this.RemoveQueueItem(queueId, itemId);
-        this.AppendToQueue(this.DefaultQueueId, contents);
+        var moved = await this.ApplyAsync((commandId, expectedRevision) => this.inputQueues.MoveAsync(
+            new MoveAgentInputQueueItemRequest
+            {
+                SourceQueueId = queueId,
+                ItemId = itemId,
+                TargetQueueId = this.DefaultQueueId,
+                CommandId = commandId,
+                ExpectedRevision = expectedRevision,
+            },
+            ct), ct).ConfigureAwait(false);
+        if (moved.Status != AgentInputQueueCommandStatus.Applied)
+            this.ReportQueueOperationFailure();
     }
 
     internal void RemoveQueueItemContent(RemoveQueueItemContentRequest request)
@@ -327,21 +490,22 @@ public sealed class InputQueueViewModel : ViewModelBase
         contents.RemoveAt(contentIndex);
         if (contents.Count == 0)
         {
-            this.RemoveQueueItem(queueId, itemId);
+            _ = this.ExecuteQueueCommandWithFeedbackAsync(
+                () => this.RemoveQueueItemAsync(queueId, itemId));
             return;
         }
 
         var updatedMessages = item.Messages.ToArray();
         updatedMessages[0] = new ChatMessage(ChatRole.User, contents);
-        this.Apply((commandId, expectedRevision) => this.inputQueues.Edit(new EditAgentInputQueueItemRequest
-        {
-            QueueId = queueId,
-            ItemId = itemId,
-            Messages = updatedMessages,
-            CommandId = commandId,
-            ExpectedRevision = expectedRevision,
-        }));
-        this.RefreshQueue(queueId);
+        _ = this.ExecuteQueueCommandWithFeedbackAsync(
+            () => this.ApplyAsync((commandId, expectedRevision) => this.inputQueues.EditAsync(new EditAgentInputQueueItemRequest
+            {
+                QueueId = queueId,
+                ItemId = itemId,
+                Messages = updatedMessages,
+                CommandId = commandId,
+                ExpectedRevision = expectedRevision,
+            }, CancellationToken.None), CancellationToken.None));
     }
 
     public void AppendToQueue(string queueId, string text)
@@ -351,25 +515,38 @@ public sealed class InputQueueViewModel : ViewModelBase
             return;
         }
 
-        this.AppendToQueue(queueId, [new TextContent(text)]);
+        _ = this.ExecuteQueueCommandWithFeedbackAsync(
+            () => this.AppendToQueueAsync(queueId, [new TextContent(text)]));
     }
 
     public void AppendToQueue(string queueId, IReadOnlyList<AIContent> contents)
     {
+        _ = this.ExecuteQueueCommandWithFeedbackAsync(
+            () => this.AppendToQueueAsync(queueId, contents));
+    }
+
+    public async Task<AgentInputQueueCommandResult> AppendToQueueAsync(
+        string queueId,
+        IReadOnlyList<AIContent> contents,
+        CancellationToken ct = default)
+    {
         if (contents.Count == 0)
         {
-            return;
+            return RejectedResult();
         }
 
-        this.Apply((commandId, expectedRevision) => this.inputQueues.Enqueue(new EnqueueAgentInputRequest
+        var result = await this.ApplyAsync((commandId, expectedRevision) => this.inputQueues.EnqueueAsync(new EnqueueAgentInputRequest
         {
             TargetQueueId = queueId,
             Messages = [new ChatMessage(ChatRole.User, contents.ToList())],
             CommandId = commandId,
             ExpectedRevision = expectedRevision,
-        }));
-        this.RecordQueueUse(queueId);
-        this.RefreshQueue(queueId);
+        }, ct), ct).ConfigureAwait(false);
+        if (result.Status == AgentInputQueueCommandStatus.Applied)
+        {
+            this.RecordQueueUse(queueId);
+        }
+        return result;
     }
 
     public void HideQueueComposer(string queueId)
@@ -416,7 +593,7 @@ public sealed class InputQueueViewModel : ViewModelBase
         return false;
     }
 
-    private void SetAllQueuesHeld(bool held)
+    private async Task SetAllQueuesHeldAsync(bool held, CancellationToken ct)
     {
         if (this.InputQueues.Count == 0)
         {
@@ -438,7 +615,7 @@ public sealed class InputQueueViewModel : ViewModelBase
 
             var currentQueue = queue;
             var currentTargetImmediacy = targetImmediacy;
-            this.Apply((commandId, expectedRevision) => this.inputQueues.Configure(new ConfigureAgentInputQueueRequest
+            await this.ApplyAsync((commandId, expectedRevision) => this.inputQueues.ConfigureAsync(new ConfigureAgentInputQueueRequest
             {
                 QueueId = currentQueue.QueueId,
                 Configuration = new AgentInputQueueConfiguration
@@ -450,22 +627,87 @@ public sealed class InputQueueViewModel : ViewModelBase
                 },
                 CommandId = commandId,
                 ExpectedRevision = expectedRevision,
-            }));
+            }, ct), ct).ConfigureAwait(false);
         }
     }
 
     private void OnQueuesChanged(object? sender, EventArgs e)
     {
-        if (Interlocked.Exchange(ref this.ignoredQueueChangedEvents, 0) > 0)
+        if (this.disposed)
         {
             return;
         }
 
-        this.RefreshQueues();
+        _ = this.RefreshOnForegroundAsync(() => this.acknowledgedSnapshot = null);
+    }
+
+    private Task RefreshOnForegroundAsync(Action? beforeRefresh = null)
+    {
+        if (this.disposed)
+        {
+            return Task.CompletedTask;
+        }
+
+        if (TaskScheduler.Current == this.foregroundScheduler)
+        {
+            beforeRefresh?.Invoke();
+            this.RefreshQueues();
+            return Task.CompletedTask;
+        }
+
+        return Task.Factory.StartNew(
+            () =>
+            {
+                beforeRefresh?.Invoke();
+                this.RefreshQueues();
+            },
+            CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach,
+            this.foregroundScheduler);
+    }
+
+    private Task<bool> SubmitDefaultComposerOnForegroundAsync(
+        string targetQueueId,
+        CancellationToken ct) =>
+        this.RunOnForegroundAsync(
+            () => this.DefaultComposer.SubmitAsync(targetQueueId, ct),
+            ct);
+
+    private Task<T> RunOnForegroundAsync<T>(Func<Task<T>> action, CancellationToken ct)
+    {
+        if (TaskScheduler.Current == this.foregroundScheduler)
+        {
+            return action();
+        }
+
+        return Task.Factory.StartNew(
+            action,
+            ct,
+            TaskCreationOptions.DenyChildAttach,
+            this.foregroundScheduler).Unwrap();
+    }
+
+    private Task RunOnForegroundAsync(Func<Task> action, CancellationToken ct)
+    {
+        if (TaskScheduler.Current == this.foregroundScheduler)
+        {
+            return action();
+        }
+
+        return Task.Factory.StartNew(
+            action,
+            ct,
+            TaskCreationOptions.DenyChildAttach,
+            this.foregroundScheduler).Unwrap();
     }
 
     private void RefreshQueue(string queueId)
     {
+        if (this.disposed)
+        {
+            return;
+        }
+
         lock (this.queuesLock)
         {
             if (this.queueViewModels.TryGetValue(queueId, out var viewModel))
@@ -531,10 +773,12 @@ public sealed class InputQueueViewModel : ViewModelBase
         }
     }
 
-    private string? CreateQueue(AgentInputQueueImmediacy immediacy)
+    private async Task<string?> CreateQueueAsync(
+        AgentInputQueueImmediacy immediacy,
+        CancellationToken ct)
     {
         var name = this.CreateQueueName();
-        var result = this.Apply((commandId, expectedRevision) => this.inputQueues.CreateQueue(new CreateAgentInputQueueRequest
+        var result = await this.ApplyAsync((commandId, expectedRevision) => this.inputQueues.CreateQueueAsync(new CreateAgentInputQueueRequest
         {
             Configuration = new AgentInputQueueConfiguration
             {
@@ -544,7 +788,7 @@ public sealed class InputQueueViewModel : ViewModelBase
             },
             CommandId = commandId,
             ExpectedRevision = expectedRevision,
-        }));
+        }, ct), ct).ConfigureAwait(false);
         return result.Status == AgentInputQueueCommandStatus.Applied ? result.QueueId : null;
     }
 
@@ -563,9 +807,21 @@ public sealed class InputQueueViewModel : ViewModelBase
     }
 
     private AgentInputQueueSnapshot[] GetVisibleQueues()
-        => this.inputQueues.Snapshot.Queues
+        => this.CurrentSnapshot.Queues
             .Where(queue => !string.Equals(queue.QueueId, this.hiddenBuiltInQueueId, StringComparison.Ordinal))
             .ToArray();
+
+    private AgentInputQueuesSnapshot CurrentSnapshot
+    {
+        get
+        {
+            var source = this.inputQueues.Snapshot;
+            return this.acknowledgedSnapshot is { } acknowledged
+                && acknowledged.Revision >= source.Revision
+                    ? acknowledged
+                    : source;
+        }
+    }
 
     private static ChatMessage[] UpdateMessages(ImmutableArray<ChatMessage> messages, string text)
     {
@@ -596,32 +852,47 @@ public sealed class InputQueueViewModel : ViewModelBase
         return updatedMessages;
     }
 
-    // #1485: owner-side commands complete synchronously on the caller's thread. The
-    // adapter's Execute() re-reads AggregateRevision under stateLock, which can advance
-    // between the caller's Snapshot.Revision read and that lock (e.g. a legacy Configure
-    // or a background dequeue on another queue). A single-shot apply would then get
-    // Conflict and silently drop the user's edit. This helper reads a fresh revision
-    // and mints a new command id on each retry so UI mutations converge on a consistent
-    // Applied result instead of being lost.
-    internal AgentInputQueueCommandResult Apply(Func<Guid, long, AgentInputQueueCommandResult> command)
+    // A queue command is acknowledged by an immutable result or a Changed delta. Never mutate
+    // the view projection before either arrives; a remote owner may reject/cancel the command.
+    internal async Task<AgentInputQueueCommandResult> ApplyAsync(
+        Func<Guid, long, Task<AgentInputQueueCommandResult>> command,
+        CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(command);
-        const int maxAttempts = 8;
-        AgentInputQueueCommandResult result = default;
-        for (var attempt = 0; attempt < maxAttempts; attempt++)
+        ct.ThrowIfCancellationRequested();
+        var result = await command(Guid.NewGuid(), this.CurrentSnapshot.Revision)
+            .ConfigureAwait(false);
+        if (result.Status == AgentInputQueueCommandStatus.Conflict
+            && result.CurrentSnapshot is { } currentSnapshot)
         {
-            var expectedRevision = this.inputQueues.Snapshot.Revision;
-            result = command(Guid.NewGuid(), expectedRevision);
-            if (result.Status != AgentInputQueueCommandStatus.Conflict)
-            {
-                break;
-            }
+            await this.RefreshOnForegroundAsync(() =>
+                {
+                    if (currentSnapshot.Revision >= this.CurrentSnapshot.Revision)
+                        this.acknowledgedSnapshot = currentSnapshot;
+                })
+                .ConfigureAwait(false);
         }
-        if (result.Status == AgentInputQueueCommandStatus.Applied)
+        else
         {
-            Interlocked.Increment(ref this.ignoredQueueChangedEvents);
+            // Remote adapters may apply the owner delta before command completion; local adapters
+            // can report it through Changed. Either way, refresh only from an acknowledged source.
+            await this.RefreshOnForegroundAsync().ConfigureAwait(false);
         }
-        this.RefreshQueues();
         return result;
     }
+
+    private AgentInputQueueCommandResult RejectedResult() => new()
+    {
+        CommandId = Guid.Empty,
+        Status = AgentInputQueueCommandStatus.Rejected,
+        Revision = this.CurrentSnapshot.Revision,
+        ErrorCode = AgentInputQueueErrorCodes.InvalidRequest,
+    };
+
+    private static bool IsExpectedQueueOperationFailure(Exception exception) =>
+        exception is OperationCanceledException
+            or ObjectDisposedException
+            or InvalidOperationException
+            or Phantom.Workspaces.Llm.Remote.RemoteAgentSessionException
+            or Phantom.Workspaces.Llm.Remote.RemoteAgentProtocolException;
 }
