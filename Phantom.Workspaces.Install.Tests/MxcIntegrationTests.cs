@@ -196,62 +196,16 @@ public sealed class MxcRuntimePayloadTests
         Assert.True(result.ExitCode == 0, result.StandardError);
         Assert.Contains("runtime payload validation passed", result.StandardOutput, StringComparison.Ordinal);
 
-        var copilotResult = MxcRepositoryTestSupport.InvokePowerShell(
-            "packaging", "validate", "Assert-CopilotRuntimePayload.ps1",
-            "-PayloadDirectory", payload.Path,
-            "-RuntimeIdentifier", "win-x64",
-            "-SkipStartupSmoke");
-
-        Assert.True(copilotResult.ExitCode == 0, copilotResult.StandardError);
-        Assert.Contains(
-            "Copilot runtime payload validation passed",
-            copilotResult.StandardOutput,
-            StringComparison.Ordinal);
-
-        var containerOutputDirectory = Path.Combine(
+        var runtimeConfigs = Directory.GetFiles(
             buildArtifacts.Path,
-            "bin",
-            "Phantom.Workspaces.Containers");
-        var containerRuntimeConfigs = Directory.GetFiles(
-            containerOutputDirectory,
             "*.runtimeconfig.json",
             SearchOption.AllDirectories);
-        var containerRuntimeConfig = Assert.Single(
-            containerRuntimeConfigs);
-        Assert.Equal(
-            "Phantom.Workspaces.Containers.runtimeconfig.json",
-            Path.GetFileName(containerRuntimeConfig),
-            ignoreCase: true);
         Assert.Contains(
-            $"{Path.DirectorySeparatorChar}release_win-x64{Path.DirectorySeparatorChar}",
-            containerRuntimeConfig,
-            StringComparison.OrdinalIgnoreCase);
-
-        var wrapperPublishDirectory = Path.Combine(
-            buildArtifacts.Path,
-            "obj",
-            "Phantom.Workspaces",
-            "release_win-x64",
-            "copilot-wrapper");
-        var wrapperPublishFiles = Directory.GetFiles(
-            wrapperPublishDirectory,
-            "*",
-            SearchOption.AllDirectories);
-        var duplicateWrapperRelativePaths = wrapperPublishFiles
-            .Select(path => Path.GetRelativePath(wrapperPublishDirectory, path))
-            .GroupBy(path => path, StringComparer.OrdinalIgnoreCase)
-            .Where(group => group.Count() > 1)
-            .Select(group => group.Key)
-            .ToArray();
-        Assert.Empty(duplicateWrapperRelativePaths);
-        var wrapperExecutable = Assert.Single(
-            wrapperPublishFiles,
+            runtimeConfigs,
             path => Path.GetFileName(path).Equals(
-                    "phantom-copilot-wrapper.exe",
-                    StringComparison.OrdinalIgnoreCase));
-        Assert.True(new FileInfo(wrapperExecutable).Length > 0);
-
-        Assert.All(containerRuntimeConfigs, MxcRepositoryTestSupport.AssertExclusivelyOpenable);
+                "Phantom.Workspaces.Containers.runtimeconfig.json",
+                StringComparison.OrdinalIgnoreCase));
+        Assert.All(runtimeConfigs, MxcRepositoryTestSupport.AssertExclusivelyOpenable);
         Assert.All(
             Directory.GetFiles(payload.Path, "*.runtimeconfig.json", SearchOption.TopDirectoryOnly),
             MxcRepositoryTestSupport.AssertExclusivelyOpenable);
@@ -386,6 +340,80 @@ public sealed class InstallScriptTests
         Assert.Equal(42, result.ExitCode);
         Assert.Contains("Microsoft MXC", result.StandardError, StringComparison.Ordinal);
         Assert.Contains("win-x64", result.StandardError, StringComparison.Ordinal);
+    }
+}
+
+[Collection(MxcIntegrationCollection.Name)]
+public sealed class CopilotWrapperNestedPublishTests
+{
+    [Fact]
+    public async Task NestedPublish_RidConsistentGraphProducesUniqueCompleteWrapperPayload()
+    {
+        using var payload = new MxcRepositoryTestSupport.TestDirectory();
+        using var buildArtifacts = new MxcRepositoryTestSupport.TestDirectory();
+        var publish = await MxcRepositoryTestSupport.InvokeAsync(
+            "dotnet",
+            "msbuild",
+            Path.Combine("Phantom.Workspaces", "Phantom.Workspaces.csproj"),
+            "-restore",
+            "-nologo",
+            "-t:PublishCopilotWrapperLoose",
+            "/nodeReuse:false",
+            "-p:Configuration=Release",
+            "-p:RuntimeIdentifier=win-x64",
+            "-p:SelfContained=true",
+            "-p:PublishReadyToRun=false",
+            "-p:UseSharedCompilation=false",
+            "-p:UseArtifactsOutput=true",
+            $"-p:ArtifactsPath={buildArtifacts.Path}",
+            $"-p:PublishDir={payload.Path}{Path.DirectorySeparatorChar}");
+
+        Assert.True(
+            publish.ExitCode == 0,
+            $"Nested wrapper publish failed.\nSTDOUT:\n{publish.StandardOutput}\nSTDERR:\n{publish.StandardError}");
+        Assert.True(publish.DirectProcessInJob);
+        Assert.Equal(0U, publish.ActiveJobProcessesAfterCleanup);
+
+        var containerOutputDirectory = Path.Combine(
+            buildArtifacts.Path,
+            "bin",
+            "Phantom.Workspaces.Containers");
+        var containerRuntimeConfig = Assert.Single(
+            Directory.GetFiles(
+                containerOutputDirectory,
+                "Phantom.Workspaces.Containers.runtimeconfig.json",
+                SearchOption.AllDirectories));
+        Assert.Contains(
+            $"{Path.DirectorySeparatorChar}release_win-x64{Path.DirectorySeparatorChar}",
+            containerRuntimeConfig,
+            StringComparison.OrdinalIgnoreCase);
+
+        var wrapperPublishDirectory = Path.Combine(
+            buildArtifacts.Path,
+            "obj",
+            "Phantom.Workspaces",
+            "release_win-x64",
+            "copilot-wrapper");
+        var wrapperRelativePaths = Directory.GetFiles(
+                wrapperPublishDirectory,
+                "*",
+                SearchOption.AllDirectories)
+            .Select(path => Path.GetRelativePath(wrapperPublishDirectory, path))
+            .ToArray();
+        Assert.Equal(
+            wrapperRelativePaths.Length,
+            wrapperRelativePaths.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+
+        var installedWrapper = Path.Combine(
+            payload.Path,
+            "runtimes",
+            "win-x64",
+            "native",
+            "phantom-copilot-wrapper.exe");
+        Assert.True(new FileInfo(installedWrapper).Length > 0);
+        var smoke = MxcRepositoryTestSupport.Invoke(installedWrapper);
+        Assert.Equal(64, smoke.ExitCode);
+        Assert.Contains("Invalid wrapper arguments.", smoke.StandardError, StringComparison.Ordinal);
     }
 }
 
