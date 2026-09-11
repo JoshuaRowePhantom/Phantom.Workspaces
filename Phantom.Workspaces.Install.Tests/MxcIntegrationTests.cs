@@ -158,25 +158,35 @@ public sealed class MxcSdkVersionTests
 public sealed class MxcRuntimePayloadTests
 {
     [Fact]
-    public void MxcRuntimePayload_PublishDisablesPersistentBuildServers()
+    public void MxcRuntimePayload_PublishIsolatesBuildOutputsAndDisablesPersistentServers()
     {
-        var arguments = MxcRepositoryTestSupport.CreatePublishArguments("payload");
+        var arguments = MxcRepositoryTestSupport.CreatePublishArguments(
+            "payload",
+            "isolated-artifacts");
 
         Assert.Contains("--disable-build-servers", arguments);
         Assert.Contains("/nodeReuse:false", arguments);
         Assert.Contains("-p:UseSharedCompilation=false", arguments);
+        Assert.Contains("-p:UseArtifactsOutput=true", arguments);
+        Assert.Contains("-p:ArtifactsPath=isolated-artifacts", arguments);
     }
 
     [Fact]
     public async Task MxcRuntimePayload_RequiredNativeUnit_IsPresent()
     {
         using var payload = new MxcRepositoryTestSupport.TestDirectory();
+        using var buildArtifacts = new MxcRepositoryTestSupport.TestDirectory();
+        using var sharedOutputLock = MxcRepositoryTestSupport.LockSharedRuntimeConfig();
         var publish = await MxcRepositoryTestSupport.InvokeAsync(
             "dotnet",
-            MxcRepositoryTestSupport.CreatePublishArguments(payload.Path));
+            MxcRepositoryTestSupport.CreatePublishArguments(
+                payload.Path,
+                buildArtifacts.Path));
         Assert.True(
             publish.ExitCode == 0,
             $"Application publish failed.\nSTDOUT:\n{publish.StandardOutput}\nSTDERR:\n{publish.StandardError}");
+        Assert.True(publish.DirectProcessInJob);
+        Assert.Equal(0U, publish.ActiveJobProcessesAfterCleanup);
 
         var result = MxcRepositoryTestSupport.InvokePowerShell(
             "packaging", "validate", "Assert-MxcRuntimePayload.ps1",
@@ -186,16 +196,19 @@ public sealed class MxcRuntimePayloadTests
         Assert.True(result.ExitCode == 0, result.StandardError);
         Assert.Contains("runtime payload validation passed", result.StandardOutput, StringComparison.Ordinal);
 
-        var runtimeConfig = Path.Combine(
-            MxcRepositoryTestSupport.Root.FullName,
-            "Phantom.Workspaces.Containers",
-            "bin",
-            "Release",
-            "net10.0",
-            "win-x64",
-            "Phantom.Workspaces.Containers.runtimeconfig.json");
-        Assert.True(File.Exists(runtimeConfig), $"Expected publish output '{runtimeConfig}'.");
-        using var unlocked = File.Open(runtimeConfig, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        var runtimeConfigs = Directory.GetFiles(
+            buildArtifacts.Path,
+            "*.runtimeconfig.json",
+            SearchOption.AllDirectories);
+        Assert.Contains(
+            runtimeConfigs,
+            path => Path.GetFileName(path).Equals(
+                "Phantom.Workspaces.Containers.runtimeconfig.json",
+                StringComparison.OrdinalIgnoreCase));
+        Assert.All(runtimeConfigs, MxcRepositoryTestSupport.AssertExclusivelyOpenable);
+        Assert.All(
+            Directory.GetFiles(payload.Path, "*.runtimeconfig.json", SearchOption.TopDirectoryOnly),
+            MxcRepositoryTestSupport.AssertExclusivelyOpenable);
     }
 
     [Theory]
@@ -355,7 +368,7 @@ internal static class MxcRepositoryTestSupport
         return new ProcessResult(process.ExitCode, standardOutput, standardError);
     }
 
-    internal static string[] CreatePublishArguments(string outputPath) =>
+    internal static string[] CreatePublishArguments(string outputPath, string artifactsPath) =>
     [
         "publish",
         Path.Combine("Phantom.Workspaces", "Phantom.Workspaces.csproj"),
@@ -366,6 +379,8 @@ internal static class MxcRepositoryTestSupport
         "win-x64",
         "-p:PublishReadyToRun=false",
         "-p:UseSharedCompilation=false",
+        "-p:UseArtifactsOutput=true",
+        $"-p:ArtifactsPath={artifactsPath}",
         "-o",
         outputPath,
     ];
@@ -391,7 +406,30 @@ internal static class MxcRepositoryTestSupport
         return new ProcessResult(
             result.ExitCode,
             result.StandardOut,
-            result.StandardError);
+            result.StandardError,
+            result.DirectProcessInJob,
+            result.ActiveJobProcessesBeforeCleanup,
+            result.ActiveJobProcessesAfterCleanup);
+    }
+
+    internal static void AssertExclusivelyOpenable(string path)
+    {
+        using var stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.None);
+        Assert.True(stream.CanRead, $"Expected build output '{path}' to be exclusively openable.");
+    }
+
+    internal static IDisposable LockSharedRuntimeConfig()
+    {
+        var path = Path.Combine(
+            Root.FullName,
+            "Phantom.Workspaces.Containers",
+            "bin",
+            "Release",
+            "net10.0",
+            "win-x64",
+            "Phantom.Workspaces.Containers.runtimeconfig.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        return new ExclusiveFileLease(path);
     }
 
     internal static bool IsProcessRunning(int processId)
@@ -553,7 +591,34 @@ internal static class MxcRepositoryTestSupport
         throw new DirectoryNotFoundException("Could not locate repository root.");
     }
 
-    internal sealed record ProcessResult(int ExitCode, string StandardOutput, string StandardError);
+    internal sealed record ProcessResult(
+        int ExitCode,
+        string StandardOutput,
+        string StandardError,
+        bool? DirectProcessInJob = null,
+        uint? ActiveJobProcessesBeforeCleanup = null,
+        uint? ActiveJobProcessesAfterCleanup = null);
+
+    private sealed class ExclusiveFileLease : IDisposable
+    {
+        private readonly string path;
+        private readonly bool deleteOnDispose;
+        private readonly FileStream stream;
+
+        internal ExclusiveFileLease(string path)
+        {
+            this.path = path;
+            deleteOnDispose = !File.Exists(path);
+            stream = File.Open(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        }
+
+        public void Dispose()
+        {
+            stream.Dispose();
+            if (deleteOnDispose)
+                File.Delete(path);
+        }
+    }
 
     internal sealed class TestDirectory : IDisposable
     {

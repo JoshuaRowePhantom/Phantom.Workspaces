@@ -679,7 +679,10 @@ static async Task<WindowsChildProcessProbeResult> RunProcessRunnerAsync(
             jobConfigured: observer.Succeeded(ProcessRunnerWindowsStage.ConfigureJob),
             jobAssigned: observer.Succeeded(ProcessRunnerWindowsStage.AssignJob),
             resumed: observer.Succeeded(ProcessRunnerWindowsStage.ResumeThread),
-            innerJobAssigned: result.JobAssigned);
+            innerJobAssigned: result.JobAssigned,
+            directProcessInJob: result.DirectProcessInJob,
+            activeJobProcessesBeforeCleanup: result.ActiveJobProcessesBeforeCleanup,
+            activeJobProcessesAfterCleanup: result.ActiveJobProcessesAfterCleanup);
     }
     catch (Win32Exception ex) when (injectedStage is not null)
     {
@@ -759,6 +762,9 @@ static async Task<WindowsChildProcessProbeResult> RunProcessRunnerExitedParentTr
             jobAssigned: observer.Succeeded(ProcessRunnerWindowsStage.AssignJob),
             resumed: observer.Succeeded(ProcessRunnerWindowsStage.ResumeThread),
             innerJobAssigned: result.JobAssigned,
+            directProcessInJob: result.DirectProcessInJob,
+            activeJobProcessesBeforeCleanup: result.ActiveJobProcessesBeforeCleanup,
+            activeJobProcessesAfterCleanup: result.ActiveJobProcessesAfterCleanup,
             cleanupCompleted: observer.AllResourcesReleased,
             childExitObserved: true,
             descendantExitObserved: descendant?.HasExited == true,
@@ -931,6 +937,9 @@ static WindowsChildProcessProbeResult Result(
     bool? jobAssigned = null,
     bool? resumed = null,
     bool? innerJobAssigned = null,
+    bool? directProcessInJob = null,
+    uint? activeJobProcessesBeforeCleanup = null,
+    uint? activeJobProcessesAfterCleanup = null,
     bool? cleanupCompleted = true,
     bool creationStatusAvailable = true,
     WindowsContainmentDescriptor? observedContainment = null,
@@ -969,6 +978,9 @@ static WindowsChildProcessProbeResult Result(
     JobAssigned = jobAssigned,
     ResumeSucceeded = resumed,
     InnerJobAssigned = innerJobAssigned,
+    DirectProcessInJob = directProcessInJob,
+    ActiveJobProcessesBeforeCleanup = activeJobProcessesBeforeCleanup,
+    ActiveJobProcessesAfterCleanup = activeJobProcessesAfterCleanup,
     CleanupCompleted = cleanupCompleted,
     ChildExitObserved = childExitObserved,
     DescendantExitObserved = descendantExitObserved,
