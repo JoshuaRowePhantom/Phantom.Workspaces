@@ -928,6 +928,89 @@ public sealed class RunningAgentChatTableTests
     }
 
     [Fact]
+    public async Task ReleaseAsync_UnregistersCompletedFlightBeforeConcurrentReacquire()
+    {
+        var scheduler = new PausableScheduler();
+        var firstTransport = new SnapshotTransport("release-flight-replacement");
+        var table = new RunningAgentChatTable(
+            new FakeRunningAgentChatFactory(),
+            new FakeRuntimeContextFactory());
+        var firstLease = await table.AcquireAsync(
+            RemoteRequest("release-flight-replacement", firstTransport, scheduler),
+            TestContext.Current.CancellationToken);
+        scheduler.Pause();
+
+        var releasing = firstLease.DisposeAsync().AsTask();
+        await scheduler.WaitForQueuedTaskAsync(TestContext.Current.CancellationToken);
+        Assert.False(releasing.IsCompleted);
+        Assert.Equal(0, firstTransport.DisposeCount);
+
+        var replacementTransport = new SnapshotTransport("release-flight-replacement");
+        var reacquiring = table.AcquireAsync(
+            RemoteRequest("release-flight-replacement", replacementTransport, scheduler),
+            TestContext.Current.CancellationToken);
+        Assert.False(reacquiring.IsCompleted);
+
+        scheduler.RunNext();
+        scheduler.Resume();
+        var replacementLease = await reacquiring;
+        await releasing;
+
+        Assert.NotSame(firstLease.AgentChat, replacementLease.AgentChat);
+        Assert.Equal(1, firstTransport.DisposeCount);
+        Assert.Equal(0, replacementTransport.DisposeCount);
+        Assert.Equal(replacementLease.SessionId, Assert.Single(table.RunningSessions).SessionId);
+
+        await replacementLease.DisposeAsync();
+        Assert.Equal(1, replacementTransport.DisposeCount);
+    }
+
+    [Fact]
+    public async Task OwnerTerminalUnpublish_OldViewerReleaseDoesNotRemoveReplacementFlight()
+    {
+        var firstTransport = new SnapshotTransport("terminal-flight-replacement");
+        var table = new RunningAgentChatTable(
+            new FakeRunningAgentChatFactory(),
+            new FakeRuntimeContextFactory());
+        var firstLease = await table.AcquireAsync(
+            RemoteRequest("terminal-flight-replacement", firstTransport),
+            TestContext.Current.CancellationToken);
+        var removed = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        table.RunningSessions.CollectionChanged += (_, args) =>
+        {
+            if (args.Action == NotifyCollectionChangedAction.Remove)
+                removed.TrySetResult();
+        };
+
+        firstTransport.Send(
+            new SessionTerminalEvent
+            {
+                Reason = "owner-stopped",
+                CompletionState = JsonSerializer.SerializeToElement(new { state = "completed" }),
+            },
+            2,
+            Guid.NewGuid());
+        await removed.Task.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(0, firstTransport.DisposeCount);
+
+        var replacementTransport = new SnapshotTransport("terminal-flight-replacement");
+        var replacementLease = await table.AcquireAsync(
+            RemoteRequest("terminal-flight-replacement", replacementTransport),
+            TestContext.Current.CancellationToken);
+
+        await firstLease.DisposeAsync();
+
+        Assert.NotSame(firstLease.AgentChat, replacementLease.AgentChat);
+        Assert.Equal(1, firstTransport.DisposeCount);
+        Assert.Equal(0, replacementTransport.DisposeCount);
+        Assert.Equal(replacementLease.SessionId, Assert.Single(table.RunningSessions).SessionId);
+
+        await replacementLease.DisposeAsync();
+        Assert.Equal(1, replacementTransport.DisposeCount);
+    }
+
+    [Fact]
     public async Task AcquireAsync_RemoteAuthorizationDenied_AddsNoRunningRow()
     {
         var table = new RunningAgentChatTable(

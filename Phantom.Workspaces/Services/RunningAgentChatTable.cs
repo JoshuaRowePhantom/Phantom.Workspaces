@@ -801,16 +801,17 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
 
     private void UnregisterRemoteFlight(RemoteRunningSession session)
     {
+        RemoteAcquisitionFlight? removedFlight = null;
         lock (this._entityInfoLock)
         {
             if (this.remoteSessions.TryGetValue(session.Key, out var flight)
-                && flight.Creation.IsCompletedSuccessfully
-                && ReferenceEquals(flight.Creation.Result, session))
+                && flight.WasCreatedFor(session))
             {
                 this.remoteSessions.Remove(session.Key);
-                flight.Dispose();
+                removedFlight = flight;
             }
         }
+        removedFlight?.Dispose();
     }
 
     private Task UnpublishRemoteAsync(RemoteRunningSession session)
@@ -819,19 +820,20 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
             return Task.CompletedTask;
 
         session.Unsubscribe();
+        RemoteAcquisitionFlight? removedFlight = null;
         lock (this._entityInfoLock)
         {
             if (this.remoteSessions.TryGetValue(session.Key, out var flight)
-                && flight.Creation.IsCompletedSuccessfully
-                && ReferenceEquals(flight.Creation.Result, session))
+                && flight.WasCreatedFor(session))
             {
                 this.remoteSessions.Remove(session.Key);
-                flight.Dispose();
+                removedFlight = flight;
             }
             if (this.publishedRemoteSessions.TryGetValue(session.Key.SessionId, out var published)
                 && ReferenceEquals(published, session))
                 this.publishedRemoteSessions.Remove(session.Key.SessionId);
         }
+        removedFlight?.Dispose();
         if (session.Row is { } row)
         {
             return RunOnSchedulerAsync(
@@ -847,6 +849,7 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
     private sealed class RemoteAcquisitionFlight : IDisposable
     {
         private readonly CancellationTokenSource cancellation = new();
+        private RemoteRunningSession? createdSession;
         private int waiterCount;
 
         internal RemoteAcquisitionFlight(
@@ -854,11 +857,14 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
             Func<CancellationToken, Task<RemoteRunningSession>> create)
         {
             this.Transport = transport;
-            this.Creation = create(this.cancellation.Token);
+            this.Creation = this.CreateAndCaptureAsync(create);
         }
 
         internal ITransport Transport { get; }
         internal Task<RemoteRunningSession> Creation { get; }
+
+        internal bool WasCreatedFor(RemoteRunningSession session) =>
+            ReferenceEquals(Volatile.Read(ref this.createdSession), session);
 
         internal void AddWaiter() => this.waiterCount++;
 
@@ -867,6 +873,14 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         internal void Cancel() => this.cancellation.Cancel();
 
         public void Dispose() => this.cancellation.Dispose();
+
+        private async Task<RemoteRunningSession> CreateAndCaptureAsync(
+            Func<CancellationToken, Task<RemoteRunningSession>> create)
+        {
+            var session = await create(this.cancellation.Token).ConfigureAwait(false);
+            Volatile.Write(ref this.createdSession, session);
+            return session;
+        }
     }
 
     private sealed class RemoteRunningSession
