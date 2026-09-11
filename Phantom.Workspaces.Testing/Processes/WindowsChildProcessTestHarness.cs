@@ -21,6 +21,7 @@ public enum WindowsProbeScenario
     MxcCommandShim,
     ProcessRunnerNoJob,
     ProcessRunnerKillTree,
+    ProcessRunnerExitedParentTree,
     ProcessRunnerTimeoutTree,
     ProcessRunnerCancellationTree,
     ProcessRunnerConfigureFailure,

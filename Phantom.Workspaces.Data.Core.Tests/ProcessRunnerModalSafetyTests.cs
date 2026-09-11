@@ -150,6 +150,69 @@ public sealed class ProcessRunnerModalSafetyTests
     }
 
     [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public async Task ProcessRunner_ExitedParent_KillsPipeHoldingDescendantAndCompletesDrains(
+        int _)
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var result = await RunAsync(WindowsProbeScenario.ProcessRunnerExitedParentTree);
+
+        Assert.Equal(23, result.ExitCode);
+        Assert.Contains("parent-stdout", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("parent-stderr", result.StandardError, StringComparison.Ordinal);
+        Assert.True(result.DescendantExitObserved);
+        Assert.True(result.CleanupCompleted);
+        Assert.True(result.ProcessHandleClosed);
+        Assert.True(result.ThreadHandleClosed);
+        Assert.True(result.JobHandleClosed);
+        Assert.True(result.OutputHandleClosed);
+    }
+
+    [Fact]
+    public async Task ProcessRunner_OutputDrainExpiry_CancelsReadsAndPreservesPartialDiagnostics()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var time = new ManualDrainTimeProvider();
+        var observer = new RecordingObserver();
+        var operation = ProcessRunner.RunProcessAsync(new RunProcessParameters(
+            Command: "cmd.exe",
+            Arguments:
+            [
+                "/d",
+                "/s",
+                "/c",
+                "echo retained-stdout && echo retained-stderr 1>&2",
+            ],
+            KillOnClose: KillOnCloseAction.KillTree)
+        {
+            WindowsTestOptions = new()
+            {
+                Observer = observer,
+                TimeProvider = time,
+                OutputDrainDecorator = HoldDrainUntilCancelledAsync,
+            },
+        });
+
+        await time.TimerArmed;
+        time.Expire();
+
+        var exception = await Assert.ThrowsAsync<TimeoutException>(() => operation);
+        Assert.Contains("retained-stdout", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("retained-stderr", exception.Message, StringComparison.Ordinal);
+        AssertReleased(observer, ProcessRunnerWindowsResource.Process, 1);
+        AssertReleased(observer, ProcessRunnerWindowsResource.Thread, 1);
+        AssertReleased(observer, ProcessRunnerWindowsResource.Job, 1);
+        AssertReleased(observer, ProcessRunnerWindowsResource.StandardOutputPipe, 2);
+        AssertReleased(observer, ProcessRunnerWindowsResource.StandardErrorPipe, 2);
+    }
+
+    [Theory]
     [InlineData(WindowsProbeScenario.ProcessRunnerConfigureFailure, "ConfigureJob")]
     [InlineData(WindowsProbeScenario.ProcessRunnerAssignFailure, "AssignJob")]
     [InlineData(WindowsProbeScenario.ProcessRunnerResumeFailure, "ResumeThread")]
@@ -193,6 +256,17 @@ public sealed class ProcessRunnerModalSafetyTests
         Assert.All(releases, processEvent => Assert.True(processEvent.Succeeded));
     }
 
+    private static async Task HoldDrainUntilCancelledAsync(
+        Task actualDrain,
+        CancellationToken cancellationToken)
+    {
+        var cancelled = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var registration = cancellationToken.Register(
+            () => cancelled.TrySetCanceled(cancellationToken));
+        await Task.WhenAll(actualDrain, cancelled.Task);
+    }
+
     private sealed class RecordingObserver : IProcessRunnerWindowsObserver
     {
         private readonly List<ProcessRunnerWindowsEvent> events = [];
@@ -229,6 +303,50 @@ public sealed class ProcessRunnerModalSafetyTests
         {
             Interlocked.Increment(ref callbackCount);
             throw new InvalidOperationException("Failure cleanup synchronously dispatched to the caller.");
+        }
+    }
+
+    private sealed class ManualDrainTimeProvider : TimeProvider
+    {
+        private readonly TaskCompletionSource timerArmed = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        private ManualTimer? timer;
+
+        public Task TimerArmed => timerArmed.Task;
+
+        public override ITimer CreateTimer(
+            TimerCallback callback,
+            object? state,
+            TimeSpan dueTime,
+            TimeSpan period)
+        {
+            timer = new ManualTimer(callback, state);
+            timerArmed.TrySetResult();
+            return timer;
+        }
+
+        public void Expire() =>
+            (timer ?? throw new InvalidOperationException("The drain timer was not armed.")).Fire();
+
+        private sealed class ManualTimer(TimerCallback callback, object? state) : ITimer
+        {
+            private bool disposed;
+
+            public bool Change(TimeSpan dueTime, TimeSpan period) => !disposed;
+
+            public void Fire()
+            {
+                if (!disposed)
+                    callback(state);
+            }
+
+            public void Dispose() => disposed = true;
+
+            public ValueTask DisposeAsync()
+            {
+                Dispose();
+                return ValueTask.CompletedTask;
+            }
         }
     }
 }
