@@ -197,45 +197,17 @@ public sealed class SubAgentDispatcherChatClient : IChatClient, ISubAgentDispatc
             LastUpdated = _timeProvider.GetUtcNow(),
         };
 
-        // Subscribe to events for idle detection
-        var idleSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var wasCancelled = false;
-        // Tracks whether we ever observed the sub-agent's assistant running item created for this
-        // dispatch. Without this guard, there is a race window between AgentChat.RunProcessLoopAsync
-        // appending the user message to History (History.Count increments) and CreateRunningItem
-        // adding the assistant running item (RunningItems.Count increments). Observing state inside
-        // that window would satisfy "History > idx AND RunningItems == 0" and prematurely signal
-        // idle before the sub-agent actually runs (issue #1184).
-        var hasSeenRunningItem = false;
+        cancellationToken.ThrowIfCancellationRequested();
+        var completion = new CreateDispatchCompletion(lease, dispatched, cancellationToken);
 
         void OnCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
         {
-            if (lease.AgentChat.RunningItems.Count > 0)
-            {
-                hasSeenRunningItem = true;
-            }
-            CheckIdleCondition();
+            completion.ObserveAgentState();
         }
 
         void OnTurnCompleted(object? sender, AgentChatHistoryItem item)
         {
-            if (lease.AgentChat.RunningItems.Count > 0)
-            {
-                hasSeenRunningItem = true;
-            }
-            CheckIdleCondition();
-        }
-
-        void CheckIdleCondition()
-        {
-            // Idle when: a running item was observed for this dispatch, history has grown past
-            // DispatchHistoryIndex, and RunningItems is empty.
-            if (hasSeenRunningItem
-                && lease.AgentChat.History.Count > dispatched.DispatchHistoryIndex
-                && lease.AgentChat.RunningItems.Count == 0)
-            {
-                idleSignal.TrySetResult();
-            }
+            completion.ObserveAgentState();
         }
 
         ((INotifyCollectionChanged)lease.AgentChat.RunningItems).CollectionChanged += OnCollectionChanged;
@@ -246,6 +218,12 @@ public sealed class SubAgentDispatcherChatClient : IChatClient, ISubAgentDispatc
             // Yield ack update
             var truncatedPrompt = Truncate(create.Prompt, MaxTruncatedPromptLength);
             yield return new ChatResponseUpdate(ChatRole.Assistant, $"Sending \"{truncatedPrompt}\" to {id}.\n");
+
+            if (!completion.TryBeginDispatch())
+            {
+                yield return new ChatResponseUpdate(ChatRole.Assistant, "Interrupted.\n");
+                yield break;
+            }
 
             // Record dispatch history index before enqueue
             dispatched.DispatchHistoryIndex = lease.AgentChat.History.Count;
@@ -258,57 +236,36 @@ public sealed class SubAgentDispatcherChatClient : IChatClient, ISubAgentDispatc
             _mostRecentlyDispatchedId = id;
 
             // Persist the sub-agent as a child entity of the dispatcher so it survives restart.
-            await PersistSubAgentAsync(dispatched, lease.SessionId, cancellationToken);
+            // Cancellation after the dispatch begins is arbitrated by CreateDispatchCompletion.
+            // Letting persistence observe that token directly would bypass the required terminal
+            // Interrupted update.
+            await PersistSubAgentAsync(dispatched, lease.SessionId, CancellationToken.None);
 
             yield return new ChatResponseUpdate(ChatRole.Assistant, $"Created sub-agent \"{id}\".\n");
 
-            // Handle cancellation
-            var interruptTask = Task.CompletedTask;
-            using var registration = cancellationToken.Register(() =>
+            var outcome = await completion.AcknowledgeCreationAndWaitAsync().ConfigureAwait(false);
+            if (outcome == CreateDispatchOutcome.Canceled)
             {
-                if (lease.AgentChat.RunningItems.Count > 0)
-                {
-                    interruptTask = lease.LocalAgentChat.InterruptAsync();
-                }
-                idleSignal.TrySetCanceled(cancellationToken);
-            });
-
-            // Wait for idle - capture cancellation state without catching.
-            // No pre-await poll here: subscription was set up before EnqueueUserMessage, so all
-            // legitimate transitions (create running item → complete running item → remove) arrive
-            // via events. A direct poll here would race the foreground scheduler's user-message-
-            // then-create-running-item sequence and could fire premature idle (issue #1184).
-            var task = idleSignal.Task;
-            try
-            {
-                await task.ConfigureAwait(false);
+                await completion.WaitForInterruptAsync().ConfigureAwait(false);
+                yield return new ChatResponseUpdate(ChatRole.Assistant, "Interrupted.\n");
+                yield break;
             }
-            catch (OperationCanceledException)
+
+            // The idle outcome is the terminal decision. A later cancellation must not replace it
+            // while final persistence and history projection complete.
+            dispatched.LastUpdated = _timeProvider.GetUtcNow();
+            await PersistSubAgentAsync(dispatched, lease.SessionId, CancellationToken.None);
+            for (var i = dispatched.DispatchHistoryIndex; i < lease.AgentChat.History.Count; i++)
             {
-                await interruptTask.ConfigureAwait(false);
-                wasCancelled = true;
+                var historyItem = lease.AgentChat.History[i];
+                yield return new ChatResponseUpdate(historyItem.Role, historyItem.Contents.ToList());
             }
         }
         finally
         {
             ((INotifyCollectionChanged)lease.AgentChat.RunningItems).CollectionChanged -= OnCollectionChanged;
             lease.AgentChat.TurnCompleted -= OnTurnCompleted;
-        }
-
-        // Handle cancellation result - yields outside of catch clause
-        if (wasCancelled)
-        {
-            yield return new ChatResponseUpdate(ChatRole.Assistant, "Interrupted.\n");
-            yield break;
-        }
-
-        // Emit new history items
-        dispatched.LastUpdated = _timeProvider.GetUtcNow();
-        await PersistSubAgentAsync(dispatched, lease.SessionId, cancellationToken);
-        for (var i = dispatched.DispatchHistoryIndex; i < lease.AgentChat.History.Count; i++)
-        {
-            var historyItem = lease.AgentChat.History[i];
-            yield return new ChatResponseUpdate(historyItem.Role, historyItem.Contents.ToList());
+            await completion.DisposeAsync().ConfigureAwait(false);
         }
     }
 
@@ -693,6 +650,185 @@ public sealed class SubAgentDispatcherChatClient : IChatClient, ISubAgentDispatc
         }
 
         return text[..maxLength] + "...";
+    }
+
+    private enum CreateDispatchOutcome
+    {
+        Idle,
+        Canceled,
+    }
+
+    private sealed class CreateDispatchCompletion : IAsyncDisposable
+    {
+        private readonly object sync = new();
+        private readonly RunningAgentChatLease lease;
+        private readonly DispatchedSubAgent dispatched;
+        private readonly TaskCompletionSource<CreateDispatchOutcome> completion =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly CancellationTokenRegistration cancellationRegistration;
+        private bool dispatchStarted;
+        private bool creationAcknowledged;
+        private bool runningItemObserved;
+        private bool idleObserved;
+        private bool cancellationObserved;
+        private bool outcomeChosen;
+        private bool interruptStarted;
+        private bool disposed;
+        private Task interruptTask = Task.CompletedTask;
+
+        public CreateDispatchCompletion(
+            RunningAgentChatLease lease,
+            DispatchedSubAgent dispatched,
+            CancellationToken cancellationToken)
+        {
+            this.lease = lease;
+            this.dispatched = dispatched;
+            cancellationRegistration = cancellationToken.Register(
+                static state => ((CreateDispatchCompletion)state!).ObserveCancellation(),
+                this);
+        }
+
+        public bool TryBeginDispatch()
+        {
+            lock (sync)
+            {
+                if (cancellationObserved)
+                {
+                    return false;
+                }
+
+                dispatchStarted = true;
+                return true;
+            }
+        }
+
+        public void ObserveAgentState()
+        {
+            lock (sync)
+            {
+                if (disposed || outcomeChosen || !dispatchStarted)
+                {
+                    return;
+                }
+
+                if (lease.AgentChat.RunningItems.Count > 0)
+                {
+                    runningItemObserved = true;
+                    StartInterruptIfNeeded();
+                }
+
+                if (runningItemObserved
+                    && lease.AgentChat.History.Count > dispatched.DispatchHistoryIndex
+                    && lease.AgentChat.RunningItems.Count == 0)
+                {
+                    idleObserved = true;
+                }
+
+                ChooseOutcomeIfReady();
+            }
+        }
+
+        public Task<CreateDispatchOutcome> AcknowledgeCreationAndWaitAsync()
+        {
+            lock (sync)
+            {
+                creationAcknowledged = true;
+                ObserveAgentStateUnderLock();
+                ChooseOutcomeIfReady();
+                return completion.Task;
+            }
+        }
+
+        public Task WaitForInterruptAsync()
+        {
+            lock (sync)
+            {
+                return interruptTask;
+            }
+        }
+
+        private void ObserveCancellation()
+        {
+            lock (sync)
+            {
+                if (disposed || outcomeChosen)
+                {
+                    return;
+                }
+
+                cancellationObserved = true;
+                ObserveAgentStateUnderLock();
+                StartInterruptIfNeeded();
+                ChooseOutcomeIfReady();
+            }
+        }
+
+        private void ObserveAgentStateUnderLock()
+        {
+            if (!dispatchStarted)
+            {
+                return;
+            }
+
+            if (lease.AgentChat.RunningItems.Count > 0)
+            {
+                runningItemObserved = true;
+                StartInterruptIfNeeded();
+            }
+
+            if (runningItemObserved
+                && lease.AgentChat.History.Count > dispatched.DispatchHistoryIndex
+                && lease.AgentChat.RunningItems.Count == 0)
+            {
+                idleObserved = true;
+            }
+        }
+
+        private void StartInterruptIfNeeded()
+        {
+            if (!cancellationObserved
+                || interruptStarted
+                || lease.AgentChat.RunningItems.Count == 0)
+            {
+                return;
+            }
+
+            interruptStarted = true;
+            interruptTask = lease.LocalAgentChat.InterruptAsync(CancellationToken.None);
+        }
+
+        private void ChooseOutcomeIfReady()
+        {
+            if (!creationAcknowledged || outcomeChosen)
+            {
+                return;
+            }
+
+            if (cancellationObserved && runningItemObserved)
+            {
+                outcomeChosen = true;
+                completion.TrySetResult(CreateDispatchOutcome.Canceled);
+            }
+            else if (idleObserved)
+            {
+                outcomeChosen = true;
+                completion.TrySetResult(CreateDispatchOutcome.Idle);
+            }
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            cancellationRegistration.Dispose();
+
+            Task pendingInterrupt;
+            lock (sync)
+            {
+                disposed = true;
+                pendingInterrupt = interruptTask;
+            }
+
+            await pendingInterrupt.ConfigureAwait(false);
+        }
     }
 
     public object? GetService(Type serviceType, object? serviceKey = null)

@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using AgentSchema;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Data;
@@ -157,67 +158,135 @@ public sealed class SubAgentDispatcherIntegrationTests
     }
 
     [Fact]
-    public async Task Cancellation_InterruptsRunningSubAgent_AndYieldsInterrupted()
+    public async Task Cancellation_BeforeCreatedAcknowledgement_YieldsOneInterruptedWithoutDispatching()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-        var dataAccessLayer = new InMemoryDataAccessLayer();
-        var testChatClient = new DeterministicTestChatClient();
-        var factory = new ControllableEchoFactory(testChatClient);
-        var dispatcherName = new EntityName("dispatchers", "interrupt");
+        await using var scenario = new ControlledDispatchScenario("cancel-before-created");
 
-        var client = new SubAgentDispatcherChatClient(
-            factory,
-            new DeterministicEmbeddingsProvider(),
-            dataAccessLayer,
-            dispatcherName,
-            CreateOptions());
+        var sending = await scenario.ReadRequiredAsync();
+        Assert.Contains("Sending", sending.Text);
 
-        var stream = testChatClient.EnqueueStreamingResponse(isReady: true);
+        scenario.Cancel();
 
-        using var dispatchCts = new CancellationTokenSource();
-        var messages = new List<ChatMessage> { new(ChatRole.User, "new: long running task") };
-        var enumerator = client.GetStreamingResponseAsync(messages, cancellationToken: dispatchCts.Token)
-            .GetAsyncEnumerator(dispatchCts.Token);
+        var interrupted = await scenario.ReadRequiredAsync();
+        Assert.Equal("Interrupted.\n", interrupted.Text);
+        Assert.False(await scenario.Enumerator.MoveNextAsync());
+        Assert.Empty(scenario.Client.ActiveSubAgents);
+        Assert.Empty(scenario.Factory.Leases.Values.Single().AgentChat.RunningItems);
+    }
 
-        var updates = new List<ChatResponseUpdate>();
-        var gotCreated = false;
-        try
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Cancellation_WhileCreatedAcknowledgementIsYielded_WinsOverIdleInEitherOrder(
+        bool completeBeforeCancel)
+    {
+        await using var scenario = new ControlledDispatchScenario(
+            completeBeforeCancel ? "idle-then-cancel-before-ack" : "cancel-then-idle-before-ack");
+
+        await scenario.ReadThroughCreatedAsync();
+        await scenario.WaitForRunningAsync();
+
+        if (completeBeforeCancel)
         {
-            while (await enumerator.MoveNextAsync())
-            {
-                updates.Add(enumerator.Current);
-                if (enumerator.Current.Text?.Contains("Created sub-agent") == true)
-                {
-                    gotCreated = true;
-                    break;
-                }
-            }
+            scenario.Stream.Complete();
+            await scenario.WaitForIdleAsync();
+            scenario.Cancel();
         }
-        catch (OperationCanceledException)
+        else
         {
-        }
-
-        Assert.True(gotCreated);
-
-        dispatchCts.Cancel();
-        stream.Complete();
-
-        try
-        {
-            while (await enumerator.MoveNextAsync())
-            {
-                updates.Add(enumerator.Current);
-            }
-        }
-        catch (OperationCanceledException)
-        {
+            scenario.Cancel();
+            scenario.Stream.Complete();
         }
 
-        await enumerator.DisposeAsync();
+        var updates = await scenario.DrainAsync();
 
-        Assert.Contains(updates, u => u.Text?.Contains("Interrupted") == true);
+        Assert.Equal(["Interrupted.\n"], updates.Select(update => update.Text));
+        Assert.Empty(scenario.Factory.Leases.Values.Single().AgentChat.RunningItems);
+    }
 
-        client.Dispose();
+    [Fact]
+    public async Task Completion_AfterCreatedAcknowledgement_StreamsOutputWithoutInterrupted()
+    {
+        await using var scenario = new ControlledDispatchScenario("normal-completion");
+
+        await scenario.ReadThroughCreatedAsync();
+        await scenario.WaitForRunningAsync();
+
+        var pendingUpdate = scenario.Enumerator.MoveNextAsync().AsTask();
+        scenario.Stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "completed normally"));
+        scenario.Stream.Complete();
+
+        Assert.True(await pendingUpdate);
+        var updates = new List<ChatResponseUpdate> { scenario.Enumerator.Current };
+        updates.AddRange(await scenario.DrainAsync());
+
+        Assert.Contains(updates, update => update.Text == "completed normally");
+        Assert.DoesNotContain(updates, update => update.Text == "Interrupted.\n");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CancellationAndIdle_AfterCreatedAcknowledgement_FirstTerminalSignalWins(
+        bool completeBeforeCancel)
+    {
+        await using var scenario = new ControlledDispatchScenario(
+            completeBeforeCancel ? "idle-then-cancel-after-ack" : "cancel-then-idle-after-ack");
+
+        await scenario.ReadThroughCreatedAsync();
+        await scenario.WaitForRunningAsync();
+
+        var pendingUpdate = scenario.Enumerator.MoveNextAsync().AsTask();
+        if (completeBeforeCancel)
+        {
+            scenario.Stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "idle won"));
+            scenario.Stream.Complete();
+            await scenario.WaitForIdleAsync();
+            scenario.Cancel();
+        }
+        else
+        {
+            scenario.Cancel();
+            scenario.Stream.Complete();
+        }
+
+        Assert.True(await pendingUpdate);
+        var updates = new List<ChatResponseUpdate> { scenario.Enumerator.Current };
+        updates.AddRange(await scenario.DrainAsync());
+
+        if (completeBeforeCancel)
+        {
+            Assert.Contains(updates, update => update.Text == "idle won");
+            Assert.DoesNotContain(updates, update => update.Text == "Interrupted.\n");
+        }
+        else
+        {
+            Assert.Equal(["Interrupted.\n"], updates.Select(update => update.Text));
+        }
+    }
+
+    [Fact]
+    public async Task DisposingCreatedDispatch_UnsubscribesCancellationWithoutInterruptingAgent()
+    {
+        await using var scenario = new ControlledDispatchScenario("dispose-created");
+
+        await scenario.ReadThroughCreatedAsync();
+        await scenario.WaitForRunningAsync();
+        await scenario.DisposeEnumeratorAsync();
+
+        scenario.Cancel();
+        scenario.Stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "finished after disposal"));
+        scenario.Stream.Complete();
+        await scenario.WaitForIdleAsync();
+
+        var historyText = string.Join(
+            "",
+            scenario.Factory.Leases.Values.Single().AgentChat.History
+                .SelectMany(item => item.Contents)
+                .OfType<TextContent>()
+                .Select(content => content.Text));
+        Assert.Contains("finished after disposal", historyText);
+        Assert.DoesNotContain("Interrupted by user.", historyText);
     }
 
     [Fact]
@@ -355,5 +424,127 @@ public sealed class SubAgentDispatcherIntegrationTests
             string? descriptionOverride = null,
             string? nameOverride = null, CancellationToken ct = default)
             => GetOrCreateAsync(sessionId, definition, services, displayNameOverride, descriptionOverride, ct: ct);
+    }
+
+    private sealed class ControlledDispatchScenario : IAsyncDisposable
+    {
+        private readonly CancellationTokenSource timeout = new(TimeSpan.FromSeconds(60));
+        private readonly CancellationTokenSource dispatchCancellation = new();
+        private bool enumeratorDisposed;
+
+        public ControlledDispatchScenario(string dispatcherId)
+        {
+            var testChatClient = new DeterministicTestChatClient();
+            Factory = new ControllableEchoFactory(testChatClient);
+            Client = new SubAgentDispatcherChatClient(
+                Factory,
+                new DeterministicEmbeddingsProvider(),
+                new InMemoryDataAccessLayer(),
+                new EntityName("dispatchers", dispatcherId),
+                CreateOptions());
+            Stream = testChatClient.EnqueueStreamingResponse(isReady: true);
+            TestChatClient = testChatClient;
+
+            var messages = new List<ChatMessage> { new(ChatRole.User, "new: controlled task") };
+            Enumerator = Client.GetStreamingResponseAsync(
+                    messages,
+                    cancellationToken: dispatchCancellation.Token)
+                .GetAsyncEnumerator();
+        }
+
+        public SubAgentDispatcherChatClient Client { get; }
+
+        public ControllableEchoFactory Factory { get; }
+
+        public DeterministicTestChatClient TestChatClient { get; }
+
+        public DeterministicTestChatClient.QueuedStreamResponse Stream { get; }
+
+        public IAsyncEnumerator<ChatResponseUpdate> Enumerator { get; }
+
+        public void Cancel() => dispatchCancellation.Cancel();
+
+        public async Task<ChatResponseUpdate> ReadRequiredAsync()
+        {
+            Assert.True(await Enumerator.MoveNextAsync());
+            return Enumerator.Current;
+        }
+
+        public async Task ReadThroughCreatedAsync()
+        {
+            var sending = await ReadRequiredAsync();
+            Assert.Contains("Sending", sending.Text);
+            var created = await ReadRequiredAsync();
+            Assert.Contains("Created sub-agent", created.Text);
+        }
+
+        public async Task<List<ChatResponseUpdate>> DrainAsync()
+        {
+            var updates = new List<ChatResponseUpdate>();
+            while (await Enumerator.MoveNextAsync())
+            {
+                updates.Add(Enumerator.Current);
+            }
+
+            return updates;
+        }
+
+        public async Task WaitForRunningAsync()
+        {
+            await TestChatClient.WaitForRequestAsync(timeout.Token);
+            await WaitForRunningCountAsync(1);
+        }
+
+        public Task WaitForIdleAsync() => WaitForRunningCountAsync(0);
+
+        public async Task DisposeEnumeratorAsync()
+        {
+            if (enumeratorDisposed)
+            {
+                return;
+            }
+
+            enumeratorDisposed = true;
+            await Enumerator.DisposeAsync();
+        }
+
+        private async Task WaitForRunningCountAsync(int expectedCount)
+        {
+            var runningItems = Factory.Leases.Values.Single().AgentChat.RunningItems;
+            var observableRunningItems = (INotifyCollectionChanged)runningItems;
+            var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            void OnCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+            {
+                if (runningItems.Count == expectedCount)
+                {
+                    signal.TrySetResult();
+                }
+            }
+
+            observableRunningItems.CollectionChanged += OnCollectionChanged;
+            try
+            {
+                if (runningItems.Count == expectedCount)
+                {
+                    return;
+                }
+
+                await signal.Task.WaitAsync(timeout.Token);
+            }
+            finally
+            {
+                observableRunningItems.CollectionChanged -= OnCollectionChanged;
+            }
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await DisposeEnumeratorAsync();
+
+            Client.Dispose();
+            dispatchCancellation.Dispose();
+            timeout.Dispose();
+        }
     }
 }
