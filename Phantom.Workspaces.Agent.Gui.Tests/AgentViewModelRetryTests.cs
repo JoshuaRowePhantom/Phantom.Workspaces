@@ -391,6 +391,103 @@ public sealed class AgentViewModelRetryTests
     }
 
     [Fact]
+    public async Task InterruptCommand_RepeatedShortcut_IsSingleFlightAndRetriesAfterSuccess()
+    {
+        using var loggerFactory = new ObservableLoggerFactory();
+        var firstCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        var chat = new StubAgentChat(
+            new DeferredQueues(),
+            MakeDefinition(),
+            _ =>
+            {
+                Interlocked.Increment(ref calls);
+                return firstCompletion.Task;
+            });
+        await using var vm = this.CreateViewModel(chat, loggerFactory);
+        var command = Assert.IsType<AsyncRelayCommand>(vm.InterruptCommand);
+        var availabilityChanges = new List<bool>();
+        command.CanExecuteChanged += (_, _) => availabilityChanges.Add(command.CanExecute(null));
+
+        command.Execute(null);
+        var firstExecution = command.LastExecutionTask;
+        command.Execute(null);
+
+        Assert.Equal(1, Volatile.Read(ref calls));
+        Assert.Same(firstExecution, command.LastExecutionTask);
+        Assert.True(command.IsExecuting);
+        Assert.False(command.CanExecute(null));
+        Assert.Equal([false], availabilityChanges);
+
+        firstCompletion.SetResult();
+        await firstExecution!;
+
+        Assert.False(command.IsExecuting);
+        Assert.True(command.CanExecute(null));
+        Assert.Equal([false, true], availabilityChanges);
+
+        command.Execute(null);
+        await command.LastExecutionTask!;
+        Assert.Equal(2, Volatile.Read(ref calls));
+    }
+
+    [Fact]
+    public async Task InterruptCommand_FailureAndCancellation_PropagateAndReleaseSingleFlightGate()
+    {
+        using var loggerFactory = new ObservableLoggerFactory();
+        var completions = new Queue<TaskCompletionSource>();
+        var chat = new StubAgentChat(
+            new DeferredQueues(),
+            MakeDefinition(),
+            _ => completions.Dequeue().Task);
+        await using var vm = this.CreateViewModel(chat, loggerFactory);
+        var command = Assert.IsType<AsyncRelayCommand>(vm.InterruptCommand);
+
+        var failed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        completions.Enqueue(failed);
+        command.Execute(null);
+        failed.SetException(new InvalidOperationException("owner rejected"));
+
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await command.LastExecutionTask!);
+        Assert.Equal("owner rejected", failure.Message);
+        Assert.False(command.IsExecuting);
+        Assert.True(command.CanExecute(null));
+
+        var canceled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        completions.Enqueue(canceled);
+        command.Execute(null);
+        canceled.SetCanceled(TestContext.Current.CancellationToken);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            async () => await command.LastExecutionTask!);
+        Assert.False(command.IsExecuting);
+        Assert.True(command.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task InterruptCommand_PendingDuringViewDisposal_ReleasesGateOnCompletion()
+    {
+        using var loggerFactory = new ObservableLoggerFactory();
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var chat = new StubAgentChat(new DeferredQueues(), MakeDefinition(), _ => completion.Task);
+        var vm = this.CreateViewModel(chat, loggerFactory);
+        var command = Assert.IsType<AsyncRelayCommand>(vm.InterruptCommand);
+
+        command.Execute(null);
+        var execution = command.LastExecutionTask!;
+        await vm.DisposeAsync();
+
+        Assert.True(command.IsExecuting);
+        Assert.False(command.CanExecute(null));
+
+        completion.SetResult();
+        await execution;
+        Assert.False(command.IsExecuting);
+        Assert.False(command.IsExecuting);
+    }
+
+    [Fact]
     public async Task ConfigureSlashCommands_RemoteChat_RegistersOnlyCommonHandlers()
     {
         using var loggerFactory = new ObservableLoggerFactory();
@@ -589,7 +686,10 @@ public sealed class AgentViewModelRetryTests
     }
 
 #pragma warning disable CS0067
-    private sealed class StubAgentChat(DeferredQueues inputQueues, AgentDefinition definition) : IAgentChat
+    private sealed class StubAgentChat(
+        DeferredQueues inputQueues,
+        AgentDefinition definition,
+        Func<CancellationToken, Task>? interruptAsync = null) : IAgentChat
     {
         private readonly ReadOnlyObservableCollection<IRunningSubAgent> subAgents = new(new System.Collections.ObjectModel.ObservableCollection<IRunningSubAgent>());
         private readonly ReadOnlyObservableCollection<AgentChatModal> modals = new(new System.Collections.ObjectModel.ObservableCollection<AgentChatModal>());
@@ -624,7 +724,8 @@ public sealed class AgentViewModelRetryTests
         public void EnqueueSystemNote(string text) { }
         public void EnqueueHelpNote(string text) { }
         public void EnqueueTransientDiagnostic(string text) { }
-        public Task InterruptAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task InterruptAsync(CancellationToken ct = default) =>
+            interruptAsync?.Invoke(ct) ?? Task.CompletedTask;
         public object? GetService(Type serviceType) => null;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

@@ -35,15 +35,95 @@ public sealed class RelayCommand<T>(Action<T> execute, Func<T, bool>? canExecute
 /// <summary>Command adapter for owner-acknowledged UI operations.</summary>
 public sealed class AsyncRelayCommand(
     Func<object?, Task> execute,
-    Func<object?, bool>? canExecute = null) : ICommand
+    Func<object?, bool>? canExecute = null,
+    bool allowConcurrentExecutions = true) : ICommand
 {
+    private readonly object executionLock = new();
+    private Task? lastExecutionTask;
+    private bool isExecuting;
+    private long executionGeneration;
+
     public event EventHandler? CanExecuteChanged;
 
-    public Task? LastExecutionTask { get; private set; }
+    public Task? LastExecutionTask
+    {
+        get
+        {
+            lock (this.executionLock)
+            {
+                return this.lastExecutionTask;
+            }
+        }
+    }
 
-    public bool CanExecute(object? parameter) => canExecute?.Invoke(parameter) ?? true;
+    public bool IsExecuting
+    {
+        get
+        {
+            lock (this.executionLock)
+            {
+                return this.isExecuting;
+            }
+        }
+    }
 
-    public void Execute(object? parameter) => this.LastExecutionTask = execute(parameter);
+    public bool CanExecute(object? parameter) =>
+        (allowConcurrentExecutions || !this.IsExecuting)
+        && (canExecute?.Invoke(parameter) ?? true);
+
+    public void Execute(object? parameter)
+    {
+        if (allowConcurrentExecutions)
+        {
+            var concurrentTask = execute(parameter);
+            lock (this.executionLock)
+            {
+                this.lastExecutionTask = concurrentTask;
+            }
+            return;
+        }
+
+        long generation;
+        lock (this.executionLock)
+        {
+            if (this.isExecuting || !(canExecute?.Invoke(parameter) ?? true))
+            {
+                return;
+            }
+
+            this.isExecuting = true;
+            generation = ++this.executionGeneration;
+        }
+
+        this.RaiseCanExecuteChanged();
+        var executionTask = this.ExecuteSingleFlightAsync(parameter, generation);
+        lock (this.executionLock)
+        {
+            if (this.executionGeneration == generation)
+            {
+                this.lastExecutionTask = executionTask;
+            }
+        }
+    }
+
+    private async Task ExecuteSingleFlightAsync(object? parameter, long generation)
+    {
+        try
+        {
+            await execute(parameter);
+        }
+        finally
+        {
+            lock (this.executionLock)
+            {
+                if (this.executionGeneration == generation)
+                {
+                    this.isExecuting = false;
+                }
+            }
+            this.RaiseCanExecuteChanged();
+        }
+    }
 
     public void RaiseCanExecuteChanged() => this.CanExecuteChanged?.Invoke(this, EventArgs.Empty);
 }

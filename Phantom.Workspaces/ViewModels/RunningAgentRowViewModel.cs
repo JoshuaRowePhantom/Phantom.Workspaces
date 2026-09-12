@@ -19,6 +19,7 @@ public sealed class RunningAgentRowViewModel : ViewModelBase
     private bool isBackgroundOptionEnabled;
     private bool isInterruptEnabled;
     private bool isTerminateEnabled;
+    private bool isInterruptPending;
     private bool isTerminationPending;
     private string? lastOperationError;
     private bool canSetContinueInBackground;
@@ -70,7 +71,8 @@ public sealed class RunningAgentRowViewModel : ViewModelBase
     {
         this.interruptCommand = new AsyncRelayCommand(
             _ => this.InterruptAsync(interruptAsync),
-            _ => this.IsInterruptEnabled);
+            _ => this.IsInterruptEnabled,
+            allowConcurrentExecutions: false);
         this.terminateCommand = new AsyncRelayCommand(
             _ => this.TerminateAsync(terminateAsync),
             _ => this.IsTerminateEnabled);
@@ -176,6 +178,13 @@ public sealed class RunningAgentRowViewModel : ViewModelBase
         }
     }
 
+    /// <summary>True while an explicit interrupt request is awaiting the owner result.</summary>
+    public bool IsInterruptPending
+    {
+        get => this.isInterruptPending;
+        private set => this.SetProperty(ref this.isInterruptPending, value);
+    }
+
     /// <summary>True while an explicit terminate request is awaiting the owner result.</summary>
     public bool IsTerminationPending
     {
@@ -240,6 +249,8 @@ public sealed class RunningAgentRowViewModel : ViewModelBase
 
     private async Task InterruptAsync(Func<CancellationToken, Task> interruptAsync)
     {
+        this.IsInterruptPending = true;
+        this.UpdateCommandAvailability();
         this.LastOperationError = null;
         try
         {
@@ -252,6 +263,11 @@ public sealed class RunningAgentRowViewModel : ViewModelBase
         catch
         {
             this.LastOperationError = "Unable to interrupt agent.";
+        }
+        finally
+        {
+            this.IsInterruptPending = false;
+            this.UpdateCommandAvailability();
         }
     }
 
@@ -288,7 +304,11 @@ public sealed class RunningAgentRowViewModel : ViewModelBase
     private void UpdateCommandAvailability()
     {
         this.IsInterruptEnabled =
-            !this.IsTerminationPending && this.IsThinking && this.isConnected && !this.isTerminal;
+            !this.IsInterruptPending
+            && !this.IsTerminationPending
+            && this.IsThinking
+            && this.isConnected
+            && !this.isTerminal;
         this.IsTerminateEnabled =
             !this.IsTerminationPending && this.isConnected && !this.isTerminal;
         this.IsBackgroundOptionEnabled =

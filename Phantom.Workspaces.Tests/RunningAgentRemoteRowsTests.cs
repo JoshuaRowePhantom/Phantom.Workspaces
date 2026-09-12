@@ -207,6 +207,124 @@ public sealed class RunningAgentRemoteRowsTests
     }
 
     [Fact]
+    public async Task InterruptCommand_RepeatedClick_IsSingleFlightAndRetriesAfterSuccess()
+    {
+        var firstCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        var session = new RunningAgentChatWithEntityInfo(
+            new RunningAgentChat(new AgentSessionId("remote"), null!),
+            "Remote session",
+            null);
+        var row = new RunningAgentRowViewModel(
+            session,
+            null,
+            null,
+            "Remote session",
+            hasOpenTab: false,
+            isThinking: true,
+            activateCommand: new Phantom.Workspaces.ViewModels.RelayCommand(_ => { }),
+            interruptAsync: _ =>
+            {
+                Interlocked.Increment(ref calls);
+                return firstCompletion.Task;
+            },
+            terminateAsync: _ => Task.CompletedTask,
+            setContinueInBackgroundAsync: (_, _) => Task.CompletedTask);
+        var command = Assert.IsType<Phantom.Workspaces.ViewModels.AsyncRelayCommand>(row.InterruptCommand);
+
+        command.Execute(null);
+        var firstExecution = command.LastExecutionTask;
+        command.Execute(null);
+
+        Assert.Equal(1, Volatile.Read(ref calls));
+        Assert.Same(firstExecution, command.LastExecutionTask);
+        Assert.True(row.IsInterruptPending);
+        Assert.False(row.IsInterruptEnabled);
+        Assert.False(command.CanExecute(null));
+
+        row.UpdateRuntimeMetadata(session, isActiveInterruptibleTurn: true);
+        Assert.False(row.IsInterruptEnabled);
+
+        firstCompletion.SetResult();
+        await firstExecution!;
+
+        Assert.False(row.IsInterruptPending);
+        Assert.True(row.IsInterruptEnabled);
+        Assert.True(command.CanExecute(null));
+
+        command.Execute(null);
+        await command.LastExecutionTask!;
+        Assert.Equal(2, Volatile.Read(ref calls));
+    }
+
+    [Fact]
+    public async Task InterruptCommand_Cancellation_ClearsPendingWithoutDisplayingError()
+    {
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var session = new RunningAgentChatWithEntityInfo(
+            new RunningAgentChat(new AgentSessionId("remote"), null!),
+            "Remote session",
+            null);
+        var row = new RunningAgentRowViewModel(
+            session,
+            null,
+            null,
+            "Remote session",
+            hasOpenTab: false,
+            isThinking: true,
+            activateCommand: new Phantom.Workspaces.ViewModels.RelayCommand(_ => { }),
+            interruptAsync: _ => completion.Task,
+            terminateAsync: _ => Task.CompletedTask,
+            setContinueInBackgroundAsync: (_, _) => Task.CompletedTask);
+        var command = Assert.IsType<Phantom.Workspaces.ViewModels.AsyncRelayCommand>(row.InterruptCommand);
+
+        command.Execute(null);
+        completion.SetCanceled(TestContext.Current.CancellationToken);
+        await command.LastExecutionTask!;
+
+        Assert.False(row.IsInterruptPending);
+        Assert.True(row.IsInterruptEnabled);
+        Assert.Null(row.LastOperationError);
+    }
+
+    [Fact]
+    public async Task InterruptCommand_Failure_ClearsPendingDisplaysErrorAndAllowsRetry()
+    {
+        var attempts = new Queue<Task>(
+        [
+            Task.FromException(new InvalidOperationException("owner rejected")),
+            Task.CompletedTask,
+        ]);
+        var session = new RunningAgentChatWithEntityInfo(
+            new RunningAgentChat(new AgentSessionId("remote"), null!),
+            "Remote session",
+            null);
+        var row = new RunningAgentRowViewModel(
+            session,
+            null,
+            null,
+            "Remote session",
+            hasOpenTab: false,
+            isThinking: true,
+            activateCommand: new Phantom.Workspaces.ViewModels.RelayCommand(_ => { }),
+            interruptAsync: _ => attempts.Dequeue(),
+            terminateAsync: _ => Task.CompletedTask,
+            setContinueInBackgroundAsync: (_, _) => Task.CompletedTask);
+        var command = Assert.IsType<Phantom.Workspaces.ViewModels.AsyncRelayCommand>(row.InterruptCommand);
+
+        command.Execute(null);
+        await command.LastExecutionTask!;
+
+        Assert.False(row.IsInterruptPending);
+        Assert.True(row.IsInterruptEnabled);
+        Assert.Equal("Unable to interrupt agent.", row.LastOperationError);
+
+        command.Execute(null);
+        await command.LastExecutionTask!;
+        Assert.Null(row.LastOperationError);
+    }
+
+    [Fact]
     public void InterruptCommand_NoInterruptibleRun_IsDisabled()
     {
         var table = new ControlledTable();
