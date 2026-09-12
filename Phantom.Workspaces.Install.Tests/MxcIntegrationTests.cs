@@ -178,11 +178,41 @@ public sealed class MxcRuntimePayloadTests
     [Fact]
     public async Task MxcRuntimePayload_RequiredNativeUnit_IsPresent()
     {
-        using var payload = new MxcRepositoryTestSupport.TestDirectory();
-        using var buildArtifacts = new MxcRepositoryTestSupport.TestDirectory();
+        var processObserver = new RecordingProcessObserver();
+        MxcRepositoryTestSupport.ProcessResult? publish = null;
+        MxcRepositoryTestSupport.ProcessResult? validation = null;
+        var resourcesReleasedBeforeCleanup = true;
+        void ObserveResourcesReleased()
+        {
+            resourcesReleasedBeforeCleanup &=
+                publish?.ActiveJobProcessesAfterCleanup == 0
+                && validation?.ActiveJobProcessesAfterCleanup == 0
+                && ReleasedCount(processObserver, ProcessRunnerWindowsResource.Process) == 2
+                && ReleasedCount(processObserver, ProcessRunnerWindowsResource.Thread) == 2
+                && ReleasedCount(processObserver, ProcessRunnerWindowsResource.Job) == 2
+                && ReleasedCount(
+                    processObserver,
+                    ProcessRunnerWindowsResource.StandardOutputPipe) == 4
+                && ReleasedCount(
+                    processObserver,
+                    ProcessRunnerWindowsResource.StandardErrorPipe) == 4;
+        }
+
+        await using var payload = new MxcRepositoryTestSupport.TestDirectory(
+            ObserveResourcesReleased,
+            message => Console.WriteLine($"MXC payload {message}"));
+        await using var buildArtifacts =
+            new MxcRepositoryTestSupport.TestDirectory(
+                ObserveResourcesReleased,
+                message => Console.WriteLine($"MXC build artifacts {message}"));
         using var sharedOutputLock = MxcRepositoryTestSupport.LockSharedRuntimeConfig();
-        var publish = await MxcRepositoryTestSupport.InvokeAsync(
+        publish = await MxcRepositoryTestSupport.InvokeAsync(
             "dotnet",
+            new MxcRepositoryTestSupport.InvocationOptions
+            {
+                Timeout = TimeSpan.FromMinutes(10),
+                Observer = processObserver,
+            },
             MxcRepositoryTestSupport.CreatePublishArguments(
                 payload.Path,
                 buildArtifacts.Path));
@@ -192,13 +222,25 @@ public sealed class MxcRuntimePayloadTests
         Assert.True(publish.DirectProcessInJob);
         Assert.Equal(0U, publish.ActiveJobProcessesAfterCleanup);
 
-        var result = await MxcRepositoryTestSupport.InvokePowerShellAsync(
-            "packaging", "validate", "Assert-MxcRuntimePayload.ps1",
+        validation = await MxcRepositoryTestSupport.InvokePowerShellAsync(
+            Path.Combine(
+                MxcRepositoryTestSupport.Root.FullName,
+                "packaging",
+                "validate",
+                "Assert-MxcRuntimePayload.ps1"),
+            new MxcRepositoryTestSupport.InvocationOptions
+            {
+                Timeout = TimeSpan.FromSeconds(30),
+                Observer = processObserver,
+            },
             "-PayloadDirectory", payload.Path,
             "-RuntimeIdentifier", "win-x64");
 
-        Assert.True(result.ExitCode == 0, result.StandardError);
-        Assert.Contains("runtime payload validation passed", result.StandardOutput, StringComparison.Ordinal);
+        Assert.True(validation.ExitCode == 0, validation.StandardError);
+        Assert.Contains(
+            "runtime payload validation passed",
+            validation.StandardOutput,
+            StringComparison.Ordinal);
 
         var runtimeConfigs = Directory.GetFiles(
             buildArtifacts.Path,
@@ -213,6 +255,60 @@ public sealed class MxcRuntimePayloadTests
         Assert.All(
             Directory.GetFiles(payload.Path, "*.runtimeconfig.json", SearchOption.TopDirectoryOnly),
             MxcRepositoryTestSupport.AssertExclusivelyOpenable);
+
+        await buildArtifacts.DisposeAsync();
+        await payload.DisposeAsync();
+        Assert.True(
+            resourcesReleasedBeforeCleanup,
+            "Contained process, job, thread, or output-pipe resources remained at cleanup.");
+    }
+
+    [Fact]
+    public async Task TestDirectory_CleanupProofWithOpenFile_RefusesPartialDeletion()
+    {
+        string? lockedPath = null;
+        var directory = new MxcRepositoryTestSupport.TestDirectory(
+            beforeCleanup: () =>
+                MxcRepositoryTestSupport.AssertExclusivelyOpenable(
+                    Assert.IsType<string>(lockedPath)));
+        var firstPath = Path.Combine(directory.Path, "first.txt");
+        lockedPath = Path.Combine(directory.Path, "locked.txt");
+        File.WriteAllText(firstPath, "first");
+        File.WriteAllText(lockedPath, "locked");
+
+        using (File.Open(lockedPath, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            await Assert.ThrowsAsync<IOException>(() => directory.DisposeAsync().AsTask());
+            Assert.True(File.Exists(firstPath));
+            Assert.True(File.Exists(lockedPath));
+        }
+
+        await directory.DisposeAsync();
+        Assert.False(Directory.Exists(directory.Path));
+    }
+
+    [Fact]
+    public async Task TestDirectory_CleanupProof_PrecedesEnumerationAndDeletion()
+    {
+        var proofRan = false;
+        var cleanupStarted = false;
+        var directory = new MxcRepositoryTestSupport.TestDirectory(
+            beforeCleanup: () =>
+            {
+                Assert.False(cleanupStarted);
+                proofRan = true;
+            },
+            cleanupProgress: _ =>
+            {
+                Assert.True(proofRan);
+                cleanupStarted = true;
+            });
+        File.WriteAllText(Path.Combine(directory.Path, "content.txt"), "content");
+
+        await directory.DisposeAsync();
+
+        Assert.True(cleanupStarted);
+        Assert.False(Directory.Exists(directory.Path));
     }
 
     [Fact]
@@ -467,6 +563,14 @@ public sealed class MxcRuntimePayloadTests
         Assert.All(releases, processEvent => Assert.True(processEvent.Succeeded));
     }
 
+    private static int ReleasedCount(
+        RecordingProcessObserver observer,
+        ProcessRunnerWindowsResource resource) =>
+        observer.Events.Count(
+            processEvent => processEvent.Stage == ProcessRunnerWindowsStage.ReleaseResource
+                && processEvent.Resource == resource
+                && processEvent.Succeeded);
+
     private sealed class RecordingProcessObserver : IProcessRunnerWindowsObserver
     {
         private readonly List<ProcessRunnerWindowsEvent> events = [];
@@ -571,8 +675,10 @@ public sealed class CopilotWrapperNestedPublishTests
     [Fact]
     public async Task NestedPublish_RidConsistentGraphProducesUniqueCompleteWrapperPayload()
     {
-        using var payload = new MxcRepositoryTestSupport.TestDirectory();
-        using var buildArtifacts = new MxcRepositoryTestSupport.TestDirectory();
+        await using var payload = new MxcRepositoryTestSupport.TestDirectory(
+            cleanupProgress: message => Console.WriteLine($"wrapper payload {message}"));
+        await using var buildArtifacts = new MxcRepositoryTestSupport.TestDirectory(
+            cleanupProgress: message => Console.WriteLine($"wrapper build artifacts {message}"));
         var publish = await MxcRepositoryTestSupport.InvokeAsync(
             "dotnet",
             MxcRepositoryTestSupport.CreateCopilotWrapperPublishArguments(
@@ -951,10 +1057,19 @@ internal static class MxcRepositoryTestSupport
         }
     }
 
-    internal sealed class TestDirectory : IDisposable
+    internal sealed class TestDirectory : IDisposable, IAsyncDisposable
     {
-        internal TestDirectory()
+        private const int MaxCleanupConcurrency = 8;
+        private readonly Action? beforeCleanup;
+        private readonly Action<string>? cleanupProgress;
+        private readonly SemaphoreSlim cleanupLock = new(1, 1);
+
+        internal TestDirectory(
+            Action? beforeCleanup = null,
+            Action<string>? cleanupProgress = null)
         {
+            this.beforeCleanup = beforeCleanup;
+            this.cleanupProgress = cleanupProgress;
             Path = System.IO.Path.Combine(
                 Root.FullName, "TestResults", $"mxc-integration-{Guid.NewGuid():N}");
             Directory.CreateDirectory(Path);
@@ -962,6 +1077,78 @@ internal static class MxcRepositoryTestSupport
 
         internal string Path { get; }
 
-        public void Dispose() => Directory.Delete(Path, recursive: true);
+        public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
+
+        public ValueTask DisposeAsync() => new(DisposeAsyncCore());
+
+        private async Task DisposeAsyncCore()
+        {
+            await cleanupLock.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                if (!Directory.Exists(Path))
+                    return;
+
+                beforeCleanup?.Invoke();
+                await DeleteDirectoryAsync(
+                    Path,
+                    cleanupProgress,
+                    CancellationToken.None).ConfigureAwait(false);
+            }
+            finally
+            {
+                cleanupLock.Release();
+            }
+        }
+
+        internal static async Task DeleteDirectoryAsync(
+            string path,
+            Action<string>? progress,
+            CancellationToken cancellationToken)
+        {
+            var files = Directory.GetFiles(path, "*", SearchOption.AllDirectories);
+            var directories = Directory.GetDirectories(path, "*", SearchOption.AllDirectories);
+            progress?.Invoke(
+                $"cleanup snapshot completed; enumeration handles closed"
+                + $" ({files.Length} files, {directories.Length} directories)");
+
+            var options = new ParallelOptions
+            {
+                CancellationToken = cancellationToken,
+                MaxDegreeOfParallelism = MaxCleanupConcurrency,
+            };
+            await Parallel.ForEachAsync(
+                files,
+                options,
+                static (file, _) =>
+                {
+                    File.Delete(file);
+                    return ValueTask.CompletedTask;
+                }).ConfigureAwait(false);
+            progress?.Invoke($"deleted {files.Length} files");
+
+            var directoryGroups = directories
+                .GroupBy(directory => PathDepth(path, directory))
+                .OrderByDescending(group => group.Key);
+            foreach (var group in directoryGroups)
+            {
+                await Parallel.ForEachAsync(
+                    group,
+                    options,
+                    static (directory, _) =>
+                    {
+                        Directory.Delete(directory);
+                        return ValueTask.CompletedTask;
+                    }).ConfigureAwait(false);
+            }
+
+            Directory.Delete(path);
+            progress?.Invoke($"cleanup completed ({directories.Length + 1} directories)");
+        }
+
+        private static int PathDepth(string root, string path) =>
+            System.IO.Path.GetRelativePath(root, path).Count(
+                character => character == System.IO.Path.DirectorySeparatorChar
+                    || character == System.IO.Path.AltDirectorySeparatorChar);
     }
 }
