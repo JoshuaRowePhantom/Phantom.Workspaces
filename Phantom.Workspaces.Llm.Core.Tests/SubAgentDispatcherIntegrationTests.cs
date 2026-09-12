@@ -174,6 +174,60 @@ public sealed class SubAgentDispatcherIntegrationTests
         Assert.Empty(scenario.Factory.Leases.Values.Single().AgentChat.RunningItems);
     }
 
+    [Fact]
+    public async Task Cancellation_AfterDispatchBeforeRunning_WaitsForActiveItemAndOwnsItsCleanup()
+    {
+        await using var scenario = new ControlledDispatchScenario(
+            "cancel-after-dispatch-before-running",
+            pauseProcessing: true);
+
+        var sending = await scenario.ReadRequiredAsync();
+        Assert.Contains("Sending", sending.Text);
+        var created = await scenario.ReadRequiredAsync();
+        Assert.Contains("Created sub-agent", created.Text);
+
+        var lease = scenario.Factory.Leases.Values.Single();
+        var runningCounts = new List<int>();
+        void OnRunningItemsChanged(object? sender, NotifyCollectionChangedEventArgs e)
+            => runningCounts.Add(lease.AgentChat.RunningItems.Count);
+        ((INotifyCollectionChanged)lease.AgentChat.RunningItems).CollectionChanged += OnRunningItemsChanged;
+
+        try
+        {
+            Assert.Single(scenario.Client.ActiveSubAgents);
+            Assert.Empty(lease.AgentChat.RunningItems);
+            Assert.True(scenario.HasPausedProcessingWork);
+
+            var interruptedMove = scenario.Enumerator.MoveNextAsync().AsTask();
+            scenario.Cancel();
+
+            Assert.False(interruptedMove.IsCompleted);
+            Assert.Empty(lease.AgentChat.RunningItems);
+
+            scenario.ReleasePausedProcessing();
+
+            Assert.True(await interruptedMove);
+            Assert.Equal("Interrupted.\n", scenario.Enumerator.Current.Text);
+            Assert.False(await scenario.Enumerator.MoveNextAsync());
+
+            Assert.Equal([1, 0], runningCounts);
+            Assert.Empty(lease.AgentChat.RunningItems);
+            Assert.False(scenario.HasPausedProcessingWork);
+
+            var historyText = lease.AgentChat.History
+                .SelectMany(item => item.Contents)
+                .OfType<TextContent>()
+                .Select(content => content.Text)
+                .ToArray();
+            Assert.Single(historyText, text => text == "Interrupted by user.");
+            Assert.DoesNotContain(historyText, text => text == "completed normally");
+        }
+        finally
+        {
+            ((INotifyCollectionChanged)lease.AgentChat.RunningItems).CollectionChanged -= OnRunningItemsChanged;
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -377,10 +431,14 @@ public sealed class SubAgentDispatcherIntegrationTests
     private sealed class ControllableEchoFactory : IRunningAgentChatFactory
     {
         private readonly DeterministicTestChatClient _chatClient;
+        private readonly ManuallyDrivenTaskScheduler? _foregroundScheduler;
 
-        public ControllableEchoFactory(DeterministicTestChatClient chatClient)
+        public ControllableEchoFactory(
+            DeterministicTestChatClient chatClient,
+            ManuallyDrivenTaskScheduler? foregroundScheduler = null)
         {
             _chatClient = chatClient;
+            _foregroundScheduler = foregroundScheduler;
         }
 
         public Dictionary<AgentSessionId, RunningAgentChatLease> Leases { get; } = new();
@@ -399,14 +457,17 @@ public sealed class SubAgentDispatcherIntegrationTests
                 return existing;
             }
 
-            var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+            var createTask = AgentChat.CreateAsync(new InternalCreateAgentChatRequest
             {
                 AgentDefinition = definition ?? EchoAgentDefinition,
                 ConfiguredStore = new InMemoryAgentPersistenceStore(),
                 ClientOverride = _chatClient,
                 DisplayNameOverride = displayNameOverride ?? "sub-agent",
                 DescriptionOverride = descriptionOverride,
+                ForegroundScheduler = _foregroundScheduler,
             });
+            _foregroundScheduler?.RunPending();
+            var chat = await createTask;
 
             var lease = new RunningAgentChatLease(sessionId, chat, () => ValueTask.CompletedTask);
             Leases[sessionId] = lease;
@@ -430,12 +491,14 @@ public sealed class SubAgentDispatcherIntegrationTests
     {
         private readonly CancellationTokenSource timeout = new(TimeSpan.FromSeconds(60));
         private readonly CancellationTokenSource dispatchCancellation = new();
+        private readonly ManuallyDrivenTaskScheduler? foregroundScheduler;
         private bool enumeratorDisposed;
 
-        public ControlledDispatchScenario(string dispatcherId)
+        public ControlledDispatchScenario(string dispatcherId, bool pauseProcessing = false)
         {
             var testChatClient = new DeterministicTestChatClient();
-            Factory = new ControllableEchoFactory(testChatClient);
+            foregroundScheduler = pauseProcessing ? new ManuallyDrivenTaskScheduler() : null;
+            Factory = new ControllableEchoFactory(testChatClient, foregroundScheduler);
             Client = new SubAgentDispatcherChatClient(
                 Factory,
                 new DeterministicEmbeddingsProvider(),
@@ -462,7 +525,15 @@ public sealed class SubAgentDispatcherIntegrationTests
 
         public IAsyncEnumerator<ChatResponseUpdate> Enumerator { get; }
 
+        public bool HasPausedProcessingWork => foregroundScheduler?.QueuedCount > 0;
+
         public void Cancel() => dispatchCancellation.Cancel();
+
+        public void ReleasePausedProcessing()
+        {
+            Assert.NotNull(foregroundScheduler);
+            foregroundScheduler.DrainAndRunInline();
+        }
 
         public async Task<ChatResponseUpdate> ReadRequiredAsync()
         {
@@ -543,8 +614,86 @@ public sealed class SubAgentDispatcherIntegrationTests
             await DisposeEnumeratorAsync();
 
             Client.Dispose();
+            foregroundScheduler?.DrainAndRunInline();
+            foreach (var lease in Factory.Leases.Values)
+            {
+                await lease.LocalAgentChat.DisposeAsync();
+            }
             dispatchCancellation.Dispose();
             timeout.Dispose();
         }
+    }
+
+    private sealed class ManuallyDrivenTaskScheduler : TaskScheduler
+    {
+        private readonly object sync = new();
+        private List<Task> queuedTasks = [];
+        private bool runInline;
+
+        public int QueuedCount
+        {
+            get
+            {
+                lock (sync)
+                {
+                    return queuedTasks.Count;
+                }
+            }
+        }
+
+        public void RunPending()
+        {
+            List<Task> pending;
+            lock (sync)
+            {
+                pending = queuedTasks;
+                queuedTasks = [];
+            }
+
+            foreach (var task in pending)
+            {
+                TryExecuteTask(task);
+            }
+        }
+
+        public void DrainAndRunInline()
+        {
+            List<Task> pending;
+            lock (sync)
+            {
+                runInline = true;
+                pending = queuedTasks;
+                queuedTasks = [];
+            }
+
+            foreach (var task in pending)
+            {
+                TryExecuteTask(task);
+            }
+        }
+
+        protected override IEnumerable<Task> GetScheduledTasks()
+        {
+            lock (sync)
+            {
+                return queuedTasks.ToArray();
+            }
+        }
+
+        protected override void QueueTask(Task task)
+        {
+            lock (sync)
+            {
+                if (!runInline)
+                {
+                    queuedTasks.Add(task);
+                    return;
+                }
+            }
+
+            TryExecuteTask(task);
+        }
+
+        protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued) => false;
     }
 }

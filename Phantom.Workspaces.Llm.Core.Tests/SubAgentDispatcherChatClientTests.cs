@@ -245,14 +245,12 @@ public sealed class SubAgentDispatcherChatClientTests
     [Fact]
     public async Task Cancellation_WhileSubAgentRunning_PropagatesInterrupt_AndYieldsInterrupted()
     {
-        // Arrange
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var embeddingsProvider = new DeterministicEmbeddingsProvider();
         var dataAccessLayer = new FakeDataAccessLayer();
         var dispatcherEntityName = new EntityName("dispatchers", "test-dispatcher");
         var options = CreateOptions();
 
-        // Use a factory that creates AgentChats with a controllable DeterministicTestChatClient
         var testChatClient = new DeterministicTestChatClient();
         var factory = new ControllableAgentChatFactory(testChatClient);
 
@@ -263,72 +261,65 @@ public sealed class SubAgentDispatcherChatClientTests
             dispatcherEntityName,
             options);
 
-        // Enqueue a streaming response that won't complete until we say so
-        var stream = testChatClient.EnqueueStreamingResponse(isReady: true);
-        // Don't complete the stream yet - this will hold the sub-agent in a running state
-
+        testChatClient.EnqueueStreamingResponse(isReady: true);
         using var dispatchCts = new CancellationTokenSource();
-
-        // Act - Start dispatching
         var messages = new List<ChatMessage>
         {
             new(ChatRole.User, "new: test message"),
         };
 
         var updates = new List<ChatResponseUpdate>();
-        var enumerator = client.GetStreamingResponseAsync(messages, cancellationToken: dispatchCts.Token)
-            .GetAsyncEnumerator(dispatchCts.Token);
+        await using var enumerator = client
+            .GetStreamingResponseAsync(messages, cancellationToken: dispatchCts.Token)
+            .GetAsyncEnumerator();
 
-        // Collect initial updates (ack and created messages)
-        var gotInitialUpdates = false;
-        try
-        {
-            while (await enumerator.MoveNextAsync())
-            {
-                updates.Add(enumerator.Current);
-                if (enumerator.Current.Text?.Contains("Created sub-agent") == true)
-                {
-                    gotInitialUpdates = true;
-                    break;
-                }
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            // Expected if cancelled
-        }
+        Assert.True(await enumerator.MoveNextAsync());
+        updates.Add(enumerator.Current);
+        Assert.Contains("Sending", enumerator.Current.Text);
 
-        Assert.True(gotInitialUpdates, "Should have received the initial ack and created messages");
+        Assert.True(await enumerator.MoveNextAsync());
+        updates.Add(enumerator.Current);
+        Assert.Contains("Created sub-agent", enumerator.Current.Text);
 
-        // Now the dispatcher is waiting for the sub-agent to go idle
-        // The sub-agent is waiting for the DeterministicTestChatClient to produce output
+        var lease = factory.Leases.Values.Single();
+        await WaitForConditionAsync(
+            [(INotifyCollectionChanged)lease.LocalAgentChat.RunningItems],
+            () => lease.LocalAgentChat.RunningItems.Count == 1,
+            "the dispatched sub-agent to publish its active running item",
+            timeout.Token);
 
-        // Cancel the dispatcher
+        var interruptedMove = enumerator.MoveNextAsync().AsTask();
         dispatchCts.Cancel();
 
-        // Complete the stream so the test can finish
-        stream.Complete();
+        Assert.True(await interruptedMove);
+        updates.Add(enumerator.Current);
+        Assert.False(await enumerator.MoveNextAsync());
 
-        // Try to get any remaining updates
-        try
-        {
-            while (await enumerator.MoveNextAsync())
-            {
-                updates.Add(enumerator.Current);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            // Expected
-        }
+        await WaitForConditionAsync(
+            [(INotifyCollectionChanged)lease.LocalAgentChat.RunningItems],
+            () => lease.LocalAgentChat.RunningItems.Count == 0,
+            "the interrupted sub-agent to release its running item",
+            timeout.Token);
 
-        await enumerator.DisposeAsync();
+        var terminalUpdates = updates
+            .Where(update => update.Text is not null
+                && !update.Text.Contains("Sending", StringComparison.Ordinal)
+                && !update.Text.Contains("Created sub-agent", StringComparison.Ordinal))
+            .Select(update => update.Text)
+            .ToArray();
+        Assert.Equal(["Interrupted.\n"], terminalUpdates);
 
-        // Assert - Should have an "Interrupted." message
-        var interruptedUpdate = updates.FirstOrDefault(u => u.Text?.Contains("Interrupted") == true);
-        Assert.NotNull(interruptedUpdate);
+        var historyText = lease.LocalAgentChat.History
+            .SelectMany(item => item.Contents)
+            .OfType<TextContent>()
+            .Select(content => content.Text)
+            .ToArray();
+        Assert.Single(historyText, text => text == "Interrupted by user.");
+        Assert.DoesNotContain(historyText, text => text.Contains("completed normally", StringComparison.Ordinal));
+        Assert.Empty(lease.LocalAgentChat.RunningItems);
 
         client.Dispose();
+        await lease.LocalAgentChat.DisposeAsync();
     }
 
     /// <summary>
