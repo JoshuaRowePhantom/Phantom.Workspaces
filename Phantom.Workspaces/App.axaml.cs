@@ -7,6 +7,7 @@ using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Secrets;
@@ -309,8 +310,12 @@ public partial class App : Application
                 agentPersistenceStore,
                 Services.AgentServicesComposition.ComposeHostServices(secretProvider, mcpOAuthOptions),
                 foregroundScheduler);
+            var transportFactoryRegistryProvider = new Services.TransportFactoryRegistryProvider();
             var applicationServices = new ApplicationServices(
-                new RunningAgentChatTable(agentChatFactory),
+                new RunningAgentChatTable(
+                    agentChatFactory,
+                    Services.AgentSessionRuntimeContextFactory.FromProvider(transportFactoryRegistryProvider),
+                    loggerFactory.CreateLogger<RunningAgentChatTable>()),
                 agentPersistenceStoreCache,
                 loggerFactory: loggerFactory,
                 logDirectoryProvider: logDirectoryProvider,
@@ -319,7 +324,8 @@ public partial class App : Application
                 credentialPicker: credentialPicker,
                 allowedSecretsStore: allowedSecretsStore,
                 platformSecretStore: platformStore,
-                mcpOAuthOptions: mcpOAuthOptions);
+                mcpOAuthOptions: mcpOAuthOptions,
+                transportFactoryRegistryProvider: transportFactoryRegistryProvider);
             var viewModel = new MainWindowViewModel(repositorySource, configuration, applicationServices: applicationServices);
 
             // #1172: register the canonical URL opener now that MainWindowViewModel exists

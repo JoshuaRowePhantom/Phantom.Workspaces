@@ -4,6 +4,8 @@ using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Llm.Processes;
+using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Transport;
 
 namespace Phantom.Workspaces.Tests;
@@ -59,15 +61,19 @@ public sealed class RemoteMcpHostHandlerTests
     [Fact]
     public async Task OpenAsync_StdioConnection_HostsServer()
     {
-        var handler = new RemoteMcpHostHandler();
+        var handler = new RemoteMcpHostHandler(new Phantom.Workspaces.Llm.AgentServices
+        {
+            ProcessExecutor = new RecordingProcessExecutor(),
+        });
         await using var channel = new StubMessageChannel();
+        var command = Uri.EscapeDataString(ComSpecPath);
 
         // A stdio connection descriptor selects the stdio branch of the shared factory
         // (McpTransportFactory.IsStdioEndpoint/CreateStdioTransport) rather than the HTTP branch.
         // Construction of the stdio transport is synchronous and the child process launch is lazy, so
         // the host session is live immediately; disposing tears the bridge down without a round-trip.
         var handle = await handler.OpenAsync(
-            Json("""{"type":"mcp","connection":{"server-name":"remote-stdio","endpoint":"stdio://?command=my-server"}}"""),
+            Json($"{{\"type\":\"mcp\",\"connection\":{{\"server-name\":\"remote-stdio\",\"endpoint\":\"stdio://?command={command}\"}}}}"),
             channel,
             Ct());
 
@@ -93,7 +99,285 @@ public sealed class RemoteMcpHostHandlerTests
         await handle.DisposeAsync();
     }
 
+    [Fact]
+    public async Task OpenAsync_CompiledPolicyOverWire_IsRejected()
+    {
+        // #1477: the launch host, not the caller, compiles policy. A request whose connection
+        // carries a compiled-policy property must fail closed before opening anything.
+        var handler = new RemoteMcpHostHandler();
+        await using var channel = new StubMessageChannel();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await handler.OpenAsync(
+                Json("""{"type":"mcp","connection":{"server-name":"srv","endpoint":"stdio://?command=cmd","compiled-policy":{}}}"""),
+                channel,
+                Ct()));
+    }
+
+    [Fact]
+    public async Task RemoteStdio_ProfileReference_ResolvesAndCompilesOnLaunchHost()
+    {
+        // #1477: when the wire carries a trust-profile-ref, THIS host resolves it locally, composes
+        // the effective profile, and threads the resulting AgentExecutionTrustContext into the
+        // shared transport factory. Successful resolution reaches the transport open path.
+        var resolver = new FakeRemoteTrustProfileResolver(
+            new Phantom.Workspaces.Llm.Trust.RemoteTrustProfileResolution(
+                new Phantom.Workspaces.Llm.Trust.TrustProfile(),
+                Revision: "rev-1"));
+        var compiler = new RecordingPolicyCompiler();
+        var executor = new RecordingProcessExecutor();
+        var services = new Phantom.Workspaces.Llm.AgentServices
+        {
+            TrustProfileResolver = resolver,
+            TrustProfilePolicyCompiler = compiler,
+            ProcessExecutor = executor,
+        };
+        var handler = new RemoteMcpHostHandler(services);
+        await using var channel = new StubMessageChannel();
+        var command = Uri.EscapeDataString(ComSpecPath);
+
+        var handle = await handler.OpenAsync(
+            Json($"{{\"type\":\"mcp\",\"connection\":{{\"server-name\":\"srv\",\"endpoint\":\"stdio://?command={command}\",\"trust-profile-ref\":\"my-profile\",\"trust-profile-revision\":\"rev-1\"}}}}"),
+            channel,
+            Ct());
+
+        Assert.NotNull(handle);
+        Assert.Equal(1, resolver.ResolveCalls);
+        var launched = await executor.Started.Task.WaitAsync(Ct());
+        Assert.Equal(1, compiler.CompileCalls);
+        Assert.NotNull(launched.MxcPolicy);
+        await handle!.DisposeAsync();
+        Assert.Equal(1, executor.Handle.DisposeCount);
+    }
+
+    [Fact]
+    public async Task RemoteStdio_StaleTrustProfileRevision_RejectsLaunch()
+    {
+        // A resolved profile whose revision no longer matches the caller-observed revision must
+        // fail closed before any process is opened.
+        var resolver = new FakeRemoteTrustProfileResolver(
+            new Phantom.Workspaces.Llm.Trust.RemoteTrustProfileResolution(
+                new Phantom.Workspaces.Llm.Trust.TrustProfile(),
+                Revision: "rev-999"));
+        var services = new Phantom.Workspaces.Llm.AgentServices
+        {
+            TrustProfileResolver = resolver,
+            TrustProfilePolicyCompiler =
+                new Phantom.Workspaces.Llm.Trust.MxcTrustProfilePolicyCompiler(),
+        };
+        var handler = new RemoteMcpHostHandler(services);
+        await using var channel = new StubMessageChannel();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await handler.OpenAsync(
+                Json("""{"type":"mcp","connection":{"server-name":"srv","endpoint":"stdio://?command=my-server","trust-profile-ref":"my-profile","trust-profile-revision":"rev-1"}}"""),
+                channel,
+                Ct()));
+
+        Assert.Equal("Remote MCP launch was denied by host policy.", ex.Message);
+    }
+
+    [Fact]
+    public async Task RemoteStdio_MissingTrustProfileRevision_RejectsLaunch()
+    {
+        var handler = new RemoteMcpHostHandler(new Phantom.Workspaces.Llm.AgentServices
+        {
+            TrustProfileResolver = new FakeRemoteTrustProfileResolver(
+                new RemoteTrustProfileResolution(new TrustProfile(), Revision: "current")),
+            TrustProfilePolicyCompiler = new RecordingPolicyCompiler(),
+            ProcessExecutor = new RecordingProcessExecutor(),
+        });
+        await using var channel = new StubMessageChannel();
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await handler.OpenAsync(
+                Json("""{"type":"mcp","connection":{"server-name":"srv","endpoint":"stdio://?command=cmd","trust-profile-ref":"my-profile"}}"""),
+                channel,
+                Ct()));
+
+        Assert.Equal("Remote MCP launch was denied by host policy.", exception.Message);
+    }
+
+    [Theory]
+    [InlineData("""{"type":"mcp","connection":{"server-name":"srv","endpoint":"stdio://?command=cmd","trust-profile-ref":"restricted"}}""")]
+    [InlineData("""{"type":"mcp","connection":{"server-name":"srv","endpoint":"stdio://?command=cmd","trust-profile-revision":"7"}}""")]
+    [InlineData("""{"type":"mcp","connection":{"server-name":"srv","endpoint":"stdio://?command=cmd","trust-profile-ref":42,"trust-profile-revision":"7"}}""")]
+    [InlineData("""{"type":"mcp","connection":{"server-name":"srv","endpoint":"stdio://?command=cmd","trust-profile-ref":"restricted","trust-profile-revision":7}}""")]
+    public async Task RemoteStdio_MalformedTrustIntent_FailsBeforeProcessLaunch(string json)
+    {
+        var executor = new RecordingProcessExecutor();
+        var handler = new RemoteMcpHostHandler(new Phantom.Workspaces.Llm.AgentServices
+        {
+            TrustProfileResolver = new FakeRemoteTrustProfileResolver(
+                new RemoteTrustProfileResolution(new TrustProfile(), Revision: "7")),
+            TrustProfilePolicyCompiler = new RecordingPolicyCompiler(),
+            ProcessExecutor = executor,
+        });
+        await using var channel = new StubMessageChannel();
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => handler.OpenAsync(Json(json), channel, Ct()));
+
+        Assert.Equal("Remote MCP launch was denied by host policy.", exception.Message);
+        Assert.Equal(0, executor.StartCalls);
+    }
+
+    [Fact]
+    public async Task RemoteStdio_CompilerFailure_IsSanitizedAndDoesNotLaunch()
+    {
+        var executor = new RecordingProcessExecutor();
+        var handler = new RemoteMcpHostHandler(new Phantom.Workspaces.Llm.AgentServices
+        {
+            TrustProfileResolver = new FakeRemoteTrustProfileResolver(
+                new RemoteTrustProfileResolution(new TrustProfile(), Revision: "7")),
+            TrustProfilePolicyCompiler = new ThrowingPolicyCompiler(),
+            ProcessExecutor = executor,
+        });
+        await using var channel = new StubMessageChannel();
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => handler.OpenAsync(
+                Json("""{"type":"mcp","connection":{"server-name":"srv","endpoint":"stdio://?command=cmd","trust-profile-ref":"restricted","trust-profile-revision":"7"}}"""),
+                channel,
+                Ct()));
+
+        Assert.Equal("Remote MCP launch was denied by host policy.", exception.Message);
+        Assert.DoesNotContain("secret", exception.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, executor.StartCalls);
+    }
+
+    [Fact]
+    public async Task RemoteStdio_ExecutorFailure_IsReturnedSanitized()
+    {
+        var handler = new RemoteMcpHostHandler(new Phantom.Workspaces.Llm.AgentServices
+        {
+            ProcessExecutor = new ThrowingProcessExecutor(),
+        });
+        await using var channel = new StubMessageChannel();
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => handler.OpenAsync(
+                Json("""{"type":"mcp","connection":{"server-name":"srv","endpoint":"stdio://?command=cmd"}}"""),
+                channel,
+                Ct()));
+
+        Assert.Equal("Remote MCP launch was denied by host policy.", exception.Message);
+        Assert.DoesNotContain("secret", exception.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed class FakeRemoteTrustProfileResolver
+        : Phantom.Workspaces.Llm.Trust.IRemoteTrustProfileResolver
+    {
+        private readonly Phantom.Workspaces.Llm.Trust.RemoteTrustProfileResolution? result;
+        public int ResolveCalls { get; private set; }
+        public FakeRemoteTrustProfileResolver(Phantom.Workspaces.Llm.Trust.RemoteTrustProfileResolution? result)
+        {
+            this.result = result;
+        }
+
+        public Task<Phantom.Workspaces.Llm.Trust.RemoteTrustProfileResolution?> ResolveAsync(
+            string profileReference, CancellationToken cancellationToken)
+        {
+            ResolveCalls++;
+            return Task.FromResult(result);
+        }
+    }
+
+    private sealed class RecordingPolicyCompiler : ITrustProfileProcessPolicyCompiler
+    {
+        public int CompileCalls { get; private set; }
+
+        public TrustProfileProcessPolicyCompilation Compile(TrustProfile effectiveProfile)
+        {
+            CompileCalls++;
+            var policy = new MxcProcessPolicy(
+                MxcProcessPolicy.CurrentSchemaVersion,
+                [], [], [],
+                new Dictionary<string, string>(),
+                new MxcProcessContainment(
+                    MxcContainmentBackend.ProcessContainer,
+                    LeastPrivilege: true,
+                    LearningMode: false,
+                    PermissiveMode: false));
+            return new TrustProfileProcessPolicyCompilation(true, policy, []);
+        }
+
+    }
+
+    private sealed class ThrowingPolicyCompiler : ITrustProfileProcessPolicyCompiler
+    {
+        public TrustProfileProcessPolicyCompilation Compile(TrustProfile effectiveProfile)
+            => throw new InvalidOperationException(
+                @"C:\secret\policy.json --token sensitive stderr");
+    }
+
+    private sealed class RecordingProcessExecutor : IProcessExecutor
+    {
+        public TaskCompletionSource<ProcessExecutionRequest> Started { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int StartCalls { get; private set; }
+        public StubProcessHandle Handle { get; } = new();
+
+        public IProcessHandle Start(ProcessExecutionRequest request)
+        {
+            StartCalls++;
+            Started.TrySetResult(request);
+            return Handle;
+        }
+    }
+
+    private sealed class ThrowingProcessExecutor : IProcessExecutor
+    {
+        public IProcessHandle Start(ProcessExecutionRequest request)
+            => throw new InvalidOperationException(
+                @"C:\secret\mcp.exe --token sensitive stderr");
+    }
+
+    private sealed class StubProcessHandle : IProcessHandle
+    {
+        private readonly TaskCompletionSource<ProcessExitResult> exit =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int DisposeCount { get; private set; }
+
+        public Stream StandardInput { get; } = new MemoryStream();
+        public Stream StandardOutput { get; } = new MemoryStream();
+        public Stream StandardError { get; } = new MemoryStream();
+        public ProcessLaunchInfo LaunchInfo { get; } = new()
+        {
+            ProcessId = 1234,
+            IsContained = true,
+            Warnings = [],
+            PathCategory = ProcessPathCategory.CallerProvided,
+            LaunchMechanism = ProcessLaunchMechanism.MxcSpawn,
+            CreationStatusAvailable = false,
+            CreateProcessSucceeded = null,
+            CreateProcessWin32Error = null,
+            SdkSpawnSucceeded = true,
+            JobConfigured = null,
+            JobAssigned = null,
+            ResumeSucceeded = null,
+            Containment = new ProcessContainmentInfo
+            {
+                PolicyType = "ProcessContainer",
+                PolicyIdentity = "test-policy",
+            },
+        };
+        public Task<ProcessExitResult> WaitAsync(CancellationToken cancellationToken = default)
+            => exit.Task.WaitAsync(cancellationToken);
+        public void Kill() => exit.TrySetResult(ProcessExitResult.Create(-1, false, null));
+        public ValueTask DisposeAsync()
+        {
+            DisposeCount++;
+            exit.TrySetResult(ProcessExitResult.Create(0, false, null));
+            return ValueTask.CompletedTask;
+        }
+    }
+
     private static JsonElement Json(string json) => JsonDocument.Parse(json).RootElement.Clone();
+
+    private static string ComSpecPath =>
+        Environment.GetEnvironmentVariable("ComSpec")
+        ?? Path.Combine(Environment.SystemDirectory, "cmd.exe");
 
     private static CancellationToken Ct() => new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token;
 

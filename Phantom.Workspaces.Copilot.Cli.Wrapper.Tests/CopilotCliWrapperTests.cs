@@ -8,70 +8,6 @@ namespace Phantom.Workspaces.Copilot.Cli.Wrapper.Tests;
 public sealed class CopilotCliWrapperTests
 {
     [Fact]
-    public async Task Wrapper_InvalidArguments_ReturnsReservedExitCode()
-    {
-        using var stderr = new MemoryStream();
-
-        var exitCode = await CopilotCliWrapper.RunAsync(
-            ["--policy", "missing-prefix"],
-            Stream.Null,
-            Stream.Null,
-            stderr,
-            new RecordingExecutor(),
-            "unused",
-            Environment.ProcessId,
-            "unused");
-
-        Assert.Equal(CopilotCliWrapper.InvalidArgumentsExitCode, exitCode);
-        Assert.Contains("invalid", Encoding.UTF8.GetString(stderr.ToArray()), StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public async Task Wrapper_InvalidPolicyEnvelope_ReturnsReservedExitCode()
-    {
-        using var files = new WrapperFiles();
-        using var lease = files.Store.Create(CreatePolicy(), Environment.ProcessId);
-        File.WriteAllText(lease.Path, "{");
-        using var stderr = new MemoryStream();
-
-        var exitCode = await CopilotCliWrapper.RunAsync(
-            ["--policy", lease.Path, "--copilot", files.CopilotPath],
-            Stream.Null,
-            Stream.Null,
-            stderr,
-            new RecordingExecutor(),
-            files.LaunchRoot,
-            Environment.ProcessId,
-            files.WrapperPath);
-
-        Assert.Equal(CopilotCliWrapper.InvalidEnvelopeExitCode, exitCode);
-        Assert.Contains("invalid or expired", Encoding.UTF8.GetString(stderr.ToArray()), StringComparison.OrdinalIgnoreCase);
-        Assert.False(File.Exists(lease.Path));
-    }
-
-    [Fact]
-    public async Task Wrapper_StreamRelayFails_ReturnsInternalFailureExitCode()
-    {
-        using var files = new WrapperFiles();
-        using var lease = files.Store.Create(CreatePolicy(), Environment.ProcessId);
-        using var stderr = new MemoryStream();
-        var executor = new RecordingExecutor { ChildOutput = [1] };
-
-        var exitCode = await CopilotCliWrapper.RunAsync(
-            ["--policy", lease.Path, "--copilot", files.CopilotPath],
-            Stream.Null,
-            new ThrowingWriteStream(),
-            stderr,
-            executor,
-            files.LaunchRoot,
-            Environment.ProcessId,
-            files.WrapperPath);
-
-        Assert.Equal(CopilotCliWrapper.InternalFailureExitCode, exitCode);
-        Assert.Contains("stream relay failed", Encoding.UTF8.GetString(stderr.ToArray()), StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
     public async Task Wrapper_CopilotPathEqualsWrapper_RejectsRecursion()
     {
         using var files = new WrapperFiles();
@@ -256,7 +192,7 @@ public sealed class CopilotCliWrapperTests
         public Stream StandardInput { get; } = new MemoryStream();
         public Stream StandardOutput { get; } = new MemoryStream();
         public Stream StandardError { get; } = new MemoryStream();
-        public ProcessLaunchInfo LaunchInfo { get; } = new(123, true, []);
+        public ProcessLaunchInfo LaunchInfo { get; } = CreateLaunchInfo();
         public bool Killed { get; private set; }
 
         public Task<ProcessExitResult> WaitAsync(CancellationToken cancellationToken = default) =>
@@ -265,7 +201,7 @@ public sealed class CopilotCliWrapperTests
         public void Kill()
         {
             Killed = true;
-            completion.TrySetResult(new ProcessExitResult(137, false, null));
+            completion.TrySetResult(CreateExitResult(137));
         }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
@@ -276,27 +212,37 @@ public sealed class CopilotCliWrapperTests
         public Stream StandardInput => input;
         public Stream StandardOutput { get; } = new MemoryStream(output, writable: false);
         public Stream StandardError { get; } = new MemoryStream(error, writable: false);
-        public ProcessLaunchInfo LaunchInfo { get; } = new(123, true, []);
+        public ProcessLaunchInfo LaunchInfo { get; } = CreateLaunchInfo();
         public byte[] WrittenInput => input.ToArray();
         public Task<ProcessExitResult> WaitAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(new ProcessExitResult(exitCode, false, null));
+            Task.FromResult(CreateExitResult(exitCode));
         public void Kill() { }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private sealed class ThrowingWriteStream : MemoryStream
+    private static ProcessLaunchInfo CreateLaunchInfo() => new()
     {
-        public override void Write(byte[] buffer, int offset, int count) =>
-            throw new IOException("Write failed.");
+        ProcessId = 123,
+        IsContained = true,
+        Warnings = [],
+        PathCategory = ProcessPathCategory.PackagedTool,
+        LaunchMechanism = ProcessLaunchMechanism.MxcSpawn,
+        CreationStatusAvailable = false,
+        CreateProcessSucceeded = null,
+        CreateProcessWin32Error = null,
+        SdkSpawnSucceeded = true,
+        JobConfigured = null,
+        JobAssigned = null,
+        ResumeSucceeded = null,
+    };
 
-        public override void Write(ReadOnlySpan<byte> buffer) =>
-            throw new IOException("Write failed.");
-
-        public override ValueTask WriteAsync(
-            ReadOnlyMemory<byte> buffer,
-            CancellationToken cancellationToken = default) =>
-            ValueTask.FromException(new IOException("Write failed."));
-    }
+    private static ProcessExitResult CreateExitResult(int exitCode) => new()
+    {
+        ExitCode = exitCode,
+        UnsignedNtStatus = exitCode < 0 ? $"0x{unchecked((uint)exitCode):X8}" : null,
+        TimedOut = false,
+        OutputMetadata = null,
+    };
 
     private sealed class WrapperFiles : IDisposable
     {

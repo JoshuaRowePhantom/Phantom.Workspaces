@@ -24,11 +24,29 @@ public static class ChatOutputBrowserCommands
             ["content"] = content,
         });
 
+    internal static string Update(string path, string location, string content, string generation)
+        => JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["type"] = UpdateType,
+            ["path"] = path,
+            ["location"] = location,
+            ["content"] = content,
+            ["generation"] = generation,
+        });
+
     public static string Remove(string path)
         => JsonSerializer.Serialize(new Dictionary<string, object?>
         {
             ["type"] = RemoveType,
             ["path"] = path,
+        });
+
+    internal static string Remove(string path, string generation)
+        => JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["type"] = RemoveType,
+            ["path"] = path,
+            ["generation"] = generation,
         });
 
     public static string Scroll()

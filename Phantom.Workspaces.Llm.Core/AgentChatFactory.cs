@@ -77,6 +77,22 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
                 else
                 {
                     var effectiveServices = WithSelfAsFactory(services ?? _services);
+                    var executionTrustContext = effectiveServices.RemoteAgentSessionRuntimeIntent is not null
+                        ? effectiveServices.AgentExecutionTrustContext
+                            as Trust.AgentExecutionTrustContext
+                        : await AgentFactory.ResolveExecutionTrustContextAsync(
+                            definition,
+                            effectiveServices.TrustProfileResolver as Trust.ITrustProfileProvider,
+                            effectiveServices,
+                            ct).ConfigureAwait(false);
+                    if (executionTrustContext is not null)
+                    {
+                        effectiveServices = effectiveServices with
+                        {
+                            AgentExecutionTrustContext = executionTrustContext,
+                            ExecutionTrustContext = executionTrustContext,
+                        };
+                    }
 
                     if (definition is not null)
                     {
@@ -96,6 +112,7 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
                         AgentDefinition = definition,
                         AgentSessionId = sessionId.Value,
                         AgentServices = effectiveServices,
+                        ExecutionTrustContext = executionTrustContext,
                         ConfiguredStore = _store,
                         ClientOverride = effectiveServices.ChatClientOverride,
                         DisplayNameOverride = displayNameOverride,
@@ -124,7 +141,8 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
 
             if (registerAsRunningAgent)
             {
-                await PostToForegroundAsync(() => _runningSessions.Add(new RunningAgentChat(sessionId, this)));
+                await PostToForegroundAsync(() => _runningSessions.Add(
+                    new RunningAgentChat(sessionId, this, newChat!)));
             }
             return MakeLease(sessionId, newChat!);
         }
@@ -191,7 +209,8 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
 
             if (registerAsRunningAgent)
             {
-                await PostToForegroundAsync(() => _runningSessions.Add(new RunningAgentChat(sessionId, this)));
+                await PostToForegroundAsync(() => _runningSessions.Add(
+                    new RunningAgentChat(sessionId, this, newChat!)));
             }
             return MakeLease(sessionId, newChat!);
         }
@@ -248,12 +267,68 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
             _gate.Release();
         }
 
-        await PostToForegroundAsync(() => _runningSessions.Add(new RunningAgentChat(sessionId, this)));
+        await PostToForegroundAsync(() => _runningSessions.Add(
+            new RunningAgentChat(sessionId, this, newChat!)));
         return MakeLease(sessionId, newChat!);
     }
 
     private RunningAgentChatLease MakeLease(AgentSessionId sessionId, AgentChat agentChat)
         => new RunningAgentChatLease(sessionId, agentChat, () => ReleaseAsync(sessionId));
+
+    public async Task<bool> TerminateAsync(
+        AgentSessionId sessionId,
+        CancellationToken ct = default)
+    {
+        AgentChat? toDispose;
+        TaskCompletionSource disposalCompletion;
+
+        await _gate.WaitAsync(ct);
+        try
+        {
+            if (!_entries.TryGetValue(sessionId, out var entry))
+            {
+                return false;
+            }
+
+            entry.RefCount = 0;
+            entry.DisposalCompletion ??= new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            disposalCompletion = entry.DisposalCompletion;
+            toDispose = entry.AgentChat;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        try
+        {
+            await PostToForegroundAsync(() =>
+            {
+                var item = _runningSessions.FirstOrDefault(r => r.SessionId == sessionId);
+                if (item is not null)
+                {
+                    _runningSessions.Remove(item);
+                }
+            });
+            await toDispose.DisposeAsync();
+        }
+        finally
+        {
+            await _gate.WaitAsync(CancellationToken.None);
+            try
+            {
+                _entries.Remove(sessionId);
+            }
+            finally
+            {
+                _gate.Release();
+            }
+            disposalCompletion.TrySetResult();
+        }
+
+        return true;
+    }
 
     // Fix #1109: every chat this factory creates MUST reach back to the factory so restore
     // (AgentChat.RestoreSubAgentsAsync) and live sub-agent creation work. The factory *is* the

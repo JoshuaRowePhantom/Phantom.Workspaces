@@ -17,16 +17,21 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
 {
     private readonly IMessageChannel registrationChannel;
     private readonly TransportRegistry registry;
+    private readonly TransportPeerIdentityProvider? peerIdentities;
     private readonly ConcurrentDictionary<string, DispatchedChannel> channels = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, DispatchedStream> streams = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, IAsyncDisposable> sessions = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource shutdown = new();
     private readonly Task readLoop;
 
-    public ReverseExecutionDispatcher(IMessageChannel registrationChannel, TransportRegistry registry)
+    public ReverseExecutionDispatcher(
+        IMessageChannel registrationChannel,
+        TransportRegistry registry,
+        TransportPeerIdentityProvider? peerIdentities = null)
     {
         this.registrationChannel = registrationChannel ?? throw new ArgumentNullException(nameof(registrationChannel));
         this.registry = registry ?? throw new ArgumentNullException(nameof(registry));
+        this.peerIdentities = peerIdentities;
         this.readLoop = this.RunAsync();
     }
 
@@ -156,6 +161,8 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
 
         var channel = new DispatchedChannel(this.registrationChannel.Writer, channelId);
         this.channels[channelId] = channel;
+        if (this.peerIdentities is not null && TryReadAuthenticatedPeer(frame, out var peer))
+            this.peerIdentities.SetIdentity(channel, peer);
 
         var session = await this.registry.OnChannelOpenAsync(request.Clone(), channel, this.shutdown.Token).ConfigureAwait(false);
         if (session is null)
@@ -261,6 +268,28 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
 
         value = string.Empty;
         return false;
+    }
+
+    private static bool TryReadAuthenticatedPeer(JsonElement frame, out TransportPeerIdentity identity)
+    {
+        identity = null!;
+        if (!frame.TryGetProperty("authenticatedPeer", out var peer)
+            || peer.ValueKind != JsonValueKind.Object
+            || !peer.TryGetProperty("authenticationScheme", out var scheme)
+            || !peer.TryGetProperty("stablePeerId", out var stable)
+            || string.IsNullOrWhiteSpace(scheme.GetString())
+            || string.IsNullOrWhiteSpace(stable.GetString()))
+            return false;
+        identity = new TransportPeerIdentity
+        {
+            AuthenticationScheme = scheme.GetString()!,
+            StablePeerId = stable.GetString()!,
+            UserEntityId = peer.TryGetProperty("userEntityId", out var user) ? user.GetString() : null,
+            UserComputerProfileEntityId = peer.TryGetProperty("userComputerProfileEntityId", out var profile)
+                ? profile.GetString()
+                : null,
+        };
+        return true;
     }
 
     private sealed class DispatchedChannel : IMessageChannel

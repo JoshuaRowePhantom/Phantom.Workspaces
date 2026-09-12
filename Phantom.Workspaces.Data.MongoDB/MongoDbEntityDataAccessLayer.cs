@@ -608,7 +608,11 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
             batches.Add(new TimestampedQueryBatch { Timestamp = timestamp, Entities = entities });
         }
 
-        return new QueryResult { Batches = batches };
+        return new QueryResult
+        {
+            AuthoritativeTimestamp = new Timestamp(_timeProvider.GetUtcNow(), "query"),
+            Batches = batches,
+        };
     }
 
     /// <summary>

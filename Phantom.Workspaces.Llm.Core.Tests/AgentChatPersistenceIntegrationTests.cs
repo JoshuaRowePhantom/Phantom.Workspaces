@@ -107,7 +107,7 @@ public class AgentChatPersistenceIntegrationTests
         // Two role-alternating updates (FC + FR, immediately ready) form two messages.
         // After FR arrives, the middleware computes stableCount=1 and persists FC with
         // CancellationToken.None. A gated third update keeps the stream open so the turn
-        // is still in progress when Interrupt() is called. FC must survive in the store.
+        // is still in progress when InterruptAsync() is called. FC must survive in the store.
         var store = new InMemoryAgentPersistenceStore();
         var client = new DeterministicTestChatClient();
         var stream = client.EnqueueStreamingResponse();
@@ -133,7 +133,7 @@ public class AgentChatPersistenceIntegrationTests
         // Wait until FC and FR are both promoted to History (user + FC + FR = 3 items).
         await WaitForHistoryCountAsync(chat.History, 3, "user + FC + FR promoted");
 
-        chat.Interrupt();
+        await chat.InterruptAsync(CancellationToken.None);
 
         // Wait for the interrupted turn to finish (running items cleared).
         await WaitForRunningItemsEmptyAsync(chat.RunningItems);

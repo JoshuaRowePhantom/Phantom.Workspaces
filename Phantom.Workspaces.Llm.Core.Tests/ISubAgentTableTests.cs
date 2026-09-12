@@ -283,7 +283,7 @@ public sealed class ISubAgentTableTests
 
         await using var factory = CreateFactory(store: store);
         await using var childLease = await factory.CreateAsync(EchoAgentDefinition, sessionId);
-        var childChat = childLease.AgentChat;
+        var childChat = childLease.LocalAgentChat;
 
         var factoryServices = new AgentServices { RunningAgentChatFactory = factory };
         await using var parent = CreateParentChat(services: factoryServices);
@@ -292,7 +292,7 @@ public sealed class ISubAgentTableTests
 
         await using var lease = await subAgent.AcquireLeaseAsync();
 
-        Assert.Same(childChat, lease.AgentChat);
+        Assert.Same(childChat, lease.LocalAgentChat);
     }
 
     [Fact]

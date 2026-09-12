@@ -38,7 +38,10 @@ public sealed class SubAgentsContainerViewModel : ViewModelBase
     /// <summary>Adds a new slot for a sub-agent. Must be called on the UI thread.</summary>
     internal SubAgentSlotViewModel AddSlot(string agentId, AgentViewModel subAgentViewModel)
     {
-        var slot = new SubAgentSlotViewModel(agentId, subAgentViewModel, subAgentViewModel.AgentChat);
+        var slot = new SubAgentSlotViewModel(
+            agentId,
+            subAgentViewModel,
+            (IRunningSubAgent)subAgentViewModel.AgentChat);
         this.slotSource.Add(slot);
         return slot;
     }
@@ -49,6 +52,16 @@ public sealed class SubAgentsContainerViewModel : ViewModelBase
         this.slotSource.Add(slot);
         this.ApplySortOrDefer();
         return slot;
+    }
+
+    internal void RemoveSlot(string agentId)
+    {
+        var slot = this.slotSource.FirstOrDefault(
+            value => string.Equals(value.AgentId, agentId, StringComparison.Ordinal));
+        if (slot is not null)
+            this.slotSource.Remove(slot);
+        if (this.slotSource.All(value => !value.IsSelected))
+            this.IsShowingBrowser = true;
     }
 
     public void SuppressSort()

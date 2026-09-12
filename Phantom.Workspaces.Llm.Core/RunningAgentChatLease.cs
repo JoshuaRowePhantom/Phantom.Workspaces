@@ -5,24 +5,39 @@ namespace Phantom.Workspaces.Llm;
 public sealed class RunningAgentChatLease : IAsyncDisposable
 {
     private readonly Func<ValueTask> _onDispose;
+    private readonly Func<ValueTask>? _afterDispose;
+    private readonly AgentChat? _localAgentChat;
     private int _disposed;
 
     public AgentSessionId SessionId { get; }
 
-    public AgentChat AgentChat { get; }
+    public IAgentChat AgentChat { get; }
 
-    internal RunningAgentChatLease(AgentSessionId sessionId, AgentChat agentChat, Func<ValueTask> onDispose)
+    /// <summary>
+    /// Temporary local-engine compatibility accessor. New UI code consumes <see cref="AgentChat"/>.
+    /// </summary>
+    public AgentChat LocalAgentChat => this._localAgentChat
+        ?? throw new InvalidOperationException("This lease does not expose a local AgentChat instance.");
+
+    internal RunningAgentChatLease(
+        AgentSessionId sessionId,
+        IAgentChat agentChat,
+        Func<ValueTask> onDispose,
+        AgentChat? localAgentChat = null,
+        Func<ValueTask>? afterDispose = null)
     {
         SessionId = sessionId;
         AgentChat = agentChat;
+        this._localAgentChat = localAgentChat ?? agentChat as AgentChat;
         _onDispose = onDispose;
+        _afterDispose = afterDispose;
     }
 
     ~RunningAgentChatLease()
     {
         if (Interlocked.CompareExchange(ref _disposed, 1, 0) == 0)
         {
-            ObserveDisposal(_onDispose());
+            ObserveDisposal(this.DisposeCoreAsync());
         }
     }
 
@@ -34,7 +49,16 @@ public sealed class RunningAgentChatLease : IAsyncDisposable
         }
 
         GC.SuppressFinalize(this);
-        return _onDispose();
+        return DisposeCoreAsync();
+    }
+
+    private async ValueTask DisposeCoreAsync()
+    {
+        await _onDispose().ConfigureAwait(false);
+        if (_afterDispose is not null)
+        {
+            await _afterDispose().ConfigureAwait(false);
+        }
     }
 
     // Ensures the fire-and-forget disposal launched from the finalizer can never leave an

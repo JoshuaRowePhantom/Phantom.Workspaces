@@ -8,16 +8,21 @@ public sealed class ReverseHttpForwardingTransportFactory : ITransportFactory
     private static readonly TimeSpan DefaultHubConnectionTimeout = TimeSpan.FromSeconds(10);
     private readonly ITransportFactory httpClientTransportFactory;
     private readonly TimeSpan hubConnectionTimeout;
+    private readonly TransportPeerIdentity? authenticatedPeer;
 
     public ReverseHttpForwardingTransportFactory()
-        : this(new HttpClientTransportFactory(), DefaultHubConnectionTimeout)
+        : this(new HttpClientTransportFactory(), DefaultHubConnectionTimeout, null)
     {
     }
 
-    public ReverseHttpForwardingTransportFactory(ITransportFactory httpClientTransportFactory, TimeSpan? hubConnectionTimeout = null)
+    public ReverseHttpForwardingTransportFactory(
+        ITransportFactory httpClientTransportFactory,
+        TimeSpan? hubConnectionTimeout = null,
+        TransportPeerIdentity? authenticatedPeer = null)
     {
         this.httpClientTransportFactory = httpClientTransportFactory ?? throw new ArgumentNullException(nameof(httpClientTransportFactory));
         this.hubConnectionTimeout = hubConnectionTimeout ?? DefaultHubConnectionTimeout;
+        this.authenticatedPeer = authenticatedPeer;
     }
 
     public async Task<ITransport?> ConnectToAsync(JsonElement connectionDescriptor, CancellationToken ct = default)
@@ -83,7 +88,7 @@ public sealed class ReverseHttpForwardingTransportFactory : ITransportFactory
                     ["entity-id"] = entityId,
                 }));
                 var relayChannel = await winner.Transport.ConnectToMessageChannelAsync(relayRequest.RootElement, ct).ConfigureAwait(false);
-                var transport = new ReverseHttpTransport(relayChannel);
+                var transport = new ReverseHttpTransport(relayChannel, this.authenticatedPeer);
                 try
                 {
                     // Surface hub-side relay rejections (e.g. channel-open-error {"error-code":"not-registered"})

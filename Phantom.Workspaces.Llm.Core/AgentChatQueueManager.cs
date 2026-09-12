@@ -8,6 +8,7 @@ public sealed class AgentChatQueueManager
 {
     private readonly AgentInputQueueManager inputQueueManager;
     private readonly ObservableCollection<AgentChatQueue> inputQueues = [];
+    private readonly Dictionary<string, AgentChatQueue> queuesById = new(StringComparer.Ordinal);
     private int nextUserQueuePriority = 10;
     private int userQueueSequence = 1;
 
@@ -29,8 +30,12 @@ public sealed class AgentChatQueueManager
             "Immediate Queue",
             isDefault: false,
             isImmediate: true);
+        this.queuesById[this.DefaultInputQueue.Queue.QueueId] = this.DefaultInputQueue;
+        this.queuesById[this.ImmediateInputQueue.Queue.QueueId] = this.ImmediateInputQueue;
         this.inputQueues.Add(this.DefaultInputQueue);
         this.InputQueues = new ReadOnlyObservableCollection<AgentChatQueue>(this.inputQueues);
+        this.inputQueueManager.QueueRegistered += this.OnQueueRegistered;
+        this.inputQueueManager.QueueUnregistered += this.OnQueueUnregistered;
     }
 
     public ReadOnlyObservableCollection<AgentChatQueue> InputQueues { get; }
@@ -52,10 +57,9 @@ public sealed class AgentChatQueueManager
         var queueName = string.IsNullOrWhiteSpace(name)
             ? $"Queue {this.userQueueSequence++}"
             : name;
-        var wrapped = new AgentChatQueue(queue, queueName, isDefault: false);
+        this.inputQueueManager.SetQueueName(queue.QueueId, queueName);
         this.inputQueueManager.RegisterInputQueue(queue);
-        this.inputQueues.Add(wrapped);
-        return wrapped;
+        return this.queuesById[queue.QueueId];
     }
 
     public bool RemoveInputQueue(AgentChatQueue queue)
@@ -67,12 +71,40 @@ public sealed class AgentChatQueueManager
         }
 
         var removedFromManager = this.inputQueueManager.UnregisterInputQueue(queue.Queue);
-        if (removedFromManager)
+        return removedFromManager;
+    }
+
+    private void OnQueueRegistered(object? sender, AgentInputQueueManager.QueueRegistrationChangedEventArgs e)
+    {
+        if (ReferenceEquals(e.Queue, this.inputQueueManager.ImmediateQueue)
+            || ReferenceEquals(e.Queue, this.DefaultInputQueue.Queue)
+            || this.queuesById.ContainsKey(e.Queue.QueueId))
         {
-            this.inputQueues.Remove(queue);
+            return;
         }
 
-        return removedFromManager;
+        var name = this.inputQueueManager.GetQueueName(e.Queue.QueueId);
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            name = $"Queue {this.userQueueSequence++}";
+            this.inputQueueManager.SetQueueName(e.Queue.QueueId, name);
+        }
+
+        var wrapped = new AgentChatQueue(e.Queue, name, isDefault: false);
+        this.queuesById[e.Queue.QueueId] = wrapped;
+        this.inputQueues.Add(wrapped);
+    }
+
+    private void OnQueueUnregistered(object? sender, AgentInputQueueManager.QueueRegistrationChangedEventArgs e)
+    {
+        if (!this.queuesById.Remove(e.Queue.QueueId, out var wrapped)
+            || ReferenceEquals(wrapped, this.DefaultInputQueue)
+            || ReferenceEquals(wrapped, this.ImmediateInputQueue))
+        {
+            return;
+        }
+
+        this.inputQueues.Remove(wrapped);
     }
 
     public void SetQueueHeld(AgentChatQueue queue, bool held)
@@ -218,28 +250,41 @@ public sealed class AgentChatQueueManager
             contents.Insert(0, new TextContent(text));
         }
 
+        bool applied;
+        AgentInputQueueManager.QueueStateChangeKind kind;
         if (contents.Count == 0)
         {
-            return queue.TryRemove(ref expected, item);
-        }
-
-        var updatedMessages = item.Messages.ToArray();
-        if (updatedMessages.Length == 0)
-        {
-            updatedMessages = [new ChatMessage(ChatRole.User, contents)];
+            applied = queue.TryRemove(ref expected, item);
+            kind = AgentInputQueueManager.QueueStateChangeKind.ItemRemoved;
         }
         else
         {
-            updatedMessages[0] = new ChatMessage(ChatRole.User, contents);
+            var updatedMessages = item.Messages.ToArray();
+            if (updatedMessages.Length == 0)
+            {
+                updatedMessages = [new ChatMessage(ChatRole.User, contents)];
+            }
+            else
+            {
+                updatedMessages[0] = new ChatMessage(ChatRole.User, contents);
+            }
+
+            applied = queue.TryUpdate(
+                ref expected,
+                item,
+                item with
+                {
+                    Messages = updatedMessages,
+                });
+            kind = AgentInputQueueManager.QueueStateChangeKind.ItemAdded;
         }
 
-        return queue.TryUpdate(
-            ref expected,
-            item,
-            item with
-            {
-                Messages = updatedMessages,
-            });
+        if (applied)
+        {
+            // #1485: keep the common queue aggregate in lock-step with legacy edits.
+            this.inputQueueManager.NotifyLegacyMutationApplied(queue, kind);
+        }
+        return applied;
     }
 
     private bool TryRemoveQueueItemContent(
@@ -258,27 +303,39 @@ public sealed class AgentChatQueueManager
         }
 
         contents.RemoveAt(contentIndex);
+        bool applied;
+        AgentInputQueueManager.QueueStateChangeKind kind;
         if (contents.Count == 0)
         {
-            return queue.TryRemove(ref expected, item);
-        }
-
-        var updatedMessages = item.Messages.ToArray();
-        if (updatedMessages.Length == 0)
-        {
-            updatedMessages = [new ChatMessage(ChatRole.User, contents)];
+            applied = queue.TryRemove(ref expected, item);
+            kind = AgentInputQueueManager.QueueStateChangeKind.ItemRemoved;
         }
         else
         {
-            updatedMessages[0] = new ChatMessage(ChatRole.User, contents);
+            var updatedMessages = item.Messages.ToArray();
+            if (updatedMessages.Length == 0)
+            {
+                updatedMessages = [new ChatMessage(ChatRole.User, contents)];
+            }
+            else
+            {
+                updatedMessages[0] = new ChatMessage(ChatRole.User, contents);
+            }
+
+            applied = queue.TryUpdate(
+                ref expected,
+                item,
+                item with
+                {
+                    Messages = updatedMessages,
+                });
+            kind = AgentInputQueueManager.QueueStateChangeKind.ItemAdded;
         }
 
-        return queue.TryUpdate(
-            ref expected,
-            item,
-            item with
-            {
-                Messages = updatedMessages,
-            });
+        if (applied)
+        {
+            this.inputQueueManager.NotifyLegacyMutationApplied(queue, kind);
+        }
+        return applied;
     }
 }

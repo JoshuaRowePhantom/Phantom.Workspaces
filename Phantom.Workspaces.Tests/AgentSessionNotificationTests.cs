@@ -62,7 +62,11 @@ public sealed class AgentSessionNotificationTests
 
         public void Remove(string tabId) { }
 
+        public void Remove(NotificationTargetRequest request) { }
+
         public void MarkRead(string tabId) { }
+
+        public void MarkRead(NotificationTargetRequest request) { }
 
         public event Action<Notification>? NotifyCallReceived;
     }

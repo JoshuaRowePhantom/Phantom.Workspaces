@@ -1065,6 +1065,8 @@ public class AgentFactoryTests
         var hostContext = new CurrentSessionContext
         {
             AgentSessionId = "will-be-overwritten",
+            OwningProfileEntityId = "host-A",
+            OwnershipGeneration = 3,
             User = user,
             UserComputerProfile = profile,
             Computer = computer,
@@ -1077,6 +1079,8 @@ public class AgentFactoryTests
         Assert.Same(user, resolved.User);
         Assert.Same(profile, resolved.UserComputerProfile);
         Assert.Same(computer, resolved.Computer);
+        Assert.Equal("host-A", resolved.OwningProfileEntityId);
+        Assert.Equal(3, resolved.OwnershipGeneration);
     }
 
     [Fact]
@@ -1090,6 +1094,8 @@ public class AgentFactoryTests
         Assert.Null(resolved.User);
         Assert.Null(resolved.UserComputerProfile);
         Assert.Null(resolved.Computer);
+        Assert.Equal("unbound", resolved.OwningProfileEntityId);
+        Assert.Equal(0, resolved.OwnershipGeneration);
     }
 
     private static Data.EntitySnapshot MakeSnapshot(string[] entityTypes, string[] entityName)

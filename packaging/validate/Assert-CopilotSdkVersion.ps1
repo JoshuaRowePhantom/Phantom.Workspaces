@@ -4,8 +4,8 @@
     (issue #1376: PackageVersions_CopilotSdk_IsExpectedPinnedVersion).
 
 .DESCRIPTION
-    The redistributed Copilot CLI version is pinned 1:1 by the SDK NuGet version (SDK 1.0.11 ->
-    CLI 1.0.79). Bundling the CLI is only compliant/correct when the SDK — and therefore the CLI
+    The redistributed Copilot CLI version is pinned 1:1 by the SDK NuGet version (SDK 1.0.13 ->
+    CLI 1.0.83). Bundling the CLI is only compliant/correct when the SDK — and therefore the CLI
     it downloads and we ship — stays at the reviewed version. This guard fails the build if the
     central package pin drifts unexpectedly.
 
@@ -20,7 +20,7 @@ param(
     [Parameter()]
     [string] $RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path,
     [Parameter()]
-    [string] $ExpectedVersion = '1.0.11'
+    [string] $ExpectedVersion = '1.0.13'
 )
 
 $ErrorActionPreference = 'Stop'

@@ -54,7 +54,7 @@ public partial class QueueComposerControl : UserControl
         this.InputBox.Focus();
     }
 
-    private void InputBox_KeyDown(object? sender, KeyEventArgs e)
+    private async void InputBox_KeyDown(object? sender, KeyEventArgs e)
     {
         if (this.DataContext is not QueueComposerViewModel vm)
         {
@@ -118,6 +118,48 @@ public partial class QueueComposerControl : UserControl
                     }
                 }
             }
+        }
+
+        if ((e.Key == Key.Enter || e.Key == Key.Return)
+            && e.KeyModifiers.HasFlag(KeyModifiers.Control)
+            && e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+        {
+            e.Handled = true;
+            try
+            {
+                if (!await vm.SubmitBeforeCursorAsync(caretIndex))
+                {
+                    vm.ReportSubmissionFailure();
+                    return;
+                }
+
+                this.SyncTextBoxText(vm);
+                if (textBox is not null)
+                {
+                    textBox.CaretIndex = 0;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                vm.ReportSubmissionFailure();
+            }
+            catch (ObjectDisposedException)
+            {
+                vm.ReportSubmissionFailure();
+            }
+            catch (Phantom.Workspaces.Llm.Remote.RemoteAgentSessionException)
+            {
+                vm.ReportSubmissionFailure();
+            }
+            catch (Phantom.Workspaces.Llm.Remote.RemoteAgentProtocolException)
+            {
+                vm.ReportSubmissionFailure();
+            }
+            catch (InvalidOperationException)
+            {
+                vm.ReportSubmissionFailure();
+            }
+            return;
         }
 
         if (HandleInputKey(vm, e.Key, e.KeyModifiers, caretLine, caretIndex, out var newText, out var newCaretIndex))

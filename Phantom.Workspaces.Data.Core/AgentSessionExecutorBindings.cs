@@ -14,7 +14,8 @@ namespace Phantom.Workspaces.Data;
 /// Reuse-first / no new schema: every binding IS a <c>type</c>-discriminated transport
 /// connection-descriptor. The session executor is the explicit <c>{"type":"local"}</c> default that
 /// per-component executors override. <b>Back-compat (M6):</b> when <c>executor-bindings.session</c> is
-/// absent but the legacy <c>host-profile-entity-id</c> is present, the session executor is derived as
+    /// absent but <c>host-profile-entity-id</c> or its legacy <c>owning-profile-entity-id</c> alias is
+    /// present, the session executor is derived as
 /// <c>{"type":"user-computer-profile","entity-id":&lt;that id&gt;}</c>.
 /// </remarks>
 public static class AgentSessionExecutorBindings
@@ -34,6 +35,9 @@ public static class AgentSessionExecutorBindings
     /// <summary>The legacy root key naming the single host user-computer-profile entity (M6 fallback).</summary>
     public const string HostProfileKey = "host-profile-entity-id";
 
+    /// <summary>The former name of <see cref="HostProfileKey"/> retained for persisted-session compatibility.</summary>
+    public const string OwningProfileKey = "owning-profile-entity-id";
+
     /// <summary>The connection-descriptor <c>type</c> discriminator property name.</summary>
     public const string TypeProperty = "type";
 
@@ -51,7 +55,7 @@ public static class AgentSessionExecutorBindings
 
     /// <summary>
     /// Reads the explicit session executor descriptor: <c>executor-bindings.session</c> when present;
-    /// otherwise the M6 fallback derived from <c>host-profile-entity-id</c>; otherwise
+    /// otherwise the M6 fallback derived from <c>host-profile-entity-id</c> or its legacy alias; otherwise
     /// <c>{"type":"local"}</c>.
     /// </summary>
     public static JsonElement ReadSessionExecutor(JsonElement entityData)
@@ -65,12 +69,17 @@ public static class AgentSessionExecutorBindings
             return session.Clone();
         }
 
-        if (entityData.ValueKind == JsonValueKind.Object
-            && entityData.TryGetProperty(HostProfileKey, out var hostProfile)
-            && hostProfile.ValueKind == JsonValueKind.String
-            && !string.IsNullOrWhiteSpace(hostProfile.GetString()))
+        if (entityData.ValueKind == JsonValueKind.Object)
         {
-            return UserComputerProfileDescriptor(hostProfile.GetString()!);
+            foreach (var propertyName in new[] { HostProfileKey, OwningProfileKey })
+            {
+                if (entityData.TryGetProperty(propertyName, out var hostProfile)
+                    && hostProfile.ValueKind == JsonValueKind.String
+                    && !string.IsNullOrWhiteSpace(hostProfile.GetString()))
+                {
+                    return UserComputerProfileDescriptor(hostProfile.GetString()!);
+                }
+            }
         }
 
         return LocalDescriptor();

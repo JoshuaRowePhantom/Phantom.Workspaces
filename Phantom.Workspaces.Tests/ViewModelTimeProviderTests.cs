@@ -22,6 +22,7 @@ public sealed class ViewModelTimeProviderTests
             new NotificationEntry
             {
                 TabKey = "tab-1",
+                Kind = "legacy",
                 TabDescriptor = new TabDescriptor { TabId = "Tab 1", TabTitle = null },
                 Heading = "Completed",
                 Description = "done",

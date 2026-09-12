@@ -7,6 +7,11 @@ using System.Text.Json.Serialization;
 
 namespace Phantom.Workspaces.Llm.Copilot;
 
+internal interface ICopilotLaunchPolicyStore
+{
+    CopilotLaunchPolicyLease Create(MxcProcessPolicy policy, int? parentProcessId = null);
+}
+
 /// <summary>A short-lived, one-use handoff for a locally compiled Copilot launch policy.</summary>
 public sealed record CopilotLaunchPolicyEnvelope(
     int SchemaVersion,
@@ -61,7 +66,7 @@ public sealed class CopilotLaunchPolicyLease : IDisposable, IAsyncDisposable
 }
 
 /// <summary>Creates and consumes secured, bounded, one-use Copilot policy envelopes.</summary>
-public sealed class CopilotLaunchPolicyStore
+public sealed class CopilotLaunchPolicyStore : ICopilotLaunchPolicyStore
 {
     /// <summary>Maximum serialized envelope size.</summary>
     public const int MaximumEnvelopeBytes = 1024 * 1024;

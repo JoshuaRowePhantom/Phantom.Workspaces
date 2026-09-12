@@ -1,4 +1,4 @@
-﻿using AgentSchema;
+using AgentSchema;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
 
@@ -21,7 +21,7 @@ public sealed class QueueComposerNormalModeHintTests
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
 
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.IsFormattedMode = false;
@@ -38,7 +38,7 @@ public sealed class QueueComposerNormalModeHintTests
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
 
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.IsFormattedMode = true;
@@ -54,8 +54,11 @@ public sealed class QueueComposerNormalModeHintTests
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
 
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
-        var appendComposer = new QueueComposerViewModel(inputQueue, chat.DefaultInputQueue, isDefaultComposer: false);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var appendComposer = new QueueComposerViewModel(
+            inputQueue,
+            inputQueue.InputQueues[0].QueueId,
+            isDefaultComposer: false);
 
         appendComposer.IsFormattedMode = false;
 
@@ -70,7 +73,7 @@ public sealed class QueueComposerNormalModeHintTests
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
 
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.IsFormattedMode = false;
@@ -86,7 +89,7 @@ public sealed class QueueComposerNormalModeHintTests
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
 
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.IsFormattedMode = true;
@@ -102,7 +105,7 @@ public sealed class QueueComposerNormalModeHintTests
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
 
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         var changedProperties = new List<string?>();
@@ -122,7 +125,7 @@ public sealed class QueueComposerNormalModeHintTests
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
 
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         var changedProperties = new List<string?>();
@@ -142,7 +145,7 @@ public sealed class QueueComposerNormalModeHintTests
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
 
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.IsFormattedMode = false;
@@ -159,7 +162,7 @@ public sealed class QueueComposerNormalModeHintTests
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
 
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.IsFormattedMode = false;
@@ -176,7 +179,7 @@ public sealed class QueueComposerNormalModeHintTests
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
 
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.IsFormattedMode = false;
@@ -193,7 +196,7 @@ public sealed class QueueComposerNormalModeHintTests
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
 
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
         composer.IsFormattedMode = false;

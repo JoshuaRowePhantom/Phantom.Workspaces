@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
@@ -77,6 +78,36 @@ public sealed class CopilotSubAgentRouterTests
             Role = ChatRole.Assistant,
             Contents = [new FunctionCallContent(callId, toolName, new Dictionary<string, object?>())],
         };
+
+    private static ChatResponseUpdate BackgroundTaskStart(string callId, string name) =>
+        new()
+        {
+            Role = ChatRole.Assistant,
+            Contents =
+            [
+                new FunctionCallContent(
+                    callId,
+                    "task",
+                    new Dictionary<string, object?>
+                    {
+                        ["mode"] = JsonDocument.Parse("\"background\"").RootElement.Clone(),
+                        ["name"] = JsonDocument.Parse(JsonSerializer.Serialize(name)).RootElement.Clone(),
+                    }),
+            ],
+        };
+
+    private static ChatResponseUpdate SubAgentFinal(string agentId, string toolCallId, string text)
+    {
+        var content = new TextContent(text)
+        {
+            AdditionalProperties = new()
+            {
+                [CopilotSdkStreamAdapter.ParentToolCallIdPropertyName] = agentId,
+                [CopilotSdkStreamAdapter.SourceToolCallIdPropertyName] = toolCallId,
+            },
+        };
+        return new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [content] };
+    }
 
     private static ChatResponseUpdate LifecycleStart(
         string agentId,
@@ -162,6 +193,59 @@ public sealed class CopilotSubAgentRouterTests
 
         var call = Assert.Single(factory.CreateCalls);
         Assert.Contains("github-copilot-subagent", call.Definition.ToJson());
+    }
+
+    [Fact]
+    public async Task RouteAsync_DuplicateSdkLifecycle_CreatesSubAgentOnlyOnce()
+    {
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var table = new SubAgentTestFakes.FakeSubAgentTable();
+        var (router, _) = CreateRouter(factory, table);
+
+        await router.RouteAsync(LifecycleStart("agent-1", "call-1", agentName: "sub-one"));
+        await router.RouteAsync(LifecycleStart("agent-1", "call-1", agentName: "sub-one"));
+        await router.RouteAsync(SubAgentText("agent-1", "child output"));
+
+        Assert.Single(factory.CreateCalls);
+        Assert.Single(table.AddedChats);
+        var updates = await DrainReceiverAsync(factory.CreatedReceiver!);
+        Assert.Contains(updates, update => update.Text == "child output");
+    }
+
+    [Fact]
+    public async Task RouteAsync_BackgroundTasks_CreateSlotsWithoutSdkLifecycleEvents()
+    {
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var table = new SubAgentTestFakes.FakeSubAgentTable();
+        var (router, _) = CreateRouter(factory, table);
+
+        await router.RouteAsync(BackgroundTaskStart("call-1", "sub-one"));
+        await router.RouteAsync(BackgroundTaskStart("call-2", "sub-two"));
+
+        Assert.Equal(2, factory.CreateCalls.Count);
+        Assert.Equal(2, table.AddedChats.Count);
+    }
+
+    [Fact]
+    public async Task RouteAsync_ReverseOrderChildOutput_CorrelatesBySourceToolCallId()
+    {
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var (router, _) = CreateRouter(factory);
+
+        await router.RouteAsync(BackgroundTaskStart("call-1", "sub-one"));
+        var receiverOne = factory.CreatedReceivers[^1];
+        await router.RouteAsync(BackgroundTaskStart("call-2", "sub-two"));
+        var receiverTwo = factory.CreatedReceivers[^1];
+
+        await router.RouteAsync(SubAgentFinal("agent-2", "call-2", "second"));
+        await router.RouteAsync(SubAgentFinal("agent-1", "call-1", "first"));
+
+        var updatesOne = await DrainReceiverAsync(receiverOne);
+        var updatesTwo = await DrainReceiverAsync(receiverTwo);
+        Assert.Contains(updatesOne, update => update.Text == "first");
+        Assert.DoesNotContain(updatesOne, update => update.Text == "second");
+        Assert.Contains(updatesTwo, update => update.Text == "second");
+        Assert.DoesNotContain(updatesTwo, update => update.Text == "first");
     }
 
     [Fact]

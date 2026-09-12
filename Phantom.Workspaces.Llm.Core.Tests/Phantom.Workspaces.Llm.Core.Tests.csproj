@@ -26,6 +26,8 @@
     <ProjectReference Include="..\Phantom.Workspaces.Llm.Test.Mcp\Phantom.Workspaces.Llm.Test.Mcp.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Web.Server\Phantom.Workspaces.Web.Server.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces\Phantom.Workspaces.csproj" />
+    <ProjectReference Include="..\Phantom.Workspaces.Testing\Phantom.Workspaces.Testing.csproj" />
+    <ProjectReference Include="..\Phantom.Workspaces.Test.WindowsProcessProbe\Phantom.Workspaces.Test.WindowsProcessProbe.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
@@ -50,4 +52,12 @@
     <EmbeddedResource Include="..\Phantom.Workspaces.Data.Core\JsonEntities\defaults\agent-manifests\copilot-split-executor.json" Link="copilot-split-executor.json" />
     <EmbeddedResource Include="..\Phantom.Workspaces.Data.Core\JsonEntities\documentation\agent-manifest-executors.md" Link="agent-manifest-executors.md" />
   </ItemGroup>
+  <Target Name="CopyWindowsProcessProbe" AfterTargets="Build">
+    <ItemGroup>
+      <WindowsProcessProbeFiles Include="..\Phantom.Workspaces.Test.WindowsProcessProbe\bin\$(Configuration)\net10.0\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(WindowsProcessProbeFiles)"
+          DestinationFiles="@(WindowsProcessProbeFiles->'$(OutDir)%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
 </Project>

@@ -25,10 +25,15 @@ public sealed class NotificationService : INotificationService
     public void Notify(Notification notification)
     {
         ArgumentNullException.ThrowIfNull(notification);
+        if (string.IsNullOrWhiteSpace(notification.Kind))
+        {
+            throw new ArgumentException("Notification kind must be non-blank.", nameof(notification));
+        }
         var tabKey = notification.TabDescriptor.TabId;
         var isSnoozed = this.snoozedTabIds.Contains(tabKey);
 
-        var existingIndex = this.notifications.FindIndex(e => e.TabKey == tabKey);
+        var existingIndex = this.notifications.FindIndex(e =>
+            e.TabKey == tabKey && e.Kind == notification.Kind);
 
         bool isRead;
         if (notification.NotificationState == NotificationState.NotInteresting)
@@ -47,6 +52,7 @@ public sealed class NotificationService : INotificationService
         var entry = new NotificationEntry
         {
             TabKey = tabKey,
+            Kind = notification.Kind,
             TabDescriptor = notification.TabDescriptor,
             Heading = notification.Heading,
             Description = notification.Description,
@@ -79,15 +85,44 @@ public sealed class NotificationService : INotificationService
         }
     }
 
+    public void Remove(NotificationTargetRequest request)
+    {
+        ValidateTarget(request);
+        var removed = this.notifications.RemoveAll(
+            entry => entry.TabKey == request.TabId && entry.Kind == request.Kind) > 0;
+        if (removed)
+        {
+            this.NotificationsChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
     public void MarkRead(string tabId)
     {
         ArgumentNullException.ThrowIfNull(tabId);
-        var index = this.notifications.FindIndex(e => e.TabKey == tabId);
+        var changed = false;
+        for (var index = 0; index < this.notifications.Count; index++)
+        {
+            if (this.notifications[index].TabKey == tabId && !this.notifications[index].IsRead)
+            {
+                this.notifications[index] = this.notifications[index] with { IsRead = true };
+                changed = true;
+            }
+        }
+        if (changed)
+        {
+            this.NotificationsChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    public void MarkRead(NotificationTargetRequest request)
+    {
+        ValidateTarget(request);
+        var index = this.notifications.FindIndex(
+            entry => entry.TabKey == request.TabId && entry.Kind == request.Kind);
         if (index < 0 || this.notifications[index].IsRead)
         {
             return;
         }
-
         this.notifications[index] = this.notifications[index] with { IsRead = true };
         this.NotificationsChanged?.Invoke(this, EventArgs.Empty);
     }
@@ -97,10 +132,12 @@ public sealed class NotificationService : INotificationService
         ArgumentNullException.ThrowIfNull(tabId);
         this.snoozedTabIds.Add(tabId);
 
-        var index = this.notifications.FindIndex(e => e.TabKey == tabId);
-        if (index >= 0)
+        for (var index = 0; index < this.notifications.Count; index++)
         {
-            this.notifications[index] = this.notifications[index] with { IsRead = true, IsSnoozed = true };
+            if (this.notifications[index].TabKey == tabId)
+            {
+                this.notifications[index] = this.notifications[index] with { IsRead = true, IsSnoozed = true };
+            }
         }
 
         this.NotificationsChanged?.Invoke(this, EventArgs.Empty);
@@ -114,14 +151,23 @@ public sealed class NotificationService : INotificationService
             return;
         }
 
-        var index = this.notifications.FindIndex(e => e.TabKey == tabId);
-        if (index >= 0)
+        for (var index = 0; index < this.notifications.Count; index++)
         {
-            this.notifications[index] = this.notifications[index] with { IsSnoozed = false };
+            if (this.notifications[index].TabKey == tabId)
+            {
+                this.notifications[index] = this.notifications[index] with { IsSnoozed = false };
+            }
         }
 
         this.NotificationsChanged?.Invoke(this, EventArgs.Empty);
     }
 
     public bool IsTabSnoozed(string tabId) => this.snoozedTabIds.Contains(tabId);
+
+    private static void ValidateTarget(NotificationTargetRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.TabId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.Kind);
+    }
 }

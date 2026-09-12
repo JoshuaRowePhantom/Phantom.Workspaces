@@ -102,7 +102,7 @@ internal sealed class NewSubAgentSlashCommandHandler : ISlashCommandHandler
         return Task.FromResult<IReadOnlyList<SlashCommandCompletion>>(completions);
     }
 
-    public Task<SlashCommandResult> ExecuteAsync(
+    public async Task<SlashCommandResult> ExecuteAsync(
         SlashCommandContext context,
         string arguments,
         CancellationToken cancellationToken)
@@ -110,28 +110,31 @@ internal sealed class NewSubAgentSlashCommandHandler : ISlashCommandHandler
         var (definitionId, subAgentId, prompt) = SubAgentSlashCommandParsing.ParseNewSubAgent(arguments);
         if (definitionId.Length == 0)
         {
-            return Task.FromResult(new SlashCommandResult
+            return new SlashCommandResult
             {
                 StatusMessage = "Usage: /new-subagent <definition-id> [subagent-id] [prompt]",
-            });
+            };
         }
 
         var routingArgs = subAgentId.Length == 0 ? definitionId : $"{definitionId} {subAgentId}";
 
         if (prompt.Length == 0)
         {
-            return Task.FromResult(new SlashCommandResult
+            return new SlashCommandResult
             {
                 StatusMessage =
                     $"Type a prompt to create sub-agent from \"{definitionId}\" (equivalent to \"new({routingArgs}): <prompt>\").",
-            });
+            };
         }
 
         var message = $"new({routingArgs}): {prompt}";
-        context.AgentChat.EnqueueUserMessage(message);
+        await SubAgentSlashCommandParsing.EnqueueUserMessageAsync(
+            context.AgentChat.InputQueues,
+            message,
+            cancellationToken);
 
         var label = subAgentId.Length == 0 ? definitionId : subAgentId;
-        return Task.FromResult(new SlashCommandResult { StatusMessage = $"Creating sub-agent \"{label}\"." });
+        return new SlashCommandResult { StatusMessage = $"Creating sub-agent \"{label}\"." };
     }
 }
 
@@ -180,7 +183,7 @@ internal sealed class SubAgentSlashCommandHandler : ISlashCommandHandler
         return Task.FromResult<IReadOnlyList<SlashCommandCompletion>>(completions);
     }
 
-    public Task<SlashCommandResult> ExecuteAsync(
+    public async Task<SlashCommandResult> ExecuteAsync(
         SlashCommandContext context,
         string arguments,
         CancellationToken cancellationToken)
@@ -188,22 +191,25 @@ internal sealed class SubAgentSlashCommandHandler : ISlashCommandHandler
         var (subAgentId, message) = SubAgentSlashCommandParsing.ParseSubAgent(arguments);
         if (subAgentId.Length == 0)
         {
-            return Task.FromResult(new SlashCommandResult
+            return new SlashCommandResult
             {
                 StatusMessage = "Usage: /subagent <subagent-id> [message]",
-            });
+            };
         }
 
         if (message.Length == 0)
         {
-            return Task.FromResult(new SlashCommandResult
+            return new SlashCommandResult
             {
                 StatusMessage = $"Type a message to route to sub-agent \"{subAgentId}\" (equivalent to \"{subAgentId}: <message>\").",
-            });
+            };
         }
 
-        context.AgentChat.EnqueueUserMessage($"{subAgentId}: {message}");
-        return Task.FromResult(new SlashCommandResult { StatusMessage = $"Routing to sub-agent \"{subAgentId}\"." });
+        await SubAgentSlashCommandParsing.EnqueueUserMessageAsync(
+            context.AgentChat.InputQueues,
+            $"{subAgentId}: {message}",
+            cancellationToken);
+        return new SlashCommandResult { StatusMessage = $"Routing to sub-agent \"{subAgentId}\"." };
     }
 }
 
@@ -213,6 +219,44 @@ internal static class SubAgentSlashCommandParsing
     private static readonly char[] Whitespace = [' ', '\t', '\r', '\n', '\f', '\v'];
 
     public static bool ContainsWhitespace(string value) => value.IndexOfAny(Whitespace) >= 0;
+
+    public static async Task EnqueueUserMessageAsync(
+        IAgentInputQueues queues,
+        string message,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            var snapshot = queues.Snapshot;
+            var result = await queues.EnqueueAsync(
+                new EnqueueAgentInputRequest
+                {
+                    TargetQueueId = queues.DefaultQueue.Snapshot.QueueId,
+                    Messages =
+                    [
+                        new Microsoft.Extensions.AI.ChatMessage(
+                            Microsoft.Extensions.AI.ChatRole.User,
+                            message),
+                    ],
+                    CommandId = Guid.NewGuid(),
+                    ExpectedRevision = snapshot.Revision,
+                },
+                cancellationToken);
+            if (result.Status is AgentInputQueueCommandStatus.Applied
+                or AgentInputQueueCommandStatus.Duplicate)
+            {
+                return;
+            }
+            if (result.Status != AgentInputQueueCommandStatus.Conflict)
+            {
+                throw new InvalidOperationException(
+                    $"The agent input was rejected ({result.ErrorCode ?? "unknown-error"}).");
+            }
+        }
+
+        throw new InvalidOperationException(
+            "The agent input queue changed repeatedly; retry the command.");
+    }
 
     /// <summary>
     /// Parses <c>&lt;definition-id&gt; [subagent-id] [prompt]</c> into its three components.

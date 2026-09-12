@@ -10,6 +10,7 @@ using Avalonia.Controls;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.Controls;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
+using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 using Phantom.Workspaces.Gui.Shared.Controls;
 using Phantom.Workspaces.Llm;
 
@@ -88,6 +89,15 @@ public sealed class AgentChatOutputControlTests
         var html = ReadShellHtml();
 
         Assert.DoesNotContain("DetailsGutter.init", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ChatOutputShellHtml_CommandFailed_EchoesMutationGeneration()
+    {
+        var html = ReadShellHtml();
+
+        Assert.Contains("type: \"commandFailed\"", html, StringComparison.Ordinal);
+        Assert.Contains("generation: command.generation", html, StringComparison.Ordinal);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -687,6 +697,270 @@ public sealed class AgentChatOutputControlTests
         Assert.True(control.HistoryLoaded.IsCompleted);
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task AgentChatOutputControl_F5Reload_WhileRunningItemExists_DoesNotDuplicateRows()
+    {
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var runningItem = new AgentChatRunningItem();
+        runningItem.Items.Add(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new TextContent("partial")],
+        });
+        chat.RunningItems.Add(runningItem);
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
+        var control = new AgentChatOutputControl();
+        var browser = GetBrowser(control);
+        SetAttached(control);
+
+        control.DataContext = viewModel;
+        await control.HistoryLoaded;
+        browser.FireReady();
+        await control.HistoryLoaded;
+        browser.PostedMessages.Clear();
+        browser.FireReady();
+        await control.HistoryLoaded;
+
+        var generation = GetActiveOutputGeneration(control);
+        Assert.Single(
+            browser.PostedMessages,
+            message => IsCommand(message, "update", generation, contentFragment: "chat-running-item"));
+
+        browser.PostedMessages.Clear();
+        runningItem.Items[0] = new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new TextContent("complete text")],
+        };
+
+        Assert.Single(
+            browser.PostedMessages,
+            message => IsCommand(message, "update", generation, contentFragment: "complete text"));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task AgentChatOutputControl_OverlappingOnBrowserReadyCalls_UsesLatestGenerationOnly()
+    {
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var runningItem = new AgentChatRunningItem();
+        runningItem.Items.Add(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new TextContent("streaming")],
+        });
+        chat.RunningItems.Add(runningItem);
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
+        var historyPopulated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        viewModel.SetHistoryPopulatedForTest(historyPopulated.Task);
+        var control = new AgentChatOutputControl();
+        var browser = GetBrowser(control);
+        SetAttached(control);
+
+        control.DataContext = viewModel;
+        var firstGeneration = GetActiveOutputGeneration(control);
+        browser.FireReady();
+        var latestGeneration = GetActiveOutputGeneration(control);
+        Assert.NotEqual(firstGeneration, latestGeneration);
+        browser.PostedMessages.Clear();
+
+        historyPopulated.SetResult();
+        await control.HistoryLoaded;
+
+        Assert.Equal(latestGeneration, GetOutputModel(control)?.GenerationId);
+        Assert.Single(
+            browser.PostedMessages,
+            message => IsCommand(message, "update", latestGeneration, contentFragment: "chat-running-item"));
+        Assert.DoesNotContain(browser.PostedMessages, message =>
+            IsCommand(message, "update", firstGeneration));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task AgentChatOutputControl_ConstructedReadyCandidateLosesBeforePublication_DisposesAllRunningTargets()
+    {
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var firstRunningItem = new AgentChatRunningItem();
+        firstRunningItem.Items.Add(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new TextContent("first streaming")],
+        });
+        var secondRunningItem = new AgentChatRunningItem();
+        secondRunningItem.Items.Add(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new TextContent("second streaming")],
+        });
+        chat.RunningItems.Add(firstRunningItem);
+        chat.RunningItems.Add(secondRunningItem);
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
+        var control = new AgentChatOutputControl();
+        var browser = GetBrowser(control);
+        SetAttached(control);
+        ChatOutputHtmlModel? losingCandidate = null;
+        RunningChatItemHtmlModel[]? losingTargets = null;
+        control.OutputModelCandidateCreated += candidate =>
+        {
+            if (losingCandidate is not null)
+            {
+                return;
+            }
+
+            losingCandidate = candidate;
+            losingTargets = candidate.RunningModels.ToArray();
+            browser.FireReady();
+        };
+
+        control.DataContext = viewModel;
+        await control.HistoryLoaded;
+
+        var currentModel = Assert.IsType<ChatOutputHtmlModel>(GetOutputModel(control));
+        Assert.NotSame(losingCandidate, currentModel);
+        var disposedTargets = Assert.IsType<RunningChatItemHtmlModel[]>(losingTargets);
+        Assert.Empty(Assert.IsType<ChatOutputHtmlModel>(losingCandidate).RunningModels);
+        Assert.All(disposedTargets, target =>
+        {
+            Assert.Null(target.Source);
+            Assert.False(target.IsInserted);
+        });
+
+        browser.PostedMessages.Clear();
+        foreach (var target in disposedTargets)
+        {
+            target.Update(firstRunningItem);
+            target.Refresh();
+            target.ReInsert(ChatOutputHtmlRenderer.RunningContainerId);
+        }
+        Assert.Empty(browser.PostedMessages);
+
+        firstRunningItem.Items[0] = new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new TextContent("current generation only")],
+        };
+        var currentGeneration = GetActiveOutputGeneration(control);
+        Assert.Single(
+            browser.PostedMessages,
+            message => IsCommand(message, "update", currentGeneration, contentFragment: "current generation only"));
+        Assert.DoesNotContain(
+            browser.PostedMessages,
+            message => IsCommand(message, "update", losingCandidate.GenerationId));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task AgentChatOutputControl_CommandFailedFromSupersededGeneration_IsIgnored()
+    {
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var runningItem = new AgentChatRunningItem();
+        runningItem.Items.Add(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new TextContent("streaming")],
+        });
+        chat.RunningItems.Add(runningItem);
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
+        var control = new AgentChatOutputControl();
+        var browser = GetBrowser(control);
+        SetAttached(control);
+
+        control.DataContext = viewModel;
+        await control.HistoryLoaded;
+        var staleGeneration = GetActiveOutputGeneration(control);
+        browser.FireReady();
+        await control.HistoryLoaded;
+        var activeGeneration = GetActiveOutputGeneration(control);
+        var activeRunningId = ViewModels.DocumentModels.ChatOutputHtmlRenderer.RunningItemId(activeGeneration, 0);
+        var activeModel = Assert.IsType<ChatOutputHtmlModel>(GetOutputModel(control));
+        var activeRunningModel = Assert.Single(activeModel.RunningModels);
+        browser.PostedMessages.Clear();
+
+        browser.FireMessage(JsonSerializer.Serialize(new
+        {
+            type = "commandFailed",
+            path = activeRunningId,
+        }));
+        Assert.Same(activeModel, GetOutputModel(control));
+        Assert.Same(activeRunningModel, Assert.Single(activeModel.RunningModels));
+        Assert.True(activeRunningModel.IsInserted);
+        Assert.Empty(browser.PostedMessages);
+
+        browser.FireMessage(JsonSerializer.Serialize(new
+        {
+            type = "commandFailed",
+            path = activeRunningId,
+            generation = staleGeneration,
+        }));
+        Assert.Empty(browser.PostedMessages);
+
+        browser.FireMessage(JsonSerializer.Serialize(new
+        {
+            type = "commandFailed",
+            path = activeRunningId,
+            generation = activeGeneration,
+        }));
+        Assert.Contains(browser.PostedMessages, message =>
+            IsCommand(message, "update", activeGeneration, contentFragment: "chat-running-item"));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task AgentChatOutputControl_ReadySupersededByRebind_DoesNotPublishDetachedGeneration()
+    {
+        var firstChat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var staleRunningItem = new AgentChatRunningItem();
+        staleRunningItem.Items.Add(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new TextContent("stale")],
+        });
+        firstChat.RunningItems.Add(staleRunningItem);
+        var secondChat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        secondChat.History.Add(new AgentChatHistoryItem
+        {
+            Role = ChatRole.User,
+            Contents = [new TextContent("current")],
+        });
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var firstViewModel = new AgentViewModel(firstChat, "first", "", loggerFactory, TaskScheduler.Default);
+        await using var secondViewModel = new AgentViewModel(secondChat, "second", "", loggerFactory, TaskScheduler.Default);
+        var firstHistoryPopulated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        firstViewModel.SetHistoryPopulatedForTest(firstHistoryPopulated.Task);
+        var control = new AgentChatOutputControl();
+        var browser = GetBrowser(control);
+        SetAttached(control);
+
+        control.DataContext = firstViewModel;
+        var staleGeneration = GetActiveOutputGeneration(control);
+        var staleReadyCompleted = control.BrowserReadyCompleted;
+        Assert.False(staleReadyCompleted.IsCompleted);
+        control.DataContext = secondViewModel;
+        await control.HistoryLoaded;
+        var currentModel = Assert.IsType<ChatOutputHtmlModel>(GetOutputModel(control));
+        var currentGeneration = GetActiveOutputGeneration(control);
+        Assert.NotEqual(staleGeneration, currentGeneration);
+
+        firstHistoryPopulated.SetResult();
+        await staleReadyCompleted;
+        Assert.Same(currentModel, GetOutputModel(control));
+        Assert.Equal(currentGeneration, GetActiveOutputGeneration(control));
+
+        browser.PostedMessages.Clear();
+        staleRunningItem.Items[0] = new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new TextContent("stale late update")],
+        };
+        Assert.Empty(browser.PostedMessages);
+    }
+
     private static HeadlessControllableBrowser GetBrowser(AgentChatOutputControl control)
     {
         var browserField = typeof(AgentChatOutputControl)
@@ -716,6 +990,38 @@ public sealed class AgentChatOutputControlTests
                 return false;
             }
         });
+
+    private static string GetActiveOutputGeneration(AgentChatOutputControl control)
+    {
+        var field = typeof(AgentChatOutputControl)
+            .GetField("activeOutputGeneration", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        return Assert.IsType<string>(field!.GetValue(control));
+    }
+
+    private static bool IsCommand(
+        string message,
+        string type,
+        string generation,
+        string? contentFragment = null)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(message);
+            var root = document.RootElement;
+            return root.TryGetProperty("type", out var typeProperty)
+                && typeProperty.GetString() == type
+                && root.TryGetProperty("generation", out var generationProperty)
+                && generationProperty.GetString() == generation
+                && (contentFragment is null
+                    || (root.TryGetProperty("content", out var contentProperty)
+                        && (contentProperty.GetString() ?? string.Empty).Contains(contentFragment, StringComparison.Ordinal)));
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
 
     [AvaloniaFact(Timeout = 15_000)]
     public async Task OnBrowserReady_SetsAutoScrollEnabled_AfterInitialContentLoad()

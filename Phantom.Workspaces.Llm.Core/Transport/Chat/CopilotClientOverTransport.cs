@@ -16,10 +16,12 @@ namespace Phantom.Workspaces.Llm.Core.Transport.Chat;
 internal sealed class CopilotClientOverTransport : ICopilotClient
 {
     private readonly ITransport transport;
-    private readonly string? trustProfileReference;
+    private readonly Phantom.Workspaces.Llm.Trust.AgentExecutionTrustProfileReference? trustProfileReference;
     private int disposed;
 
-    public CopilotClientOverTransport(ITransport transport, string? trustProfileReference = null)
+    public CopilotClientOverTransport(
+        ITransport transport,
+        Phantom.Workspaces.Llm.Trust.AgentExecutionTrustProfileReference? trustProfileReference = null)
     {
         this.transport = transport ?? throw new ArgumentNullException(nameof(transport));
         this.trustProfileReference = trustProfileReference;

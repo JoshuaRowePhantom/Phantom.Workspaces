@@ -20,7 +20,8 @@ public sealed class ApplicationServices
         ICredentialPicker? credentialPicker = null,
         IAllowedSecretsStore? allowedSecretsStore = null,
         IPlatformSecretStore? platformSecretStore = null,
-        object? mcpOAuthOptions = null)
+        object? mcpOAuthOptions = null,
+        TransportFactoryRegistryProvider? transportFactoryRegistryProvider = null)
     {
         this.RunningAgentChats = runningAgentChats;
         this.AgentPersistenceStoreCache = agentPersistenceStoreCache;
@@ -42,6 +43,8 @@ public sealed class ApplicationServices
         this.AllowedSecretsStore = allowedSecretsStore;
         this.PlatformSecretStore = platformSecretStore;
         this.McpOAuthOptions = mcpOAuthOptions;
+        this.TransportFactoryRegistryProvider =
+            transportFactoryRegistryProvider ?? new TransportFactoryRegistryProvider();
     }
 
     internal static (ISecretProvider SecretProvider, ICredentialPicker CredentialPicker, IAllowedSecretsStore AllowedSecretsStore, IPlatformSecretStore PlatformSecretStore) CreateDefaultSecretServices()
@@ -119,6 +122,8 @@ public sealed class ApplicationServices
     /// hosts (CLI / Web.Server / tests), which intentionally keep the failing default.
     /// </summary>
     public object? McpOAuthOptions { get; }
+
+    public TransportFactoryRegistryProvider TransportFactoryRegistryProvider { get; }
 
     /// <summary>
     /// The canonical URL-opening service (#1172). Populated post-construction by <c>App.axaml.cs</c>

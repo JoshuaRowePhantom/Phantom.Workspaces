@@ -10,6 +10,7 @@ using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Tools;
+using Phantom.Workspaces.Llm.Trust;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -57,9 +58,32 @@ public sealed class AgentSessionShortcutContext
         string agentSessionId,
         IReadOnlyDictionary<string, string>? parameterValues = null,
         IReadOnlyDictionary<string, JsonElement>? parameterSelections = null,
-        EntityId? hostProfileEntityId = null)
+        EntityId? hostProfileEntityId = null,
+        JsonElement? sessionExecutor = null,
+        JsonElement? executorComponentBindings = null,
+        JsonElement? trustProfileReference = null,
+        string? expectedTrustProfileRevision = null)
     {
         var workspaceEntitySession = mainWindowViewModel.EntityBroker.EntityRepository.WorkspaceEntitySession;
+        if (trustProfileReference is null
+            && expectedTrustProfileRevision is null
+            && agentDefinitionEntity.Data is JsonElement sourceData
+            && sourceData.TryGetProperty("definition", out var definitionData))
+        {
+            var definition = PhantomAgentSchema.AgentDefinitionFromJson(definitionData.GetRawText());
+            var reference = AgentTrustProfileResolver.GetProfileReference(definition);
+            if (!string.IsNullOrWhiteSpace(reference))
+            {
+                var resolver = new DataAccessLayerTrustProfileResolver(
+                    mainWindowViewModel.EntityBroker.EntityRepository.DataAccessLayer);
+                var resolved = await resolver.ResolveVersionedAsync(reference);
+                trustProfileReference = JsonSerializer.SerializeToElement(reference);
+                expectedTrustProfileRevision = resolved.Revision
+                    ?? throw new InvalidOperationException(
+                        $"Trust profile '{reference}' has no persisted revision.");
+            }
+        }
+
         var executionContext = new CurrentExecutionContextProvider(this.userComputerProfileOverride);
         var computerName = executionContext.EffectiveComputerName;
         var currentTime = this.timeProvider.GetUtcNow();
@@ -72,16 +96,24 @@ public sealed class AgentSessionShortcutContext
             workspaceEntitySession,
             new EntityTypeName("agent-session"),
             sessionObjectSimpleName);
-        var agentSessionEntityData = AgentSessionEntityFactory.CreateEntityData(
-            agentDefinitionEntity.EntityId,
-            agentDefinitionEntity.DisplayName,
-            agentSessionId,
-            agentSessionNames,
-            currentTime,
-            computerName,
-            parameterValues,
-            hostProfileEntityId,
-            parameterSelections: parameterSelections);
+        var createEntityDataRequest = new CreateAgentSessionEntityDataRequest
+        {
+            AgentDefinitionEntityId = agentDefinitionEntity.EntityId,
+            AgentDisplayName = agentDefinitionEntity.DisplayName,
+            AgentSessionId = agentSessionId,
+            AgentSessionNames = agentSessionNames,
+            CurrentTime = currentTime,
+            ComputerName = computerName,
+            HostProfileEntityId = hostProfileEntityId
+                ?? mainWindowViewModel.EntityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId,
+            ParameterValues = parameterValues,
+            SessionExecutor = sessionExecutor,
+            ExecutorComponentBindings = executorComponentBindings,
+            ParameterSelections = parameterSelections,
+            TrustProfileReference = trustProfileReference,
+            ExpectedTrustProfileRevision = expectedTrustProfileRevision,
+        };
+        var agentSessionEntityData = AgentSessionEntityFactory.CreateEntityData(createEntityDataRequest);
         var createAgentSessionResult = await mainWindowViewModel.EntityBroker.UpdateAsync(
             new UpdateRequest
             {

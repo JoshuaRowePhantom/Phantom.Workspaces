@@ -45,7 +45,7 @@ public sealed class QueueComposerControlTests
         // advancing the popup selection by 2 instead of 1.
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
         composer.Completions.SetItems([
             new SlashCommandCompletion("alpha", "/alpha", "d"),
@@ -80,7 +80,7 @@ public sealed class QueueComposerControlTests
         // #1192 mirror of Down.
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
         composer.Completions.SetItems([
             new SlashCommandCompletion("alpha", "/alpha", "d"),
@@ -115,7 +115,7 @@ public sealed class QueueComposerControlTests
         // The KeyDown handler must still set e.Handled so ancestors do not react.
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
         composer.Completions.SetItems([
             new SlashCommandCompletion("alpha", "/alpha", "d"),
@@ -151,7 +151,7 @@ public sealed class QueueComposerControlTests
         // composer. Enter should submit exactly once (not twice) and post one queue item.
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
         composer.InputText = "hello";
 

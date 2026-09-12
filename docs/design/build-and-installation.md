@@ -1061,7 +1061,7 @@ touch the developer's actual install or processes (respecting "don't kill my pro
 - **Copilot SDK version pin** — `packaging\validate\Assert-CopilotSdkVersion.ps1` asserts
   `GitHub.Copilot.SDK` is pinned to the reviewed version in `Directory.Packages.props`
   (`PackageVersions_CopilotSdk_IsExpectedPinnedVersion`). The redistributed CLI version is fixed 1:1
-  by the SDK version (SDK `1.0.11` -> CLI `1.0.79`), so an unreviewed bump would silently change the
+  by the SDK version (SDK `1.0.13` -> CLI `1.0.83`), so an unreviewed bump would silently change the
   bundled binary.
 - **Version consistency** — assembly `InformationalVersion` == `app.manifest` == release tag.
 - **Release-artifact hash** — uploaded asset SHA256 matches the published `.sha256`.

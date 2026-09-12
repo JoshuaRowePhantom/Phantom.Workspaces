@@ -30,22 +30,22 @@
                 <ItemsControl ItemsSource="{Binding Rows}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:RunningAgentRowViewModel">
-                            <Button Command="{Binding ActivateCommand}"
+                            <Grid ColumnDefinitions="*,Auto,Auto,Auto"
+                                  RowDefinitions="Auto,Auto"
+                                  ColumnSpacing="6"
+                                  Margin="4">
+                                <Button Command="{Binding ActivateCommand}"
                                         HorizontalAlignment="Stretch"
                                         HorizontalContentAlignment="Left"
                                         Background="Transparent"
                                         BorderThickness="0"
-                                        Padding="4">
+                                        Padding="0">
                                     <StackPanel Orientation="Horizontal" Spacing="8">
-                                        <!-- Brain icon: pulsating when thinking, dimmed when idle -->
                                         <TextBlock Classes="agent-chat-status-line-brain"
                                                    Classes.thinking="{Binding IsThinking}"
                                                    Classes.idle="{Binding IsThinking, Converter={x:Static BoolConverters.Not}}"
                                                    Text="🧠"
-                                                   VerticalAlignment="Center"
-                                                   Margin="0,0,0,0" />
-
-                                        <!-- Workspace + tab labels (when open tab exists) -->
+                                                   VerticalAlignment="Center" />
                                         <StackPanel Spacing="1"
                                                     IsVisible="{Binding HasOpenTab}">
                                             <TextBlock Text="{Binding WorkspacePaneTitle}"
@@ -58,8 +58,6 @@
                                                        TextWrapping="NoWrap"
                                                        TextTrimming="CharacterEllipsis" />
                                         </StackPanel>
-
-                                        <!-- Fallback label (when no open tab) -->
                                         <StackPanel Spacing="1"
                                                     IsVisible="{Binding !HasOpenTab}">
                                             <TextBlock Text="No Open Tab"
@@ -72,6 +70,37 @@
                                         </StackPanel>
                                     </StackPanel>
                                 </Button>
+                                <CheckBox Grid.Column="1"
+                                          Content="Continue in background"
+                                          AutomationProperties.Name="Continue in background"
+                                          ToolTip.Tip="Keep this agent running when the last viewer disconnects."
+                                          IsChecked="{Binding ContinueInBackground, Mode=OneWay}"
+                                          IsEnabled="{Binding IsBackgroundOptionEnabled}"
+                                          Command="{Binding SetContinueInBackgroundCommand}"
+                                          CommandParameter="{Binding IsChecked, RelativeSource={RelativeSource Self}}" />
+                                <Button Grid.Column="2"
+                                        Content="X"
+                                        Background="Red"
+                                        Foreground="White"
+                                        HorizontalAlignment="Right"
+                                        Command="{Binding InterruptCommand}"
+                                        IsEnabled="{Binding IsInterruptEnabled}"
+                                        ToolTip.Tip="Interrupt agent"
+                                        AutomationProperties.Name="Interrupt agent" />
+                                <Button Grid.Column="3"
+                                        Content="Terminate"
+                                        HorizontalAlignment="Right"
+                                        Command="{Binding TerminateCommand}"
+                                        IsEnabled="{Binding IsTerminateEnabled}"
+                                        ToolTip.Tip="Terminate agent session"
+                                        AutomationProperties.Name="Terminate agent session" />
+                                <TextBlock Grid.Row="1"
+                                           Grid.ColumnSpan="4"
+                                           Text="{Binding LastOperationError}"
+                                           Foreground="Red"
+                                           Classes="caption"
+                                           IsVisible="{Binding LastOperationError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                            </Grid>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>

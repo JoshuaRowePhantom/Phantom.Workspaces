@@ -24,8 +24,8 @@ public sealed class CopilotSdkChatClientExecutorTests
     [Fact]
     public async Task ModelOptionsExecutor_UnsetOrLocal_UsesInProcessSession()
     {
-        // No bindings / registry at all -> behaviour-preserving in-process session.
-        var noRouting = ExecutorRoutingTestHarness.CreateClient("model-host");
+        // No named executor and no routing context -> behaviour-preserving in-process session.
+        var noRouting = ExecutorRoutingTestHarness.CreateClient(executorName: null);
         Assert.Null(await noRouting.ResolveRemoteClientForTestAsync());
 
         // Executor option unset -> inherits the (default local) session executor -> in-process.
@@ -67,6 +67,58 @@ public sealed class CopilotSdkChatClientExecutorTests
         var descriptor = registry.LastDescriptor!.Value;
         Assert.Equal("user-computer-profile", descriptor.GetProperty("type").GetString());
         Assert.Equal(ExecutorRoutingTestHarness.RemoteEntityId, descriptor.GetProperty("entity-id").GetString());
+    }
+
+    [Fact]
+    public async Task ModelOptionsExecutor_UnknownNamedBinding_FailsBeforeOpeningTransport()
+    {
+        var (transport, _) = ExecutorRoutingTestHarness.BuildHostTransport();
+        await using var ownedTransport = transport;
+        var registry = new ExecutorRoutingTestHarness.RecordingTransportFactoryRegistry(transport);
+        await using var client = ExecutorRoutingTestHarness.CreateClient("missing-model-host");
+        client.ConfigureExecutorRouting(new ExecutorBindings(), registry);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => client.ResolveRemoteClientForTestAsync());
+
+        Assert.Contains("missing-model-host", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, registry.ConnectCount);
+    }
+
+    [Fact]
+    public async Task ModelOptionsExecutor_NamedWithoutRoutingContext_FailsClosed()
+    {
+        await using var client = ExecutorRoutingTestHarness.CreateClient("missing-model-host");
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => client.ResolveRemoteClientForTestAsync());
+
+        Assert.Contains("missing-model-host", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ModelOptionsExecutor_MalformedDescriptor_FailsBeforeOpeningTransport()
+    {
+        var (transport, _) = ExecutorRoutingTestHarness.BuildHostTransport();
+        await using var ownedTransport = transport;
+        var registry = new ExecutorRoutingTestHarness.RecordingTransportFactoryRegistry(transport);
+        await using var client = ExecutorRoutingTestHarness.CreateClient("model-host");
+        client.ConfigureExecutorRouting(
+            new ExecutorBindings
+            {
+                Bindings = new Dictionary<string, JsonElement>
+                {
+                    ["model-host"] = JsonSerializer.SerializeToElement(
+                        new Dictionary<string, string> { ["entity-id"] = "remote" }),
+                },
+            },
+            registry);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => client.ResolveRemoteClientForTestAsync());
+
+        Assert.Contains("malformed", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, registry.ConnectCount);
     }
 
     [Fact]
@@ -194,10 +246,16 @@ internal static class ExecutorRoutingTestHarness
     internal sealed class RecordingCopilotClient : ICopilotClient
     {
         public int CreateSessionCount { get; private set; }
+        public int DisposeCount { get; private set; }
 
         public SessionConfig? LastConfig { get; private set; }
 
-        public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public Exception? StartException { get; set; }
+
+        public Task StartAsync(CancellationToken cancellationToken) =>
+            this.StartException is null
+                ? Task.CompletedTask
+                : Task.FromException(this.StartException);
 
         public Task<IReadOnlyList<ModelInfo>> ListModelsAsync(CancellationToken cancellationToken)
             => Task.FromResult<IReadOnlyList<ModelInfo>>(Array.Empty<ModelInfo>());
@@ -212,7 +270,11 @@ internal static class ExecutorRoutingTestHarness
         public Task<ICopilotSession> ResumeSessionAsync(string sessionId, ResumeSessionConfig config, CancellationToken cancellationToken)
             => Task.FromResult<ICopilotSession>(new StubCopilotSession(sessionId));
 
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public ValueTask DisposeAsync()
+        {
+            DisposeCount++;
+            return ValueTask.CompletedTask;
+        }
     }
 
     internal sealed class StubCopilotSession : ICopilotSession

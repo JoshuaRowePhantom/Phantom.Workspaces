@@ -252,6 +252,13 @@ public sealed record QueryRequest
 
 public sealed record QueryResult
 {
+    /// <summary>
+    /// The data service's UTC time when it evaluated the query. Callers that make distributed
+    /// expiry decisions must use this value rather than their process-local clock.
+    /// </summary>
+    [JsonPropertyName("authoritative-timestamp")]
+    public Timestamp? AuthoritativeTimestamp { get; init; }
+
     [JsonPropertyName("batches")]
     public required IReadOnlyCollection<TimestampedQueryBatch> Batches { get; init; }
 }

@@ -475,12 +475,12 @@ public sealed class AgentChatHostedSubAgentTests
 
         await using var parentLease = await factory.GetAsync(new AgentSessionId(parentSessionId));
 
-        await WaitForSubAgentCountAsync(parentLease.AgentChat, childSessionIds.Length, CancellationToken.None);
+        await WaitForSubAgentCountAsync(parentLease.LocalAgentChat, childSessionIds.Length, CancellationToken.None);
 
         var leases = new List<RunningAgentChatLease>();
         try
         {
-            foreach (var stub in parentLease.AgentChat.SubAgents.OfType<SubAgent>())
+            foreach (var stub in parentLease.LocalAgentChat.SubAgents.OfType<SubAgent>())
             {
                 leases.Add(await stub.AcquireLeaseAsync());
             }
@@ -542,8 +542,8 @@ public sealed class AgentChatHostedSubAgentTests
 
             await using (var parentLease = await factory.GetAsync(new AgentSessionId(parentSessionId)))
             {
-                await WaitForSubAgentCountAsync(parentLease.AgentChat, 1, CancellationToken.None);
-                var stub = parentLease.AgentChat.SubAgents.OfType<SubAgent>().Single();
+                await WaitForSubAgentCountAsync(parentLease.LocalAgentChat, 1, CancellationToken.None);
+                var stub = parentLease.LocalAgentChat.SubAgents.OfType<SubAgent>().Single();
                 await using var childLease = await stub.AcquireLeaseAsync();
 
                 Assert.Single(factory.RunningSessions);

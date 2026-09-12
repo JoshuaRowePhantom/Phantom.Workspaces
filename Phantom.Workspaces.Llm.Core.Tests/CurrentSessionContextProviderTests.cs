@@ -21,7 +21,7 @@ public sealed class CurrentSessionContextProviderTests
         var definitionName = new EntityName("agent-definitions", "researcher");
         await SeedEntityAsync(dataAccessLayer, ["entity", "agent-definition"], ["agent-definitions", "researcher"]);
 
-        var context = new CurrentSessionContext
+        var context = CreateContext() with
         {
             AgentSessionId = AgentSessionId,
             UserComputerProfile = profile,
@@ -52,7 +52,7 @@ public sealed class CurrentSessionContextProviderTests
 
         var firstHostResult = await InvokeAsync(
             dataAccessLayer,
-            new CurrentSessionContext
+            CreateContext() with
             {
                 AgentSessionId = AgentSessionId,
                 UserComputerProfile = firstProfile,
@@ -60,7 +60,7 @@ public sealed class CurrentSessionContextProviderTests
             });
         var secondHostResult = await InvokeAsync(
             dataAccessLayer,
-            new CurrentSessionContext
+            CreateContext() with
             {
                 AgentSessionId = AgentSessionId,
                 UserComputerProfile = secondProfile,
@@ -87,7 +87,7 @@ public sealed class CurrentSessionContextProviderTests
 
         var result = await InvokeAsync(
             dataAccessLayer,
-            new CurrentSessionContext
+            CreateContext() with
             {
                 AgentSessionId = AgentSessionId,
                 UserComputerProfile = currentProfile,
@@ -104,7 +104,7 @@ public sealed class CurrentSessionContextProviderTests
 
         var result = await InvokeAsync(
             dataAccessLayer,
-            new CurrentSessionContext { AgentSessionId = AgentSessionId });
+            CreateContext());
 
         Assert.Equal(JsonValueKind.Null, result.GetProperty("user_computer_profile").ValueKind);
         Assert.Equal(JsonValueKind.Null, result.GetProperty("user").ValueKind);
@@ -119,7 +119,7 @@ public sealed class CurrentSessionContextProviderTests
 
         var result = await InvokeAsync(
             dataAccessLayer,
-            new CurrentSessionContext { AgentSessionId = AgentSessionId });
+            CreateContext());
 
         Assert.Equal(JsonValueKind.Null, result.GetProperty("agent_definition").ValueKind);
     }
@@ -132,7 +132,7 @@ public sealed class CurrentSessionContextProviderTests
 
         var result = await InvokeAsync(
             dataAccessLayer,
-            new CurrentSessionContext
+            CreateContext() with
             {
                 AgentSessionId = "no-such-session",
                 UserComputerProfile = profile,
@@ -152,7 +152,7 @@ public sealed class CurrentSessionContextProviderTests
 
         var result = await InvokeAsync(
             dataAccessLayer,
-            new CurrentSessionContext
+            CreateContext() with
             {
                 AgentSessionId = AgentSessionId,
                 UserComputerProfile = profile,
@@ -174,7 +174,7 @@ public sealed class CurrentSessionContextProviderTests
 
         var result = await InvokeAsync(
             dataAccessLayer,
-            new CurrentSessionContext
+            CreateContext() with
             {
                 AgentSessionId = AgentSessionId,
                 AgentDefinitionReference = new EntityName("agent-definitions", "researcher"),
@@ -190,7 +190,7 @@ public sealed class CurrentSessionContextProviderTests
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var provider = new CurrentSessionContextProvider(
             dataAccessLayer,
-            new CurrentSessionContext { AgentSessionId = AgentSessionId });
+            CreateContext());
 
         var tools = await GetToolsAsync(provider);
 
@@ -208,7 +208,7 @@ public sealed class CurrentSessionContextProviderTests
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var factory = ToolsetFactory.CreateCurrentSessionToolsetFactory(
             dataAccessLayer,
-            new CurrentSessionContext { AgentSessionId = AgentSessionId });
+            CreateContext());
 
         var toolset = await factory.CreateToolsetAsync(
             new AgentSchema.CustomTool { Kind = "current-session", Name = "current-session" },
@@ -223,7 +223,7 @@ public sealed class CurrentSessionContextProviderTests
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var factory = ToolsetFactory.CreateCurrentSessionToolsetFactory(
             dataAccessLayer,
-            new CurrentSessionContext { AgentSessionId = AgentSessionId });
+            CreateContext());
 
         var toolset = await factory.CreateToolsetAsync(
             new AgentSchema.CustomTool { Kind = "web_search", Name = "web_search" },
@@ -240,7 +240,7 @@ public sealed class CurrentSessionContextProviderTests
         var profile = await SeedEntityAsync(dataAccessLayer, ["entity", "user-computer-profile"], ["profiles", "captured-host"]);
         var factory = ToolsetFactory.CreateCurrentSessionToolsetFactory(
             dataAccessLayer,
-            new CurrentSessionContext
+            CreateContext() with
             {
                 AgentSessionId = AgentSessionId,
                 UserComputerProfile = profile,
@@ -266,7 +266,7 @@ public sealed class CurrentSessionContextProviderTests
 
         var result = await InvokeAsync(
             dataAccessLayer,
-            new CurrentSessionContext
+            CreateContext() with
             {
                 AgentSessionId = AgentSessionId,
                 UserComputerProfile = profile,
@@ -290,7 +290,7 @@ public sealed class CurrentSessionContextProviderTests
 
         var result = await InvokeAsync(
             dataAccessLayer,
-            new CurrentSessionContext
+            CreateContext() with
             {
                 AgentSessionId = AgentSessionId,
                 UserComputerProfile = profile,
@@ -316,7 +316,7 @@ public sealed class CurrentSessionContextProviderTests
 
         var result = await InvokeAsync(
             dataAccessLayer,
-            new CurrentSessionContext
+            CreateContext() with
             {
                 AgentSessionId = AgentSessionId,
                 UserComputerProfile = profile,
@@ -333,7 +333,7 @@ public sealed class CurrentSessionContextProviderTests
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var provider = new CurrentSessionContextProvider(
             dataAccessLayer,
-            new CurrentSessionContext { AgentSessionId = AgentSessionId });
+            CreateContext());
 
         var tool = Assert.Single(await GetToolsAsync(provider));
 
@@ -346,7 +346,7 @@ public sealed class CurrentSessionContextProviderTests
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var chain = ToolsetFactory.CreateCurrentSessionToolsetFactory(
             dataAccessLayer,
-            new CurrentSessionContext { AgentSessionId = AgentSessionId },
+            CreateContext(),
             ToolsetFactory.CreateDefaultToolsetFactory());
 
         var provider = Assert.IsType<CurrentSessionContextProvider>(
@@ -370,7 +370,7 @@ public sealed class CurrentSessionContextProviderTests
         // Mirrors the running-agent / Copilot path once AgentFactory prefers the host-resolved context.
         var result = await InvokeAsync(
             dataAccessLayer,
-            new CurrentSessionContext
+            CreateContext() with
             {
                 AgentSessionId = AgentSessionId,
                 UserComputerProfile = profile,
@@ -390,7 +390,7 @@ public sealed class CurrentSessionContextProviderTests
 
         var result = await InvokeAsync(
             dataAccessLayer,
-            new CurrentSessionContext { AgentSessionId = "unresolved-session" });
+            CreateContext("unresolved-session"));
 
         // Guard against the #1236 regression: members must be present with an explicit JSON null,
         // never dropped so the object renders as "{}".
@@ -405,6 +405,14 @@ public sealed class CurrentSessionContextProviderTests
         Assert.True(result.TryGetProperty("agent_definition", out var definition));
         Assert.Equal(JsonValueKind.Null, definition.ValueKind);
     }
+
+    private static CurrentSessionContext CreateContext(string agentSessionId = AgentSessionId)
+        => new()
+        {
+            AgentSessionId = agentSessionId,
+            OwningProfileEntityId = "host-profile",
+            OwnershipGeneration = 0,
+        };
 
     private static async Task<JsonElement> InvokeAsync(
         IDataAccessLayer dataAccessLayer,

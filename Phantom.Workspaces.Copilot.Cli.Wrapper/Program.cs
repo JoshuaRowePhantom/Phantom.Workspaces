@@ -121,7 +121,7 @@ internal static class CopilotCliWrapper
         IProcessHandle process;
         try
         {
-            process = executor.Start(request);
+            process = await executor.StartAsync(request, cancellationToken).ConfigureAwait(false);
         }
         catch
         {
@@ -156,7 +156,7 @@ internal static class CopilotCliWrapper
                 var waitForExit = process.WaitAsync(cancellationToken);
                 var firstCompletion = await Task.WhenAny(inputPump, waitForExit).ConfigureAwait(false);
                 if (firstCompletion == inputPump && !waitForExit.IsCompleted)
-                    process.Kill();
+                    await process.TerminateAsync(CancellationToken.None).ConfigureAwait(false);
                 var result = await waitForExit.ConfigureAwait(false);
                 inputCancellation.Cancel();
                 await process.StandardInput.DisposeAsync().ConfigureAwait(false);
@@ -168,12 +168,12 @@ internal static class CopilotCliWrapper
             }
             catch (OperationCanceledException)
             {
-                process.Kill();
+                await process.TerminateAsync(CancellationToken.None).ConfigureAwait(false);
                 return InternalFailureExitCode;
             }
             catch
             {
-                process.Kill();
+                await process.TerminateAsync(CancellationToken.None).ConfigureAwait(false);
                 await WriteDiagnosticAsync(
                     standardError,
                     "Copilot wrapper stream relay failed.",

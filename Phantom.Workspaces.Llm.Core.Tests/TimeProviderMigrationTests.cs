@@ -119,7 +119,12 @@ public sealed class TimeProviderMigrationTests
             new AgentServices { ChatClientOverride = new DeterministicTestChatClient() },
             TaskScheduler.Default);
 
-        var currentSessionContext = new CurrentSessionContext { AgentSessionId = "parent-session" };
+        var currentSessionContext = new CurrentSessionContext
+        {
+            AgentSessionId = "parent-session",
+            OwningProfileEntityId = "test-profile",
+            OwnershipGeneration = 0,
+        };
 
         await using var parentChat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
         {

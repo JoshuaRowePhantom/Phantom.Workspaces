@@ -9,6 +9,7 @@ public sealed class CurrentSessionContextFactoryTests
     private const string SessionId = "session-9999";
     private const string UserName = "alice";
     private const string ComputerName = "host-a";
+    private const string OwningProfileEntityId = "11111111-1111-1111-1111-111111111111";
 
     [Fact]
     public async Task CreateForHostAsync_ResolvesUserComputerProfileFromDataAccessLayer()
@@ -22,12 +23,16 @@ public sealed class CurrentSessionContextFactoryTests
             ["computer-user-profiles", "users", "username", UserName, "computers", "hostname", ComputerName]);
 
         var context = await CurrentSessionContextFactory.CreateForHostAsync(
-            SessionId, dataAccessLayer, UserName, ComputerName, ComputerName);
+            SessionId, dataAccessLayer, UserName, ComputerName, ComputerName,
+            OwningProfileEntityId, 3);
 
         Assert.Equal(SessionId, context.AgentSessionId);
         Assert.Equal(user.EntityId, context.User!.EntityId);
         Assert.Equal(computer.EntityId, context.Computer!.EntityId);
         Assert.Equal(profile.EntityId, context.UserComputerProfile!.EntityId);
+        Assert.Equal(OwningProfileEntityId, context.OwningProfileEntityId);
+        Assert.Equal(3, context.OwnershipGeneration);
+        Assert.Null(context.RuntimeEpoch);
     }
 
     [Fact]
@@ -38,7 +43,8 @@ public sealed class CurrentSessionContextFactoryTests
         var computer = await SeedEntityAsync(dataAccessLayer, ["entity", "computer"], ["computers", "hostname", ComputerName]);
 
         var context = await CurrentSessionContextFactory.CreateForHostAsync(
-            SessionId, dataAccessLayer, UserName, ComputerName, ComputerName);
+            SessionId, dataAccessLayer, UserName, ComputerName, ComputerName,
+            OwningProfileEntityId, 0);
 
         Assert.Null(context.UserComputerProfile);
         Assert.Equal(user.EntityId, context.User!.EntityId);
@@ -52,7 +58,8 @@ public sealed class CurrentSessionContextFactoryTests
         var definitionReference = new EntityName("agent-definitions", "researcher");
 
         var context = await CurrentSessionContextFactory.CreateForHostAsync(
-            SessionId, dataAccessLayer, UserName, ComputerName, ComputerName, definitionReference);
+            SessionId, dataAccessLayer, UserName, ComputerName, ComputerName,
+            OwningProfileEntityId, 0, agentDefinitionReference: definitionReference);
 
         Assert.Equal(definitionReference, context.AgentDefinitionReference);
     }

@@ -1,34 +1,37 @@
+using System.Runtime.InteropServices;
 using GitHub.Copilot;
 using Phantom.Workspaces.Llm.Trust;
-using System.Runtime.InteropServices;
 
 namespace Phantom.Workspaces.Llm.Copilot;
 
 internal interface ICopilotRuntimeConnectionFactory
 {
-    Task<CopilotRuntimeConnectionSelection> CreateAsync(
+    Task<CopilotRuntimeConnectionLease> CreateConnectionAsync(
+        AgentExecutionTrustContext trustContext,
+        string? cliPath,
         CancellationToken cancellationToken = default);
 }
 
-internal sealed class CopilotRuntimeConnectionSelection : IAsyncDisposable
+/// <summary>Owns one direct or wrapper Copilot runtime connection selection.</summary>
+public sealed class CopilotRuntimeConnectionLease : IAsyncDisposable
 {
     private CopilotLaunchPolicyLease? policyLease;
 
-    internal CopilotRuntimeConnectionSelection(
-        RuntimeConnection? connection,
+    internal CopilotRuntimeConnectionLease(
+        RuntimeConnection connection,
         CopilotLaunchPolicyLease? policyLease,
         IReadOnlyList<TrustProfilePolicyDiagnostic>? diagnostics = null,
         string? executablePath = null,
         IReadOnlyList<string>? arguments = null)
     {
-        Connection = connection;
+        Connection = connection ?? throw new ArgumentNullException(nameof(connection));
         this.policyLease = policyLease;
         Diagnostics = diagnostics ?? [];
         ExecutablePath = executablePath;
         Arguments = arguments ?? [];
     }
 
-    internal RuntimeConnection? Connection { get; }
+    public RuntimeConnection Connection { get; }
     internal string? PolicyFilePath => this.policyLease?.Path;
     internal IReadOnlyList<TrustProfilePolicyDiagnostic> Diagnostics { get; }
     internal string? ExecutablePath { get; }
@@ -41,23 +44,18 @@ internal sealed class CopilotRuntimeConnectionSelection : IAsyncDisposable
     }
 }
 
-internal sealed class CopilotRuntimeConnectionFactory : ICopilotRuntimeConnectionFactory
+/// <summary>
+/// Selects a direct or MXC-wrapper Copilot runtime connection from policy compiled on this host.
+/// </summary>
+public sealed class CopilotRuntimeConnectionFactory : ICopilotRuntimeConnectionFactory
 {
     internal const string WrapperFileName = "phantom-copilot-wrapper.exe";
-    private readonly string? cliPath;
-    private readonly TrustProfile? effectiveTrustProfile;
-    private readonly ITrustProfileProcessPolicyCompiler compiler;
-    private readonly CopilotLaunchPolicyStore policyStore;
+    private readonly ICopilotLaunchPolicyStore policyStore;
     private readonly string baseDirectory;
     private readonly string runtimeIdentifier;
 
-    internal CopilotRuntimeConnectionFactory(
-        string? cliPath,
-        TrustProfile? effectiveTrustProfile)
+    public CopilotRuntimeConnectionFactory()
         : this(
-            cliPath,
-            effectiveTrustProfile,
-            new MxcTrustProfilePolicyCompiler(),
             new CopilotLaunchPolicyStore(),
             AppContext.BaseDirectory,
             RuntimeInformation.RuntimeIdentifier)
@@ -65,55 +63,45 @@ internal sealed class CopilotRuntimeConnectionFactory : ICopilotRuntimeConnectio
     }
 
     internal CopilotRuntimeConnectionFactory(
-        string? cliPath,
-        TrustProfile? effectiveTrustProfile,
-        ITrustProfileProcessPolicyCompiler compiler,
-        CopilotLaunchPolicyStore policyStore,
+        ICopilotLaunchPolicyStore policyStore,
         string baseDirectory,
         string runtimeIdentifier)
     {
-        this.cliPath = cliPath;
-        this.effectiveTrustProfile = effectiveTrustProfile;
-        this.compiler = compiler;
-        this.policyStore = policyStore;
-        this.baseDirectory = baseDirectory;
-        this.runtimeIdentifier = runtimeIdentifier;
+        this.policyStore = policyStore ?? throw new ArgumentNullException(nameof(policyStore));
+        this.baseDirectory = baseDirectory ?? throw new ArgumentNullException(nameof(baseDirectory));
+        this.runtimeIdentifier = runtimeIdentifier ?? throw new ArgumentNullException(nameof(runtimeIdentifier));
     }
 
-    public Task<CopilotRuntimeConnectionSelection> CreateAsync(
+    public async Task<CopilotRuntimeConnectionLease> CreateConnectionAsync(
+        AgentExecutionTrustContext trustContext,
+        string? cliPath,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(trustContext);
+        var compilation = await trustContext
+            .GetCompilationAsync(cancellationToken)
+            .ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
-        var compilation = this.effectiveTrustProfile is null
-            ? new TrustProfileProcessPolicyCompilation(false, null, [])
-            : this.compiler.Compile(this.effectiveTrustProfile);
 
-        var realCliPath = ResolveRealCliPath();
+        var realCliPath = ResolveRealCliPath(cliPath);
         if (!compilation.RequiresContainment)
         {
-            var direct = string.IsNullOrWhiteSpace(this.cliPath)
-                ? null
-                : RuntimeConnection.ForStdio(realCliPath);
-            return Task.FromResult(new CopilotRuntimeConnectionSelection(
-                direct,
+            return new CopilotRuntimeConnectionLease(
+                RuntimeConnection.ForStdio(realCliPath),
                 policyLease: null,
                 compilation.Diagnostics,
-                executablePath: direct is null ? null : realCliPath));
+                realCliPath);
         }
 
         if (compilation.Policy is null)
         {
-            var errors = string.Join(
-                "; ",
-                compilation.Diagnostics.Select(diagnostic => diagnostic.Message));
             throw new InvalidOperationException(
-                $"The Copilot containment policy could not be compiled: {errors}");
+                "The Copilot containment policy could not be compiled on the launch host.");
         }
 
         ValidateNormalExecutable(realCliPath, "Copilot CLI");
-        var runtimeDirectory = System.IO.Path.GetDirectoryName(realCliPath)!;
-        var wrapperPath = System.IO.Path.GetFullPath(
-            System.IO.Path.Combine(runtimeDirectory, WrapperFileName));
+        var runtimeDirectory = Path.GetDirectoryName(realCliPath)!;
+        var wrapperPath = Path.GetFullPath(Path.Combine(runtimeDirectory, WrapperFileName));
         ValidateNormalExecutable(wrapperPath, "Copilot wrapper");
         if (string.Equals(wrapperPath, realCliPath, PathComparison))
             throw new InvalidOperationException("The Copilot wrapper and CLI paths must be different.");
@@ -121,45 +109,45 @@ internal sealed class CopilotRuntimeConnectionFactory : ICopilotRuntimeConnectio
         var lease = this.policyStore.Create(compilation.Policy);
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             string[] arguments = ["--policy", lease.Path, "--copilot", realCliPath];
-            var connection = RuntimeConnection.ForStdio(wrapperPath, arguments);
-            return Task.FromResult(new CopilotRuntimeConnectionSelection(
-                connection,
+            return new CopilotRuntimeConnectionLease(
+                RuntimeConnection.ForStdio(wrapperPath, arguments),
                 lease,
                 compilation.Diagnostics,
                 wrapperPath,
-                arguments));
+                arguments);
         }
         catch
         {
-            lease.Dispose();
+            await lease.DisposeAsync().ConfigureAwait(false);
             throw;
         }
     }
 
-    private string ResolveRealCliPath()
+    private string ResolveRealCliPath(string? cliPath)
     {
-        var path = string.IsNullOrWhiteSpace(this.cliPath)
-            ? System.IO.Path.Combine(
+        var path = string.IsNullOrWhiteSpace(cliPath)
+            ? Path.Combine(
                 this.baseDirectory,
                 "runtimes",
                 this.runtimeIdentifier,
                 "native",
                 "copilot.exe")
-            : this.cliPath;
-        return System.IO.Path.GetFullPath(path);
+            : cliPath;
+        return Path.GetFullPath(path);
     }
 
     private static void ValidateNormalExecutable(string path, string description)
     {
-        if (!System.IO.Path.IsPathFullyQualified(path)
+        if (!Path.IsPathFullyQualified(path)
             || !File.Exists(path)
             || Directory.Exists(path)
             || (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0
-            || (File.GetAttributes(System.IO.Path.GetDirectoryName(path)!)
+            || (File.GetAttributes(Path.GetDirectoryName(path)!)
                 & FileAttributes.ReparsePoint) != 0)
         {
-            throw new InvalidOperationException($"{description} path is missing or unsafe: '{path}'.");
+            throw new InvalidOperationException($"{description} path is missing or unsafe.");
         }
     }
 

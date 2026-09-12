@@ -23,6 +23,7 @@ public sealed class NotificationRowViewModel : ViewModelBase
     {
         this.timeProvider = timeProvider ?? TimeProvider.System;
         this.TabKey = entry.TabKey;
+        this.Kind = entry.Kind;
         this.TabTitle = entry.TabDescriptor.TabTitle ?? entry.TabDescriptor.TabId;
         this.heading = entry.Heading;
         this.description = entry.Description;
@@ -36,6 +37,7 @@ public sealed class NotificationRowViewModel : ViewModelBase
     }
 
     public string TabKey { get; }
+    public string Kind { get; }
     public string TabTitle { get; }
 
     public IStatusItem Status => this.status;
@@ -141,4 +143,3 @@ public sealed class NotificationRowViewModel : ViewModelBase
     public ICommand NavigateCommand { get; }
     public ICommand SnoozeCommand { get; }
 }
-

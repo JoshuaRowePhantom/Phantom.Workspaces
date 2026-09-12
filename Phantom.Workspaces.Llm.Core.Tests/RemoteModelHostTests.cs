@@ -24,7 +24,9 @@ public sealed class RemoteModelHostTests
             gitHubToken: null,
             loggerFactory: null,
             modelOptions: options,
-            effectiveTrustProfile: new TrustProfile { NetworkCapabilities = [] });
+            executionTrustContext: new AgentExecutionTrustContext(
+                new TrustProfile { NetworkCapabilities = [] },
+                new RecordingCompiler()));
         var (transport, _) = ExecutorRoutingTestHarness.BuildHostTransport();
         await using var ownedTransport = transport;
         client.ConfigureExecutorRouting(
@@ -48,49 +50,62 @@ public sealed class RemoteModelHostTests
         listeners.Register(new CopilotClientTransportListener(
             sdkFactory,
             provider,
-            resolvedProfile =>
-            {
-                runtimeFactory.ProfileSeen = resolvedProfile;
-                return runtimeFactory;
-            }));
+            new RecordingCompiler(),
+            runtimeFactory));
         await using var transport = new LocalTransport(listeners);
-        await using var client = new CopilotClientOverTransport(transport, "contained-profile");
+        await using var client = new CopilotClientOverTransport(
+            transport,
+            new AgentExecutionTrustProfileReference(
+                "trust-profile",
+                "contained-profile",
+                "17"));
 
         await using var session = await client.CreateSessionAsync(
             new SessionConfig { Model = "gpt-5" },
             ExecutorRoutingTestHarness.Ct());
 
         Assert.Equal("contained-profile", provider.ResolvedName);
-        Assert.Same(profile, runtimeFactory.ProfileSeen);
         Assert.Equal(1, runtimeFactory.CallCount);
+        Assert.Equal("contained-profile", runtimeFactory.ContextSeen!.RemoteReference!.Id);
         Assert.Same(runtimeFactory.Connection, sdkFactory.Options!.Connection);
     }
 
-    private sealed class RecordingProvider(TrustProfile profile) : ITrustProfileProvider
+    private sealed class RecordingProvider(TrustProfile profile) : IRemoteTrustProfileResolver
     {
         public string? ResolvedName { get; private set; }
 
-        public ValueTask<TrustProfile> ResolveAsync(
+        public Task<RemoteTrustProfileResolution?> ResolveAsync(
             string profileName,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken)
         {
             ResolvedName = profileName;
-            return ValueTask.FromResult(profile);
+            return Task.FromResult<RemoteTrustProfileResolution?>(
+                new(profile, "17"));
         }
+    }
+
+    private sealed class RecordingCompiler : ITrustProfileProcessPolicyCompiler
+    {
+        public TrustProfileProcessPolicyCompilation Compile(TrustProfile effectiveProfile)
+            => new(false, null, []);
     }
 
     private sealed class RecordingRuntimeFactory : ICopilotRuntimeConnectionFactory
     {
         public RuntimeConnection Connection { get; } =
             RuntimeConnection.ForStdio("phantom-copilot-wrapper.exe", ["--policy", "local"]);
-        public TrustProfile? ProfileSeen { get; set; }
+        public AgentExecutionTrustContext? ContextSeen { get; private set; }
         public int CallCount { get; private set; }
 
-        public Task<CopilotRuntimeConnectionSelection> CreateAsync(
+        public async Task<CopilotRuntimeConnectionLease> CreateConnectionAsync(
+            AgentExecutionTrustContext trustContext,
+            string? cliPath,
             CancellationToken cancellationToken = default)
         {
             CallCount++;
-            return Task.FromResult(new CopilotRuntimeConnectionSelection(Connection, null));
+            ContextSeen = trustContext;
+            await trustContext.GetCompilationAsync(cancellationToken);
+            return new CopilotRuntimeConnectionLease(Connection, null);
         }
     }
 }

@@ -180,7 +180,7 @@ public sealed class AgentChatPersistenceTests
 
         var stub = Assert.IsType<SubAgent>(Assert.Single(restoredParent.SubAgents));
         await using var lease = await stub.AcquireLeaseAsync();
-        Assert.Equal("sub-agent", lease.AgentChat.AgentDefinition?.Name);
+        Assert.Equal("sub-agent", lease.LocalAgentChat.AgentDefinition?.Name);
     }
 
     [Fact]
@@ -215,7 +215,7 @@ public sealed class AgentChatPersistenceTests
 
         var stub = Assert.IsType<SubAgent>(Assert.Single(restoredParent.SubAgents));
         await using var lease = await stub.AcquireLeaseAsync();
-        Assert.True(lease.AgentChat.History.Count > 0);
+        Assert.True(lease.LocalAgentChat.History.Count > 0);
     }
 
     [Fact]
@@ -350,7 +350,7 @@ public sealed class AgentChatPersistenceTests
 
         var stub = Assert.IsType<SubAgent>(Assert.Single(restoredParent.SubAgents));
         await using var lease = await stub.AcquireLeaseAsync();
-        var promptAgent = Assert.IsType<PromptAgent>(lease.AgentChat.AgentDefinition);
+        var promptAgent = Assert.IsType<PromptAgent>(lease.LocalAgentChat.AgentDefinition);
         Assert.Equal("github-copilot-subagent", promptAgent.Model?.Provider);
     }
 

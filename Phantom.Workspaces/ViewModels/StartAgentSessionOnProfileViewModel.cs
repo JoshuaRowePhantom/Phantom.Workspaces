@@ -9,6 +9,7 @@ using AgentSchema;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Services;
 
@@ -239,10 +240,19 @@ public sealed class StartAgentSessionOnProfileViewModel : WorkspaceTabViewModel
             return;
         }
 
+        var persistedEntity = createdAgentSessionEntity.Data is JsonElement value
+            ? value
+            : throw new InvalidOperationException("The created agent session has no persisted data.");
+        var acquisition = await this.openAgentSessionShortcutHandler.OpenPersistedSessionAsync(
+            this.mainWindowViewModel,
+            persistedEntity,
+            AgentSessionOpenIntent.StartOrAttach,
+            CancellationToken.None);
         var lease = await this.openAgentSessionShortcutHandler.RunningAgentChatTable.AcquireAsync(
             new AcquireAgentChatRequest
             {
                 AgentSessionId = new AgentSessionId(agentSessionId),
+                AgentSessionEntity = acquisition.Entity,
                 AgentDefinition = agentDefinition,
                 AgentServices = agentServices,
                 ToolResourceFactory = agentServices.ToolResourceFactory,
@@ -250,12 +260,18 @@ public sealed class StartAgentSessionOnProfileViewModel : WorkspaceTabViewModel
                 EntityName = createdAgentSessionEntity.DisplayName,
                 EntityId = createdAgentSessionEntity.EntityId.ToString(),
                 WorkspaceId = this.mainWindowViewModel.SelectedWorkspacePane?.Id,
+                AcquisitionMode = acquisition.Mode,
+                OwningProfileTransport = acquisition.Transport,
             });
 
-        var agentSessionTab = await this.openAgentSessionShortcutHandler.CreateAgentSessionTabAsync(
-            this.mainWindowViewModel,
-            createdAgentSessionEntity,
-            lease.AgentChat);
+        var agentSessionTab = await this.openAgentSessionShortcutHandler.CreateAgentSessionTabWithRemoteProfileAsync(
+            new CreateAgentSessionTabRequest
+            {
+                MainWindowViewModel = this.mainWindowViewModel,
+                AgentSessionEntity = createdAgentSessionEntity,
+                AgentChat = lease.AgentChat,
+            },
+            acquisition.RemoteProfileDisplayName);
         agentSessionTab.SetLease(lease);
 
         await this.tabService.ReplaceTabAsync(this, agentSessionTab);

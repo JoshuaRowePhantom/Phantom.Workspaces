@@ -7,6 +7,8 @@ using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Mcp;
+using Phantom.Workspaces.Llm.Processes;
+using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.Mcp;
 
@@ -50,6 +52,33 @@ public sealed class RemoteMcpHostHandler
     public async Task<IAsyncDisposable?> OpenAsync(JsonElement request, IMessageChannel channel, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(channel);
+        try
+        {
+            return await this.OpenCoreAsync(request, channel, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            throw new InvalidOperationException(
+                "Remote MCP launch was denied by host policy.");
+        }
+    }
+
+    private async Task<IAsyncDisposable?> OpenCoreAsync(
+        JsonElement request,
+        IMessageChannel channel,
+        CancellationToken ct)
+    {
+        // #1477: never accept a caller-supplied compiled policy. Policy compilation is authoritative
+        // on this launch host only.
+        McpConnectionRequest.RejectCompiledPolicyProperty(request);
+
+        // Parse security-sensitive intent before deciding whether the connection is hostable. A
+        // partial or malformed descriptor must never be reinterpreted as an unconstrained request.
+        var trustContext = await this.ResolveTrustContextAsync(request, ct).ConfigureAwait(false);
 
         var tool = await this.ResolveConnectionAsync(request, ct).ConfigureAwait(false);
         if (tool is null)
@@ -61,13 +90,66 @@ public sealed class RemoteMcpHostHandler
             tool,
             this.services,
             this.loggerFactory,
-            ct).ConfigureAwait(false);
+            ct,
+            clientIdOverride: null,
+            trustContext: trustContext,
+            processExecutor: this.services?.ProcessExecutor as IProcessExecutor).ConfigureAwait(false);
+
+        // Process-backed transports launch lazily from ConnectAsync. Connect them inside this
+        // sanitized request boundary so wrapper/executor failures are returned safely instead of
+        // faulting an unobserved relay after the remote open has already succeeded.
+        if (serverTransport is ProcessExecutorBackedClientTransport)
+        {
+            var connected = await serverTransport.ConnectAsync(ct).ConfigureAwait(false);
+            serverTransport = new PreconnectedClientTransport(serverTransport.Name, connected);
+        }
 
         var delegatingServer = new DelegatingMcpServer(serverTransport);
         var incoming = McpChannelClientTransport.CreateServerTransport(channel);
         var cts = new CancellationTokenSource();
-        var relay = Task.Run(() => delegatingServer.RunAsync(incoming, cts.Token), CancellationToken.None);
+        var relay = delegatingServer.RunAsync(incoming, cts.Token);
         return new HostSession(delegatingServer, incoming, cts, relay);
+    }
+
+    /// <summary>
+    /// Resolves the stored trust profile referenced by a #1477 <c>mcp</c> request on THIS launch
+    /// host and compiles it into an <see cref="AgentExecutionTrustContext"/>. When the request has
+    /// no reference, returns null so the launch is unconstrained. A revision mismatch fails closed
+    /// with <see cref="InvalidOperationException"/> before any process starts.
+    /// </summary>
+    private Task<AgentExecutionTrustContext?> ResolveTrustContextAsync(
+        JsonElement request,
+        CancellationToken ct)
+    {
+        if (!McpConnectionRequest.TryGetTrustProfileReference(
+                request,
+                out var trustProfileRef,
+                out var expectedRevision))
+        {
+            return Task.FromResult<AgentExecutionTrustContext?>(null);
+        }
+        if (string.IsNullOrWhiteSpace(expectedRevision))
+        {
+            throw new InvalidOperationException(
+                $"Remote MCP trust profile '{trustProfileRef}' must include an expected revision.");
+        }
+
+        var resolver = this.services?.TrustProfileResolver as IRemoteTrustProfileResolver;
+        var compiler = this.services?.TrustProfilePolicyCompiler as ITrustProfileProcessPolicyCompiler;
+        if (resolver is null || compiler is null)
+        {
+            throw new InvalidOperationException(
+                $"Remote MCP host has no trust profile resolver/compiler for reference '{trustProfileRef}'.");
+        }
+
+        return Task.FromResult<AgentExecutionTrustContext?>(
+            new AgentExecutionTrustContext(
+                new AgentExecutionTrustProfileReference(
+                    "trust-profile",
+                    trustProfileRef,
+                    expectedRevision),
+                resolver,
+                compiler));
     }
 
     /// <summary>
@@ -100,6 +182,29 @@ public sealed class RemoteMcpHostHandler
         }
 
         return McpConnectionRequest.ToTool(request);
+    }
+
+    private sealed class PreconnectedClientTransport(
+        string name,
+        ModelContextProtocol.Protocol.ITransport transport)
+        : ModelContextProtocol.Client.IClientTransport
+    {
+        private int connected;
+
+        public string Name { get; } = name;
+
+        public Task<ModelContextProtocol.Protocol.ITransport> ConnectAsync(
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (Interlocked.Exchange(ref this.connected, 1) != 0)
+            {
+                throw new InvalidOperationException(
+                    "The preconnected MCP transport has already been consumed.");
+            }
+
+            return Task.FromResult(transport);
+        }
     }
 
     private sealed class HostSession(

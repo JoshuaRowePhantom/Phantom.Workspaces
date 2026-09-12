@@ -14,6 +14,7 @@ using Phantom.Workspaces.Llm.Echo;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.SlashCommands;
 using System.ClientModel;
+using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -31,8 +32,11 @@ namespace Phantom.Workspaces.Llm;
 /// otherwise a dedicated exclusive scheduler that serializes foreground work so the
 /// running-item collections are never mutated concurrently off the UI thread.
 /// </summary>
-public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentChatRegistry, IRunningSubAgent, ISubAgentTable
+public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAgent, ISubAgentTable
 {
+    internal const string SecondaryProviderCleanupExceptionDataKey =
+        "Phantom.Workspaces.Llm.SecondaryProviderCleanupException";
+
     private const string GitHubModelsInferenceEndpoint = "https://models.github.ai/inference";
     private const string RunningPartAssistantReasoning = "assistant-reasoning";
     private const string RunningPartAssistantText = "assistant-text";
@@ -63,6 +67,14 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     private IReadOnlyList<RuntimeContextProviderRegistration> runtimeContextProviderRegistrations = [];
     private readonly AgentInputQueueManager queueManager;
     private readonly AgentChatQueueManager chatQueueManager;
+    private readonly LocalAgentInputQueuesAdapter commonInputQueues;
+    private readonly ObservableCollection<AgentChatModal> modals = [];
+    // #1485: pending RespondToModalAsync completions keyed by modal id. Completed by
+    // PublishModalDismiss (owner-side dismiss delta). Access on the foreground scheduler.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, TaskCompletionSource> pendingModalDismissals = new();
+    // #1485: last observed response per modal id (owner-side hook for tests). Only meaningful
+    // between the RespondToModalAsync call and the corresponding PublishModalDismiss.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, JsonElement> lastModalResponses = new();
     private AgentChatHistoryService? historyService;
     private readonly AgentChatHistoryCollection history = new();
     private readonly TaskCompletionSource historyPopulated = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -89,6 +101,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     // on it. Assigned once during initialization; Task.CompletedTask when the agent has no tools.
     private Task initialization = Task.CompletedTask;
     private string agentSessionId = Guid.NewGuid().ToString("n");
+    private AgentInformation information;
+    private Usage usage;
 
     private bool isBusy;
     private bool processingStarted;
@@ -142,21 +156,27 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
        VerifyOnForegroundContext(request.ForegroundScheduler);
        this.request = request;
        this.timeProvider = request.TimeProvider;
-       this.logger = request.AgentServices?.LoggerFactory?.CreateLogger<AgentChat>()
-           ?? (ILogger)NullLogger<AgentChat>.Instance;
-       this.lastUpdatedAt = this.timeProvider.GetUtcNow().UtcDateTime;
-       this.queueManager = new AgentInputQueueManager();
-       this.chatQueueManager = new AgentChatQueueManager(this.queueManager);
-       this.runningItemOperations = new AgentRunningItems(this.runningItems);
-       this.ownedResources = request.OwnedResources?.ToList() ?? [];
-       this.PendingApprovalItems = new ReadOnlyObservableCollection<AgentChatPendingApprovalItem>(this.pendingApprovalItems);
-       this.SubAgents = new ReadOnlyObservableCollection<IRunningSubAgent>(this.subAgentItems);
-       this.foregroundScheduler = request.ForegroundScheduler
-           ?? (SynchronizationContext.Current is not null
-               ? TaskScheduler.FromCurrentSynchronizationContext()
-               : this.foregroundSchedulerPair.ExclusiveScheduler);
-       this.outerSlashCommands.Register(this.replaceableCommands);
-       this.outerSlashCommands.Register(new HelpSlashCommandHandler(this.outerSlashCommands));
+        this.logger = request.AgentServices?.LoggerFactory?.CreateLogger<AgentChat>()
+            ?? (ILogger)NullLogger<AgentChat>.Instance;
+        this.lastUpdatedAt = this.timeProvider.GetUtcNow().UtcDateTime;
+        this.foregroundScheduler = request.ForegroundScheduler
+            ?? (SynchronizationContext.Current is not null
+                ? TaskScheduler.FromCurrentSynchronizationContext()
+                : this.foregroundSchedulerPair.ExclusiveScheduler);
+        this.queueManager = new AgentInputQueueManager();
+        this.chatQueueManager = new AgentChatQueueManager(this.queueManager);
+        this.commonInputQueues = new LocalAgentInputQueuesAdapter(
+            this.queueManager,
+            this.chatQueueManager.DefaultInputQueue.Queue,
+            this.foregroundScheduler);
+        this.runningItemOperations = new AgentRunningItems(this.runningItems);
+        this.ownedResources = request.OwnedResources?.ToList() ?? [];
+        this.PendingApprovalItems = new ReadOnlyObservableCollection<AgentChatPendingApprovalItem>(this.pendingApprovalItems);
+        this.SubAgents = new ReadOnlyObservableCollection<IRunningSubAgent>(this.subAgentItems);
+        this.Modals = new ReadOnlyObservableCollection<AgentChatModal>(this.modals);
+        this.information = default;
+        this.outerSlashCommands.Register(this.replaceableCommands);
+        this.outerSlashCommands.Register(new HelpSlashCommandHandler(this.outerSlashCommands));
     }
 
     // Enforces the foreground-context affinity invariant (issue #909): AgentChat construction and
@@ -299,6 +319,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
        // type-level DisplayName. Blank when no caller name was supplied so downstream UI can
        // fall back to DisplayName / session id without inventing a fake value.
        this.Name = this.request.NameOverride ?? string.Empty;
+       this.PublishInformation();
 
        // Steering messages are injected into the model call deep in the chat-client pipeline
        // (at tool-result boundaries by ToolResultSteeringMiddleware, or forwarded to the live
@@ -514,6 +535,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
     public event EventHandler<string>? AgentSessionIdChanged;
 
+    public event EventHandler? InformationChanged;
+
     public event EventHandler? ToolsChanged;
 
     public event EventHandler? UsageChanged;
@@ -553,6 +576,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
     /// <summary>All known input queues, including the default queue.</summary>
     public ReadOnlyObservableCollection<AgentChatQueue> InputQueues => this.chatQueueManager.InputQueues;
+
+    IAgentInputQueues IAgentChat.InputQueues => this.commonInputQueues;
 
     /// <summary>The default input queue.</summary>
     public AgentChatQueue DefaultInputQueue => this.chatQueueManager.DefaultInputQueue;
@@ -599,6 +624,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     /// <summary>Child sub-agent chats spawned by this chat during the current session.</summary>
     public ReadOnlyObservableCollection<IRunningSubAgent> SubAgents { get; }
 
+    public ReadOnlyObservableCollection<AgentChatModal> Modals { get; }
+
     IReadOnlyList<IRunningSubAgent> IRunningSubAgent.SubAgents => this.SubAgents;
 
     public string DisplayName { get; private set; } = string.Empty;
@@ -630,6 +657,10 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     /// registered automatically during initialisation; <c>/help</c> is always present.
     /// </summary>
     public ISlashCommandRegistry SlashCommands => this.outerSlashCommands;
+
+    public AgentInformation Information => this.information;
+
+    public Usage Usage => this.usage;
 
     public long? TotalInputTokenCount { get; private set; }
 
@@ -685,7 +716,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             {
                 if (!this.toolIndex.TryGetValue(toolId, out var node))
                 {
-                    return;
+                    throw new ArgumentException($"Unknown tool id '{toolId}'.", nameof(toolId));
                 }
 
                 changed = SetNodeEnabled(node, enabled);
@@ -793,6 +824,24 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         this.EnqueueUserContents([new TextContent(text)], targetQueue);
     }
 
+    internal AgentInputTurnCompletion EnqueueUserMessageWithCompletion(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            var emptyCompletion = new AgentInputTurnCompletion();
+            emptyCompletion.ClaimTerminal();
+            emptyCompletion.CompleteAfter(Task.CompletedTask);
+            return emptyCompletion;
+        }
+
+        var turnCompletion = new AgentInputTurnCompletion();
+        this.EnqueueUserContentsCore(
+            [new TextContent(text)],
+            this.DefaultInputQueue,
+            turnCompletion);
+        return turnCompletion;
+    }
+
     /// <summary>
     /// Adds a user message with structured content (e.g. text + images) and enqueues it.
     /// </summary>
@@ -804,7 +853,17 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             return;
         }
 
-        targetQueue ??= this.DefaultInputQueue;
+        this.EnqueueUserContentsCore(
+            contents,
+            targetQueue ?? this.DefaultInputQueue,
+            turnCompletion: null);
+    }
+
+    private void EnqueueUserContentsCore(
+        IReadOnlyList<AIContent> contents,
+        AgentChatQueue targetQueue,
+        AgentInputTurnCompletion? turnCompletion)
+    {
         this.StartProcessingLoop();
         this.queueManager.Enqueue(
             targetQueue.Queue,
@@ -818,6 +877,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                             CreatedAt = this.timeProvider.GetUtcNow(),
                         },
                     ],
+                    TurnCompletion = turnCompletion,
                 },
             ]);
     }
@@ -901,7 +961,14 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     /// <summary>
     /// Requests an interrupt of the current streaming response.
     /// </summary>
-    public void Interrupt()
+    public Task InterruptAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        this.InterruptCore();
+        return Task.CompletedTask;
+    }
+
+    private void InterruptCore()
     {
         CancellationTokenSource? cancellationToUse;
         lock (this.processingStateLock)
@@ -912,13 +979,115 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         cancellationToUse?.Cancel();
     }
 
+    public Task RespondToModalAsync(
+        string modalId,
+        JsonElement response,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(modalId);
+        ct.ThrowIfCancellationRequested();
+        // #1485: RespondToModalAsync no longer removes the modal itself. It records a pending
+        // dismissal for the modal id, awaits the owner-side dismiss delta (delivered via
+        // PublishModalDismiss), and completes only after the owner removes the modal from the
+        // Modals collection. This matches the transport contract: the local engine and the remote
+        // proxy both dismiss modals via an owner-authoritative delta rather than by client fiat.
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ = Task.Factory.StartNew(
+            () =>
+            {
+                AgentChatModal? match = null;
+                for (var i = 0; i < this.modals.Count; i++)
+                {
+                    if (string.Equals(this.modals[i].Id, modalId, StringComparison.Ordinal))
+                    {
+                        match = this.modals[i];
+                        break;
+                    }
+                }
+                if (match is null)
+                {
+                    tcs.TrySetException(new ArgumentException($"Unknown modal id '{modalId}'.", nameof(modalId)));
+                    return;
+                }
+                if (!this.pendingModalDismissals.TryAdd(modalId, tcs))
+                {
+                    tcs.TrySetException(new InvalidOperationException(
+                        $"Modal '{modalId}' already has a pending response."));
+                    return;
+                }
+                // Cancellation triggers detach only; the modal remains present because dismissal is
+                // owner-authoritative.
+                if (ct.CanBeCanceled)
+                {
+                    ct.Register(() =>
+                    {
+                        if (this.pendingModalDismissals.TryRemove(modalId, out var pending))
+                        {
+                            pending.TrySetCanceled(ct);
+                        }
+                    });
+                }
+                // Owner-side response consumer hook: the tests' foreground scheduler will drain
+                // PublishModalDismiss synchronously after the response is observed.
+                this.lastModalResponses[modalId] = response;
+            },
+            CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach,
+            this.foregroundScheduler);
+        return tcs.Task;
+    }
+
+    // #1485: production owner-side ingress. Adds a modal to Modals on the foreground scheduler.
+    // Used by tests and by the (future) transport ingress. Public because remote proxies invoke it.
+    public void PublishModal(AgentChatModal modal)
+    {
+        ArgumentNullException.ThrowIfNull(modal);
+        _ = Task.Factory.StartNew(
+            () => this.modals.Add(modal),
+            CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach,
+            this.foregroundScheduler);
+    }
+
+    // #1485: production owner-side dismissal. Removes the modal from Modals on the foreground
+    // scheduler and completes any pending RespondToModalAsync task.
+    public void PublishModalDismiss(string modalId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(modalId);
+        _ = Task.Factory.StartNew(
+            () =>
+            {
+                for (var i = 0; i < this.modals.Count; i++)
+                {
+                    if (string.Equals(this.modals[i].Id, modalId, StringComparison.Ordinal))
+                    {
+                        this.modals.RemoveAt(i);
+                        break;
+                    }
+                }
+                if (this.pendingModalDismissals.TryRemove(modalId, out var pending))
+                {
+                    pending.TrySetResult();
+                }
+            },
+            CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach,
+            this.foregroundScheduler);
+    }
+
+    /// <summary>
+    /// #1485: test helper preserved for source compatibility. Routes through the production
+    /// <see cref="PublishModal"/> ingress so tests exercise the real path.
+    /// </summary>
+    internal void PublishModalForTest(AgentChatModal modal) => this.PublishModal(modal);
+
     public void ResetSession(AgentChatSession nextSession, bool interruptCurrentResponse = true)
     {
         ArgumentNullException.ThrowIfNull(nextSession);
 
         if (interruptCurrentResponse)
         {
-            this.Interrupt();
+            this.InterruptCore();
         }
 
         this.queueManager.Enqueue(
@@ -1328,6 +1497,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         }
 
         this.agentSessionId = agentSessionId;
+        this.PublishInformation();
 
         this.AgentSessionIdChanged?.Invoke(this, agentSessionId);
     }
@@ -1513,18 +1683,32 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             return;
         }
 
+        var failures = new List<Exception>();
+        this.commonInputQueues.Dispose();
+
         if (this.modelClient is not null)
         {
             this.modelClient.ModelChanged -= this.OnModelChanged;
         }
 
-        await this.cts.CancelAsync();
+        try
+        {
+            await this.cts.CancelAsync();
+        }
+        catch (Exception error)
+        {
+            failures.Add(error);
+        }
         try
         {
             await this.processTask;
         }
         catch (OperationCanceledException)
         {
+        }
+        catch (Exception error)
+        {
+            failures.Add(error);
         }
 
         this.cts.Dispose();
@@ -1537,7 +1721,14 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
         foreach (var resource in resourcesToDispose)
         {
-            await resource.DisposeAsync();
+            try
+            {
+                await resource.DisposeAsync();
+            }
+            catch (Exception error)
+            {
+                failures.Add(error);
+            }
         }
 
         List<AgentChat> childChats;
@@ -1549,12 +1740,27 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
         foreach (var childChat in childChats)
         {
-            await childChat.DisposeAsync();
+            try
+            {
+                await childChat.DisposeAsync();
+            }
+            catch (Exception error)
+            {
+                failures.Add(error);
+            }
+        }
+
+        if (failures.Count != 0)
+        {
+            throw new AggregateException("Agent chat resource cleanup failed.", failures);
         }
     }
 
     private void OnModelChanged(object? sender, EventArgs eventArgs)
-        => this.ModelChanged?.Invoke(this, EventArgs.Empty);
+    {
+        this.PublishInformation();
+        this.ModelChanged?.Invoke(this, EventArgs.Empty);
+    }
 
     // Drains a conflator while suppressing coalesce faults so a secondary failure during teardown
     // cannot mask the cancellation or provider error already being handled.
@@ -1882,6 +2088,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         this.queueManager.QueueStateChanged += OnQueueStateChanged;
 
         List<ChatMessage> chatMessagesToSubmit = new List<ChatMessage>();
+        List<AgentInputTurnCompletion> turnCompletions = new List<AgentInputTurnCompletion>();
 
         try
         {
@@ -1889,6 +2096,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             while (!cancellationToken.IsCancellationRequested)
             {
                 chatMessagesToSubmit.Clear();
+                turnCompletions.Clear();
                 while (chatMessagesToSubmit.Count == 0)
                 {
                     while(this.queueManager.TryDequeueNextImmediateOrQueued(
@@ -1900,6 +2108,10 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                             currentSession = this.GetSession();
                         }
                         chatMessagesToSubmit.AddRange(agentInputItem.Messages ?? Array.Empty<ChatMessage>());
+                        if (agentInputItem.TurnCompletion is { } turnCompletion)
+                        {
+                            turnCompletions.Add(turnCompletion);
+                        }
                     }
 
                     if (chatMessagesToSubmit.Count == 0)
@@ -1910,27 +2122,30 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
                 this.AppendUserMessagesToHistory(chatMessagesToSubmit);
 
-                AgentChatRunningItem? currentPartialTextResponseItem = this.CreateRunningItem([
-                    new AgentChatHistoryItem
-                    {
-                        Role = ChatRole.Assistant,
-                        Timestamp = this.timeProvider.GetUtcNow(),
-                    }]);
-
-                // A fresh per-run cancellation source (linked to the loop token) is what Interrupt()
-                // cancels, so a Ctrl+Break interrupts only the current run while the agent keeps
-                // accepting new input afterwards.
+                // A fresh per-run cancellation source (linked to the loop token) is what InterruptAsync()
+                // cancels. Publish it before creating the running item because creating that item
+                // synchronously notifies observers; an interrupt from that notification must not be
+                // lost before the provider read starts.
                 var runCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 lock (this.processingStateLock)
                 {
                     this.activeRunCancellation = runCancellation;
                 }
 
+                AgentChatRunningItem? currentPartialTextResponseItem = null;
                 IAsyncEnumerator<AgentResponseUpdate>? providerEnumerator = null;
                 Task<bool>? pendingMoveNext = null;
+                Task<bool>? abandonedMoveNext = null;
                 PartialResponseConflator? partialResponses = null;
                 try
                 {
+                    currentPartialTextResponseItem = this.CreateRunningItem([
+                        new AgentChatHistoryItem
+                        {
+                            Role = ChatRole.Assistant,
+                            Timestamp = this.timeProvider.GetUtcNow(),
+                        }]);
+
                     partialResponses = new PartialResponseConflator(
                         this,
                         currentPartialTextResponseItem
@@ -1955,6 +2170,12 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                         pendingMoveNext = providerEnumerator.MoveNextAsync().AsTask();
                         if (await WasCanceledBeforeCompletingAsync(pendingMoveNext, runCancellation.Token))
                         {
+                            abandonedMoveNext = pendingMoveNext;
+                            pendingMoveNext = null;
+                            foreach (var turnCompletion in turnCompletions)
+                            {
+                                turnCompletion.MarkProviderReadAbandoned();
+                            }
                             throw new OperationCanceledException(runCancellation.Token);
                         }
 
@@ -2035,14 +2256,32 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                     // Clean up the provider enumerator and run CTS in the background so a provider stuck
                     // on a canceled read cannot block the agent. The in-flight read is observed before
                     // disposing to honor the async-enumerator contract.
-                    _ = CleanUpRunAsync(providerEnumerator, pendingMoveNext, runCancellation);
+                    var providerCleanup = CleanUpRunAsync(
+                        providerEnumerator,
+                        abandonedMoveNext,
+                        runCancellation);
 
                     lock (this.steeringLock)
                     {
                         this.activeConflator = null;
                     }
 
-                    this.CompleteRunningItem(currentPartialTextResponseItem);
+                    foreach (var turnCompletion in turnCompletions)
+                    {
+                        // Claim the terminal ordering before publishing RunningItems removal. The
+                        // settlement is completed below only after history has been projected.
+                        turnCompletion.ClaimTerminal();
+                    }
+
+                    if (currentPartialTextResponseItem is not null)
+                    {
+                        this.CompleteRunningItem(currentPartialTextResponseItem);
+                    }
+
+                    foreach (var turnCompletion in turnCompletions)
+                    {
+                        turnCompletion.CompleteAfter(providerCleanup);
+                    }
                 }
             }
         }
@@ -2163,49 +2402,88 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     /// Cleans up a run's provider enumerator and cancellation source in the background. The in-flight
     /// read (if any) is awaited first so the enumerator is never disposed while a <c>MoveNextAsync</c>
     /// is still running; doing this in the background means a provider stuck on a canceled read cannot
-    /// block the agent loop or an interrupt.
+    /// block the agent loop or an interrupt. If both the read and disposal fail, the read remains the
+    /// primary exception and the disposal failure is attached under
+    /// <see cref="SecondaryProviderCleanupExceptionDataKey"/>.
     /// </summary>
-    private static async Task CleanUpRunAsync(
+    internal static async Task CleanUpRunAsync(
         IAsyncEnumerator<AgentResponseUpdate>? providerEnumerator,
         Task<bool>? pendingMoveNext,
         CancellationTokenSource runCancellation)
     {
-        if (pendingMoveNext is not null)
-        {
-            try
-            {
-                await pendingMoveNext.ConfigureAwait(false);
-            }
-            catch
-            {
-                // The abandoned read was canceled or failed; nothing to surface from cleanup.
-            }
-        }
-
-        if (providerEnumerator is not null)
-        {
-            await DisposeProviderEnumeratorAsync(providerEnumerator).ConfigureAwait(false);
-        }
-
-        runCancellation.Dispose();
-    }
-
-    private static async Task DisposeProviderEnumeratorAsync(
-        IAsyncEnumerator<AgentResponseUpdate> providerEnumerator)
-    {
+        Exception? providerReadException = null;
+        Exception? providerDisposalException = null;
         try
         {
-            await providerEnumerator.DisposeAsync();
+            if (pendingMoveNext is not null)
+            {
+                await ((Task)pendingMoveNext).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+                if (pendingMoveNext.IsFaulted)
+                {
+                    providerReadException = UnwrapTaskException(pendingMoveNext);
+                }
+            }
+
+            if (providerEnumerator is not null)
+            {
+                providerDisposalException =
+                    await DisposeProviderEnumeratorAsync(providerEnumerator).ConfigureAwait(false);
+            }
         }
-        catch (NotSupportedException)
+        finally
         {
+            runCancellation.Dispose();
         }
-        catch (OperationCanceledException)
+
+        if (providerReadException is not null)
         {
+            if (providerDisposalException is not null)
+            {
+                providerReadException.Data[SecondaryProviderCleanupExceptionDataKey] =
+                    providerDisposalException;
+            }
+
+            ExceptionDispatchInfo.Capture(providerReadException).Throw();
+        }
+
+        if (providerDisposalException is not null)
+        {
+            ExceptionDispatchInfo.Capture(providerDisposalException).Throw();
         }
     }
 
-    private void AccumulateUsage(AgentResponseUpdate update)
+    private static async Task<Exception?> DisposeProviderEnumeratorAsync(
+        IAsyncEnumerator<AgentResponseUpdate> providerEnumerator)
+    {
+        var disposalTask = DisposeProviderEnumeratorCoreAsync(providerEnumerator);
+        await disposalTask.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        if (disposalTask.IsCanceled || disposalTask.IsCompletedSuccessfully)
+        {
+            return null;
+        }
+
+        var exception = UnwrapTaskException(disposalTask);
+        return exception is NotSupportedException or OperationCanceledException
+            ? null
+            : exception;
+    }
+
+    private static async Task DisposeProviderEnumeratorCoreAsync(
+        IAsyncEnumerator<AgentResponseUpdate> providerEnumerator)
+    {
+        await providerEnumerator.DisposeAsync();
+    }
+
+    private static Exception UnwrapTaskException(Task task)
+    {
+        var aggregate = task.Exception
+            ?? throw new InvalidOperationException("A faulted task did not expose its exception.");
+        return aggregate.InnerExceptions.Count == 1
+            ? aggregate.InnerException!
+            : aggregate;
+    }
+
+    internal void AccumulateUsage(AgentResponseUpdate update)
     {
         var inputTokenCountToAdd = 0L;
         var outputTokenCountToAdd = 0L;
@@ -2307,8 +2585,76 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             || this.TotalReasoningTokenCount != previousReasoningTokenCount
             || this.TotalSessionCostMicroUsd != previousCostMicroUsd)
         {
+            var candidate = new Usage
+            {
+                TotalInputTokenCount = this.TotalInputTokenCount,
+                TotalOutputTokenCount = this.TotalOutputTokenCount,
+                TotalCacheReadTokenCount = this.TotalCacheReadTokenCount,
+                TotalCacheWriteTokenCount = this.TotalCacheWriteTokenCount,
+                TotalReasoningTokenCount = this.TotalReasoningTokenCount,
+                TotalSessionCostUsd = this.TotalSessionCostUsd,
+            };
+            // #1485: publisher validation must gate publication. Invalid candidates (negative
+            // token counts, NaN/negative cost) never reach IAgentChat.Usage or UsageChanged.
+            if (!UsagePublisher.TryValidate(candidate, out _))
+            {
+                this.TotalInputTokenCount = previousInputTokenCount;
+                this.TotalOutputTokenCount = previousOutputTokenCount;
+                this.TotalCacheReadTokenCount = previousCacheReadTokenCount;
+                this.TotalCacheWriteTokenCount = previousCacheWriteTokenCount;
+                this.TotalReasoningTokenCount = previousReasoningTokenCount;
+                this.TotalSessionCostMicroUsd = previousCostMicroUsd;
+                return;
+            }
+            this.usage = candidate;
             this.UsageChanged?.Invoke(this, EventArgs.Empty);
         }
+    }
+
+    internal void PublishInformation()
+    {
+        if (this.agentDefinition is null)
+        {
+            return;
+        }
+
+        // #1485: guarantee every required-string field is non-blank so publisher validation never
+        // silently drops a publication. Cascading fallback: DisplayName -> Name -> AgentId ->
+        // agentSessionId -> "agent".
+        var fallback = string.IsNullOrWhiteSpace(this.AgentId)
+            ? (string.IsNullOrWhiteSpace(this.agentSessionId) ? "agent" : this.agentSessionId)
+            : this.AgentId;
+        var name = string.IsNullOrWhiteSpace(this.Name) ? fallback : this.Name;
+        var displayName = string.IsNullOrWhiteSpace(this.DisplayName) ? name : this.DisplayName;
+        var description = AgentInformationPublisher.EnsureNonBlankDescription(
+            this.Description,
+            displayName,
+            fallback);
+
+        var candidate = new AgentInformation
+        {
+            AgentSessionId = string.IsNullOrWhiteSpace(this.agentSessionId) ? fallback : this.agentSessionId,
+            AgentId = string.IsNullOrWhiteSpace(this.AgentId) ? fallback : this.AgentId,
+            Name = name,
+            DisplayName = displayName,
+            Description = description,
+            AcceptsUserInput = this.acceptsUserInput,
+            CurrentModelId = string.IsNullOrWhiteSpace(this.CurrentModelId) ? null : this.CurrentModelId,
+            AgentDefinition = this.agentDefinition,
+        };
+        this.TryPublishInformation(candidate);
+    }
+
+    internal bool TryPublishInformation(AgentInformation candidate)
+    {
+        if (!AgentInformationPublisher.TryValidate(candidate, out _))
+        {
+            return false;
+        }
+
+        this.information = candidate;
+        this.InformationChanged?.Invoke(this, EventArgs.Empty);
+        return true;
     }
 
     /// <summary>
@@ -2539,7 +2885,10 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         }
 
         var toolsetFactory = services?.ToolsetFactory ?? ToolsetFactory.CreateDefaultToolsetFactory();
-        var resolvedServices = services ?? new AgentServices();
+        var resolvedServices = (services ?? new AgentServices()) with
+        {
+            ExecutionTrustContext = this.request.ExecutionTrustContext,
+        };
         var providerTasks = customTools.Select(async tool =>
         {
             var provider = await toolsetFactory.CreateToolsetAsync(tool, resolvedServices);
@@ -2562,7 +2911,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         // "gathering credentials"/"waiting for sign-in" running item without the Llm.Core.Mcp layer
         // needing any AgentChat reference. Chaining preserves any reporter a host already supplied.
         var hostReporter = services?.McpCredentialStatusReporter;
-        var mcpServices = (services ?? new AgentServices()) with
+        var mcpServices = resolvedServices with
         {
             McpCredentialStatusReporter = (server, status) =>
             {
@@ -2597,7 +2946,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 Core.Transport.ExecutorTargetResolver.ForTool(tool),
                 mcpServices,
                 boundExecutor,
-                executorRouter);
+                executorRouter,
+                this.request.ExecutionTrustContext);
             this.RegisterOwnedResource(provider);
             return new RuntimeContextProviderRegistration(
                 tool,

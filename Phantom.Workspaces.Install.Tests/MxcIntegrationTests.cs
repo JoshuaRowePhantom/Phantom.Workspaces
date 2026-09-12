@@ -86,10 +86,10 @@ public sealed class MxcNativeUnitTests
 public sealed class MxcSdkVersionTests
 {
     [Fact]
-    public void MxcSdkVersion_ManagedAndNativeUnits_Match()
+    public async Task MxcSdkVersion_ManagedAndNativeUnits_Match()
     {
         var nativeLibrary = MxcRepositoryTestSupport.FindBuiltMxcFile("mxc_ffi.dll");
-        var result = MxcRepositoryTestSupport.InvokePowerShell(
+        var result = await MxcRepositoryTestSupport.InvokePowerShellAsync(
             "packaging", "validate", "Assert-MxcSdkVersion.ps1",
             "-NativeLibraryPath", nativeLibrary);
 
@@ -98,10 +98,10 @@ public sealed class MxcSdkVersionTests
     }
 
     [Fact]
-    public void MxcSdkVersion_MissingManagedAssembly_Fails()
+    public async Task MxcSdkVersion_MissingManagedAssembly_Fails()
     {
         using var output = new MxcRepositoryTestSupport.TestDirectory();
-        var result = MxcRepositoryTestSupport.InvokePowerShell(
+        var result = await MxcRepositoryTestSupport.InvokePowerShellAsync(
             "packaging", "validate", "Assert-MxcSdkVersion.ps1",
             "-NativeLibraryPath", MxcRepositoryTestSupport.FindBuiltMxcFile("mxc_ffi.dll"),
             "-ManagedOutputPath", output.Path);
@@ -111,10 +111,10 @@ public sealed class MxcSdkVersionTests
     }
 
     [Fact]
-    public void MxcSdkVersion_MissingNativeLibrary_Fails()
+    public async Task MxcSdkVersion_MissingNativeLibrary_Fails()
     {
         using var output = new MxcRepositoryTestSupport.TestDirectory();
-        var result = MxcRepositoryTestSupport.InvokePowerShell(
+        var result = await MxcRepositoryTestSupport.InvokePowerShellAsync(
             "packaging", "validate", "Assert-MxcSdkVersion.ps1",
             "-NativeLibraryPath", Path.Combine(output.Path, "missing.dll"));
 
@@ -123,13 +123,13 @@ public sealed class MxcSdkVersionTests
     }
 
     [Fact]
-    public void MxcSdkVersion_ManagedAssemblyVersionMismatch_Fails()
+    public async Task MxcSdkVersion_ManagedAssemblyVersionMismatch_Fails()
     {
         using var output = new MxcRepositoryTestSupport.TestDirectory();
         File.Copy(
             typeof(MxcSdkVersionTests).Assembly.Location,
             Path.Combine(output.Path, "Microsoft.Mxc.Sdk.dll"));
-        var result = MxcRepositoryTestSupport.InvokePowerShell(
+        var result = await MxcRepositoryTestSupport.InvokePowerShellAsync(
             "packaging", "validate", "Assert-MxcSdkVersion.ps1",
             "-NativeLibraryPath", MxcRepositoryTestSupport.FindBuiltMxcFile("mxc_ffi.dll"),
             "-ManagedOutputPath", output.Path);
@@ -141,11 +141,15 @@ public sealed class MxcSdkVersionTests
     [Theory]
     [InlineData("", "reported an empty version")]
     [InlineData("99.0.0", "does not match managed SDK version")]
-    public void MxcSdkVersion_InvalidNativeVersion_Fails(string nativeVersion, string expectedError)
+    public async Task MxcSdkVersion_InvalidNativeVersion_Fails(
+        string nativeVersion,
+        string expectedError)
     {
         using var output = new MxcRepositoryTestSupport.TestDirectory();
-        var nativeLibrary = MxcRepositoryTestSupport.BuildNativeVersionLibrary(output.Path, nativeVersion);
-        var result = MxcRepositoryTestSupport.InvokePowerShell(
+        var nativeLibrary = await MxcRepositoryTestSupport.BuildNativeVersionLibraryAsync(
+            output.Path,
+            nativeVersion);
+        var result = await MxcRepositoryTestSupport.InvokePowerShellAsync(
             "packaging", "validate", "Assert-MxcSdkVersion.ps1",
             "-NativeLibraryPath", nativeLibrary);
 
@@ -158,38 +162,351 @@ public sealed class MxcSdkVersionTests
 public sealed class MxcRuntimePayloadTests
 {
     [Fact]
-    public async Task MxcRuntimePayload_RequiredNativeUnit_IsPresent()
+    public void MxcRuntimePayload_PublishIsolatesBuildOutputsAndDisablesPersistentServers()
     {
-        using var payload = new MxcRepositoryTestSupport.TestDirectory();
-        var publish = await MxcRepositoryTestSupport.InvokeAsync(
-            "dotnet",
-            "publish",
-            Path.Combine("Phantom.Workspaces", "Phantom.Workspaces.csproj"),
-            "--nologo",
-            "/nodeReuse:false",
-            "-r",
-            "win-x64",
-            "-p:PublishReadyToRun=false",
-            "-o",
-            payload.Path);
-        Assert.True(
-            publish.ExitCode == 0,
-            $"Application publish failed.\nSTDOUT:\n{publish.StandardOutput}\nSTDERR:\n{publish.StandardError}");
+        var arguments = MxcRepositoryTestSupport.CreatePublishArguments(
+            "payload",
+            "isolated-artifacts");
 
-        var result = MxcRepositoryTestSupport.InvokePowerShell(
-            "packaging", "validate", "Assert-MxcRuntimePayload.ps1",
-            "-PayloadDirectory", payload.Path,
-            "-RuntimeIdentifier", "win-x64");
-
-        Assert.True(result.ExitCode == 0, result.StandardError);
-        Assert.Contains("runtime payload validation passed", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("--disable-build-servers", arguments);
+        Assert.Contains("-m:1", arguments);
+        Assert.Contains("/nodeReuse:false", arguments);
+        Assert.Contains("-p:UseSharedCompilation=false", arguments);
+        Assert.Contains("-p:UseArtifactsOutput=true", arguments);
+        Assert.Contains("-p:ArtifactsPath=isolated-artifacts", arguments);
+        Assert.Contains("-p:PublishCopilotRuntime=false", arguments);
+        Assert.Contains("-p:CopilotSkipCliDownload=true", arguments);
+        Assert.Contains("-p:SelfContained=false", arguments);
+        Assert.Contains("-p:PublishSingleFile=false", arguments);
     }
 
     [Fact]
-    public void MxcRuntimePayload_UnsupportedRid_Fails()
+    public async Task MxcRuntimePayload_RequiredNativeUnit_IsPresent()
+    {
+        var processObserver = new RecordingProcessObserver();
+        MxcRepositoryTestSupport.ProcessResult? publish = null;
+        MxcRepositoryTestSupport.ProcessResult? validation = null;
+        var resourcesReleasedBeforeCleanup = true;
+        void ObserveResourcesReleased()
+        {
+            resourcesReleasedBeforeCleanup &=
+                publish?.ActiveJobProcessesAfterCleanup == 0
+                && validation?.ActiveJobProcessesAfterCleanup == 0
+                && ReleasedCount(processObserver, ProcessRunnerWindowsResource.Process) == 2
+                && ReleasedCount(processObserver, ProcessRunnerWindowsResource.Thread) == 2
+                && ReleasedCount(processObserver, ProcessRunnerWindowsResource.Job) == 2
+                && ReleasedCount(
+                    processObserver,
+                    ProcessRunnerWindowsResource.StandardOutputPipe) == 4
+                && ReleasedCount(
+                    processObserver,
+                    ProcessRunnerWindowsResource.StandardErrorPipe) == 4;
+        }
+
+        await using var payload = new MxcRepositoryTestSupport.TestDirectory(
+            ObserveResourcesReleased,
+            message => Console.WriteLine($"MXC payload {message}"));
+        await using var buildArtifacts =
+            new MxcRepositoryTestSupport.TestDirectory(
+                ObserveResourcesReleased,
+                message => Console.WriteLine($"MXC build artifacts {message}"));
+        using var sharedOutputLock = MxcRepositoryTestSupport.LockSharedRuntimeConfig();
+        publish = await MxcRepositoryTestSupport.InvokeAsync(
+            "dotnet",
+            new MxcRepositoryTestSupport.InvocationOptions
+            {
+                Timeout = TimeSpan.FromMinutes(10),
+                Observer = processObserver,
+            },
+            MxcRepositoryTestSupport.CreatePublishArguments(
+                payload.Path,
+                buildArtifacts.Path));
+        Assert.True(
+            publish.ExitCode == 0,
+            $"Application publish failed.\nSTDOUT:\n{publish.StandardOutput}\nSTDERR:\n{publish.StandardError}");
+        Assert.True(publish.DirectProcessInJob);
+        Assert.Equal(0U, publish.ActiveJobProcessesAfterCleanup);
+
+        validation = await MxcRepositoryTestSupport.InvokePowerShellAsync(
+            Path.Combine(
+                MxcRepositoryTestSupport.Root.FullName,
+                "packaging",
+                "validate",
+                "Assert-MxcRuntimePayload.ps1"),
+            new MxcRepositoryTestSupport.InvocationOptions
+            {
+                Timeout = TimeSpan.FromSeconds(30),
+                Observer = processObserver,
+            },
+            "-PayloadDirectory", payload.Path,
+            "-RuntimeIdentifier", "win-x64");
+
+        Assert.True(validation.ExitCode == 0, validation.StandardError);
+        Assert.Contains(
+            "runtime payload validation passed",
+            validation.StandardOutput,
+            StringComparison.Ordinal);
+        Assert.False(File.Exists(Path.Combine(
+            payload.Path,
+            "runtimes",
+            "win-x64",
+            "native",
+            "copilot.exe")));
+        Assert.False(File.Exists(Path.Combine(
+            payload.Path,
+            "runtimes",
+            "win-x64",
+            "native",
+            "phantom-copilot-wrapper.exe")));
+
+        var runtimeConfigs = Directory.GetFiles(
+            buildArtifacts.Path,
+            "*.runtimeconfig.json",
+            SearchOption.AllDirectories);
+        Assert.Contains(
+            runtimeConfigs,
+            path => Path.GetFileName(path).Equals(
+                "Phantom.Workspaces.Containers.runtimeconfig.json",
+                StringComparison.OrdinalIgnoreCase));
+        Assert.All(runtimeConfigs, MxcRepositoryTestSupport.AssertExclusivelyOpenable);
+        Assert.All(
+            Directory.GetFiles(payload.Path, "*.runtimeconfig.json", SearchOption.TopDirectoryOnly),
+            MxcRepositoryTestSupport.AssertExclusivelyOpenable);
+
+        await buildArtifacts.DisposeAsync();
+        await payload.DisposeAsync();
+        Assert.True(
+            resourcesReleasedBeforeCleanup,
+            "Contained process, job, thread, or output-pipe resources remained at cleanup.");
+    }
+
+    [Fact]
+    public async Task TestDirectory_CleanupProofWithOpenFile_RefusesPartialDeletion()
+    {
+        string? lockedPath = null;
+        var directory = new MxcRepositoryTestSupport.TestDirectory(
+            beforeCleanup: () =>
+                MxcRepositoryTestSupport.AssertExclusivelyOpenable(
+                    Assert.IsType<string>(lockedPath)));
+        var firstPath = Path.Combine(directory.Path, "first.txt");
+        lockedPath = Path.Combine(directory.Path, "locked.txt");
+        File.WriteAllText(firstPath, "first");
+        File.WriteAllText(lockedPath, "locked");
+
+        using (File.Open(lockedPath, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            await Assert.ThrowsAsync<IOException>(() => directory.DisposeAsync().AsTask());
+            Assert.True(File.Exists(firstPath));
+            Assert.True(File.Exists(lockedPath));
+        }
+
+        await directory.DisposeAsync();
+        Assert.False(Directory.Exists(directory.Path));
+    }
+
+    [Fact]
+    public async Task TestDirectory_CleanupProof_PrecedesEnumerationAndDeletion()
+    {
+        var proofRan = false;
+        var cleanupStarted = false;
+        var directory = new MxcRepositoryTestSupport.TestDirectory(
+            beforeCleanup: () =>
+            {
+                Assert.False(cleanupStarted);
+                proofRan = true;
+            },
+            cleanupProgress: _ =>
+            {
+                Assert.True(proofRan);
+                cleanupStarted = true;
+            });
+        File.WriteAllText(Path.Combine(directory.Path, "content.txt"), "content");
+
+        await directory.DisposeAsync();
+
+        Assert.True(cleanupStarted);
+        Assert.False(Directory.Exists(directory.Path));
+    }
+
+    [Fact]
+    public async Task InvokePowerShellAsync_StalledValidator_TimesOutAndCleansProcessTreeAndArtifacts()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var releaseName = $"Local\\MxcValidatorRelease-{Guid.NewGuid():N}";
+        var childReadyName = $"Local\\MxcValidatorChildReady-{Guid.NewGuid():N}";
+        using var release = new EventWaitHandle(false, EventResetMode.ManualReset, releaseName);
+        using var childReady = new EventWaitHandle(false, EventResetMode.ManualReset, childReadyName);
+        var time = new ManualTimeoutTimeProvider();
+        var observer = new RecordingProcessObserver();
+        var validatorReady = new TaskCompletionSource<string>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        string payloadPath;
+        string artifactsPath;
+        int validatorProcessId;
+        int childProcessId;
+
+        try
+        {
+            using var fixture = new MxcRepositoryTestSupport.TestDirectory();
+            using var payload = new MxcRepositoryTestSupport.TestDirectory();
+            using var artifacts = new MxcRepositoryTestSupport.TestDirectory();
+            payloadPath = payload.Path;
+            artifactsPath = artifacts.Path;
+            var scriptPath = Path.Combine(fixture.Path, "Assert-StalledMxcPayload.ps1");
+            File.WriteAllText(
+                scriptPath,
+                """
+                param(
+                    [Parameter(Mandatory)][string] $PayloadDirectory,
+                    [Parameter(Mandatory)][string] $ArtifactsDirectory,
+                    [Parameter(Mandatory)][string] $ProbePath,
+                    [Parameter(Mandatory)][string] $ChildReadyEvent,
+                    [Parameter(Mandatory)][string] $ReleaseEvent
+                )
+
+                Set-Content -LiteralPath (Join-Path $PayloadDirectory 'validator.tmp') -Value 'payload'
+                Set-Content -LiteralPath (Join-Path $ArtifactsDirectory 'validator.tmp') -Value 'artifacts'
+                $childInfo = [Diagnostics.ProcessStartInfo]::new()
+                $childInfo.FileName = $ProbePath
+                $childInfo.UseShellExecute = $false
+                $childInfo.CreateNoWindow = $true
+                $childInfo.ArgumentList.Add('--child-wait-events')
+                $childInfo.ArgumentList.Add($ChildReadyEvent)
+                $childInfo.ArgumentList.Add($ReleaseEvent)
+                $child = [Diagnostics.Process]::Start($childInfo)
+                try {
+                    $childReady = [Threading.EventWaitHandle]::OpenExisting($ChildReadyEvent)
+                    try { $childReady.WaitOne() | Out-Null } finally { $childReady.Dispose() }
+                    [Console]::Error.WriteLine('validator-stderr-before-stall')
+                    [Console]::Out.WriteLine("VALIDATOR_READY:${PID}:$($child.Id)")
+                    [Console]::Out.Flush()
+                    $release = [Threading.EventWaitHandle]::OpenExisting($ReleaseEvent)
+                    try { $release.WaitOne() | Out-Null } finally { $release.Dispose() }
+                }
+                finally {
+                    $child.Dispose()
+                }
+                """);
+
+            var operation = MxcRepositoryTestSupport.InvokePowerShellAsync(
+                scriptPath,
+                new MxcRepositoryTestSupport.InvocationOptions
+                {
+                    Timeout = TimeSpan.FromDays(1),
+                    TimeProvider = time,
+                    Observer = observer,
+                    StandardOutputObserver = line =>
+                    {
+                        if (line.StartsWith("VALIDATOR_READY:", StringComparison.Ordinal))
+                            validatorReady.TrySetResult(line);
+                    },
+                },
+                "-PayloadDirectory", payload.Path,
+                "-ArtifactsDirectory", artifacts.Path,
+                "-ProbePath", Path.Combine(
+                    AppContext.BaseDirectory,
+                    "Phantom.Workspaces.Test.WindowsProcessProbe.exe"),
+                "-ChildReadyEvent", childReadyName,
+                "-ReleaseEvent", releaseName);
+
+            await time.TimerArmed;
+            var readiness = await Task.WhenAny(validatorReady.Task, operation);
+            if (readiness == operation)
+            {
+                var prematureResult = await operation;
+                Assert.Fail(
+                    "The stalled validator exited before its readiness handshake."
+                    + $"\nSTDOUT:\n{prematureResult.StandardOutput}"
+                    + $"\nSTDERR:\n{prematureResult.StandardError}");
+            }
+            var readyLine = await validatorReady.Task;
+            var processIds = readyLine.Split(':');
+            validatorProcessId = int.Parse(
+                processIds[1],
+                System.Globalization.CultureInfo.InvariantCulture);
+            childProcessId = int.Parse(
+                processIds[2],
+                System.Globalization.CultureInfo.InvariantCulture);
+            Assert.True(File.Exists(Path.Combine(payload.Path, "validator.tmp")));
+            Assert.True(File.Exists(Path.Combine(artifacts.Path, "validator.tmp")));
+            time.Expire();
+
+            var exception = await Assert.ThrowsAsync<TimeoutException>(() => operation);
+            Assert.Contains("validator-stderr-before-stall", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("VALIDATOR_READY:", exception.Message, StringComparison.Ordinal);
+            Assert.False(MxcRepositoryTestSupport.IsProcessRunning(validatorProcessId));
+            Assert.False(MxcRepositoryTestSupport.IsProcessRunning(childProcessId));
+            Assert.Contains(
+                observer.Events,
+                processEvent => processEvent.Stage == ProcessRunnerWindowsStage.AssignJob
+                    && processEvent.Succeeded);
+            AssertReleased(observer, ProcessRunnerWindowsResource.Process, 1);
+            AssertReleased(observer, ProcessRunnerWindowsResource.Thread, 1);
+            AssertReleased(observer, ProcessRunnerWindowsResource.Job, 1);
+            AssertReleased(observer, ProcessRunnerWindowsResource.StandardOutputPipe, 2);
+            AssertReleased(observer, ProcessRunnerWindowsResource.StandardErrorPipe, 2);
+        }
+        finally
+        {
+            release.Set();
+        }
+
+        Assert.False(Directory.Exists(payloadPath));
+        Assert.False(Directory.Exists(artifactsPath));
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public async Task InvokeAsync_ExitedParentWithInheritedPipeWriter_CompletesWithDiagnostics(
+        int _)
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var descendantReadyName = $"Local\\MxcInvokeDescendantReady-{Guid.NewGuid():N}";
+        var descendantReleaseName = $"Local\\MxcInvokeDescendantRelease-{Guid.NewGuid():N}";
+        using var descendantReady = new EventWaitHandle(
+            false,
+            EventResetMode.ManualReset,
+            descendantReadyName);
+        using var descendantRelease = new EventWaitHandle(
+            false,
+            EventResetMode.ManualReset,
+            descendantReleaseName);
+        var probe = Path.Combine(
+            AppContext.BaseDirectory,
+            "Phantom.Workspaces.Test.WindowsProcessProbe.exe");
+
+        var result = await MxcRepositoryTestSupport.InvokeAsync(
+            probe,
+            "--exiting-parent",
+            descendantReadyName,
+            "-",
+            descendantReleaseName);
+
+        Assert.Equal(23, result.ExitCode);
+        Assert.Contains("parent-stdout", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("parent-stderr", result.StandardError, StringComparison.Ordinal);
+        var descendantLine = Assert.Single(
+            result.StandardOutput.Split(
+                Environment.NewLine,
+                StringSplitOptions.RemoveEmptyEntries),
+            line => line.StartsWith("EXITING_PARENT_DESCENDANT:", StringComparison.Ordinal));
+        var descendantId = int.Parse(
+            descendantLine["EXITING_PARENT_DESCENDANT:".Length..],
+            System.Globalization.CultureInfo.InvariantCulture);
+        Assert.False(MxcRepositoryTestSupport.IsProcessRunning(descendantId));
+    }
+
+    [Fact]
+    public async Task MxcRuntimePayload_UnsupportedRid_Fails()
     {
         using var payload = MxcRepositoryTestSupport.CreateMxcPayload();
-        var result = MxcRepositoryTestSupport.InvokePowerShell(
+        var result = await MxcRepositoryTestSupport.InvokePowerShellAsync(
             "packaging", "validate", "Assert-MxcRuntimePayload.ps1",
             "-PayloadDirectory", payload.Path,
             "-RuntimeIdentifier", "win-arm64");
@@ -202,12 +519,12 @@ public sealed class MxcRuntimePayloadTests
     [InlineData("mxc_ffi.dll")]
     [InlineData("plm.exe")]
     [InlineData("MXC-LICENSE.md")]
-    public void MxcRuntimePayload_MissingRequiredFile_Fails(string fileName)
+    public async Task MxcRuntimePayload_MissingRequiredFile_Fails(string fileName)
     {
         using var payload = MxcRepositoryTestSupport.CreateMxcPayload();
         File.Delete(Path.Combine(payload.Path, "runtimes", "win-x64", "native", fileName));
 
-        var result = MxcRepositoryTestSupport.InvokePowerShell(
+        var result = await MxcRepositoryTestSupport.InvokePowerShellAsync(
             "packaging", "validate", "Assert-MxcRuntimePayload.ps1",
             "-PayloadDirectory", payload.Path,
             "-RuntimeIdentifier", "win-x64");
@@ -218,14 +535,14 @@ public sealed class MxcRuntimePayloadTests
     }
 
     [Fact]
-    public void MxcRuntimePayload_AlteredLicense_Fails()
+    public async Task MxcRuntimePayload_AlteredLicense_Fails()
     {
         using var payload = MxcRepositoryTestSupport.CreateMxcPayload();
         File.AppendAllText(
             Path.Combine(payload.Path, "runtimes", "win-x64", "native", "MXC-LICENSE.md"),
             $"{Environment.NewLine}altered");
 
-        var result = MxcRepositoryTestSupport.InvokePowerShell(
+        var result = await MxcRepositoryTestSupport.InvokePowerShellAsync(
             "packaging", "validate", "Assert-MxcRuntimePayload.ps1",
             "-PayloadDirectory", payload.Path,
             "-RuntimeIdentifier", "win-x64");
@@ -235,14 +552,14 @@ public sealed class MxcRuntimePayloadTests
     }
 
     [Fact]
-    public void MxcRuntimePayload_RequiredLicenseNotice_IsPresent()
+    public async Task MxcRuntimePayload_RequiredLicenseNotice_IsPresent()
     {
         using var payload = MxcRepositoryTestSupport.CreateMxcPayload();
         File.WriteAllText(
             Path.Combine(payload.Path, "runtimes", "win-x64", "native", "mxc.lic"),
             "not a valid MXC redistribution artifact");
 
-        var result = MxcRepositoryTestSupport.InvokePowerShell(
+        var result = await MxcRepositoryTestSupport.InvokePowerShellAsync(
             "packaging", "validate", "Assert-MxcRuntimePayload.ps1",
             "-PayloadDirectory", payload.Path,
             "-RuntimeIdentifier", "win-x64");
@@ -250,16 +567,100 @@ public sealed class MxcRuntimePayloadTests
         Assert.NotEqual(0, result.ExitCode);
         Assert.Contains("Unexpected mxc.lic", result.StandardError, StringComparison.Ordinal);
     }
+
+    private static void AssertReleased(
+        RecordingProcessObserver observer,
+        ProcessRunnerWindowsResource resource,
+        int expectedCount)
+    {
+        var releases = observer.Events.Where(
+            processEvent => processEvent.Stage == ProcessRunnerWindowsStage.ReleaseResource
+                && processEvent.Resource == resource).ToArray();
+        Assert.Equal(expectedCount, releases.Length);
+        Assert.All(releases, processEvent => Assert.True(processEvent.Succeeded));
+    }
+
+    private static int ReleasedCount(
+        RecordingProcessObserver observer,
+        ProcessRunnerWindowsResource resource) =>
+        observer.Events.Count(
+            processEvent => processEvent.Stage == ProcessRunnerWindowsStage.ReleaseResource
+                && processEvent.Resource == resource
+                && processEvent.Succeeded);
+
+    private sealed class RecordingProcessObserver : IProcessRunnerWindowsObserver
+    {
+        private readonly List<ProcessRunnerWindowsEvent> events = [];
+
+        internal IReadOnlyList<ProcessRunnerWindowsEvent> Events
+        {
+            get
+            {
+                lock (events)
+                    return events.ToArray();
+            }
+        }
+
+        public void Observe(ProcessRunnerWindowsEvent processEvent)
+        {
+            lock (events)
+                events.Add(processEvent);
+        }
+    }
+
+    private sealed class ManualTimeoutTimeProvider : TimeProvider
+    {
+        private readonly TaskCompletionSource timerArmed = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        private ManualTimer? timer;
+
+        internal Task TimerArmed => timerArmed.Task;
+
+        public override ITimer CreateTimer(
+            TimerCallback callback,
+            object? state,
+            TimeSpan dueTime,
+            TimeSpan period)
+        {
+            timer = new ManualTimer(callback, state);
+            timerArmed.TrySetResult();
+            return timer;
+        }
+
+        internal void Expire() =>
+            (timer ?? throw new InvalidOperationException("The timeout timer was not armed.")).Fire();
+
+        private sealed class ManualTimer(TimerCallback callback, object? state) : ITimer
+        {
+            private bool disposed;
+
+            public bool Change(TimeSpan dueTime, TimeSpan period) => !disposed;
+
+            internal void Fire()
+            {
+                if (!disposed)
+                    callback(state);
+            }
+
+            public void Dispose() => disposed = true;
+
+            public ValueTask DisposeAsync()
+            {
+                Dispose();
+                return ValueTask.CompletedTask;
+            }
+        }
+    }
 }
 
 [Collection(MxcIntegrationCollection.Name)]
 public sealed class InstallScriptTests
 {
     [Fact]
-    public void Install_Arm64Architecture_ReportsUnsupportedArchitecture()
+    public async Task Install_Arm64Architecture_ReportsUnsupportedArchitecture()
     {
         var script = Path.Combine(MxcRepositoryTestSupport.Root.FullName, "install.ps1");
-        var result = MxcRepositoryTestSupport.Invoke(
+        var result = await MxcRepositoryTestSupport.InvokeAsync(
             "pwsh",
             "-NoProfile",
             "-NonInteractive",
@@ -272,81 +673,302 @@ public sealed class InstallScriptTests
     }
 }
 
+[Collection(MxcIntegrationCollection.Name)]
+public sealed class CopilotWrapperNestedPublishTests
+{
+    [Fact]
+    public void NestedPublish_CommandUsesSingleNonReusableNodeAndDisablesBuildServers()
+    {
+        var arguments = MxcRepositoryTestSupport.CreateCopilotWrapperPublishArguments(
+            "payload",
+            "isolated-artifacts");
+
+        Assert.Contains("--disable-build-servers", arguments);
+        Assert.Contains("-m:1", arguments);
+        Assert.Contains("/nodeReuse:false", arguments);
+        Assert.Contains("-p:UseSharedCompilation=false", arguments);
+    }
+
+    [Fact]
+    public async Task NestedPublish_RidConsistentGraphProducesUniqueCompleteWrapperPayload()
+    {
+        await using var payload = new MxcRepositoryTestSupport.TestDirectory(
+            cleanupProgress: message => Console.WriteLine($"wrapper payload {message}"));
+        await using var buildArtifacts = new MxcRepositoryTestSupport.TestDirectory(
+            cleanupProgress: message => Console.WriteLine($"wrapper build artifacts {message}"));
+        var publish = await MxcRepositoryTestSupport.InvokeAsync(
+            "dotnet",
+            MxcRepositoryTestSupport.CreateCopilotWrapperPublishArguments(
+                payload.Path,
+                buildArtifacts.Path));
+
+        Assert.True(
+            publish.ExitCode == 0,
+            $"Nested wrapper publish failed.\nSTDOUT:\n{publish.StandardOutput}\nSTDERR:\n{publish.StandardError}");
+        Assert.True(publish.DirectProcessInJob);
+        Assert.Equal(0U, publish.ActiveJobProcessesAfterCleanup);
+
+        var containerOutputDirectory = Path.Combine(
+            buildArtifacts.Path,
+            "bin",
+            "Phantom.Workspaces.Containers");
+        var containerRuntimeConfig = Assert.Single(
+            Directory.GetFiles(
+                containerOutputDirectory,
+                "Phantom.Workspaces.Containers.runtimeconfig.json",
+                SearchOption.AllDirectories));
+        Assert.Contains(
+            $"{Path.DirectorySeparatorChar}release_win-x64{Path.DirectorySeparatorChar}",
+            containerRuntimeConfig,
+            StringComparison.OrdinalIgnoreCase);
+
+        var wrapperPublishDirectory = Path.Combine(
+            buildArtifacts.Path,
+            "obj",
+            "Phantom.Workspaces",
+            "release_win-x64",
+            "copilot-wrapper");
+        var wrapperRelativePaths = Directory.GetFiles(
+                wrapperPublishDirectory,
+                "*",
+                SearchOption.AllDirectories)
+            .Select(path => Path.GetRelativePath(wrapperPublishDirectory, path))
+            .ToArray();
+        Assert.Equal(
+            wrapperRelativePaths.Length,
+            wrapperRelativePaths.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+
+        var installedWrapper = Path.Combine(
+            payload.Path,
+            "runtimes",
+            "win-x64",
+            "native",
+            "phantom-copilot-wrapper.exe");
+        Assert.True(new FileInfo(installedWrapper).Length > 0);
+        var smoke = await MxcRepositoryTestSupport.InvokeAsync(installedWrapper);
+        Assert.Equal(64, smoke.ExitCode);
+        Assert.Contains("Invalid wrapper arguments.", smoke.StandardError, StringComparison.Ordinal);
+    }
+}
+
 internal static class MxcRepositoryTestSupport
 {
+    private static readonly TimeSpan LongRunningProcessTimeout = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan ValidatorProcessTimeout = TimeSpan.FromSeconds(30);
+
     internal static DirectoryInfo Root { get; } = FindRepositoryRoot();
 
     internal static string Read(params string[] relativePath)
         => File.ReadAllText(Path.Combine([Root.FullName, .. relativePath]));
 
-    internal static string InvokeGit(params string[] arguments)
-    {
-        var result = Invoke("git", arguments);
-        Assert.True(result.ExitCode == 0, result.StandardError);
-        return result.StandardOutput.Trim();
-    }
+    internal static string[] CreatePublishArguments(string outputPath, string artifactsPath) =>
+    [
+        "publish",
+        Path.Combine("Phantom.Workspaces", "Phantom.Workspaces.csproj"),
+        "--nologo",
+        "--disable-build-servers",
+        "-m:1",
+        "/nodeReuse:false",
+        "-r",
+        "win-x64",
+        "-p:SelfContained=false",
+        "-p:PublishSingleFile=false",
+        "-p:PublishReadyToRun=false",
+        "-p:UseSharedCompilation=false",
+        "-p:PublishCopilotRuntime=false",
+        "-p:CopilotSkipCliDownload=true",
+        "-p:UseArtifactsOutput=true",
+        $"-p:ArtifactsPath={artifactsPath}",
+        "-o",
+        outputPath,
+    ];
 
-    internal static ProcessResult Invoke(string fileName, params string[] arguments)
+    internal static string[] CreateCopilotWrapperPublishArguments(
+        string outputPath,
+        string artifactsPath) =>
+    [
+        "msbuild",
+        "--disable-build-servers",
+        Path.Combine("Phantom.Workspaces", "Phantom.Workspaces.csproj"),
+        "-restore",
+        "-nologo",
+        "-m:1",
+        "-t:PublishCopilotWrapperLoose",
+        "/nodeReuse:false",
+        "-p:Configuration=Release",
+        "-p:RuntimeIdentifier=win-x64",
+        "-p:SelfContained=true",
+        "-p:PublishReadyToRun=false",
+        "-p:UseSharedCompilation=false",
+        "-p:UseArtifactsOutput=true",
+        $"-p:ArtifactsPath={artifactsPath}",
+        $"-p:PublishDir={outputPath}{Path.DirectorySeparatorChar}",
+    ];
+
+    internal static Task<ProcessResult> InvokeAsync(string fileName, params string[] arguments) =>
+        InvokeAsync(
+            fileName,
+            new InvocationOptions { Timeout = LongRunningProcessTimeout },
+            arguments);
+
+    internal static async Task<ProcessResult> InvokeAsync(
+        string fileName,
+        InvocationOptions options,
+        params string[] arguments)
     {
         var startInfo = CreateStartInfo(fileName, arguments);
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException($"Failed to start {fileName}.");
-        var standardOutput = process.StandardOutput.ReadToEnd();
-        var standardError = process.StandardError.ReadToEnd();
-        process.WaitForExit();
-        return new ProcessResult(process.ExitCode, standardOutput, standardError);
-    }
+        if (!string.IsNullOrEmpty(startInfo.Arguments))
+        {
+            throw new InvalidOperationException(
+                "Contained asynchronous commands must resolve to an executable, not a command script.");
+        }
 
-    internal static async Task<ProcessResult> InvokeAsync(string fileName, params string[] arguments)
-    {
-        var startInfo = CreateStartInfo(fileName, arguments);
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException($"Failed to start {fileName}.");
-        var standardOutput = process.StandardOutput.ReadToEndAsync();
-        var standardError = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
+        var result = await ProcessRunner.RunProcessAsync(new RunProcessParameters(
+            Command: startInfo.FileName,
+            Arguments: startInfo.ArgumentList.ToArray(),
+            KillOnClose: KillOnCloseAction.KillTree,
+            WorkingDirectory: startInfo.WorkingDirectory,
+            Timeout: options.Timeout,
+            EnvironmentVariables: new Dictionary<string, string>
+            {
+                ["PATH"] = startInfo.Environment["PATH"] ?? string.Empty,
+            })
+        {
+            WindowsTestOptions = new()
+            {
+                TimeProvider = options.TimeProvider,
+                Observer = options.Observer,
+                StandardOutputObserver = options.StandardOutputObserver,
+            },
+        }, options.CancellationToken);
         return new ProcessResult(
-            process.ExitCode,
-            await standardOutput,
-            await standardError);
+            result.ExitCode,
+            result.StandardOut,
+            result.StandardError,
+            result.DirectProcessInJob,
+            result.ActiveJobProcessesBeforeCleanup,
+            result.ActiveJobProcessesAfterCleanup);
+    }
+
+    internal static void AssertExclusivelyOpenable(string path)
+    {
+        using var stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.None);
+        Assert.True(stream.CanRead, $"Expected build output '{path}' to be exclusively openable.");
+    }
+
+    internal static IDisposable LockSharedRuntimeConfig()
+    {
+        var path = Path.Combine(
+            Root.FullName,
+            "Phantom.Workspaces.Containers",
+            "bin",
+            "Release",
+            "net10.0",
+            "win-x64",
+            "Phantom.Workspaces.Containers.runtimeconfig.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        return new ExclusiveFileLease(path);
+    }
+
+    internal static bool IsProcessRunning(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
     }
 
     private static ProcessStartInfo CreateStartInfo(string fileName, IEnumerable<string> arguments)
     {
-        var startInfo = new ProcessStartInfo(fileName)
+        var path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+        var cargoHome = Environment.GetEnvironmentVariable("CARGO_HOME");
+        if (string.IsNullOrWhiteSpace(cargoHome))
+        {
+            var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (!string.IsNullOrWhiteSpace(userProfile))
+            {
+                cargoHome = Path.Combine(userProfile, ".cargo");
+            }
+        }
+
+        var cargoBin = string.IsNullOrWhiteSpace(cargoHome)
+            ? null
+            : Path.Combine(cargoHome, "bin");
+        if (cargoBin is not null && Directory.Exists(cargoBin))
+        {
+            path = string.IsNullOrEmpty(path)
+                ? cargoBin
+                : $"{cargoBin}{Path.PathSeparator}{path}";
+        }
+
+        var searchDirectories = path.Split(
+            Path.PathSeparator,
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var pathExtensions = OperatingSystem.IsWindows()
+            ? (Environment.GetEnvironmentVariable("PATHEXT") ?? ".COM;.EXE;.BAT;.CMD").Split(
+                ';',
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            : [];
+        var resolved = MxcExecutableResolver.Resolve(
+            fileName,
+            [.. arguments],
+            searchDirectories,
+            pathExtensions,
+            OperatingSystem.IsWindows(),
+            Environment.GetEnvironmentVariable("ComSpec")
+                ?? Path.Combine(Environment.SystemDirectory, "cmd.exe"),
+            File.Exists);
+        var startInfo = new ProcessStartInfo(resolved.FileName)
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             WorkingDirectory = Root.FullName,
         };
-        foreach (var argument in arguments)
+        if (resolved.ArgumentString is not null)
         {
-            startInfo.ArgumentList.Add(argument);
+            startInfo.Arguments = resolved.ArgumentString;
         }
-        var cargoBin = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cargo", "bin");
-        if (Directory.Exists(cargoBin))
+        else
         {
-            startInfo.Environment["PATH"] = $"{cargoBin};{startInfo.Environment["PATH"]}";
+            foreach (var argument in resolved.Arguments)
+            {
+                startInfo.ArgumentList.Add(argument);
+            }
         }
+        startInfo.Environment["PATH"] = path;
         return startInfo;
     }
 
-    internal static ProcessResult InvokePowerShell(params string[] arguments)
+    internal static Task<ProcessResult> InvokePowerShellAsync(params string[] arguments)
     {
         var scriptPath = Path.Combine([Root.FullName, .. arguments.TakeWhile(argument => !argument.StartsWith('-'))]);
         var scriptParts = arguments.TakeWhile(argument => !argument.StartsWith('-')).Count();
-        return Invoke(
+        return InvokePowerShellAsync(
+            scriptPath,
+            new InvocationOptions { Timeout = ValidatorProcessTimeout },
+            [.. arguments.Skip(scriptParts)]);
+    }
+
+    internal static Task<ProcessResult> InvokePowerShellAsync(
+        string scriptPath,
+        InvocationOptions options,
+        params string[] arguments) =>
+        InvokeAsync(
             "pwsh",
+            options,
             [
                 "-NoProfile",
                 "-NonInteractive",
                 "-File",
                 scriptPath,
-                .. arguments.Skip(scriptParts),
+                .. arguments,
             ]);
-    }
 
     internal static string FindBuiltMxcFile(string fileName)
     {
@@ -370,7 +992,9 @@ internal static class MxcRepositoryTestSupport
         return directory;
     }
 
-    internal static string BuildNativeVersionLibrary(string outputDirectory, string version)
+    internal static async Task<string> BuildNativeVersionLibraryAsync(
+        string outputDirectory,
+        string version)
     {
         var sourcePath = Path.Combine(outputDirectory, "version.rs");
         var libraryPath = Path.Combine(outputDirectory, "mxc_version_fixture.dll");
@@ -386,7 +1010,7 @@ internal static class MxcRepositoryTestSupport
                 VERSION.as_ptr().cast()
             }
             """);
-        var result = Invoke(
+        var result = await InvokeAsync(
             "rustc",
             "--crate-type",
             "cdylib",
@@ -399,6 +1023,15 @@ internal static class MxcRepositoryTestSupport
             result.ExitCode == 0,
             $"Failed to build native-version fixture.\nSTDOUT:\n{result.StandardOutput}\nSTDERR:\n{result.StandardError}");
         return libraryPath;
+    }
+
+    internal sealed record InvocationOptions
+    {
+        internal required TimeSpan Timeout { get; init; }
+        internal CancellationToken CancellationToken { get; init; }
+        internal TimeProvider TimeProvider { get; init; } = TimeProvider.System;
+        internal IProcessRunnerWindowsObserver? Observer { get; init; }
+        internal Action<string>? StandardOutputObserver { get; init; }
     }
 
     private static DirectoryInfo FindRepositoryRoot()
@@ -417,12 +1050,48 @@ internal static class MxcRepositoryTestSupport
         throw new DirectoryNotFoundException("Could not locate repository root.");
     }
 
-    internal sealed record ProcessResult(int ExitCode, string StandardOutput, string StandardError);
+    internal sealed record ProcessResult(
+        int ExitCode,
+        string StandardOutput,
+        string StandardError,
+        bool? DirectProcessInJob = null,
+        uint? ActiveJobProcessesBeforeCleanup = null,
+        uint? ActiveJobProcessesAfterCleanup = null);
 
-    internal sealed class TestDirectory : IDisposable
+    private sealed class ExclusiveFileLease : IDisposable
     {
-        internal TestDirectory()
+        private readonly string path;
+        private readonly bool deleteOnDispose;
+        private readonly FileStream stream;
+
+        internal ExclusiveFileLease(string path)
         {
+            this.path = path;
+            deleteOnDispose = !File.Exists(path);
+            stream = File.Open(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        }
+
+        public void Dispose()
+        {
+            stream.Dispose();
+            if (deleteOnDispose)
+                File.Delete(path);
+        }
+    }
+
+    internal sealed class TestDirectory : IDisposable, IAsyncDisposable
+    {
+        private const int MaxCleanupConcurrency = 8;
+        private readonly Action? beforeCleanup;
+        private readonly Action<string>? cleanupProgress;
+        private readonly SemaphoreSlim cleanupLock = new(1, 1);
+
+        internal TestDirectory(
+            Action? beforeCleanup = null,
+            Action<string>? cleanupProgress = null)
+        {
+            this.beforeCleanup = beforeCleanup;
+            this.cleanupProgress = cleanupProgress;
             Path = System.IO.Path.Combine(
                 Root.FullName, "TestResults", $"mxc-integration-{Guid.NewGuid():N}");
             Directory.CreateDirectory(Path);
@@ -430,6 +1099,78 @@ internal static class MxcRepositoryTestSupport
 
         internal string Path { get; }
 
-        public void Dispose() => Directory.Delete(Path, recursive: true);
+        public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
+
+        public ValueTask DisposeAsync() => new(DisposeAsyncCore());
+
+        private async Task DisposeAsyncCore()
+        {
+            await cleanupLock.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                if (!Directory.Exists(Path))
+                    return;
+
+                beforeCleanup?.Invoke();
+                await DeleteDirectoryAsync(
+                    Path,
+                    cleanupProgress,
+                    CancellationToken.None).ConfigureAwait(false);
+            }
+            finally
+            {
+                cleanupLock.Release();
+            }
+        }
+
+        internal static async Task DeleteDirectoryAsync(
+            string path,
+            Action<string>? progress,
+            CancellationToken cancellationToken)
+        {
+            var files = Directory.GetFiles(path, "*", SearchOption.AllDirectories);
+            var directories = Directory.GetDirectories(path, "*", SearchOption.AllDirectories);
+            progress?.Invoke(
+                $"cleanup snapshot completed; enumeration handles closed"
+                + $" ({files.Length} files, {directories.Length} directories)");
+
+            var options = new ParallelOptions
+            {
+                CancellationToken = cancellationToken,
+                MaxDegreeOfParallelism = MaxCleanupConcurrency,
+            };
+            await Parallel.ForEachAsync(
+                files,
+                options,
+                static (file, _) =>
+                {
+                    File.Delete(file);
+                    return ValueTask.CompletedTask;
+                }).ConfigureAwait(false);
+            progress?.Invoke($"deleted {files.Length} files");
+
+            var directoryGroups = directories
+                .GroupBy(directory => PathDepth(path, directory))
+                .OrderByDescending(group => group.Key);
+            foreach (var group in directoryGroups)
+            {
+                await Parallel.ForEachAsync(
+                    group,
+                    options,
+                    static (directory, _) =>
+                    {
+                        Directory.Delete(directory);
+                        return ValueTask.CompletedTask;
+                    }).ConfigureAwait(false);
+            }
+
+            Directory.Delete(path);
+            progress?.Invoke($"cleanup completed ({directories.Length + 1} directories)");
+        }
+
+        private static int PathDepth(string root, string path) =>
+            System.IO.Path.GetRelativePath(root, path).Count(
+                character => character == System.IO.Path.DirectorySeparatorChar
+                    || character == System.IO.Path.AltDirectorySeparatorChar);
     }
 }

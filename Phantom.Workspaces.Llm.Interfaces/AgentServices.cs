@@ -143,17 +143,53 @@ public sealed record AgentServices : IServiceProvider
     public object? ExecutorTransportFactoryRegistry { get; init; }
 
     /// <summary>
-    /// Effective composed trust profile for the current agent. Typed as <see langword="object"/> to
-    /// preserve the interfaces/core layering; the local Copilot runtime host casts it to the core
-    /// trust-profile contract and compiles containment policy on that host.
+    /// Optional launch-host trust profile resolver (issue #1477). Typed as <see langword="object"/>
+    /// to avoid a reverse project reference; consuming code casts to
+    /// <c>Phantom.Workspaces.Llm.Trust.ITrustProfileResolver</c>. When null, remote MCP requests
+    /// that carry a trust-profile reference fail closed.
     /// </summary>
-    public object? EffectiveTrustProfile { get; init; }
+    public object? TrustProfileResolver { get; init; }
 
     /// <summary>
-    /// Host-local trust-profile provider used by remote model listeners to resolve a profile
-    /// reference without transporting a compiled policy or policy-file contents.
+    /// Optional launch-host MXC policy compiler (issue #1477). Typed as <see langword="object"/> to
+    /// avoid a reverse project reference; consuming code casts to
+    /// <c>Phantom.Workspaces.Llm.Trust.ITrustProfileProcessPolicyCompiler</c>.
     /// </summary>
-    public object? TrustProfileProvider { get; init; }
+    public object? TrustProfilePolicyCompiler { get; init; }
+
+    /// <summary>
+    /// Optional policy-aware streaming process executor (issue #1474 / #1477). Typed as
+    /// <see langword="object"/> to avoid a reverse project reference; consuming code casts to
+    /// <c>Phantom.Workspaces.Llm.Processes.IProcessExecutor</c>. When null, stdio MCP servers use
+    /// Phantom's default policy-aware process executor.
+    /// </summary>
+    public object? ProcessExecutor { get; init; }
+
+    /// <summary>
+    /// Optional session execution-trust context used by built-in process-backed toolsets. Typed as
+    /// <see langword="object"/> to avoid a reverse project reference into Llm.Core.
+    /// </summary>
+    public object? ExecutionTrustContext { get; init; }
+
+    /// <summary>
+    /// Persisted session trust intent composed at the running-session acquisition boundary.
+    /// This separate seam keeps host execution state out of persisted entities.
+    /// </summary>
+    public object? AgentExecutionTrustContext { get; init; }
+
+    /// <summary>
+     /// Optional remote-runtime intent supplied by the host for a remote-proxy chat (issue #1485).
+     /// Typed as <see langword="object"/> to avoid a reverse project reference from
+     /// <c>Phantom.Workspaces.Llm.Interfaces</c> to <c>Phantom.Workspaces.Llm.Core</c>; consuming
+     /// code casts to the concrete <c>Phantom.Workspaces.Services.RemoteRuntimeIntent</c> when
+     /// present. When null, the host runs everything in-process against the local engine.
+     /// </summary>
+    public object? RemoteRuntimeIntent { get; init; }
+
+    /// <summary>
+    /// Persisted remote-session runtime intent composed by the owning host.
+    /// </summary>
+    public object? RemoteAgentSessionRuntimeIntent { get; init; }
 
     public object? GetService(Type serviceType)
     {

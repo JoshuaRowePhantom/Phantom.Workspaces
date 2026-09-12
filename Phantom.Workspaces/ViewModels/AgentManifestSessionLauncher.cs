@@ -7,6 +7,8 @@ using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Gui.Shared.Utilities;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Remote;
+using Phantom.Workspaces.Llm.Core.Manifest;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Services;
@@ -50,13 +52,38 @@ internal static class AgentManifestSessionLauncher
         }
 
         var agentSessionId = Guid.NewGuid().ToString("n");
+        JsonElement? sessionExecutor = null;
+        JsonElement? executorComponentBindings = null;
+        SelectedTrustProfile? selectedTrustProfile = null;
+        if (data.TryGetProperty("manifest", out var persistedManifest))
+        {
+            selectedTrustProfile = await ResolveSelectedTrustProfileAsync(
+                mainWindowViewModel,
+                parameterSelections);
+            var executorResources = ExecutorResource.ParseManifestResources(persistedManifest.GetRawText());
+            if (executorResources.Count > 0)
+            {
+                var bindings = ExecutorBindings.Build(
+                    executorResources,
+                    parameterSelections ?? new Dictionary<string, JsonElement>(StringComparer.Ordinal),
+                    selectedTrustProfile?.Profile);
+                sessionExecutor = bindings.SessionExecutor;
+                executorComponentBindings = bindings.ToPersistableMap();
+            }
+        }
 
         var createdAgentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
             mainWindowViewModel,
             agentSourceEntity,
             agentSessionId,
             parameterValues,
-            parameterSelections);
+            parameterSelections,
+            sessionExecutor: sessionExecutor,
+            executorComponentBindings: executorComponentBindings,
+            trustProfileReference: selectedTrustProfile is null
+                ? null
+                : JsonSerializer.SerializeToElement(selectedTrustProfile.Reference),
+            expectedTrustProfileRevision: selectedTrustProfile?.Revision);
 
         if (createdAgentSessionEntity is null)
         {
@@ -85,7 +112,7 @@ internal static class AgentManifestSessionLauncher
             // Route through IRunningAgentChatTable → AgentChatFactory.GetOrCreateAsync so
             // AgentChatFactory.WithSelfAsFactory injects itself as RunningAgentChatFactory on
             // AgentServices (fix for #1180 / the #1109 guard).
-            lifetime.Run(_ => InitializeSessionTabAsync(
+            lifetime.Run(ct => InitializeSessionTabAsync(
                 openAgentSessionShortcutHandler,
                 mainWindowViewModel,
                 async () =>
@@ -102,10 +129,20 @@ internal static class AgentManifestSessionLauncher
                         agentManifest.Metadata[AgentManifestSecretUseMemoryFactory.EntityIdMetadataKey] =
                             agentSourceEntity.EntityId.ToString();
                     }
+                    var persistedEntity = createdAgentSessionEntity.Data is JsonElement value
+                        ? value
+                        : throw new InvalidOperationException("The created agent session has no persisted data.");
+                    var acquisition = await openAgentSessionShortcutHandler.OpenPersistedSessionAsync(
+                        mainWindowViewModel,
+                        persistedEntity,
+                        AgentSessionOpenIntent.StartOrAttach,
+                        ct);
+                    loadingTab.SetRemoteProfileDisplayName(acquisition.RemoteProfileDisplayName);
                     var lease = await openAgentSessionShortcutHandler.RunningAgentChatTable.AcquireAsync(
                         new AcquireAgentChatRequest
                         {
                             AgentSessionId = new AgentSessionId(agentSessionId),
+                            AgentSessionEntity = acquisition.Entity,
                             AgentManifest = agentManifest,
                             Parameters = parameterValues,
                             AgentServices = agentServices,
@@ -114,7 +151,9 @@ internal static class AgentManifestSessionLauncher
                             EntityName = createdAgentSessionEntity.DisplayName,
                             EntityId = createdAgentSessionEntity.EntityId.ToString(),
                             WorkspaceId = loadingTab.WorkspacePaneId,
-                        });
+                            AcquisitionMode = acquisition.Mode,
+                            OwningProfileTransport = acquisition.Transport,
+                        }, ct);
                     loadingTab.SetLease(lease);
                     return (lease.AgentChat, loggerFactory);
                 }, createdAgentSessionEntity, loadingTab, foregroundScheduler));
@@ -122,7 +161,7 @@ internal static class AgentManifestSessionLauncher
         else if (data.TryGetProperty("definition", out var definitionElement))
         {
             var definitionJson = definitionElement.GetRawText();
-            lifetime.Run(_ => InitializeSessionTabAsync(
+            lifetime.Run(ct => InitializeSessionTabAsync(
                 openAgentSessionShortcutHandler,
                 mainWindowViewModel,
                 async () =>
@@ -131,10 +170,20 @@ internal static class AgentManifestSessionLauncher
                     var agentServices = await agentSessionShortcutContext
                         .CreateAgentServicesAsync(mainWindowViewModel, loggerFactory);
                     var agentDefinition = PhantomAgentSchema.AgentDefinitionFromJson(definitionJson);
+                    var persistedEntity = createdAgentSessionEntity.Data is JsonElement value
+                        ? value
+                        : throw new InvalidOperationException("The created agent session has no persisted data.");
+                    var acquisition = await openAgentSessionShortcutHandler.OpenPersistedSessionAsync(
+                        mainWindowViewModel,
+                        persistedEntity,
+                        AgentSessionOpenIntent.StartOrAttach,
+                        ct);
+                    loadingTab.SetRemoteProfileDisplayName(acquisition.RemoteProfileDisplayName);
                     var lease = await openAgentSessionShortcutHandler.RunningAgentChatTable.AcquireAsync(
                         new AcquireAgentChatRequest
                         {
                             AgentSessionId = new AgentSessionId(agentSessionId),
+                            AgentSessionEntity = acquisition.Entity,
                             AgentDefinition = agentDefinition,
                             AgentServices = agentServices,
                             ToolResourceFactory = agentServices.ToolResourceFactory,
@@ -142,7 +191,9 @@ internal static class AgentManifestSessionLauncher
                             EntityName = createdAgentSessionEntity.DisplayName,
                             EntityId = createdAgentSessionEntity.EntityId.ToString(),
                             WorkspaceId = loadingTab.WorkspacePaneId,
-                        });
+                            AcquisitionMode = acquisition.Mode,
+                            OwningProfileTransport = acquisition.Transport,
+                        }, ct);
                     loadingTab.SetLease(lease);
                     return (lease.AgentChat, loggerFactory);
                 }, createdAgentSessionEntity, loadingTab, foregroundScheduler));
@@ -151,10 +202,44 @@ internal static class AgentManifestSessionLauncher
         return createdAgentSessionEntity;
     }
 
+    private static async Task<SelectedTrustProfile?> ResolveSelectedTrustProfileAsync(
+        MainWindowViewModel mainWindowViewModel,
+        IReadOnlyDictionary<string, JsonElement>? parameterSelections)
+    {
+        if (parameterSelections is null)
+        {
+            return null;
+        }
+
+        foreach (var selection in parameterSelections.Values)
+        {
+            if (ExecutorParameterSelection.TryGetTrustProfile(selection, out var profileName)
+                && !string.IsNullOrWhiteSpace(profileName))
+            {
+                var resolver = new DataAccessLayerTrustProfileResolver(
+                    mainWindowViewModel.EntityBroker.EntityRepository.DataAccessLayer);
+                var resolved = await resolver.ResolveVersionedAsync(profileName);
+                return new SelectedTrustProfile(
+                    resolved.Profile,
+                    profileName,
+                    resolved.Revision
+                        ?? throw new InvalidOperationException(
+                            $"Trust profile '{profileName}' has no persisted revision."));
+            }
+        }
+
+        return null;
+    }
+
+    private sealed record SelectedTrustProfile(
+        Phantom.Workspaces.Llm.Trust.TrustProfile Profile,
+        string Reference,
+        string Revision);
+
     private static async Task InitializeSessionTabAsync(
         OpenAgentSessionShortcutHandler openAgentSessionShortcutHandler,
         MainWindowViewModel mainWindowViewModel,
-        Func<Task<(AgentChat AgentChat, ObservableLoggerFactory LoggerFactory)>> createChatAsync,
+        Func<Task<(IAgentChat AgentChat, ObservableLoggerFactory LoggerFactory)>> createChatAsync,
         SubscribedEntityViewModel createdAgentSessionEntity,
         AgentSessionWorkspaceTabViewModel loadingTab,
         TaskScheduler foregroundScheduler)
@@ -164,7 +249,15 @@ internal static class AgentManifestSessionLauncher
             var (agentChat, loggerFactory) = await createChatAsync();
             // #1429: materialize through the single composition seam so slash commands are always wired.
             var agent = openAgentSessionShortcutHandler.ComposeSessionAgentViewModel(
-                mainWindowViewModel, loggerFactory, agentChat, createdAgentSessionEntity, loadingTab, foregroundScheduler);
+                new ComposeSessionAgentViewModelOptions
+                {
+                    MainWindowViewModel = mainWindowViewModel,
+                    LoggerFactory = loggerFactory,
+                    AgentChat = agentChat,
+                    AgentSessionEntity = createdAgentSessionEntity,
+                    Tab = loadingTab,
+                    ForegroundScheduler = foregroundScheduler,
+                });
             loadingTab.SetReady(agent, loggerFactory);
         }
         catch (Exception ex)

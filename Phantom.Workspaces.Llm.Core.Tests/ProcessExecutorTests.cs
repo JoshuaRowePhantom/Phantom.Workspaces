@@ -188,7 +188,7 @@ public sealed class ProcessExecutorTests
     }
 
     [Fact]
-    public void ProcessExecutor_MxcWarning_PreservesDiagnostic()
+    public void ProcessExecutor_MxcWarning_DerivesDiagnosticsFromEffectiveLaunch()
     {
         var sandboxProcess = new FakeSandboxProcess
         {
@@ -205,6 +205,64 @@ public sealed class ProcessExecutorTests
         });
 
         Assert.Equal(["DACL mutation was required."], handle.LaunchInfo.Warnings);
+        Assert.Equal(ProcessLaunchMechanism.MxcSpawn, handle.LaunchInfo.LaunchMechanism);
+        Assert.False(handle.LaunchInfo.CreationStatusAvailable);
+        Assert.Null(handle.LaunchInfo.CreateProcessSucceeded);
+        Assert.True(handle.LaunchInfo.SdkSpawnSucceeded);
+        Assert.Null(handle.LaunchInfo.JobConfigured);
+        Assert.Null(handle.LaunchInfo.JobAssigned);
+        Assert.Null(handle.LaunchInfo.ResumeSucceeded);
+        Assert.Equal("ProcessContainment", handle.LaunchInfo.Containment?.PolicyType);
+        Assert.Equal(
+            "ProcessContainment:0.8.0-alpha",
+            handle.LaunchInfo.Containment?.PolicyIdentity);
+    }
+
+    [Fact]
+    public void ProcessExecutor_ExplicitMxcContainment_ReportsEffectiveTypeAndPolicy()
+    {
+        var executor = new ProcessExecutor(
+            new RecordingSystemProcessFactory(),
+            new FakeSandboxRunner());
+
+        var handle = executor.Start(new ProcessExecutionRequest("tool")
+        {
+            Mxc = new MxcProcessConfiguration(
+                new SandboxPolicy { Version = "0.8.0-alpha" },
+                new ProcessContainerContainment { LeastPrivilege = true }),
+        });
+
+        Assert.True(handle.LaunchInfo.SdkSpawnSucceeded);
+        Assert.Equal(
+            "ProcessContainerContainment",
+            handle.LaunchInfo.Containment?.PolicyType);
+        Assert.Equal(
+            "ProcessContainerContainment:0.8.0-alpha",
+            handle.LaunchInfo.Containment?.PolicyIdentity);
+    }
+
+    [Fact]
+    public async Task ProcessExecutor_StatusDllInitFailed_NormalizesUnsignedNtStatus()
+    {
+        var backend = new FakeProcessBackend
+        {
+            WaitResult = ProcessExitResult.Create(unchecked((int)0xC0000142), false, null),
+            PathCategory = ProcessPathCategory.FixedProbeBinary,
+        };
+        var executor = new ProcessExecutor(
+            new RecordingSystemProcessFactory { Process = backend },
+            new FakeSandboxRunner());
+
+        await using var handle = executor.Start(new ProcessExecutionRequest("fixed-probe")
+        {
+            PathCategory = ProcessPathCategory.FixedProbeBinary,
+        });
+        var result = await handle.WaitAsync();
+
+        Assert.Equal(unchecked((int)0xC0000142), result.ExitCode);
+        Assert.Equal("0xC0000142", result.UnsignedNtStatus);
+        Assert.Equal(ProcessPathCategory.FixedProbeBinary, handle.LaunchInfo.PathCategory);
+        Assert.DoesNotContain("fixed-probe", handle.LaunchInfo.ToSanitizedDiagnostic(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -250,16 +308,39 @@ public sealed class ProcessExecutorTests
         var executor = new ProcessExecutor(new RecordingSystemProcessFactory(), new FakeSandboxRunner());
         Assert.Throws<ArgumentException>(() => executor.Start(new ProcessExecutionRequest("")));
     }
+
+    [Fact]
+    public async Task StartAsync_CancelledDuringLaunch_CleansPartialProcess()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var backend = new FakeProcessBackend { HasExited = false };
+        var factory = new RecordingSystemProcessFactory
+        {
+            Process = backend,
+            BeforeReturn = cancellation.Cancel,
+        };
+        var executor = new ProcessExecutor(factory, new FakeSandboxRunner());
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => executor.StartAsync(
+                new ProcessExecutionRequest("tool"),
+                cancellation.Token));
+
+        Assert.True(backend.Disposed);
+        Assert.Equal(1, backend.KillCount);
+    }
 }
 
 internal sealed class RecordingSystemProcessFactory : ISystemProcessFactory
 {
     public ProcessExecutionRequest? Request { get; private set; }
     public IProcessBackend Process { get; set; } = new FakeProcessBackend();
+    public Action? BeforeReturn { get; init; }
 
     public IProcessBackend Start(ProcessExecutionRequest request)
     {
         Request = request;
+        BeforeReturn?.Invoke();
         return Process;
     }
 }

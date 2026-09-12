@@ -16,6 +16,7 @@ public sealed class WorkspacesTransportHost : IAsyncDisposable
 {
     private readonly TransportRegistry localListeners;
     private readonly IReadOnlyList<ReverseHttpClientTransportFactory> hubFactories;
+    private readonly TransportPeerIdentityProvider? peerIdentities;
     private readonly CancellationTokenSource shutdown = new();
     private readonly List<Task> hubLoops = [];
     private readonly SemaphoreSlim startGate = new(1, 1);
@@ -24,10 +25,12 @@ public sealed class WorkspacesTransportHost : IAsyncDisposable
 
     public WorkspacesTransportHost(
         TransportRegistry localListeners,
-        IReadOnlyList<ReverseHttpClientTransportFactory> hubFactories)
+        IReadOnlyList<ReverseHttpClientTransportFactory> hubFactories,
+        TransportPeerIdentityProvider? peerIdentities = null)
     {
         this.localListeners = localListeners ?? throw new ArgumentNullException(nameof(localListeners));
         this.hubFactories = hubFactories ?? throw new ArgumentNullException(nameof(hubFactories));
+        this.peerIdentities = peerIdentities;
     }
 
     public event EventHandler? ConnectionStateChanged;
@@ -95,7 +98,7 @@ public sealed class WorkspacesTransportHost : IAsyncDisposable
 
         while (!token.IsCancellationRequested)
         {
-            var dispatcher = new ReverseExecutionDispatcher(current, this.localListeners);
+            var dispatcher = new ReverseExecutionDispatcher(current, this.localListeners, this.peerIdentities);
             try
             {
                 await current.Reader.Completion.WaitAsync(token).ConfigureAwait(false);

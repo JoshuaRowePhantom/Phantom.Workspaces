@@ -118,12 +118,22 @@ public sealed class NotificationsViewModel : TransientPopupViewModel, IDisposabl
 
     private void RefreshRowsInPlace()
     {
-        var notificationsMap = this.notificationService.Notifications.ToDictionary(e => e.TabKey);
+        var notificationsMap = this.notificationService.Notifications.ToDictionary(
+            e => (e.TabKey, e.Kind));
+
+        for (var index = this.Rows.Count - 1; index >= 0; index--)
+        {
+            var row = this.Rows[index];
+            if (!notificationsMap.ContainsKey((row.TabKey, row.Kind)))
+            {
+                this.Rows.RemoveAt(index);
+            }
+        }
 
         // Update existing rows in-place without reordering
         foreach (var row in this.Rows)
         {
-            if (notificationsMap.TryGetValue(row.TabKey, out var entry))
+            if (notificationsMap.TryGetValue((row.TabKey, row.Kind), out var entry))
             {
                 row.Heading = entry.Heading;
                 row.Description = entry.Description;
@@ -136,9 +146,9 @@ public sealed class NotificationsViewModel : TransientPopupViewModel, IDisposabl
         }
 
         // Prepend new notifications (not yet in Rows) at the top
-        var existingTabKeys = this.Rows.Select(r => r.TabKey).ToHashSet();
+        var existingKeys = this.Rows.Select(r => (r.TabKey, r.Kind)).ToHashSet();
         var newEntries = this.notificationService.Notifications
-            .Where(e => !existingTabKeys.Contains(e.TabKey))
+            .Where(e => !existingKeys.Contains((e.TabKey, e.Kind)))
             .OrderByDescending(e => e.When);
 
         int insertIndex = 0;

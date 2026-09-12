@@ -1,6 +1,7 @@
 using AgentSchema;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.Trust;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -14,6 +15,8 @@ internal sealed record InternalCreateAgentChatRequest
     public string? AgentSessionId { get; init; }
 
     public AgentServices? AgentServices { get; init; }
+
+    public AgentExecutionTrustContext? ExecutionTrustContext { get; init; }
 
     public required IAgentPersistenceStore ConfiguredStore { get; init; }
 

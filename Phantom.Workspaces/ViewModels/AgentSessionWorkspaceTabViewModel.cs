@@ -8,6 +8,7 @@ using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Gui.Shared.Utilities;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Notifications;
 
@@ -36,6 +37,10 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
     private readonly TimeProvider timeProvider;
     private RunningAgentChatLease? lease;
     private AgentRunningIndicatorTabHeaderItemViewModel? runningIndicator;
+    private bool isRemote;
+    private string? remoteProfileDisplayName;
+    private bool hasModalsNeedingInput;
+    private bool disposed;
 
     public AgentSessionWorkspaceTabViewModel()
         : this(TimeProvider.System)
@@ -76,6 +81,24 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
 
     public string? AgentSessionId { get; init; }
 
+    public bool IsRemote
+    {
+        get => this.isRemote;
+        private set => this.SetProperty(ref this.isRemote, value);
+    }
+
+    public string? RemoteProfileDisplayName
+    {
+        get => this.remoteProfileDisplayName;
+        private set => this.SetProperty(ref this.remoteProfileDisplayName, value);
+    }
+
+    public bool HasModalsNeedingInput
+    {
+        get => this.hasModalsNeedingInput;
+        private set => this.SetProperty(ref this.hasModalsNeedingInput, value);
+    }
+
     /// <summary>
     /// The workspace-pane id the tab currently lives in.
     /// Init-stamped from the creating handler's <c>SelectedWorkspacePane?.Id</c>; overwritten
@@ -89,6 +112,17 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
     {
         this.lease = value;
         this.leaseDisposables.Add(value);
+    }
+
+    internal void SetRemoteProfileDisplayName(string? value)
+    {
+        if (this.State != AgentTabState.Loading || this.Agent is not null)
+        {
+            throw new InvalidOperationException(
+                "Remote profile metadata must be staged before the tab becomes ready.");
+        }
+
+        this.remoteProfileDisplayName = value;
     }
 
     public event EventHandler<bool>? AltKeyStateChanged;
@@ -120,8 +154,27 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
 
     public void SetReady(AgentViewModel agentViewModel, ObservableLoggerFactory factory)
     {
+        ArgumentNullException.ThrowIfNull(agentViewModel);
+        ArgumentNullException.ThrowIfNull(factory);
+        if (this.disposed)
+        {
+            throw new ObjectDisposedException(nameof(AgentSessionWorkspaceTabViewModel));
+        }
+        if (this.State != AgentTabState.Loading || this.Agent is not null)
+        {
+            throw new InvalidOperationException("The agent session tab has already completed initialization.");
+        }
+
+        // Publish the ready surface as one coherent state transition. Consumers never observe a
+        // Ready tab whose Agent and remote metadata describe different sessions.
         this.loggerFactory = factory;
-        this.Agent = agentViewModel;
+        this.agent = agentViewModel;
+        this.isRemote = agentViewModel.AgentChat is RemoteAgentChat or RemoteAgentChatProxy;
+        if (!this.isRemote)
+        {
+            this.remoteProfileDisplayName = null;
+        }
+        this.hasModalsNeedingInput = agentViewModel.HasModalsNeedingInput;
 
         // #1451: open a restoring window before wiring up the notification handler. While the agent
         // rehydrates, running-state churn (persisted running items settling, and sub-agent
@@ -147,6 +200,12 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
         this.TabHeader = header;
 
         this.State = AgentTabState.Ready;
+        this.RaisePropertyChanged(nameof(this.Agent));
+        this.RaisePropertyChanged(nameof(this.LoggerFactory));
+        this.RaisePropertyChanged(nameof(this.IsRemote));
+        this.RaisePropertyChanged(nameof(this.RemoteProfileDisplayName));
+        this.RaisePropertyChanged(nameof(this.HasModalsNeedingInput));
+        this.UpdateModalNotification(agentViewModel.HasModalsNeedingInput);
 
         // Close the restoring window once rehydration has fully settled, re-baselining wasRunning
         // from the settled state so the first observed transition is a genuine user edge.
@@ -205,6 +264,9 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
             this.Agent = null;
         }
 
+        this.UpdateModalNotification(hasModals: false);
+        this.IsRemote = false;
+        this.RemoteProfileDisplayName = null;
         this.loggerFactory?.Dispose();
         this.loggerFactory = null;
         this.runningIndicator = null;
@@ -220,7 +282,23 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
 
     private void OnAgentPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName != nameof(AgentViewModel.IsChatRunning) || sender is not AgentViewModel vm)
+        if (this.disposed)
+        {
+            return;
+        }
+
+        if (sender is not AgentViewModel vm)
+        {
+            return;
+        }
+
+        if (e.PropertyName == nameof(AgentViewModel.HasModalsNeedingInput))
+        {
+            this.UpdateModalNotification(vm.HasModalsNeedingInput);
+            return;
+        }
+
+        if (e.PropertyName != nameof(AgentViewModel.IsChatRunning))
         {
             return;
         }
@@ -252,7 +330,10 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
                 textSummary ?? string.Empty,
                 this.timeProvider.GetUtcNow().UtcDateTime,
                 RunningState.Running,
-                NotificationState.Interesting));
+                NotificationState.Interesting)
+            {
+                Kind = "chat-idle",
+            });
         }
         else if (!isRunning && this.wasRunning)
         {
@@ -265,7 +346,10 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
                 reason,
                 this.timeProvider.GetUtcNow().UtcDateTime,
                 RunningState.Idle,
-                NotificationState.Interesting));
+                NotificationState.Interesting)
+            {
+                Kind = "chat-idle",
+            });
         }
         else if (isRunning)
         {
@@ -281,11 +365,41 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
                     textSummary ?? string.Empty,
                     this.timeProvider.GetUtcNow().UtcDateTime,
                     RunningState.Running,
-                    NotificationState.NotInteresting));
+                    NotificationState.NotInteresting)
+                {
+                    Kind = "chat-idle",
+                });
             }
         }
 
         this.wasRunning = isRunning;
+    }
+
+    private void UpdateModalNotification(bool hasModals)
+    {
+        this.HasModalsNeedingInput = hasModals;
+        if (this.NotificationService is null || string.IsNullOrWhiteSpace(this.Id))
+        {
+            return;
+        }
+
+        var target = new NotificationTargetRequest { TabId = this.Id, Kind = "modal-pending" };
+        if (!hasModals)
+        {
+            this.NotificationService.Remove(target);
+            return;
+        }
+
+        this.NotificationService.Notify(new Notification
+        {
+            TabDescriptor = this.CreateTabDescriptor(),
+            Heading = "Input required",
+            Description = "An agent is waiting for your response.",
+            When = this.timeProvider.GetUtcNow().UtcDateTime,
+            RunningState = this.Agent?.IsChatRunning == true ? RunningState.Running : RunningState.Idle,
+            NotificationState = NotificationState.Interesting,
+            Kind = "modal-pending",
+        });
     }
 
     private void OnAgentAltKeyStateChanged(object? sender, bool isAltHeld)
@@ -348,6 +462,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
 
     public override async ValueTask DisposeAsync()
     {
+        this.disposed = true;
         if (this.agent is not null)
         {
             this.agent.PropertyChanged -= this.OnAgentPropertyChanged;

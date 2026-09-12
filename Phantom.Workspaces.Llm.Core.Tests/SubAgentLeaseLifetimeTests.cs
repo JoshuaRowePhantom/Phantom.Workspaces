@@ -55,8 +55,8 @@ public sealed class SubAgentLeaseLifetimeTests
         await using var lease = await subAgent.AcquireLeaseAsync();
 
         Assert.NotNull(lease);
-        Assert.NotNull(lease.AgentChat);
-        Assert.Same(chat, lease.AgentChat);
+        Assert.NotNull(lease.LocalAgentChat);
+        Assert.Same(chat, lease.LocalAgentChat);
     }
 
     [Fact]
@@ -72,8 +72,8 @@ public sealed class SubAgentLeaseLifetimeTests
         await using var lease = await subAgent.AcquireLeaseAsync();
 
         Assert.NotNull(lease);
-        Assert.NotNull(lease.AgentChat);
-        Assert.Same(chat, lease.AgentChat);
+        Assert.NotNull(lease.LocalAgentChat);
+        Assert.Same(chat, lease.LocalAgentChat);
     }
 
     [Fact]

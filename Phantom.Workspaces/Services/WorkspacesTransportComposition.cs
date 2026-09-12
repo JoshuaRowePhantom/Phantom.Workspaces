@@ -6,12 +6,14 @@ using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Core;
 using Phantom.Workspaces.Llm.Core.Transport;
+using Phantom.Workspaces.Llm.Processes;
 using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.Chat;
 using Phantom.Workspaces.Transport.Http;
 using Phantom.Workspaces.Transport.Local;
 using Phantom.Workspaces.Transport.ReverseHttp;
+using Phantom.Workspaces.Services.AgentSessions;
 
 namespace Phantom.Workspaces.Services;
 
@@ -24,8 +26,8 @@ namespace Phantom.Workspaces.Services;
 /// and exposes the resolved registry plus <see cref="Llm.Core.Transport.TransportTrustedExecutor"/>,
 /// <see cref="Services.WorkspacesTransportHost"/> and
 /// <see cref="ReverseConnectionStatusRegistry"/> for later resolution by the production consumers.
-/// Additive: no existing consumer is switched onto these surfaces yet — the old
-/// <c>ReverseExecutionRegistry</c> / <c>CreateSelector</c> stack remains wired.
+/// The resolved registry is published to session runtime hydration so persisted executor bindings
+/// can route models and tools through the same production transport factories.
 /// </summary>
 public sealed class WorkspacesTransportComposition : IAsyncDisposable
 {
@@ -38,19 +40,22 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
         IDataAccessLayer dataAccessLayer,
         WorkspaceEntitySession workspaceEntitySession,
         IReadOnlyList<ReverseHttpClientTransportFactory>? hubFactories = null,
-        AgentServices? agentServices = null)
+        AgentServices? agentServices = null,
+        TransportFactoryRegistryProvider? registryProvider = null,
+        ITransportListener? agentSessionTransportListener = null,
+        IRunningAgentChatTable? runningAgentChats = null)
     {
         ArgumentNullException.ThrowIfNull(dataAccessLayer);
         ArgumentNullException.ThrowIfNull(workspaceEntitySession);
-        agentServices ??= new AgentServices();
-        if (agentServices.TrustProfileProvider is null)
-        {
-            agentServices = agentServices with
-            {
-                TrustProfileProvider = new DataAccessTrustProfileProvider(dataAccessLayer),
-            };
-        }
 
+        var effectiveRegistryProvider = registryProvider ?? new TransportFactoryRegistryProvider();
+        var localPeer = new TransportPeerIdentity
+        {
+            AuthenticationScheme = "local-workspace-session",
+            StablePeerId = workspaceEntitySession.UserComputerProfileEntityId.ToString(),
+            UserEntityId = workspaceEntitySession.UserEntityId.ToString(),
+            UserComputerProfileEntityId = workspaceEntitySession.UserComputerProfileEntityId.ToString(),
+        };
         this.ConnectionStatusRegistry = new ReverseConnectionStatusRegistry();
         this.LocalListeners = new TransportRegistry();
 
@@ -75,7 +80,15 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
         // remote-bound McpToolContextProvider on another machine — is served by opening the requested
         // MCP server here and bridging its JSON-RPC back over the channel. Unrecognised connections
         // return null so the listener declines them.
-        this.RemoteMcpHostHandler = new RemoteMcpHostHandler(agentServices);
+        var remoteHostServices = (agentServices ?? new AgentServices()) with
+        {
+            ProcessExecutor = agentServices?.ProcessExecutor ?? new ProcessExecutor(),
+            TrustProfilePolicyCompiler =
+                agentServices?.TrustProfilePolicyCompiler ?? new MxcTrustProfilePolicyCompiler(),
+            TrustProfileResolver =
+                agentServices?.TrustProfileResolver ?? new DataAccessLayerTrustProfileResolver(dataAccessLayer),
+        };
+        this.RemoteMcpHostHandler = new RemoteMcpHostHandler(remoteHostServices);
         this.LocalListeners.Register(new Phantom.Workspaces.Transport.Mcp.McpTransportListener(
             this.RemoteMcpHostHandler.OpenAsync));
 
@@ -85,24 +98,54 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
         // ICopilotClient here and bridging only its SDK session back over the channel. This is
         // distinct from ChatClientTransportListener above, which remotes the whole AgentChat.
         this.LocalListeners.Register(new Phantom.Workspaces.Llm.Core.Transport.Chat.CopilotClientTransportListener(agentServices));
+        if (runningAgentChats is RunningAgentChatTable runningTable)
+            runningTable.ConfigureLocalRuntimeRegistry(
+                new LocalAgentSessionRuntimeRegistry(dataAccessLayer));
+        if (agentSessionTransportListener is null && runningAgentChats is not null)
+        {
+            var runtimeRegistry = new RemoteAgentSessionRuntimeRegistry(TimeProvider.System);
+            var peerIdentities = new TransportPeerIdentityProvider();
+            var authorizer = new AgentSessionAttachAuthorizer(dataAccessLayer, runtimeRegistry);
+            var runtimeFactory = new DataAccessAgentSessionRuntimeHostFactory(
+                dataAccessLayer,
+                runningAgentChats,
+                AgentSessionRuntimeContextFactory.FromProvider(effectiveRegistryProvider),
+                TimeProvider.System,
+                remoteHostServices);
+            var host = new RemoteAgentSessionHost(authorizer, runtimeRegistry, runtimeFactory);
+            agentSessionTransportListener = new AgentSessionTransportListener(host, peerIdentities);
+            this.AgentSessionPeerIdentities = peerIdentities;
+        }
+        if (agentSessionTransportListener is not null)
+        {
+            this.LocalListeners.Register(agentSessionTransportListener);
+        }
 
         var registry = new TransportFactoryRegistry();
-        this.localTransportFactory = new LocalTransportFactory(this.LocalListeners);
+        this.localTransportFactory = new LocalTransportFactory(
+            this.LocalListeners,
+            this.AgentSessionPeerIdentities is { } identities
+                ? channel => identities.SetIdentity(channel, localPeer)
+                : null);
         this.userComputerProfileTransportFactory =
             new UserComputerProfileTransportFactory(dataAccessLayer, workspaceEntitySession, registry);
         this.httpClientTransportFactory = new HttpClientTransportFactory();
-        this.reverseHttpForwardingTransportFactory = new ReverseHttpForwardingTransportFactory();
+        this.reverseHttpForwardingTransportFactory = new ReverseHttpForwardingTransportFactory(
+            new HttpClientTransportFactory(),
+            authenticatedPeer: this.AgentSessionPeerIdentities is not null ? localPeer : null);
 
         registry.Register(this.localTransportFactory);
         registry.Register(this.userComputerProfileTransportFactory);
         registry.Register(this.httpClientTransportFactory);
         registry.Register(this.reverseHttpForwardingTransportFactory);
         this.TransportFactoryRegistry = registry;
+        effectiveRegistryProvider.Publish(registry);
 
         this.TrustedExecutor = new TransportTrustedExecutor(registry, new ExecutionTargetResolver());
 
         this.HubFactories = hubFactories ?? [];
-        this.TransportHost = new WorkspacesTransportHost(this.LocalListeners, this.HubFactories);
+        this.TransportHost = new WorkspacesTransportHost(
+            this.LocalListeners, this.HubFactories, this.AgentSessionPeerIdentities);
     }
 
     /// <summary>The resolved registry that builds transports for every registered descriptor type.</summary>
@@ -125,6 +168,8 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
 
     /// <summary>The configured reverse-HTTP hub client factories the host registers with.</summary>
     public IReadOnlyList<ReverseHttpClientTransportFactory> HubFactories { get; }
+
+    internal TransportPeerIdentityProvider? AgentSessionPeerIdentities { get; }
 
     /// <summary>Starts the GUI-side transport host (hub registration + dispatcher hosting).</summary>
     public Task StartAsync(CancellationToken cancellationToken = default)

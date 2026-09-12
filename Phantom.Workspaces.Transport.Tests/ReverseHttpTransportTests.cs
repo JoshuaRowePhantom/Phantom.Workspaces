@@ -25,6 +25,32 @@ public sealed class ReverseHttpTransportTests
     }
 
     [Fact]
+    public async Task ReverseHttpTransport_AuthenticatedPeer_IsAddedToChannelOpenEnvelope()
+    {
+        await using var underlying = new UnderlyingChannel();
+        await using var transport = new ReverseHttpTransport(underlying, new TransportPeerIdentity
+        {
+            AuthenticationScheme = "workspace-session",
+            StablePeerId = "peer",
+            UserEntityId = "11111111-1111-1111-1111-111111111111",
+            UserComputerProfileEntityId = "22222222-2222-2222-2222-222222222222",
+        });
+
+        await transport.ConnectToMessageChannelAsync(Json("""{"type":"attach-agent-session"}"""), Ct());
+
+        var open = await underlying.Outbound.ReadAsync(Ct());
+        var peer = open.GetProperty("authenticatedPeer");
+        Assert.Equal("workspace-session", peer.GetProperty("authenticationScheme").GetString());
+        Assert.Equal("peer", peer.GetProperty("stablePeerId").GetString());
+        Assert.Equal(
+            "11111111-1111-1111-1111-111111111111",
+            peer.GetProperty("userEntityId").GetString());
+        Assert.Equal(
+            "22222222-2222-2222-2222-222222222222",
+            peer.GetProperty("userComputerProfileEntityId").GetString());
+    }
+
+    [Fact]
     public async Task ReverseHttpTransport_InboundMessage_RoutedToOriginatingChannel()
     {
         await using var underlying = new UnderlyingChannel();

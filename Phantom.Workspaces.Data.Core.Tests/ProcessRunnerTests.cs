@@ -163,30 +163,19 @@ public sealed class ProcessRunnerTests
 
     [Fact]
     [SupportedOSPlatform("windows")]
-    public void AssignToWindowsJobObject_AssignsProcessToJobObject()
+    public async Task RunProcessAsync_KillTree_AssignsBeforeResume()
     {
         if (!OperatingSystem.IsWindows())
         {
             return;
         }
 
-        using var process = Process.Start(new ProcessStartInfo("cmd.exe", "/c pause")
-        {
-            CreateNoWindow = true,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        }) ?? throw new InvalidOperationException("Failed to start process.");
+        var result = await ProcessRunner.RunProcessAsync(new RunProcessParameters(
+            Command: "cmd.exe",
+            Arguments: ["/d", "/c", "exit", "0"],
+            KillOnClose: KillOnCloseAction.KillTree));
 
-        try
-        {
-            ProcessRunner.AssignToWindowsJobObject(process);
-            Assert.True(IsProcessInAnyJob(process.Handle));
-        }
-        finally
-        {
-            process.Kill(entireProcessTree: true);
-        }
+        Assert.True(result.JobAssigned);
     }
 
     [Fact]

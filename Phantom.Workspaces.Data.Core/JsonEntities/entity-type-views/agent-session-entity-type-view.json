@@ -1,0 +1,18 @@
+{
+  "entity-id": "f55a812a-8c01-4c96-aee4-6fd16d658748",
+  "entity-types": ["entity", "entity-type-view"],
+  "names": [["entity-type-views", "agent-session"]],
+  "display-name": {
+    "default": "Agent Session View"
+  },
+  "fields": [
+    { "field-path": ["agent-session-id"] },
+    { "field-path": ["ownership-generation"] },
+    { "field-path": ["continue-in-background"] }
+  ],
+  "group-by-parent": {
+    "source": "field",
+    "field-path": ["host-profile-entity-id"],
+    "parent-entity-type-names": ["user-computer-profile"]
+  }
+}

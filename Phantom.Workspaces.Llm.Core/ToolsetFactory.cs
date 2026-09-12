@@ -233,7 +233,9 @@ public sealed class ToolsetFactory : IToolsetFactory
 
         AIContextProvider toolset = new FilesystemServiceContextProvider(
             editStoreConnectionJson: connectionJson,
-            loggerFactory: agentServices.LoggerFactory);
+            loggerFactory: agentServices.LoggerFactory,
+            trustContext: agentServices.ExecutionTrustContext as Trust.AgentExecutionTrustContext,
+            processExecutor: agentServices.ProcessExecutor as Processes.IProcessExecutor);
         return Task.FromResult<AIContextProvider?>(toolset);
     }
 

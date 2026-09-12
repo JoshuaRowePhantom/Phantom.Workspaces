@@ -23,6 +23,26 @@ public class LocalTransportTests
     }
 
     [Fact]
+    public async Task LocalTransport_ConnectToMessageChannel_AuthenticatesServerChannelBeforeDispatch()
+    {
+        var expected = new TransportPeerIdentity
+        {
+            AuthenticationScheme = "test",
+            StablePeerId = "peer",
+        };
+        var identities = new TransportPeerIdentityProvider();
+        var registry = new TransportRegistry();
+        var listener = new AuthenticationObservingListener(identities);
+        registry.Register(listener);
+        await using var transport = new LocalTransport(
+            registry, channel => identities.SetIdentity(channel, expected));
+
+        await transport.ConnectToMessageChannelAsync(JsonDocument.Parse("{}").RootElement);
+
+        Assert.Same(expected, await listener.Observed.Task.WaitAsync(TimeSpan.FromSeconds(10)));
+    }
+
+    [Fact]
     public async Task LocalTransport_ConnectToStream_RoutesToRegistry()
     {
         var registry = new TransportRegistry();
@@ -158,6 +178,25 @@ public class LocalTransportTests
 
         public Task<IAsyncDisposable?> OnStreamOpenAsync(JsonElement request, Stream stream, CancellationToken ct = default)
             => Task.FromResult<IAsyncDisposable?>(new DummyDisposable());
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class AuthenticationObservingListener(TransportPeerIdentityProvider identities) : ITransportListener
+    {
+        internal TaskCompletionSource<TransportPeerIdentity> Observed { get; }
+            = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<IAsyncDisposable?> OnChannelOpenAsync(
+            JsonElement request, IMessageChannel channel, CancellationToken ct = default)
+        {
+            this.Observed.TrySetResult(identities.GetRequiredIdentity(channel));
+            return Task.FromResult<IAsyncDisposable?>(new DummyDisposable());
+        }
+
+        public Task<IAsyncDisposable?> OnStreamOpenAsync(
+            JsonElement request, Stream stream, CancellationToken ct = default)
+            => Task.FromResult<IAsyncDisposable?>(null);
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

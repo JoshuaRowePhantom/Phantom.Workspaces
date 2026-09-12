@@ -103,11 +103,21 @@ public sealed class AgentCliApp : IDisposable
     {
         this.agentChat.TurnCompleted += this.OnTurnCompleted;
 
-        ConsoleCancelEventHandler cancelHandler = (_, e) =>
+        ConsoleCancelEventHandler cancelHandler = async (_, e) =>
         {
             e.Cancel = true;
             this.ResetAssistantStreamAfterInterrupt();
-            this.agentChat.Interrupt();
+            try
+            {
+                await this.agentChat.InterruptAsync(this.appCts.Token);
+            }
+            catch (OperationCanceledException) when (this.appCts.IsCancellationRequested)
+            {
+            }
+            catch (Exception error)
+            {
+                this.WriteLogLine($"Unable to interrupt agent: {error.Message}");
+            }
         };
         Console.CancelKeyPress += cancelHandler;
 

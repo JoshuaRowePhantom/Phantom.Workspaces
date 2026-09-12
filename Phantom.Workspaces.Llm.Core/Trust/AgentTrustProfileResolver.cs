@@ -50,8 +50,8 @@ public static class AgentTrustProfileResolver
         return null;
     }
 
-    /// <summary>Returns the referenced profile name, or null for no/inline profile metadata.</summary>
-    public static string? GetReference(AgentDefinition agentDefinition)
+    /// <summary>Returns the stored profile name referenced by an agent definition, if any.</summary>
+    public static string? GetProfileReference(AgentDefinition agentDefinition)
     {
         ArgumentNullException.ThrowIfNull(agentDefinition);
         var metadata = ReadTrustProfileMetadata(agentDefinition);

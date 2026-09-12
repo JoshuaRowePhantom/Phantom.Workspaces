@@ -51,7 +51,7 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
         return this.ReadState().GetHistoryAsync(request, cancellationToken);
     }
 
-    public Task<QueryResult> QueryAsync(
+    public async Task<QueryResult> QueryAsync(
         QueryRequest request,
         CancellationToken cancellationToken = default)
     {
@@ -61,7 +61,12 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
             storedEmbeddingsSnapshot = new Dictionary<EntityId, IReadOnlyList<float>>(this.storedEmbeddings);
         }
 
-        return this.ReadState().QueryAsync(request, this.embeddingsProvider, storedEmbeddingsSnapshot, cancellationToken);
+        var result = await this.ReadState().QueryAsync(
+            request, this.embeddingsProvider, storedEmbeddingsSnapshot, cancellationToken).ConfigureAwait(false);
+        return result with
+        {
+            AuthoritativeTimestamp = new Timestamp(this.timeProvider.GetUtcNow(), "query"),
+        };
     }
 
     public Task<UpdateResult> UpdateAsync(

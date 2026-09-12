@@ -4,6 +4,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>Phantom.Workspaces.Data.MongoDB</RootNamespace>
+    <!-- This library references the executable Containers project, so RID-specific publish
+         graphs must propagate their RID through this project to that runtime dependency. -->
+    <IsRidAgnostic>false</IsRidAgnostic>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="JsonSchema.Net" />

@@ -95,6 +95,31 @@ public sealed class ReverseExecutionDispatcherTests
     }
 
     [Fact]
+    public async Task ExecutorDispatcher_AuthenticatedPeerClaims_AreAttachedToDispatchedChannel()
+    {
+        await using var underlying = new UnderlyingChannel();
+        var identities = new TransportPeerIdentityProvider();
+        var received = new TaskCompletionSource<TransportPeerIdentity>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var registry = new TransportRegistry();
+        registry.Register(new IdentityListener(identities, identity => received.TrySetResult(identity)));
+        await using var dispatcher = new ReverseExecutionDispatcher(underlying, registry, identities);
+
+        await underlying.DeliverInbound(Json("""
+            {"type":"channel-open","channelId":"identity","authenticatedPeer":{
+              "authenticationScheme":"dev-tunnel","stablePeerId":"peer",
+              "userEntityId":"11111111-1111-1111-1111-111111111111",
+              "userComputerProfileEntityId":"22222222-2222-2222-2222-222222222222"},
+             "request":{"type":"identity"}}
+            """));
+
+        var identity = await received.Task.WaitAsync(Ct());
+        Assert.Equal("dev-tunnel", identity.AuthenticationScheme);
+        Assert.Equal("11111111-1111-1111-1111-111111111111", identity.UserEntityId);
+        Assert.Equal("22222222-2222-2222-2222-222222222222", identity.UserComputerProfileEntityId);
+    }
+
+    [Fact]
     public async Task ExecutorDispatcher_RelayedStream_RoundTripsDataFrames()
     {
         await using var underlying = new UnderlyingChannel();
@@ -172,6 +197,28 @@ public sealed class ReverseExecutionDispatcherTests
             onStream(request);
             return Task.FromResult<IAsyncDisposable?>(new NoopDisposable());
         }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class IdentityListener(
+        TransportPeerIdentityProvider provider,
+        Action<TransportPeerIdentity> onIdentity) : ITransportListener
+    {
+        public Task<IAsyncDisposable?> OnChannelOpenAsync(
+            JsonElement request, IMessageChannel channel, CancellationToken ct = default)
+        {
+            if (request.TryGetProperty("type", out var type) && type.GetString() == "identity")
+            {
+                onIdentity(provider.GetRequiredIdentity(channel));
+                return Task.FromResult<IAsyncDisposable?>(new NoopDisposable());
+            }
+            return Task.FromResult<IAsyncDisposable?>(null);
+        }
+
+        public Task<IAsyncDisposable?> OnStreamOpenAsync(
+            JsonElement request, Stream stream, CancellationToken ct = default)
+            => Task.FromResult<IAsyncDisposable?>(null);
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

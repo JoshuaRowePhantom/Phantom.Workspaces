@@ -1,9 +1,20 @@
 using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using Avalonia.Headless.XUnit;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Gui.Shared.Utilities;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Core.Manifest;
+using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.Remote;
+using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.ViewModels;
 using Xunit;
 using AgentViewModel = Phantom.Workspaces.Agent.Gui.ViewModels.AgentViewModel;
@@ -12,6 +23,157 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class OpenAgentSessionShortcutHandlerTests
 {
+    [Fact]
+    public void CreateAgentSessionTabRequest_PublicContract_HasExactlySpecifiedProperties()
+    {
+        var properties = typeof(CreateAgentSessionTabRequest)
+            .GetProperties()
+            .Select(static property => property.Name)
+            .Order()
+            .ToArray();
+
+        Assert.Equal(
+            [
+                nameof(CreateAgentSessionTabRequest.AgentChat),
+                nameof(CreateAgentSessionTabRequest.AgentSessionEntity),
+                nameof(CreateAgentSessionTabRequest.MainWindowViewModel),
+            ],
+            properties);
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task DisposeAsync_InitializationInFlight_CancelsWithoutPublishingReadyTab()
+    {
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = MainWindowIntegrationTests.GetEntityBroker(viewModel);
+        var definitionEntity = await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(
+            entityBroker,
+            new EntityId("bbbb1488-0000-4000-8000-000000000001"),
+            """
+            {
+              "entity-id": "bbbb1488-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "cancel-before-ready"]],
+              "display-name": { "default": "Cancel Before Ready" },
+              "definition": {
+                "kind": "prompt",
+                "name": "cancel-before-ready",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+        var context = new AgentSessionShortcutContext();
+        var sessionEntity = await context.CreateAgentSessionEntityAsync(
+            viewModel,
+            definitionEntity,
+            "cancel-before-ready");
+        Assert.NotNull(sessionEntity);
+
+        var table = MainWindowIntegrationTests.CreateTestRunningAgentChatTable();
+        var publicationQueued = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowPublication = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new OpenAgentSessionShortcutHandler(
+            context,
+            MainWindowIntegrationTests.CreateLocalTrustedExecutorSelector(),
+            table,
+            new AgentSessionOwnerDecisionProvider(),
+            transportFactoryRegistry: null,
+            async callback =>
+            {
+                publicationQueued.TrySetResult();
+                await allowPublication.Task;
+                callback();
+            });
+
+        Assert.True(await handler.Handle(viewModel, Shortcut.Open, sessionEntity!));
+        await publicationQueued.Task.WaitAsync(
+            TimeSpan.FromSeconds(30),
+            TestContext.Current.CancellationToken);
+
+        var tab = Assert.Single(viewModel.WorkspacePanes
+            .SelectMany(static pane => pane.Tabs)
+            .OfType<AgentSessionWorkspaceTabViewModel>());
+        var disposeTask = handler.DisposeAsync().AsTask();
+        allowPublication.TrySetResult();
+        await disposeTask;
+
+        Assert.Equal(AgentTabState.Loading, tab.State);
+        Assert.Null(tab.Agent);
+        Assert.Null(tab.Lease);
+        Assert.Empty(table.RunningSessions);
+    }
+
+    [Theory]
+    [InlineData(AgentSessionRemoteStatus.Running)]
+    [InlineData(AgentSessionRemoteStatus.NotRunning)]
+    [InlineData(AgentSessionRemoteStatus.Unavailable)]
+    public async Task Handle_RemoteOwnerPrompt_ShowsAuthorizedStatusAndConnectsOnOwner(
+        AgentSessionRemoteStatus status)
+    {
+        var choices = new RecordingOwnerDecisionProvider(
+            AgentSessionOwnerDecision.ConnectOnOwner);
+        var handler = Handler(choices);
+        var transport = new OwnerDecisionTransport(status);
+
+        var result = await handler.ResolveRemoteOwnerAsync(
+            RemoteEntity(),
+            Guid.Parse("11111111-1111-1111-1111-111111111111"),
+            Guid.Parse("22222222-2222-2222-2222-222222222222"),
+            transport,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(status, choices.Status);
+        Assert.Equal(AgentChatAcquisitionMode.StartOrAttachRemote, result.Mode);
+        Assert.Same(transport, result.Transport);
+        Assert.Equal(["attach-agent-session"], transport.RequestTypes);
+    }
+
+    [Fact]
+    public async Task ResolveRemoteOwner_CancelledDecision_DisposesUntransferredTransport()
+    {
+        var choices = new BlockingOwnerDecisionProvider();
+        var handler = Handler(choices);
+        var transport = new OwnerDecisionTransport(AgentSessionRemoteStatus.Running);
+        using var cancellation = new CancellationTokenSource();
+        var resolving = handler.ResolveRemoteOwnerAsync(
+            RemoteEntity(),
+            Guid.Parse("11111111-1111-1111-1111-111111111111"),
+            Guid.Parse("22222222-2222-2222-2222-222222222222"),
+            transport,
+            cancellation.Token);
+        await choices.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
+
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => resolving);
+        Assert.True(transport.IsDisposed);
+    }
+
+    [Fact]
+    public async Task TryCreateAgentSessionTabForRestoreAsync_RemoteOwner_ResumesLocallyAfterTakeover()
+    {
+        var handler = Handler(new RecordingOwnerDecisionProvider(
+            AgentSessionOwnerDecision.ResumeLocally));
+        var transport = new OwnerDecisionTransport(AgentSessionRemoteStatus.Running);
+        var localOwner = Guid.Parse("22222222-2222-2222-2222-222222222222");
+
+        var result = await handler.ResolveRemoteOwnerAsync(
+            RemoteEntity(),
+            Guid.Parse("11111111-1111-1111-1111-111111111111"),
+            localOwner,
+            transport,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(AgentChatAcquisitionMode.Local, result.Mode);
+        Assert.Null(result.Transport);
+        Assert.Equal(localOwner.ToString(), result.Entity.GetProperty("host-profile-entity-id").GetString());
+        Assert.Equal(8, result.Entity.GetProperty("ownership-generation").GetInt64());
+        Assert.Equal(["attach-agent-session", "take-over-agent-session"], transport.RequestTypes);
+    }
+
     [AvaloniaFact(Timeout = 30_000)]
     public async Task ComposeSessionAgentViewModel_AlwaysConfiguresSlashCommands()
     {
@@ -73,7 +235,15 @@ public sealed class OpenAgentSessionShortcutHandlerTests
         };
 
         AgentViewModel agent = handler.ComposeSessionAgentViewModel(
-            viewModel, loggerFactory, chat, sessionEntity, tab, TaskScheduler.Default);
+            new ComposeSessionAgentViewModelOptions
+            {
+                MainWindowViewModel = viewModel,
+                LoggerFactory = loggerFactory,
+                AgentChat = chat,
+                AgentSessionEntity = sessionEntity,
+                Tab = tab,
+                ForegroundScheduler = TaskScheduler.Default,
+            });
 
         try
         {
@@ -84,6 +254,345 @@ public sealed class OpenAgentSessionShortcutHandlerTests
             await agent.DisposeAsync();
             await chat.DisposeAsync();
             loggerFactory.Dispose();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task FirstOpen_UsesPersistedSplitBindings()
+    {
+        // Regression pin for #1481 — the first-open path (Open shortcut → TryBuildAgentAsync) must
+        // route through the shared IAgentSessionRuntimeContextFactory hydrator, reconstructing the
+        // persisted executor-bindings before definition resolution / chat creation. No GUI code
+        // may parse executor bindings on this path.
+        var legacyHostProfileEntityId = new EntityId("bbbb1481-0000-4000-8000-000000000001");
+        const string WorkerProfileEntityId = "cccc1481-0000-4000-8000-000000000001";
+        var registry = new TransportFactoryRegistry();
+        var registryProvider = new TransportFactoryRegistryProvider(registry);
+        var innerRuntimeFactory = AgentSessionRuntimeContextFactory.FromProvider(registryProvider);
+        var spyRuntimeFactory = new SpyRuntimeContextFactory(innerRuntimeFactory);
+        var runningChatFactory = new AgentChatFactory(
+            new InMemoryAgentPersistenceStore(),
+            new AgentServices(),
+            SynchronizationContextTaskScheduler.FromCurrent());
+        var table = new RunningAgentChatTable(runningChatFactory, spyRuntimeFactory);
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel(applicationServices: appServices);
+        await viewModel.InitializeAsync();
+
+        var entityBroker = MainWindowIntegrationTests.GetEntityBroker(viewModel);
+        var agentDefinitionEntity = await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(
+            entityBroker,
+            new EntityId("dd811481-0000-4000-8000-000000000001"),
+            """
+            {
+              "entity-id": "dd811481-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "first-open-split-bindings"]],
+              "display-name": { "default": "First-Open Split Bindings" },
+              "definition": {
+                "kind": "prompt",
+                "name": "first-open-split-bindings",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var context = new AgentSessionShortcutContext();
+        var sessionEntityId = new EntityId("eeee1481-0000-4000-8000-000000000001");
+        var sessionEntity = await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(
+            entityBroker,
+            sessionEntityId,
+            $$"""
+            {
+              "entity-id": "{{sessionEntityId}}",
+              "entity-types": ["entity", "agent-session"],
+              "names": [["tests", "agent-sessions", "first-open-legacy-split-bindings"]],
+              "display-name": { "default": "First-Open Legacy Split Bindings" },
+              "agent-source-entity-id": "{{agentDefinitionEntity.EntityId}}",
+              "agent-session-id": "{{Guid.NewGuid():n}}",
+              "host-profile-entity-id": "{{legacyHostProfileEntityId}}",
+              "executor-bindings": {
+                "components": {
+                  "worker": {
+                    "type": "user-computer-profile",
+                    "entity-id": "{{WorkerProfileEntityId}}"
+                  }
+                }
+              }
+            }
+            """);
+        Assert.NotNull(sessionEntity);
+
+        var handler = new OpenAgentSessionShortcutHandler(
+            context,
+            MainWindowIntegrationTests.CreateLocalTrustedExecutorSelector(),
+            table);
+
+        var tab = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = sessionEntity!.EntityId.ToString(),
+            Title = sessionEntity.DisplayName,
+            Entity = sessionEntity,
+        };
+        var foregroundScheduler = SynchronizationContextTaskScheduler.FromCurrent();
+
+        var result = await Task.Run(() =>
+            handler.TryBuildAgentAsync(viewModel, sessionEntity!, tab, foregroundScheduler));
+
+        try
+        {
+            Assert.NotNull(result);
+            Assert.Equal(1, spyRuntimeFactory.CreateCallCount);
+            var lastContext = Assert.IsType<AgentSessionRuntimeContext>(spyRuntimeFactory.LastContext);
+            Assert.Equal(
+                legacyHostProfileEntityId.ToString(),
+                lastContext.Intent.ExecutorBindings.SessionExecutor.GetProperty("entity-id").GetString());
+            var workerBinding = lastContext.Intent.ExecutorBindings.ResolveComponent("worker");
+            Assert.Equal("user-computer-profile", workerBinding.GetProperty("type").GetString());
+            Assert.Equal(WorkerProfileEntityId, workerBinding.GetProperty("entity-id").GetString());
+            Assert.Same(registry, lastContext.TransportFactoryRegistry);
+        }
+        finally
+        {
+            if (result?.lease is { } lease)
+            {
+                await lease.DisposeAsync();
+            }
+            if (result?.agent is { } createdAgent)
+            {
+                await createdAgent.DisposeAsync();
+            }
+            result?.loggerFactory.Dispose();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task AutoResume_UsesPersistedSplitBindings()
+    {
+        // Regression pin for #1481 — the auto-resume path must go through the same hydrator, so a
+        // persisted split-executor session that auto-resumes reconstructs the same runtime context
+        // as first-open.
+        const string WorkerProfileEntityId = "cccc1481-0000-4000-8000-000000000002";
+        var registry = new TransportFactoryRegistry();
+        var registryProvider = new TransportFactoryRegistryProvider(registry);
+        var innerRuntimeFactory = AgentSessionRuntimeContextFactory.FromProvider(registryProvider);
+        var spyRuntimeFactory = new SpyRuntimeContextFactory(innerRuntimeFactory);
+        var runningChatFactory = new AgentChatFactory(
+            new InMemoryAgentPersistenceStore(),
+            new AgentServices(),
+            SynchronizationContextTaskScheduler.FromCurrent());
+        var table = new RunningAgentChatTable(runningChatFactory, spyRuntimeFactory);
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel(applicationServices: appServices);
+        await viewModel.InitializeAsync();
+
+        var entityBroker = MainWindowIntegrationTests.GetEntityBroker(viewModel);
+        var agentDefinitionEntity = await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(
+            entityBroker,
+            new EntityId("dd811481-0000-4000-8000-000000000002"),
+            """
+            {
+              "entity-id": "dd811481-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "auto-resume-split-bindings"]],
+              "display-name": { "default": "Auto-Resume Split Bindings" },
+              "definition": {
+                "kind": "prompt",
+                "name": "auto-resume-split-bindings",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var context = new AgentSessionShortcutContext();
+        var sessionExecutor = ExecutorBindings.LocalDescriptor();
+        var componentBindings = BuildWorkerComponentBindings(WorkerProfileEntityId);
+        var sessionEntity = await context.CreateAgentSessionEntityAsync(
+            viewModel,
+            agentDefinitionEntity,
+            Guid.NewGuid().ToString("n"),
+            sessionExecutor: sessionExecutor,
+            executorComponentBindings: componentBindings);
+        Assert.NotNull(sessionEntity);
+
+        var handler = new OpenAgentSessionShortcutHandler(
+            context,
+            MainWindowIntegrationTests.CreateLocalTrustedExecutorSelector(),
+            table);
+
+        const string resumePrompt = "Resume with persisted split bindings.";
+        var foregroundScheduler = SynchronizationContextTaskScheduler.FromCurrent();
+        var lease = await Task.Run(() =>
+            handler.TryStartAutoResumeAsync(viewModel, sessionEntity!, resumePrompt, foregroundScheduler));
+
+        try
+        {
+            Assert.NotNull(lease);
+            Assert.Equal(1, spyRuntimeFactory.CreateCallCount);
+            var lastContext = Assert.IsType<AgentSessionRuntimeContext>(spyRuntimeFactory.LastContext);
+            var workerBinding = lastContext.Intent.ExecutorBindings.ResolveComponent("worker");
+            Assert.Equal("user-computer-profile", workerBinding.GetProperty("type").GetString());
+            Assert.Equal(WorkerProfileEntityId, workerBinding.GetProperty("entity-id").GetString());
+            Assert.Same(registry, lastContext.TransportFactoryRegistry);
+        }
+        finally
+        {
+            if (lease is not null)
+            {
+                await lease.DisposeAsync();
+            }
+        }
+    }
+
+    private static JsonElement BuildWorkerComponentBindings(string workerProfileEntityId)
+    {
+        using var document = JsonDocument.Parse(
+            $$"""
+            {
+              "worker": {
+                "type": "user-computer-profile",
+                "entity-id": "{{workerProfileEntityId}}"
+              }
+            }
+            """);
+        return document.RootElement.Clone();
+    }
+
+    private static OpenAgentSessionShortcutHandler Handler(
+        IAgentSessionOwnerDecisionProvider decisionProvider)
+        => new(
+            new AgentSessionShortcutContext(),
+            MainWindowIntegrationTests.CreateLocalTrustedExecutorSelector(),
+            Moq.Mock.Of<IRunningAgentChatTable>(),
+            decisionProvider);
+
+    private static JsonElement RemoteEntity()
+        => JsonDocument.Parse(
+            """
+            {
+              "agent-session-id":"remote-choice",
+              "host-profile-entity-id":"11111111-1111-1111-1111-111111111111",
+              "ownership-generation":7
+            }
+            """).RootElement.Clone();
+
+    private sealed class RecordingOwnerDecisionProvider(AgentSessionOwnerDecision decision)
+        : IAgentSessionOwnerDecisionProvider
+    {
+        internal AgentSessionRemoteStatus? Status { get; private set; }
+
+        public Task<AgentSessionOwnerDecision> ChooseAsync(
+            AgentSessionOwnerDecisionContext context,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            this.Status = context.Status;
+            return Task.FromResult(decision);
+        }
+    }
+
+    private sealed class BlockingOwnerDecisionProvider : IAgentSessionOwnerDecisionProvider
+    {
+        internal TaskCompletionSource Started { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<AgentSessionOwnerDecision> ChooseAsync(
+            AgentSessionOwnerDecisionContext context,
+            CancellationToken ct)
+        {
+            this.Started.TrySetResult();
+            var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var registration = ct.Register(cancelled.SetResult);
+            await cancelled.Task;
+            ct.ThrowIfCancellationRequested();
+            throw new InvalidOperationException("The cancellation token should have stopped the decision.");
+        }
+    }
+
+    private sealed class OwnerDecisionTransport(AgentSessionRemoteStatus status) : ITransport
+    {
+        internal List<string> RequestTypes { get; } = [];
+        internal bool IsDisposed { get; private set; }
+
+        public Task<IMessageChannel> ConnectToMessageChannelAsync(
+            JsonElement request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var type = request.GetProperty("type").GetString()!;
+            this.RequestTypes.Add(type);
+            var channel = new OwnerDecisionChannel();
+            if (type == "attach-agent-session")
+            {
+                channel.Send(new SessionStatusEvent { Status = status }, Guid.NewGuid());
+            }
+            else
+            {
+                var takeover = AgentSessionProtocolCodec.DeserializeTakeover(request);
+                channel.Send(
+                    new CommandCompletedEvent { CommandId = takeover.CorrelationId },
+                    takeover.CorrelationId);
+            }
+            return Task.FromResult<IMessageChannel>(channel);
+        }
+
+        public Task<Stream> ConnectToStreamAsync(
+            JsonElement request,
+            CancellationToken ct = default)
+            => throw new NotSupportedException();
+
+        public ValueTask DisposeAsync()
+        {
+            this.IsDisposed = true;
+            return ValueTask.CompletedTask;
+        }
+
+        private sealed class OwnerDecisionChannel : IMessageChannel
+        {
+            private readonly Channel<JsonElement> incoming = Channel.CreateUnbounded<JsonElement>();
+            private readonly Channel<JsonElement> outgoing = Channel.CreateUnbounded<JsonElement>();
+
+            public ChannelWriter<JsonElement> Writer => this.outgoing.Writer;
+            public ChannelReader<JsonElement> Reader => this.incoming.Reader;
+
+            internal void Send(AgentSessionServerEvent value, Guid correlationId)
+                => this.incoming.Writer.TryWrite(AgentSessionProtocolCodec.SerializeFrame(
+                    AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.CreateFrame(
+                        new RuntimeEpoch { Value = Guid.NewGuid() },
+                        1,
+                        correlationId,
+                        value)));
+
+            public ValueTask DisposeAsync()
+            {
+                this.incoming.Writer.TryComplete();
+                this.outgoing.Writer.TryComplete();
+                return ValueTask.CompletedTask;
+            }
+        }
+    }
+
+    private sealed class SpyRuntimeContextFactory : IAgentSessionRuntimeContextFactory
+    {
+        private readonly IAgentSessionRuntimeContextFactory inner;
+        private int createCallCount;
+
+        public SpyRuntimeContextFactory(IAgentSessionRuntimeContextFactory inner)
+        {
+            this.inner = inner;
+        }
+
+        public int CreateCallCount => Volatile.Read(ref this.createCallCount);
+        public AgentSessionRuntimeContext? LastContext { get; private set; }
+
+        public AgentSessionRuntimeContext Create(JsonElement agentSessionEntity)
+        {
+            Interlocked.Increment(ref this.createCallCount);
+            var context = this.inner.Create(agentSessionEntity);
+            this.LastContext = context;
+            return context;
         }
     }
 }

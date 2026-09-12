@@ -9,6 +9,7 @@ namespace Phantom.Workspaces.Llm;
 public sealed class RunningAgentChat
 {
     private readonly IRunningAgentChatFactory _factory;
+    internal IAgentChat? AgentChat { get; }
 
     public AgentSessionId SessionId { get; }
 
@@ -23,10 +24,14 @@ public sealed class RunningAgentChat
     /// </summary>
     public bool IsSubAgent { get; init; }
 
-    internal RunningAgentChat(AgentSessionId sessionId, IRunningAgentChatFactory factory)
+    internal RunningAgentChat(
+        AgentSessionId sessionId,
+        IRunningAgentChatFactory factory,
+        IAgentChat? agentChat = null)
     {
         SessionId = sessionId;
         _factory = factory;
+        this.AgentChat = agentChat;
     }
 
     /// <summary>

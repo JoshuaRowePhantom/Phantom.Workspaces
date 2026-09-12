@@ -244,6 +244,35 @@ public sealed class McpToolContextProviderTests
         Assert.Equal(2, attempts);
     }
 
+    [Fact]
+    public async Task DisposeAsync_InFlightInitialization_CancelsAndDrainsAttempt()
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var canceled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var neverCompletes = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = CreateProvider(async cancellationToken =>
+        {
+            started.SetResult();
+            try
+            {
+                await neverCompletes.Task.WaitAsync(cancellationToken);
+                return [];
+            }
+            finally
+            {
+                canceled.SetResult();
+            }
+        });
+
+        var initialization = InvokeAsync(provider);
+        await started.Task;
+
+        await provider.DisposeAsync();
+
+        await canceled.Task;
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => initialization);
+    }
+
     private static McpToolContextProvider CreateProvider(Func<CancellationToken, Task<AITool[]>> initialize)
         => new(
             OAuthTool(),

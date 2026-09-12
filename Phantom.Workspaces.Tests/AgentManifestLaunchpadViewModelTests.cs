@@ -12,6 +12,7 @@ using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Core.Manifest;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces.Tests;
@@ -82,7 +83,7 @@ public sealed class AgentManifestLaunchpadViewModelTests
             // therefore that RunningAgentChatFactory was injected before AgentChat.CreateAsync.
             Assert.Equal(AgentTabState.Ready, sessionTab.State);
             Assert.NotNull(sessionTab.Lease);
-            var services = GetRequestServices(sessionTab.Lease!.AgentChat);
+            var services = GetRequestServices(sessionTab.Lease!.LocalAgentChat);
             Assert.NotNull(services.RunningAgentChatFactory);
         }
     }
@@ -103,7 +104,7 @@ public sealed class AgentManifestLaunchpadViewModelTests
 
             Assert.Equal(AgentTabState.Ready, sessionTab.State);
             Assert.NotNull(sessionTab.Lease);
-            var services = GetRequestServices(sessionTab.Lease!.AgentChat);
+            var services = GetRequestServices(sessionTab.Lease!.LocalAgentChat);
             Assert.NotNull(services.RunningAgentChatFactory);
         }
     }
@@ -126,6 +127,7 @@ public sealed class AgentManifestLaunchpadViewModelTests
             // Regression pin: any future refactor that silently reverts to the direct
             // AgentFactory.CreateAgentChatAsync path would fail this spy assertion.
             Assert.True(spy.AcquireCallCount >= 1, "IRunningAgentChatTable.AcquireAsync was not invoked.");
+            Assert.NotNull(spy.LastRequest?.AgentSessionEntity);
         }
     }
 
@@ -140,7 +142,7 @@ public sealed class AgentManifestLaunchpadViewModelTests
         var entity = await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(broker, entityId, entityJson);
 
         var agentSessionShortcutContext = new AgentSessionShortcutContext();
-        var inner = MainWindowIntegrationTests.CreateTestRunningAgentChatTable();
+        var inner = CreateTestRunningAgentChatTable();
         var spy = new SpyRunningAgentChatTable(inner);
         var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
             agentSessionShortcutContext,
@@ -325,7 +327,7 @@ public sealed class AgentManifestLaunchpadViewModelTests
             broker, new EntityId(ExecutorManifestEntityId), ExecutorManifestEntityJson);
 
         var agentSessionShortcutContext = new AgentSessionShortcutContext();
-        var inner = MainWindowIntegrationTests.CreateTestRunningAgentChatTable();
+        var inner = CreateTestRunningAgentChatTable();
         var spy = new SpyRunningAgentChatTable(inner);
         var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
             agentSessionShortcutContext,
@@ -398,7 +400,15 @@ public sealed class AgentManifestLaunchpadViewModelTests
               "kind": "prompt",
               "name": "issue-1463-executor",
               "model": { "id": "echo", "provider": "echo", "apiType": "Echo" }
-            }
+            },
+            "resources": [
+              {
+                "kind": "executor",
+                "id": "parameter",
+                "name": "worker",
+                "options": { "parameter": "worker-executor" }
+              }
+            ]
           }
         }
         """;
@@ -442,7 +452,90 @@ public sealed class AgentManifestLaunchpadViewModelTests
             broker, new EntityId(Issue1463ExecutorManifestEntityId), Issue1463ExecutorManifestEntityJson);
 
         var agentSessionShortcutContext = new AgentSessionShortcutContext();
-        var inner = MainWindowIntegrationTests.CreateTestRunningAgentChatTable();
+        var inner = CreateTestRunningAgentChatTable();
+        var spy = new SpyRunningAgentChatTable(inner);
+        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext,
+            MainWindowIntegrationTests.CreateLocalTrustedExecutorSelector(),
+            spy);
+
+        var launchpad = new AgentManifestLaunchpadViewModel(
+            manifestEntity,
+            agentSessionShortcutContext,
+            openAgentSessionShortcutHandler,
+            viewModel,
+            new Dictionary<string, string> { ["topic"] = "weather" })
+        {
+            Id = $"launchpad-{manifestEntity.EntityId}",
+            Title = manifestEntity.DisplayName,
+            DockRegion = "full",
+            Entity = manifestEntity,
+        };
+
+        await viewModel.OpenTabAsync(launchpad);
+        await launchpad.ExecutorOptionsLoaded;
+
+        await using (viewModel)
+        {
+            var executorRow = Assert.Single(launchpad.ManifestParameters.Parameters, p => p.IsExecutorPicker);
+            var profileOption = Assert.Single(
+                executorRow.ExecutorOptions,
+                option => option.Kind == ExecutorParameterSelection.UserComputerProfileKind
+                    && SelectionValue(option.Selection, ExecutorParameterSelection.UserComputerProfileKind)
+                        == new EntityId(UserComputerProfileEntityId).ToString());
+            executorRow.SelectedExecutorOption = profileOption;
+
+            launchpad.StartSessionCommand.Execute(null);
+
+            var sessionTab = await MainWindowIntegrationTests.WaitForSelectedTabAsync<AgentSessionWorkspaceTabViewModel>(
+                viewModel.SelectedWorkspacePane);
+            await MainWindowIntegrationTests.WaitForAgentReadyAsync(sessionTab);
+
+            Assert.NotNull(sessionTab.Entity);
+            Assert.True(sessionTab.Entity!.Data is JsonElement);
+            var data = (JsonElement)sessionTab.Entity!.Data!;
+
+            // Text value collected via component.GetValues().
+            Assert.True(data.TryGetProperty("parameter-values", out var parameterValues));
+            Assert.Equal("weather", parameterValues.GetProperty("topic").GetString());
+
+            // Executor selection collected via component.GetSelections().
+            Assert.True(data.TryGetProperty("parameter-selections", out var parameterSelections));
+            Assert.True(parameterSelections.TryGetProperty("worker-executor", out var workerSelection));
+            Assert.True(ExecutorParameterSelection.TryGetUserComputerProfile(workerSelection, out var profileId));
+            Assert.Equal(new EntityId(UserComputerProfileEntityId).ToString(), profileId);
+
+            var workerBinding = data
+                .GetProperty("executor-bindings")
+                .GetProperty("components")
+                .GetProperty("worker");
+            Assert.Equal("user-computer-profile", workerBinding.GetProperty("type").GetString());
+            Assert.Equal(new EntityId(UserComputerProfileEntityId).ToString(), workerBinding.GetProperty("entity-id").GetString());
+            Assert.Equal(data.GetRawText(), spy.LastRequest?.AgentSessionEntity?.GetRawText());
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task Launchpad_StartSession_WithTrustProfileSelection_ResolvesTrustProfileFreshLaunchBranch()
+    {
+        // Regression pin for #1481 — the fresh-launch trust-profile branch in
+        // AgentManifestSessionLauncher.ResolveSelectedTrustProfileAsync must resolve the referenced
+        // trust profile via DataAccessLayerTrustProfileResolver so that ExecutorBindings.Build
+        // authors a nonlocal worker binding for the persisted session entity. The prior test only
+        // covered the user-computer-profile branch and did not exercise this code path.
+        var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var broker = MainWindowIntegrationTests.GetEntityBroker(viewModel);
+        await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(
+            broker, new EntityId(UserComputerProfileEntityId), UserComputerProfileEntityJson);
+        await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(
+            broker, new EntityId(TrustProfileEntityId), TrustProfileEntityJson);
+        var manifestEntity = await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(
+            broker, new EntityId(Issue1463ExecutorManifestEntityId), Issue1463ExecutorManifestEntityJson);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var inner = CreateTestRunningAgentChatTable();
         var spy = new SpyRunningAgentChatTable(inner);
         var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
             agentSessionShortcutContext,
@@ -478,27 +571,67 @@ public sealed class AgentManifestLaunchpadViewModelTests
 
             var sessionTab = await MainWindowIntegrationTests.WaitForSelectedTabAsync<AgentSessionWorkspaceTabViewModel>(
                 viewModel.SelectedWorkspacePane);
+            await MainWindowIntegrationTests.WaitForAgentReadyAsync(sessionTab);
 
             Assert.NotNull(sessionTab.Entity);
             Assert.True(sessionTab.Entity!.Data is JsonElement);
             var data = (JsonElement)sessionTab.Entity!.Data!;
 
-            // Text value collected via component.GetValues().
-            Assert.True(data.TryGetProperty("parameter-values", out var parameterValues));
-            Assert.Equal("weather", parameterValues.GetProperty("topic").GetString());
-
-            // Executor selection collected via component.GetSelections().
+            // The trust-profile selection round-trips into the persisted parameter-selections.
             Assert.True(data.TryGetProperty("parameter-selections", out var parameterSelections));
             Assert.True(parameterSelections.TryGetProperty("worker-executor", out var workerSelection));
-            Assert.True(ExecutorParameterSelection.TryGetTrustProfile(workerSelection, out var nameOrId));
-            Assert.Equal("issue-1440-remote", nameOrId);
+            Assert.True(ExecutorParameterSelection.TryGetTrustProfile(workerSelection, out var trustName));
+            Assert.Equal("issue-1440-remote", trustName);
+
+            // The trust-profile fresh-launch branch resolved the profile and Build authored a worker
+            // binding (proof the ResolveSelectedTrustProfileAsync branch actually ran; the prior
+            // launch test's user-computer-profile branch skipped it entirely).
+            Assert.True(data.TryGetProperty("executor-bindings", out var executorBindings));
+            var workerBinding = executorBindings.GetProperty("components").GetProperty("worker");
+            Assert.NotEqual(JsonValueKind.Undefined, workerBinding.ValueKind);
+            Assert.True(workerBinding.TryGetProperty("type", out var workerType));
+            Assert.Equal(JsonValueKind.String, workerType.ValueKind);
+            Assert.False(string.IsNullOrWhiteSpace(workerType.GetString()));
+
+            // #1490: the selected trust profile is authoritative runtime intent, not merely an
+            // input to the binding pre-pass. It must survive the production creation path so first
+            // materialization can enforce the exact revision observed by the creator.
+            Assert.Equal(
+                "issue-1440-remote",
+                data.GetProperty("trust-profile-reference").GetString());
+            var expectedRevision = data
+                .GetProperty("expected-trust-profile-revision")
+                .GetString();
+            Assert.False(string.IsNullOrWhiteSpace(expectedRevision));
+
+            var runtimeContext = new AgentSessionRuntimeContextFactory(
+                new TransportFactoryRegistry())
+                .Create(
+                    data,
+                    broker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId);
+            Assert.Equal(
+                "issue-1440-remote",
+                runtimeContext.Intent.TrustProfileReference);
+            Assert.Equal(
+                expectedRevision,
+                runtimeContext.Intent.ExpectedTrustProfileRevision);
+            Assert.Equal(data.GetRawText(), spy.LastRequest?.AgentSessionEntity?.GetRawText());
         }
+    }
+
+    private static RunningAgentChatTable CreateTestRunningAgentChatTable()
+    {
+        var store = new InMemoryAgentPersistenceStore();
+        var factory = new AgentChatFactory(store, new AgentServices(), SynchronizationContextTaskScheduler.FromCurrent());
+        var registryProvider = new TransportFactoryRegistryProvider(new TransportFactoryRegistry());
+        return new RunningAgentChatTable(factory, AgentSessionRuntimeContextFactory.FromProvider(registryProvider));
     }
 
     private sealed class SpyRunningAgentChatTable : IRunningAgentChatTable
     {
         private readonly IRunningAgentChatTable inner;
         private int acquireCallCount;
+        private AcquireAgentChatRequest? lastRequest;
 
         public SpyRunningAgentChatTable(IRunningAgentChatTable inner)
         {
@@ -506,11 +639,13 @@ public sealed class AgentManifestLaunchpadViewModelTests
         }
 
         public int AcquireCallCount => Volatile.Read(ref this.acquireCallCount);
+        public AcquireAgentChatRequest? LastRequest => this.lastRequest;
 
         public ObservableCollection<RunningAgentChatWithEntityInfo> RunningSessions => this.inner.RunningSessions;
 
         public Task<RunningAgentChatLease> AcquireAsync(AcquireAgentChatRequest request, CancellationToken ct = default)
         {
+            this.lastRequest = request;
             Interlocked.Increment(ref this.acquireCallCount);
             return this.inner.AcquireAsync(request, ct);
         }

@@ -209,9 +209,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var agentPersistenceStoreCache = new AgentPersistenceStoreCache();
         var agentPersistenceStore = AgentPersistenceStoreFactory.CreateInMemory();
         var agentChatFactory = new AgentChatFactory(agentPersistenceStore, new AgentServices(), TaskScheduler.Current);
+        var registryProvider = new TransportFactoryRegistryProvider();
         return new ApplicationServices(
-            new RunningAgentChatTable(agentChatFactory),
-            agentPersistenceStoreCache);
+            new RunningAgentChatTable(agentChatFactory, AgentSessionRuntimeContextFactory.FromProvider(registryProvider)),
+            agentPersistenceStoreCache,
+            transportFactoryRegistryProvider: registryProvider);
     }
 
     public RepositorySource RepositorySource { get; }
@@ -909,7 +911,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var composition = new Services.WorkspacesTransportComposition(
             this.entityBroker!.EntityRepository.DataAccessLayer,
             this.entityBroker.EntityRepository.WorkspaceEntitySession,
-            hubFactories);
+            hubFactories,
+            registryProvider: this.applicationServices.TransportFactoryRegistryProvider,
+            runningAgentChats: this.applicationServices.RunningAgentChats);
         this.transportComposition = composition;
         this.trustedExecutorSelector.SetRemoteExecutor(composition.TrustedExecutor);
         await composition.StartAsync();
@@ -2582,7 +2586,16 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                     this.SelectedWorkspacePane = targetPane;
                 }
                 this.dockFactory.SetActiveDockable(existingDocument);
-                this.notificationService.MarkRead(tab.Id);
+                this.notificationService.MarkRead(new NotificationTargetRequest
+                {
+                    TabId = tab.Id,
+                    Kind = "chat-idle",
+                });
+                this.notificationService.MarkRead(new NotificationTargetRequest
+                {
+                    TabId = tab.Id,
+                    Kind = "legacy",
+                });
                 this.dockFactory.SetFocusedDockable(documentDock, existingDocument);
                 // Set SelectedTab directly so GoToPane notification-read works even when the
                 // ItemsSource/ItemContainerGenerator pipeline is inactive (e.g. headless tests).
@@ -3441,7 +3454,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                             entity.EntityId.Value.ToString();
                         var agentTab = await this.openAgentSessionShortcutHandler
                             .TryCreateAgentSessionTabForRestoreAsync(
-                                this, entity, tabId, title: restoredAgentTitle, dockRegion: null);
+                                new CreateAgentSessionTabForRestoreRequest
+                                {
+                                    MainWindowViewModel = this,
+                                    AgentSessionEntity = entity,
+                                    TabId = tabId,
+                                    Title = restoredAgentTitle,
+                                    DockRegion = null,
+                                });
                         if (agentTab is not null)
                         {
                             agentTab.IsTitleExplicit = agentDesc.IsTitleExplicit;
@@ -4364,12 +4384,30 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 ?? paneDoc.WorkspacePane.Tabs.FirstOrDefault();
             if (activeTab is not null)
             {
-                this.notificationService.MarkRead(activeTab.Id);
+                this.notificationService.MarkRead(new NotificationTargetRequest
+                {
+                    TabId = activeTab.Id,
+                    Kind = "chat-idle",
+                });
+                this.notificationService.MarkRead(new NotificationTargetRequest
+                {
+                    TabId = activeTab.Id,
+                    Kind = "legacy",
+                });
             }
         }
         else if (e.Dockable is WorkspaceDocument doc)
         {
-            this.notificationService.MarkRead(doc.Id);
+            this.notificationService.MarkRead(new NotificationTargetRequest
+            {
+                TabId = doc.Id,
+                Kind = "chat-idle",
+            });
+            this.notificationService.MarkRead(new NotificationTargetRequest
+            {
+                TabId = doc.Id,
+                Kind = "legacy",
+            });
             // Update the selected tab on the pane that owns this document
             var ownerPane = this.WorkspacePanes.FirstOrDefault(
                 p => p.Tabs.Any(t => string.Equals(t.Id, doc.Id, StringComparison.Ordinal)));
@@ -4599,5 +4637,3 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         await base.DisposeAsync();
     }
 }
-
-

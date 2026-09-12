@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Phantom.Workspaces.Llm.Core.Transport;
 using Phantom.Workspaces.Llm.Echo;
 using Phantom.Workspaces.Llm.Mcp;
+using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.Local;
 using Phantom.Workspaces.Transport.Mcp;
@@ -90,6 +91,56 @@ public sealed class McpToolContextProviderRoutingTests
     }
 
     [Fact]
+    public async Task BoundRemote_TrustProfileReference_IsSentToLaunchHost()
+    {
+        await using var server = await InProcessMcpServer.StartAsync(new AsyncBarrier(1));
+        JsonElement observedRequest = default;
+        var host = BuildHost(server, request => observedRequest = request.Clone());
+        var factory = new CountingTransportFactory(host);
+        var router = BuildRouter(factory);
+        var trustContext = new AgentExecutionTrustContext(
+            new AgentExecutionTrustProfileReference("trust-profile", "restricted", "rev-7"));
+
+        var provider = new McpToolContextProvider(
+            RemoteTool(server),
+            NullLoggerFactory.Instance,
+            ExecutorTarget.AgentExecutor,
+            services: null,
+            boundExecutor: RemoteDescriptor(),
+            router: router,
+            trustContext: trustContext);
+
+        await GetToolsAsync(provider);
+
+        var connection = observedRequest.GetProperty(McpConnectionRequest.ConnectionProperty);
+        Assert.Equal("restricted", connection.GetProperty(McpConnectionRequest.TrustProfileRefProperty).GetString());
+        Assert.Equal("rev-7", connection.GetProperty(McpConnectionRequest.TrustProfileRevisionProperty).GetString());
+    }
+
+    [Fact]
+    public async Task BoundRemote_InlineTrustProfileWithoutRevisionedReference_IsRejected()
+    {
+        await using var server = await InProcessMcpServer.StartAsync(new AsyncBarrier(1));
+        var factory = new CountingTransportFactory(BuildHost(server));
+        var provider = new McpToolContextProvider(
+            RemoteTool(server),
+            NullLoggerFactory.Instance,
+            ExecutorTarget.AgentExecutor,
+            services: null,
+            boundExecutor: RemoteDescriptor(),
+            router: BuildRouter(factory),
+            trustContext: new AgentExecutionTrustContext(
+                new TrustProfile { NetworkCapabilities = [] },
+                new MxcTrustProfilePolicyCompiler(new FakeMxcPolicyHost())));
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await GetToolsAsync(provider));
+
+        Assert.Contains("revisioned trust-profile reference", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, factory.ConnectCount);
+    }
+
+    [Fact]
     public async Task BoundRemote_BridgesChannelViaMcpChannelClientTransport()
     {
         await using var server = await InProcessMcpServer.StartAsync(new AsyncBarrier(1));
@@ -155,12 +206,13 @@ public sealed class McpToolContextProviderRoutingTests
 
     // Mirrors the production RemoteMcpHostHandler (app assembly): opens the requested MCP server via
     // the shared factory and bridges its JSON-RPC to the incoming channel with a DelegatingMcpServer.
-    private static TransportRegistry BuildHost(InProcessMcpServer server)
+    private static TransportRegistry BuildHost(InProcessMcpServer server, Action<JsonElement>? observeRequest = null)
     {
         _ = server;
         var registry = new TransportRegistry();
         registry.Register(new McpTransportListener(async (request, channel, ct) =>
         {
+            observeRequest?.Invoke(request);
             var tool = McpConnectionRequest.ToTool(request);
             if (tool is null)
             {

@@ -28,33 +28,39 @@ namespace Phantom.Workspaces.Llm.Core.Transport.Chat;
 public sealed class CopilotClientTransportListener : ITransportListener
 {
     private readonly ICopilotClientFactory clientFactory;
-    private readonly ITrustProfileProvider? trustProfileProvider;
-    private readonly Func<TrustProfile?, ICopilotRuntimeConnectionFactory> runtimeConnectionFactory;
+    private readonly IRemoteTrustProfileResolver? trustProfileResolver;
+    private readonly ITrustProfileProcessPolicyCompiler? policyCompiler;
+    private readonly ICopilotRuntimeConnectionFactory runtimeConnectionFactory;
 
     public CopilotClientTransportListener(AgentServices? agentServices = null)
     {
         this.clientFactory = agentServices?.CopilotClientFactory as ICopilotClientFactory
             ?? DefaultCopilotClientFactory.Instance;
-        this.trustProfileProvider = agentServices?.TrustProfileProvider as ITrustProfileProvider;
-        this.runtimeConnectionFactory = profile =>
-            new CopilotRuntimeConnectionFactory(null, profile);
+        this.trustProfileResolver =
+            agentServices?.TrustProfileResolver as IRemoteTrustProfileResolver;
+        this.policyCompiler =
+            agentServices?.TrustProfilePolicyCompiler as ITrustProfileProcessPolicyCompiler;
+        this.runtimeConnectionFactory = new CopilotRuntimeConnectionFactory();
     }
 
     internal CopilotClientTransportListener(ICopilotClientFactory clientFactory)
         : this(
             clientFactory,
-            trustProfileProvider: null,
-            profile => new CopilotRuntimeConnectionFactory(null, profile))
+            trustProfileResolver: null,
+            policyCompiler: null,
+            new CopilotRuntimeConnectionFactory())
     {
     }
 
     internal CopilotClientTransportListener(
         ICopilotClientFactory clientFactory,
-        ITrustProfileProvider? trustProfileProvider,
-        Func<TrustProfile?, ICopilotRuntimeConnectionFactory> runtimeConnectionFactory)
+        IRemoteTrustProfileResolver? trustProfileResolver,
+        ITrustProfileProcessPolicyCompiler? policyCompiler,
+        ICopilotRuntimeConnectionFactory runtimeConnectionFactory)
     {
         this.clientFactory = clientFactory ?? throw new ArgumentNullException(nameof(clientFactory));
-        this.trustProfileProvider = trustProfileProvider;
+        this.trustProfileResolver = trustProfileResolver;
+        this.policyCompiler = policyCompiler;
         this.runtimeConnectionFactory = runtimeConnectionFactory
             ?? throw new ArgumentNullException(nameof(runtimeConnectionFactory));
     }
@@ -70,49 +76,70 @@ public sealed class CopilotClientTransportListener : ITransportListener
             return null;
         }
 
-        TrustProfile? effectiveProfile = null;
-        var profileReference = CopilotSessionTransportFrames.GetString(
-            request,
-            CopilotSessionTransportFrames.TrustProfileProperty);
-        if (profileReference is not null)
-        {
-            if (this.trustProfileProvider is null)
-            {
-                throw new InvalidOperationException(
-                    "The remote Copilot host cannot resolve the requested trust profile.");
-            }
-            effectiveProfile = await this.trustProfileProvider
-                .ResolveAsync(profileReference, ct)
-                .ConfigureAwait(false);
-        }
-
-        var selection = await this.runtimeConnectionFactory(effectiveProfile)
-            .CreateAsync(ct)
-            .ConfigureAwait(false);
-        var options = new CopilotClientOptions
-        {
-            Mode = CopilotClientMode.CopilotCli,
-            Connection = selection.Connection,
-        };
+        CopilotRuntimeConnectionLease? selection = null;
         ICopilotClient? client = null;
         try
         {
+            if (CopilotSessionTransportFrames.TryGetTrustProfileReference(
+                    request,
+                    out var profileReference))
+            {
+                if (this.trustProfileResolver is null || this.policyCompiler is null)
+                {
+                    throw new InvalidOperationException(
+                        "The remote Copilot host cannot resolve or compile the requested trust profile.");
+                }
+
+                var trustContext = new AgentExecutionTrustContext(
+                    profileReference!,
+                    this.trustProfileResolver,
+                    this.policyCompiler);
+                selection = await this.runtimeConnectionFactory
+                    .CreateConnectionAsync(trustContext, cliPath: null, ct)
+                    .ConfigureAwait(false);
+            }
+
+            var options = new CopilotClientOptions
+            {
+                Mode = CopilotClientMode.CopilotCli,
+                Connection = selection?.Connection,
+            };
             client = this.clientFactory.Create(options);
             await client.StartAsync(ct).ConfigureAwait(false);
             return new CopilotSessionTransportHost(client, channel, ct, selection);
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            await DisposeFailedLaunchAsync(client, selection).ConfigureAwait(false);
+            throw;
+        }
         catch
         {
-            if (client is not null)
+            await DisposeFailedLaunchAsync(client, selection).ConfigureAwait(false);
+            throw new InvalidOperationException(
+                "Remote Copilot launch was denied by host policy.");
+        }
+    }
+
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+    private static async Task DisposeFailedLaunchAsync(
+        ICopilotClient? client,
+        CopilotRuntimeConnectionLease? selection)
+    {
+        if (client is not null)
+        {
+            try
             {
-                try
-                {
-                    await client.DisposeAsync().ConfigureAwait(false);
-                }
-                catch
-                {
-                }
+                await client.DisposeAsync().ConfigureAwait(false);
             }
+            catch
+            {
+            }
+        }
+
+        if (selection is not null)
+        {
             try
             {
                 await selection.DisposeAsync().ConfigureAwait(false);
@@ -120,11 +147,8 @@ public sealed class CopilotClientTransportListener : ITransportListener
             catch
             {
             }
-            throw;
         }
     }
-
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
     /// <summary>Serves a single channel: reads client request frames and drives a local SDK session.</summary>
     private sealed class CopilotSessionTransportHost : IAsyncDisposable
@@ -133,7 +157,7 @@ public sealed class CopilotClientTransportListener : ITransportListener
         private readonly IMessageChannel channel;
         private readonly CancellationTokenSource cancellation;
         private readonly Task pump;
-        private readonly CopilotRuntimeConnectionSelection runtimeConnectionSelection;
+        private readonly CopilotRuntimeConnectionLease? runtimeConnectionSelection;
         private ICopilotSession? session;
         private IDisposable? subscription;
         private int disposed;
@@ -142,7 +166,7 @@ public sealed class CopilotClientTransportListener : ITransportListener
             ICopilotClient client,
             IMessageChannel channel,
             CancellationToken ct,
-            CopilotRuntimeConnectionSelection runtimeConnectionSelection)
+            CopilotRuntimeConnectionLease? runtimeConnectionSelection)
         {
             this.client = client;
             this.channel = channel;
@@ -192,7 +216,8 @@ public sealed class CopilotClientTransportListener : ITransportListener
             }
             try
             {
-                await this.runtimeConnectionSelection.DisposeAsync().ConfigureAwait(false);
+                if (this.runtimeConnectionSelection is not null)
+                    await this.runtimeConnectionSelection.DisposeAsync().ConfigureAwait(false);
             }
             finally
             {

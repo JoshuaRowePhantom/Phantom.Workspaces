@@ -227,6 +227,13 @@ public sealed class CopilotSdkChatClientTests
         // When an Immediate-immediacy AgentInputItem is enqueued into the queueManager while a
         // streaming turn is live, SteeringMessageForwarded must fire with the correct ChatMessage.
         var queueManager = new AgentInputQueueManager();
+        var defaultQueue = new AgentInputQueue(new AgentInputQueue.Parameters
+        {
+            Priority = int.MaxValue - 1,
+            Immediacy = AgentInputQueueImmediacy.Queue,
+        });
+        queueManager.RegisterInputQueue(defaultQueue);
+        using var inputQueues = new LocalAgentInputQueuesAdapter(queueManager, defaultQueue);
         using var client = new CopilotSdkChatClient(
             "gpt-5",
             "GitHub Copilot (gpt-5)",
@@ -298,9 +305,16 @@ public sealed class CopilotSdkChatClientTests
         var steeringMessage = new ChatMessage(
             ChatRole.User,
             [new TextContent("steer the agent"), new DataContent(imageBytes, "image/jpeg")]);
-        queueManager.Enqueue(
-            queueManager.ImmediateQueue,
-            [new AgentInputItem { Messages = [steeringMessage] }]);
+        var revisionBefore = inputQueues.Snapshot.Revision;
+        var changedCount = 0;
+        inputQueues.Changed += (_, _) => changedCount++;
+        var enqueueResult = await inputQueues.EnqueueAsync(new EnqueueAgentInputRequest
+        {
+            TargetQueueId = inputQueues.ImmediateQueue.Snapshot.QueueId,
+            Messages = [steeringMessage],
+            CommandId = Guid.NewGuid(),
+            ExpectedRevision = revisionBefore,
+        });
 
         // Complete the turn so the task finishes cleanly.
         channel.Writer.Complete();
@@ -315,6 +329,10 @@ public sealed class CopilotSdkChatClientTests
         var blob = Assert.IsType<AttachmentBlob>(Assert.Single(sent.Attachments!));
         Assert.Equal("image/jpeg", blob.MimeType);
         Assert.Equal(Convert.ToBase64String(imageBytes), blob.Data);
+        Assert.Equal(AgentInputQueueCommandStatus.Applied, enqueueResult.Status);
+        Assert.Equal(revisionBefore + 2, inputQueues.Snapshot.Revision);
+        Assert.Equal(1, changedCount);
+        Assert.Empty(inputQueues.ImmediateQueue.Snapshot.Items);
         Assert.True(subscription.Disposed);
     }
 

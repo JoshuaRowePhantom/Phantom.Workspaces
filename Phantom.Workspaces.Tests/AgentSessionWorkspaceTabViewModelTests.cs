@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Specialized;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Headless.XUnit;
@@ -8,6 +9,7 @@ using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Services.Notifications;
 using Phantom.Workspaces.Testing.Gui;
 using Phantom.Workspaces.Utilities;
 using Phantom.Workspaces.ViewModels;
@@ -17,6 +19,133 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class AgentSessionWorkspaceTabViewModelTests
 {
+    [Fact]
+    public async Task SetReady_RemoteAgent_SetsRemoteMetadata()
+    {
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var local = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateSimpleAgentDefinition() });
+        await using var remote = new RemoteAgentChatProxy(local);
+        var agent = new AgentViewModel(remote, "remote", "", loggerFactory, TaskScheduler.Default);
+        var tab = new AgentSessionWorkspaceTabViewModel { Id = "remote-tab", Title = "Remote" };
+
+        tab.SetRemoteProfileDisplayName("Owner workstation");
+        tab.SetReady(agent, loggerFactory);
+
+        Assert.True(tab.IsRemote);
+        Assert.Equal("Owner workstation", tab.RemoteProfileDisplayName);
+        await tab.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task SetReady_LocalAgent_ClearsRemoteMetadata()
+    {
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateSimpleAgentDefinition() });
+        var agent = new AgentViewModel(chat, "local", "", loggerFactory, TaskScheduler.Default);
+        var tab = new AgentSessionWorkspaceTabViewModel { Id = "local-tab", Title = "Local" };
+
+        tab.SetReady(agent, loggerFactory);
+
+        Assert.False(tab.IsRemote);
+        Assert.Null(tab.RemoteProfileDisplayName);
+        await tab.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task SetReady_AgentWithModal_SetsModalPendingNotification()
+    {
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateSimpleAgentDefinition() });
+        var modalPublished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ((INotifyCollectionChanged)chat.Modals).CollectionChanged += (_, _) => modalPublished.TrySetResult();
+        chat.PublishModal(new AgentChatModal
+        {
+            Id = "modal",
+            OwnerAgentId = "owner",
+            Title = "Input",
+            Body = "Required",
+            Content = new FreeformModalContent { IsRequired = true },
+        });
+        await modalPublished.Task.WaitAsync(TestContext.Current.CancellationToken);
+        var notificationService = new NotificationService(new FakeActiveTabProvider());
+        var agent = new AgentViewModel(chat, "local", "", loggerFactory, TaskScheduler.Default);
+        var tab = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = "modal-tab",
+            Title = "Local",
+            NotificationService = notificationService,
+        };
+
+        tab.SetReady(agent, loggerFactory);
+
+        Assert.True(tab.HasModalsNeedingInput);
+        Assert.Contains(notificationService.Notifications,
+            notification => notification.TabKey == tab.Id && notification.Kind == "modal-pending");
+        var dismissed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        agent.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(AgentViewModel.HasModalsNeedingInput)
+                && !agent.HasModalsNeedingInput)
+            {
+                dismissed.TrySetResult();
+            }
+        };
+        chat.PublishModalDismiss("modal");
+        await dismissed.Task.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.False(tab.HasModalsNeedingInput);
+        Assert.DoesNotContain(notificationService.Notifications,
+            notification => notification.TabKey == tab.Id && notification.Kind == "modal-pending");
+        await tab.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task SetReady_PublishesModalStateBeforeReadyTransition()
+    {
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateSimpleAgentDefinition() });
+        var modalPublished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ((INotifyCollectionChanged)chat.Modals).CollectionChanged += (_, _) => modalPublished.TrySetResult();
+        chat.PublishModal(new AgentChatModal
+        {
+            Id = "modal",
+            OwnerAgentId = "owner",
+            Title = "Input",
+            Body = "Required",
+            Content = new FreeformModalContent { IsRequired = true },
+        });
+        await modalPublished.Task.WaitAsync(TestContext.Current.CancellationToken);
+        var agent = new AgentViewModel(chat, "local", "", loggerFactory, TaskScheduler.Default);
+        var tab = new AgentSessionWorkspaceTabViewModel { Id = "modal-tab", Title = "Local" };
+        bool? modalStateObservedAtReady = null;
+        tab.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(AgentSessionWorkspaceTabViewModel.State)
+                && tab.State == AgentTabState.Ready)
+            {
+                modalStateObservedAtReady = tab.HasModalsNeedingInput;
+            }
+        };
+
+        tab.SetReady(agent, loggerFactory);
+
+        Assert.True(modalStateObservedAtReady);
+        await tab.DisposeAsync();
+    }
+
+    private static AgentSchema.AgentDefinition CreateSimpleAgentDefinition()
+        => AgentDefinitionLoader.LoadAgentFromJson("""
+        {
+          "kind": "prompt",
+          "name": "test-agent",
+          "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+          "tools": []
+        }
+        """);
+
     [AvaloniaFact(Timeout = 30_000)]
     public async Task SetReady_TransitionsToReadyWhenHistoryPopulated_WithoutWaitingForMcpInit()
     {

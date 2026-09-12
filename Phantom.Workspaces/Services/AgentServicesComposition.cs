@@ -3,6 +3,8 @@ using System.Threading.Tasks;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.Processes;
+using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Tools;
 using Phantom.Workspaces.ViewModels;
 
@@ -30,6 +32,8 @@ public static class AgentServicesComposition
         {
             SecretProvider = secretProvider,
             McpOAuthOptions = mcpOAuthOptions,
+            ProcessExecutor = new ProcessExecutor(),
+            TrustProfilePolicyCompiler = new MxcTrustProfilePolicyCompiler(),
         };
 
     /// <summary>
@@ -51,11 +55,14 @@ public static class AgentServicesComposition
         // Hand the resolved host context to the running-agent / Copilot path so get_current_session
         // is populated there too (issue #1236).
         var currentSessionContext = await CurrentSessionContextFactory.CreateForHostAsync(
-            agentSessionId: string.Empty,
+            agentSessionId: "unbound",
             dataAccessLayer: dataAccessLayer,
             userName: executionContext.UserName,
             computerName: executionContext.ComputerName,
             effectiveComputerName: executionContext.EffectiveComputerName,
+            owningProfileEntityId: mainWindowViewModel.EntityBroker.EntityRepository
+                .WorkspaceEntitySession.UserComputerProfileEntityId.ToString(),
+            ownershipGeneration: 0,
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         var workspaceGuiContextProvider = new WorkspaceGuiContextProvider(
@@ -105,6 +112,7 @@ public static class AgentServicesComposition
             ToolResourceFactory = toolResourceFactory,
             AccountUpsertService = accountUpsertService,
             CurrentSessionContext = currentSessionContext,
+            TrustProfileResolver = new DataAccessLayerTrustProfileResolver(dataAccessLayer),
         };
     }
 }

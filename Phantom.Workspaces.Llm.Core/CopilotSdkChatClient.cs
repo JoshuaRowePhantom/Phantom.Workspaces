@@ -52,7 +52,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private ICopilotClientFactory copilotClientFactory;
     private ICopilotRuntimeConnectionFactory runtimeConnectionFactory;
     private readonly object runtimeConnectionGate = new();
-    private Task<CopilotRuntimeConnectionSelection>? runtimeConnectionSelectionTask;
+    private Task<CopilotRuntimeConnectionLease>? runtimeConnectionSelectionTask;
 
     // Issue #1443 (per-component-executor-binding): the model's executor NAME sourced from
     // model.options.executor (sibling to cliPath / wireApi / working-directory). When it resolves —
@@ -60,8 +60,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     // the innermost SDK session is obtained over a transport instead of the in-process CLI factory,
     // while the router and context providers stay local.
     private readonly string? modelExecutorName;
-    private readonly string? trustProfileReference;
-    private readonly bool hasEffectiveTrustProfile;
+    private readonly AgentExecutionTrustContext? executionTrustContext;
     private ExecutorBindings? executorBindings;
     private ITransportFactoryRegistry? executorTransportFactoryRegistry;
 
@@ -205,8 +204,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         IGitHubAccountUpsertService? accountUpsertService = null,
         SlashCommands.ISlashCommandRegistry? slashCommandRegistry = null,
         CopilotBuiltinToolPolicy? builtinToolPolicy = null,
-        TrustProfile? effectiveTrustProfile = null,
-        string? trustProfileReference = null)
+        AgentExecutionTrustContext? executionTrustContext = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
         ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
@@ -220,15 +218,12 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         this.builtinToolPolicy = builtinToolPolicy;
         this.cliPath = string.IsNullOrWhiteSpace(cliPath) ? GetStringModelOption(modelOptions, "cliPath") : cliPath;
         this.modelExecutorName = GetStringModelOption(modelOptions, "executor");
-        this.trustProfileReference = trustProfileReference;
-        this.hasEffectiveTrustProfile = effectiveTrustProfile is not null;
+        this.executionTrustContext = executionTrustContext;
         this.queueManager = queueManager;
         this.subAgentChatRegistry = subAgentChatRegistry;
         this.accountUpsertService = accountUpsertService;
         this.copilotClientFactory = DefaultCopilotClientFactory.Instance;
-        this.runtimeConnectionFactory = new CopilotRuntimeConnectionFactory(
-            this.cliPath,
-            effectiveTrustProfile);
+        this.runtimeConnectionFactory = new CopilotRuntimeConnectionFactory();
 
         if (slashCommandRegistry is { } registry)
         {
@@ -607,7 +602,10 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             GitHubToken = this.gitHubToken,
             Logger = this.loggerFactory?.CreateLogger<CopilotClient>(),
             Mode = this.builtinToolPolicy?.ClientMode ?? CopilotClientMode.CopilotCli,
-            Connection = selection.Connection,
+            Connection = selection?.Connection
+                ?? (!string.IsNullOrWhiteSpace(this.cliPath)
+                    ? RuntimeConnection.ForStdio(this.cliPath)
+                    : null),
         };
 
         if (!string.IsNullOrWhiteSpace(workingDirectory))
@@ -621,7 +619,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
         var diagnosticLogger = this.loggerFactory?
             .CreateLogger<CopilotRuntimeConnectionFactory>();
-        foreach (var diagnostic in selection.Diagnostics.Where(
+        foreach (var diagnostic in (selection?.Diagnostics ?? []).Where(
                      item => item.Severity == TrustProfilePolicyDiagnosticSeverity.Warning))
         {
             diagnosticLogger?.LogWarning(
@@ -633,21 +631,27 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         return clientOptions;
     }
 
-    private async Task<CopilotRuntimeConnectionSelection> GetRuntimeConnectionSelectionAsync(
+    private async Task<CopilotRuntimeConnectionLease?> GetRuntimeConnectionSelectionAsync(
         CancellationToken cancellationToken)
     {
-        Task<CopilotRuntimeConnectionSelection> selectionTask;
+        if (this.executionTrustContext is null)
+            return null;
+
+        Task<CopilotRuntimeConnectionLease> selectionTask;
         lock (this.runtimeConnectionGate)
         {
             selectionTask = this.runtimeConnectionSelectionTask
-                ??= this.runtimeConnectionFactory.CreateAsync(CancellationToken.None);
+                ??= this.runtimeConnectionFactory.CreateConnectionAsync(
+                    this.executionTrustContext,
+                    this.cliPath,
+                    CancellationToken.None);
         }
         return await selectionTask.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async ValueTask DisposeRuntimeConnectionSelectionAsync()
     {
-        Task<CopilotRuntimeConnectionSelection>? selectionTask;
+        Task<CopilotRuntimeConnectionLease>? selectionTask;
         lock (this.runtimeConnectionGate)
         {
             selectionTask = this.runtimeConnectionSelectionTask;
@@ -869,25 +873,19 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
             // While a turn is running, forward any Immediate-immediacy queue items as steering
             // input. SendAsync with Mode="immediate" is safe to call concurrently with a live turn.
-            void OnQueueChanged(object? sender, AgentInputQueueManager.QueueStateChangedEventArgs e)
-                => this.ForwardPendingImmediateMessages(
-                    (options, ct) => session.SendAsync(options, ct),
-                    e);
-
-            if (this.queueManager is not null)
-            {
-                this.queueManager.QueueStateChanged += OnQueueChanged;
-            }
+            // The subscription (and dispatch to ForwardPendingImmediateMessages) is established
+            // through SubscribeImmediateQueueSteering so that fake-BeginTurnAsync test call sites
+            // exercise the exact same production wiring — not a duplicated copy — when observing
+            // SteeringMessageForwarded during a live turn.
+            var queueSubscription = this.SubscribeImmediateQueueSteering(
+                (options, ct) => session.SendAsync(options, ct));
 
             var subscription = new AsyncDelegateDisposable(async () =>
             {
                 eventSubscription.Dispose();
                 eventChannel.Writer.Complete();
                 await dispatchLoop;
-                if (this.queueManager is not null)
-                {
-                    this.queueManager.QueueStateChanged -= OnQueueChanged;
-                }
+                queueSubscription.Dispose();
 
                 await router.DisposeRemainingLeasesAsync();
             });
@@ -1027,6 +1025,50 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 this.loggerFactory?.CreateLogger<CopilotSdkChatClient>()
                     .LogDebug(exception, "Terminalizing running sub-agents on parent interrupt failed.");
             }
+        }
+    }
+
+    /// <summary>
+    /// Subscribes the client's queue manager (if any) so that any Immediate-immediacy queue
+    /// items are dequeued and forwarded to <paramref name="sendAsync"/> via
+    /// <see cref="ForwardPendingImmediateMessages"/>. Returns an <see cref="IDisposable"/> that
+    /// unsubscribes when disposed. Extracted from <c>BeginTurnAsync</c> so tests can exercise
+    /// the exact production wiring that raises <see cref="SteeringMessageForwarded"/> during a
+    /// live turn instead of reproducing the wiring themselves.
+    /// </summary>
+    internal IDisposable SubscribeImmediateQueueSteering(
+        Func<MessageOptions, CancellationToken, Task> sendAsync)
+    {
+        ArgumentNullException.ThrowIfNull(sendAsync);
+
+        var queueManager = this.queueManager;
+        if (queueManager is null)
+        {
+            return new NoopDisposable();
+        }
+
+        void Handler(object? sender, AgentInputQueueManager.QueueStateChangedEventArgs e)
+            => this.ForwardPendingImmediateMessages(sendAsync, e);
+
+        queueManager.QueueStateChanged += Handler;
+        return new SyncDelegateDisposable(() => queueManager.QueueStateChanged -= Handler);
+    }
+
+    private sealed class NoopDisposable : IDisposable
+    {
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class SyncDelegateDisposable(Action dispose) : IDisposable
+    {
+        private Action? dispose = dispose ?? throw new ArgumentNullException(nameof(dispose));
+
+        public void Dispose()
+        {
+            var d = Interlocked.Exchange(ref this.dispose, null);
+            d?.Invoke();
         }
     }
 
@@ -1490,31 +1532,34 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     // Issue #1443: resolves model.options.executor (via the shared executor-bindings path) and, when
     // it maps to a non-local connection-descriptor, connects a transport and builds a session-only
     // remote ICopilotClient. Returns null — so the caller uses the in-process CLI factory — when no
-    // bindings/registry are wired, when the name is unbound, or when the descriptor is local.
+    // bindings/registry are wired or when the descriptor is local. A named but missing binding
+    // fails closed before any local or remote client is opened.
     private async Task<ICopilotClient?> TryCreateRemoteClientAsync(CancellationToken cancellationToken)
     {
-        if (this.executorBindings is null || this.executorTransportFactoryRegistry is null)
+        if (this.executorBindings is null)
         {
+            if (!string.IsNullOrWhiteSpace(this.modelExecutorName))
+            {
+                throw new InvalidOperationException(
+                    $"Executor binding '{this.modelExecutorName}' could not be resolved.");
+            }
+
             return null;
         }
 
-        JsonElement descriptor;
-        try
-        {
-            descriptor = this.executorBindings.ResolveComponent(this.modelExecutorName);
-        }
-        catch (InvalidOperationException)
-        {
-            // An unbound executor name falls back to the local in-process session rather than failing
-            // session creation; the manifest pre-pass is responsible for surfacing binding errors.
-            return null;
-        }
+        var descriptor = this.executorBindings.ResolveComponent(this.modelExecutorName);
 
         if (IsLocalDescriptor(descriptor))
         {
             return null;
         }
-        if (this.hasEffectiveTrustProfile && string.IsNullOrWhiteSpace(this.trustProfileReference))
+        if (this.executorTransportFactoryRegistry is null)
+        {
+            throw new InvalidOperationException(
+                "Remote Copilot execution requires a configured executor transport registry.");
+        }
+        var reference = this.executionTrustContext?.RemoteReference;
+        if (this.executionTrustContext is not null && reference is null)
         {
             throw new InvalidOperationException(
                 "Remote Copilot execution requires a named trust-profile reference; inline trust profiles cannot be transported.");
@@ -1523,18 +1568,24 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         var transport = await this.executorTransportFactoryRegistry
             .ConnectToAsync(descriptor, cancellationToken)
             .ConfigureAwait(false);
-        return new CopilotClientOverTransport(transport, this.trustProfileReference);
+        return new CopilotClientOverTransport(transport, reference);
     }
 
     private static bool IsLocalDescriptor(JsonElement descriptor)
     {
-        if (descriptor.ValueKind != JsonValueKind.Object)
+        if (descriptor.ValueKind != JsonValueKind.Object
+            || !descriptor.TryGetProperty("type", out var type)
+            || type.ValueKind != JsonValueKind.String
+            || string.IsNullOrWhiteSpace(type.GetString()))
         {
-            return true;
+            throw new InvalidOperationException(
+                "The Copilot executor binding is malformed.");
         }
 
-        return !descriptor.TryGetProperty("type", out var type)
-            || string.Equals(type.GetString(), ExecutionTargetResolver.LocalDescriptorType, StringComparison.OrdinalIgnoreCase);
+        return string.Equals(
+            type.GetString(),
+            ExecutionTargetResolver.LocalDescriptorType,
+            StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

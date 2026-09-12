@@ -67,7 +67,7 @@ internal static class ChatOutputHtmlRenderer
 
     public static string ContentId(string messageId, int subIndex) => $"{messageId}-{subIndex}";
 
-    public static string RunningItemId(int sequence) => $"run-{sequence}";
+    public static string RunningItemId(string generationId, int sequence) => $"run-{generationId}-{sequence}";
 
     public static string RunningItemContentsId(string runningItemId) => $"{runningItemId}-contents";
 
