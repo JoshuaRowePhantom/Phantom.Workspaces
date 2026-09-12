@@ -556,26 +556,28 @@ public sealed class InstallScriptTests
 public sealed class CopilotWrapperNestedPublishTests
 {
     [Fact]
+    public void NestedPublish_CommandUsesSingleNonReusableNodeAndDisablesBuildServers()
+    {
+        var arguments = MxcRepositoryTestSupport.CreateCopilotWrapperPublishArguments(
+            "payload",
+            "isolated-artifacts");
+
+        Assert.Contains("--disable-build-servers", arguments);
+        Assert.Contains("-m:1", arguments);
+        Assert.Contains("/nodeReuse:false", arguments);
+        Assert.Contains("-p:UseSharedCompilation=false", arguments);
+    }
+
+    [Fact]
     public async Task NestedPublish_RidConsistentGraphProducesUniqueCompleteWrapperPayload()
     {
         using var payload = new MxcRepositoryTestSupport.TestDirectory();
         using var buildArtifacts = new MxcRepositoryTestSupport.TestDirectory();
         var publish = await MxcRepositoryTestSupport.InvokeAsync(
             "dotnet",
-            "msbuild",
-            Path.Combine("Phantom.Workspaces", "Phantom.Workspaces.csproj"),
-            "-restore",
-            "-nologo",
-            "-t:PublishCopilotWrapperLoose",
-            "/nodeReuse:false",
-            "-p:Configuration=Release",
-            "-p:RuntimeIdentifier=win-x64",
-            "-p:SelfContained=true",
-            "-p:PublishReadyToRun=false",
-            "-p:UseSharedCompilation=false",
-            "-p:UseArtifactsOutput=true",
-            $"-p:ArtifactsPath={buildArtifacts.Path}",
-            $"-p:PublishDir={payload.Path}{Path.DirectorySeparatorChar}");
+            MxcRepositoryTestSupport.CreateCopilotWrapperPublishArguments(
+                payload.Path,
+                buildArtifacts.Path));
 
         Assert.True(
             publish.ExitCode == 0,
@@ -651,6 +653,28 @@ internal static class MxcRepositoryTestSupport
         $"-p:ArtifactsPath={artifactsPath}",
         "-o",
         outputPath,
+    ];
+
+    internal static string[] CreateCopilotWrapperPublishArguments(
+        string outputPath,
+        string artifactsPath) =>
+    [
+        "msbuild",
+        "--disable-build-servers",
+        Path.Combine("Phantom.Workspaces", "Phantom.Workspaces.csproj"),
+        "-restore",
+        "-nologo",
+        "-m:1",
+        "-t:PublishCopilotWrapperLoose",
+        "/nodeReuse:false",
+        "-p:Configuration=Release",
+        "-p:RuntimeIdentifier=win-x64",
+        "-p:SelfContained=true",
+        "-p:PublishReadyToRun=false",
+        "-p:UseSharedCompilation=false",
+        "-p:UseArtifactsOutput=true",
+        $"-p:ArtifactsPath={artifactsPath}",
+        $"-p:PublishDir={outputPath}{Path.DirectorySeparatorChar}",
     ];
 
     internal static Task<ProcessResult> InvokeAsync(string fileName, params string[] arguments) =>
