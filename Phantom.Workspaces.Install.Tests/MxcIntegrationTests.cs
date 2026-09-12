@@ -169,10 +169,15 @@ public sealed class MxcRuntimePayloadTests
             "isolated-artifacts");
 
         Assert.Contains("--disable-build-servers", arguments);
+        Assert.Contains("-m:1", arguments);
         Assert.Contains("/nodeReuse:false", arguments);
         Assert.Contains("-p:UseSharedCompilation=false", arguments);
         Assert.Contains("-p:UseArtifactsOutput=true", arguments);
         Assert.Contains("-p:ArtifactsPath=isolated-artifacts", arguments);
+        Assert.Contains("-p:PublishCopilotRuntime=false", arguments);
+        Assert.Contains("-p:CopilotSkipCliDownload=true", arguments);
+        Assert.Contains("-p:SelfContained=false", arguments);
+        Assert.Contains("-p:PublishSingleFile=false", arguments);
     }
 
     [Fact]
@@ -241,6 +246,18 @@ public sealed class MxcRuntimePayloadTests
             "runtime payload validation passed",
             validation.StandardOutput,
             StringComparison.Ordinal);
+        Assert.False(File.Exists(Path.Combine(
+            payload.Path,
+            "runtimes",
+            "win-x64",
+            "native",
+            "copilot.exe")));
+        Assert.False(File.Exists(Path.Combine(
+            payload.Path,
+            "runtimes",
+            "win-x64",
+            "native",
+            "phantom-copilot-wrapper.exe")));
 
         var runtimeConfigs = Directory.GetFiles(
             buildArtifacts.Path,
@@ -750,11 +767,16 @@ internal static class MxcRepositoryTestSupport
         Path.Combine("Phantom.Workspaces", "Phantom.Workspaces.csproj"),
         "--nologo",
         "--disable-build-servers",
+        "-m:1",
         "/nodeReuse:false",
         "-r",
         "win-x64",
+        "-p:SelfContained=false",
+        "-p:PublishSingleFile=false",
         "-p:PublishReadyToRun=false",
         "-p:UseSharedCompilation=false",
+        "-p:PublishCopilotRuntime=false",
+        "-p:CopilotSkipCliDownload=true",
         "-p:UseArtifactsOutput=true",
         $"-p:ArtifactsPath={artifactsPath}",
         "-o",

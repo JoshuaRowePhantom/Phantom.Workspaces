@@ -51,7 +51,7 @@
   <Target Name="PublishCopilotRuntimeLoose"
            AfterTargets="Publish"
            DependsOnTargets="PublishCopilotWrapperLoose"
-           Condition="'$(RuntimeIdentifier)' != ''">
+           Condition="'$(RuntimeIdentifier)' != '' And '$(PublishCopilotRuntime)' != 'false'">
     <ItemGroup>
       <_CopilotRuntimeToPublish Include="$(OutDir)runtimes\$(RuntimeIdentifier)\native\copilot.exe" />
       <_CopilotRuntimeToPublish Include="$(OutDir)runtimes\$(RuntimeIdentifier)\native\copilot_runtime.dll"
@@ -69,7 +69,7 @@
            Text="Copilot CLI (runtimes\$(RuntimeIdentifier)\native\copilot.exe) was not published as a loose file (issue #1376)." />
   </Target>
   <Target Name="PublishCopilotWrapperLoose"
-          Condition="'$(RuntimeIdentifier)' == 'win-x64'">
+          Condition="'$(RuntimeIdentifier)' == 'win-x64' And '$(PublishCopilotRuntime)' != 'false'">
     <PropertyGroup>
       <_CopilotWrapperProject>$(MSBuildProjectDirectory)\..\Phantom.Workspaces.Copilot.Cli.Wrapper\Phantom.Workspaces.Copilot.Cli.Wrapper.csproj</_CopilotWrapperProject>
       <_CopilotWrapperPublishDir>$(IntermediateOutputPath)copilot-wrapper\</_CopilotWrapperPublishDir>
