@@ -240,22 +240,46 @@ public sealed class SubAgentDispatcherIntegrationTests
         await scenario.ReadThroughCreatedAsync();
         await scenario.WaitForRunningAsync();
 
+        List<ChatResponseUpdate> updates;
         if (completeBeforeCancel)
         {
             scenario.Stream.Complete();
             await scenario.WaitForIdleAsync();
             scenario.Cancel();
+            updates = await scenario.DrainAsync();
         }
         else
         {
             scenario.Cancel();
+            var interruptedMove = scenario.Enumerator.MoveNextAsync().AsTask();
+            await scenario.WaitForIdleAsync();
             scenario.Stream.Complete();
+
+            Assert.True(await interruptedMove);
+            updates = [scenario.Enumerator.Current];
+            updates.AddRange(await scenario.DrainAsync());
         }
 
-        var updates = await scenario.DrainAsync();
-
         Assert.Equal(["Interrupted.\n"], updates.Select(update => update.Text));
-        Assert.Empty(scenario.Factory.Leases.Values.Single().AgentChat.RunningItems);
+        Assert.False(await scenario.Enumerator.MoveNextAsync());
+
+        var lease = scenario.Factory.Leases.Values.Single();
+        Assert.Empty(lease.AgentChat.RunningItems);
+
+        var historyText = lease.AgentChat.History
+            .SelectMany(item => item.Contents)
+            .OfType<TextContent>()
+            .Select(content => content.Text)
+            .ToArray();
+        if (completeBeforeCancel)
+        {
+            Assert.DoesNotContain(historyText, text => text == "Interrupted by user.");
+        }
+        else
+        {
+            Assert.Single(historyText, text => text == "Interrupted by user.");
+        }
+        Assert.DoesNotContain(historyText, text => text == "completed normally");
     }
 
     [Fact]

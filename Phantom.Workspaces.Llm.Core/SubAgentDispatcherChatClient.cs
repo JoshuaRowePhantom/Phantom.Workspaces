@@ -246,7 +246,7 @@ public sealed class SubAgentDispatcherChatClient : IChatClient, ISubAgentDispatc
             var outcome = await completion.AcknowledgeCreationAndWaitAsync().ConfigureAwait(false);
             if (outcome == CreateDispatchOutcome.Canceled)
             {
-                await completion.WaitForInterruptAsync().ConfigureAwait(false);
+                await completion.WaitForCancellationCompletionAsync().ConfigureAwait(false);
                 yield return new ChatResponseUpdate(ChatRole.Assistant, "Interrupted.\n");
                 yield break;
             }
@@ -665,6 +665,9 @@ public sealed class SubAgentDispatcherChatClient : IChatClient, ISubAgentDispatc
         private readonly DispatchedSubAgent dispatched;
         private readonly TaskCompletionSource<CreateDispatchOutcome> completion =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        // InterruptAsync acknowledges the request before the child turn has retired its running item.
+        private readonly TaskCompletionSource cancellationSettled =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly CancellationTokenRegistration cancellationRegistration;
         private bool dispatchStarted;
         private bool creationAcknowledged;
@@ -706,24 +709,12 @@ public sealed class SubAgentDispatcherChatClient : IChatClient, ISubAgentDispatc
         {
             lock (sync)
             {
-                if (disposed || outcomeChosen || !dispatchStarted)
+                if (disposed || !dispatchStarted)
                 {
                     return;
                 }
 
-                if (lease.AgentChat.RunningItems.Count > 0)
-                {
-                    runningItemObserved = true;
-                    StartInterruptIfNeeded();
-                }
-
-                if (runningItemObserved
-                    && lease.AgentChat.History.Count > dispatched.DispatchHistoryIndex
-                    && lease.AgentChat.RunningItems.Count == 0)
-                {
-                    idleObserved = true;
-                }
-
+                ObserveAgentStateUnderLock();
                 ChooseOutcomeIfReady();
             }
         }
@@ -739,12 +730,16 @@ public sealed class SubAgentDispatcherChatClient : IChatClient, ISubAgentDispatc
             }
         }
 
-        public Task WaitForInterruptAsync()
+        public async Task WaitForCancellationCompletionAsync()
         {
+            Task pendingInterrupt;
             lock (sync)
             {
-                return interruptTask;
+                pendingInterrupt = interruptTask;
             }
+
+            await pendingInterrupt.ConfigureAwait(false);
+            await cancellationSettled.Task.ConfigureAwait(false);
         }
 
         private void ObserveCancellation()
@@ -781,6 +776,11 @@ public sealed class SubAgentDispatcherChatClient : IChatClient, ISubAgentDispatc
                 && lease.AgentChat.RunningItems.Count == 0)
             {
                 idleObserved = true;
+            }
+
+            if (cancellationObserved && idleObserved)
+            {
+                cancellationSettled.TrySetResult();
             }
         }
 
