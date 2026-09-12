@@ -18,18 +18,28 @@ public sealed class QueueComposerInputHistoryTests
         }
         """);
 
+    private static InputQueueViewModel CreateInputQueue(AgentChat chat)
+    {
+        var queue = chat.QueueManager.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
+        return new InputQueueViewModel(new InputQueueViewModelOptions
+        {
+            AgentChat = chat,
+            DefaultQueueId = queue.Queue.QueueId,
+        });
+    }
+
     [Fact]
     public async Task TryNavigateHistoryUp_OnFirstLine_ReturnsLastSubmittedMessage()
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var inputQueue = CreateInputQueue(chat);
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "first message";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
         composer.InputText = "second message";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
 
         var navigated = composer.TryNavigateHistoryUp(caretLine: 0, out var text, out _);
 
@@ -44,11 +54,11 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var inputQueue = CreateInputQueue(chat);
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "first message";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
 
         composer.InputText = "draft";
         composer.TryNavigateHistoryUp(caretLine: 0, out _, out _);
@@ -67,15 +77,15 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var inputQueue = CreateInputQueue(chat);
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "msg1";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
         composer.InputText = "msg2";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
         composer.InputText = "msg3";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
 
         composer.InputText = "my draft";
 
@@ -101,11 +111,11 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var inputQueue = CreateInputQueue(chat);
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "first message";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
 
         // Caret on line 1 (not the first line)
         var navigated = composer.TryNavigateHistoryUp(caretLine: 1, out _, out _);
@@ -120,13 +130,13 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var inputQueue = CreateInputQueue(chat);
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "duplicate";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
         composer.InputText = "duplicate";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
 
         // Navigate up once — should reach "duplicate"
         var first = composer.TryNavigateHistoryUp(caretLine: 0, out var text1, out _);
@@ -152,11 +162,11 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var inputQueue = CreateInputQueue(chat);
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "first message";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
         composer.InputText = string.Empty;
 
         // caretLine: 1 represents the caret being on visual line 1 (above the first),
@@ -175,11 +185,11 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var inputQueue = CreateInputQueue(chat);
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "first message";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
         composer.InputText = string.Empty;
 
         // caretLine: 1 represents the caret being exactly at the FirstTextSourceIndex boundary
@@ -200,11 +210,11 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var inputQueue = CreateInputQueue(chat);
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "submitted message";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
         composer.InputText = string.Empty;
 
         // Open the completions popup
@@ -231,11 +241,11 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var inputQueue = CreateInputQueue(chat);
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "only message";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
         composer.InputText = "draft";
 
         var navigated = composer.TryNavigateHistoryUp(caretLine: 0, out var text, out _);
@@ -251,15 +261,15 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var inputQueue = CreateInputQueue(chat);
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "first message";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
         composer.InputText = "second message";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
         composer.InputText = "third message";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
         composer.InputText = "draft";
 
         var navigated = composer.TryNavigateHistoryUp(caretLine: 0, out var text, out _);
@@ -275,15 +285,15 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var inputQueue = CreateInputQueue(chat);
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "first message";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
         composer.InputText = "second message";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
         composer.InputText = "third message";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
         composer.InputText = "draft";
 
         composer.TryNavigateHistoryUp(caretLine: 0, out _, out _);
@@ -300,7 +310,7 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var inputQueue = CreateInputQueue(chat);
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "draft";
@@ -318,15 +328,15 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var inputQueue = CreateInputQueue(chat);
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "first message";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
         composer.InputText = "second message";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
         composer.InputText = "third message";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
 
         composer.TryNavigateHistoryUp(caretLine: 0, out _, out _);
         composer.TryNavigateHistoryUp(caretLine: 0, out _, out _);
@@ -344,11 +354,11 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var inputQueue = CreateInputQueue(chat);
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "first message";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
 
         var navigated = composer.TryNavigateHistoryDown(out var text, out _);
 
@@ -365,20 +375,20 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var inputQueue = CreateInputQueue(chat);
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "A";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
         composer.InputText = "B";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
 
         composer.TryNavigateHistoryUp(caretLine: 0, out var first, out _);
         Assert.Equal("B", first);
 
         // Resend "B" — dedup-suppressed, must still reset history navigation.
         composer.InputText = "B";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
 
         var navigated = composer.TryNavigateHistoryUp(caretLine: 0, out var text, out _);
         Assert.True(navigated);
@@ -392,13 +402,13 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var inputQueue = CreateInputQueue(chat);
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "A";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
         composer.InputText = "B";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
 
         composer.TryNavigateHistoryUp(caretLine: 0, out _, out _);
         composer.TryNavigateHistoryUp(caretLine: 0, out _, out _);
@@ -418,19 +428,19 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var inputQueue = CreateInputQueue(chat);
         var composer = inputQueue.DefaultComposer;
 
         composer.SlashCommandInterceptorAsync = _ => Task.CompletedTask;
 
         composer.InputText = "A";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
 
         // Move the history cursor away from -1.
         composer.TryNavigateHistoryUp(caretLine: 0, out _, out _);
 
         composer.InputText = "/help";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
 
         var navigated = composer.TryNavigateHistoryUp(caretLine: 0, out var text, out _);
         Assert.True(navigated);
@@ -444,11 +454,11 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var inputQueue = CreateInputQueue(chat);
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "A";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
 
         var navigated = composer.TryNavigateHistoryUp(caretLine: 0, out var text, out _);
         Assert.True(navigated);
@@ -462,13 +472,13 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var inputQueue = CreateInputQueue(chat);
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "A";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
         composer.InputText = "B";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
 
         composer.TryNavigateHistoryUp(caretLine: 0, out var t1, out _);
         composer.TryNavigateHistoryUp(caretLine: 0, out var t2, out _);
@@ -484,11 +494,11 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var inputQueue = CreateInputQueue(chat);
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "first";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
         composer.InputText = "d";
 
         composer.TryNavigateHistoryUp(caretLine: 0, out _, out _);
@@ -505,13 +515,13 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var inputQueue = CreateInputQueue(chat);
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "A";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
         composer.InputText = "B";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
 
         // Advance history cursor.
         composer.TryNavigateHistoryUp(caretLine: 0, out _, out _);
@@ -537,7 +547,7 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var inputQueue = CreateInputQueue(chat);
         var composer = inputQueue.DefaultComposer;
 
         composer.Completions.SetItems([
@@ -561,7 +571,7 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var inputQueue = CreateInputQueue(chat);
         var composer = inputQueue.DefaultComposer;
 
         composer.Completions.SetItems([
@@ -585,7 +595,7 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var inputQueue = CreateInputQueue(chat);
         var composer = inputQueue.DefaultComposer;
 
         composer.Completions.SetItems([
@@ -607,11 +617,11 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var inputQueue = CreateInputQueue(chat);
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "A";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
         composer.InputText = "draft";
 
         composer.Completions.SetItems([
@@ -635,11 +645,11 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var inputQueue = CreateInputQueue(chat);
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "A";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
         composer.InputText = "draft";
 
         composer.Completions.SetItems([
@@ -663,11 +673,11 @@ public sealed class QueueComposerInputHistoryTests
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
+        var inputQueue = CreateInputQueue(chat);
         var composer = inputQueue.DefaultComposer;
 
         composer.InputText = "recent";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
 
         Assert.False(composer.Completions.IsVisible);
 

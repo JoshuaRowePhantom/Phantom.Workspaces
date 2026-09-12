@@ -102,7 +102,7 @@ public sealed class InputQueueViewModelTests
         var queueVm = viewModel.Queues[1];
         queueVm.ToggleComposerCommand.Execute(null);
         queueVm.Composer.InputText = "more";
-        queueVm.Composer.Submit();
+        Assert.True(await queueVm.Composer.SubmitAsync(TestContext.Current.CancellationToken));
         var refreshedQueueVm = viewModel.Queues.Single(queueViewModel => !queueViewModel.IsDefault);
 
         Assert.False(refreshedQueueVm.IsComposerVisible);

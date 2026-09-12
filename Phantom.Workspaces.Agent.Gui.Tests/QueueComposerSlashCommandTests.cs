@@ -32,21 +32,23 @@ public sealed class QueueComposerSlashCommandTests
         var inputQueue = new InputQueueViewModel(new InputQueueViewModelOptions { AgentChat = chat });
         var composer = inputQueue.DefaultComposer;
 
-        var intercepted = false;
-        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var interceptionCount = 0;
+        string? interceptedText = null;
         composer.SlashCommandInterceptorAsync = async text =>
         {
-            intercepted = true;
+            interceptionCount++;
+            interceptedText = text;
             await Task.Yield();
-            tcs.TrySetResult();
         };
 
         composer.InputText = "/working-directory C:\\Projects\\Foo";
-        composer.Submit();
+        var command = Assert.IsType<AsyncRelayCommand>(composer.SubmitCommand);
+        Assert.True(command.CanExecute(null));
+        command.Execute(null);
+        await command.LastExecutionTask!;
 
-        await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
-
-        Assert.True(intercepted);
+        Assert.Equal(1, interceptionCount);
+        Assert.Equal("/working-directory C:\\Projects\\Foo", interceptedText);
         Assert.Equal(string.Empty, composer.InputText);
         Assert.Empty(chat.DefaultInputQueue.Items);
 
@@ -70,7 +72,7 @@ public sealed class QueueComposerSlashCommandTests
         };
 
         composer.InputText = "hello world";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
 
         Assert.False(interceptorCalled);
         Assert.Single(chat.DefaultInputQueue.Items);
@@ -89,7 +91,7 @@ public sealed class QueueComposerSlashCommandTests
 
         // No interceptor set.
         composer.InputText = "/working-directory C:\\Foo";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
 
         // Wait for the echo LLM to process the queued item. chat.History is a
         // ReadOnlyObservableCollection that only grows, so the CollectionChanged-based

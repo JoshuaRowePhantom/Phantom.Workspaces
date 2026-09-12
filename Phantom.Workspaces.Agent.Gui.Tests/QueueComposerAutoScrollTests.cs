@@ -26,7 +26,7 @@ public sealed class QueueComposerAutoScrollTests
 
         var composer = viewModel.InputQueue!.DefaultComposer;
         composer.InputText = "a queued message";
-        composer.Submit();
+        Assert.True(await composer.SubmitAsync(TestContext.Current.CancellationToken));
 
         // Submit consumed the input (sanity that the path actually ran) but left auto-scroll untouched.
         Assert.Equal(string.Empty, composer.InputText);
