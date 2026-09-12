@@ -76,8 +76,8 @@ public sealed class RunningAgentRowViewModel : ViewModelBase, IDisposable
             _ => this.IsInterruptEnabled,
             allowConcurrentExecutions: false);
         this.interruptState = session.InterruptState;
-        this.interruptState.PendingChanged += this.OnInterruptPendingChanged;
-        this.isInterruptPending = this.interruptState.IsPending;
+        this.interruptState.StateChanged += this.OnInterruptStateChanged;
+        this.ApplyInterruptState(this.interruptState.Snapshot);
         this.terminateCommand = new AsyncRelayCommand(
             _ => this.TerminateAsync(terminateAsync),
             _ => this.IsTerminateEnabled);
@@ -254,7 +254,6 @@ public sealed class RunningAgentRowViewModel : ViewModelBase, IDisposable
 
     private async Task InterruptAsync(Func<CancellationToken, Task> interruptAsync)
     {
-        this.LastOperationError = null;
         try
         {
             await this.interruptState!.InterruptAsync(interruptAsync, CancellationToken.None);
@@ -265,17 +264,21 @@ public sealed class RunningAgentRowViewModel : ViewModelBase, IDisposable
         }
         catch
         {
-            this.LastOperationError = "Unable to interrupt agent.";
+            // The shared state publishes the failure before releasing ownership.
         }
     }
 
-    private void OnInterruptPendingChanged(object? sender, EventArgs e)
+    private void OnInterruptStateChanged(object? sender, EventArgs e) =>
+        this.ApplyInterruptState(this.interruptState!.Snapshot);
+
+    private void ApplyInterruptState(AgentChatInterruptSnapshot snapshot)
     {
-        this.IsInterruptPending = this.interruptState!.IsPending;
-        if (this.IsInterruptPending)
+        this.IsInterruptPending = snapshot.IsPending;
+        this.LastOperationError = snapshot.Outcome switch
         {
-            this.LastOperationError = null;
-        }
+            AgentChatInterruptOutcome.Failed => "Unable to interrupt agent.",
+            _ => null,
+        };
         this.UpdateCommandAvailability();
     }
 
@@ -338,7 +341,7 @@ public sealed class RunningAgentRowViewModel : ViewModelBase, IDisposable
     {
         if (this.interruptState is not null)
         {
-            this.interruptState.PendingChanged -= this.OnInterruptPendingChanged;
+            this.interruptState.StateChanged -= this.OnInterruptStateChanged;
         }
     }
 }

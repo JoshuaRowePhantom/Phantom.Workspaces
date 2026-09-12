@@ -426,19 +426,56 @@ public sealed class RunningAgentRemoteRowsTests
     }
 
     [Fact]
-    public async Task InterruptCommand_RowThenEditor_FailureDoesNotRaceErrorStateAndRetries()
+    public async Task InterruptCommand_RowThenEditor_PublishesFailureBeforeRetryAndCannotOverwriteRetry()
     {
         var first = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var attempts = new Queue<Task>([first.Task, Task.CompletedTask]);
+        var retry = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var attempts = new Queue<Task>([first.Task, retry.Task]);
         var (chat, getCalls) = CreateInterruptChat(_ => attempts.Dequeue());
         await using var editor = CreateEditor(chat);
         using var row = CreateRow(chat);
+        var state = AgentChatInterruptState.For(chat);
+        var scheduler = new PausableTaskScheduler();
         var editorCommand = Assert.IsType<Phantom.Workspaces.Agent.Gui.ViewModels.AsyncRelayCommand>(
             editor.InterruptCommand);
         var rowCommand = Assert.IsType<Phantom.Workspaces.ViewModels.AsyncRelayCommand>(
             row.InterruptCommand);
+        var released = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var failurePublishedWhilePending = false;
+        var errorPublishedBeforeEnable = false;
+        var callsAfterEarlyRetry = 0;
+        EventHandler handler = (_, _) =>
+        {
+            var snapshot = state.Snapshot;
+            if (snapshot.Outcome != AgentChatInterruptOutcome.Failed)
+            {
+                return;
+            }
 
-        rowCommand.Execute(null);
+            if (snapshot.IsPending)
+            {
+                failurePublishedWhilePending = true;
+                errorPublishedBeforeEnable =
+                    row.LastOperationError == "Unable to interrupt agent."
+                    && !row.IsInterruptEnabled
+                    && !editorCommand.CanExecute(null);
+                editorCommand.Execute(null);
+                callsAfterEarlyRetry = getCalls();
+            }
+            else
+            {
+                released.TrySetResult();
+            }
+        };
+        state.StateChanged += handler;
+
+        var scheduling = Task.Factory.StartNew(
+            () => rowCommand.Execute(null),
+            CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach,
+            scheduler);
+        scheduler.RunNext();
+        await scheduling;
         var rowExecution = rowCommand.LastExecutionTask;
         editorCommand.Execute(null);
 
@@ -449,17 +486,105 @@ public sealed class RunningAgentRemoteRowsTests
         Assert.Null(editorCommand.LastExecutionTask);
 
         first.SetException(new InvalidOperationException("owner rejected"));
-        await rowExecution!;
+        scheduler.RunNext();
+        await released.Task.WaitAsync(TestContext.Current.CancellationToken);
 
+        Assert.True(failurePublishedWhilePending);
+        Assert.True(errorPublishedBeforeEnable);
+        Assert.Equal(1, callsAfterEarlyRetry);
         Assert.Equal("Unable to interrupt agent.", row.LastOperationError);
         Assert.False(editor.IsInterruptPending);
         Assert.False(row.IsInterruptPending);
         Assert.True(editorCommand.CanExecute(null));
 
         editorCommand.Execute(null);
-        await editorCommand.LastExecutionTask!;
         Assert.Equal(2, getCalls());
         Assert.Null(row.LastOperationError);
+
+        scheduler.RunAll();
+        await rowExecution!;
+        Assert.Null(row.LastOperationError);
+
+        retry.SetResult();
+        await editorCommand.LastExecutionTask!;
+        Assert.Null(row.LastOperationError);
+        state.StateChanged -= handler;
+    }
+
+    [Fact]
+    public async Task InterruptCommand_EditorThenRow_PublishesFailureBeforeRetryAndCannotOverwriteRetry()
+    {
+        var first = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var retry = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var attempts = new Queue<Task>([first.Task, retry.Task]);
+        var (chat, getCalls) = CreateInterruptChat(_ => attempts.Dequeue());
+        await using var editor = CreateEditor(chat);
+        using var row = CreateRow(chat);
+        var state = AgentChatInterruptState.For(chat);
+        var scheduler = new PausableTaskScheduler();
+        var editorCommand = Assert.IsType<Phantom.Workspaces.Agent.Gui.ViewModels.AsyncRelayCommand>(
+            editor.InterruptCommand);
+        var rowCommand = Assert.IsType<Phantom.Workspaces.ViewModels.AsyncRelayCommand>(
+            row.InterruptCommand);
+        var released = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var failurePublishedWhilePending = false;
+        var errorPublishedBeforeEnable = false;
+        var callsAfterEarlyRetry = 0;
+        EventHandler handler = (_, _) =>
+        {
+            var snapshot = state.Snapshot;
+            if (snapshot.Outcome != AgentChatInterruptOutcome.Failed)
+            {
+                return;
+            }
+
+            if (snapshot.IsPending)
+            {
+                failurePublishedWhilePending = true;
+                errorPublishedBeforeEnable =
+                    row.LastOperationError == "Unable to interrupt agent."
+                    && !row.IsInterruptEnabled
+                    && !rowCommand.CanExecute(null);
+                rowCommand.Execute(null);
+                callsAfterEarlyRetry = getCalls();
+            }
+            else
+            {
+                released.TrySetResult();
+            }
+        };
+        state.StateChanged += handler;
+
+        var scheduling = Task.Factory.StartNew(
+            () => editorCommand.Execute(null),
+            CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach,
+            scheduler);
+        scheduler.RunNext();
+        await scheduling;
+        var editorExecution = editorCommand.LastExecutionTask!;
+
+        first.SetException(new InvalidOperationException("owner rejected"));
+        scheduler.RunNext();
+        await released.Task.WaitAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(failurePublishedWhilePending);
+        Assert.True(errorPublishedBeforeEnable);
+        Assert.Equal(1, callsAfterEarlyRetry);
+        Assert.Equal("Unable to interrupt agent.", row.LastOperationError);
+
+        rowCommand.Execute(null);
+        Assert.Equal(2, getCalls());
+        Assert.Null(row.LastOperationError);
+
+        scheduler.RunAll();
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await editorExecution);
+        Assert.Null(row.LastOperationError);
+
+        retry.SetResult();
+        await rowCommand.LastExecutionTask!;
+        Assert.Null(row.LastOperationError);
+        state.StateChanged -= handler;
     }
 
     [Fact]
@@ -635,6 +760,59 @@ public sealed class RunningAgentRemoteRowsTests
             });
         chat.Setup(value => value.DisposeAsync()).Returns(ValueTask.CompletedTask);
         return (chat.Object, () => Volatile.Read(ref calls));
+    }
+
+    private sealed class PausableTaskScheduler : TaskScheduler
+    {
+        private readonly Queue<Task> queuedTasks = new();
+
+        internal void RunNext()
+        {
+            Task task;
+            lock (this.queuedTasks)
+            {
+                task = this.queuedTasks.Dequeue();
+            }
+
+            this.TryExecuteTask(task);
+        }
+
+        internal void RunAll()
+        {
+            while (true)
+            {
+                Task? task;
+                lock (this.queuedTasks)
+                {
+                    task = this.queuedTasks.TryDequeue(out var queued) ? queued : null;
+                }
+
+                if (task is null)
+                {
+                    return;
+                }
+
+                this.TryExecuteTask(task);
+            }
+        }
+
+        protected override IEnumerable<Task>? GetScheduledTasks()
+        {
+            lock (this.queuedTasks)
+            {
+                return this.queuedTasks.ToArray();
+            }
+        }
+
+        protected override void QueueTask(Task task)
+        {
+            lock (this.queuedTasks)
+            {
+                this.queuedTasks.Enqueue(task);
+            }
+        }
+
+        protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued) => false;
     }
 
     private static RunningAgentBrainViewModel Create(ControlledTable table) =>

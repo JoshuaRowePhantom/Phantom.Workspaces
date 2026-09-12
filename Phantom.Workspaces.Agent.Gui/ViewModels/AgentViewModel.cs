@@ -111,7 +111,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.SubAgentDisplays = new ReadOnlyObservableCollection<IRunningSubAgentDisplay>(this.subAgentDisplayItems);
         this.Modals = new ReadOnlyObservableCollection<AgentSessionModalViewModel>(this.modalSource);
         this.interruptState = AgentChatInterruptState.For(agentChat);
-        this.interruptState.PendingChanged += this.OnInterruptPendingChanged;
+        this.interruptState.StateChanged += this.OnInterruptStateChanged;
         this.isInterruptPending = this.interruptState.IsPending;
         this.interruptCommand = new AsyncRelayCommand(
             _ => this.interruptState.InterruptAsync(agentChat.InterruptAsync),
@@ -681,7 +681,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     public void SetReasoningVisibility(bool visible)
         => this.IsReasoningVisible = visible;
 
-    private void OnInterruptPendingChanged(object? sender, EventArgs e)
+    private void OnInterruptStateChanged(object? sender, EventArgs e)
     {
         this.IsInterruptPending = this.interruptState.IsPending;
         if (!this.interruptCommand.IsExecuting)
@@ -744,7 +744,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     public async ValueTask DisposeViewResourcesAsync()
     {
-        this.interruptState.PendingChanged -= this.OnInterruptPendingChanged;
+        this.interruptState.StateChanged -= this.OnInterruptStateChanged;
         this.toolsTransformer.Dispose();
         this.subAgentsTransformer.Dispose();
         foreach (var (subAgentViewModel, handler) in this.subAgentDetailSubscriptions)

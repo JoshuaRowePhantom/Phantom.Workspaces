@@ -3,6 +3,20 @@ using Phantom.Workspaces.Llm.Interfaces;
 
 namespace Phantom.Workspaces.Llm;
 
+internal enum AgentChatInterruptOutcome
+{
+    None,
+    Pending,
+    Succeeded,
+    Canceled,
+    Failed,
+}
+
+internal readonly record struct AgentChatInterruptSnapshot(
+    bool IsPending,
+    long Generation,
+    AgentChatInterruptOutcome Outcome);
+
 /// <summary>Coordinates one owner-acknowledged interrupt operation for a chat.</summary>
 internal sealed class AgentChatInterruptState
 {
@@ -10,6 +24,8 @@ internal sealed class AgentChatInterruptState
 
     private readonly object sync = new();
     private Task? pendingTask;
+    private long generation;
+    private AgentChatInterruptOutcome outcome;
 
     internal static AgentChatInterruptState For(IAgentChat chat)
     {
@@ -17,18 +33,23 @@ internal sealed class AgentChatInterruptState
         return states.GetValue(chat, static _ => new AgentChatInterruptState());
     }
 
-    internal event EventHandler? PendingChanged;
+    internal event EventHandler? StateChanged;
 
-    internal bool IsPending
+    internal AgentChatInterruptSnapshot Snapshot
     {
         get
         {
             lock (this.sync)
             {
-                return this.pendingTask is not null;
+                return new AgentChatInterruptSnapshot(
+                    this.pendingTask is not null,
+                    this.generation,
+                    this.outcome);
             }
         }
     }
+
+    internal bool IsPending => this.Snapshot.IsPending;
 
     internal Task InterruptAsync(
         Func<CancellationToken, Task> interruptAsync,
@@ -37,6 +58,7 @@ internal sealed class AgentChatInterruptState
         ArgumentNullException.ThrowIfNull(interruptAsync);
 
         TaskCompletionSource completion;
+        long ownedGeneration;
         lock (this.sync)
         {
             if (this.pendingTask is { } pending)
@@ -46,15 +68,18 @@ internal sealed class AgentChatInterruptState
 
             completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             this.pendingTask = completion.Task;
+            ownedGeneration = ++this.generation;
+            this.outcome = AgentChatInterruptOutcome.Pending;
         }
 
-        this.PendingChanged?.Invoke(this, EventArgs.Empty);
-        _ = this.ExecuteOwnedAsync(completion, interruptAsync, cancellationToken);
+        this.StateChanged?.Invoke(this, EventArgs.Empty);
+        _ = this.ExecuteOwnedAsync(completion, ownedGeneration, interruptAsync, cancellationToken);
         return completion.Task;
     }
 
     private async Task ExecuteOwnedAsync(
         TaskCompletionSource completion,
+        long ownedGeneration,
         Func<CancellationToken, Task> interruptAsync,
         CancellationToken cancellationToken)
     {
@@ -67,18 +92,28 @@ internal sealed class AgentChatInterruptState
         {
             failure = exception;
         }
-        finally
+
+        var outcome = failure switch
         {
-            lock (this.sync)
+            OperationCanceledException => AgentChatInterruptOutcome.Canceled,
+            not null => AgentChatInterruptOutcome.Failed,
+            null => AgentChatInterruptOutcome.Succeeded,
+        };
+
+        lock (this.sync)
+        {
+            if (!ReferenceEquals(this.pendingTask, completion.Task)
+                || this.generation != ownedGeneration)
             {
-                if (ReferenceEquals(this.pendingTask, completion.Task))
-                {
-                    this.pendingTask = null;
-                }
+                return;
             }
 
-            this.PendingChanged?.Invoke(this, EventArgs.Empty);
+            this.outcome = outcome;
         }
+
+        // Publish the complete outcome while ownership is still held. Subscribers can
+        // update every surface before any entry point is allowed to begin a retry.
+        this.StateChanged?.Invoke(this, EventArgs.Empty);
 
         if (failure is OperationCanceledException canceled)
         {
@@ -92,5 +127,18 @@ internal sealed class AgentChatInterruptState
         {
             completion.TrySetResult();
         }
+
+        lock (this.sync)
+        {
+            if (!ReferenceEquals(this.pendingTask, completion.Task)
+                || this.generation != ownedGeneration)
+            {
+                return;
+            }
+
+            this.pendingTask = null;
+        }
+
+        this.StateChanged?.Invoke(this, EventArgs.Empty);
     }
 }
