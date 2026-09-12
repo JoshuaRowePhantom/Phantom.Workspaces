@@ -906,7 +906,11 @@
             case "update": {
               var target = document.getElementById(command.path);
               if (!target) {
-                postToHost({ type: "commandFailed", path: command.path });
+                postToHost({
+                  type: "commandFailed",
+                  path: command.path,
+                  generation: command.generation
+                });
                 return;
               }
               switch (command.location) {

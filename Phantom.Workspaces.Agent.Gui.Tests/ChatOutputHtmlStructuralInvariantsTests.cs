@@ -142,10 +142,10 @@ public sealed class ChatOutputHtmlStructuralInvariantsTests
         var (sink, model) = await RunRepresentativeScenarioAsync();
         using var _ = model;
 
-        // Approved namespaces: history-*, tool-group-*, run-* elements, plus the persistent
-        // shell regions.
+        // Approved namespaces: positional history/tool-group ids, generation-scoped running ids,
+        // and the persistent shell regions.
         var approvedPattern = new Regex(
-            "^(history-\\d+|tool-group-\\d+|run-\\d+)(-.*)?$|" +
+            "^(history-\\d+|tool-group-\\d+|run-[0-9a-f]{32}-\\d+)(-.*)?$|" +
             $"^({ChatOutputHtmlRenderer.HistoryContainerId}|{ChatOutputHtmlRenderer.RunningContainerId}|{ChatOutputHtmlRenderer.SubAgentPanelSentinelId}|{ChatOutputHtmlRenderer.SubAgentPanelInnerId})$");
 
         foreach (var op in sink.Operations)

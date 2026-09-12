@@ -1378,32 +1378,105 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
     }
 }
 
+internal sealed class GenerationBoundChatOutputSink : IChatOutputHtmlSink, IAgentStatusSink
+{
+    private readonly IChatOutputHtmlSink sink;
+    private readonly IAgentStatusSink? statusSink;
+    private readonly Func<bool> isActive;
+    private readonly Stack<bool> forwardedBatches = new();
+
+    public GenerationBoundChatOutputSink(
+        IChatOutputHtmlSink sink,
+        IAgentStatusSink? statusSink,
+        Func<bool> isActive)
+    {
+        this.sink = sink;
+        this.statusSink = statusSink;
+        this.isActive = isActive;
+    }
+
+    public void UpdateContent(string path, ChatOutputUpdateLocation location, string content)
+    {
+        if (this.isActive())
+        {
+            this.sink.UpdateContent(path, location, content);
+        }
+    }
+
+    public void RemoveContent(string path)
+    {
+        if (this.isActive())
+        {
+            this.sink.RemoveContent(path);
+        }
+    }
+
+    public void ScrollToBottom()
+    {
+        if (this.isActive())
+        {
+            this.sink.ScrollToBottom();
+        }
+    }
+
+    public void UpdateStatus(AgentStatusField field, string? value)
+    {
+        if (this.isActive())
+        {
+            this.statusSink?.UpdateStatus(field, value);
+        }
+    }
+
+    public void BeginBatch()
+    {
+        var forward = this.isActive();
+        this.forwardedBatches.Push(forward);
+        if (forward)
+        {
+            this.sink.BeginBatch();
+        }
+    }
+
+    public void EndBatch()
+    {
+        if (this.forwardedBatches.Count > 0 && this.forwardedBatches.Pop())
+        {
+            this.sink.EndBatch();
+        }
+    }
+}
+
 /// <summary>Renders a single running (in-progress) turn: an empty container that hosts its streaming messages.</summary>
 internal sealed class RunningChatItemHtmlModel : IDisposable
 {
     private readonly IChatOutputHtmlSink sink;
     private readonly Func<bool> isReasoningVisible;
+    private readonly Func<bool> isCurrentGeneration;
     private readonly Dictionary<string, RenderSlot> sharedSlotByCallId;
     private readonly IToolVisualizerFactory? toolFactory;
     private readonly IAgentStatusSink? statusSink;
     private readonly List<RenderSlot> messageSlots = [];
     private ChatMessageHtmlTransformer? transformer;
+    private int disposeState;
 
     public RunningChatItemHtmlModel(
         string elementId,
         AgentChatRunningItem source,
         Func<bool> isReasoningVisible,
+        Func<bool> isCurrentGeneration,
         IChatOutputHtmlSink sink,
         Dictionary<string, RenderSlot> sharedSlotByCallId,
         IToolVisualizerFactory? toolFactory = null,
         IAgentStatusSink? statusSink = null)
     {
         ArgumentNullException.ThrowIfNull(isReasoningVisible);
+        ArgumentNullException.ThrowIfNull(isCurrentGeneration);
         ArgumentNullException.ThrowIfNull(sink);
         ArgumentNullException.ThrowIfNull(sharedSlotByCallId);
         this.ElementId = elementId;
         this.Source = source;
         this.isReasoningVisible = isReasoningVisible;
+        this.isCurrentGeneration = isCurrentGeneration;
         this.sink = sink;
         this.sharedSlotByCallId = sharedSlotByCallId;
         this.toolFactory = toolFactory;
@@ -1416,6 +1489,8 @@ internal sealed class RunningChatItemHtmlModel : IDisposable
 
     public AgentChatRunningItem? Source { get; private set; }
 
+    private bool IsActive => Volatile.Read(ref this.disposeState) == 0 && this.isCurrentGeneration();
+
     /// <summary>The empty container element; messages are appended into it once it is activated.</summary>
     public string BuildHtml() => ChatOutputHtmlRenderer.RenderRunningItemContainer(this.ElementId);
 
@@ -1425,7 +1500,7 @@ internal sealed class RunningChatItemHtmlModel : IDisposable
     /// </summary>
     public void Activate()
     {
-        if (this.Source is null)
+        if (!this.IsActive || this.Source is null || this.transformer is not null)
         {
             return;
         }
@@ -1446,6 +1521,11 @@ internal sealed class RunningChatItemHtmlModel : IDisposable
 
     public void Update(AgentChatRunningItem? source)
     {
+        if (!this.IsActive)
+        {
+            return;
+        }
+
         var previousItems = this.Source?.Items;
         this.Source = source;
 
@@ -1468,6 +1548,7 @@ internal sealed class RunningChatItemHtmlModel : IDisposable
         }
 
         this.transformer.Dispose();
+        this.transformer = null;
         this.messageSlots.Clear();
         this.sink.UpdateContent(
             ChatOutputHtmlRenderer.RunningItemContentsId(this.ElementId),
@@ -1478,6 +1559,11 @@ internal sealed class RunningChatItemHtmlModel : IDisposable
 
     public void Refresh()
     {
+        if (!this.IsActive)
+        {
+            return;
+        }
+
         foreach (var slot in this.messageSlots)
         {
             slot.Model.Refresh();
@@ -1493,6 +1579,11 @@ internal sealed class RunningChatItemHtmlModel : IDisposable
     /// </summary>
     public void ReInsert(string containerPath)
     {
+        if (!this.IsActive)
+        {
+            return;
+        }
+
         this.IsInserted = false;
         this.transformer?.Dispose();
         this.transformer = null;
@@ -1502,7 +1593,20 @@ internal sealed class RunningChatItemHtmlModel : IDisposable
         this.Activate();
     }
 
-    public void Dispose() => this.transformer?.Dispose();
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref this.disposeState, 1) != 0)
+        {
+            return;
+        }
+
+        var currentTransformer = this.transformer;
+        this.transformer = null;
+        currentTransformer?.Dispose();
+        this.messageSlots.Clear();
+        this.Source = null;
+        this.IsInserted = false;
+    }
 }
 
 /// <summary>Transforms the running-items source collection into <see cref="RunningChatItemHtmlModel"/> instances.</summary>
@@ -1511,9 +1615,12 @@ internal sealed class RunningChatItemsHtmlTransformer : CollectionTransformer<Ag
     private readonly IChatOutputHtmlSink sink;
     private readonly Func<bool> isReasoningVisible;
     private readonly Func<int> nextId;
+    private readonly string generationId;
+    private readonly Func<bool> isCurrentGeneration;
     private readonly Dictionary<string, RenderSlot> sharedSlotByCallId;
     private readonly IToolVisualizerFactory? toolFactory;
     private readonly IAgentStatusSink? statusSink;
+    private int disposeState;
 
     public RunningChatItemsHtmlTransformer(
         IReadOnlyList<AgentChatRunningItem> source,
@@ -1521,15 +1628,21 @@ internal sealed class RunningChatItemsHtmlTransformer : CollectionTransformer<Ag
         IChatOutputHtmlSink sink,
         Func<bool> isReasoningVisible,
         Func<int> nextId,
+        string generationId,
+        Func<bool> isCurrentGeneration,
         Dictionary<string, RenderSlot> sharedSlotByCallId,
         IToolVisualizerFactory? toolFactory = null,
         IAgentStatusSink? statusSink = null)
         : base(source, target)
     {
         ArgumentNullException.ThrowIfNull(sharedSlotByCallId);
+        ArgumentException.ThrowIfNullOrEmpty(generationId);
+        ArgumentNullException.ThrowIfNull(isCurrentGeneration);
         this.sink = sink;
         this.isReasoningVisible = isReasoningVisible;
         this.nextId = nextId;
+        this.generationId = generationId;
+        this.isCurrentGeneration = isCurrentGeneration;
         this.sharedSlotByCallId = sharedSlotByCallId;
         this.toolFactory = toolFactory;
         this.statusSink = statusSink;
@@ -1540,19 +1653,30 @@ internal sealed class RunningChatItemsHtmlTransformer : CollectionTransformer<Ag
 
     protected override RunningChatItemHtmlModel Create(AgentChatRunningItem sourceItem)
         => new(
-            ChatOutputHtmlRenderer.RunningItemId(this.nextId()),
+            ChatOutputHtmlRenderer.RunningItemId(this.generationId, this.nextId()),
             sourceItem,
             this.isReasoningVisible,
+            this.isCurrentGeneration,
             this.sink,
             this.sharedSlotByCallId,
             this.toolFactory,
             this.statusSink);
 
     protected override void Update(RunningChatItemHtmlModel target, AgentChatRunningItem sourceItem)
-        => target.Update(sourceItem);
+    {
+        if (this.IsActive)
+        {
+            target.Update(sourceItem);
+        }
+    }
 
     protected override void OnInsert(int index, RunningChatItemHtmlModel target)
     {
+        if (!this.IsActive)
+        {
+            return;
+        }
+
         this.sink.UpdateContent(
             ChatOutputHtmlRenderer.RunningContainerId,
             ChatOutputUpdateLocation.Append,
@@ -1562,7 +1686,30 @@ internal sealed class RunningChatItemsHtmlTransformer : CollectionTransformer<Ag
     }
 
     protected override void OnRemoveAt(int index, RunningChatItemHtmlModel target)
-        => this.sink.RemoveContent(target.ElementId);
+    {
+        if (this.IsActive)
+        {
+            this.sink.RemoveContent(target.ElementId);
+        }
+    }
+
+    public override void Dispose()
+    {
+        if (Interlocked.Exchange(ref this.disposeState, 1) != 0)
+        {
+            return;
+        }
+
+        base.Dispose();
+        var models = this.Target.ToArray();
+        this.Target.Clear();
+        foreach (var model in models)
+        {
+            model.Dispose();
+        }
+    }
+
+    private bool IsActive => Volatile.Read(ref this.disposeState) == 0 && this.isCurrentGeneration();
 }
 
 /// <summary>
@@ -1594,6 +1741,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
     private readonly IAgentStatusSink? statusSink;
     private readonly Func<string, string?>? resolveSubAgentId;
     private readonly Action? beforeDispatchHistoryChunk;
+    private readonly Func<bool> isCurrentGeneration;
     private readonly RunningChatItemsHtmlTransformer runningTransformer;
     private readonly RunningSubAgentsHtmlTransformer? subAgentsTransformer;
     private readonly List<RenderSlot> historySlots = [];
@@ -1605,6 +1753,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
     private bool historyLoading;
     private List<NotifyCollectionChangedEventArgs>? bufferedHistoryEvents;
     private int idSequence;
+    private int disposeState;
 
     /// <summary>
     /// Task that completes when the history has been fully loaded and the live transformer is ready.
@@ -1618,6 +1767,8 @@ public sealed class ChatOutputHtmlModel : IDisposable
     /// <summary>Exposed internally for tests that assert publication/cancellation invariants.</summary>
     internal IReadOnlyDictionary<string, RenderSlot> SharedSlotByCallId => this.sharedSlotByCallId;
 
+    internal string GenerationId { get; }
+
     public ChatOutputHtmlModel(
         IReadOnlyList<AgentChatHistoryItem> historyItems,
         IReadOnlyList<AgentChatRunningItem> runningItems,
@@ -1630,18 +1781,54 @@ public sealed class ChatOutputHtmlModel : IDisposable
         IReadOnlyList<IRunningSubAgent>? ancestors = null,
         Action? beforeDispatchHistoryChunk = null,
         IRunningSubAgentDisplay? parentAgent = null)
+        : this(
+            Guid.NewGuid().ToString("N"),
+            static () => true,
+            historyItems,
+            runningItems,
+            isReasoningVisible,
+            sink,
+            toolFactory,
+            statusSink,
+            resolveSubAgentId,
+            subAgents,
+            ancestors,
+            beforeDispatchHistoryChunk,
+            parentAgent)
     {
+    }
+
+    internal ChatOutputHtmlModel(
+        string generationId,
+        Func<bool> isCurrentGeneration,
+        IReadOnlyList<AgentChatHistoryItem> historyItems,
+        IReadOnlyList<AgentChatRunningItem> runningItems,
+        Func<bool> isReasoningVisible,
+        IChatOutputHtmlSink sink,
+        IToolVisualizerFactory? toolFactory = null,
+        IAgentStatusSink? statusSink = null,
+        Func<string, string?>? resolveSubAgentId = null,
+        IReadOnlyList<IRunningSubAgentDisplay>? subAgents = null,
+        IReadOnlyList<IRunningSubAgent>? ancestors = null,
+        Action? beforeDispatchHistoryChunk = null,
+        IRunningSubAgentDisplay? parentAgent = null)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(generationId);
+        ArgumentNullException.ThrowIfNull(isCurrentGeneration);
         ArgumentNullException.ThrowIfNull(historyItems);
         ArgumentNullException.ThrowIfNull(runningItems);
         ArgumentNullException.ThrowIfNull(isReasoningVisible);
         ArgumentNullException.ThrowIfNull(sink);
 
+        this.GenerationId = generationId;
+        this.isCurrentGeneration = isCurrentGeneration;
         this.historyItems = historyItems;
         this.runningItems = runningItems;
-        this.sink = sink;
+        var generationSink = new GenerationBoundChatOutputSink(sink, statusSink, () => this.IsActive);
+        this.sink = generationSink;
         this.isReasoningVisible = isReasoningVisible;
         this.toolFactory = toolFactory;
-        this.statusSink = statusSink;
+        this.statusSink = statusSink is null ? null : generationSink;
         this.resolveSubAgentId = resolveSubAgentId;
         this.beforeDispatchHistoryChunk = beforeDispatchHistoryChunk;
 
@@ -1659,16 +1846,22 @@ public sealed class ChatOutputHtmlModel : IDisposable
         this.runningTransformer = new RunningChatItemsHtmlTransformer(
             runningItems,
             this.runningModels,
-            sink,
+            this.sink,
             isReasoningVisible,
             this.NextId,
+            generationId,
+            () => this.IsActive,
             this.sharedSlotByCallId,
             toolFactory,
-            statusSink);
+            this.statusSink);
 
         if (subAgents is not null)
         {
-            this.subAgentsTransformer = new RunningSubAgentsHtmlTransformer(subAgents, ancestors ?? [], sink, parentAgent);
+            this.subAgentsTransformer = new RunningSubAgentsHtmlTransformer(
+                subAgents,
+                ancestors ?? [],
+                this.sink,
+                parentAgent);
         }
 
         // Emit the always-present ancestor breadcrumb for non-root agents (issue #1046).
@@ -1690,7 +1883,10 @@ public sealed class ChatOutputHtmlModel : IDisposable
             var breadcrumbHtml = ChatOutputHtmlRenderer.RenderAncestorLinks(ancestorModels);
             if (!string.IsNullOrEmpty(breadcrumbHtml))
             {
-                sink.UpdateContent(ChatOutputHtmlRenderer.HistoryContainerId, ChatOutputUpdateLocation.Prepend, breadcrumbHtml);
+                this.sink.UpdateContent(
+                    ChatOutputHtmlRenderer.HistoryContainerId,
+                    ChatOutputUpdateLocation.Prepend,
+                    breadcrumbHtml);
             }
         }
 
@@ -1971,6 +2167,11 @@ public sealed class ChatOutputHtmlModel : IDisposable
     {
         try
         {
+            if (!this.IsActive)
+            {
+                return;
+            }
+
             // Phase B: build the complete render plan off-thread before any chunk is generated.
             // Nothing is published to this model until every chunk has been delivered.
             var plan = BuildHistoryRenderPlan(
@@ -1989,10 +2190,19 @@ public sealed class ChatOutputHtmlModel : IDisposable
             foreach (var (start, end) in plan.Chunks)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (!this.IsActive)
+                {
+                    return;
+                }
 
                 var chunkHtml = GenerateHistoryChunk(plan, start, end);
                 this.beforeDispatchHistoryChunk?.Invoke();
                 cancellationToken.ThrowIfCancellationRequested();
+                if (!this.IsActive)
+                {
+                    return;
+                }
+
                 if (chunkHtml.Length == 0)
                 {
                     continue;
@@ -2004,25 +2214,30 @@ public sealed class ChatOutputHtmlModel : IDisposable
                 await Dispatcher.UIThread.InvokeAsync(
                     () =>
                     {
-                        if (cancellationToken.IsCancellationRequested)
+                        if (cancellationToken.IsCancellationRequested || !this.IsActive)
                         {
                             return;
                         }
 
                         this.sink.BeginBatch();
-                        this.sink.UpdateContent(
-                            ChatOutputHtmlRenderer.HistoryContainerId,
-                            ChatOutputUpdateLocation.Prepend,
-                            chunkHtml);
-
-                        // Scroll to bottom immediately after the first (newest) chunk, making the most
-                        // recent content visible while older chunks fill in above.
-                        if (scrollAfterThisChunk)
+                        try
                         {
-                            this.sink.ScrollToBottom();
-                        }
+                            this.sink.UpdateContent(
+                                ChatOutputHtmlRenderer.HistoryContainerId,
+                                ChatOutputUpdateLocation.Prepend,
+                                chunkHtml);
 
-                        this.sink.EndBatch();
+                            // Scroll to bottom immediately after the first (newest) chunk, making the most
+                            // recent content visible while older chunks fill in above.
+                            if (scrollAfterThisChunk)
+                            {
+                                this.sink.ScrollToBottom();
+                            }
+                        }
+                        finally
+                        {
+                            this.sink.EndBatch();
+                        }
                     },
                     DispatcherPriority.Normal,
                     cancellationToken);
@@ -2034,7 +2249,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
             await Dispatcher.UIThread.InvokeAsync(
                 () =>
                 {
-                    if (cancellationToken.IsCancellationRequested)
+                    if (cancellationToken.IsCancellationRequested || !this.IsActive)
                     {
                         return;
                     }
@@ -2086,6 +2301,11 @@ public sealed class ChatOutputHtmlModel : IDisposable
     /// <summary>Re-renders every message (for example, when reasoning visibility toggles).</summary>
     public void Refresh()
     {
+        if (!this.IsActive)
+        {
+            return;
+        }
+
         if (!this.historyLoading)
         {
             foreach (var slot in this.historySlots)
@@ -2113,6 +2333,11 @@ public sealed class ChatOutputHtmlModel : IDisposable
     /// </summary>
     public void NotifyInsertionFailed(string failedPath)
     {
+        if (!this.IsActive)
+        {
+            return;
+        }
+
         foreach (var model in this.runningModels)
         {
             if (model.ElementId == failedPath ||
@@ -2183,6 +2408,11 @@ public sealed class ChatOutputHtmlModel : IDisposable
 
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref this.disposeState, 1) != 0)
+        {
+            return;
+        }
+
         try
         {
             this.loadCts.Cancel();
@@ -2207,15 +2437,23 @@ public sealed class ChatOutputHtmlModel : IDisposable
         }
 
         this.runningItemHandlers.Clear();
+        this.bufferedHistoryEvents = null;
+        this.historyLoading = false;
         this.subAgentsTransformer?.Dispose();
         this.runningTransformer.Dispose();
         this.historyTransformer?.Dispose();
+        this.historyTransformer = null;
     }
 
     private int NextId() => this.idSequence++;
 
     private void OnHistoryCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
+        if (!this.IsActive)
+        {
+            return;
+        }
+
         if (this.historyLoading)
         {
             this.bufferedHistoryEvents?.Add(e);
@@ -2228,15 +2466,30 @@ public sealed class ChatOutputHtmlModel : IDisposable
 
     private void OnRunningCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
+        if (!this.IsActive)
+        {
+            return;
+        }
+
         this.SyncRunningItemSubscriptions();
         this.sink.ScrollToBottom();
     }
 
     private void OnRunningItemMessagesChanged(object? sender, NotifyCollectionChangedEventArgs e)
-        => this.sink.ScrollToBottom();
+    {
+        if (this.IsActive)
+        {
+            this.sink.ScrollToBottom();
+        }
+    }
 
     private void SyncRunningItemSubscriptions()
     {
+        if (!this.IsActive)
+        {
+            return;
+        }
+
         var removedItems = this.runningItemHandlers.Keys.Except(this.runningItems).ToArray();
         foreach (var removedItem in removedItems)
         {
@@ -2261,4 +2514,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
             this.runningItemHandlers[runningItem] = handler;
         }
     }
+
+    private bool IsActive
+        => Volatile.Read(ref this.disposeState) == 0 && this.isCurrentGeneration();
 }

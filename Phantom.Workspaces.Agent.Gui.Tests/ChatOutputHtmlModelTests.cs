@@ -30,6 +30,8 @@ public sealed class ChatOutputHtmlModelTests
 
         public int BatchCount { get; private set; }
 
+        public Action? OnBeginBatch { get; set; }
+
         public void UpdateContent(string path, ChatOutputUpdateLocation location, string content)
             => this.Operations.Add(new Operation("update", path, location, content));
 
@@ -39,7 +41,11 @@ public sealed class ChatOutputHtmlModelTests
         public void ScrollToBottom()
             => this.Operations.Add(new Operation("scroll", string.Empty, ChatOutputUpdateLocation.Replace, string.Empty));
 
-        public void BeginBatch() => this.batchActive = true;
+        public void BeginBatch()
+        {
+            this.batchActive = true;
+            this.OnBeginBatch?.Invoke();
+        }
 
         public void EndBatch()
         {
@@ -214,11 +220,11 @@ public sealed class ChatOutputHtmlModelTests
         // First the empty running container appended into the persistent running region.
         Assert.Equal(ChatOutputHtmlRenderer.RunningContainerId, operations[0].Path);
         Assert.Equal(ChatOutputUpdateLocation.Append, operations[0].Location);
-        Assert.Contains(ChatOutputHtmlRenderer.RunningItemId(0), operations[0].Content);
+        Assert.Contains(ChatOutputHtmlRenderer.RunningItemId(model.GenerationId, 0), operations[0].Content);
 
         // Then the message appended into the running item's own contents container.
         Assert.Equal(
-            ChatOutputHtmlRenderer.RunningItemContentsId(ChatOutputHtmlRenderer.RunningItemId(0)),
+            ChatOutputHtmlRenderer.RunningItemContentsId(ChatOutputHtmlRenderer.RunningItemId(model.GenerationId, 0)),
             operations[1].Path);
         Assert.Equal(ChatOutputUpdateLocation.Append, operations[1].Location);
         Assert.Contains(">working<", operations[1].Content);
@@ -1017,12 +1023,12 @@ public sealed class ChatOutputHtmlModelTests
         // First op must be the outer running-item container appended into the running region.
         Assert.Equal(ChatOutputHtmlRenderer.RunningContainerId, ops[0].Path);
         Assert.Equal(ChatOutputUpdateLocation.Append, ops[0].Location);
-        Assert.Contains(ChatOutputHtmlRenderer.RunningItemId(0), ops[0].Content);
+        Assert.Contains(ChatOutputHtmlRenderer.RunningItemId(model.GenerationId, 0), ops[0].Content);
 
         // Second op must be the message appended into the running item's contents container —
         // never a hardcoded anchor outside the running item.
         Assert.Equal(
-            ChatOutputHtmlRenderer.RunningItemContentsId(ChatOutputHtmlRenderer.RunningItemId(0)),
+            ChatOutputHtmlRenderer.RunningItemContentsId(ChatOutputHtmlRenderer.RunningItemId(model.GenerationId, 0)),
             ops[1].Path);
         Assert.Equal(ChatOutputUpdateLocation.Append, ops[1].Location);
         Assert.Contains(">hello<", ops[1].Content);
@@ -1083,7 +1089,7 @@ public sealed class ChatOutputHtmlModelTests
 
         // Simulate: JS reported that the running-item container element was not found
         // (the anchor used to insert it was stale — e.g. after a page reset/reload).
-        var runningItemId = ChatOutputHtmlRenderer.RunningItemId(0);
+        var runningItemId = ChatOutputHtmlRenderer.RunningItemId(model.GenerationId, 0);
         model.NotifyInsertionFailed(runningItemId);
 
         // The model must re-insert the container via Append into the running region.
@@ -1101,6 +1107,216 @@ public sealed class ChatOutputHtmlModelTests
 
         var streamOps = sink.ContentOperations;
         Assert.Contains(streamOps, op => op.Content.Contains(">recovered stream<"));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ChatOutputHtmlModel_Dispose_DisposesRunningItemTransformers()
+    {
+        var runningItem = new AgentChatRunningItem();
+        runningItem.Items.Add(TextMessage(ChatRole.Assistant, "before dispose"));
+        var running = new ObservableCollection<AgentChatRunningItem> { runningItem };
+        var sink = new RecordingSink();
+        var model = new ChatOutputHtmlModel(
+            new ObservableCollection<AgentChatHistoryItem>(),
+            running,
+            () => true,
+            sink);
+        await model.HistoryLoaded;
+
+        model.Dispose();
+        sink.Clear();
+        runningItem.Items.Add(TextMessage(ChatRole.Assistant, "after dispose"));
+
+        Assert.Empty(sink.Operations);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ChatOutputHtmlModel_DisposeTwice_DisposesRunningItemTransformersOnce()
+    {
+        var runningItem = new AgentChatRunningItem();
+        runningItem.Items.Add(TextMessage(ChatRole.Assistant, "before dispose"));
+        var running = new ObservableCollection<AgentChatRunningItem> { runningItem };
+        var sink = new RecordingSink();
+        var model = new ChatOutputHtmlModel(
+            new ObservableCollection<AgentChatHistoryItem>(),
+            running,
+            () => true,
+            sink);
+        await model.HistoryLoaded;
+
+        model.Dispose();
+        model.Dispose();
+        running.Remove(runningItem);
+        sink.Clear();
+        runningItem.Items.Add(TextMessage(ChatRole.Assistant, "after double dispose"));
+
+        Assert.Empty(sink.Operations);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ChatOutputHtmlModel_LateCommandFailedAfterDispose_IsIgnored()
+    {
+        var runningItem = new AgentChatRunningItem();
+        var running = new ObservableCollection<AgentChatRunningItem> { runningItem };
+        var sink = new RecordingSink();
+        var model = new ChatOutputHtmlModel(
+            new ObservableCollection<AgentChatHistoryItem>(),
+            running,
+            () => true,
+            sink);
+        await model.HistoryLoaded;
+        var runningId = ChatOutputHtmlRenderer.RunningItemId(model.GenerationId, 0);
+
+        model.Dispose();
+        sink.Clear();
+        model.NotifyInsertionFailed(runningId);
+        model.Refresh();
+
+        Assert.Empty(sink.Operations);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ChatOutputHtmlModel_TwoGenerations_UseDistinctRunningDomIds()
+    {
+        var runningItem = new AgentChatRunningItem();
+        runningItem.Items.Add(TextMessage(ChatRole.Assistant, "streaming"));
+        var running = new ObservableCollection<AgentChatRunningItem> { runningItem };
+        var firstSink = new RecordingSink();
+        var secondSink = new RecordingSink();
+        using var first = new ChatOutputHtmlModel(
+            new ObservableCollection<AgentChatHistoryItem>(),
+            running,
+            () => true,
+            firstSink);
+        using var second = new ChatOutputHtmlModel(
+            new ObservableCollection<AgentChatHistoryItem>(),
+            running,
+            () => true,
+            secondSink);
+        await Task.WhenAll(first.HistoryLoaded, second.HistoryLoaded);
+
+        var firstId = ChatOutputHtmlRenderer.RunningItemId(first.GenerationId, 0);
+        var secondId = ChatOutputHtmlRenderer.RunningItemId(second.GenerationId, 0);
+        Assert.NotEqual(firstId, secondId);
+        Assert.Contains(firstSink.ContentOperations, operation => operation.Content.Contains($"id=\"{firstId}\"", StringComparison.Ordinal));
+        Assert.Contains(secondSink.ContentOperations, operation => operation.Content.Contains($"id=\"{secondId}\"", StringComparison.Ordinal));
+        Assert.Contains(firstSink.ContentOperations, operation =>
+            operation.Content.Contains($"id=\"{ChatOutputHtmlRenderer.RunningMessageId(firstId, 0)}\"", StringComparison.Ordinal));
+        Assert.Contains(secondSink.ContentOperations, operation =>
+            operation.Content.Contains($"id=\"{ChatOutputHtmlRenderer.RunningMessageId(secondId, 0)}\"", StringComparison.Ordinal));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ChatOutputHtmlModel_RunningItemUpdate_ReplacesOneDomRow_NotSiblings()
+    {
+        var first = new AgentChatRunningItem();
+        first.Items.Add(TextMessage(ChatRole.Assistant, "first partial"));
+        var second = new AgentChatRunningItem();
+        second.Items.Add(TextMessage(ChatRole.Assistant, "second partial"));
+        var running = new ObservableCollection<AgentChatRunningItem> { first, second };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(
+            new ObservableCollection<AgentChatHistoryItem>(),
+            running,
+            () => true,
+            sink);
+        await model.HistoryLoaded;
+        sink.Clear();
+
+        first.Items[0] = TextMessage(ChatRole.Assistant, "first complete");
+
+        var firstId = ChatOutputHtmlRenderer.RunningItemId(model.GenerationId, 0);
+        var secondId = ChatOutputHtmlRenderer.RunningItemId(model.GenerationId, 1);
+        var operation = Assert.Single(sink.ContentOperations);
+        Assert.Equal(ChatOutputUpdateLocation.Replace, operation.Location);
+        Assert.StartsWith(firstId, operation.Path, StringComparison.Ordinal);
+        Assert.DoesNotContain(secondId, operation.Path, StringComparison.Ordinal);
+        Assert.DoesNotContain(sink.ContentOperations, item => item.Location == ChatOutputUpdateLocation.Append);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ChatOutputHtmlModel_Completion_RemovesRunningRow_AndHistoryHasOneFinalRow()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>();
+        var runningItem = new AgentChatRunningItem();
+        runningItem.Items.Add(TextMessage(ChatRole.Assistant, "partial"));
+        var running = new ObservableCollection<AgentChatRunningItem> { runningItem };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, running, () => true, sink);
+        await model.HistoryLoaded;
+        sink.Clear();
+
+        var finalItem = TextMessage(ChatRole.Assistant, "complete");
+        history.Add(finalItem);
+        running.Remove(runningItem);
+
+        var runningId = ChatOutputHtmlRenderer.RunningItemId(model.GenerationId, 0);
+        Assert.Single(
+            sink.ContentOperations,
+            operation => operation.Kind == "remove" && operation.Path == runningId);
+        var historyInsert = Assert.Single(
+            sink.ContentOperations,
+            operation => operation.Kind == "update"
+                && operation.Content.Contains(">complete<", StringComparison.Ordinal));
+        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.MessageId(0)}\"", historyInsert.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain(sink.ContentOperations, operation =>
+            operation.Content.Contains(">complete<", StringComparison.Ordinal) &&
+            operation.Content.Contains("chat-running-item", StringComparison.Ordinal));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ChatOutputHtmlModel_SupersededBeforeHistoryPublication_DropsLateCallbacks()
+    {
+        var isCurrent = true;
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.User, "late history"),
+        };
+        var runningItem = new AgentChatRunningItem();
+        runningItem.Items.Add(TextMessage(ChatRole.Assistant, "late running"));
+        var running = new ObservableCollection<AgentChatRunningItem> { runningItem };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(
+            "test-generation",
+            () => isCurrent,
+            history,
+            running,
+            () => true,
+            sink,
+            beforeDispatchHistoryChunk: () => isCurrent = false);
+
+        await model.HistoryLoaded;
+        sink.Clear();
+        history.Add(TextMessage(ChatRole.Assistant, "later history"));
+        runningItem.Items[0] = TextMessage(ChatRole.Assistant, "later running");
+        model.NotifyInsertionFailed(ChatOutputHtmlRenderer.RunningItemId(model.GenerationId, 0));
+        model.Refresh();
+
+        Assert.Empty(model.HistorySlots);
+        Assert.Empty(sink.Operations);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ChatOutputHtmlModel_GenerationSupersededDuringBatch_ForwardsBalancedEndAndSuppressesPayload()
+    {
+        var isCurrent = true;
+        var sink = new RecordingSink
+        {
+            OnBeginBatch = () => isCurrent = false,
+        };
+        using var model = new ChatOutputHtmlModel(
+            "test-generation",
+            () => isCurrent,
+            new ObservableCollection<AgentChatHistoryItem> { TextMessage(ChatRole.User, "suppressed") },
+            new ObservableCollection<AgentChatRunningItem>(),
+            () => true,
+            sink);
+
+        await model.HistoryLoaded;
+
+        Assert.Equal(1, sink.BatchCount);
+        Assert.Empty(sink.Operations);
+        Assert.Empty(model.HistorySlots);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -2212,8 +2428,8 @@ public sealed class ChatOutputHtmlModelTests
         var op = Assert.Single(sink.ContentOperations);
         Assert.Equal(ChatOutputHtmlRenderer.RunningContainerId, op.Path);
         Assert.Equal(ChatOutputUpdateLocation.Append, op.Location);
-        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.RunningItemId(0)}\"", op.Content);
-        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.RunningItemContentsId(ChatOutputHtmlRenderer.RunningItemId(0))}\"", op.Content);
+        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.RunningItemId(model.GenerationId, 0)}\"", op.Content);
+        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.RunningItemContentsId(ChatOutputHtmlRenderer.RunningItemId(model.GenerationId, 0))}\"", op.Content);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -2234,7 +2450,7 @@ public sealed class ChatOutputHtmlModelTests
 
         var op = Assert.Single(sink.ContentOperations);
         Assert.Equal(
-            ChatOutputHtmlRenderer.RunningItemContentsId(ChatOutputHtmlRenderer.RunningItemId(0)),
+            ChatOutputHtmlRenderer.RunningItemContentsId(ChatOutputHtmlRenderer.RunningItemId(model.GenerationId, 0)),
             op.Path);
         Assert.Equal(ChatOutputUpdateLocation.Append, op.Location);
         Assert.Contains(">streamed<", op.Content);
@@ -2256,7 +2472,7 @@ public sealed class ChatOutputHtmlModelTests
 
         runningItem.Items.Add(TextMessage(ChatRole.Assistant, "streamed"));
 
-        var runId = ChatOutputHtmlRenderer.RunningItemId(0);
+        var runId = ChatOutputHtmlRenderer.RunningItemId(model.GenerationId, 0);
         var op = Assert.Single(sink.ContentOperations);
         Assert.Contains($"id=\"{ChatOutputHtmlRenderer.RunningMessageId(runId, 0)}\"", op.Content);
         Assert.DoesNotContain("id=\"history-", op.Content);
@@ -2279,7 +2495,7 @@ public sealed class ChatOutputHtmlModelTests
 
         runningItem.Items.Add(TextMessage(ChatRole.Assistant, "second"));
 
-        var runId = ChatOutputHtmlRenderer.RunningItemId(0);
+        var runId = ChatOutputHtmlRenderer.RunningItemId(model.GenerationId, 0);
         // Two ops: the insert After, plus the #1222 header-suppression Replace on the new element.
         Assert.Equal(2, sink.ContentOperations.Count);
         var op = sink.ContentOperations[0];
@@ -2304,12 +2520,12 @@ public sealed class ChatOutputHtmlModelTests
         await model.HistoryLoaded;
         sink.Clear();
 
-        model.NotifyInsertionFailed(ChatOutputHtmlRenderer.RunningItemId(0));
+        model.NotifyInsertionFailed(ChatOutputHtmlRenderer.RunningItemId(model.GenerationId, 0));
 
         var op = Assert.Single(sink.ContentOperations);
         Assert.Equal(ChatOutputHtmlRenderer.RunningContainerId, op.Path);
         Assert.Equal(ChatOutputUpdateLocation.Append, op.Location);
-        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.RunningItemId(0)}\"", op.Content);
+        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.RunningItemId(model.GenerationId, 0)}\"", op.Content);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -2332,7 +2548,7 @@ public sealed class ChatOutputHtmlModelTests
         replacement.Items.Add(TextMessage(ChatRole.Assistant, "new stream"));
         running[0] = replacement;
 
-        var runId = ChatOutputHtmlRenderer.RunningItemId(0);
+        var runId = ChatOutputHtmlRenderer.RunningItemId(model.GenerationId, 0);
         var contentsId = ChatOutputHtmlRenderer.RunningItemContentsId(runId);
         var ops = sink.ContentOperations;
 
@@ -2361,7 +2577,7 @@ public sealed class ChatOutputHtmlModelTests
 
         var removeOp = Assert.Single(sink.ContentOperations);
         Assert.Equal("remove", removeOp.Kind);
-        Assert.Equal(ChatOutputHtmlRenderer.RunningItemId(0), removeOp.Path);
+        Assert.Equal(ChatOutputHtmlRenderer.RunningItemId(model.GenerationId, 0), removeOp.Path);
         sink.Clear();
 
         // The inner transformer is disposed: further additions to the removed item emit nothing.
@@ -2435,7 +2651,7 @@ public sealed class ChatOutputHtmlModelTests
 
         var op = Assert.Single(sink.ContentOperations);
         Assert.Equal(
-            ChatOutputHtmlRenderer.RunningItemContentsId(ChatOutputHtmlRenderer.RunningItemId(0)),
+            ChatOutputHtmlRenderer.RunningItemContentsId(ChatOutputHtmlRenderer.RunningItemId(model.GenerationId, 0)),
             op.Path);
         Assert.DoesNotContain(sink.Operations, o => o.Path == "load-after");
     }

@@ -54,6 +54,7 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
     private bool isAttached;
     private bool suppressScrollOnEnable;
     private TaskCompletionSource? historyLoadedSource;
+    private string? activeOutputGeneration;
 
     /// <summary>
     /// Raised when the page requests opening a URL in an external browser.
@@ -133,11 +134,25 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
     }
 
     public void UpdateContent(string path, ChatOutputUpdateLocation location, string content)
-        => this.browser.PostMessageToJavaScript(
-            ChatOutputBrowserCommands.Update(path, ToWireLocation(location), content));
+    {
+        if (this.activeOutputGeneration is not { } generation)
+        {
+            return;
+        }
+
+        this.browser.PostMessageToJavaScript(
+            ChatOutputBrowserCommands.Update(path, ToWireLocation(location), content, generation));
+    }
 
     public void RemoveContent(string path)
-        => this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Remove(path));
+    {
+        if (this.activeOutputGeneration is not { } generation)
+        {
+            return;
+        }
+
+        this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Remove(path, generation));
+    }
 
     public void ScrollToBottom()
     {
@@ -242,19 +257,19 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
 
     private void DetachOutputModel()
     {
+        this.activeOutputGeneration = null;
+        this.historyLoadedSource?.TrySetResult();
+        this.historyLoadedSource = null;
+
+        var model = this.outputModel;
+        this.outputModel = null;
+        model?.Dispose();
+
         if (this.subscribedViewModel is not null)
         {
             this.subscribedViewModel.PropertyChanged -= this.OnViewModelPropertyChanged;
             this.subscribedViewModel = null;
         }
-
-        // Release any pending history-load waiter so awaiters of HistoryLoaded do not hang after a
-        // detach/re-bind, and so a stale OnBrowserReady cycle abandons itself (issue #1009).
-        this.historyLoadedSource?.TrySetResult();
-        this.historyLoadedSource = null;
-
-        this.outputModel?.Dispose();
-        this.outputModel = null;
     }
 
     private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -273,17 +288,12 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
 
     private async void OnBrowserReady(object? sender, EventArgs e)
     {
+        var generation = this.BeginOutputGeneration();
+
         // Always post the theme first so CSS variables are set before any DOM operations arrive.
         this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Theme(this.GetThemeClassName()));
 
-        // Dispose any model left from a previous load cycle, then rebuild from scratch.
-        // This fires on both the initial load and every spontaneous reload, so both paths share
-        // the same code. subscribedViewModel is null when the control has no DataContext, in
-        // which case only the theme is posted and no model is created.
-        this.outputModel?.Dispose();
-        this.outputModel = null;
-
-        if (this.subscribedViewModel is not { } vm)
+        if (!this.isAttached || this.subscribedViewModel is not { } vm)
         {
             return;
         }
@@ -310,7 +320,9 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
 
         // The control may have been detached or re-bound to a different view model while awaiting;
         // abandon this stale cycle rather than rendering into a reused browser.
-        if (this.subscribedViewModel != vm || this.historyLoadedSource != completion)
+        if (!this.IsCurrentOutputGeneration(generation)
+            || this.subscribedViewModel != vm
+            || this.historyLoadedSource != completion)
         {
             completion.TrySetResult();
             return;
@@ -318,31 +330,70 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
 
         // Auto-scroll is enabled from the start. ScrollToBottom will be called after the
         // first (newest) history chunk in Phase B, making recent content visible immediately.
+        ChatOutputHtmlModel candidate;
         this.browser.BeginBatch();
-        this.outputModel = new ChatOutputHtmlModel(
-            vm.History,
-            vm.RunningItems,
-            isReasoningVisible: () => vm.IsReasoningVisible,
-            sink: this,
-            toolFactory: DefaultToolFactory,
-            statusSink: this,
-            resolveSubAgentId: vm.AgentChat is AgentChat localChat
-                ? localChat.TryGetSubAgentIdByToolCallId
-                : null,
-            subAgents: vm.SubAgentDisplays,
-            ancestors: BuildAncestors(vm.AgentChat),
-            parentAgent: vm.ParentAgentDisplay);
-        this.browser.EndBatch();
+        try
+        {
+            candidate = new ChatOutputHtmlModel(
+                generation,
+                () => this.IsCurrentOutputGeneration(generation),
+                vm.History,
+                vm.RunningItems,
+                isReasoningVisible: () => vm.IsReasoningVisible,
+                sink: this,
+                toolFactory: DefaultToolFactory,
+                statusSink: this,
+                resolveSubAgentId: vm.AgentChat is AgentChat localChat
+                    ? localChat.TryGetSubAgentIdByToolCallId
+                    : null,
+                subAgents: vm.SubAgentDisplays,
+                ancestors: BuildAncestors(vm.AgentChat),
+                parentAgent: vm.ParentAgentDisplay);
+        }
+        finally
+        {
+            this.browser.EndBatch();
+        }
+
+        if (!this.IsCurrentOutputGeneration(generation)
+            || this.subscribedViewModel != vm
+            || this.historyLoadedSource != completion)
+        {
+            candidate.Dispose();
+            completion.TrySetResult();
+            return;
+        }
+
+        this.outputModel = candidate;
 
         // Enable auto-scroll so the page follows live updates; the explicit scroll-to-bottom
         // is issued by the model after the first history chunk, not here.
-        this.suppressScrollOnEnable = true;
-        vm.AutoScrollEnabled = true;
-        this.suppressScrollOnEnable = false;
+        if (this.IsCurrentOutputGeneration(generation))
+        {
+            this.suppressScrollOnEnable = true;
+            vm.AutoScrollEnabled = true;
+            this.suppressScrollOnEnable = false;
+        }
 
         // Complete the tracked pipeline task once the initial history render finishes.
-        _ = CompleteWhenLoadedAsync(completion, this.outputModel.HistoryLoaded);
+        _ = CompleteWhenLoadedAsync(completion, candidate.HistoryLoaded);
     }
+
+    private string BeginOutputGeneration()
+    {
+        var generation = Guid.NewGuid().ToString("N");
+        this.activeOutputGeneration = generation;
+        this.historyLoadedSource?.TrySetResult();
+        this.historyLoadedSource = null;
+        var previousModel = this.outputModel;
+        this.outputModel = null;
+        previousModel?.Dispose();
+        return generation;
+    }
+
+    private bool IsCurrentOutputGeneration(string generation)
+        => this.isAttached
+            && string.Equals(this.activeOutputGeneration, generation, StringComparison.Ordinal);
 
     private static async Task CompleteWhenLoadedAsync(TaskCompletionSource completion, Task historyLoaded)
     {
@@ -428,10 +479,14 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
             }
             case "commandFailed":
             {
-                if (root.TryGetProperty("path", out var pathProp))
+                if (root.TryGetProperty("path", out var pathProp)
+                    && root.TryGetProperty("generation", out var generationProp))
                 {
                     var path = pathProp.GetString();
-                    if (!string.IsNullOrEmpty(path))
+                    var generation = generationProp.GetString();
+                    if (!string.IsNullOrEmpty(path)
+                        && !string.IsNullOrEmpty(generation)
+                        && this.IsCurrentOutputGeneration(generation))
                     {
                         this.outputModel?.NotifyInsertionFailed(path);
                     }

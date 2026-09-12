@@ -32,6 +32,28 @@ public sealed class ChatOutputBrowserCommandsTests
     }
 
     [Fact]
+    public void Update_WithGeneration_SerializesGeneration()
+    {
+        var json = ChatOutputBrowserCommands.Update(
+            "run-scope-0-msg-0",
+            "replace",
+            "<div>updated</div>",
+            "opaque-generation");
+
+        using var document = JsonDocument.Parse(json);
+        Assert.Equal("opaque-generation", document.RootElement.GetProperty("generation").GetString());
+    }
+
+    [Fact]
+    public void Remove_WithGeneration_SerializesGeneration()
+    {
+        var json = ChatOutputBrowserCommands.Remove("run-scope-0", "opaque-generation");
+
+        using var document = JsonDocument.Parse(json);
+        Assert.Equal("opaque-generation", document.RootElement.GetProperty("generation").GetString());
+    }
+
+    [Fact]
     public void Remove_SerializesTypeAndPath()
     {
         var json = ChatOutputBrowserCommands.Remove("run-2-c1");
