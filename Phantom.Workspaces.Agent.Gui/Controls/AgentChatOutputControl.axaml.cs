@@ -55,6 +55,7 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
     private bool suppressScrollOnEnable;
     private TaskCompletionSource? historyLoadedSource;
     private string? activeOutputGeneration;
+    private Task browserReadyCompleted = Task.CompletedTask;
 
     /// <summary>
     /// Raised when the page requests opening a URL in an external browser.
@@ -170,6 +171,10 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
 
     internal Task HistoryLoaded
         => this.historyLoadedSource?.Task ?? this.outputModel?.HistoryLoaded ?? Task.CompletedTask;
+
+    internal Task BrowserReadyCompleted => this.browserReadyCompleted;
+
+    internal event Action<ChatOutputHtmlModel>? OutputModelCandidateCreated;
 
     public void UpdateStatus(AgentStatusField field, string? value)
         => this.subscribedViewModel?.StatusSink.UpdateStatus(field, value);
@@ -288,6 +293,13 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
 
     private async void OnBrowserReady(object? sender, EventArgs e)
     {
+        var readyTask = this.OnBrowserReadyAsync();
+        this.browserReadyCompleted = readyTask;
+        await readyTask;
+    }
+
+    private async Task OnBrowserReadyAsync()
+    {
         var generation = this.BeginOutputGeneration();
 
         // Always post the theme first so CSS variables are set before any DOM operations arrive.
@@ -354,6 +366,8 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
         {
             this.browser.EndBatch();
         }
+
+        this.OutputModelCandidateCreated?.Invoke(candidate);
 
         if (!this.IsCurrentOutputGeneration(generation)
             || this.subscribedViewModel != vm

@@ -10,6 +10,7 @@ using Avalonia.Controls;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.Controls;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
+using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 using Phantom.Workspaces.Gui.Shared.Controls;
 using Phantom.Workspaces.Llm;
 
@@ -778,6 +779,80 @@ public sealed class AgentChatOutputControlTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task AgentChatOutputControl_ConstructedReadyCandidateLosesBeforePublication_DisposesAllRunningTargets()
+    {
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var firstRunningItem = new AgentChatRunningItem();
+        firstRunningItem.Items.Add(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new TextContent("first streaming")],
+        });
+        var secondRunningItem = new AgentChatRunningItem();
+        secondRunningItem.Items.Add(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new TextContent("second streaming")],
+        });
+        chat.RunningItems.Add(firstRunningItem);
+        chat.RunningItems.Add(secondRunningItem);
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
+        var control = new AgentChatOutputControl();
+        var browser = GetBrowser(control);
+        SetAttached(control);
+        ChatOutputHtmlModel? losingCandidate = null;
+        RunningChatItemHtmlModel[]? losingTargets = null;
+        control.OutputModelCandidateCreated += candidate =>
+        {
+            if (losingCandidate is not null)
+            {
+                return;
+            }
+
+            losingCandidate = candidate;
+            losingTargets = candidate.RunningModels.ToArray();
+            browser.FireReady();
+        };
+
+        control.DataContext = viewModel;
+        await control.HistoryLoaded;
+
+        var currentModel = Assert.IsType<ChatOutputHtmlModel>(GetOutputModel(control));
+        Assert.NotSame(losingCandidate, currentModel);
+        var disposedTargets = Assert.IsType<RunningChatItemHtmlModel[]>(losingTargets);
+        Assert.Empty(Assert.IsType<ChatOutputHtmlModel>(losingCandidate).RunningModels);
+        Assert.All(disposedTargets, target =>
+        {
+            Assert.Null(target.Source);
+            Assert.False(target.IsInserted);
+        });
+
+        browser.PostedMessages.Clear();
+        foreach (var target in disposedTargets)
+        {
+            target.Update(firstRunningItem);
+            target.Refresh();
+            target.ReInsert(ChatOutputHtmlRenderer.RunningContainerId);
+        }
+        Assert.Empty(browser.PostedMessages);
+
+        firstRunningItem.Items[0] = new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new TextContent("current generation only")],
+        };
+        var currentGeneration = GetActiveOutputGeneration(control);
+        Assert.Single(
+            browser.PostedMessages,
+            message => IsCommand(message, "update", currentGeneration, contentFragment: "current generation only"));
+        Assert.DoesNotContain(
+            browser.PostedMessages,
+            message => IsCommand(message, "update", losingCandidate.GenerationId));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task AgentChatOutputControl_CommandFailedFromSupersededGeneration_IsIgnored()
     {
         var chat = await AgentFactory.CreateAgentChatAsync(
@@ -802,7 +877,19 @@ public sealed class AgentChatOutputControlTests
         await control.HistoryLoaded;
         var activeGeneration = GetActiveOutputGeneration(control);
         var activeRunningId = ViewModels.DocumentModels.ChatOutputHtmlRenderer.RunningItemId(activeGeneration, 0);
+        var activeModel = Assert.IsType<ChatOutputHtmlModel>(GetOutputModel(control));
+        var activeRunningModel = Assert.Single(activeModel.RunningModels);
         browser.PostedMessages.Clear();
+
+        browser.FireMessage(JsonSerializer.Serialize(new
+        {
+            type = "commandFailed",
+            path = activeRunningId,
+        }));
+        Assert.Same(activeModel, GetOutputModel(control));
+        Assert.Same(activeRunningModel, Assert.Single(activeModel.RunningModels));
+        Assert.True(activeRunningModel.IsInserted);
+        Assert.Empty(browser.PostedMessages);
 
         browser.FireMessage(JsonSerializer.Serialize(new
         {
@@ -852,14 +939,16 @@ public sealed class AgentChatOutputControlTests
 
         control.DataContext = firstViewModel;
         var staleGeneration = GetActiveOutputGeneration(control);
+        var staleReadyCompleted = control.BrowserReadyCompleted;
+        Assert.False(staleReadyCompleted.IsCompleted);
         control.DataContext = secondViewModel;
         await control.HistoryLoaded;
-        var currentModel = GetOutputModel(control);
+        var currentModel = Assert.IsType<ChatOutputHtmlModel>(GetOutputModel(control));
         var currentGeneration = GetActiveOutputGeneration(control);
         Assert.NotEqual(staleGeneration, currentGeneration);
 
         firstHistoryPopulated.SetResult();
-        await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => { });
+        await staleReadyCompleted;
         Assert.Same(currentModel, GetOutputModel(control));
         Assert.Equal(currentGeneration, GetActiveOutputGeneration(control));
 

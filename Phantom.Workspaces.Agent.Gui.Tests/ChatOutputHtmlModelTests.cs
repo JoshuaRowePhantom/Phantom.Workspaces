@@ -5,7 +5,9 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.AI;
+using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
+using Phantom.Workspaces.Agent.Gui.ViewModels.Visualization;
 using Phantom.Workspaces.Llm;
 using Xunit;
 
@@ -17,7 +19,7 @@ public sealed class ChatOutputHtmlModelTests
 {
     private sealed record Operation(string Kind, string Path, ChatOutputUpdateLocation Location, string Content);
 
-    private sealed class RecordingSink : IChatOutputHtmlSink
+    private sealed class RecordingSink : IChatOutputHtmlSink, IAgentStatusSink
     {
         private bool batchActive;
 
@@ -40,6 +42,9 @@ public sealed class ChatOutputHtmlModelTests
 
         public void ScrollToBottom()
             => this.Operations.Add(new Operation("scroll", string.Empty, ChatOutputUpdateLocation.Replace, string.Empty));
+
+        public void UpdateStatus(AgentStatusField field, string? value)
+            => this.Operations.Add(new Operation("status", field.ToString(), ChatOutputUpdateLocation.Replace, value ?? string.Empty));
 
         public void BeginBatch()
         {
@@ -1317,6 +1322,50 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Equal(1, sink.BatchCount);
         Assert.Empty(sink.Operations);
         Assert.Empty(model.HistorySlots);
+    }
+
+    [Fact]
+    public void GenerationBoundChatOutputSink_InactiveGeneration_SuppressesEveryOperationAndBalancesBatches()
+    {
+        var isActive = true;
+        var sink = new RecordingSink();
+        var generationSink = new GenerationBoundChatOutputSink(sink, sink, () => isActive);
+
+        generationSink.UpdateContent("active-update", ChatOutputUpdateLocation.Append, "content");
+        generationSink.RemoveContent("active-remove");
+        generationSink.ScrollToBottom();
+        generationSink.UpdateStatus(AgentStatusField.Intent, "active-status");
+
+        Assert.Collection(
+            sink.Operations,
+            operation => Assert.Equal("update", operation.Kind),
+            operation => Assert.Equal("remove", operation.Kind),
+            operation => Assert.Equal("scroll", operation.Kind),
+            operation => Assert.Equal("status", operation.Kind));
+
+        sink.Clear();
+        isActive = false;
+        generationSink.UpdateContent("inactive-update", ChatOutputUpdateLocation.Append, "content");
+        generationSink.RemoveContent("inactive-remove");
+        generationSink.ScrollToBottom();
+        generationSink.UpdateStatus(AgentStatusField.Intent, "inactive-status");
+        generationSink.BeginBatch();
+        isActive = true;
+        generationSink.EndBatch();
+
+        Assert.Empty(sink.Operations);
+        Assert.Equal(0, sink.BatchCount);
+
+        generationSink.BeginBatch();
+        isActive = false;
+        generationSink.UpdateContent("superseded-update", ChatOutputUpdateLocation.Append, "content");
+        generationSink.RemoveContent("superseded-remove");
+        generationSink.ScrollToBottom();
+        generationSink.UpdateStatus(AgentStatusField.Intent, "superseded-status");
+        generationSink.EndBatch();
+
+        Assert.Empty(sink.Operations);
+        Assert.Equal(1, sink.BatchCount);
     }
 
     [AvaloniaFact(Timeout = 15_000)]

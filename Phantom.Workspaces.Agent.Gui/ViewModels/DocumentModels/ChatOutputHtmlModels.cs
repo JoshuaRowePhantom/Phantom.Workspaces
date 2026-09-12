@@ -1767,6 +1767,9 @@ public sealed class ChatOutputHtmlModel : IDisposable
     /// <summary>Exposed internally for tests that assert publication/cancellation invariants.</summary>
     internal IReadOnlyDictionary<string, RenderSlot> SharedSlotByCallId => this.sharedSlotByCallId;
 
+    /// <summary>Exposed internally for tests that assert running-target lifetime invariants.</summary>
+    internal IReadOnlyList<RunningChatItemHtmlModel> RunningModels => this.runningModels;
+
     internal string GenerationId { get; }
 
     public ChatOutputHtmlModel(
