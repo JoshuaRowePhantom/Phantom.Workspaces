@@ -1,8 +1,10 @@
 using GitHub.Copilot;
 using Microsoft.Extensions.Time.Testing;
 using Phantom.Workspaces.Llm.Copilot;
+using Phantom.Workspaces.Llm.Core.Tests.Infrastructure;
 using Phantom.Workspaces.Llm.Processes;
 using Phantom.Workspaces.Llm.Trust;
+using System.Reflection;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
@@ -82,9 +84,11 @@ public sealed class CopilotRuntimeConnectionFactoryTests
     }
 
     [Fact]
-    public async Task CreateConnectionAsync_ConcurrentLifecyclePaths_ReturnsOneSelection()
+    public async Task CreateConnection_EnsureConnectedAndEnsureSession_ReusesSelection()
     {
         var connectionFactory = new RecordingConnectionFactory();
+        var sdkSession = new FakeCopilotSession();
+        var sdkClient = new FakeCopilotClient(sdkSession);
         await using var client = new CopilotSdkChatClient(
             "gpt-5",
             "GitHub Copilot",
@@ -94,17 +98,52 @@ public sealed class CopilotRuntimeConnectionFactoryTests
                 new TrustProfile(),
                 new RecordingCompiler(new(false, null, []))));
         client.SetRuntimeConnectionFactoryForTest(connectionFactory);
+        client.SetCopilotClientFactoryForTest(new FakeCopilotClientFactory(sdkClient));
 
-        var connectedTask = client.CreateClientOptionsForTestAsync(workingDirectory: null);
+        var connectedTask = client.ListModelsAsync(CancellationToken.None);
         await connectionFactory.Started.Task;
-        var sessionTask = client.CreateClientOptionsForTestAsync(@"C:\workspace");
+        var sessionTask = InvokeEnsureSessionAsync(client);
         connectionFactory.Release.TrySetResult();
-        var connected = await connectedTask;
-        var session = await sessionTask;
+        await connectedTask;
+        await sessionTask;
 
         Assert.Equal(1, connectionFactory.CallCount);
-        Assert.Same(connected.Connection, session.Connection);
-        Assert.Equal(@"C:\workspace", session.WorkingDirectory);
+        Assert.Single(sdkSession.CreateSessionConfigs);
+    }
+
+    [Fact]
+    public async Task CreateConnection_IntermediateAncestorReparsePoint_IsRejected()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        using var files = new RuntimeFiles();
+        var target = Directory.CreateDirectory(Path.Combine(files.BaseDirectory, "real-runtime"));
+        var native = Directory.CreateDirectory(Path.Combine(target.FullName, "native"));
+        File.WriteAllText(Path.Combine(native.FullName, "copilot.exe"), "cli");
+        File.WriteAllText(
+            Path.Combine(native.FullName, CopilotRuntimeConnectionFactory.WrapperFileName),
+            "wrapper");
+        var link = Path.Combine(files.BaseDirectory, "linked-runtime");
+        await CreateJunctionAsync(link, target.FullName);
+        var cliPath = Path.Combine(link, "native", "copilot.exe");
+        var factory = new CopilotRuntimeConnectionFactory(
+            new CopilotLaunchPolicyStore(files.LaunchRoot, TimeProvider.System),
+            files.BaseDirectory,
+            "win-x64");
+        var context = new AgentExecutionTrustContext(
+            new TrustProfile { NetworkCapabilities = [] },
+            new RecordingCompiler(new(true, CreatePolicy(), [])));
+
+        try
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => factory.CreateConnectionAsync(context, cliPath));
+        }
+        finally
+        {
+            Directory.Delete(link);
+        }
     }
 
     [Fact]
@@ -184,6 +223,35 @@ public sealed class CopilotRuntimeConnectionFactoryTests
                 LeastPrivilege: true,
                 LearningMode: false,
                 PermissiveMode: false));
+
+    private static async Task InvokeEnsureSessionAsync(CopilotSdkChatClient client)
+    {
+        var method = typeof(CopilotSdkChatClient).GetMethod(
+            "EnsureSessionAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new MissingMethodException(nameof(CopilotSdkChatClient), "EnsureSessionAsync");
+        await (Task)(method.Invoke(client, [null, CancellationToken.None])
+            ?? throw new InvalidOperationException("EnsureSessionAsync returned no task."));
+    }
+
+    private static async Task CreateJunctionAsync(string link, string target)
+    {
+        using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            ArgumentList = { "/d", "/c", "mklink", "/J", link, target },
+        }) ?? throw new InvalidOperationException("Failed to start junction creation.");
+        var output = process.StandardOutput.ReadToEndAsync();
+        var error = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        Assert.True(
+            process.ExitCode == 0,
+            $"Junction creation failed: {await output} {await error}");
+    }
 
     private sealed class RecordingCompiler(TrustProfileProcessPolicyCompilation result)
         : ITrustProfileProcessPolicyCompiler

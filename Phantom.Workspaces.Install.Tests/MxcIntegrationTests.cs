@@ -805,6 +805,29 @@ internal static class MxcRepositoryTestSupport
         $"-p:PublishDir={outputPath}{Path.DirectorySeparatorChar}",
     ];
 
+    internal static string[] CreateCopilotRuntimePublishArguments(
+        string outputPath,
+        string artifactsPath) =>
+    [
+        "publish",
+        Path.Combine("Phantom.Workspaces", "Phantom.Workspaces.csproj"),
+        "--nologo",
+        "--disable-build-servers",
+        "-m:1",
+        "/nodeReuse:false",
+        "-r",
+        "win-x64",
+        "-p:Configuration=Release",
+        "-p:SelfContained=false",
+        "-p:PublishSingleFile=false",
+        "-p:PublishReadyToRun=false",
+        "-p:UseSharedCompilation=false",
+        "-p:UseArtifactsOutput=true",
+        $"-p:ArtifactsPath={artifactsPath}",
+        "-o",
+        outputPath,
+    ];
+
     internal static Task<ProcessResult> InvokeAsync(string fileName, params string[] arguments) =>
         InvokeAsync(
             fileName,

@@ -225,13 +225,11 @@ internal static class CopilotCliWrapper
         var canonical = System.IO.Path.GetFullPath(path);
         if (!System.IO.Path.IsPathFullyQualified(canonical)
             || !File.Exists(canonical)
-            || Directory.Exists(canonical)
-            || (File.GetAttributes(canonical) & FileAttributes.ReparsePoint) != 0
-            || (File.GetAttributes(System.IO.Path.GetDirectoryName(canonical)!)
-                & FileAttributes.ReparsePoint) != 0)
+            || Directory.Exists(canonical))
         {
             throw new UnauthorizedAccessException();
         }
+        CopilotPathSecurity.EnsureNoReparsePoints(canonical);
         return canonical;
     }
 

@@ -109,12 +109,13 @@ public sealed class CopilotLaunchPolicyStore : ICopilotLaunchPolicyStore
         int? parentProcessId = null)
     {
         ArgumentNullException.ThrowIfNull(policy);
-        CleanupExpiredFiles();
-
         Directory.CreateDirectory(this.launchRoot);
+        CopilotPathSecurity.EnsureNoReparsePoints(this.launchRoot);
         RestrictDirectory(this.launchRoot);
+        CleanupExpiredFiles();
         var directory = System.IO.Path.Combine(this.launchRoot, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
+        CopilotPathSecurity.EnsureNoReparsePoints(directory, this.launchRoot);
         RestrictDirectory(directory);
 
         var now = this.timeProvider.GetUtcNow();
@@ -238,16 +239,11 @@ public sealed class CopilotLaunchPolicyStore : ICopilotLaunchPolicyStore
             throw new UnauthorizedAccessException("The policy path is outside the Copilot launch directory.");
         }
         if (!File.Exists(canonicalPath)
-            || (File.GetAttributes(canonicalPath) & FileAttributes.ReparsePoint) != 0)
+            || Directory.Exists(canonicalPath))
         {
             throw new UnauthorizedAccessException("The policy path is not a normal file.");
         }
-        var containingDirectory = System.IO.Path.GetDirectoryName(canonicalPath)!;
-        if ((File.GetAttributes(this.launchRoot) & FileAttributes.ReparsePoint) != 0
-            || (File.GetAttributes(containingDirectory) & FileAttributes.ReparsePoint) != 0)
-        {
-            throw new UnauthorizedAccessException("The policy path traverses a reparse point.");
-        }
+        CopilotPathSecurity.EnsureNoReparsePoints(canonicalPath, this.launchRoot);
         return canonicalPath;
     }
 

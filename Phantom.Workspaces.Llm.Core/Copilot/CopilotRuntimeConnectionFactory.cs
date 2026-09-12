@@ -140,14 +140,25 @@ public sealed class CopilotRuntimeConnectionFactory : ICopilotRuntimeConnectionF
 
     private static void ValidateNormalExecutable(string path, string description)
     {
-        if (!Path.IsPathFullyQualified(path)
-            || !File.Exists(path)
-            || Directory.Exists(path)
-            || (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0
-            || (File.GetAttributes(Path.GetDirectoryName(path)!)
-                & FileAttributes.ReparsePoint) != 0)
+        try
         {
-            throw new InvalidOperationException($"{description} path is missing or unsafe.");
+            if (!Path.IsPathFullyQualified(path)
+                || !File.Exists(path)
+                || Directory.Exists(path))
+            {
+                throw new InvalidOperationException($"{description} path is missing or unsafe.");
+            }
+            CopilotPathSecurity.EnsureNoReparsePoints(path);
+        }
+        catch (Exception exception) when (
+            exception is UnauthorizedAccessException
+                or IOException
+                or ArgumentException
+                or NotSupportedException)
+        {
+            throw new InvalidOperationException(
+                $"{description} path is missing or unsafe.",
+                exception);
         }
     }
 

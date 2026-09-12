@@ -42,15 +42,20 @@ public sealed class RemoteModelHostTests
     [Fact]
     public async Task RemoteModel_ConstrainedProfile_CompilesAndCreatesEnvelopeOnRemoteHost()
     {
+        using var files = new RuntimeFiles();
         var profile = new TrustProfile { NetworkCapabilities = [] };
         var provider = new RecordingProvider(profile);
+        var compiler = new RecordingCompiler();
         var sdkFactory = new ExecutorRoutingTestHarness.RecordingClientFactory();
-        var runtimeFactory = new RecordingRuntimeFactory();
+        var runtimeFactory = new CopilotRuntimeConnectionFactory(
+            new CopilotLaunchPolicyStore(files.LaunchRoot, TimeProvider.System),
+            files.BaseDirectory,
+            "win-x64");
         var listeners = new Phantom.Workspaces.Transport.TransportRegistry();
         listeners.Register(new CopilotClientTransportListener(
             sdkFactory,
             provider,
-            new RecordingCompiler(),
+            compiler,
             runtimeFactory));
         await using var transport = new LocalTransport(listeners);
         await using var client = new CopilotClientOverTransport(
@@ -65,9 +70,12 @@ public sealed class RemoteModelHostTests
             ExecutorRoutingTestHarness.Ct());
 
         Assert.Equal("contained-profile", provider.ResolvedName);
-        Assert.Equal(1, runtimeFactory.CallCount);
-        Assert.Equal("contained-profile", runtimeFactory.ContextSeen!.RemoteReference!.Id);
-        Assert.Same(runtimeFactory.Connection, sdkFactory.Options!.Connection);
+        Assert.Equal(1, compiler.CallCount);
+        Assert.NotNull(sdkFactory.Options!.Connection);
+        Assert.Single(Directory.EnumerateFiles(
+            files.LaunchRoot,
+            "policy.json",
+            SearchOption.AllDirectories));
     }
 
     private sealed class RecordingProvider(TrustProfile profile) : IRemoteTrustProfileResolver
@@ -86,26 +94,35 @@ public sealed class RemoteModelHostTests
 
     private sealed class RecordingCompiler : ITrustProfileProcessPolicyCompiler
     {
-        public TrustProfileProcessPolicyCompilation Compile(TrustProfile effectiveProfile)
-            => new(false, null, []);
-    }
-
-    private sealed class RecordingRuntimeFactory : ICopilotRuntimeConnectionFactory
-    {
-        public RuntimeConnection Connection { get; } =
-            RuntimeConnection.ForStdio("phantom-copilot-wrapper.exe", ["--policy", "local"]);
-        public AgentExecutionTrustContext? ContextSeen { get; private set; }
         public int CallCount { get; private set; }
 
-        public async Task<CopilotRuntimeConnectionLease> CreateConnectionAsync(
-            AgentExecutionTrustContext trustContext,
-            string? cliPath,
-            CancellationToken cancellationToken = default)
+        public TrustProfileProcessPolicyCompilation Compile(TrustProfile effectiveProfile)
         {
             CallCount++;
-            ContextSeen = trustContext;
-            await trustContext.GetCompilationAsync(cancellationToken);
-            return new CopilotRuntimeConnectionLease(Connection, null);
+            return new(true, CopilotRuntimeConnectionFactoryTests.CreatePolicy(), []);
         }
+    }
+
+    private sealed class RuntimeFiles : IDisposable
+    {
+        public RuntimeFiles()
+        {
+            BaseDirectory = Path.Combine(
+                Environment.CurrentDirectory,
+                "TestResults",
+                $"remote-copilot-runtime-{Guid.NewGuid():N}");
+            var native = Directory.CreateDirectory(
+                Path.Combine(BaseDirectory, "runtimes", "win-x64", "native"));
+            File.WriteAllText(Path.Combine(native.FullName, "copilot.exe"), "cli");
+            File.WriteAllText(
+                Path.Combine(native.FullName, CopilotRuntimeConnectionFactory.WrapperFileName),
+                "wrapper");
+            LaunchRoot = Path.Combine(BaseDirectory, "launch");
+        }
+
+        public string BaseDirectory { get; }
+        public string LaunchRoot { get; }
+
+        public void Dispose() => Directory.Delete(BaseDirectory, recursive: true);
     }
 }
