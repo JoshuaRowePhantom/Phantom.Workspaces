@@ -37,9 +37,11 @@ public sealed class DeterministicTestChatClient : IChatClient
         return queued;
     }
 
-    public QueuedStreamResponse EnqueueStreamingResponse(bool isReady = true)
+    public QueuedStreamResponse EnqueueStreamingResponse(
+        bool isReady = true,
+        bool isDisposalReady = true)
     {
-        var queued = new QueuedStreamResponse(isReady);
+        var queued = new QueuedStreamResponse(isReady, isDisposalReady);
         this.streamQueue.Enqueue(queued);
         this.streamSignal.Release();
         return queued;
@@ -98,29 +100,36 @@ public sealed class DeterministicTestChatClient : IChatClient
 
         await queuedStream.WaitUntilReadyAsync(cancellationToken);
 
-        while (true)
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var item = await queuedStream.DequeueAsync(cancellationToken);
-            await item.WaitUntilReadyAsync(cancellationToken);
-
-            if (item.IsTerminal)
+            while (true)
             {
-                if (item.Exception is not null)
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var item = await queuedStream.DequeueAsync(cancellationToken);
+                await item.WaitUntilReadyAsync(cancellationToken);
+
+                if (item.IsTerminal)
                 {
-                    throw item.Exception;
+                    if (item.Exception is not null)
+                    {
+                        throw item.Exception;
+                    }
+
+                    yield break;
                 }
 
-                yield break;
-            }
+                if (item.Update is null)
+                {
+                    throw new InvalidOperationException("Queued streaming update item did not include an update payload.");
+                }
 
-            if (item.Update is null)
-            {
-                throw new InvalidOperationException("Queued streaming update item did not include an update payload.");
+                yield return item.Update;
             }
-
-            yield return item.Update;
+        }
+        finally
+        {
+            await queuedStream.DisposeAsync();
         }
     }
 
@@ -160,15 +169,34 @@ public sealed class DeterministicTestChatClient : IChatClient
         private readonly ConcurrentQueue<QueuedStreamItem> items = new();
         private readonly SemaphoreSlim itemSignal = new(0);
         private readonly TaskCompletionSource ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        internal QueuedStreamResponse(bool isReady)
+        private readonly TaskCompletionSource disposalReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource disposalStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource disposed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int disposalCount;
+
+        internal QueuedStreamResponse(bool isReady, bool isDisposalReady)
         {
             if (isReady)
             {
                 this.MarkReady();
             }
+            if (isDisposalReady)
+            {
+                this.ReleaseDisposal();
+            }
         }
 
+        public int DisposalCount => Volatile.Read(ref this.disposalCount);
+
         public void MarkReady() => this.ready.TrySetResult();
+
+        public void ReleaseDisposal() => this.disposalReady.TrySetResult();
+
+        public Task WaitForDisposalStartedAsync(CancellationToken cancellationToken = default)
+            => this.disposalStarted.Task.WaitAsync(cancellationToken);
+
+        public Task WaitForDisposalAsync(CancellationToken cancellationToken = default)
+            => this.disposed.Task.WaitAsync(cancellationToken);
 
         public QueuedStreamItem EnqueueUpdate(ChatResponseUpdate update, bool isReady = true)
         {
@@ -178,9 +206,15 @@ public sealed class DeterministicTestChatClient : IChatClient
             return item;
         }
 
-        public QueuedStreamItem EnqueueException(Exception exception, bool isReady = true)
+        public QueuedStreamItem EnqueueException(
+            Exception exception,
+            bool isReady = true,
+            bool observeCancellationWhileWaiting = true)
         {
-            var item = QueuedStreamItem.ForTerminal(exception, isReady);
+            var item = QueuedStreamItem.ForTerminal(
+                exception,
+                isReady,
+                observeCancellationWhileWaiting);
             this.items.Enqueue(item);
             this.itemSignal.Release();
             return item;
@@ -208,17 +242,31 @@ public sealed class DeterministicTestChatClient : IChatClient
             throw new InvalidOperationException("No queued streaming item was available.");
         }
 
+        internal async Task DisposeAsync()
+        {
+            this.disposalStarted.TrySetResult();
+            await this.disposalReady.Task.ConfigureAwait(false);
+            Interlocked.Increment(ref this.disposalCount);
+            this.disposed.TrySetResult();
+        }
     }
 
     public sealed class QueuedStreamItem
     {
         private readonly TaskCompletionSource ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly bool observeCancellationWhileWaiting;
 
-        private QueuedStreamItem(ChatResponseUpdate? update, Exception? exception, bool isTerminal, bool isReady)
+        private QueuedStreamItem(
+            ChatResponseUpdate? update,
+            Exception? exception,
+            bool isTerminal,
+            bool isReady,
+            bool observeCancellationWhileWaiting = true)
         {
             this.Update = update;
             this.Exception = exception;
             this.IsTerminal = isTerminal;
+            this.observeCancellationWhileWaiting = observeCancellationWhileWaiting;
             if (isReady)
             {
                 this.MarkReady();
@@ -234,12 +282,22 @@ public sealed class DeterministicTestChatClient : IChatClient
         public void MarkReady() => this.ready.TrySetResult();
 
         internal Task WaitUntilReadyAsync(CancellationToken cancellationToken)
-            => this.ready.Task.WaitAsync(cancellationToken);
+            => this.observeCancellationWhileWaiting
+                ? this.ready.Task.WaitAsync(cancellationToken)
+                : this.ready.Task;
 
         internal static QueuedStreamItem ForUpdate(ChatResponseUpdate update, bool isReady)
             => new(update, exception: null, isTerminal: false, isReady);
 
-        internal static QueuedStreamItem ForTerminal(Exception? exception, bool isReady)
-            => new(update: null, exception, isTerminal: true, isReady);
+        internal static QueuedStreamItem ForTerminal(
+            Exception? exception,
+            bool isReady,
+            bool observeCancellationWhileWaiting = true)
+            => new(
+                update: null,
+                exception,
+                isTerminal: true,
+                isReady,
+                observeCancellationWhileWaiting);
     }
 }

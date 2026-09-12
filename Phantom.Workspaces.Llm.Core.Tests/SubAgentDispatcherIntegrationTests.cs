@@ -228,6 +228,131 @@ public sealed class SubAgentDispatcherIntegrationTests
         }
     }
 
+    [Fact]
+    public async Task CancellationThenDisposal_WaitsForChildProviderCleanup()
+    {
+        await using var scenario = new ControlledDispatchScenario(
+            "cancel-dispose-active",
+            providerDisposalReady: false);
+
+        await scenario.ReadThroughCreatedAsync();
+        await scenario.WaitForRunningAsync();
+
+        scenario.Cancel();
+        var disposal = scenario.BeginDisposeEnumeratorAsync();
+
+        await scenario.Stream.WaitForDisposalStartedAsync(scenario.TimeoutToken);
+        Assert.False(disposal.IsCompleted);
+
+        scenario.Stream.ReleaseDisposal();
+        await disposal;
+
+        Assert.Equal(1, scenario.Stream.DisposalCount);
+        scenario.AssertInterruptedChildSettled();
+    }
+
+    [Fact]
+    public async Task CancellationThenDisposal_SurfacesLateProviderCleanupFault()
+    {
+        await using var scenario = new ControlledDispatchScenario("cancel-dispose-cleanup-fault");
+        var lateFault = scenario.Stream.EnqueueException(
+            new InvalidOperationException("late provider cleanup fault"),
+            isReady: false,
+            observeCancellationWhileWaiting: false);
+
+        await scenario.ReadThroughCreatedAsync();
+        await scenario.WaitForRunningAsync();
+
+        scenario.Cancel();
+        var disposal = scenario.BeginDisposeEnumeratorAsync();
+        Assert.False(disposal.IsCompleted);
+
+        lateFault.MarkReady();
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => disposal);
+
+        Assert.Equal("late provider cleanup fault", error.Message);
+        Assert.Equal(1, scenario.Stream.DisposalCount);
+        Assert.Empty(scenario.Factory.Leases.Values.Single().AgentChat.RunningItems);
+    }
+
+    [Fact]
+    public async Task CancellationThenDisposal_BeforeRunningOwnsChildThroughProviderCleanup()
+    {
+        await using var scenario = new ControlledDispatchScenario(
+            "cancel-dispose-pre-active",
+            pauseProcessing: true,
+            providerDisposalReady: false);
+
+        await scenario.ReadThroughCreatedAsync();
+        Assert.True(scenario.HasPausedProcessingWork);
+
+        scenario.Cancel();
+        var disposal = scenario.BeginDisposeEnumeratorAsync();
+        Assert.False(disposal.IsCompleted);
+
+        scenario.ReleasePausedProcessing();
+        await disposal;
+
+        Assert.Equal(0, scenario.Stream.DisposalCount);
+        Assert.Equal(1, scenario.TestChatClient.QueuedStreamingResponseCount);
+        Assert.False(scenario.HasPausedProcessingWork);
+        scenario.AssertInterruptedChildSettled();
+    }
+
+    [Theory]
+    [InlineData(SynchronousTerminal.Complete)]
+    [InlineData(SynchronousTerminal.Fault)]
+    [InlineData(SynchronousTerminal.Cancel)]
+    public async Task SynchronousChildTerminal_OwnsProviderCleanupAndProjectsHistoryOnce(
+        SynchronousTerminal terminal)
+    {
+        await using var scenario = new ControlledDispatchScenario($"synchronous-{terminal}");
+        switch (terminal)
+        {
+            case SynchronousTerminal.Complete:
+                scenario.Stream.Complete();
+                break;
+            case SynchronousTerminal.Fault:
+                scenario.Stream.EnqueueException(new InvalidOperationException("synchronous provider fault"));
+                break;
+            case SynchronousTerminal.Cancel:
+                scenario.Stream.EnqueueException(new OperationCanceledException("synchronous provider cancellation"));
+                break;
+        }
+
+        var updates = await scenario.DrainAsync();
+
+        Assert.Equal(1, scenario.Stream.DisposalCount);
+        Assert.False(await scenario.Enumerator.MoveNextAsync());
+
+        var lease = scenario.Factory.Leases.Values.Single();
+        Assert.Empty(lease.AgentChat.RunningItems);
+        var history = lease.AgentChat.History.ToArray();
+        Assert.Single(history, item => item.Role == ChatRole.User);
+        Assert.Equal(history.Length, updates.Count(update =>
+            update.Text?.Contains("Sending", StringComparison.Ordinal) != true
+            && update.Text?.Contains("Created sub-agent", StringComparison.Ordinal) != true));
+        Assert.DoesNotContain(updates, update => update.Text == "Interrupted.\n");
+
+        var contents = history.SelectMany(item => item.Contents).ToArray();
+        if (terminal == SynchronousTerminal.Fault)
+        {
+            Assert.Single(contents.OfType<ErrorContent>(), content =>
+                content.Message.Contains("synchronous provider fault", StringComparison.Ordinal));
+        }
+        else if (terminal == SynchronousTerminal.Cancel)
+        {
+            Assert.Single(contents.OfType<TextContent>(), content =>
+                content.Text == "Interrupted by user.");
+        }
+        else
+        {
+            Assert.Empty(contents.OfType<ErrorContent>());
+            Assert.DoesNotContain(contents.OfType<TextContent>(), content =>
+                content.Text == "Interrupted by user.");
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -320,6 +445,7 @@ public sealed class SubAgentDispatcherIntegrationTests
             scenario.Stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "idle won"));
             scenario.Stream.Complete();
             await scenario.WaitForIdleAsync();
+            await scenario.Stream.WaitForDisposalAsync(scenario.TimeoutToken);
             scenario.Cancel();
         }
         else
@@ -344,7 +470,7 @@ public sealed class SubAgentDispatcherIntegrationTests
     }
 
     [Fact]
-    public async Task DisposingCreatedDispatch_UnsubscribesCancellationWithoutInterruptingAgent()
+    public async Task DisposingCreatedDispatch_InterruptsAndSettlesOwnedAgent()
     {
         await using var scenario = new ControlledDispatchScenario("dispose-created");
 
@@ -352,19 +478,8 @@ public sealed class SubAgentDispatcherIntegrationTests
         await scenario.WaitForRunningAsync();
         await scenario.DisposeEnumeratorAsync();
 
-        scenario.Cancel();
-        scenario.Stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "finished after disposal"));
-        scenario.Stream.Complete();
-        await scenario.WaitForIdleAsync();
-
-        var historyText = string.Join(
-            "",
-            scenario.Factory.Leases.Values.Single().AgentChat.History
-                .SelectMany(item => item.Contents)
-                .OfType<TextContent>()
-                .Select(content => content.Text));
-        Assert.Contains("finished after disposal", historyText);
-        Assert.DoesNotContain("Interrupted by user.", historyText);
+        Assert.Equal(1, scenario.Stream.DisposalCount);
+        scenario.AssertInterruptedChildSettled();
     }
 
     [Fact]
@@ -518,7 +633,10 @@ public sealed class SubAgentDispatcherIntegrationTests
         private readonly ManuallyDrivenTaskScheduler? foregroundScheduler;
         private bool enumeratorDisposed;
 
-        public ControlledDispatchScenario(string dispatcherId, bool pauseProcessing = false)
+        public ControlledDispatchScenario(
+            string dispatcherId,
+            bool pauseProcessing = false,
+            bool providerDisposalReady = true)
         {
             var testChatClient = new DeterministicTestChatClient();
             foregroundScheduler = pauseProcessing ? new ManuallyDrivenTaskScheduler() : null;
@@ -529,7 +647,9 @@ public sealed class SubAgentDispatcherIntegrationTests
                 new InMemoryDataAccessLayer(),
                 new EntityName("dispatchers", dispatcherId),
                 CreateOptions());
-            Stream = testChatClient.EnqueueStreamingResponse(isReady: true);
+            Stream = testChatClient.EnqueueStreamingResponse(
+                isReady: true,
+                isDisposalReady: providerDisposalReady);
             TestChatClient = testChatClient;
 
             var messages = new List<ChatMessage> { new(ChatRole.User, "new: controlled task") };
@@ -550,6 +670,8 @@ public sealed class SubAgentDispatcherIntegrationTests
         public IAsyncEnumerator<ChatResponseUpdate> Enumerator { get; }
 
         public bool HasPausedProcessingWork => foregroundScheduler?.QueuedCount > 0;
+
+        public CancellationToken TimeoutToken => timeout.Token;
 
         public void Cancel() => dispatchCancellation.Cancel();
 
@@ -603,6 +725,30 @@ public sealed class SubAgentDispatcherIntegrationTests
             await Enumerator.DisposeAsync();
         }
 
+        public Task BeginDisposeEnumeratorAsync()
+        {
+            if (enumeratorDisposed)
+            {
+                return Task.CompletedTask;
+            }
+
+            enumeratorDisposed = true;
+            return Enumerator.DisposeAsync().AsTask();
+        }
+
+        public void AssertInterruptedChildSettled()
+        {
+            var lease = Factory.Leases.Values.Single();
+            Assert.Empty(lease.AgentChat.RunningItems);
+            var historyText = lease.AgentChat.History
+                .SelectMany(item => item.Contents)
+                .OfType<TextContent>()
+                .Select(content => content.Text)
+                .ToArray();
+            Assert.Single(historyText, text => text == "Interrupted by user.");
+            Assert.DoesNotContain(historyText, text => text == "completed normally");
+        }
+
         private async Task WaitForRunningCountAsync(int expectedCount)
         {
             var runningItems = Factory.Leases.Values.Single().AgentChat.RunningItems;
@@ -646,6 +792,13 @@ public sealed class SubAgentDispatcherIntegrationTests
             dispatchCancellation.Dispose();
             timeout.Dispose();
         }
+    }
+
+    public enum SynchronousTerminal
+    {
+        Complete,
+        Fault,
+        Cancel,
     }
 
     private sealed class ManuallyDrivenTaskScheduler : TaskScheduler

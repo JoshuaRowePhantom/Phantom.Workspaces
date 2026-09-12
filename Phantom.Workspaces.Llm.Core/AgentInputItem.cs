@@ -15,6 +15,8 @@ public sealed record AgentInputItem
 
     public AgentChatSession? ResetSession { get; init; }
 
+    internal AgentInputTurnCompletion? TurnCompletion { get; init; }
+
     public IReadOnlyList<AIContent> Contents => this.Messages?.SelectMany(m => m.Contents).ToArray() ?? Array.Empty<AIContent>();
 
     public string Text => string.Concat(
@@ -29,4 +31,26 @@ public sealed record AgentInputItem
         UriContent uriContent => uriContent.Uri.ToString(),
         _ => $"[{content.GetType().Name}]",
     };
+}
+
+internal sealed class AgentInputTurnCompletion
+{
+    private readonly TaskCompletionSource<Task> completionSource =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public AgentInputTurnCompletion()
+    {
+        Completion = completionSource.Task.Unwrap();
+    }
+
+    public Task Completion { get; }
+
+    public void CompleteAfter(Task providerCleanup)
+    {
+        ArgumentNullException.ThrowIfNull(providerCleanup);
+        if (!completionSource.TrySetResult(providerCleanup))
+        {
+            throw new InvalidOperationException("The agent input turn was completed more than once.");
+        }
+    }
 }

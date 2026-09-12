@@ -820,6 +820,21 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
         this.EnqueueUserContents([new TextContent(text)], targetQueue);
     }
 
+    internal Task EnqueueUserMessageWithCompletion(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return Task.CompletedTask;
+        }
+
+        var turnCompletion = new AgentInputTurnCompletion();
+        this.EnqueueUserContentsCore(
+            [new TextContent(text)],
+            this.DefaultInputQueue,
+            turnCompletion);
+        return turnCompletion.Completion;
+    }
+
     /// <summary>
     /// Adds a user message with structured content (e.g. text + images) and enqueues it.
     /// </summary>
@@ -831,7 +846,17 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
             return;
         }
 
-        targetQueue ??= this.DefaultInputQueue;
+        this.EnqueueUserContentsCore(
+            contents,
+            targetQueue ?? this.DefaultInputQueue,
+            turnCompletion: null);
+    }
+
+    private void EnqueueUserContentsCore(
+        IReadOnlyList<AIContent> contents,
+        AgentChatQueue targetQueue,
+        AgentInputTurnCompletion? turnCompletion)
+    {
         this.StartProcessingLoop();
         this.queueManager.Enqueue(
             targetQueue.Queue,
@@ -845,6 +870,7 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
                             CreatedAt = this.timeProvider.GetUtcNow(),
                         },
                     ],
+                    TurnCompletion = turnCompletion,
                 },
             ]);
     }
@@ -2055,6 +2081,7 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
         this.queueManager.QueueStateChanged += OnQueueStateChanged;
 
         List<ChatMessage> chatMessagesToSubmit = new List<ChatMessage>();
+        List<AgentInputTurnCompletion> turnCompletions = new List<AgentInputTurnCompletion>();
 
         try
         {
@@ -2062,6 +2089,7 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
             while (!cancellationToken.IsCancellationRequested)
             {
                 chatMessagesToSubmit.Clear();
+                turnCompletions.Clear();
                 while (chatMessagesToSubmit.Count == 0)
                 {
                     while(this.queueManager.TryDequeueNextImmediateOrQueued(
@@ -2073,6 +2101,10 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
                             currentSession = this.GetSession();
                         }
                         chatMessagesToSubmit.AddRange(agentInputItem.Messages ?? Array.Empty<ChatMessage>());
+                        if (agentInputItem.TurnCompletion is { } turnCompletion)
+                        {
+                            turnCompletions.Add(turnCompletion);
+                        }
                     }
 
                     if (chatMessagesToSubmit.Count == 0)
@@ -2096,6 +2128,7 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
                 AgentChatRunningItem? currentPartialTextResponseItem = null;
                 IAsyncEnumerator<AgentResponseUpdate>? providerEnumerator = null;
                 Task<bool>? pendingMoveNext = null;
+                Task<bool>? abandonedMoveNext = null;
                 PartialResponseConflator? partialResponses = null;
                 try
                 {
@@ -2130,6 +2163,8 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
                         pendingMoveNext = providerEnumerator.MoveNextAsync().AsTask();
                         if (await WasCanceledBeforeCompletingAsync(pendingMoveNext, runCancellation.Token))
                         {
+                            abandonedMoveNext = pendingMoveNext;
+                            pendingMoveNext = null;
                             throw new OperationCanceledException(runCancellation.Token);
                         }
 
@@ -2210,7 +2245,10 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
                     // Clean up the provider enumerator and run CTS in the background so a provider stuck
                     // on a canceled read cannot block the agent. The in-flight read is observed before
                     // disposing to honor the async-enumerator contract.
-                    _ = CleanUpRunAsync(providerEnumerator, pendingMoveNext, runCancellation);
+                    var providerCleanup = CleanUpRunAsync(
+                        providerEnumerator,
+                        abandonedMoveNext,
+                        runCancellation);
 
                     lock (this.steeringLock)
                     {
@@ -2220,6 +2258,11 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
                     if (currentPartialTextResponseItem is not null)
                     {
                         this.CompleteRunningItem(currentPartialTextResponseItem);
+                    }
+
+                    foreach (var turnCompletion in turnCompletions)
+                    {
+                        turnCompletion.CompleteAfter(providerCleanup);
                     }
                 }
             }
@@ -2348,24 +2391,31 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
         Task<bool>? pendingMoveNext,
         CancellationTokenSource runCancellation)
     {
-        if (pendingMoveNext is not null)
+        try
         {
             try
             {
-                await pendingMoveNext.ConfigureAwait(false);
+                if (pendingMoveNext is not null)
+                {
+                    await pendingMoveNext.ConfigureAwait(false);
+                }
             }
-            catch
+            catch (OperationCanceledException)
             {
-                // The abandoned read was canceled or failed; nothing to surface from cleanup.
+                // Cancellation is the expected completion for an abandoned provider read.
+            }
+            finally
+            {
+                if (providerEnumerator is not null)
+                {
+                    await DisposeProviderEnumeratorAsync(providerEnumerator).ConfigureAwait(false);
+                }
             }
         }
-
-        if (providerEnumerator is not null)
+        finally
         {
-            await DisposeProviderEnumeratorAsync(providerEnumerator).ConfigureAwait(false);
+            runCancellation.Dispose();
         }
-
-        runCancellation.Dispose();
     }
 
     private static async Task DisposeProviderEnumeratorAsync(
