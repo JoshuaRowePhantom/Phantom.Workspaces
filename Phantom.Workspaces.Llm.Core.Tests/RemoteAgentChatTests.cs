@@ -156,7 +156,8 @@ public sealed partial class RemoteAgentChatTests
         var (_, chat) = await AttachAsync();
         await chat.DisposeAsync();
         Assert.Throws<ObjectDisposedException>(() => _ = chat.Information);
-        Assert.Throws<ObjectDisposedException>(() => chat.Interrupt());
+        await Assert.ThrowsAsync<ObjectDisposedException>(
+            () => chat.InterruptAsync(CancellationToken.None));
     }
 
     [Fact]

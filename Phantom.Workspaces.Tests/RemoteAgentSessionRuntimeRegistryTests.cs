@@ -399,7 +399,9 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
         });
         var chat = Chat();
         chat.SetupGet(value => value.IsBusy).Returns(true);
-        chat.Setup(value => value.Interrupt()).Callback(() => order.Add("interrupt"));
+        chat.Setup(value => value.InterruptAsync(It.IsAny<CancellationToken>()))
+            .Callback(() => order.Add("interrupt"))
+            .Returns(Task.CompletedTask);
         chat.Setup(value => value.DisposeAsync()).Callback(() => order.Add("dispose")).Returns(ValueTask.CompletedTask);
         var lease = Lease(true, chat: chat.Object, persistTerminal: _ =>
         {
@@ -515,9 +517,9 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
         var order = new List<string>();
         var chat = Chat();
         chat.SetupGet(value => value.IsBusy).Returns(true);
-        chat.Setup(value => value.Interrupt())
+        chat.Setup(value => value.InterruptAsync(It.IsAny<CancellationToken>()))
             .Callback(() => order.Add("interrupt"))
-            .Throws(new InvalidOperationException("interrupt failed"));
+            .Returns(Task.FromException(new InvalidOperationException("interrupt failed")));
         chat.Setup(value => value.DisposeAsync())
             .Callback(() => order.Add("runtime"))
             .Returns(ValueTask.CompletedTask);
@@ -559,7 +561,9 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
 
         await lease.DisposeAsync();
 
-        chat.Verify(value => value.Interrupt(), Times.Never);
+        chat.Verify(
+            value => value.InterruptAsync(It.IsAny<CancellationToken>()),
+            Times.Never);
         chat.Verify(value => value.DisposeAsync(), Times.Once);
     }
 

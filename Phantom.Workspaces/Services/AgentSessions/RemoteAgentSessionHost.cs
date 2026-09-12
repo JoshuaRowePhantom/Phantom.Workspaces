@@ -313,7 +313,7 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
                 await runtime.SetContinueInBackgroundAsync(value.ContinueInBackground, ct).ConfigureAwait(false);
                 break;
             case InterruptCommand:
-                runtime.Chat.Interrupt();
+                await runtime.Chat.InterruptAsync(ct).ConfigureAwait(false);
                 break;
             case OpenSubagentCommand:
             case TerminateSessionCommand:

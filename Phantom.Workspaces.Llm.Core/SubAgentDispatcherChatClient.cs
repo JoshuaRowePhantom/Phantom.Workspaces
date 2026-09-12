@@ -263,11 +263,12 @@ public sealed class SubAgentDispatcherChatClient : IChatClient, ISubAgentDispatc
             yield return new ChatResponseUpdate(ChatRole.Assistant, $"Created sub-agent \"{id}\".\n");
 
             // Handle cancellation
+            var interruptTask = Task.CompletedTask;
             using var registration = cancellationToken.Register(() =>
             {
                 if (lease.AgentChat.RunningItems.Count > 0)
                 {
-                    lease.LocalAgentChat.Interrupt();
+                    interruptTask = lease.LocalAgentChat.InterruptAsync();
                 }
                 idleSignal.TrySetCanceled(cancellationToken);
             });
@@ -284,6 +285,7 @@ public sealed class SubAgentDispatcherChatClient : IChatClient, ISubAgentDispatc
             }
             catch (OperationCanceledException)
             {
+                await interruptTask.ConfigureAwait(false);
                 wasCancelled = true;
             }
         }
@@ -407,11 +409,12 @@ public sealed class SubAgentDispatcherChatClient : IChatClient, ISubAgentDispatc
             _mostRecentlyDispatchedId = targetAgent.Id;
 
             // Handle cancellation
+            var interruptTask = Task.CompletedTask;
             using var registration = cancellationToken.Register(() =>
             {
                 if (lease.AgentChat.RunningItems.Count > 0)
                 {
-                    lease.LocalAgentChat.Interrupt();
+                    interruptTask = lease.LocalAgentChat.InterruptAsync();
                 }
                 idleSignal.TrySetCanceled(cancellationToken);
             });
@@ -424,6 +427,7 @@ public sealed class SubAgentDispatcherChatClient : IChatClient, ISubAgentDispatc
             }
             catch (OperationCanceledException)
             {
+                await interruptTask.ConfigureAwait(false);
                 wasCancelled = true;
             }
         }

@@ -410,7 +410,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         try
         {
             if (this.Chat.IsBusy)
-                this.Chat.Interrupt();
+                await this.Chat.InterruptAsync().ConfigureAwait(false);
         }
         catch (Exception error) { failures.Add(error); }
         this.Chat.InformationChanged -= this.OnInformationChanged;

@@ -48,14 +48,20 @@ public sealed class AgentChatInterfaceTests
     }
 
     [Fact]
-    public void IAgentChat_ExposesOnlyApprovedInterruptCommand()
+    public void IAgentChat_ExposesApprovedAsyncInterruptCommand()
     {
         var interrupt = Assert.Single(
             typeof(IAgentChat).GetMethods(BindingFlags.Public | BindingFlags.Instance),
-            method => method.Name == nameof(IAgentChat.Interrupt));
+            method => method.Name == "InterruptAsync");
 
-        Assert.Equal(typeof(void), interrupt.ReturnType);
-        Assert.Empty(interrupt.GetParameters());
+        Assert.Equal(typeof(Task), interrupt.ReturnType);
+        var parameter = Assert.Single(interrupt.GetParameters());
+        Assert.Equal(typeof(CancellationToken), parameter.ParameterType);
+        Assert.True(parameter.HasDefaultValue);
+        Assert.Null(parameter.DefaultValue);
+        Assert.DoesNotContain(
+            typeof(IAgentChat).GetMethods(BindingFlags.Public | BindingFlags.Instance),
+            method => method.Name == "Interrupt");
         Assert.Null(typeof(IAgentChat).Assembly.GetType(
             "Phantom.Workspaces.Llm.IAsyncInterruptibleAgentChat",
             throwOnError: false));

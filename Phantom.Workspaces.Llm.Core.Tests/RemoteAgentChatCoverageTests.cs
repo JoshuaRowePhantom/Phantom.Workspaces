@@ -392,15 +392,17 @@ public sealed partial class RemoteAgentChatTests
         => await AssertLocalNoteAsync((chat, text) => chat.EnqueueTransientDiagnostic(text), AgentChatHistoryItem.DiagnosticChatRole);
 
     [Fact]
-    public async Task Interrupt_ConnectedProxy_SerializesInterrupt()
+    public async Task InterruptAsync_ConnectedProxy_AwaitsCommandCompletion()
     {
         var (transport, chat) = await AttachAsync();
         await using (chat)
         {
-            chat.Interrupt();
+            var operation = chat.InterruptAsync(CancellationToken.None);
             var command = Assert.IsType<InterruptCommand>(
                 AgentSessionProtocolCodec.DeserializeCommand(await transport.Outgoing.ReadAsync()));
+            Assert.False(operation.IsCompleted);
             await CompleteAsync(transport, 2, command);
+            await operation;
         }
     }
 

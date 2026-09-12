@@ -928,7 +928,14 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
     /// <summary>
     /// Requests an interrupt of the current streaming response.
     /// </summary>
-    public void Interrupt()
+    public Task InterruptAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        this.InterruptCore();
+        return Task.CompletedTask;
+    }
+
+    private void InterruptCore()
     {
         CancellationTokenSource? cancellationToUse;
         lock (this.processingStateLock)
@@ -1047,7 +1054,7 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
 
         if (interruptCurrentResponse)
         {
-            this.Interrupt();
+            this.InterruptCore();
         }
 
         this.queueManager.Enqueue(
@@ -2076,7 +2083,7 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
 
                 this.AppendUserMessagesToHistory(chatMessagesToSubmit);
 
-                // A fresh per-run cancellation source (linked to the loop token) is what Interrupt()
+                // A fresh per-run cancellation source (linked to the loop token) is what InterruptAsync()
                 // cancels. Publish it before creating the running item because creating that item
                 // synchronously notifies observers; an interrupt from that notification must not be
                 // lost before the provider read starts.

@@ -42,7 +42,7 @@ public interface IAgentChat : IAsyncDisposable, IServiceProvider
     void EnqueueHelpNote(string text);
     void EnqueueTransientDiagnostic(string text);
 
-    void Interrupt();
+    Task InterruptAsync(CancellationToken ct = default);
 }
 
 /// <summary>

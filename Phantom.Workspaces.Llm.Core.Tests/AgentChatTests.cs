@@ -1036,7 +1036,7 @@ public sealed class AgentChatTests
             () => RunningItemContents(chat).OfType<TextContent>().Any(content => content.Text.Contains("thinking", StringComparison.Ordinal)),
             "run to stream initial content");
 
-        chat.Interrupt();
+        await chat.InterruptAsync(CancellationToken.None);
 
         await WaitForConditionAsync(
             [chat.RunningItems, chat.History],
@@ -1091,7 +1091,7 @@ public sealed class AgentChatTests
             () => RunningItemContents(chat).OfType<TextContent>().Any(c => c.Text.Contains("thinking", StringComparison.Ordinal)),
             "first run to stream initial content");
 
-        chat.Interrupt();
+        await chat.InterruptAsync(CancellationToken.None);
 
         await WaitForConditionAsync(
             [chat.RunningItems, chat.History],
@@ -1200,7 +1200,7 @@ public sealed class AgentChatTests
             () => RunningItemContents(chat).OfType<TextContent>().Any(content => content.Text.Contains("partial answer", StringComparison.Ordinal)),
             "run to stream initial content");
 
-        chat.Interrupt();
+        await chat.InterruptAsync(CancellationToken.None);
 
         await WaitForConditionAsync(
             [chat.History, chat.RunningItems],

@@ -368,7 +368,9 @@ public sealed class AgentViewModelRetryTests
         local.EnqueueUserMessage("start");
         await started.Task.WaitAsync(CancellationToken.None);
 
-        vm.InterruptCommand.Execute(null);
+        var interruptCommand = Assert.IsType<AsyncRelayCommand>(vm.InterruptCommand);
+        interruptCommand.Execute(null);
+        await interruptCommand.LastExecutionTask!;
         await completed.Task.WaitAsync(CancellationToken.None);
         Assert.Empty(local.RunningItems);
 
@@ -622,7 +624,7 @@ public sealed class AgentViewModelRetryTests
         public void EnqueueSystemNote(string text) { }
         public void EnqueueHelpNote(string text) { }
         public void EnqueueTransientDiagnostic(string text) { }
-        public void Interrupt() { }
+        public Task InterruptAsync(CancellationToken ct = default) => Task.CompletedTask;
         public object? GetService(Type serviceType) => null;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

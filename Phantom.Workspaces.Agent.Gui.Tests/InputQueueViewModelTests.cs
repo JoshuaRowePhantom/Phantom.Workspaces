@@ -1030,7 +1030,7 @@ public sealed class InputQueueViewModelTests
         public void EnqueueSystemNote(string text) => inner.EnqueueSystemNote(text);
         public void EnqueueHelpNote(string text) => inner.EnqueueHelpNote(text);
         public void EnqueueTransientDiagnostic(string text) => inner.EnqueueTransientDiagnostic(text);
-        public void Interrupt() => inner.Interrupt();
+        public Task InterruptAsync(CancellationToken ct = default) => inner.InterruptAsync(ct);
         public object? GetService(Type serviceType) => inner.GetService(serviceType);
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

@@ -107,7 +107,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.subAgentsContainerDetail = new SubAgentsContainerViewModel(this.subAgentsBrowserDetail);
         this.SubAgentDisplays = new ReadOnlyObservableCollection<IRunningSubAgentDisplay>(this.subAgentDisplayItems);
         this.Modals = new ReadOnlyObservableCollection<AgentSessionModalViewModel>(this.modalSource);
-        this.InterruptCommand = new RelayCommand(agentChat.Interrupt);
+        this.InterruptCommand = new AsyncRelayCommand(
+            _ => agentChat.InterruptAsync());
         this.ToggleReasoningVisibilityCommand = new RelayCommand(this.ToggleReasoningVisibility);
         this.RequestOpenLogWindowCommand = new RelayCommand(this.RequestOpenLogWindow);
         this.InputQueue = agentChat.Information.AcceptsUserInput

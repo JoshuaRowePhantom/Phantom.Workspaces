@@ -704,7 +704,7 @@ public sealed class AgentInputQueuesRetryTests
         Assert.True(changedCount >= 2);
         Assert.True(commonQueues.Snapshot.Revision > enqueueResult.Revision);
         Assert.Empty(commonQueues.DefaultQueue.Snapshot.Items);
-        chat.Interrupt();
+        await chat.InterruptAsync(CancellationToken.None);
     }
 
     [Fact]
@@ -814,7 +814,7 @@ public sealed class AgentInputQueuesRetryTests
         Assert.Contains(
             commonQueues.ImmediateQueue.Snapshot.Items,
             item => item.ItemId == result.ItemId);
-        chat.Interrupt();
+        await chat.InterruptAsync(CancellationToken.None);
     }
 
     [Fact]
@@ -1039,7 +1039,7 @@ public sealed class AgentInputQueuesRetryTests
         public void EnqueueSystemNote(string text) { }
         public void EnqueueHelpNote(string text) { }
         public void EnqueueTransientDiagnostic(string text) { }
-        public void Interrupt() { }
+        public Task InterruptAsync(CancellationToken ct = default) => Task.CompletedTask;
         public object? GetService(Type serviceType) => null;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
@@ -1113,7 +1113,7 @@ public sealed class AgentInputQueuesRetryTests
         public void EnqueueSystemNote(string text) { }
         public void EnqueueHelpNote(string text) { }
         public void EnqueueTransientDiagnostic(string text) { }
-        public void Interrupt() { }
+        public Task InterruptAsync(CancellationToken ct = default) => Task.CompletedTask;
         public object? GetService(Type serviceType) => null;
         public ValueTask DisposeAsync()
         {

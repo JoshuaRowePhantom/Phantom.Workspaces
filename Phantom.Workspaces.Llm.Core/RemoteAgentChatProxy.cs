@@ -80,7 +80,8 @@ public sealed class RemoteAgentChatProxy : IAgentChat
     public void EnqueueSystemNote(string text) => this.source.EnqueueSystemNote(text);
     public void EnqueueHelpNote(string text) => this.source.EnqueueHelpNote(text);
     public void EnqueueTransientDiagnostic(string text) => this.source.EnqueueTransientDiagnostic(text);
-    public void Interrupt() => this.source.Interrupt();
+    public Task InterruptAsync(CancellationToken ct = default)
+        => this.source.InterruptAsync(ct);
     public object? GetService(Type serviceType) => this.source.GetService(serviceType);
 
     public ValueTask DisposeAsync()

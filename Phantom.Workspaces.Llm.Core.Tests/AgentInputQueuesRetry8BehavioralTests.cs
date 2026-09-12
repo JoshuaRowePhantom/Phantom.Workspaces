@@ -65,7 +65,12 @@ public sealed class AgentInputQueuesRetry8BehavioralTests
         public void EnqueueSystemNote(string text) { }
         public void EnqueueHelpNote(string text) { }
         public void EnqueueTransientDiagnostic(string text) { }
-        public void Interrupt() => this.InterruptCount++;
+        public Task InterruptAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            this.InterruptCount++;
+            return Task.CompletedTask;
+        }
 
         public int InterruptCount { get; private set; }
 
@@ -488,14 +493,14 @@ public sealed class AgentInputQueuesRetry8BehavioralTests
         Assert.Equal(0, proxyChangedAfterDispose);
     }
 
-    // Gap #52: Remote interrupt — Interrupt is delegated to the owner chat by the proxy.
+    // Gap #52: Remote interrupt — InterruptAsync is delegated to the owner chat by the proxy.
     [Fact]
-    public void RemoteProxy_Interrupt_DelegatesToOwner()
+    public async Task RemoteProxy_InterruptAsync_DelegatesToOwner()
     {
         var (_, _, _, chat, proxy) = NewPair();
         Assert.Equal(0, chat.InterruptCount);
-        proxy.Interrupt();
-        proxy.Interrupt();
+        await proxy.InterruptAsync(CancellationToken.None);
+        await proxy.InterruptAsync(CancellationToken.None);
         Assert.Equal(2, chat.InterruptCount);
     }
 

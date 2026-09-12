@@ -316,7 +316,7 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
                 await using var lease = await session.AcquireLeaseAsync(ct).ConfigureAwait(false);
                 if (lease.AgentChat.RunningItems.Count > 0)
                 {
-                    lease.AgentChat.Interrupt();
+                    await lease.AgentChat.InterruptAsync(ct).ConfigureAwait(false);
                 }
             },
             async ct =>

@@ -361,18 +361,31 @@ public sealed class AgentChatRetryTests
     }
 
     [Fact]
-    public async Task Interrupt_NoActiveTurn_IsIdempotent()
+    public async Task InterruptAsync_NoActiveTurn_IsIdempotent()
     {
         var sessionId = new AgentSessionId("retry-interrupt-idem");
         await using var factory = await NewFactoryAsync(sessionId);
         await using var lease = await factory.CreateAsync(EchoDef, sessionId);
-        lease.AgentChat.Interrupt();
-        lease.AgentChat.Interrupt();
-        lease.AgentChat.Interrupt();
+        await lease.AgentChat.InterruptAsync(CancellationToken.None);
+        await lease.AgentChat.InterruptAsync(CancellationToken.None);
+        await lease.AgentChat.InterruptAsync(CancellationToken.None);
     }
 
     [Fact]
-    public async Task Interrupt_ActiveTurn_CancelsTurnWithoutDisposingChat()
+    public async Task InterruptAsync_CanceledRequest_PropagatesCancellation()
+    {
+        var sessionId = new AgentSessionId("retry-interrupt-canceled");
+        await using var factory = await NewFactoryAsync(sessionId);
+        await using var lease = await factory.CreateAsync(EchoDef, sessionId);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => lease.AgentChat.InterruptAsync(cancellation.Token));
+    }
+
+    [Fact]
+    public async Task InterruptAsync_ActiveTurn_CancelsTurnWithoutDisposingChat()
     {
         var client = new DeterministicTestChatClient();
         var subsequentTurn = client.EnqueueStreamingResponse();
@@ -393,12 +406,13 @@ public sealed class AgentChatRetryTests
         });
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var interrupted = false;
+        Task? interruptTask = null;
         ((System.Collections.Specialized.INotifyCollectionChanged)chat.RunningItems).CollectionChanged += (_, _) =>
         {
             if (!interrupted && chat.RunningItems.Count > 0)
             {
                 interrupted = true;
-                chat.Interrupt();
+                interruptTask = chat.InterruptAsync(timeout.Token);
             }
         };
         var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -412,6 +426,7 @@ public sealed class AgentChatRetryTests
 
         chat.EnqueueUserMessage("interrupt immediately");
         await stopped.Task.WaitAsync(timeout.Token);
+        await interruptTask!;
 
         Assert.Contains(
             chat.History,

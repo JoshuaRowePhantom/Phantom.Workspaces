@@ -136,10 +136,10 @@ public sealed class RemoteAgentChat : IAgentChat
     public void EnqueueHelpNote(string text) => this.EnqueueLocalNote(text, AgentChatHistoryItem.HelpChatRole);
     public void EnqueueTransientDiagnostic(string text) => this.EnqueueLocalNote(text, AgentChatHistoryItem.DiagnosticChatRole);
 
-    public void Interrupt()
+    public Task InterruptAsync(CancellationToken ct = default)
     {
         this.ThrowIfDisposed();
-        _ = this.client.InterruptAsync(Guid.NewGuid());
+        return this.client.InterruptAsync(Guid.NewGuid(), ct);
     }
 
     public async Task TerminateAsync(CancellationToken ct = default)

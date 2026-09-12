@@ -539,7 +539,7 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
             if (chat is null)
                 return Serialize(new { error = $"Unknown session_id: '{sessionId}'." });
 
-            chat.Interrupt();
+            await chat.InterruptAsync(cancellationToken);
 
             if (dispose && sessionId is not null && sessionId != ".")
             {

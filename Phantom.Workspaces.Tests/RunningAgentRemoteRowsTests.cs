@@ -173,11 +173,19 @@ public sealed class RunningAgentRemoteRowsTests
     }
 
     [Fact]
-    public async Task InterruptCommand_RemoteChat_InvokesCommonInterrupt()
+    public async Task InterruptCommand_RemoteChat_AwaitsAcknowledgementAndSurfacesFailure()
     {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var chat = new Mock<IAgentChat>();
         chat.SetupGet(value => value.RunningItems)
             .Returns(new AgentChatRunningItemCollection { new AgentChatRunningItem() });
+        chat.Setup(value => value.InterruptAsync(It.IsAny<CancellationToken>()))
+            .Returns(() =>
+            {
+                started.TrySetResult();
+                return completion.Task;
+            });
         chat.Setup(value => value.DisposeAsync()).Returns(ValueTask.CompletedTask);
         var table = new ControlledTable { LeaseChat = chat.Object };
         var entry = table.Add("remote", isRemote: true, continueInBackground: false, viewerCount: 1);
@@ -187,10 +195,15 @@ public sealed class RunningAgentRemoteRowsTests
         var command = Assert.IsType<Phantom.Workspaces.ViewModels.AsyncRelayCommand>(row.InterruptCommand);
 
         command.Execute(null);
-        await command.LastExecutionTask!;
+        await started.Task.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.False(command.LastExecutionTask!.IsCompleted);
+        completion.TrySetException(new InvalidOperationException("owner rejected"));
+        await command.LastExecutionTask;
 
-        chat.Verify(value => value.Interrupt(), Times.Once);
-        Assert.Null(row.LastOperationError);
+        chat.Verify(
+            value => value.InterruptAsync(It.IsAny<CancellationToken>()),
+            Times.Once);
+        Assert.Equal("Unable to interrupt agent.", row.LastOperationError);
     }
 
     [Fact]
