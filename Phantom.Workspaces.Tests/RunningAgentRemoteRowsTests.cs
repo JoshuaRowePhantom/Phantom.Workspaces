@@ -391,6 +391,252 @@ public sealed class RunningAgentRemoteRowsTests
         Assert.True(Assert.Single(brain.Rows).IsBackgroundOptionEnabled);
     }
 
+    [Fact]
+    public async Task InterruptCommand_EditorThenRow_SharesPendingStateAndSingleFlight()
+    {
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var (chat, getCalls) = CreateInterruptChat(_ => completion.Task);
+        await using var editor = CreateEditor(chat);
+        using var row = CreateRow(chat);
+        var editorCommand = Assert.IsType<Phantom.Workspaces.Agent.Gui.ViewModels.AsyncRelayCommand>(
+            editor.InterruptCommand);
+        var rowCommand = Assert.IsType<Phantom.Workspaces.ViewModels.AsyncRelayCommand>(
+            row.InterruptCommand);
+
+        editorCommand.Execute(null);
+        var editorExecution = editorCommand.LastExecutionTask;
+        editorCommand.Execute(null);
+        rowCommand.Execute(null);
+
+        Assert.Equal(1, getCalls());
+        Assert.Same(editorExecution, editorCommand.LastExecutionTask);
+        Assert.True(editor.IsInterruptPending);
+        Assert.True(row.IsInterruptPending);
+        Assert.False(editorCommand.CanExecute(null));
+        Assert.False(rowCommand.CanExecute(null));
+        Assert.Null(rowCommand.LastExecutionTask);
+
+        completion.SetResult();
+        await editorExecution!;
+
+        Assert.False(editor.IsInterruptPending);
+        Assert.False(row.IsInterruptPending);
+        Assert.True(editorCommand.CanExecute(null));
+        Assert.True(rowCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task InterruptCommand_RowThenEditor_FailureDoesNotRaceErrorStateAndRetries()
+    {
+        var first = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var attempts = new Queue<Task>([first.Task, Task.CompletedTask]);
+        var (chat, getCalls) = CreateInterruptChat(_ => attempts.Dequeue());
+        await using var editor = CreateEditor(chat);
+        using var row = CreateRow(chat);
+        var editorCommand = Assert.IsType<Phantom.Workspaces.Agent.Gui.ViewModels.AsyncRelayCommand>(
+            editor.InterruptCommand);
+        var rowCommand = Assert.IsType<Phantom.Workspaces.ViewModels.AsyncRelayCommand>(
+            row.InterruptCommand);
+
+        rowCommand.Execute(null);
+        var rowExecution = rowCommand.LastExecutionTask;
+        editorCommand.Execute(null);
+
+        Assert.Equal(1, getCalls());
+        Assert.True(editor.IsInterruptPending);
+        Assert.True(row.IsInterruptPending);
+        Assert.False(editorCommand.CanExecute(null));
+        Assert.Null(editorCommand.LastExecutionTask);
+
+        first.SetException(new InvalidOperationException("owner rejected"));
+        await rowExecution!;
+
+        Assert.Equal("Unable to interrupt agent.", row.LastOperationError);
+        Assert.False(editor.IsInterruptPending);
+        Assert.False(row.IsInterruptPending);
+        Assert.True(editorCommand.CanExecute(null));
+
+        editorCommand.Execute(null);
+        await editorCommand.LastExecutionTask!;
+        Assert.Equal(2, getCalls());
+        Assert.Null(row.LastOperationError);
+    }
+
+    [Fact]
+    public async Task InterruptCommand_CancellationAndDisposalReleaseSharedOwnership()
+    {
+        var first = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var attempts = new Queue<Task>([first.Task, Task.CompletedTask]);
+        var (chat, getCalls) = CreateInterruptChat(_ => attempts.Dequeue());
+        var editor = CreateEditor(chat);
+        var row = CreateRow(chat);
+        var editorCommand = Assert.IsType<Phantom.Workspaces.Agent.Gui.ViewModels.AsyncRelayCommand>(
+            editor.InterruptCommand);
+        var rowCommand = Assert.IsType<Phantom.Workspaces.ViewModels.AsyncRelayCommand>(
+            row.InterruptCommand);
+
+        editorCommand.Execute(null);
+        var firstExecution = editorCommand.LastExecutionTask!;
+        row.Dispose();
+        await editor.DisposeViewResourcesAsync();
+
+        first.SetCanceled(TestContext.Current.CancellationToken);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await firstExecution);
+
+        using var retryRow = CreateRow(chat);
+        var retryCommand = Assert.IsType<Phantom.Workspaces.ViewModels.AsyncRelayCommand>(
+            retryRow.InterruptCommand);
+        Assert.True(retryCommand.CanExecute(null));
+        retryCommand.Execute(null);
+        await retryCommand.LastExecutionTask!;
+        Assert.Equal(2, getCalls());
+        Assert.False(retryRow.IsInterruptPending);
+    }
+
+    [Fact]
+    public async Task InterruptCommand_DistinctChatsRemainIndependent()
+    {
+        var firstCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var (firstChat, firstCalls) = CreateInterruptChat(_ => firstCompletion.Task, "first");
+        var (secondChat, secondCalls) = CreateInterruptChat(_ => secondCompletion.Task, "second");
+        await using var firstEditor = CreateEditor(firstChat);
+        using var firstRow = CreateRow(firstChat, "first");
+        using var secondRow = CreateRow(secondChat, "second");
+        var firstCommand = Assert.IsType<Phantom.Workspaces.Agent.Gui.ViewModels.AsyncRelayCommand>(
+            firstEditor.InterruptCommand);
+        var secondCommand = Assert.IsType<Phantom.Workspaces.ViewModels.AsyncRelayCommand>(
+            secondRow.InterruptCommand);
+
+        firstCommand.Execute(null);
+
+        Assert.True(firstRow.IsInterruptPending);
+        Assert.False(firstCommand.CanExecute(null));
+        Assert.True(secondCommand.CanExecute(null));
+
+        secondCommand.Execute(null);
+        Assert.Equal(1, firstCalls());
+        Assert.Equal(1, secondCalls());
+        Assert.True(secondRow.IsInterruptPending);
+
+        firstCompletion.SetResult();
+        secondCompletion.SetResult();
+        await Task.WhenAll(firstCommand.LastExecutionTask!, secondCommand.LastExecutionTask!);
+    }
+
+    [Fact]
+    public async Task InterruptState_DuplicateCancellationDoesNotReplaceOwnerToken()
+    {
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var (chat, getCalls) = CreateInterruptChat(_ => completion.Task);
+        var state = AgentChatInterruptState.For(chat);
+        using var ownerCancellation = new CancellationTokenSource();
+        using var duplicateCancellation = new CancellationTokenSource();
+        duplicateCancellation.Cancel();
+        CancellationToken observedToken = default;
+
+        var owner = state.InterruptAsync(
+            token =>
+            {
+                observedToken = token;
+                return chat.InterruptAsync(token);
+            },
+            ownerCancellation.Token);
+        var duplicate = state.InterruptAsync(
+            _ => throw new InvalidOperationException("duplicate invoked"),
+            duplicateCancellation.Token);
+
+        Assert.Same(owner, duplicate);
+        Assert.Equal(ownerCancellation.Token, observedToken);
+        Assert.Equal(1, getCalls());
+        Assert.True(state.IsPending);
+
+        completion.SetCanceled(ownerCancellation.Token);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await owner);
+        Assert.False(state.IsPending);
+
+        var retry = state.InterruptAsync(_ => Task.CompletedTask, CancellationToken.None);
+        await retry;
+        Assert.False(state.IsPending);
+    }
+
+    private static AgentViewModel CreateEditor(IAgentChat chat)
+    {
+        var loggerFactory = new Phantom.Workspaces.Agent.Gui.ObservableLoggerFactory();
+        return new AgentViewModel(new AgentViewModelOptions
+        {
+            AgentChat = chat,
+            DisplayName = "display",
+            Description = "description",
+            LoggerFactory = loggerFactory,
+            ForegroundScheduler = TaskScheduler.Default,
+        });
+    }
+
+    private static RunningAgentRowViewModel CreateRow(IAgentChat chat, string sessionId = "shared")
+    {
+        var session = new RunningAgentChatWithEntityInfo(
+            new RunningAgentChat(new AgentSessionId(sessionId), null!, chat),
+            "Remote session",
+            null)
+        {
+            IsRemote = true,
+        };
+        return new RunningAgentRowViewModel(
+            session,
+            null,
+            null,
+            "Remote session",
+            hasOpenTab: false,
+            isThinking: true,
+            activateCommand: new Phantom.Workspaces.ViewModels.RelayCommand(_ => { }),
+            interruptAsync: chat.InterruptAsync,
+            terminateAsync: _ => Task.CompletedTask,
+            setContinueInBackgroundAsync: (_, _) => Task.CompletedTask);
+    }
+
+    private static (IAgentChat Chat, Func<int> GetCalls) CreateInterruptChat(
+        Func<CancellationToken, Task> interrupt,
+        string sessionId = "shared")
+    {
+        var calls = 0;
+        var chat = new Mock<IAgentChat>();
+        chat.SetupGet(value => value.Information).Returns(new AgentInformation
+        {
+            AgentSessionId = sessionId,
+            AgentId = sessionId,
+            Name = sessionId,
+            DisplayName = sessionId,
+            Description = sessionId,
+            AcceptsUserInput = false,
+            AgentDefinition = null!,
+        });
+        chat.SetupGet(value => value.Usage).Returns(default(Usage));
+        chat.SetupGet(value => value.History).Returns(new AgentChatHistoryCollection());
+        chat.SetupGet(value => value.HistoryPopulated).Returns(Task.CompletedTask);
+        chat.SetupGet(value => value.RunningItems).Returns(new AgentChatRunningItemCollection
+        {
+            new AgentChatRunningItem(),
+        });
+        chat.SetupGet(value => value.SubAgents).Returns(
+            new ReadOnlyObservableCollection<IRunningSubAgent>(
+                new ObservableCollection<IRunningSubAgent>()));
+        chat.SetupGet(value => value.Modals).Returns(
+            new ReadOnlyObservableCollection<AgentChatModal>(
+                new ObservableCollection<AgentChatModal>()));
+        chat.SetupGet(value => value.SlashCommands).Returns(
+            new Phantom.Workspaces.Llm.SlashCommands.SlashCommandRegistry());
+        chat.Setup(value => value.GetToolSnapshot()).Returns([]);
+        chat.Setup(value => value.InterruptAsync(It.IsAny<CancellationToken>()))
+            .Returns((CancellationToken ct) =>
+            {
+                Interlocked.Increment(ref calls);
+                return interrupt(ct);
+            });
+        chat.Setup(value => value.DisposeAsync()).Returns(ValueTask.CompletedTask);
+        return (chat.Object, () => Volatile.Read(ref calls));
+    }
+
     private static RunningAgentBrainViewModel Create(ControlledTable table) =>
         new(table, () => [], new FakeTabNavigator(), action => action());
 

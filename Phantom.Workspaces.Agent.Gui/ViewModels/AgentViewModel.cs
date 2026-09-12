@@ -41,7 +41,10 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private readonly ToolsCollectionTransformer toolsTransformer;
     private readonly SubAgentsCollectionTransformer subAgentsTransformer;
     private readonly TaskScheduler foregroundScheduler;
+    private readonly AgentChatInterruptState interruptState;
+    private readonly AsyncRelayCommand interruptCommand;
     private bool isReasoningVisible;
+    private bool isInterruptPending;
     private bool autoScrollEnabled = true;
     private bool showChatInputHelpText = true;
     private string agentSessionId;
@@ -107,9 +110,14 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.subAgentsContainerDetail = new SubAgentsContainerViewModel(this.subAgentsBrowserDetail);
         this.SubAgentDisplays = new ReadOnlyObservableCollection<IRunningSubAgentDisplay>(this.subAgentDisplayItems);
         this.Modals = new ReadOnlyObservableCollection<AgentSessionModalViewModel>(this.modalSource);
-        this.InterruptCommand = new AsyncRelayCommand(
-            _ => agentChat.InterruptAsync(),
+        this.interruptState = AgentChatInterruptState.For(agentChat);
+        this.interruptState.PendingChanged += this.OnInterruptPendingChanged;
+        this.isInterruptPending = this.interruptState.IsPending;
+        this.interruptCommand = new AsyncRelayCommand(
+            _ => this.interruptState.InterruptAsync(agentChat.InterruptAsync),
+            _ => !this.interruptState.IsPending,
             allowConcurrentExecutions: false);
+        this.InterruptCommand = this.interruptCommand;
         this.ToggleReasoningVisibilityCommand = new RelayCommand(this.ToggleReasoningVisibility);
         this.RequestOpenLogWindowCommand = new RelayCommand(this.RequestOpenLogWindow);
         this.InputQueue = agentChat.Information.AcceptsUserInput
@@ -319,6 +327,12 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     public IRunningSubAgentDisplay? ParentAgentDisplay { get; }
 
     public ICommand InterruptCommand { get; }
+
+    public bool IsInterruptPending
+    {
+        get => this.isInterruptPending;
+        private set => this.SetProperty(ref this.isInterruptPending, value);
+    }
 
     public ICommand ToggleReasoningVisibilityCommand { get; }
 
@@ -667,6 +681,15 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     public void SetReasoningVisibility(bool visible)
         => this.IsReasoningVisible = visible;
 
+    private void OnInterruptPendingChanged(object? sender, EventArgs e)
+    {
+        this.IsInterruptPending = this.interruptState.IsPending;
+        if (!this.interruptCommand.IsExecuting)
+        {
+            this.interruptCommand.RaiseCanExecuteChanged();
+        }
+    }
+
     private void OnInformationChanged(object? sender, EventArgs e)
     {
         this.AgentSessionId = this.agentChat.Information.AgentSessionId;
@@ -721,6 +744,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     public async ValueTask DisposeViewResourcesAsync()
     {
+        this.interruptState.PendingChanged -= this.OnInterruptPendingChanged;
         this.toolsTransformer.Dispose();
         this.subAgentsTransformer.Dispose();
         foreach (var (subAgentViewModel, handler) in this.subAgentDetailSubscriptions)

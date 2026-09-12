@@ -167,7 +167,9 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
             var rowIndex = this.IndexOfRow(key);
             if (rowIndex >= 0)
             {
+                var removed = this.Rows[rowIndex];
                 this.Rows.RemoveAt(rowIndex);
+                removed.Dispose();
             }
 
             this.UnsubscribeRowThinking(key);
@@ -211,6 +213,7 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
                 this.UnsubscribeRow(sessionKey);
                 var rowIndex = this.IndexOfRow(sessionKey);
                 var replacement = this.CreateTabRow(session, tabInfo);
+                existing.Dispose();
                 this.Rows[rowIndex] = replacement;
                 existing = replacement;
                 this.SubscribeRowThinking(replacement);
@@ -223,6 +226,7 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
                 this.UnsubscribeRow(sessionKey);
                 var rowIndex = this.IndexOfRow(sessionKey);
                 var replacement = this.CreateFallbackRow(session);
+                existing.Dispose();
                 this.Rows[rowIndex] = replacement;
                 existing = replacement;
                 this.SubscribeRowThinking(replacement);
@@ -604,5 +608,10 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
         }
 
         this.sessionMetadataSubscriptions.Clear();
+
+        foreach (var row in this.Rows)
+        {
+            row.Dispose();
+        }
     }
 }

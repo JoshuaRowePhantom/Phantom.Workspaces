@@ -1,4 +1,5 @@
 using System.Windows.Input;
+using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Services;
 
 namespace Phantom.Workspaces.ViewModels;
@@ -6,9 +7,10 @@ namespace Phantom.Workspaces.ViewModels;
 /// <summary>
 /// Represents a single running-agent entry in the <see cref="RunningAgentBrainViewModel"/> popup.
 /// </summary>
-public sealed class RunningAgentRowViewModel : ViewModelBase
+public sealed class RunningAgentRowViewModel : ViewModelBase, IDisposable
 {
     private readonly TimeProvider timeProvider;
+    private readonly AgentChatInterruptState? interruptState;
     private readonly AsyncRelayCommand? interruptCommand;
     private readonly AsyncRelayCommand? terminateCommand;
     private readonly AsyncRelayCommand? setContinueInBackgroundCommand;
@@ -73,6 +75,9 @@ public sealed class RunningAgentRowViewModel : ViewModelBase
             _ => this.InterruptAsync(interruptAsync),
             _ => this.IsInterruptEnabled,
             allowConcurrentExecutions: false);
+        this.interruptState = session.InterruptState;
+        this.interruptState.PendingChanged += this.OnInterruptPendingChanged;
+        this.isInterruptPending = this.interruptState.IsPending;
         this.terminateCommand = new AsyncRelayCommand(
             _ => this.TerminateAsync(terminateAsync),
             _ => this.IsTerminateEnabled);
@@ -249,12 +254,10 @@ public sealed class RunningAgentRowViewModel : ViewModelBase
 
     private async Task InterruptAsync(Func<CancellationToken, Task> interruptAsync)
     {
-        this.IsInterruptPending = true;
-        this.UpdateCommandAvailability();
         this.LastOperationError = null;
         try
         {
-            await interruptAsync(CancellationToken.None);
+            await this.interruptState!.InterruptAsync(interruptAsync, CancellationToken.None);
         }
         catch (OperationCanceledException)
         {
@@ -264,11 +267,16 @@ public sealed class RunningAgentRowViewModel : ViewModelBase
         {
             this.LastOperationError = "Unable to interrupt agent.";
         }
-        finally
+    }
+
+    private void OnInterruptPendingChanged(object? sender, EventArgs e)
+    {
+        this.IsInterruptPending = this.interruptState!.IsPending;
+        if (this.IsInterruptPending)
         {
-            this.IsInterruptPending = false;
-            this.UpdateCommandAvailability();
+            this.LastOperationError = null;
         }
+        this.UpdateCommandAvailability();
     }
 
     private async Task SetContinueInBackgroundAsync(
@@ -325,4 +333,12 @@ public sealed class RunningAgentRowViewModel : ViewModelBase
     public ICommand InterruptCommand { get; }
     public ICommand TerminateCommand { get; }
     public ICommand SetContinueInBackgroundCommand { get; }
+
+    public void Dispose()
+    {
+        if (this.interruptState is not null)
+        {
+            this.interruptState.PendingChanged -= this.OnInterruptPendingChanged;
+        }
+    }
 }

@@ -436,7 +436,8 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                         session.AcquireAsync,
                         request.EntityName,
                         request.EntityId,
-                        request.WorkspaceId);
+                        request.WorkspaceId,
+                        AgentChatInterruptState.For(chat));
                     row.SetIsRemote(true);
                     row.SetCanSetContinueInBackground(true);
                     row.SetContinueInBackground(chat.ContinueInBackground);

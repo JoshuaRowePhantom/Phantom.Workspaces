@@ -15,6 +15,7 @@ public sealed class RunningAgentChatWithEntityInfo : INotifyPropertyChanged
     private readonly AgentSessionId _sessionId;
     private readonly bool _isSubAgent;
     private readonly Func<CancellationToken, Task<RunningAgentChatLease>>? acquireLease;
+    private readonly AgentChatInterruptState interruptState;
     private bool _continueInBackground;
     private int _viewerCount = 1;
     private bool _isRemote;
@@ -26,6 +27,8 @@ public sealed class RunningAgentChatWithEntityInfo : INotifyPropertyChanged
 
     /// <summary>The agent session identifier.</summary>
     public AgentSessionId SessionId => _chat?.SessionId ?? _sessionId;
+
+    internal AgentChatInterruptState InterruptState => this.interruptState;
 
     /// <summary>
     /// <see langword="true"/> when the underlying <see cref="RunningAgentChat"/> is a sub-agent.
@@ -115,6 +118,9 @@ public sealed class RunningAgentChatWithEntityInfo : INotifyPropertyChanged
         EntityName = entityName;
         EntityId = entityId;
         WorkspaceId = workspaceId;
+        this.interruptState = chat.AgentChat is { } agentChat
+            ? AgentChatInterruptState.For(agentChat)
+            : new AgentChatInterruptState();
         this.runningItems = chat.AgentChat?.RunningItems;
         if (this.runningItems is not null)
         {
@@ -129,7 +135,8 @@ public sealed class RunningAgentChatWithEntityInfo : INotifyPropertyChanged
         Func<CancellationToken, Task<RunningAgentChatLease>> acquireLease,
         string entityName,
         string? entityId,
-        string? workspaceId = null)
+        string? workspaceId = null,
+        AgentChatInterruptState? interruptState = null)
     {
         _sessionId = sessionId;
         _isSubAgent = isSubAgent;
@@ -137,6 +144,7 @@ public sealed class RunningAgentChatWithEntityInfo : INotifyPropertyChanged
         EntityName = entityName;
         EntityId = entityId;
         WorkspaceId = workspaceId;
+        this.interruptState = interruptState ?? new AgentChatInterruptState();
     }
 
     /// <summary>
