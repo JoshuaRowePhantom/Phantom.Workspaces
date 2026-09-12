@@ -236,6 +236,7 @@ public sealed class DeterministicTestChatClient : IChatClient
             await this.itemSignal.WaitAsync(cancellationToken);
             if (this.items.TryDequeue(out var item))
             {
+                item.MarkClaimed();
                 return item;
             }
 
@@ -254,6 +255,7 @@ public sealed class DeterministicTestChatClient : IChatClient
     public sealed class QueuedStreamItem
     {
         private readonly TaskCompletionSource ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource claimed = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly bool observeCancellationWhileWaiting;
 
         private QueuedStreamItem(
@@ -280,6 +282,11 @@ public sealed class DeterministicTestChatClient : IChatClient
         internal bool IsTerminal { get; }
 
         public void MarkReady() => this.ready.TrySetResult();
+
+        public Task WaitForClaimedAsync(CancellationToken cancellationToken = default)
+            => this.claimed.Task.WaitAsync(cancellationToken);
+
+        internal void MarkClaimed() => this.claimed.TrySetResult();
 
         internal Task WaitUntilReadyAsync(CancellationToken cancellationToken)
             => this.observeCancellationWhileWaiting

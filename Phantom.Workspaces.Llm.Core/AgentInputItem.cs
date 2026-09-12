@@ -35,22 +35,66 @@ public sealed record AgentInputItem
 
 internal sealed class AgentInputTurnCompletion
 {
-    private readonly TaskCompletionSource<Task> completionSource =
+    private readonly TaskCompletionSource terminalSource =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource settlementSource =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource providerReadAbandonedSource =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private int terminalClaimed;
+    private int completionStarted;
 
-    public AgentInputTurnCompletion()
+    public Task Terminal => terminalSource.Task;
+
+    public Task Settlement => settlementSource.Task;
+
+    public Task ProviderReadAbandoned => providerReadAbandonedSource.Task;
+
+    public void MarkProviderReadAbandoned()
     {
-        Completion = completionSource.Task.Unwrap();
+        providerReadAbandonedSource.TrySetResult();
     }
 
-    public Task Completion { get; }
+    public void ClaimTerminal()
+    {
+        if (Interlocked.Exchange(ref terminalClaimed, 1) != 0)
+        {
+            throw new InvalidOperationException("The agent input turn terminal was claimed more than once.");
+        }
+
+        terminalSource.SetResult();
+    }
 
     public void CompleteAfter(Task providerCleanup)
     {
         ArgumentNullException.ThrowIfNull(providerCleanup);
-        if (!completionSource.TrySetResult(providerCleanup))
+        if (Volatile.Read(ref terminalClaimed) == 0)
+        {
+            throw new InvalidOperationException("The agent input turn terminal must be claimed before settlement.");
+        }
+
+        if (Interlocked.Exchange(ref completionStarted, 1) != 0)
         {
             throw new InvalidOperationException("The agent input turn was completed more than once.");
+        }
+
+        _ = SettleAfterCleanupAsync(providerCleanup);
+    }
+
+    private async Task SettleAfterCleanupAsync(Task providerCleanup)
+    {
+        await providerCleanup.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        if (providerCleanup.IsFaulted)
+        {
+            settlementSource.SetException(providerCleanup.Exception!.InnerExceptions);
+        }
+        else if (providerCleanup.IsCanceled)
+        {
+            settlementSource.SetCanceled();
+        }
+        else
+        {
+            settlementSource.SetResult();
         }
     }
 }

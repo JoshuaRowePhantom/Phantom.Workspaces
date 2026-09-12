@@ -14,6 +14,7 @@ using Phantom.Workspaces.Llm.Echo;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.SlashCommands;
 using System.ClientModel;
+using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -33,6 +34,9 @@ namespace Phantom.Workspaces.Llm;
 /// </summary>
 public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAgent, ISubAgentTable
 {
+    internal const string SecondaryProviderCleanupExceptionDataKey =
+        "Phantom.Workspaces.Llm.SecondaryProviderCleanupException";
+
     private const string GitHubModelsInferenceEndpoint = "https://models.github.ai/inference";
     private const string RunningPartAssistantReasoning = "assistant-reasoning";
     private const string RunningPartAssistantText = "assistant-text";
@@ -820,11 +824,14 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
         this.EnqueueUserContents([new TextContent(text)], targetQueue);
     }
 
-    internal Task EnqueueUserMessageWithCompletion(string text)
+    internal AgentInputTurnCompletion EnqueueUserMessageWithCompletion(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
         {
-            return Task.CompletedTask;
+            var emptyCompletion = new AgentInputTurnCompletion();
+            emptyCompletion.ClaimTerminal();
+            emptyCompletion.CompleteAfter(Task.CompletedTask);
+            return emptyCompletion;
         }
 
         var turnCompletion = new AgentInputTurnCompletion();
@@ -832,7 +839,7 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
             [new TextContent(text)],
             this.DefaultInputQueue,
             turnCompletion);
-        return turnCompletion.Completion;
+        return turnCompletion;
     }
 
     /// <summary>
@@ -2165,6 +2172,10 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
                         {
                             abandonedMoveNext = pendingMoveNext;
                             pendingMoveNext = null;
+                            foreach (var turnCompletion in turnCompletions)
+                            {
+                                turnCompletion.MarkProviderReadAbandoned();
+                            }
                             throw new OperationCanceledException(runCancellation.Token);
                         }
 
@@ -2253,6 +2264,13 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
                     lock (this.steeringLock)
                     {
                         this.activeConflator = null;
+                    }
+
+                    foreach (var turnCompletion in turnCompletions)
+                    {
+                        // Claim the terminal ordering before publishing RunningItems removal. The
+                        // settlement is completed below only after history has been projected.
+                        turnCompletion.ClaimTerminal();
                     }
 
                     if (currentPartialTextResponseItem is not null)
@@ -2384,53 +2402,85 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
     /// Cleans up a run's provider enumerator and cancellation source in the background. The in-flight
     /// read (if any) is awaited first so the enumerator is never disposed while a <c>MoveNextAsync</c>
     /// is still running; doing this in the background means a provider stuck on a canceled read cannot
-    /// block the agent loop or an interrupt.
+    /// block the agent loop or an interrupt. If both the read and disposal fail, the read remains the
+    /// primary exception and the disposal failure is attached under
+    /// <see cref="SecondaryProviderCleanupExceptionDataKey"/>.
     /// </summary>
-    private static async Task CleanUpRunAsync(
+    internal static async Task CleanUpRunAsync(
         IAsyncEnumerator<AgentResponseUpdate>? providerEnumerator,
         Task<bool>? pendingMoveNext,
         CancellationTokenSource runCancellation)
     {
+        Exception? providerReadException = null;
+        Exception? providerDisposalException = null;
         try
         {
-            try
+            if (pendingMoveNext is not null)
             {
-                if (pendingMoveNext is not null)
+                await ((Task)pendingMoveNext).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+                if (pendingMoveNext.IsFaulted)
                 {
-                    await pendingMoveNext.ConfigureAwait(false);
+                    providerReadException = UnwrapTaskException(pendingMoveNext);
                 }
             }
-            catch (OperationCanceledException)
+
+            if (providerEnumerator is not null)
             {
-                // Cancellation is the expected completion for an abandoned provider read.
-            }
-            finally
-            {
-                if (providerEnumerator is not null)
-                {
+                providerDisposalException =
                     await DisposeProviderEnumeratorAsync(providerEnumerator).ConfigureAwait(false);
-                }
             }
         }
         finally
         {
             runCancellation.Dispose();
         }
+
+        if (providerReadException is not null)
+        {
+            if (providerDisposalException is not null)
+            {
+                providerReadException.Data[SecondaryProviderCleanupExceptionDataKey] =
+                    providerDisposalException;
+            }
+
+            ExceptionDispatchInfo.Capture(providerReadException).Throw();
+        }
+
+        if (providerDisposalException is not null)
+        {
+            ExceptionDispatchInfo.Capture(providerDisposalException).Throw();
+        }
     }
 
-    private static async Task DisposeProviderEnumeratorAsync(
+    private static async Task<Exception?> DisposeProviderEnumeratorAsync(
         IAsyncEnumerator<AgentResponseUpdate> providerEnumerator)
     {
-        try
+        var disposalTask = DisposeProviderEnumeratorCoreAsync(providerEnumerator);
+        await disposalTask.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        if (disposalTask.IsCanceled || disposalTask.IsCompletedSuccessfully)
         {
-            await providerEnumerator.DisposeAsync();
+            return null;
         }
-        catch (NotSupportedException)
-        {
-        }
-        catch (OperationCanceledException)
-        {
-        }
+
+        var exception = UnwrapTaskException(disposalTask);
+        return exception is NotSupportedException or OperationCanceledException
+            ? null
+            : exception;
+    }
+
+    private static async Task DisposeProviderEnumeratorCoreAsync(
+        IAsyncEnumerator<AgentResponseUpdate> providerEnumerator)
+    {
+        await providerEnumerator.DisposeAsync();
+    }
+
+    private static Exception UnwrapTaskException(Task task)
+    {
+        var aggregate = task.Exception
+            ?? throw new InvalidOperationException("A faulted task did not expose its exception.");
+        return aggregate.InnerExceptions.Count == 1
+            ? aggregate.InnerException!
+            : aggregate;
     }
 
     internal void AccumulateUsage(AgentResponseUpdate update)
