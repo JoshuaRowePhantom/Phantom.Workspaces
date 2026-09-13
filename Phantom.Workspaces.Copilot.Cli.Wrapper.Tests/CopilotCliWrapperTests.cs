@@ -218,6 +218,391 @@ public sealed class CopilotCliWrapperTests
     }
 
     [Fact]
+    public async Task Wrapper_MissingSelfPath_ReturnsUnsafePathWithoutLaunching()
+    {
+        using var files = new WrapperFiles();
+        using var lease = files.Store.Create(CreatePolicy(), Environment.ProcessId);
+        using var stdout = new MemoryStream();
+        using var stderr = new MemoryStream();
+        var executor = new RecordingExecutor();
+
+        var exitCode = await CopilotCliWrapper.RunAsync(
+            ["--policy", lease.Path, "--copilot", files.CopilotPath],
+            Stream.Null,
+            stdout,
+            stderr,
+            executor,
+            files.LaunchRoot,
+            Environment.ProcessId,
+            Path.Combine(files.BaseDirectory, "missing-wrapper.exe"));
+
+        AssertFailure(
+            exitCode,
+            CopilotCliWrapper.UnsafePathExitCode,
+            stdout,
+            stderr,
+            "Unsafe Copilot wrapper path.");
+        Assert.Null(executor.Request);
+    }
+
+    [Fact]
+    public async Task Wrapper_UnsafePolicyPath_ReturnsUnsafePathWithoutLaunching()
+    {
+        using var files = new WrapperFiles();
+        using var outside = new WrapperFiles();
+        using var lease = outside.Store.Create(CreatePolicy(), Environment.ProcessId);
+        using var stdout = new MemoryStream();
+        using var stderr = new MemoryStream();
+        var executor = new RecordingExecutor();
+
+        var exitCode = await CopilotCliWrapper.RunAsync(
+            ["--policy", lease.Path, "--copilot", files.CopilotPath],
+            Stream.Null,
+            stdout,
+            stderr,
+            executor,
+            files.LaunchRoot,
+            Environment.ProcessId,
+            files.WrapperPath);
+
+        AssertFailure(
+            exitCode,
+            CopilotCliWrapper.UnsafePathExitCode,
+            stdout,
+            stderr,
+            "Unsafe Copilot policy path.");
+        Assert.Null(executor.Request);
+    }
+
+    [Fact]
+    public async Task Wrapper_MissingCopilotPath_ReturnsUnsafePathWithoutLaunching()
+    {
+        using var files = new WrapperFiles();
+        using var lease = files.Store.Create(CreatePolicy(), Environment.ProcessId);
+        using var stdout = new MemoryStream();
+        using var stderr = new MemoryStream();
+        var executor = new RecordingExecutor();
+
+        var exitCode = await CopilotCliWrapper.RunAsync(
+            [
+                "--policy", lease.Path,
+                "--copilot", Path.Combine(files.BaseDirectory, "missing-copilot.exe"),
+            ],
+            Stream.Null,
+            stdout,
+            stderr,
+            executor,
+            files.LaunchRoot,
+            Environment.ProcessId,
+            files.WrapperPath);
+
+        AssertFailure(
+            exitCode,
+            CopilotCliWrapper.UnsafePathExitCode,
+            stdout,
+            stderr,
+            "Unsafe Copilot executable path.");
+        Assert.Null(executor.Request);
+    }
+
+    [Fact]
+    public async Task Wrapper_PreCancelled_ReturnsInternalFailureBeforeParsing()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        using var stdout = new MemoryStream();
+        using var stderr = new MemoryStream();
+
+        var exitCode = await CopilotCliWrapper.RunAsync(
+            [],
+            Stream.Null,
+            stdout,
+            stderr,
+            new RecordingExecutor(),
+            "secret launch root",
+            Environment.ProcessId,
+            "secret wrapper path",
+            cancellation.Token);
+
+        AssertFailure(
+            exitCode,
+            CopilotCliWrapper.InternalFailureExitCode,
+            stdout,
+            stderr,
+            "Copilot wrapper cancelled.");
+        Assert.DoesNotContain("secret", Encoding.UTF8.GetString(stderr.ToArray()));
+    }
+
+    [Fact]
+    public async Task Wrapper_SelfPathReparsePoint_ReturnsUnsafePathWithoutLaunching()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        using var files = new WrapperFiles();
+        using var lease = files.Store.Create(CreatePolicy(), Environment.ProcessId);
+        var target = Directory.CreateDirectory(Path.Combine(files.BaseDirectory, "real-wrapper"));
+        var child = Directory.CreateDirectory(Path.Combine(target.FullName, "child"));
+        var wrapper = Path.Combine(child.FullName, "phantom-copilot-wrapper.exe");
+        File.WriteAllText(wrapper, "wrapper");
+        var link = Path.Combine(files.BaseDirectory, "linked-wrapper");
+        await CreateJunctionAsync(link, target.FullName);
+        using var stdout = new MemoryStream();
+        using var stderr = new MemoryStream();
+        var executor = new RecordingExecutor();
+
+        try
+        {
+            var exitCode = await CopilotCliWrapper.RunAsync(
+                ["--policy", lease.Path, "--copilot", files.CopilotPath],
+                Stream.Null,
+                stdout,
+                stderr,
+                executor,
+                files.LaunchRoot,
+                Environment.ProcessId,
+                Path.Combine(link, "child", "phantom-copilot-wrapper.exe"));
+
+            AssertFailure(
+                exitCode,
+                CopilotCliWrapper.UnsafePathExitCode,
+                stdout,
+                stderr,
+                "Unsafe Copilot wrapper path.");
+            Assert.Null(executor.Request);
+        }
+        finally
+        {
+            Directory.Delete(link);
+        }
+    }
+
+    [Theory]
+    [InlineData((int)CopilotWrapperStartupPhase.Envelope)]
+    [InlineData((int)CopilotWrapperStartupPhase.Paths)]
+    [InlineData((int)CopilotWrapperStartupPhase.Launch)]
+    public async Task Wrapper_CancellationDuringStartupPhase_ReturnsInternalFailure(
+        int phaseValue)
+    {
+        var phase = (CopilotWrapperStartupPhase)phaseValue;
+        using var files = new WrapperFiles();
+        using var lease = files.Store.Create(CreatePolicy(), Environment.ProcessId);
+        using var cancellation = new CancellationTokenSource();
+        using var stdout = new MemoryStream();
+        using var stderr = new MemoryStream();
+        var executor = new RecordingExecutor();
+
+        var exitCode = await CopilotCliWrapper.RunAsync(
+            ["--policy", lease.Path, "--copilot", files.CopilotPath],
+            Stream.Null,
+            stdout,
+            stderr,
+            executor,
+            files.LaunchRoot,
+            Environment.ProcessId,
+            files.WrapperPath,
+            cancellation.Token,
+            observed =>
+            {
+                if (observed == phase)
+                    cancellation.Cancel();
+            });
+
+        AssertFailure(
+            exitCode,
+            CopilotCliWrapper.InternalFailureExitCode,
+            stdout,
+            stderr,
+            "Copilot wrapper cancelled.");
+        Assert.Null(executor.Request);
+    }
+
+    [Fact]
+    public async Task Wrapper_CancellationDuringExecutorLaunch_ReturnsInternalFailure()
+    {
+        using var files = new WrapperFiles();
+        using var lease = files.Store.Create(CreatePolicy(), Environment.ProcessId);
+        using var cancellation = new CancellationTokenSource();
+        using var stdout = new MemoryStream();
+        using var stderr = new MemoryStream();
+        var executor = new CancellableExecutor();
+
+        var run = CopilotCliWrapper.RunAsync(
+            ["--policy", lease.Path, "--copilot", files.CopilotPath],
+            Stream.Null,
+            stdout,
+            stderr,
+            executor,
+            files.LaunchRoot,
+            Environment.ProcessId,
+            files.WrapperPath,
+            cancellation.Token);
+        await executor.Started.Task;
+        cancellation.Cancel();
+
+        AssertFailure(
+            await run,
+            CopilotCliWrapper.InternalFailureExitCode,
+            stdout,
+            stderr,
+            "Copilot wrapper cancelled.");
+    }
+
+    [Fact]
+    public async Task Wrapper_UnexpectedEnvelopeFailure_ReturnsInternalFailure()
+    {
+        using var files = new WrapperFiles();
+        using var lease = files.Store.Create(CreatePolicy(), Environment.ProcessId);
+        using var stdout = new MemoryStream();
+        using var stderr = new MemoryStream();
+
+        var exitCode = await CopilotCliWrapper.RunAsync(
+            ["--policy", lease.Path, "--copilot", files.CopilotPath],
+            Stream.Null,
+            stdout,
+            stderr,
+            new RecordingExecutor(),
+            files.LaunchRoot,
+            Environment.ProcessId,
+            files.WrapperPath,
+            startupObserver: _ => throw new InvalidOperationException("secret startup state"));
+
+        AssertFailure(
+            exitCode,
+            CopilotCliWrapper.InternalFailureExitCode,
+            stdout,
+            stderr,
+            "Copilot wrapper startup failed.");
+    }
+
+    [Fact]
+    public async Task Main_MissingPrimaryAndFallbackSelfPath_FailsClosed()
+    {
+        using var stdout = new MemoryStream();
+        using var stderr = new MemoryStream();
+
+        var exitCode = await Program.RunMainAsync(
+            [],
+            Stream.Null,
+            stdout,
+            stderr,
+            new RecordingExecutor(),
+            () => "unused",
+            () => Environment.ProcessId,
+            () => null,
+            () => null,
+            CancellationToken.None);
+
+        AssertFailure(
+            exitCode,
+            CopilotCliWrapper.UnsafePathExitCode,
+            stdout,
+            stderr,
+            "Unsafe Copilot wrapper path.");
+    }
+
+    [Fact]
+    public async Task Main_UnavailablePrimarySelfPath_UsesValidatedFallback()
+    {
+        using var files = new WrapperFiles();
+        using var lease = files.Store.Create(CreatePolicy(), Environment.ProcessId);
+        using var stdout = new MemoryStream();
+        using var stderr = new MemoryStream();
+        var executor = new RecordingExecutor();
+
+        var exitCode = await Program.RunMainAsync(
+            ["--policy", lease.Path, "--copilot", files.CopilotPath],
+            Stream.Null,
+            stdout,
+            stderr,
+            executor,
+            () => files.LaunchRoot,
+            () => Environment.ProcessId,
+            () => null,
+            () => files.WrapperPath,
+            CancellationToken.None);
+
+        Assert.Equal(0, exitCode);
+        Assert.Empty(stdout.ToArray());
+        Assert.Empty(stderr.ToArray());
+        Assert.NotNull(executor.Request);
+    }
+
+    [Fact]
+    public async Task Main_FailingPrimarySelfPathLookup_UsesValidatedFallback()
+    {
+        using var files = new WrapperFiles();
+        using var lease = files.Store.Create(CreatePolicy(), Environment.ProcessId);
+        using var stdout = new MemoryStream();
+        using var stderr = new MemoryStream();
+
+        var exitCode = await Program.RunMainAsync(
+            ["--policy", lease.Path, "--copilot", files.CopilotPath],
+            Stream.Null,
+            stdout,
+            stderr,
+            new RecordingExecutor(),
+            () => files.LaunchRoot,
+            () => Environment.ProcessId,
+            () => throw new InvalidOperationException("unavailable"),
+            () => files.WrapperPath,
+            CancellationToken.None);
+
+        Assert.Equal(0, exitCode);
+        Assert.Empty(stdout.ToArray());
+        Assert.Empty(stderr.ToArray());
+    }
+
+    [Fact]
+    public async Task Main_StartupFailure_ReturnsSanitizedInternalFailure()
+    {
+        using var files = new WrapperFiles();
+        using var stdout = new MemoryStream();
+        using var stderr = new MemoryStream();
+
+        var exitCode = await Program.RunMainAsync(
+            [],
+            Stream.Null,
+            stdout,
+            stderr,
+            new RecordingExecutor(),
+            () => throw new InvalidOperationException("secret path"),
+            () => Environment.ProcessId,
+            () => files.WrapperPath,
+            () => null,
+            CancellationToken.None);
+
+        AssertFailure(
+            exitCode,
+            CopilotCliWrapper.InternalFailureExitCode,
+            stdout,
+            stderr,
+            "Copilot wrapper startup failed.");
+        Assert.DoesNotContain("secret", Encoding.UTF8.GetString(stderr.ToArray()));
+    }
+
+    [Fact]
+    public async Task Wrapper_DiagnosticWriteFailure_DoesNotEscapeReservedExitCode()
+    {
+        using var stdout = new MemoryStream();
+        var stderr = new CountingThrowingWriteStream();
+
+        var exitCode = await CopilotCliWrapper.RunAsync(
+            [],
+            Stream.Null,
+            stdout,
+            stderr,
+            new RecordingExecutor(),
+            "unused",
+            Environment.ProcessId,
+            "unused");
+
+        Assert.Equal(CopilotCliWrapper.InvalidArgumentsExitCode, exitCode);
+        Assert.Empty(stdout.ToArray());
+        Assert.Equal(1, stderr.WriteCount);
+    }
+
+    [Fact]
     public async Task Wrapper_IntermediateAncestorReparsePoint_ReturnsUnsafePathExitCode()
     {
         if (!OperatingSystem.IsWindows())
@@ -262,12 +647,13 @@ public sealed class CopilotCliWrapperTests
         using var files = new WrapperFiles();
         using var lease = files.Store.Create(CreatePolicy(), Environment.ProcessId);
         using var cancellation = new CancellationTokenSource();
+        using var stderr = new MemoryStream();
         var executor = new BlockingExecutor();
         var run = CopilotCliWrapper.RunAsync(
             ["--policy", lease.Path, "--copilot", files.CopilotPath],
             new NeverCompletingStream(),
             Stream.Null,
-            Stream.Null,
+            stderr,
             executor,
             files.LaunchRoot,
             Environment.ProcessId,
@@ -278,6 +664,9 @@ public sealed class CopilotCliWrapperTests
 
         Assert.Equal(CopilotCliWrapper.InternalFailureExitCode, await run);
         Assert.True(executor.Handle.Killed);
+        Assert.Equal(
+            $"Copilot wrapper cancelled.{Environment.NewLine}",
+            Encoding.UTF8.GetString(stderr.ToArray()));
     }
 
     [Fact]
@@ -444,6 +833,20 @@ public sealed class CopilotCliWrapperTests
         }
     }
 
+    private static void AssertFailure(
+        int actualExitCode,
+        int expectedExitCode,
+        MemoryStream stdout,
+        MemoryStream stderr,
+        string diagnostic)
+    {
+        Assert.Equal(expectedExitCode, actualExitCode);
+        Assert.Empty(stdout.ToArray());
+        Assert.Equal(
+            diagnostic + Environment.NewLine,
+            Encoding.UTF8.GetString(stderr.ToArray()));
+    }
+
     private static MxcProcessPolicy CreatePolicy(IReadOnlyList<string>? readwritePaths = null) =>
         new(
             MxcProcessPolicy.CurrentSchemaVersion,
@@ -481,6 +884,24 @@ public sealed class CopilotCliWrapperTests
         {
             StartCount++;
             throw new InvalidOperationException("MXC failed");
+        }
+    }
+
+    private sealed class CancellableExecutor : IProcessExecutor
+    {
+        public TaskCompletionSource Started { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public IProcessHandle Start(ProcessExecutionRequest request) =>
+            throw new NotSupportedException();
+
+        public async Task<IProcessHandle> StartAsync(
+            ProcessExecutionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Started.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            throw new System.Diagnostics.UnreachableException();
         }
     }
 
@@ -605,6 +1026,19 @@ public sealed class CopilotCliWrapperTests
             ReadOnlyMemory<byte> buffer,
             CancellationToken cancellationToken = default) =>
             ValueTask.FromException(new IOException("Sensitive stream details."));
+    }
+
+    private sealed class CountingThrowingWriteStream : MemoryStream
+    {
+        public int WriteCount { get; private set; }
+
+        public override ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            WriteCount++;
+            return ValueTask.FromException(new IOException("Sensitive diagnostic sink."));
+        }
     }
 
     private sealed class SignalingWriteStream : MemoryStream

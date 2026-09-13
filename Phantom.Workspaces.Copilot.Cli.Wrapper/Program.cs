@@ -2,6 +2,7 @@ using Phantom.Workspaces.Llm.Copilot;
 using Phantom.Workspaces.Llm.Processes;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Security;
 using System.Text.Json;
 
 namespace Phantom.Workspaces.Copilot.Cli.Wrapper;
@@ -16,17 +17,170 @@ internal static class Program
             eventArgs.Cancel = true;
             cancellation.Cancel();
         };
+        Stream? standardError = null;
+        try
+        {
+            standardError = Console.OpenStandardError();
+            return await RunMainAsync(
+                args,
+                Console.OpenStandardInput(),
+                Console.OpenStandardOutput(),
+                standardError,
+                new ProcessExecutor(),
+                CopilotLaunchPolicyStore.GetDefaultLaunchRoot,
+                ParentProcess.GetParentProcessId,
+                () => Environment.ProcessPath,
+                () => Process.GetCurrentProcess().MainModule?.FileName,
+                cancellation.Token).ConfigureAwait(false);
+        }
+        catch
+        {
+            return standardError is null
+                ? CopilotCliWrapper.InternalFailureExitCode
+                : await CopilotCliWrapper.ReturnFailureAsync(
+                    standardError,
+                    CopilotCliWrapper.InternalFailureExitCode,
+                    "Copilot wrapper startup failed.").ConfigureAwait(false);
+        }
+    }
+
+    internal static async Task<int> RunMainAsync(
+        IReadOnlyList<string> args,
+        Stream standardInput,
+        Stream standardOutput,
+        Stream standardError,
+        IProcessExecutor executor,
+        Func<string> launchRootProvider,
+        Func<int> parentProcessIdProvider,
+        Func<string?> processPathProvider,
+        Func<string?> fallbackProcessPathProvider,
+        CancellationToken cancellationToken)
+    {
+        string wrapperPath;
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            wrapperPath = ResolveWrapperProcessPath(
+                processPathProvider,
+                fallbackProcessPathProvider);
+        }
+        catch (OperationCanceledException)
+        {
+            return await CopilotCliWrapper.ReturnFailureAsync(
+                standardError,
+                CopilotCliWrapper.InternalFailureExitCode,
+                "Copilot wrapper cancelled.").ConfigureAwait(false);
+        }
+        catch
+        {
+            return await CopilotCliWrapper.ReturnFailureAsync(
+                standardError,
+                CopilotCliWrapper.UnsafePathExitCode,
+                "Unsafe Copilot wrapper path.").ConfigureAwait(false);
+        }
+
+        string launchRoot;
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            launchRoot = launchRootProvider();
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        catch (OperationCanceledException)
+        {
+            return await CopilotCliWrapper.ReturnFailureAsync(
+                standardError,
+                CopilotCliWrapper.InternalFailureExitCode,
+                "Copilot wrapper cancelled.").ConfigureAwait(false);
+        }
+        catch (Exception exception) when (
+            exception is UnauthorizedAccessException
+                or IOException
+                or ArgumentException
+                or SecurityException
+                or NotSupportedException)
+        {
+            return await CopilotCliWrapper.ReturnFailureAsync(
+                standardError,
+                CopilotCliWrapper.UnsafePathExitCode,
+                "Unsafe Copilot policy path.").ConfigureAwait(false);
+        }
+        catch
+        {
+            return await CopilotCliWrapper.ReturnFailureAsync(
+                standardError,
+                CopilotCliWrapper.InternalFailureExitCode,
+                "Copilot wrapper startup failed.").ConfigureAwait(false);
+        }
+
+        int parentProcessId;
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            parentProcessId = parentProcessIdProvider();
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        catch (OperationCanceledException)
+        {
+            return await CopilotCliWrapper.ReturnFailureAsync(
+                standardError,
+                CopilotCliWrapper.InternalFailureExitCode,
+                "Copilot wrapper cancelled.").ConfigureAwait(false);
+        }
+        catch
+        {
+            return await CopilotCliWrapper.ReturnFailureAsync(
+                standardError,
+                CopilotCliWrapper.InternalFailureExitCode,
+                "Copilot wrapper startup failed.").ConfigureAwait(false);
+        }
+
         return await CopilotCliWrapper.RunAsync(
             args,
-            Console.OpenStandardInput(),
-            Console.OpenStandardOutput(),
-            Console.OpenStandardError(),
-            new ProcessExecutor(),
-            CopilotLaunchPolicyStore.GetDefaultLaunchRoot(),
-            ParentProcess.GetParentProcessId(),
-            Environment.ProcessPath ?? string.Empty,
-            cancellation.Token).ConfigureAwait(false);
+            standardInput,
+            standardOutput,
+            standardError,
+            executor,
+            launchRoot,
+            parentProcessId,
+            wrapperPath,
+            cancellationToken).ConfigureAwait(false);
     }
+
+    internal static string ResolveWrapperProcessPath(
+        Func<string?> processPathProvider,
+        Func<string?> fallbackProcessPathProvider)
+    {
+        string? path = null;
+        try
+        {
+            path = processPathProvider();
+        }
+        catch
+        {
+        }
+
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            try
+            {
+                path = fallbackProcessPathProvider();
+            }
+            catch
+            {
+            }
+        }
+        return string.IsNullOrWhiteSpace(path)
+            ? throw new UnauthorizedAccessException()
+            : path;
+    }
+}
+
+internal enum CopilotWrapperStartupPhase
+{
+    Envelope,
+    Paths,
+    Launch,
 }
 
 internal static class CopilotCliWrapper
@@ -46,19 +200,27 @@ internal static class CopilotCliWrapper
         string launchRoot,
         int parentProcessId,
         string wrapperPath,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action<CopilotWrapperStartupPhase>? startupObserver = null)
     {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return await ReturnFailureAsync(
+                standardError,
+                InternalFailureExitCode,
+                "Copilot wrapper cancelled.").ConfigureAwait(false);
+        }
+
         if (args.Count < 4
             || !string.Equals(args[0], "--policy", StringComparison.Ordinal)
             || string.IsNullOrWhiteSpace(args[1])
             || !string.Equals(args[2], "--copilot", StringComparison.Ordinal)
             || string.IsNullOrWhiteSpace(args[3]))
         {
-            await WriteDiagnosticAsync(
+            return await ReturnFailureAsync(
                 standardError,
-                "Invalid wrapper arguments.",
-                cancellationToken).ConfigureAwait(false);
-            return InvalidArgumentsExitCode;
+                InvalidArgumentsExitCode,
+                "Invalid wrapper arguments.").ConfigureAwait(false);
         }
 
         CopilotLaunchPolicyEnvelope envelope;
@@ -66,80 +228,186 @@ internal static class CopilotCliWrapper
         {
             envelope = new CopilotLaunchPolicyStore(launchRoot, TimeProvider.System)
                 .Consume(args[1], parentProcessId);
+            ObserveStartupPhase(
+                CopilotWrapperStartupPhase.Envelope,
+                startupObserver,
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            return await ReturnFailureAsync(
+                standardError,
+                InternalFailureExitCode,
+                "Copilot wrapper cancelled.").ConfigureAwait(false);
         }
         catch (UnauthorizedAccessException)
         {
-            await WriteDiagnosticAsync(
+            return await ReturnFailureAsync(
                 standardError,
-                "Unsafe Copilot policy path.",
-                cancellationToken).ConfigureAwait(false);
-            return UnsafePathExitCode;
+                UnsafePathExitCode,
+                "Unsafe Copilot policy path.").ConfigureAwait(false);
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException
+                or SecurityException
+                or NotSupportedException)
+        {
+            return await ReturnFailureAsync(
+                standardError,
+                UnsafePathExitCode,
+                "Unsafe Copilot policy path.").ConfigureAwait(false);
         }
         catch (Exception exception) when (
             exception is InvalidDataException
                 or IOException
                 or JsonException)
         {
-            await WriteDiagnosticAsync(
+            return await ReturnFailureAsync(
                 standardError,
-                "Invalid or expired Copilot policy.",
-                cancellationToken).ConfigureAwait(false);
-            return InvalidEnvelopeExitCode;
+                InvalidEnvelopeExitCode,
+                "Invalid or expired Copilot policy.").ConfigureAwait(false);
+        }
+        catch
+        {
+            return await ReturnFailureAsync(
+                standardError,
+                InternalFailureExitCode,
+                "Copilot wrapper startup failed.").ConfigureAwait(false);
+        }
+
+        string canonicalWrapperPath;
+        try
+        {
+            canonicalWrapperPath = ValidateExecutablePath(wrapperPath);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        catch (OperationCanceledException)
+        {
+            return await ReturnFailureAsync(
+                standardError,
+                InternalFailureExitCode,
+                "Copilot wrapper cancelled.").ConfigureAwait(false);
+        }
+        catch (Exception exception) when (
+            exception is UnauthorizedAccessException
+                or IOException
+                or ArgumentException
+                or SecurityException
+                or NotSupportedException)
+        {
+            return await ReturnFailureAsync(
+                standardError,
+                UnsafePathExitCode,
+                "Unsafe Copilot wrapper path.").ConfigureAwait(false);
+        }
+        catch
+        {
+            return await ReturnFailureAsync(
+                standardError,
+                InternalFailureExitCode,
+                "Copilot wrapper startup failed.").ConfigureAwait(false);
         }
 
         string copilotPath;
         try
         {
             copilotPath = ValidateExecutablePath(args[3]);
-            var canonicalWrapperPath = System.IO.Path.GetFullPath(wrapperPath);
             if (string.Equals(copilotPath, canonicalWrapperPath, PathComparison))
                 throw new UnauthorizedAccessException();
+            ObserveStartupPhase(
+                CopilotWrapperStartupPhase.Paths,
+                startupObserver,
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            return await ReturnFailureAsync(
+                standardError,
+                InternalFailureExitCode,
+                "Copilot wrapper cancelled.").ConfigureAwait(false);
         }
         catch (Exception exception) when (
             exception is UnauthorizedAccessException
                 or IOException
                 or ArgumentException
+                or SecurityException
                 or NotSupportedException)
         {
-            await WriteDiagnosticAsync(
+            return await ReturnFailureAsync(
                 standardError,
-                "Unsafe Copilot executable path.",
-                cancellationToken).ConfigureAwait(false);
-            return UnsafePathExitCode;
+                UnsafePathExitCode,
+                "Unsafe Copilot executable path.").ConfigureAwait(false);
+        }
+        catch
+        {
+            return await ReturnFailureAsync(
+                standardError,
+                InternalFailureExitCode,
+                "Copilot wrapper startup failed.").ConfigureAwait(false);
         }
 
-        var policy = AddRuntimeBootstrapGrant(
-            envelope.Policy,
-            System.IO.Path.GetDirectoryName(copilotPath)!);
-        var request = new ProcessExecutionRequest(copilotPath, args.Skip(4).ToArray())
+        ProcessExecutionRequest request;
+        try
         {
-            WorkingDirectory = Environment.CurrentDirectory,
-            Environment = SnapshotEnvironment(),
-            MxcPolicy = policy,
-        };
+            var policy = AddRuntimeBootstrapGrant(
+                envelope.Policy,
+                System.IO.Path.GetDirectoryName(copilotPath)!);
+            request = new ProcessExecutionRequest(copilotPath, args.Skip(4).ToArray())
+            {
+                WorkingDirectory = Environment.CurrentDirectory,
+                Environment = SnapshotEnvironment(),
+                MxcPolicy = policy,
+            };
+            ObserveStartupPhase(
+                CopilotWrapperStartupPhase.Launch,
+                startupObserver,
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            return await ReturnFailureAsync(
+                standardError,
+                InternalFailureExitCode,
+                "Copilot wrapper cancelled.").ConfigureAwait(false);
+        }
+        catch
+        {
+            return await ReturnFailureAsync(
+                standardError,
+                InternalFailureExitCode,
+                "Copilot wrapper startup failed.").ConfigureAwait(false);
+        }
 
         IProcessHandle process;
         try
         {
             process = await executor.StartAsync(request, cancellationToken).ConfigureAwait(false);
         }
+        catch (OperationCanceledException)
+        {
+            return await ReturnFailureAsync(
+                standardError,
+                InternalFailureExitCode,
+                "Copilot wrapper cancelled.").ConfigureAwait(false);
+        }
         catch
         {
-            await WriteDiagnosticAsync(
+            return await ReturnFailureAsync(
                 standardError,
-                "MXC containment launch failed.",
-                cancellationToken).ConfigureAwait(false);
-            return ExecutorFailureExitCode;
+                ExecutorFailureExitCode,
+                "MXC containment launch failed.").ConfigureAwait(false);
         }
 
-        await using (process.ConfigureAwait(false))
+        var wrapperFailed = false;
+        var exitCode = InternalFailureExitCode;
+        string? failureDiagnostic = null;
         using (var inputCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
         {
             try
             {
                 foreach (var warning in process.LaunchInfo.Warnings)
                 {
-                    await WriteDiagnosticAsync(standardError, warning, cancellationToken)
+                    await WriteStreamAsync(standardError, warning, cancellationToken)
                         .ConfigureAwait(false);
                 }
 
@@ -164,23 +432,41 @@ internal static class CopilotCliWrapper
                 await Task.WhenAll(outputPump, errorPump).ConfigureAwait(false);
                 await standardOutput.FlushAsync(cancellationToken).ConfigureAwait(false);
                 await standardError.FlushAsync(cancellationToken).ConfigureAwait(false);
-                return result.ExitCode;
+                exitCode = result.ExitCode;
             }
             catch (OperationCanceledException)
             {
-                await process.TerminateAsync(CancellationToken.None).ConfigureAwait(false);
-                return InternalFailureExitCode;
+                wrapperFailed = true;
+                failureDiagnostic = "Copilot wrapper cancelled.";
+                await TryTerminateAsync(process).ConfigureAwait(false);
             }
             catch
             {
-                await process.TerminateAsync(CancellationToken.None).ConfigureAwait(false);
-                await WriteDiagnosticAsync(
-                    standardError,
-                    "Copilot wrapper stream relay failed.",
-                    CancellationToken.None).ConfigureAwait(false);
-                return InternalFailureExitCode;
+                wrapperFailed = true;
+                failureDiagnostic = "Copilot wrapper stream relay failed.";
+                await TryTerminateAsync(process).ConfigureAwait(false);
             }
         }
+
+        try
+        {
+            await process.DisposeAsync().ConfigureAwait(false);
+        }
+        catch
+        {
+            if (!wrapperFailed)
+            {
+                wrapperFailed = true;
+                failureDiagnostic = "Copilot wrapper stream relay failed.";
+            }
+        }
+
+        return wrapperFailed
+            ? await ReturnFailureAsync(
+                standardError,
+                InternalFailureExitCode,
+                failureDiagnostic!).ConfigureAwait(false)
+            : exitCode;
     }
 
     private static async Task PumpInputAsync(
@@ -210,14 +496,31 @@ internal static class CopilotCliWrapper
         }
     }
 
-    private static async Task WriteDiagnosticAsync(
+    internal static async Task<int> ReturnFailureAsync(
         Stream standardError,
+        int exitCode,
+        string message)
+    {
+        try
+        {
+            var bytes = System.Text.Encoding.UTF8.GetBytes(message + Environment.NewLine);
+            await standardError.WriteAsync(bytes, CancellationToken.None).ConfigureAwait(false);
+            await standardError.FlushAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch
+        {
+        }
+        return exitCode;
+    }
+
+    private static async Task WriteStreamAsync(
+        Stream stream,
         string message,
         CancellationToken cancellationToken)
     {
         var bytes = System.Text.Encoding.UTF8.GetBytes(message + Environment.NewLine);
-        await standardError.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
-        await standardError.FlushAsync(cancellationToken).ConfigureAwait(false);
+        await stream.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
+        await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static string ValidateExecutablePath(string path)
@@ -225,12 +528,34 @@ internal static class CopilotCliWrapper
         var canonical = System.IO.Path.GetFullPath(path);
         if (!System.IO.Path.IsPathFullyQualified(canonical)
             || !File.Exists(canonical)
-            || Directory.Exists(canonical))
+            || Directory.Exists(canonical)
+            || (File.GetAttributes(canonical) & (FileAttributes.Directory | FileAttributes.Device))
+                != 0)
         {
             throw new UnauthorizedAccessException();
         }
         CopilotPathSecurity.EnsureNoReparsePoints(canonical);
         return canonical;
+    }
+
+    private static void ObserveStartupPhase(
+        CopilotWrapperStartupPhase phase,
+        Action<CopilotWrapperStartupPhase>? observer,
+        CancellationToken cancellationToken)
+    {
+        observer?.Invoke(phase);
+        cancellationToken.ThrowIfCancellationRequested();
+    }
+
+    private static async Task TryTerminateAsync(IProcessHandle process)
+    {
+        try
+        {
+            await process.TerminateAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch
+        {
+        }
     }
 
     private static MxcProcessPolicy AddRuntimeBootstrapGrant(

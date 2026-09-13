@@ -67,9 +67,11 @@
           SkipUnchangedFiles="true" />
     <Error Condition="!Exists('$(PublishDir)runtimes\$(RuntimeIdentifier)\native\copilot.exe')"
            Text="Copilot CLI (runtimes\$(RuntimeIdentifier)\native\copilot.exe) was not published as a loose file (issue #1376)." />
+    <Error Condition="!Exists('$(PublishDir)runtimes\$(RuntimeIdentifier)\native\phantom-copilot-wrapper.exe')"
+           Text="The Copilot MXC wrapper was not published as a loose file." />
   </Target>
   <Target Name="PublishCopilotWrapperLoose"
-          Condition="'$(RuntimeIdentifier)' == 'win-x64' And '$(PublishCopilotRuntime)' != 'false'">
+          Condition="'$(RuntimeIdentifier)' == 'win-x64' And '$(PublishCopilotRuntime)' != 'false' And '$(SkipCopilotWrapperPublish)' != 'true'">
     <PropertyGroup>
       <_CopilotWrapperProject>$(MSBuildProjectDirectory)\..\Phantom.Workspaces.Copilot.Cli.Wrapper\Phantom.Workspaces.Copilot.Cli.Wrapper.csproj</_CopilotWrapperProject>
       <_CopilotWrapperPublishDir>$(IntermediateOutputPath)copilot-wrapper\</_CopilotWrapperPublishDir>

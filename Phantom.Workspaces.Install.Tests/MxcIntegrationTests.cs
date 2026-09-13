@@ -805,28 +805,39 @@ internal static class MxcRepositoryTestSupport
         $"-p:PublishDir={outputPath}{Path.DirectorySeparatorChar}",
     ];
 
-    internal static string[] CreateCopilotRuntimePublishArguments(
+    internal static string[] CreateCopilotRuntimePayloadArguments(
         string outputPath,
-        string artifactsPath) =>
-    [
-        "publish",
-        Path.Combine("Phantom.Workspaces", "Phantom.Workspaces.csproj"),
-        "--nologo",
-        "--disable-build-servers",
-        "-m:1",
-        "/nodeReuse:false",
-        "-r",
-        "win-x64",
-        "-p:Configuration=Release",
-        "-p:SelfContained=false",
-        "-p:PublishSingleFile=false",
-        "-p:PublishReadyToRun=false",
-        "-p:UseSharedCompilation=false",
-        "-p:UseArtifactsOutput=true",
-        $"-p:ArtifactsPath={artifactsPath}",
-        "-o",
-        outputPath,
-    ];
+        string artifactsPath)
+    {
+        var targetFrameworkDirectory = new DirectoryInfo(
+            Path.TrimEndingDirectorySeparator(AppContext.BaseDirectory));
+        var configuration = targetFrameworkDirectory.Parent?.Name
+            ?? throw new InvalidOperationException("Unable to identify the test build configuration.");
+        var applicationOutput = Path.Combine(
+            Root.FullName,
+            "Phantom.Workspaces",
+            "bin",
+            configuration,
+            "net10.0");
+        return
+        [
+            "msbuild",
+            "--disable-build-servers",
+            Path.Combine("Phantom.Workspaces", "Phantom.Workspaces.csproj"),
+            "-nologo",
+            "-m:1",
+            "/nodeReuse:false",
+            "-t:PublishCopilotRuntimeLoose;PublishMxcRuntimeLoose",
+            $"-p:Configuration={configuration}",
+            "-p:RuntimeIdentifier=win-x64",
+            "-p:UseSharedCompilation=false",
+            "-p:UseArtifactsOutput=true",
+            $"-p:ArtifactsPath={artifactsPath}",
+            $"-p:OutDir={applicationOutput}{Path.DirectorySeparatorChar}",
+            $"-p:PublishDir={outputPath}{Path.DirectorySeparatorChar}",
+            "-p:SkipCopilotWrapperPublish=true",
+        ];
+    }
 
     internal static Task<ProcessResult> InvokeAsync(string fileName, params string[] arguments) =>
         InvokeAsync(
