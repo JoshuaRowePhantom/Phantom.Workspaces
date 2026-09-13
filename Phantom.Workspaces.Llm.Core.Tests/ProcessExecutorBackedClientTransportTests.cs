@@ -395,14 +395,22 @@ public sealed class ProcessExecutorBackedClientTransportTests
         bool drainerFails)
     {
         var protocolFailure = new InvalidDataException("protocol startup");
+        var handleFailure = new IOException("handle cleanup");
+        var drainerFailure = new NotSupportedException("drainer cleanup");
+        var protocolEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var rejectProtocol = new TaskCompletionSource<ITransport>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var stderr = new CoordinatedReadStream(
+            drainerFails ? drainerFailure : null);
+        var handle = new StubProcessHandle(
+            seededStderr: null,
+            disposeException: handleFails ? handleFailure : null,
+            standardError: stderr,
+            coordinateDisposal: true);
         var executor = new StubProcessExecutor
         {
-            NextHandle = new StubProcessHandle(
-                seededStderr: null,
-                disposeException: handleFails ? new IOException("handle cleanup") : null,
-                standardError: drainerFails
-                    ? new FaultingReadStream(new NotSupportedException("drainer cleanup"))
-                    : null),
+            NextHandle = handle,
         };
         var loggerFactory = new CapturingLoggerFactory();
         var transport = new ProcessExecutorBackedClientTransport(
@@ -410,13 +418,30 @@ public sealed class ProcessExecutorBackedClientTransportTests
             new ProcessExecutionRequest("some.exe"),
             executor,
             loggerFactory,
-            (_, _, _, _) => Task.FromException<ITransport>(protocolFailure));
+            (_, _, _, _) =>
+            {
+                protocolEntered.TrySetResult();
+                return rejectProtocol.Task;
+            });
 
-        var thrown = await Assert.ThrowsAsync<InvalidDataException>(
-            () => transport.ConnectAsync());
+        var connection = transport.ConnectAsync();
+        await protocolEntered.Task;
+        await stderr.ReadEntered;
+        rejectProtocol.TrySetException(protocolFailure);
+
+        await handle.DisposeEntered;
+        Assert.False(connection.IsCompleted);
+        handle.AllowDispose();
+        await handle.DisposeCompleted;
+
+        Assert.False(connection.IsCompleted);
+        stderr.CompleteRead();
+        await stderr.ReadCompleted;
+
+        var thrown = await Assert.ThrowsAsync<InvalidDataException>(() => connection);
 
         Assert.Same(protocolFailure, thrown);
-        Assert.Equal(1, executor.LastHandle!.DisposeCount);
+        Assert.Equal(1, handle.DisposeCount);
         Assert.Equal(
             (handleFails ? 1 : 0) + (drainerFails ? 1 : 0),
             loggerFactory.Entries.Count(entry => entry.Level == Microsoft.Extensions.Logging.LogLevel.Warning));
@@ -486,16 +511,25 @@ public sealed class ProcessExecutorBackedClientTransportTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource disposed =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource disposeEntered =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource allowDispose =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource disposeCompleted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly Exception? disposeException;
         private int disposeCount;
 
         public StubProcessHandle(
             byte[]? seededStderr,
             Exception? disposeException = null,
-            Stream? standardError = null)
+            Stream? standardError = null,
+            bool coordinateDisposal = false)
         {
             this.disposeException = disposeException;
             StandardError = standardError ?? stderr;
+            if (!coordinateDisposal)
+                allowDispose.TrySetResult();
             if (ReferenceEquals(StandardError, stderr))
             {
                 stderr.ReadObserved = () => stderrRead.TrySetResult();
@@ -522,6 +556,8 @@ public sealed class ProcessExecutorBackedClientTransportTests
         public bool Disposed { get; private set; }
         public int DisposeCount => Volatile.Read(ref disposeCount);
         public Task DisposedTask => disposed.Task;
+        public Task DisposeEntered => disposeEntered.Task;
+        public Task DisposeCompleted => disposeCompleted.Task;
         public Task StderrRead => stderrRead.Task;
         public Stream StandardInput => stdin;
         public Stream StandardOutput => stdout;
@@ -543,18 +579,29 @@ public sealed class ProcessExecutorBackedClientTransportTests
             exit.TrySetResult(ProcessExitResult.Create(exitCode, false, null));
         }
 
-        public ValueTask DisposeAsync()
+        public void AllowDispose() => allowDispose.TrySetResult();
+
+        public async ValueTask DisposeAsync()
         {
             if (Interlocked.Exchange(ref disposeCount, 1) != 0)
-                return ValueTask.CompletedTask;
-            Disposed = true;
-            stderr.Complete();
-            stdout.Complete();
-            exit.TrySetResult(ProcessExitResult.Create(0, false, null));
-            disposed.TrySetResult();
-            return disposeException is null
-                ? ValueTask.CompletedTask
-                : ValueTask.FromException(disposeException);
+                return;
+
+            disposeEntered.TrySetResult();
+            await allowDispose.Task;
+            try
+            {
+                Disposed = true;
+                stderr.Complete();
+                stdout.Complete();
+                exit.TrySetResult(ProcessExitResult.Create(0, false, null));
+                disposed.TrySetResult();
+                if (disposeException is not null)
+                    throw disposeException;
+            }
+            finally
+            {
+                disposeCompleted.TrySetResult();
+            }
         }
     }
 
@@ -641,6 +688,49 @@ public sealed class ProcessExecutorBackedClientTransportTests
             Memory<byte> buffer,
             CancellationToken cancellationToken = default) =>
             ValueTask.FromException<int>(failure);
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    private sealed class CoordinatedReadStream(Exception? failure) : Stream
+    {
+        private readonly TaskCompletionSource readEntered =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource completeRead =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource readCompleted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task ReadEntered => readEntered.Task;
+        public Task ReadCompleted => readCompleted.Task;
+
+        public void CompleteRead() => completeRead.TrySetResult();
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() => throw new NotSupportedException();
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            readEntered.TrySetResult();
+            try
+            {
+                await completeRead.Task;
+                if (failure is not null)
+                    throw failure;
+                return 0;
+            }
+            finally
+            {
+                readCompleted.TrySetResult();
+            }
+        }
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
         public override void SetLength(long value) => throw new NotSupportedException();
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();

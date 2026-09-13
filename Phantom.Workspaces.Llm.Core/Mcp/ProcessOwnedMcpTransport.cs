@@ -131,7 +131,7 @@ internal sealed class ProcessOwnedMcpTransport : ITransport
         if (terminationFailure is not null)
         {
             await CaptureFailureAsync(
-                drainCts.CancelAsync(),
+                CancelAsyncTask(drainCts),
                 "cancelling MCP exit monitoring after process termination failed").ConfigureAwait(false);
         }
         exitResult ??= await CaptureExitResultAsync().ConfigureAwait(false);
@@ -259,7 +259,7 @@ internal sealed class ProcessOwnedMcpTransport : ITransport
         if (terminationFailure is not null)
         {
             cancellationFailure = await CaptureFailureAsync(
-                drainCts.CancelAsync(),
+                CancelAsyncTask(drainCts),
                 "cancelling MCP pipe drains after process termination failed").ConfigureAwait(false);
         }
         var exitFailure = await CaptureFailureAsync(
@@ -272,7 +272,7 @@ internal sealed class ProcessOwnedMcpTransport : ITransport
             DisposeProcessOnceAsync(),
             "disposing the MCP stdio process tree").ConfigureAwait(false);
         cancellationFailure ??= await CaptureFailureAsync(
-            drainCts.CancelAsync(),
+            CancelAsyncTask(drainCts),
             "cancelling MCP pipe drains").ConfigureAwait(false);
         var messagePumpFailure = await CaptureFailureAsync(
             messagePump,
@@ -322,6 +322,9 @@ internal sealed class ProcessOwnedMcpTransport : ITransport
 
     private static async Task TerminateAsyncCore(IProcessHandle processHandle) =>
         await processHandle.TerminateAsync().ConfigureAwait(false);
+
+    private static async Task CancelAsyncTask(CancellationTokenSource cancellation) =>
+        await cancellation.CancelAsync().ConfigureAwait(false);
 
     private async Task<Exception?> CaptureFailureAsync(Task task, string operation)
     {

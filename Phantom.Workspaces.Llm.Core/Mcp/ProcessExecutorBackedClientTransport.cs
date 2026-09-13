@@ -136,7 +136,7 @@ public sealed class ProcessExecutorBackedClientTransport : IClientTransport, IAs
                 if (ownedTransport is not null)
                 {
                     await ObserveCleanupAsync(
-                        DisposeAsyncTask(ownedTransport),
+                        () => DisposeAsyncTask(ownedTransport),
                         "disposing the partially connected MCP transport").ConfigureAwait(false);
                 }
                 else
@@ -144,38 +144,44 @@ public sealed class ProcessExecutorBackedClientTransport : IClientTransport, IAs
                     if (inner is not null)
                     {
                         await ObserveCleanupAsync(
-                            DisposeAsyncTask(inner),
+                            () => DisposeAsyncTask(inner),
                             "disposing the MCP SDK transport after startup failed").ConfigureAwait(false);
                     }
 
                     if (handle is not null)
                     {
                         await ObserveCleanupAsync(
-                            DisposeAsyncTask(handle),
+                            () => DisposeAsyncTask(handle),
                             "disposing the MCP process tree after startup failed").ConfigureAwait(false);
                     }
 
                     if (drainCts is not null)
                     {
                         await ObserveCleanupAsync(
-                            drainCts.CancelAsync(),
+                            () => CancelAsyncTask(drainCts),
                             "cancelling MCP pipe drains after startup failed").ConfigureAwait(false);
                     }
 
                     if (stderrDrainer is not null)
                     {
                         await ObserveCleanupAsync(
-                            stderrDrainer.PumpTask,
+                            () => stderrDrainer.PumpTask,
                             "joining the MCP stderr drainer after startup failed").ConfigureAwait(false);
                     }
                     if (exitTask is not null)
                     {
                         await ObserveCleanupAsync(
-                            exitTask,
-                            "joining MCP process exit after startup failed").ConfigureAwait(false);
+                            () => exitTask,
+                            "joining MCP process exit after startup failed",
+                            cancellationIsExpected: true).ConfigureAwait(false);
                     }
 
-                    drainCts?.Dispose();
+                    if (drainCts is not null)
+                    {
+                        await ObserveCleanupAsync(
+                            () => DisposeCancellationSourceTask(drainCts),
+                            "disposing MCP pipe-drain cancellation after startup failed").ConfigureAwait(false);
+                    }
                 }
             }
         }
@@ -223,23 +229,39 @@ public sealed class ProcessExecutorBackedClientTransport : IClientTransport, IAs
         _ = task.Exception;
     }
 
-    private async Task ObserveCleanupAsync(Task task, string operation)
+    private async Task ObserveCleanupAsync(
+        Func<Task> cleanup,
+        string operation,
+        bool cancellationIsExpected = false)
     {
-        await Task.WhenAny(task).ConfigureAwait(false);
-        if (!task.IsFaulted)
-            return;
-
-        var failure = task.Exception?.GetBaseException()
-                      ?? new IOException("MCP cleanup failed.");
-        logger.LogWarning(
-            "Secondary cleanup failure while {Operation} for MCP stdio server '{Name}': {FailureType}.",
-            operation,
-            Name,
-            failure.GetType().Name);
+        try
+        {
+            await cleanup().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationIsExpected)
+        {
+        }
+        catch (Exception failure)
+        {
+            logger.LogWarning(
+                "Secondary cleanup failure while {Operation} for MCP stdio server '{Name}': {FailureType}.",
+                operation,
+                Name,
+                failure.GetType().Name);
+        }
     }
 
     private static async Task DisposeAsyncTask(IAsyncDisposable disposable) =>
         await disposable.DisposeAsync().ConfigureAwait(false);
+
+    private static async Task CancelAsyncTask(CancellationTokenSource cancellation) =>
+        await cancellation.CancelAsync().ConfigureAwait(false);
+
+    private static Task DisposeCancellationSourceTask(CancellationTokenSource cancellation)
+    {
+        cancellation.Dispose();
+        return Task.CompletedTask;
+    }
 
     private static Task<ITransport> ConnectStreamTransportAsync(
         Stream input,
@@ -268,7 +290,8 @@ public sealed class ProcessExecutorBackedClientTransport : IClientTransport, IAs
             this.source = source;
             this.logger = logger;
             this.name = name;
-            pumpTask = Task.Run(() => PumpAsync(cancellationToken), CancellationToken.None);
+            // Enter the first asynchronous read before startup can fail and begin cleanup.
+            pumpTask = PumpAsync(cancellationToken);
         }
 
         public Task PumpTask => pumpTask;
