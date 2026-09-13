@@ -220,11 +220,12 @@ public sealed class McpToolContextProviderTests
     public async Task McpToolContextProvider_ResetInitialization_ClearsFailureAndAllowsOneNewAttempt()
     {
         var attempts = 0;
+        var ownedTransport = new BlockingOwnedTransport();
         var provider = CreateProvider(_ =>
         {
             attempts++;
             throw new McpException("connect failed");
-        });
+        }, ownedTransport);
         await using var disposable = provider;
 
         await Assert.ThrowsAsync<McpException>(() => InvokeAsync(provider));
@@ -236,9 +237,15 @@ public sealed class McpToolContextProviderTests
 
         provider.ResetInitialization();
 
-        // Exactly one fresh attempt is made after reset (it fails again and re-latches).
-        await Assert.ThrowsAsync<McpException>(() => InvokeAsync(provider));
+        var reinitialize = InvokeAsync(provider);
+        await ownedTransport.DisposeStarted.Task;
+        Assert.Equal(1, attempts);
+        Assert.False(reinitialize.IsCompleted);
+
+        ownedTransport.AllowDispose.TrySetResult();
+        await Assert.ThrowsAsync<McpException>(() => reinitialize);
         Assert.Equal(2, attempts);
+        Assert.Equal(1, ownedTransport.DisposeCount);
 
         _ = await InvokeAsync(provider);
         Assert.Equal(2, attempts);
@@ -273,7 +280,9 @@ public sealed class McpToolContextProviderTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => initialization);
     }
 
-    private static McpToolContextProvider CreateProvider(Func<CancellationToken, Task<AITool[]>> initialize)
+    private static McpToolContextProvider CreateProvider(
+        Func<CancellationToken, Task<AITool[]>> initialize,
+        IAsyncDisposable? ownedTransport = null)
         => new(
             OAuthTool(),
             NullLoggerFactory.Instance,
@@ -281,7 +290,27 @@ public sealed class McpToolContextProviderTests
             services: null,
             boundExecutor: null,
             router: null,
-            initializeOverride: initialize);
+            initializeOverride: initialize,
+            ownedTransportOverride: ownedTransport);
+
+    private sealed class BlockingOwnedTransport : IAsyncDisposable
+    {
+        private int disposeCount;
+        public int DisposeCount => Volatile.Read(ref this.disposeCount);
+        public TaskCompletionSource DisposeStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource AllowDispose { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async ValueTask DisposeAsync()
+        {
+            if (Interlocked.Increment(ref this.disposeCount) != 1)
+                return;
+
+            this.DisposeStarted.TrySetResult();
+            await this.AllowDispose.Task;
+        }
+    }
 
     private static async Task<AITool[]> InvokeAsync(McpToolContextProvider provider)
     {

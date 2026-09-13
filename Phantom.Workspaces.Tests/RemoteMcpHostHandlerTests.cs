@@ -3,10 +3,14 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+using ModelContextProtocol.Protocol;
+using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Llm.Processes;
 using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Transport;
+using McpTransport = ModelContextProtocol.Protocol.ITransport;
 
 namespace Phantom.Workspaces.Tests;
 
@@ -84,19 +88,73 @@ public sealed class RemoteMcpHostHandlerTests
     [Fact]
     public async Task OpenAsync_DisposesOnChannelClose()
     {
-        var handler = new RemoteMcpHostHandler();
-        await using var channel = new StubMessageChannel();
+        var events = new List<string>();
+        var executor = new OrderedProcessExecutor(events);
+        var handler = new RemoteMcpHostHandler(new AgentServices
+        {
+            ProcessExecutor = executor,
+        });
+        var channel = new StubMessageChannel(events);
+        var command = Uri.EscapeDataString(ComSpecPath);
 
         var handle = await handler.OpenAsync(
-            Json("""{"type":"mcp","connection":{"server-name":"remote","endpoint":"http://127.0.0.1:59999/mcp"}}"""),
+            Json($"{{\"type\":\"mcp\",\"connection\":{{\"server-name\":\"remote\",\"endpoint\":\"stdio://?command={command}\"}}}}"),
             channel,
             Ct());
 
         Assert.NotNull(handle);
+        channel.CloseInbound();
 
-        // Disposing twice is safe and never hangs (the relay is cancelled on the first disposal).
+        await executor.Handle.DisposedTask;
+        await channel.DisposedTask;
+        Assert.Equal(
+            ["channel-close", "process-dispose", "channel-dispose"],
+            events);
+
         await handle!.DisposeAsync();
         await handle.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task HostSession_RelayAndChannelDisposeFaults_PreservesSanitizedRelayFailure()
+    {
+        var relayFailure = new IOException(@"C:\secret\relay --token sensitive");
+        var disposeFailure = new InvalidOperationException("secret channel cleanup");
+        var delegatedMessages = Channel.CreateUnbounded<JsonRpcMessage>();
+        delegatedMessages.Writer.TryComplete(relayFailure);
+        var delegated = new ProtocolTransport(delegatedMessages.Reader);
+        var incoming = new ProtocolTransport(
+            Channel.CreateUnbounded<JsonRpcMessage>().Reader,
+            disposeFailure);
+        var server = new DelegatingMcpServer(
+            new SingleClientTransport(delegated),
+            delegated);
+        using var cts = new CancellationTokenSource();
+        var relay = server.RunAsync(incoming, cts.Token);
+        var logger = new TestLogger<RemoteMcpHostHandler>();
+        await using var session = new RemoteMcpHostHandler.HostSession(
+            server,
+            incoming,
+            cts,
+            relay,
+            logger);
+
+        var thrown = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => session.DisposeAsync().AsTask());
+
+        Assert.Equal("Remote MCP relay failed.", thrown.Message);
+        Assert.DoesNotContain("secret", thrown.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            logger.Entries,
+            entry => entry.Level == LogLevel.Error
+                     && entry.Message.Contains("Remote MCP relay failed", StringComparison.Ordinal));
+        Assert.Contains(
+            logger.Entries,
+            entry => entry.Level == LogLevel.Warning
+                     && entry.Message.Contains("incoming-channel cleanup", StringComparison.Ordinal));
+        Assert.All(
+            logger.Entries,
+            entry => Assert.DoesNotContain("secret", entry.Message, StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -398,6 +456,12 @@ public sealed class RemoteMcpHostHandlerTests
         }
     }
 
+    private sealed class OrderedProcessExecutor(List<string> events) : IProcessExecutor
+    {
+        public StubProcessHandle Handle { get; } = new(events);
+        public IProcessHandle Start(ProcessExecutionRequest request) => this.Handle;
+    }
+
     private sealed class CancelAwareProcessExecutor : IProcessExecutor
     {
         public TaskCompletionSource Started { get; } =
@@ -429,10 +493,21 @@ public sealed class RemoteMcpHostHandlerTests
     {
         private readonly TaskCompletionSource<ProcessExitResult> exit =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource disposed =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly BlockingReadStream stdout = new();
+        private readonly List<string>? events;
+
+        public StubProcessHandle(List<string>? events = null)
+        {
+            this.events = events;
+        }
+
         public int DisposeCount { get; private set; }
+        public Task DisposedTask => this.disposed.Task;
 
         public Stream StandardInput { get; } = new MemoryStream();
-        public Stream StandardOutput { get; } = new MemoryStream();
+        public Stream StandardOutput => this.stdout;
         public Stream StandardError { get; } = new MemoryStream();
         public ProcessLaunchInfo LaunchInfo { get; } = new()
         {
@@ -456,11 +531,18 @@ public sealed class RemoteMcpHostHandlerTests
         };
         public Task<ProcessExitResult> WaitAsync(CancellationToken cancellationToken = default)
             => exit.Task.WaitAsync(cancellationToken);
-        public void Kill() => exit.TrySetResult(ProcessExitResult.Create(-1, false, null));
+        public void Kill()
+        {
+            this.stdout.Complete();
+            exit.TrySetResult(ProcessExitResult.Create(-1, false, null));
+        }
         public ValueTask DisposeAsync()
         {
             DisposeCount++;
+            this.events?.Add("process-dispose");
+            this.stdout.Complete();
             exit.TrySetResult(ProcessExitResult.Create(0, false, null));
+            this.disposed.TrySetResult();
             return ValueTask.CompletedTask;
         }
     }
@@ -473,20 +555,80 @@ public sealed class RemoteMcpHostHandlerTests
 
     private static CancellationToken Ct() => new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token;
 
-    private sealed class StubMessageChannel : IMessageChannel
+    private sealed class StubMessageChannel(List<string>? events = null) : IMessageChannel
     {
         private readonly Channel<JsonElement> reader = Channel.CreateUnbounded<JsonElement>();
         private readonly Channel<JsonElement> writer = Channel.CreateUnbounded<JsonElement>();
+        private readonly TaskCompletionSource disposed =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task DisposedTask => this.disposed.Task;
 
         public ChannelReader<JsonElement> Reader => this.reader.Reader;
 
         public ChannelWriter<JsonElement> Writer => this.writer.Writer;
 
+        public void CloseInbound()
+        {
+            events?.Add("channel-close");
+            this.reader.Writer.TryComplete();
+        }
+
         public ValueTask DisposeAsync()
         {
+            events?.Add("channel-dispose");
             this.reader.Writer.TryComplete();
             this.writer.Writer.TryComplete();
+            this.disposed.TrySetResult();
             return ValueTask.CompletedTask;
         }
+    }
+
+    private sealed class SingleClientTransport(McpTransport transport)
+        : ModelContextProtocol.Client.IClientTransport
+    {
+        public string Name => "single";
+        public Task<McpTransport> ConnectAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(transport);
+    }
+
+    private sealed class ProtocolTransport(
+        ChannelReader<JsonRpcMessage> reader,
+        Exception? disposeFailure = null) : McpTransport
+    {
+        public string? SessionId => null;
+        public ChannelReader<JsonRpcMessage> MessageReader => reader;
+        public Task SendMessageAsync(
+            JsonRpcMessage message,
+            CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public ValueTask DisposeAsync() =>
+            disposeFailure is null
+                ? ValueTask.CompletedTask
+                : ValueTask.FromException(disposeFailure);
+    }
+
+    private sealed class BlockingReadStream : Stream
+    {
+        private readonly TaskCompletionSource completed =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void Complete() => this.completed.TrySetResult();
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            await this.completed.Task.WaitAsync(cancellationToken);
+            return 0;
+        }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 }

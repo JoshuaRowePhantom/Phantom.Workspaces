@@ -1,4 +1,7 @@
+using System.Runtime.ExceptionServices;
 using System.Threading.Channels;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using ModelContextProtocol.Protocol;
 using Phantom.Workspaces.Llm.Processes;
 
@@ -19,11 +22,14 @@ internal sealed class ProcessOwnedMcpTransport : ITransport
     private readonly CancellationTokenSource drainCts;
     private readonly Task<ProcessExitResult> exitTask;
     private readonly string name;
+    private readonly ILogger logger;
     private readonly Channel<JsonRpcMessage> messages = Channel.CreateUnbounded<JsonRpcMessage>(
         new UnboundedChannelOptions { SingleReader = false, SingleWriter = true });
     private readonly Task messagePump;
     private readonly object cleanupGate = new();
+    private readonly HashSet<Task> reportedCleanupFailures = [];
     private Task? innerDisposal;
+    private Task? processTermination;
     private Task? processDisposal;
     private ProcessExitResult? completedExitResult;
     private int closed;
@@ -35,7 +41,8 @@ internal sealed class ProcessOwnedMcpTransport : ITransport
         ProcessExecutorBackedClientTransport.StderrDrainer stderrDrainer,
         CancellationTokenSource drainCts,
         Task<ProcessExitResult> exitTask,
-        string name)
+        string name,
+        ILogger? logger = null)
     {
         this.inner = inner;
         this.handle = handle;
@@ -43,6 +50,7 @@ internal sealed class ProcessOwnedMcpTransport : ITransport
         this.drainCts = drainCts;
         this.exitTask = exitTask;
         this.name = name;
+        this.logger = logger ?? NullLogger.Instance;
         this.messagePump = this.PumpMessagesAsync();
     }
 
@@ -61,7 +69,18 @@ internal sealed class ProcessOwnedMcpTransport : ITransport
         if (!sendTask.IsCompletedSuccessfully)
         {
             Interlocked.Exchange(ref closed, 1);
-            await ObserveAsync(DisposeProcessOnceAsync()).ConfigureAwait(false);
+            await CaptureFailureAsync(
+                TerminateProcessOnceAsync(),
+                "terminating the MCP stdio process tree after a send failure").ConfigureAwait(false);
+            await CaptureFailureAsync(
+                exitTask,
+                "joining MCP process exit after a send failure").ConfigureAwait(false);
+            await CaptureFailureAsync(
+                stderrDrainer.PumpTask,
+                "draining MCP stderr after a send failure").ConfigureAwait(false);
+            await CaptureFailureAsync(
+                DisposeProcessOnceAsync(),
+                "disposing the MCP stdio process tree after a send failure").ConfigureAwait(false);
         }
 
         await sendTask.ConfigureAwait(false);
@@ -69,94 +88,135 @@ internal sealed class ProcessOwnedMcpTransport : ITransport
 
     private async Task PumpMessagesAsync()
     {
-        while (Volatile.Read(ref disposed) == 0)
+        Exception? readerFailure = null;
+        ProcessExitResult? exitResult = null;
+        var stdoutEof = false;
+        while (true)
         {
-            if (exitTask.IsCompleted)
-            {
-                await CompleteFromExitAsync().ConfigureAwait(false);
-                return;
-            }
-
             var messageReady = inner.MessageReader.WaitToReadAsync(drainCts.Token).AsTask();
             var completed = await Task.WhenAny(messageReady, exitTask).ConfigureAwait(false);
             if (completed == exitTask)
             {
-                await CompleteFromExitAsync().ConfigureAwait(false);
-                return;
+                exitResult = await CaptureExitResultAsync().ConfigureAwait(false);
+                readerFailure = await DrainInnerReaderAsync().ConfigureAwait(false);
+                break;
             }
 
             if (messageReady.IsCanceled)
             {
-                messages.Writer.TryComplete();
-                return;
+                readerFailure = new OperationCanceledException(
+                    $"MCP stdio server '{name}' message reader was cancelled.");
+                break;
             }
             if (messageReady.IsFaulted)
             {
-                await ObserveAsync(DisposeProcessOnceAsync()).ConfigureAwait(false);
-                messages.Writer.TryComplete(GetTaskException(messageReady));
-                return;
+                readerFailure = GetTaskException(messageReady);
+                break;
             }
             if (!await messageReady.ConfigureAwait(false))
             {
                 Interlocked.Exchange(ref closed, 1);
-                await CompleteFromExitAsync().ConfigureAwait(false);
-                return;
+                stdoutEof = true;
+                break;
             }
 
-            while (inner.MessageReader.TryRead(out var message))
-            {
-                if (!messages.Writer.TryWrite(message))
-                    return;
-            }
+            if (!DrainAvailableMessages())
+                return;
         }
 
-        messages.Writer.TryComplete();
+        Interlocked.Exchange(ref closed, 1);
+        var terminationFailure = await CaptureFailureAsync(
+            TerminateProcessOnceAsync(),
+            "terminating the MCP stdio process tree").ConfigureAwait(false);
+        if (terminationFailure is not null)
+        {
+            await CaptureFailureAsync(
+                drainCts.CancelAsync(),
+                "cancelling MCP exit monitoring after process termination failed").ConfigureAwait(false);
+        }
+        exitResult ??= await CaptureExitResultAsync().ConfigureAwait(false);
+        var drainerFailure = await CaptureFailureAsync(
+            stderrDrainer.PumpTask,
+            "draining MCP stderr").ConfigureAwait(false);
+        var processFailure = await CaptureFailureAsync(
+            DisposeProcessOnceAsync(),
+            "disposing the MCP stdio process tree").ConfigureAwait(false);
+        var innerFailure = await CaptureFailureAsync(
+            DisposeInnerOnceAsync(),
+            "disposing the MCP SDK transport").ConfigureAwait(false);
+
+        var failure = readerFailure
+                      ?? terminationFailure
+                      ?? processFailure
+                      ?? innerFailure
+                      ?? drainerFailure;
+        if (failure is null && exitTask.IsCanceled)
+        {
+            failure = new OperationCanceledException(
+                $"MCP stdio server '{name}' exit monitoring was cancelled.");
+        }
+        else if (failure is null && exitTask.IsFaulted)
+        {
+            failure = GetTaskException(exitTask);
+        }
+        else if (failure is null && !stdoutEof && exitResult is { ExitCode: not 0 } result)
+        {
+            var diagnostic = stderrDrainer.SnapshotRolling();
+            var suffix = string.IsNullOrWhiteSpace(diagnostic) ? string.Empty : $" Stderr: {diagnostic}";
+            failure = new IOException(
+                $"MCP stdio server '{name}' exited prematurely with code {result.ExitCode}.{suffix}");
+        }
+
+        messages.Writer.TryComplete(failure);
     }
 
-    private async Task CompleteFromExitAsync()
+    private bool DrainAvailableMessages()
     {
-        Interlocked.Exchange(ref closed, 1);
-        await Task.WhenAny(exitTask).ConfigureAwait(false);
         while (inner.MessageReader.TryRead(out var message))
         {
             if (!messages.Writer.TryWrite(message))
-                return;
+                return false;
         }
 
-        if (exitTask.IsCanceled)
+        return true;
+    }
+
+    private async Task<Exception?> DrainInnerReaderAsync()
+    {
+        while (true)
         {
-            await ObserveAsync(DisposeProcessOnceAsync()).ConfigureAwait(false);
-            messages.Writer.TryComplete(new OperationCanceledException(
-                $"MCP stdio server '{name}' exit monitoring was cancelled."));
-            return;
+            if (!DrainAvailableMessages())
+                return null;
+
+            var messageReady = inner.MessageReader.WaitToReadAsync(drainCts.Token).AsTask();
+            await Task.WhenAny(messageReady).ConfigureAwait(false);
+            if (messageReady.IsCanceled)
+            {
+                return new OperationCanceledException(
+                    $"MCP stdio server '{name}' message reader was cancelled.");
+            }
+            if (messageReady.IsFaulted)
+            {
+                return GetTaskException(messageReady);
+            }
+            if (!await messageReady.ConfigureAwait(false))
+            {
+                return null;
+            }
         }
-        if (exitTask.IsFaulted)
+    }
+
+    private async Task<ProcessExitResult?> CaptureExitResultAsync()
+    {
+        await Task.WhenAny(exitTask).ConfigureAwait(false);
+        if (exitTask.IsCompletedSuccessfully)
         {
-            await ObserveAsync(DisposeProcessOnceAsync()).ConfigureAwait(false);
-            messages.Writer.TryComplete(GetTaskException(exitTask));
-            return;
+            var result = await exitTask.ConfigureAwait(false);
+            completedExitResult = result;
+            return result;
         }
 
-        var result = await exitTask.ConfigureAwait(false);
-        completedExitResult = result;
-        var processCleanup = DisposeProcessOnceAsync();
-        await Task.WhenAny(processCleanup).ConfigureAwait(false);
-        if (!processCleanup.IsCompletedSuccessfully)
-        {
-            messages.Writer.TryComplete(GetTaskException(processCleanup));
-            return;
-        }
-        if (result.ExitCode == 0)
-        {
-            messages.Writer.TryComplete();
-            return;
-        }
-
-        await stderrDrainer.PumpTask.ConfigureAwait(false);
-        var diagnostic = stderrDrainer.SnapshotRolling();
-        var suffix = string.IsNullOrWhiteSpace(diagnostic) ? string.Empty : $" Stderr: {diagnostic}";
-        messages.Writer.TryComplete(new IOException(
-            $"MCP stdio server '{name}' exited prematurely with code {result.ExitCode}.{suffix}"));
+        return null;
     }
 
     private void ThrowIfClosed()
@@ -189,25 +249,47 @@ internal sealed class ProcessOwnedMcpTransport : ITransport
             return;
 
         Interlocked.Exchange(ref closed, 1);
-        try
+        var innerFailure = await CaptureFailureAsync(
+            DisposeInnerOnceAsync(),
+            "disposing the MCP SDK transport").ConfigureAwait(false);
+        var terminationFailure = await CaptureFailureAsync(
+            TerminateProcessOnceAsync(),
+            "terminating the MCP stdio process tree").ConfigureAwait(false);
+        Exception? cancellationFailure = null;
+        if (terminationFailure is not null)
         {
-            await DisposeInnerOnceAsync().ConfigureAwait(false);
+            cancellationFailure = await CaptureFailureAsync(
+                drainCts.CancelAsync(),
+                "cancelling MCP pipe drains after process termination failed").ConfigureAwait(false);
         }
-        finally
+        var exitFailure = await CaptureFailureAsync(
+            exitTask,
+            "joining MCP process exit").ConfigureAwait(false);
+        var drainerFailure = await CaptureFailureAsync(
+            stderrDrainer.PumpTask,
+            "draining MCP stderr").ConfigureAwait(false);
+        var processFailure = await CaptureFailureAsync(
+            DisposeProcessOnceAsync(),
+            "disposing the MCP stdio process tree").ConfigureAwait(false);
+        cancellationFailure ??= await CaptureFailureAsync(
+            drainCts.CancelAsync(),
+            "cancelling MCP pipe drains").ConfigureAwait(false);
+        var messagePumpFailure = await CaptureFailureAsync(
+            messagePump,
+            "joining the MCP message reader").ConfigureAwait(false);
+        messages.Writer.TryComplete();
+        drainCts.Dispose();
+
+        var primaryFailure = innerFailure
+                             ?? terminationFailure
+                             ?? processFailure
+                             ?? cancellationFailure
+                             ?? drainerFailure
+                             ?? exitFailure
+                             ?? messagePumpFailure;
+        if (primaryFailure is not null)
         {
-            try
-            {
-                await DisposeProcessOnceAsync().ConfigureAwait(false);
-            }
-            finally
-            {
-                await drainCts.CancelAsync().ConfigureAwait(false);
-                await ObserveAsync(stderrDrainer.PumpTask).ConfigureAwait(false);
-                await ObserveAsync(exitTask).ConfigureAwait(false);
-                await ObserveAsync(messagePump).ConfigureAwait(false);
-                messages.Writer.TryComplete();
-                drainCts.Dispose();
-            }
+            ExceptionDispatchInfo.Capture(primaryFailure).Throw();
         }
     }
 
@@ -215,7 +297,7 @@ internal sealed class ProcessOwnedMcpTransport : ITransport
     {
         lock (cleanupGate)
         {
-            return innerDisposal ??= inner.DisposeAsync().AsTask();
+            return innerDisposal ??= DisposeAsyncCore(inner);
         }
     }
 
@@ -223,14 +305,43 @@ internal sealed class ProcessOwnedMcpTransport : ITransport
     {
         lock (cleanupGate)
         {
-            return processDisposal ??= handle.DisposeAsync().AsTask();
+            return processDisposal ??= DisposeAsyncCore(handle);
         }
     }
 
-    private static async Task ObserveAsync(Task task)
+    private Task TerminateProcessOnceAsync()
+    {
+        lock (cleanupGate)
+        {
+            return processTermination ??= TerminateAsyncCore(handle);
+        }
+    }
+
+    private static async Task DisposeAsyncCore(IAsyncDisposable disposable) =>
+        await disposable.DisposeAsync().ConfigureAwait(false);
+
+    private static async Task TerminateAsyncCore(IProcessHandle processHandle) =>
+        await processHandle.TerminateAsync().ConfigureAwait(false);
+
+    private async Task<Exception?> CaptureFailureAsync(Task task, string operation)
     {
         await Task.WhenAny(task).ConfigureAwait(false);
-        _ = task.Exception;
+        if (!task.IsFaulted)
+            return null;
+
+        var failure = GetTaskException(task);
+        lock (cleanupGate)
+        {
+            if (!reportedCleanupFailures.Add(task))
+                return failure;
+        }
+
+        logger.LogWarning(
+            "Secondary cleanup failure while {Operation} for MCP stdio server '{Name}': {FailureType}.",
+            operation,
+            name,
+            failure.GetType().Name);
+        return failure;
     }
 
     private static Exception GetTaskException(Task task) =>

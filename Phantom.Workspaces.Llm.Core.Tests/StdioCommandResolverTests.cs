@@ -15,40 +15,30 @@ public sealed class StdioCommandResolverTests
         if (!OperatingSystem.IsWindows())
             return;
 
-        var tempDir = Directory.CreateTempSubdirectory("phantom-stdio-cmd-shim-").FullName;
+        var tempDir = CreateTestDirectory("cmd-shim");
         try
         {
             // Create a .cmd shim on a synthetic PATH so the resolver picks it up deterministically.
             var shimPath = Path.Combine(tempDir, "myshim.cmd");
             File.WriteAllText(shimPath, "@echo off\n");
+            var environment = new StdioCommandResolver.ResolverEnvironment(
+                tempDir,
+                ".COM;.EXE;.BAT;.CMD",
+                @"C:\Windows\System32\cmd.exe");
 
-            var originalPath = Environment.GetEnvironmentVariable("PATH");
-            var originalPathExt = Environment.GetEnvironmentVariable("PATHEXT");
-            try
-            {
-                Environment.SetEnvironmentVariable("PATH", tempDir);
-                Environment.SetEnvironmentVariable("PATHEXT", ".COM;.EXE;.BAT;.CMD");
-                Environment.SetEnvironmentVariable("ComSpec", @"C:\Windows\System32\cmd.exe");
+            var resolved = StdioCommandResolver.Resolve(
+                "myshim",
+                ["arg one", "arg\"two"],
+                environment);
 
-                var resolved = StdioCommandResolver.Resolve("myshim", ["arg one", "arg\"two"]);
-
-                Assert.EndsWith("cmd.exe", resolved.Executable, StringComparison.OrdinalIgnoreCase);
-                Assert.Equal(4, resolved.Arguments.Count);
-                Assert.Equal("/d", resolved.Arguments[0]);
-                Assert.Equal("/s", resolved.Arguments[1]);
-                Assert.Equal("/c", resolved.Arguments[2]);
-                // Whitespace-containing argument is quoted; embedded quotes are backslash-escaped
-                // (Windows CommandLineToArgvW round-trip).
-                Assert.Contains("\"arg one\"", resolved.Arguments[3]);
-                Assert.Contains("arg\\\"two", resolved.Arguments[3]);
-                // The shim itself is present in the composed command line.
-                Assert.Contains("myshim.cmd", resolved.Arguments[3]);
-            }
-            finally
-            {
-                Environment.SetEnvironmentVariable("PATH", originalPath);
-                Environment.SetEnvironmentVariable("PATHEXT", originalPathExt);
-            }
+            Assert.EndsWith("cmd.exe", resolved.Executable, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(4, resolved.Arguments.Count);
+            Assert.Equal("/d", resolved.Arguments[0]);
+            Assert.Equal("/s", resolved.Arguments[1]);
+            Assert.Equal("/c", resolved.Arguments[2]);
+            Assert.Contains("\"arg one\"", resolved.Arguments[3]);
+            Assert.Contains("arg\\\"two", resolved.Arguments[3]);
+            Assert.Contains("myshim.cmd", resolved.Arguments[3]);
         }
         finally
         {
@@ -59,24 +49,27 @@ public sealed class StdioCommandResolverTests
     [Fact]
     public void ResolveCommand_MissingCommand_Throws()
     {
-        var tempDir = Directory.CreateTempSubdirectory("phantom-stdio-missing-").FullName;
+        var tempDir = CreateTestDirectory("missing");
         try
         {
-            var originalPath = Environment.GetEnvironmentVariable("PATH");
-            try
-            {
-                Environment.SetEnvironmentVariable("PATH", tempDir);
-                Assert.Throws<FileNotFoundException>(
-                    () => StdioCommandResolver.Resolve("nonexistent-tool-xyz", []));
-            }
-            finally
-            {
-                Environment.SetEnvironmentVariable("PATH", originalPath);
-            }
+            var environment = new StdioCommandResolver.ResolverEnvironment(
+                tempDir,
+                ".COM;.EXE;.BAT;.CMD",
+                "cmd.exe");
+            Assert.Throws<FileNotFoundException>(
+                () => StdioCommandResolver.Resolve("nonexistent-tool-xyz", [], environment));
         }
         finally
         {
             try { Directory.Delete(tempDir, recursive: true); } catch { }
         }
+    }
+
+    private static string CreateTestDirectory(string suffix)
+    {
+        var path = Path.Combine(
+            AppContext.BaseDirectory,
+            $"stdio-command-resolver-{suffix}-{Guid.NewGuid():N}");
+        return Directory.CreateDirectory(path).FullName;
     }
 }

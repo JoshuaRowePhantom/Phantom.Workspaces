@@ -1,9 +1,11 @@
 using System;
+using System.Runtime.ExceptionServices;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using AgentSchema;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Mcp;
@@ -115,7 +117,9 @@ public sealed class RemoteMcpHostHandler
             var cts = new CancellationTokenSource();
             var relay = delegatingServer.RunAsync(incoming, cts.Token);
             ownershipTransferred = true;
-            return new HostSession(delegatingServer, incoming, cts, relay);
+            var logger = (this.loggerFactory ?? NullLoggerFactory.Instance)
+                .CreateLogger<RemoteMcpHostHandler>();
+            return new HostSession(delegatingServer, incoming, cts, relay, logger);
         }
         finally
         {
@@ -206,13 +210,14 @@ public sealed class RemoteMcpHostHandler
         return McpConnectionRequest.ToTool(request);
     }
 
-    private sealed class HostSession(
+    internal sealed class HostSession(
         DelegatingMcpServer delegatingServer,
         ModelContextProtocol.Protocol.ITransport incoming,
         CancellationTokenSource cts,
-        Task relay) : IAsyncDisposable
+        Task relay,
+        ILogger logger) : IAsyncDisposable
     {
-        private readonly Task relayCompletion = ObserveRelayAndCloseChannelAsync(relay, incoming);
+        private readonly Task relayCompletion = ObserveRelayAndCloseChannelAsync(relay, incoming, logger);
         private int disposed;
 
         public async ValueTask DisposeAsync()
@@ -222,28 +227,96 @@ public sealed class RemoteMcpHostHandler
                 return;
             }
 
-            await cts.CancelAsync().ConfigureAwait(false);
-            await relayCompletion.ConfigureAwait(false);
-            try
+            var cancellationFailure = await CaptureFailureAsync(
+                cts.CancelAsync()).ConfigureAwait(false);
+            var relayFailure = await CaptureFailureAsync(relayCompletion).ConfigureAwait(false);
+            var ownerFailure = await CaptureFailureAsync(
+                DisposeAsyncTask(delegatingServer)).ConfigureAwait(false);
+            cts.Dispose();
+
+            var primaryFailure = relayFailure ?? cancellationFailure ?? ownerFailure;
+            if (primaryFailure is not null)
             {
-                await delegatingServer.DisposeAsync().ConfigureAwait(false);
-            }
-            finally
-            {
-                cts.Dispose();
+                if (relayFailure is not null && ownerFailure is not null)
+                {
+                    LogSanitized(
+                        logger,
+                        LogLevel.Warning,
+                        ownerFailure,
+                        "Remote MCP owner cleanup also failed after the relay failure.");
+                }
+
+                ExceptionDispatchInfo.Capture(primaryFailure).Throw();
             }
         }
 
         private static async Task ObserveRelayAndCloseChannelAsync(
             Task relay,
-            ModelContextProtocol.Protocol.ITransport incoming)
+            ModelContextProtocol.Protocol.ITransport incoming,
+            ILogger logger)
         {
             await Task.WhenAny(relay).ConfigureAwait(false);
-            _ = relay.Exception;
+            var relayFailure = GetFailure(relay);
 
-            var closeTask = incoming.DisposeAsync().AsTask();
+            var closeTask = DisposeAsyncTask(incoming);
             await Task.WhenAny(closeTask).ConfigureAwait(false);
-            _ = closeTask.Exception;
+            var closeFailure = GetFailure(closeTask);
+            if (relayFailure is not null)
+            {
+                LogSanitized(
+                    logger,
+                    LogLevel.Error,
+                    relayFailure,
+                    "Remote MCP relay failed.");
+                if (closeFailure is not null)
+                {
+                    LogSanitized(
+                        logger,
+                        LogLevel.Warning,
+                        closeFailure,
+                        "Remote MCP incoming-channel cleanup also failed.");
+                }
+
+                throw new InvalidOperationException("Remote MCP relay failed.");
+            }
+            if (closeFailure is not null)
+            {
+                LogSanitized(
+                    logger,
+                    LogLevel.Error,
+                    closeFailure,
+                    "Remote MCP incoming-channel cleanup failed.");
+                throw new InvalidOperationException("Remote MCP incoming-channel cleanup failed.");
+            }
+        }
+
+        private static async Task<Exception?> CaptureFailureAsync(Task task)
+        {
+            await Task.WhenAny(task).ConfigureAwait(false);
+            return GetFailure(task);
+        }
+
+        private static async Task DisposeAsyncTask(IAsyncDisposable disposable) =>
+            await disposable.DisposeAsync().ConfigureAwait(false);
+
+        private static Exception? GetFailure(Task task) =>
+            task.IsFaulted
+                ? task.Exception?.GetBaseException()
+                  ?? new IOException("Remote MCP lifecycle operation failed.")
+                : null;
+
+        private static void LogSanitized(
+            ILogger logger,
+            LogLevel level,
+            Exception failure,
+            string message)
+        {
+            logger.Log(
+                level,
+                eventId: default,
+                state: $"{message} Failure type: {failure.GetType().Name}.",
+                exception: null,
+                static (state, _) => state);
         }
     }
 }

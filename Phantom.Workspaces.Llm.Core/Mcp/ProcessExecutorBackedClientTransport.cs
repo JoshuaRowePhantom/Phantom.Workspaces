@@ -25,6 +25,8 @@ public sealed class ProcessExecutorBackedClientTransport : IClientTransport, IAs
     private readonly IProcessExecutor executor;
     private readonly ILoggerFactory loggerFactory;
     private readonly ILogger logger;
+    private readonly Func<Stream, Stream, ILoggerFactory, CancellationToken, Task<ITransport>>
+        connectStreamTransport;
     private readonly CancellationTokenSource lifetimeCancellation = new();
     private readonly object lifecycleGate = new();
 
@@ -38,6 +40,16 @@ public sealed class ProcessExecutorBackedClientTransport : IClientTransport, IAs
         ProcessExecutionRequest request,
         IProcessExecutor executor,
         ILoggerFactory? loggerFactory)
+        : this(name, request, executor, loggerFactory, ConnectStreamTransportAsync)
+    {
+    }
+
+    internal ProcessExecutorBackedClientTransport(
+        string name,
+        ProcessExecutionRequest request,
+        IProcessExecutor executor,
+        ILoggerFactory? loggerFactory,
+        Func<Stream, Stream, ILoggerFactory, CancellationToken, Task<ITransport>> connectStreamTransport)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentNullException.ThrowIfNull(request);
@@ -48,6 +60,8 @@ public sealed class ProcessExecutorBackedClientTransport : IClientTransport, IAs
         this.executor = executor;
         this.loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
         this.logger = this.loggerFactory.CreateLogger<ProcessExecutorBackedClientTransport>();
+        this.connectStreamTransport = connectStreamTransport
+                                      ?? throw new ArgumentNullException(nameof(connectStreamTransport));
     }
 
     /// <inheritdoc/>
@@ -92,18 +106,19 @@ public sealed class ProcessExecutorBackedClientTransport : IClientTransport, IAs
             stderrDrainer = new StderrDrainer(handle.StandardError, logger, Name, drainCts.Token);
             exitTask = handle.WaitAsync(drainCts.Token);
 
-            var streamTransport = new StreamClientTransport(
+            inner = await connectStreamTransport(
                 handle.StandardInput,
                 handle.StandardOutput,
-                loggerFactory);
-            inner = await streamTransport.ConnectAsync(lifetimeToken).ConfigureAwait(false);
+                loggerFactory,
+                lifetimeToken).ConfigureAwait(false);
             ownedTransport = new ProcessOwnedMcpTransport(
                 inner,
                 handle,
                 stderrDrainer,
                 drainCts,
                 exitTask,
-                Name);
+                Name,
+                logger);
 
             lock (lifecycleGate)
             {
@@ -120,32 +135,44 @@ public sealed class ProcessExecutorBackedClientTransport : IClientTransport, IAs
             {
                 if (ownedTransport is not null)
                 {
-                    await ownedTransport.DisposeAsync().ConfigureAwait(false);
+                    await ObserveCleanupAsync(
+                        DisposeAsyncTask(ownedTransport),
+                        "disposing the partially connected MCP transport").ConfigureAwait(false);
                 }
                 else
                 {
                     if (inner is not null)
                     {
-                        await inner.DisposeAsync().ConfigureAwait(false);
+                        await ObserveCleanupAsync(
+                            DisposeAsyncTask(inner),
+                            "disposing the MCP SDK transport after startup failed").ConfigureAwait(false);
                     }
 
                     if (handle is not null)
                     {
-                        await handle.DisposeAsync().ConfigureAwait(false);
+                        await ObserveCleanupAsync(
+                            DisposeAsyncTask(handle),
+                            "disposing the MCP process tree after startup failed").ConfigureAwait(false);
                     }
 
                     if (drainCts is not null)
                     {
-                        await drainCts.CancelAsync().ConfigureAwait(false);
+                        await ObserveCleanupAsync(
+                            drainCts.CancelAsync(),
+                            "cancelling MCP pipe drains after startup failed").ConfigureAwait(false);
                     }
 
                     if (stderrDrainer is not null)
                     {
-                        await ObserveAsync(stderrDrainer.PumpTask).ConfigureAwait(false);
+                        await ObserveCleanupAsync(
+                            stderrDrainer.PumpTask,
+                            "joining the MCP stderr drainer after startup failed").ConfigureAwait(false);
                     }
                     if (exitTask is not null)
                     {
-                        await ObserveAsync(exitTask).ConfigureAwait(false);
+                        await ObserveCleanupAsync(
+                            exitTask,
+                            "joining MCP process exit after startup failed").ConfigureAwait(false);
                     }
 
                     drainCts?.Dispose();
@@ -194,6 +221,34 @@ public sealed class ProcessExecutorBackedClientTransport : IClientTransport, IAs
     {
         await Task.WhenAny(task).ConfigureAwait(false);
         _ = task.Exception;
+    }
+
+    private async Task ObserveCleanupAsync(Task task, string operation)
+    {
+        await Task.WhenAny(task).ConfigureAwait(false);
+        if (!task.IsFaulted)
+            return;
+
+        var failure = task.Exception?.GetBaseException()
+                      ?? new IOException("MCP cleanup failed.");
+        logger.LogWarning(
+            "Secondary cleanup failure while {Operation} for MCP stdio server '{Name}': {FailureType}.",
+            operation,
+            Name,
+            failure.GetType().Name);
+    }
+
+    private static async Task DisposeAsyncTask(IAsyncDisposable disposable) =>
+        await disposable.DisposeAsync().ConfigureAwait(false);
+
+    private static Task<ITransport> ConnectStreamTransportAsync(
+        Stream input,
+        Stream output,
+        ILoggerFactory loggerFactory,
+        CancellationToken cancellationToken)
+    {
+        var streamTransport = new StreamClientTransport(input, output, loggerFactory);
+        return streamTransport.ConnectAsync(cancellationToken);
     }
 
     /// <summary>Drains child stderr into the logger and a bounded rolling diagnostic buffer.</summary>

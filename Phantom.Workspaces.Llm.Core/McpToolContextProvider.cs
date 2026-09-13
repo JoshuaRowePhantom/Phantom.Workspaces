@@ -81,7 +81,8 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
         JsonElement? boundExecutor,
         ExecutorTargetRouter? router,
         Func<CancellationToken, Task<AITool[]>>? initializeOverride,
-        AgentExecutionTrustContext? trustContext = null)
+        AgentExecutionTrustContext? trustContext = null,
+        IAsyncDisposable? ownedTransportOverride = null)
         : base(null, null, null)
     {
         this.tool = tool;
@@ -92,6 +93,7 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
         this.trustContext = trustContext;
         this.ExecutorTarget = executorTarget;
         this.initializeToolsAsync = initializeOverride ?? this.ConnectAndListToolsAsync;
+        this.connectedClientTransport = ownedTransportOverride;
     }
 
     /// <summary>

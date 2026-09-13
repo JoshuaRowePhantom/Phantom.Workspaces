@@ -106,6 +106,103 @@ public sealed class DelegatingMcpServerTests
         Assert.Equal(1, owner.DisposeCount);
     }
 
+    [Fact]
+    public async Task RunAsync_SequentialReuse_DisposesEachRunTransportExactlyOnce()
+    {
+        var first = new RelayTransport(Channel.CreateUnbounded<JsonRpcMessage>().Reader);
+        var second = new RelayTransport(Channel.CreateUnbounded<JsonRpcMessage>().Reader);
+        var owner = new QueueClientTransport(first, second);
+        await using var server = new DelegatingMcpServer(owner);
+
+        await RunUntilIncomingEofAsync(server);
+        await RunUntilIncomingEofAsync(server);
+
+        Assert.Equal(2, owner.ConnectCount);
+        Assert.Equal(1, first.DisposeCount);
+        Assert.Equal(1, second.DisposeCount);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RunAsync_RelayFault_CancelsAndJoinsPeerBeforePropagating(bool incomingToDelegated)
+    {
+        var failure = new IOException(incomingToDelegated ? "incoming fault" : "delegated fault");
+        var blockingReader = new CancellationObservingReader();
+        var source = Channel.CreateUnbounded<JsonRpcMessage>();
+        source.Writer.TryWrite(new JsonRpcNotification { Method = "fault" });
+
+        var incoming = incomingToDelegated
+            ? new RelayTransport(source.Reader)
+            : new RelayTransport(blockingReader, (_, _) => Task.FromException(failure));
+        var delegated = incomingToDelegated
+            ? new RelayTransport(blockingReader, (_, _) => Task.FromException(failure))
+            : new RelayTransport(source.Reader);
+        await using var server = new DelegatingMcpServer(new InMemoryClientTransport(delegated));
+
+        var thrown = await Assert.ThrowsAsync<IOException>(
+            () => server.RunAsync(incoming, CancellationToken.None));
+
+        Assert.Same(failure, thrown);
+        Assert.True(blockingReader.CancellationObserved.Task.IsCompletedSuccessfully);
+        Assert.Equal(1, delegated.DisposeCount);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RunAsync_DualRelayFault_PreservesPrimaryAndObservesSecondary(bool incomingToDelegated)
+    {
+        var primary = new IOException("primary relay");
+        var secondary = new InvalidOperationException("secondary relay");
+        var peerStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var peerCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var incomingMessages = Channel.CreateUnbounded<JsonRpcMessage>();
+        var delegatedMessages = Channel.CreateUnbounded<JsonRpcMessage>();
+        incomingMessages.Writer.TryWrite(new JsonRpcNotification { Method = "incoming" });
+        delegatedMessages.Writer.TryWrite(new JsonRpcNotification { Method = "delegated" });
+
+        async Task PrimarySend(JsonRpcMessage _, CancellationToken cancellationToken)
+        {
+            await peerStarted.Task.WaitAsync(cancellationToken);
+            throw primary;
+        }
+
+        async Task SecondarySend(JsonRpcMessage _, CancellationToken cancellationToken)
+        {
+            peerStarted.TrySetResult();
+            var cancellation = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            using var registration = cancellationToken.Register(() => cancellation.TrySetResult());
+            await cancellation.Task;
+            peerCompleted.TrySetResult();
+            throw secondary;
+        }
+
+        var incoming = new RelayTransport(
+            incomingMessages.Reader,
+            incomingToDelegated ? SecondarySend : PrimarySend);
+        var delegated = new RelayTransport(
+            delegatedMessages.Reader,
+            incomingToDelegated ? PrimarySend : SecondarySend);
+        await using var server = new DelegatingMcpServer(new InMemoryClientTransport(delegated));
+
+        var thrown = await Assert.ThrowsAsync<IOException>(
+            () => server.RunAsync(incoming, CancellationToken.None));
+
+        Assert.Same(primary, thrown);
+        Assert.True(peerCompleted.Task.IsCompletedSuccessfully);
+        Assert.Equal(1, delegated.DisposeCount);
+    }
+
+    private static async Task RunUntilIncomingEofAsync(DelegatingMcpServer server)
+    {
+        var incomingChannel = Channel.CreateUnbounded<JsonRpcMessage>();
+        incomingChannel.Writer.TryComplete();
+        var incoming = new RelayTransport(incomingChannel.Reader);
+        await server.RunAsync(incoming, CancellationToken.None);
+    }
+
     private static async Task<JsonRpcMessage> ReadMessageAsync(
         ChannelReader<JsonRpcMessage> reader,
         CancellationToken cancellationToken)
@@ -144,6 +241,63 @@ public sealed class DelegatingMcpServerTests
         {
             DisposeCount++;
             return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class QueueClientTransport(params ITransport[] transports) : IClientTransport
+    {
+        private readonly Queue<ITransport> transports = new(transports);
+        public int ConnectCount { get; private set; }
+        public string Name => "queue";
+
+        public Task<ITransport> ConnectAsync(CancellationToken cancellationToken = default)
+        {
+            ConnectCount++;
+            return Task.FromResult(this.transports.Dequeue());
+        }
+    }
+
+    private sealed class RelayTransport(
+        ChannelReader<JsonRpcMessage> reader,
+        Func<JsonRpcMessage, CancellationToken, Task>? send = null) : ITransport
+    {
+        private int disposeCount;
+        public int DisposeCount => Volatile.Read(ref this.disposeCount);
+        public string? SessionId => null;
+        public ChannelReader<JsonRpcMessage> MessageReader => reader;
+
+        public Task SendMessageAsync(JsonRpcMessage message, CancellationToken cancellationToken = default) =>
+            send?.Invoke(message, cancellationToken) ?? Task.CompletedTask;
+
+        public ValueTask DisposeAsync()
+        {
+            Interlocked.Increment(ref this.disposeCount);
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class CancellationObservingReader : ChannelReader<JsonRpcMessage>
+    {
+        public TaskCompletionSource CancellationObserved { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override bool TryRead(out JsonRpcMessage item)
+        {
+            item = null!;
+            return false;
+        }
+
+        public override ValueTask<bool> WaitToReadAsync(CancellationToken cancellationToken = default)
+        {
+            var completion = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            cancellationToken.Register(
+                () =>
+                {
+                    this.CancellationObserved.TrySetResult();
+                    completion.TrySetCanceled(cancellationToken);
+                });
+            return new ValueTask<bool>(completion.Task);
         }
     }
 

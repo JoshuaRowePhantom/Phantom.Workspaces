@@ -110,7 +110,8 @@ public sealed class ProcessExecutorBackedClientTransportTests
     [Fact]
     public async Task PrematureNonzeroExit_DrainsFinalProtocolMessageBeforeFaulting()
     {
-        var inner = new StubTransport();
+        var boundaryReader = new BoundaryChannelReader();
+        var inner = new StubTransport(boundaryReader);
         var handle = new StubProcessHandle(seededStderr: null);
         using var drainCts = new CancellationTokenSource();
         var drainer = new ProcessExecutorBackedClientTransport.StderrDrainer(
@@ -127,8 +128,10 @@ public sealed class ProcessExecutorBackedClientTransportTests
             "test");
         var finalMessage = new JsonRpcNotification { Method = "final" };
 
-        inner.WriteAndComplete(finalMessage);
+        await boundaryReader.FirstWait.Task;
         handle.Exit(7, "failure");
+        await boundaryReader.ExitDrainWait.Task;
+        boundaryReader.PublishAndComplete(finalMessage);
 
         Assert.Same(finalMessage, await transport.MessageReader.ReadAsync());
         await Assert.ThrowsAsync<IOException>(async () => await transport.MessageReader.Completion);
@@ -280,15 +283,143 @@ public sealed class ProcessExecutorBackedClientTransportTests
             drainCts,
             handle.WaitAsync(),
             "test");
-
         inner.Complete();
-        handle.Exit(0, string.Empty);
+        inner.Complete();
 
         await transport.MessageReader.Completion;
         await handle.DisposedTask;
         Assert.Equal(1, handle.DisposeCount);
         await transport.DisposeAsync();
         Assert.Equal(1, handle.DisposeCount);
+    }
+
+    [Fact]
+    public async Task ProcessExit_DrainsFinalFramePublishedAtReaderBoundary()
+    {
+        var boundaryReader = new BoundaryChannelReader();
+        var inner = new StubTransport(boundaryReader);
+        var handle = new StubProcessHandle(seededStderr: null);
+        using var drainCts = new CancellationTokenSource();
+        var drainer = new ProcessExecutorBackedClientTransport.StderrDrainer(
+            handle.StandardError,
+            NullLogger.Instance,
+            "test",
+            drainCts.Token);
+        var transport = new ProcessOwnedMcpTransport(
+            inner,
+            handle,
+            drainer,
+            drainCts,
+            handle.WaitAsync(),
+            "test");
+        var finalMessage = new JsonRpcNotification { Method = "final-boundary" };
+
+        await boundaryReader.FirstWait.Task;
+        handle.Exit(0, string.Empty);
+        await boundaryReader.ExitDrainWait.Task;
+        boundaryReader.PublishAndComplete(finalMessage);
+
+        Assert.Same(finalMessage, await transport.MessageReader.ReadAsync());
+        await transport.MessageReader.Completion;
+        Assert.Equal(1, handle.DisposeCount);
+        await transport.DisposeAsync();
+    }
+
+    [Theory]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, true, true)]
+    public async Task DisposeAsync_CleanupFailures_PreservesFirstAndObservesAll(
+        bool innerFails,
+        bool handleFails,
+        bool drainerFails)
+    {
+        var innerFailure = new InvalidOperationException("inner cleanup");
+        var handleFailure = new IOException("handle cleanup");
+        var drainerFailure = new NotSupportedException("drainer cleanup");
+        var inner = new StubTransport
+        {
+            DisposeException = innerFails ? innerFailure : null,
+        };
+        var handle = new StubProcessHandle(
+            seededStderr: null,
+            disposeException: handleFails ? handleFailure : null,
+            standardError: drainerFails ? new FaultingReadStream(drainerFailure) : null);
+        using var drainCts = new CancellationTokenSource();
+        var loggerFactory = new CapturingLoggerFactory();
+        var drainer = new ProcessExecutorBackedClientTransport.StderrDrainer(
+            handle.StandardError,
+            loggerFactory.CreateLogger("test"),
+            "test",
+            drainCts.Token);
+        var transport = new ProcessOwnedMcpTransport(
+            inner,
+            handle,
+            drainer,
+            drainCts,
+            handle.WaitAsync(),
+            "test",
+            loggerFactory.CreateLogger("test"));
+        if (drainerFails)
+        {
+            await Task.WhenAny(drainer.PumpTask);
+            Assert.True(drainer.PumpTask.IsFaulted);
+        }
+
+        var thrown = await Record.ExceptionAsync(
+            () => transport.DisposeAsync().AsTask());
+
+        Assert.Same(
+            innerFails ? innerFailure : handleFails ? handleFailure : drainerFailure,
+            thrown);
+        Assert.Equal(1, handle.DisposeCount);
+        var failureCount = (innerFails ? 1 : 0) + (handleFails ? 1 : 0) + (drainerFails ? 1 : 0);
+        if (failureCount == 1 && innerFails)
+            Assert.Contains(loggerFactory.Entries, entry => entry.Message.Contains(nameof(InvalidOperationException)));
+        if (failureCount == 1 && handleFails)
+            Assert.Contains(loggerFactory.Entries, entry => entry.Message.Contains(nameof(IOException)));
+        if (failureCount == 1 && drainerFails)
+            Assert.Contains(loggerFactory.Entries, entry => entry.Message.Contains(nameof(NotSupportedException)));
+        if (failureCount > 1)
+            Assert.True(loggerFactory.Entries.Count >= 2);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task ConnectAsync_ProtocolFailure_IsNotReplacedByCleanupFailures(
+        bool handleFails,
+        bool drainerFails)
+    {
+        var protocolFailure = new InvalidDataException("protocol startup");
+        var executor = new StubProcessExecutor
+        {
+            NextHandle = new StubProcessHandle(
+                seededStderr: null,
+                disposeException: handleFails ? new IOException("handle cleanup") : null,
+                standardError: drainerFails
+                    ? new FaultingReadStream(new NotSupportedException("drainer cleanup"))
+                    : null),
+        };
+        var loggerFactory = new CapturingLoggerFactory();
+        var transport = new ProcessExecutorBackedClientTransport(
+            "test",
+            new ProcessExecutionRequest("some.exe"),
+            executor,
+            loggerFactory,
+            (_, _, _, _) => Task.FromException<ITransport>(protocolFailure));
+
+        var thrown = await Assert.ThrowsAsync<InvalidDataException>(
+            () => transport.ConnectAsync());
+
+        Assert.Same(protocolFailure, thrown);
+        Assert.Equal(1, executor.LastHandle!.DisposeCount);
+        Assert.Equal(
+            (handleFails ? 1 : 0) + (drainerFails ? 1 : 0),
+            loggerFactory.Entries.Count(entry => entry.Level == Microsoft.Extensions.Logging.LogLevel.Warning));
     }
 
     // Stub IProcessExecutor whose IProcessHandle exposes disconnected pipes so the SDK's
@@ -299,6 +430,7 @@ public sealed class ProcessExecutorBackedClientTransportTests
         public int StartCount { get; private set; }
         public StubProcessHandle? LastHandle { get; private set; }
         public List<StubProcessHandle> Handles { get; } = [];
+        public StubProcessHandle? NextHandle { get; init; }
 
         public void SeedStderr(byte[] bytes) => pendingStderr = bytes;
 
@@ -310,7 +442,7 @@ public sealed class ProcessExecutorBackedClientTransportTests
             if (StartException is not null)
                 throw StartException;
 
-            LastHandle = new StubProcessHandle(pendingStderr);
+            LastHandle = NextHandle ?? new StubProcessHandle(pendingStderr);
             Handles.Add(LastHandle);
             pendingStderr = null;
             return LastHandle;
@@ -354,13 +486,22 @@ public sealed class ProcessExecutorBackedClientTransportTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource disposed =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly Exception? disposeException;
         private int disposeCount;
 
-        public StubProcessHandle(byte[]? seededStderr)
+        public StubProcessHandle(
+            byte[]? seededStderr,
+            Exception? disposeException = null,
+            Stream? standardError = null)
         {
-            stderr.ReadObserved = () => stderrRead.TrySetResult();
-            if (seededStderr is not null)
-                stderr.WriteInitial(seededStderr);
+            this.disposeException = disposeException;
+            StandardError = standardError ?? stderr;
+            if (ReferenceEquals(StandardError, stderr))
+            {
+                stderr.ReadObserved = () => stderrRead.TrySetResult();
+                if (seededStderr is not null)
+                    stderr.WriteInitial(seededStderr);
+            }
             LaunchInfo = new ProcessLaunchInfo
             {
                 ProcessId = 1234,
@@ -384,10 +525,15 @@ public sealed class ProcessExecutorBackedClientTransportTests
         public Task StderrRead => stderrRead.Task;
         public Stream StandardInput => stdin;
         public Stream StandardOutput => stdout;
-        public Stream StandardError => stderr;
+        public Stream StandardError { get; }
         public ProcessLaunchInfo LaunchInfo { get; }
         public Task<ProcessExitResult> WaitAsync(CancellationToken cancellationToken = default) => exit.Task;
-        public void Kill() => exit.TrySetResult(ProcessExitResult.Create(-1, false, null));
+        public void Kill()
+        {
+            stderr.Complete();
+            stdout.Complete();
+            exit.TrySetResult(ProcessExitResult.Create(-1, false, null));
+        }
 
         public void Exit(int exitCode, string stderrText)
         {
@@ -406,18 +552,31 @@ public sealed class ProcessExecutorBackedClientTransportTests
             stdout.Complete();
             exit.TrySetResult(ProcessExitResult.Create(0, false, null));
             disposed.TrySetResult();
-            return ValueTask.CompletedTask;
+            return disposeException is null
+                ? ValueTask.CompletedTask
+                : ValueTask.FromException(disposeException);
         }
     }
 
     private sealed class StubTransport : ITransport
     {
         private readonly Channel<JsonRpcMessage> messages = Channel.CreateUnbounded<JsonRpcMessage>();
+        private readonly ChannelReader<JsonRpcMessage>? reader;
+
+        public StubTransport()
+        {
+        }
+
+        public StubTransport(ChannelReader<JsonRpcMessage> reader)
+        {
+            this.reader = reader;
+        }
 
         public Exception? SendException { get; init; }
+        public Exception? DisposeException { get; init; }
         public bool ThrowSynchronously { get; init; }
         public string? SessionId => null;
-        public ChannelReader<JsonRpcMessage> MessageReader => messages.Reader;
+        public ChannelReader<JsonRpcMessage> MessageReader => reader ?? messages.Reader;
         public Task SendMessageAsync(JsonRpcMessage message, CancellationToken cancellationToken = default)
         {
             if (ThrowSynchronously && SendException is not null)
@@ -430,7 +589,61 @@ public sealed class ProcessExecutorBackedClientTransportTests
             messages.Writer.TryComplete();
         }
         public void Complete() => messages.Writer.TryComplete();
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public ValueTask DisposeAsync()
+        {
+            messages.Writer.TryComplete();
+            return DisposeException is null
+                ? ValueTask.CompletedTask
+                : ValueTask.FromException(DisposeException);
+        }
+    }
+
+    private sealed class BoundaryChannelReader : ChannelReader<JsonRpcMessage>
+    {
+        private readonly Channel<JsonRpcMessage> channel = Channel.CreateUnbounded<JsonRpcMessage>();
+        private int waitCount;
+
+        public TaskCompletionSource FirstWait { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ExitDrainWait { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void PublishAndComplete(JsonRpcMessage message)
+        {
+            this.channel.Writer.TryWrite(message);
+            this.channel.Writer.TryComplete();
+        }
+
+        public override bool TryRead(out JsonRpcMessage item) =>
+            this.channel.Reader.TryRead(out item!);
+
+        public override ValueTask<bool> WaitToReadAsync(CancellationToken cancellationToken = default)
+        {
+            var count = Interlocked.Increment(ref this.waitCount);
+            if (count == 1)
+                this.FirstWait.TrySetResult();
+            else if (count == 2)
+                this.ExitDrainWait.TrySetResult();
+            return this.channel.Reader.WaitToReadAsync(cancellationToken);
+        }
+    }
+
+    private sealed class FaultingReadStream(Exception failure) : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() => throw new NotSupportedException();
+        public override int Read(byte[] buffer, int offset, int count) => throw failure;
+        public override ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromException<int>(failure);
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     // Simple pipe-like stream that supports async reads which block until bytes are written

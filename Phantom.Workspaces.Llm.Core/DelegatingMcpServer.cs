@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Threading.Channels;
+using System.Runtime.ExceptionServices;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 
@@ -11,8 +12,8 @@ public sealed class DelegatingMcpServer : IClientTransport, IAsyncDisposable
     private readonly McpClientOptions? delegatedClientOptions;
     private ITransport? preconnectedTransport;
     private readonly object syncLock = new();
-    private ITransport? activeDelegatedTransport;
-    private Task? activeTransportDisposal;
+    private readonly SemaphoreSlim runLock = new(1, 1);
+    private ActiveRun? activeRun;
     private int disposed;
 
     public DelegatingMcpServer(
@@ -52,39 +53,66 @@ public sealed class DelegatingMcpServer : IClientTransport, IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(incomingServerTransport);
+        await this.runLock.WaitAsync(cancellationToken).ConfigureAwait(false);
 
-        var delegatedTransport = await this.ConnectAsync(cancellationToken);
-        lock (this.syncLock)
-        {
-            this.activeDelegatedTransport = delegatedTransport;
-        }
-
+        ActiveRun? run = null;
+        Exception? relayFailure = null;
+        Exception? cleanupFailure = null;
         try
         {
-            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var delegatedTransport = await this.ConnectAsync(cancellationToken).ConfigureAwait(false);
+            run = new ActiveRun(delegatedTransport, cancellationToken);
+            lock (this.syncLock)
+            {
+                this.activeRun = run;
+            }
+
             var forwardIncoming = ForwardAsync(
                 incomingServerTransport.MessageReader,
                 delegatedTransport,
-                linkedCts.Token);
+                run.Cancellation.Token);
             var forwardDelegated = ForwardAsync(
                 delegatedTransport.MessageReader,
                 incomingServerTransport,
-                linkedCts.Token);
+                run.Cancellation.Token);
 
-            var completedTask = await Task.WhenAny(forwardIncoming, forwardDelegated);
-            if (completedTask.IsFaulted)
-            {
-                await completedTask;
-            }
+            var completedTask = await Task.WhenAny(forwardIncoming, forwardDelegated).ConfigureAwait(false);
+            var cancellationFailure = await CaptureFailureAsync(
+                run.Cancellation.CancelAsync()).ConfigureAwait(false);
+            var incomingFailure = await CaptureFailureAsync(forwardIncoming).ConfigureAwait(false);
+            var delegatedFailure = await CaptureFailureAsync(forwardDelegated).ConfigureAwait(false);
 
-            linkedCts.Cancel();
-            await Task.WhenAll(
-                SuppressCancellation(forwardIncoming),
-                SuppressCancellation(forwardDelegated));
+            var primaryFailure = ReferenceEquals(completedTask, forwardIncoming)
+                ? incomingFailure
+                : delegatedFailure;
+            var secondaryFailure = ReferenceEquals(completedTask, forwardIncoming)
+                ? delegatedFailure
+                : incomingFailure;
+            relayFailure = primaryFailure ?? secondaryFailure ?? cancellationFailure;
         }
         finally
         {
-            await this.DisposeActiveTransportAsync(delegatedTransport);
+            if (run is not null)
+            {
+                cleanupFailure = await CaptureFailureAsync(
+                    run.DisposeTransportAsync()).ConfigureAwait(false);
+                run.Cancellation.Dispose();
+                lock (this.syncLock)
+                {
+                    if (ReferenceEquals(this.activeRun, run))
+                    {
+                        this.activeRun = null;
+                    }
+                }
+            }
+
+            this.runLock.Release();
+        }
+
+        var failure = relayFailure ?? cleanupFailure;
+        if (failure is not null)
+        {
+            ExceptionDispatchInfo.Capture(failure).Throw();
         }
     }
 
@@ -95,15 +123,16 @@ public sealed class DelegatingMcpServer : IClientTransport, IAsyncDisposable
             return;
         }
 
-        ITransport? delegatedTransport;
+        ActiveRun? run;
         lock (this.syncLock)
         {
-            delegatedTransport = this.activeDelegatedTransport;
+            run = this.activeRun;
         }
 
-        if (delegatedTransport is not null)
+        if (run is not null)
         {
-            await this.DisposeActiveTransportAsync(delegatedTransport);
+            await run.Cancellation.CancelAsync().ConfigureAwait(false);
+            await run.DisposeTransportAsync().ConfigureAwait(false);
         }
         else if (Interlocked.Exchange(ref this.preconnectedTransport, null) is { } preconnected)
         {
@@ -116,22 +145,16 @@ public sealed class DelegatingMcpServer : IClientTransport, IAsyncDisposable
         }
     }
 
-    private Task DisposeActiveTransportAsync(ITransport transport)
+    private static async Task<Exception?> CaptureFailureAsync(Task task)
     {
-        lock (this.syncLock)
+        await Task.WhenAny(task).ConfigureAwait(false);
+        if (task.IsFaulted)
         {
-            if (this.activeTransportDisposal is not null)
-            {
-                return this.activeTransportDisposal;
-            }
-
-            if (ReferenceEquals(this.activeDelegatedTransport, transport))
-            {
-                this.activeDelegatedTransport = null;
-            }
-            this.activeTransportDisposal = transport.DisposeAsync().AsTask();
-            return this.activeTransportDisposal;
+            return task.Exception?.InnerException
+                   ?? new IOException("MCP relay failed.");
         }
+
+        return null;
     }
 
     private static async Task ForwardAsync(
@@ -145,16 +168,23 @@ public sealed class DelegatingMcpServer : IClientTransport, IAsyncDisposable
         }
     }
 
-    private static async Task SuppressCancellation(
-        Task task)
+    private sealed class ActiveRun(ITransport transport, CancellationToken cancellationToken)
     {
-        try
-        {
-            await task;
-        }
-        catch (OperationCanceledException)
-        {
-        }
-    }
+        private readonly object gate = new();
+        private Task? transportDisposal;
 
+        public CancellationTokenSource Cancellation { get; } =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+        public Task DisposeTransportAsync()
+        {
+            lock (this.gate)
+            {
+                return this.transportDisposal ??= DisposeTransportAsync(transport);
+            }
+        }
+
+        private static async Task DisposeTransportAsync(ITransport transport) =>
+            await transport.DisposeAsync().ConfigureAwait(false);
+    }
 }
