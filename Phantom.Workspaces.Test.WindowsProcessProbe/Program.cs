@@ -80,21 +80,23 @@ if (args.Length >= 4 && args[0] == "--timeout-parent")
     return 0;
 }
 
-if (args.Length >= 4 && args[0] == "--exiting-parent")
+if (args.Length >= 5 && args[0] == "--exiting-parent")
 {
-    using var descendantReady = EventWaitHandle.OpenExisting(args[1]);
-    using var parentRelease = args[2] == "-"
+    var launchId = args[1];
+    using var descendantReady = EventWaitHandle.OpenExisting(args[2]);
+    using var parentRelease = args[3] == "-"
         ? null
-        : EventWaitHandle.OpenExisting(args[2]);
+        : EventWaitHandle.OpenExisting(args[3]);
     using var descendant = Process.Start(new ProcessStartInfo
     {
         FileName = Environment.ProcessPath!,
         UseShellExecute = false,
         CreateNoWindow = true,
-        ArgumentList = { "--timeout-leaf", args[1], args[3] },
+        ArgumentList = { "--timeout-leaf", args[2], args[4] },
     }) ?? throw new InvalidOperationException("Retained-pipe descendant launch failed.");
     descendantReady.WaitOne();
-    Console.WriteLine($"EXITING_PARENT_DESCENDANT:{descendant.Id}");
+    Console.WriteLine(
+        $"EXITING_PARENT_READY:{launchId}:{Environment.ProcessId}:{descendant.Id}");
     Console.WriteLine("parent-stdout");
     Console.Error.WriteLine("parent-stderr");
     Console.Out.Flush();
@@ -701,6 +703,7 @@ static async Task<WindowsChildProcessProbeResult> RunProcessRunnerExitedParentTr
     WindowsLaunchMechanism mechanism,
     WindowsContainmentDescriptor? containment)
 {
+    var launchId = Guid.NewGuid().ToString("N");
     var descendantReadyName = $"Local\\PhantomRunnerDescendantReady-{Guid.NewGuid():N}";
     var parentReleaseName = $"Local\\PhantomRunnerParentRelease-{Guid.NewGuid():N}";
     var descendantReleaseName = $"Local\\PhantomRunnerDescendantRelease-{Guid.NewGuid():N}";
@@ -717,11 +720,15 @@ static async Task<WindowsChildProcessProbeResult> RunProcessRunnerExitedParentTr
         EventResetMode.ManualReset,
         descendantReleaseName);
     Process? descendant = null;
+    uint? observedParentId = null;
+    uint? observedDescendantId = null;
+    var readinessObserved = false;
     var run = ProcessRunner.RunProcessAsync(
         new RunProcessParameters(
             Environment.ProcessPath!,
             [
                 "--exiting-parent",
+                launchId,
                 descendantReadyName,
                 parentReleaseName,
                 descendantReleaseName,
@@ -733,14 +740,29 @@ static async Task<WindowsChildProcessProbeResult> RunProcessRunnerExitedParentTr
                 Observer = observer,
                 StandardOutputObserver = line =>
                 {
-                    if (!line.StartsWith("EXITING_PARENT_DESCENDANT:", StringComparison.Ordinal))
+                    if (!line.StartsWith("EXITING_PARENT_READY:", StringComparison.Ordinal))
                         return;
 
-                    var descendantId = int.Parse(
-                        line["EXITING_PARENT_DESCENDANT:".Length..],
-                        System.Globalization.CultureInfo.InvariantCulture);
-                    descendant = Process.GetProcessById(descendantId);
-                    parentRelease.Set();
+                    try
+                    {
+                        var fields = line.Split(':');
+                        if (fields.Length != 4
+                            || fields[1] != launchId
+                            || !uint.TryParse(fields[2], out var parentId)
+                            || !uint.TryParse(fields[3], out var descendantId))
+                        {
+                            return;
+                        }
+
+                        observedParentId = parentId;
+                        observedDescendantId = descendantId;
+                        descendant = Process.GetProcessById(checked((int)descendantId));
+                        readinessObserved = !descendant.HasExited;
+                    }
+                    finally
+                    {
+                        parentRelease.Set();
+                    }
                 },
             },
         });
@@ -757,7 +779,7 @@ static async Task<WindowsChildProcessProbeResult> RunProcessRunnerExitedParentTr
             result.ExitCode,
             result.StandardOut,
             result.StandardError,
-            ready: result.StandardOut.Contains("parent-stdout", StringComparison.Ordinal),
+            ready: readinessObserved,
             jobConfigured: observer.Succeeded(ProcessRunnerWindowsStage.ConfigureJob),
             jobAssigned: observer.Succeeded(ProcessRunnerWindowsStage.AssignJob),
             resumed: observer.Succeeded(ProcessRunnerWindowsStage.ResumeThread),
@@ -765,8 +787,10 @@ static async Task<WindowsChildProcessProbeResult> RunProcessRunnerExitedParentTr
             directProcessInJob: result.DirectProcessInJob,
             activeJobProcessesBeforeCleanup: result.ActiveJobProcessesBeforeCleanup,
             activeJobProcessesAfterCleanup: result.ActiveJobProcessesAfterCleanup,
+            directProcessId: observer.SingleProcessId,
+            descendantProcessId: observedDescendantId,
             cleanupCompleted: observer.AllResourcesReleased,
-            childExitObserved: true,
+            childExitObserved: observedParentId == observer.SingleProcessId,
             descendantExitObserved: descendant?.HasExited == true,
             processHandleClosed: observer.Released(ProcessRunnerWindowsResource.Process),
             threadHandleClosed: observer.Released(ProcessRunnerWindowsResource.Thread),
@@ -940,6 +964,8 @@ static WindowsChildProcessProbeResult Result(
     bool? directProcessInJob = null,
     uint? activeJobProcessesBeforeCleanup = null,
     uint? activeJobProcessesAfterCleanup = null,
+    uint? directProcessId = null,
+    uint? descendantProcessId = null,
     bool? cleanupCompleted = true,
     bool creationStatusAvailable = true,
     WindowsContainmentDescriptor? observedContainment = null,
@@ -981,6 +1007,8 @@ static WindowsChildProcessProbeResult Result(
     DirectProcessInJob = directProcessInJob,
     ActiveJobProcessesBeforeCleanup = activeJobProcessesBeforeCleanup,
     ActiveJobProcessesAfterCleanup = activeJobProcessesAfterCleanup,
+    DirectProcessId = directProcessId,
+    DescendantProcessId = descendantProcessId,
     CleanupCompleted = cleanupCompleted,
     ChildExitObserved = childExitObserved,
     DescendantExitObserved = descendantExitObserved,
@@ -1054,6 +1082,22 @@ internal sealed class ProcessRunnerRecordingObserver : IProcessRunnerWindowsObse
     private readonly List<ProcessRunnerWindowsEvent> events = [];
 
     public uint? ProcessId { get; private set; }
+
+    public uint? SingleProcessId
+    {
+        get
+        {
+            lock (gate)
+            {
+                var processIds = events
+                    .Where(processEvent => processEvent.Stage == ProcessRunnerWindowsStage.CreateProcess
+                        && processEvent.Succeeded)
+                    .Select(processEvent => processEvent.ProcessId)
+                    .ToArray();
+                return processIds.Length == 1 ? processIds[0] : null;
+            }
+        }
+    }
 
     public void Observe(ProcessRunnerWindowsEvent processEvent)
     {

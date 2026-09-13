@@ -94,6 +94,8 @@ public sealed record WindowsChildProcessProbeResult
     public bool? DirectProcessInJob { get; init; }
     public uint? ActiveJobProcessesBeforeCleanup { get; init; }
     public uint? ActiveJobProcessesAfterCleanup { get; init; }
+    public uint? DirectProcessId { get; init; }
+    public uint? DescendantProcessId { get; init; }
     public required bool? CleanupCompleted { get; init; }
     public required bool ChildExitObserved { get; init; }
     public required bool DescendantExitObserved { get; init; }

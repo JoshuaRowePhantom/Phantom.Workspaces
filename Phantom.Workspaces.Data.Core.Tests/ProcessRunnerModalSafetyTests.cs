@@ -159,13 +159,22 @@ public sealed class ProcessRunnerModalSafetyTests
         if (!OperatingSystem.IsWindows())
             return;
 
-        var result = await RunAsync(WindowsProbeScenario.ProcessRunnerExitedParentTree);
+        var results = await Task.WhenAll(Enumerable.Range(0, 4).Select(
+            _ => RunAsync(WindowsProbeScenario.ProcessRunnerExitedParentTree)));
 
+        Assert.All(results, AssertExitedParentLifecycle);
+    }
+
+    private static void AssertExitedParentLifecycle(WindowsChildProcessProbeResult result)
+    {
         Assert.Equal(23, result.ExitCode);
         Assert.Contains("parent-stdout", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("parent-stderr", result.StandardError, StringComparison.Ordinal);
+        Assert.True(result.ReadinessHandshakeObserved);
         Assert.True(result.DirectProcessInJob);
-        Assert.Equal(2U, result.ActiveJobProcessesBeforeCleanup);
+        var directProcessId = Assert.IsType<uint>(result.DirectProcessId);
+        var descendantProcessId = Assert.IsType<uint>(result.DescendantProcessId);
+        Assert.NotEqual(directProcessId, descendantProcessId);
         Assert.Equal(0U, result.ActiveJobProcessesAfterCleanup);
         Assert.True(result.DescendantExitObserved);
         Assert.True(result.CleanupCompleted);

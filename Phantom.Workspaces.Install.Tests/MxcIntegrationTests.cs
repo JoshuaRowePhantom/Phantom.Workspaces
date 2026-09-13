@@ -467,6 +467,7 @@ public sealed class MxcRuntimePayloadTests
         if (!OperatingSystem.IsWindows())
             return;
 
+        var launchId = Guid.NewGuid().ToString("N");
         var descendantReadyName = $"Local\\MxcInvokeDescendantReady-{Guid.NewGuid():N}";
         var descendantReleaseName = $"Local\\MxcInvokeDescendantRelease-{Guid.NewGuid():N}";
         using var descendantReady = new EventWaitHandle(
@@ -484,6 +485,7 @@ public sealed class MxcRuntimePayloadTests
         var result = await MxcRepositoryTestSupport.InvokeAsync(
             probe,
             "--exiting-parent",
+            launchId,
             descendantReadyName,
             "-",
             descendantReleaseName);
@@ -495,10 +497,17 @@ public sealed class MxcRuntimePayloadTests
             result.StandardOutput.Split(
                 Environment.NewLine,
                 StringSplitOptions.RemoveEmptyEntries),
-            line => line.StartsWith("EXITING_PARENT_DESCENDANT:", StringComparison.Ordinal));
-        var descendantId = int.Parse(
-            descendantLine["EXITING_PARENT_DESCENDANT:".Length..],
+            line => line.StartsWith("EXITING_PARENT_READY:", StringComparison.Ordinal));
+        var processIds = descendantLine.Split(':');
+        Assert.Equal(launchId, processIds[1]);
+        var parentId = int.Parse(
+            processIds[2],
             System.Globalization.CultureInfo.InvariantCulture);
+        var descendantId = int.Parse(
+            processIds[3],
+            System.Globalization.CultureInfo.InvariantCulture);
+        Assert.NotEqual(parentId, descendantId);
+        Assert.False(MxcRepositoryTestSupport.IsProcessRunning(parentId));
         Assert.False(MxcRepositoryTestSupport.IsProcessRunning(descendantId));
     }
 
