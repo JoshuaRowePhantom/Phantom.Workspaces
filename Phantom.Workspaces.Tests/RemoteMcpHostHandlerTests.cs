@@ -265,6 +265,59 @@ public sealed class RemoteMcpHostHandlerTests
         Assert.DoesNotContain("secret", exception.ToString(), StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task RemoteStdio_MultipleServers_OwnDistinctProcessesUntilEachSessionDisposes()
+    {
+        var executor = new DistinctProcessExecutor();
+        var handler = new RemoteMcpHostHandler(new Phantom.Workspaces.Llm.AgentServices
+        {
+            ProcessExecutor = executor,
+        });
+        await using var firstChannel = new StubMessageChannel();
+        await using var secondChannel = new StubMessageChannel();
+        var command = Uri.EscapeDataString(ComSpecPath);
+
+        var first = await handler.OpenAsync(
+            Json($"{{\"type\":\"mcp\",\"connection\":{{\"server-name\":\"first\",\"endpoint\":\"stdio://?command={command}\"}}}}"),
+            firstChannel,
+            Ct());
+        var second = await handler.OpenAsync(
+            Json($"{{\"type\":\"mcp\",\"connection\":{{\"server-name\":\"second\",\"endpoint\":\"stdio://?command={command}\"}}}}"),
+            secondChannel,
+            Ct());
+
+        Assert.Equal(2, executor.Handles.Count);
+        Assert.NotSame(executor.Handles[0], executor.Handles[1]);
+        await first!.DisposeAsync();
+        Assert.Equal(1, executor.Handles[0].DisposeCount);
+        Assert.Equal(0, executor.Handles[1].DisposeCount);
+        await second!.DisposeAsync();
+        Assert.Equal(1, executor.Handles[1].DisposeCount);
+    }
+
+    [Fact]
+    public async Task RemoteStdio_CancelledStartup_PropagatesCancellationAndDoesNotLeaveProcessOwner()
+    {
+        var executor = new CancelAwareProcessExecutor();
+        var handler = new RemoteMcpHostHandler(new Phantom.Workspaces.Llm.AgentServices
+        {
+            ProcessExecutor = executor,
+        });
+        await using var channel = new StubMessageChannel();
+        using var cancellation = new CancellationTokenSource();
+        var command = Uri.EscapeDataString(ComSpecPath);
+
+        var openTask = handler.OpenAsync(
+            Json($"{{\"type\":\"mcp\",\"connection\":{{\"server-name\":\"cancelled\",\"endpoint\":\"stdio://?command={command}\"}}}}"),
+            channel,
+            cancellation.Token);
+        await executor.Started.Task;
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => openTask);
+        await executor.CancellationObserved.Task;
+    }
+
     private sealed class FakeRemoteTrustProfileResolver
         : Phantom.Workspaces.Llm.Trust.IRemoteTrustProfileResolver
     {
@@ -331,6 +384,45 @@ public sealed class RemoteMcpHostHandlerTests
         public IProcessHandle Start(ProcessExecutionRequest request)
             => throw new InvalidOperationException(
                 @"C:\secret\mcp.exe --token sensitive stderr");
+    }
+
+    private sealed class DistinctProcessExecutor : IProcessExecutor
+    {
+        public List<StubProcessHandle> Handles { get; } = [];
+
+        public IProcessHandle Start(ProcessExecutionRequest request)
+        {
+            var handle = new StubProcessHandle();
+            Handles.Add(handle);
+            return handle;
+        }
+    }
+
+    private sealed class CancelAwareProcessExecutor : IProcessExecutor
+    {
+        public TaskCompletionSource Started { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource CancellationObserved { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public IProcessHandle Start(ProcessExecutionRequest request) =>
+            throw new NotSupportedException();
+
+        public async Task<IProcessHandle> StartAsync(
+            ProcessExecutionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Started.TrySetResult();
+            var neverCompletes = new TaskCompletionSource<IProcessHandle>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            using var registration = cancellationToken.Register(
+                () =>
+                {
+                    CancellationObserved.TrySetResult();
+                    neverCompletes.TrySetCanceled(cancellationToken);
+                });
+            return await neverCompletes.Task;
+        }
     }
 
     private sealed class StubProcessHandle : IProcessHandle

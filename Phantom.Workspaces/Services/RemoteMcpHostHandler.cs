@@ -52,19 +52,20 @@ public sealed class RemoteMcpHostHandler
     public async Task<IAsyncDisposable?> OpenAsync(JsonElement request, IMessageChannel channel, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(channel);
-        try
+        var openTask = this.OpenCoreAsync(request, channel, ct);
+        await Task.WhenAny(openTask).ConfigureAwait(false);
+        if (openTask.IsCompletedSuccessfully)
         {
-            return await this.OpenCoreAsync(request, channel, ct).ConfigureAwait(false);
+            return await openTask.ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        if (openTask.IsCanceled && ct.IsCancellationRequested)
         {
-            throw;
+            await openTask.ConfigureAwait(false);
         }
-        catch
-        {
-            throw new InvalidOperationException(
-                "Remote MCP launch was denied by host policy.");
-        }
+
+        _ = openTask.Exception;
+        throw new InvalidOperationException(
+            "Remote MCP launch was denied by host policy.");
     }
 
     private async Task<IAsyncDisposable?> OpenCoreAsync(
@@ -98,17 +99,38 @@ public sealed class RemoteMcpHostHandler
         // Process-backed transports launch lazily from ConnectAsync. Connect them inside this
         // sanitized request boundary so wrapper/executor failures are returned safely instead of
         // faulting an unobserved relay after the remote open has already succeeded.
-        if (serverTransport is ProcessExecutorBackedClientTransport)
+        ModelContextProtocol.Protocol.ITransport? connected = null;
+        var ownershipTransferred = false;
+        try
         {
-            var connected = await serverTransport.ConnectAsync(ct).ConfigureAwait(false);
-            serverTransport = new PreconnectedClientTransport(serverTransport.Name, connected);
-        }
+            if (serverTransport is ProcessExecutorBackedClientTransport)
+            {
+                connected = await serverTransport.ConnectAsync(ct).ConfigureAwait(false);
+            }
 
-        var delegatingServer = new DelegatingMcpServer(serverTransport);
-        var incoming = McpChannelClientTransport.CreateServerTransport(channel);
-        var cts = new CancellationTokenSource();
-        var relay = delegatingServer.RunAsync(incoming, cts.Token);
-        return new HostSession(delegatingServer, incoming, cts, relay);
+            var delegatingServer = connected is null
+                ? new DelegatingMcpServer(serverTransport)
+                : new DelegatingMcpServer(serverTransport, connected);
+            var incoming = McpChannelClientTransport.CreateServerTransport(channel);
+            var cts = new CancellationTokenSource();
+            var relay = delegatingServer.RunAsync(incoming, cts.Token);
+            ownershipTransferred = true;
+            return new HostSession(delegatingServer, incoming, cts, relay);
+        }
+        finally
+        {
+            if (!ownershipTransferred)
+            {
+                if (connected is not null)
+                {
+                    await connected.DisposeAsync().ConfigureAwait(false);
+                }
+                if (serverTransport is IAsyncDisposable owner)
+                {
+                    await owner.DisposeAsync().ConfigureAwait(false);
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -184,35 +206,13 @@ public sealed class RemoteMcpHostHandler
         return McpConnectionRequest.ToTool(request);
     }
 
-    private sealed class PreconnectedClientTransport(
-        string name,
-        ModelContextProtocol.Protocol.ITransport transport)
-        : ModelContextProtocol.Client.IClientTransport
-    {
-        private int connected;
-
-        public string Name { get; } = name;
-
-        public Task<ModelContextProtocol.Protocol.ITransport> ConnectAsync(
-            CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (Interlocked.Exchange(ref this.connected, 1) != 0)
-            {
-                throw new InvalidOperationException(
-                    "The preconnected MCP transport has already been consumed.");
-            }
-
-            return Task.FromResult(transport);
-        }
-    }
-
     private sealed class HostSession(
         DelegatingMcpServer delegatingServer,
         ModelContextProtocol.Protocol.ITransport incoming,
         CancellationTokenSource cts,
         Task relay) : IAsyncDisposable
     {
+        private readonly Task relayCompletion = ObserveRelayAndCloseChannelAsync(relay, incoming);
         private int disposed;
 
         public async ValueTask DisposeAsync()
@@ -223,20 +223,27 @@ public sealed class RemoteMcpHostHandler
             }
 
             await cts.CancelAsync().ConfigureAwait(false);
-            await incoming.DisposeAsync().ConfigureAwait(false);
-
+            await relayCompletion.ConfigureAwait(false);
             try
             {
-                await relay.ConfigureAwait(false);
+                await delegatingServer.DisposeAsync().ConfigureAwait(false);
             }
-            catch (Exception)
+            finally
             {
-                // Best-effort teardown: a relay that faulted because the hosted server connection
-                // dropped or was cancelled must not surface from disposal.
+                cts.Dispose();
             }
+        }
 
-            await delegatingServer.DisposeAsync().ConfigureAwait(false);
-            cts.Dispose();
+        private static async Task ObserveRelayAndCloseChannelAsync(
+            Task relay,
+            ModelContextProtocol.Protocol.ITransport incoming)
+        {
+            await Task.WhenAny(relay).ConfigureAwait(false);
+            _ = relay.Exception;
+
+            var closeTask = incoming.DisposeAsync().AsTask();
+            await Task.WhenAny(closeTask).ConfigureAwait(false);
+            _ = closeTask.Exception;
         }
     }
 }

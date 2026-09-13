@@ -22,6 +22,11 @@ internal sealed class ProcessOwnedMcpTransport : ITransport
     private readonly Channel<JsonRpcMessage> messages = Channel.CreateUnbounded<JsonRpcMessage>(
         new UnboundedChannelOptions { SingleReader = false, SingleWriter = true });
     private readonly Task messagePump;
+    private readonly object cleanupGate = new();
+    private Task? innerDisposal;
+    private Task? processDisposal;
+    private ProcessExitResult? completedExitResult;
+    private int closed;
     private int disposed;
 
     public ProcessOwnedMcpTransport(
@@ -48,61 +53,99 @@ internal sealed class ProcessOwnedMcpTransport : ITransport
     public ChannelReader<JsonRpcMessage> MessageReader => messages.Reader;
 
     /// <inheritdoc/>
-    public Task SendMessageAsync(JsonRpcMessage message, CancellationToken cancellationToken = default)
+    public async Task SendMessageAsync(JsonRpcMessage message, CancellationToken cancellationToken = default)
     {
-        ThrowIfExited();
-        return inner.SendMessageAsync(message, cancellationToken);
+        ThrowIfClosed();
+        var sendTask = SendInnerAsync(message, cancellationToken);
+        await Task.WhenAny(sendTask).ConfigureAwait(false);
+        if (!sendTask.IsCompletedSuccessfully)
+        {
+            Interlocked.Exchange(ref closed, 1);
+            await ObserveAsync(DisposeProcessOnceAsync()).ConfigureAwait(false);
+        }
+
+        await sendTask.ConfigureAwait(false);
     }
 
     private async Task PumpMessagesAsync()
     {
-        try
+        while (Volatile.Read(ref disposed) == 0)
         {
-            while (true)
+            if (exitTask.IsCompleted)
             {
-                if (exitTask.IsCompleted)
-                {
-                    await CompleteFromExitAsync().ConfigureAwait(false);
-                    return;
-                }
+                await CompleteFromExitAsync().ConfigureAwait(false);
+                return;
+            }
 
-                var messageReady = inner.MessageReader.WaitToReadAsync(drainCts.Token).AsTask();
-                var completed = await Task.WhenAny(messageReady, exitTask).ConfigureAwait(false);
-                if (completed == exitTask)
-                {
-                    await CompleteFromExitAsync().ConfigureAwait(false);
-                    return;
-                }
+            var messageReady = inner.MessageReader.WaitToReadAsync(drainCts.Token).AsTask();
+            var completed = await Task.WhenAny(messageReady, exitTask).ConfigureAwait(false);
+            if (completed == exitTask)
+            {
+                await CompleteFromExitAsync().ConfigureAwait(false);
+                return;
+            }
 
-                if (!await messageReady.ConfigureAwait(false))
-                {
-                    await CompleteFromExitAsync().ConfigureAwait(false);
-                    return;
-                }
+            if (messageReady.IsCanceled)
+            {
+                messages.Writer.TryComplete();
+                return;
+            }
+            if (messageReady.IsFaulted)
+            {
+                await ObserveAsync(DisposeProcessOnceAsync()).ConfigureAwait(false);
+                messages.Writer.TryComplete(GetTaskException(messageReady));
+                return;
+            }
+            if (!await messageReady.ConfigureAwait(false))
+            {
+                Interlocked.Exchange(ref closed, 1);
+                await CompleteFromExitAsync().ConfigureAwait(false);
+                return;
+            }
 
-                while (inner.MessageReader.TryRead(out var message))
-                    await messages.Writer.WriteAsync(message, drainCts.Token).ConfigureAwait(false);
+            while (inner.MessageReader.TryRead(out var message))
+            {
+                if (!messages.Writer.TryWrite(message))
+                    return;
             }
         }
-        catch (OperationCanceledException)
-        {
-            messages.Writer.TryComplete();
-        }
-        catch (Exception ex)
-        {
-            messages.Writer.TryComplete(ex);
-        }
+
+        messages.Writer.TryComplete();
     }
 
     private async Task CompleteFromExitAsync()
     {
-        var result = await exitTask.ConfigureAwait(false);
-        while (await inner.MessageReader.WaitToReadAsync(drainCts.Token).ConfigureAwait(false))
+        Interlocked.Exchange(ref closed, 1);
+        await Task.WhenAny(exitTask).ConfigureAwait(false);
+        while (inner.MessageReader.TryRead(out var message))
         {
-            while (inner.MessageReader.TryRead(out var message))
-                await messages.Writer.WriteAsync(message, drainCts.Token).ConfigureAwait(false);
+            if (!messages.Writer.TryWrite(message))
+                return;
         }
 
+        if (exitTask.IsCanceled)
+        {
+            await ObserveAsync(DisposeProcessOnceAsync()).ConfigureAwait(false);
+            messages.Writer.TryComplete(new OperationCanceledException(
+                $"MCP stdio server '{name}' exit monitoring was cancelled."));
+            return;
+        }
+        if (exitTask.IsFaulted)
+        {
+            await ObserveAsync(DisposeProcessOnceAsync()).ConfigureAwait(false);
+            messages.Writer.TryComplete(GetTaskException(exitTask));
+            return;
+        }
+
+        var result = await exitTask.ConfigureAwait(false);
+        completedExitResult = result;
+        var processCleanup = DisposeProcessOnceAsync();
+        await Task.WhenAny(processCleanup).ConfigureAwait(false);
+        if (!processCleanup.IsCompletedSuccessfully)
+        {
+            messages.Writer.TryComplete(GetTaskException(processCleanup));
+            return;
+        }
         if (result.ExitCode == 0)
         {
             messages.Writer.TryComplete();
@@ -116,16 +159,28 @@ internal sealed class ProcessOwnedMcpTransport : ITransport
             $"MCP stdio server '{name}' exited prematurely with code {result.ExitCode}.{suffix}"));
     }
 
-    private void ThrowIfExited()
+    private void ThrowIfClosed()
     {
-        if (!exitTask.IsCompletedSuccessfully || exitTask.Result.ExitCode == 0)
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
+        if (Volatile.Read(ref closed) == 0 && !exitTask.IsCompleted)
             return;
 
-        var diagnostic = stderrDrainer.SnapshotRolling();
-        var suffix = string.IsNullOrWhiteSpace(diagnostic) ? string.Empty : $" Stderr: {diagnostic}";
-        throw new IOException(
-            $"MCP stdio server '{name}' exited prematurely with code {exitTask.Result.ExitCode}.{suffix}");
+        var result = completedExitResult;
+        if (result is { ExitCode: not 0 })
+        {
+            var diagnostic = stderrDrainer.SnapshotRolling();
+            var suffix = string.IsNullOrWhiteSpace(diagnostic) ? string.Empty : $" Stderr: {diagnostic}";
+            throw new IOException(
+                $"MCP stdio server '{name}' exited prematurely with code {result.ExitCode}.{suffix}");
+        }
+
+        throw new IOException($"MCP stdio server '{name}' transport is closed.");
     }
+
+    private async Task SendInnerAsync(
+        JsonRpcMessage message,
+        CancellationToken cancellationToken) =>
+        await inner.SendMessageAsync(message, cancellationToken).ConfigureAwait(false);
 
     /// <inheritdoc/>
     public async ValueTask DisposeAsync()
@@ -133,40 +188,52 @@ internal sealed class ProcessOwnedMcpTransport : ITransport
         if (Interlocked.Exchange(ref disposed, 1) != 0)
             return;
 
+        Interlocked.Exchange(ref closed, 1);
         try
         {
-            await inner.DisposeAsync().ConfigureAwait(false);
-        }
-        catch
-        {
-        }
-
-        try
-        {
-            await handle.DisposeAsync().ConfigureAwait(false);
-        }
-        catch
-        {
-        }
-
-        try
-        {
-            await drainCts.CancelAsync().ConfigureAwait(false);
-        }
-        catch
-        {
-        }
-
-        try
-        {
-            await Task.WhenAll(stderrDrainer.PumpTask, exitTask, messagePump).ConfigureAwait(false);
-        }
-        catch
-        {
+            await DisposeInnerOnceAsync().ConfigureAwait(false);
         }
         finally
         {
-            drainCts.Dispose();
+            try
+            {
+                await DisposeProcessOnceAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                await drainCts.CancelAsync().ConfigureAwait(false);
+                await ObserveAsync(stderrDrainer.PumpTask).ConfigureAwait(false);
+                await ObserveAsync(exitTask).ConfigureAwait(false);
+                await ObserveAsync(messagePump).ConfigureAwait(false);
+                messages.Writer.TryComplete();
+                drainCts.Dispose();
+            }
         }
     }
+
+    private Task DisposeInnerOnceAsync()
+    {
+        lock (cleanupGate)
+        {
+            return innerDisposal ??= inner.DisposeAsync().AsTask();
+        }
+    }
+
+    private Task DisposeProcessOnceAsync()
+    {
+        lock (cleanupGate)
+        {
+            return processDisposal ??= handle.DisposeAsync().AsTask();
+        }
+    }
+
+    private static async Task ObserveAsync(Task task)
+    {
+        await Task.WhenAny(task).ConfigureAwait(false);
+        _ = task.Exception;
+    }
+
+    private static Exception GetTaskException(Task task) =>
+        task.Exception?.InnerException
+        ?? new IOException("MCP stdio transport failed.");
 }

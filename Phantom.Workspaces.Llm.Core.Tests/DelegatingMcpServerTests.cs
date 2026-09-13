@@ -81,6 +81,31 @@ public sealed class DelegatingMcpServerTests
         await runTask;
     }
 
+    [Fact]
+    public async Task RunAsync_PreconnectedTransport_IsNotConnectedAgain_AndClientOwnerIsDisposed()
+    {
+        var (downstreamClientTransport, proxyServerTransport) = InMemoryTransportPair.Create();
+        var (proxyDelegatedTransport, delegatedServerTransport) = InMemoryTransportPair.Create();
+        var owner = new OwnedClientTransport(proxyDelegatedTransport);
+        var server = new DelegatingMcpServer(owner, proxyDelegatedTransport);
+        using var cts = new CancellationTokenSource();
+
+        var runTask = server.RunAsync(proxyServerTransport, cts.Token);
+        await downstreamClientTransport.SendMessageAsync(
+            new JsonRpcNotification { Method = "ready" },
+            CancellationToken.None);
+        _ = await ReadMessageAsync(
+            delegatedServerTransport.MessageReader,
+            CancellationToken.None);
+
+        cts.Cancel();
+        await runTask;
+        await server.DisposeAsync();
+
+        Assert.Equal(0, owner.ConnectCount);
+        Assert.Equal(1, owner.DisposeCount);
+    }
+
     private static async Task<JsonRpcMessage> ReadMessageAsync(
         ChannelReader<JsonRpcMessage> reader,
         CancellationToken cancellationToken)
@@ -99,6 +124,26 @@ public sealed class DelegatingMcpServerTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(delegatedTransport);
+        }
+    }
+
+    private sealed class OwnedClientTransport(ITransport delegatedTransport)
+        : IClientTransport, IAsyncDisposable
+    {
+        public int ConnectCount { get; private set; }
+        public int DisposeCount { get; private set; }
+        public string Name => "owned";
+
+        public Task<ITransport> ConnectAsync(CancellationToken cancellationToken = default)
+        {
+            ConnectCount++;
+            return Task.FromResult(delegatedTransport);
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeCount++;
+            return ValueTask.CompletedTask;
         }
     }
 

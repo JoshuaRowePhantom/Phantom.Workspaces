@@ -59,6 +59,7 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
     // reconnection (or OAuth browser relaunch) is attempted until an explicit user re-enable calls
     // <see cref="ResetInitialization"/> (issue #1447).
     private bool initializationFailed;
+    private bool resetCleanupRequired;
 
     public McpToolContextProvider(
         McpTool tool,
@@ -113,6 +114,12 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
         await this.initializeLock.WaitAsync(lifetimeToken);
         try
         {
+            if (this.resetCleanupRequired)
+            {
+                await this.DisposeConnectionAsync().ConfigureAwait(false);
+                this.resetCleanupRequired = false;
+            }
+
             if (this.initializationFailed)
             {
                 // Terminal: a previous attempt failed. Do not reconnect (or relaunch the OAuth
@@ -124,20 +131,18 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
             {
                 var logger = this.loggerFactory?.CreateLogger<McpToolContextProvider>();
                 var serverName = string.IsNullOrWhiteSpace(this.tool.ServerName) ? this.tool.Name : this.tool.ServerName;
-                try
+                var initialization = this.InvokeInitializerAsync(lifetimeToken);
+                await Task.WhenAny(initialization).ConfigureAwait(false);
+                if (initialization.IsFaulted)
                 {
-                    this.cachedTools = await this.initializeToolsAsync(lifetimeToken);
-                }
-                catch (Exception ex)
-                {
-                    // Latch the failure so the next invocation short-circuits instead of retrying
-                    // forever. Log only the exception type/message (no secrets, tokens, or URIs) and
-                    // re-throw so AgentChat's catch surfaces the structured diagnostic unchanged and
-                    // marks the server node disabled (issues #1408, #1447).
                     this.initializationFailed = true;
-                    logger?.LogError(ex, "Failed to open MCP server {ServerName}.", serverName ?? "(mcp server)");
-                    throw;
+                    logger?.LogError(
+                        initialization.Exception?.GetBaseException(),
+                        "Failed to open MCP server {ServerName}.",
+                        serverName ?? "(mcp server)");
                 }
+
+                this.cachedTools = await initialization.ConfigureAwait(false);
             }
 
             return new AIContext
@@ -150,6 +155,9 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
             this.initializeLock.Release();
         }
     }
+
+    private async Task<AITool[]> InvokeInitializerAsync(CancellationToken cancellationToken) =>
+        await this.initializeToolsAsync(cancellationToken).ConfigureAwait(false);
 
     private async Task<AITool[]> ConnectAndListToolsAsync(CancellationToken cancellationToken)
     {
@@ -264,8 +272,7 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
 
         this.initializationFailed = false;
         this.cachedTools = null;
-        this.client = null;
-        _ = this.DisposeRemoteAsync();
+        this.resetCleanupRequired = true;
     }
 
     public async ValueTask DisposeAsync()
@@ -280,6 +287,13 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
         await this.initializeLock.WaitAsync();
         this.initializeLock.Release();
 
+        await this.DisposeConnectionAsync();
+        this.initializeLock.Dispose();
+        this.lifetimeCancellation.Dispose();
+    }
+
+    private async ValueTask DisposeConnectionAsync()
+    {
         if (this.client is not null)
         {
             await this.client.DisposeAsync();
@@ -293,8 +307,6 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
         }
 
         await this.DisposeRemoteAsync();
-        this.initializeLock.Dispose();
-        this.lifetimeCancellation.Dispose();
     }
 
     // Tears down the remote-executor connection resources (issue #1438). The MCP SDK client owns and

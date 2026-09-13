@@ -9,8 +9,11 @@ public sealed class DelegatingMcpServer : IClientTransport, IAsyncDisposable
 {
     private readonly IClientTransport delegatedClientTransport;
     private readonly McpClientOptions? delegatedClientOptions;
+    private ITransport? preconnectedTransport;
     private readonly object syncLock = new();
     private ITransport? activeDelegatedTransport;
+    private Task? activeTransportDisposal;
+    private int disposed;
 
     public DelegatingMcpServer(
         IClientTransport delegatedClientTransport,
@@ -21,10 +24,26 @@ public sealed class DelegatingMcpServer : IClientTransport, IAsyncDisposable
         this.delegatedClientOptions = delegatedClientOptions;
     }
 
+    public DelegatingMcpServer(
+        IClientTransport delegatedClientTransport,
+        ITransport preconnectedTransport)
+        : this(delegatedClientTransport)
+    {
+        this.preconnectedTransport = preconnectedTransport
+                                     ?? throw new ArgumentNullException(nameof(preconnectedTransport));
+    }
+
     public string Name => $"Delegating ({this.delegatedClientTransport.Name})";
 
     public Task<ITransport> ConnectAsync(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref this.disposed) != 0, this);
+        if (Interlocked.Exchange(ref this.preconnectedTransport, null) is { } preconnected)
+        {
+            return Task.FromResult(preconnected);
+        }
+
         return this.delegatedClientTransport.ConnectAsync(cancellationToken);
     }
 
@@ -65,29 +84,53 @@ public sealed class DelegatingMcpServer : IClientTransport, IAsyncDisposable
         }
         finally
         {
-            await delegatedTransport.DisposeAsync();
-            lock (this.syncLock)
-            {
-                if (ReferenceEquals(this.activeDelegatedTransport, delegatedTransport))
-                {
-                    this.activeDelegatedTransport = null;
-                }
-            }
+            await this.DisposeActiveTransportAsync(delegatedTransport);
         }
     }
 
     public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref this.disposed, 1) != 0)
+        {
+            return;
+        }
+
         ITransport? delegatedTransport;
         lock (this.syncLock)
         {
             delegatedTransport = this.activeDelegatedTransport;
-            this.activeDelegatedTransport = null;
         }
 
         if (delegatedTransport is not null)
         {
-            await delegatedTransport.DisposeAsync();
+            await this.DisposeActiveTransportAsync(delegatedTransport);
+        }
+        else if (Interlocked.Exchange(ref this.preconnectedTransport, null) is { } preconnected)
+        {
+            await preconnected.DisposeAsync();
+        }
+
+        if (this.delegatedClientTransport is IAsyncDisposable owner)
+        {
+            await owner.DisposeAsync();
+        }
+    }
+
+    private Task DisposeActiveTransportAsync(ITransport transport)
+    {
+        lock (this.syncLock)
+        {
+            if (this.activeTransportDisposal is not null)
+            {
+                return this.activeTransportDisposal;
+            }
+
+            if (ReferenceEquals(this.activeDelegatedTransport, transport))
+            {
+                this.activeDelegatedTransport = null;
+            }
+            this.activeTransportDisposal = transport.DisposeAsync().AsTask();
+            return this.activeTransportDisposal;
         }
     }
 

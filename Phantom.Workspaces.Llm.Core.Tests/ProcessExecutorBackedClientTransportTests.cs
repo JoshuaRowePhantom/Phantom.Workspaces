@@ -181,6 +181,116 @@ public sealed class ProcessExecutorBackedClientTransportTests
         Assert.Equal(1, executor.StartCount);
     }
 
+    [Fact]
+    public async Task ConnectAsync_DisposedDuringStart_CancelsAndJoinsStartup()
+    {
+        var executor = new CancelAwareProcessExecutor();
+        var transport = new ProcessExecutorBackedClientTransport(
+            "test",
+            new ProcessExecutionRequest("some.exe"),
+            executor,
+            NullLoggerFactory.Instance);
+
+        var connectTask = transport.ConnectAsync();
+        await executor.Started.Task;
+
+        var disposeTask = transport.DisposeAsync().AsTask();
+
+        await executor.CancellationObserved.Task;
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => connectTask);
+        await disposeTask;
+        Assert.True(disposeTask.IsCompletedSuccessfully);
+    }
+
+    [Fact]
+    public async Task SeparateTransports_OwnSeparateProcesses_AndDisposeEachOnce()
+    {
+        var executor = new StubProcessExecutor();
+        var first = new ProcessExecutorBackedClientTransport(
+            "first",
+            new ProcessExecutionRequest("first.exe"),
+            executor,
+            NullLoggerFactory.Instance);
+        var second = new ProcessExecutorBackedClientTransport(
+            "second",
+            new ProcessExecutionRequest("second.exe"),
+            executor,
+            NullLoggerFactory.Instance);
+
+        await first.ConnectAsync();
+        await second.ConnectAsync();
+        await first.DisposeAsync();
+        await second.DisposeAsync();
+
+        Assert.Equal(2, executor.Handles.Count);
+        Assert.All(executor.Handles, handle => Assert.Equal(1, handle.DisposeCount));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SendMessageAsync_TransportFailure_DisposesOwnedProcessBeforePropagating(
+        bool throwSynchronously)
+    {
+        var sendFailure = new IOException("stdio write failed");
+        var inner = new StubTransport
+        {
+            SendException = sendFailure,
+            ThrowSynchronously = throwSynchronously,
+        };
+        var handle = new StubProcessHandle(seededStderr: null);
+        using var drainCts = new CancellationTokenSource();
+        var drainer = new ProcessExecutorBackedClientTransport.StderrDrainer(
+            handle.StandardError,
+            NullLogger.Instance,
+            "test",
+            drainCts.Token);
+        var transport = new ProcessOwnedMcpTransport(
+            inner,
+            handle,
+            drainer,
+            drainCts,
+            handle.WaitAsync(),
+            "test");
+
+        var exception = await Assert.ThrowsAsync<IOException>(
+            () => transport.SendMessageAsync(new JsonRpcNotification { Method = "test" }));
+
+        Assert.Same(sendFailure, exception);
+        Assert.Equal(1, handle.DisposeCount);
+        await transport.DisposeAsync();
+        Assert.Equal(1, handle.DisposeCount);
+    }
+
+    [Fact]
+    public async Task StdoutEof_DisposesOwnedProcessAndCompletesReader()
+    {
+        var inner = new StubTransport();
+        var handle = new StubProcessHandle(seededStderr: null);
+        using var drainCts = new CancellationTokenSource();
+        var drainer = new ProcessExecutorBackedClientTransport.StderrDrainer(
+            handle.StandardError,
+            NullLogger.Instance,
+            "test",
+            drainCts.Token);
+        var transport = new ProcessOwnedMcpTransport(
+            inner,
+            handle,
+            drainer,
+            drainCts,
+            handle.WaitAsync(),
+            "test");
+
+        inner.Complete();
+        handle.Exit(0, string.Empty);
+
+        await transport.MessageReader.Completion;
+        await handle.DisposedTask;
+        Assert.Equal(1, handle.DisposeCount);
+        await transport.DisposeAsync();
+        Assert.Equal(1, handle.DisposeCount);
+    }
+
     // Stub IProcessExecutor whose IProcessHandle exposes disconnected pipes so the SDK's
     // StreamClientTransport has stdin/stdout to connect to without needing a real child process.
     private sealed class StubProcessExecutor : IProcessExecutor
@@ -188,6 +298,7 @@ public sealed class ProcessExecutorBackedClientTransportTests
         public Exception? StartException { get; set; }
         public int StartCount { get; private set; }
         public StubProcessHandle? LastHandle { get; private set; }
+        public List<StubProcessHandle> Handles { get; } = [];
 
         public void SeedStderr(byte[] bytes) => pendingStderr = bytes;
 
@@ -200,8 +311,36 @@ public sealed class ProcessExecutorBackedClientTransportTests
                 throw StartException;
 
             LastHandle = new StubProcessHandle(pendingStderr);
+            Handles.Add(LastHandle);
             pendingStderr = null;
             return LastHandle;
+        }
+    }
+
+    private sealed class CancelAwareProcessExecutor : IProcessExecutor
+    {
+        public TaskCompletionSource Started { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource CancellationObserved { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public IProcessHandle Start(ProcessExecutionRequest request) =>
+            throw new NotSupportedException();
+
+        public async Task<IProcessHandle> StartAsync(
+            ProcessExecutionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Started.TrySetResult();
+            var neverCompletes = new TaskCompletionSource<IProcessHandle>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            using var registration = cancellationToken.Register(
+                () =>
+                {
+                    CancellationObserved.TrySetResult();
+                    neverCompletes.TrySetCanceled(cancellationToken);
+                });
+            return await neverCompletes.Task;
         }
     }
 
@@ -213,6 +352,9 @@ public sealed class ProcessExecutorBackedClientTransportTests
         private readonly TaskCompletionSource<ProcessExitResult> exit = new();
         private readonly TaskCompletionSource stderrRead =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource disposed =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int disposeCount;
 
         public StubProcessHandle(byte[]? seededStderr)
         {
@@ -237,6 +379,8 @@ public sealed class ProcessExecutorBackedClientTransportTests
         }
 
         public bool Disposed { get; private set; }
+        public int DisposeCount => Volatile.Read(ref disposeCount);
+        public Task DisposedTask => disposed.Task;
         public Task StderrRead => stderrRead.Task;
         public Stream StandardInput => stdin;
         public Stream StandardOutput => stdout;
@@ -255,10 +399,13 @@ public sealed class ProcessExecutorBackedClientTransportTests
 
         public ValueTask DisposeAsync()
         {
+            if (Interlocked.Exchange(ref disposeCount, 1) != 0)
+                return ValueTask.CompletedTask;
             Disposed = true;
             stderr.Complete();
             stdout.Complete();
             exit.TrySetResult(ProcessExitResult.Create(0, false, null));
+            disposed.TrySetResult();
             return ValueTask.CompletedTask;
         }
     }
@@ -267,15 +414,22 @@ public sealed class ProcessExecutorBackedClientTransportTests
     {
         private readonly Channel<JsonRpcMessage> messages = Channel.CreateUnbounded<JsonRpcMessage>();
 
+        public Exception? SendException { get; init; }
+        public bool ThrowSynchronously { get; init; }
         public string? SessionId => null;
         public ChannelReader<JsonRpcMessage> MessageReader => messages.Reader;
         public Task SendMessageAsync(JsonRpcMessage message, CancellationToken cancellationToken = default)
-            => Task.CompletedTask;
+        {
+            if (ThrowSynchronously && SendException is not null)
+                throw SendException;
+            return SendException is null ? Task.CompletedTask : Task.FromException(SendException);
+        }
         public void WriteAndComplete(JsonRpcMessage message)
         {
             messages.Writer.TryWrite(message);
             messages.Writer.TryComplete();
         }
+        public void Complete() => messages.Writer.TryComplete();
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 

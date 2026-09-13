@@ -47,7 +47,7 @@ public sealed class RemoteExecutionProductionPathTests
 
     [Theory]
     [MemberData(nameof(PlacementCases))]
-    public async Task PersistedRuntime_AllEightPlacementAndContainmentCases_LaunchOnlyOnResolvedHost(
+    public async Task ExecutionMatrix_AllEightPlacementContainmentCases_UseExpectedAgentAndLaunchHosts(
         bool remoteAgent,
         bool remoteComponent,
         bool requiresContainment)
@@ -224,8 +224,19 @@ public sealed class RemoteExecutionProductionPathTests
             await remoteRegistry.DisposeAsync();
     }
 
+    [Theory]
+    [MemberData(nameof(PlacementCases))]
+    public Task ExecutionMatrix_AllEightCases_ResolveTrustOnlyOnFinalLaunchHost(
+        bool remoteAgent,
+        bool remoteComponent,
+        bool requiresContainment) =>
+        this.ExecutionMatrix_AllEightPlacementContainmentCases_UseExpectedAgentAndLaunchHosts(
+            remoteAgent,
+            remoteComponent,
+            requiresContainment);
+
     [Fact]
-    public async Task Takeover_ProductionHost_FencesOldTreeAndFinalReleaseDisposesReplacementTree()
+    public async Task Takeover_NewHost_RehydratesIntentAndRecompilesPolicy()
     {
         var ownerTrust = new HostProbe(requiresContainment: true);
         var componentTrust = new HostProbe(requiresContainment: true);
