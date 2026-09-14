@@ -230,6 +230,7 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
             if (!authorized.IsAllowed) throw new AgentSessionUnavailableException();
             if (command.RuntimeEpoch != runtime.Epoch)
                 throw new AgentSessionUnavailableException();
+            attachment.EnsureConnected();
 
             if (command is TerminateSessionCommand)
             {

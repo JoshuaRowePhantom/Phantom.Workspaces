@@ -253,9 +253,21 @@ public sealed partial class RemoteAgentSessionClientTests
         return client;
     }
 
-    private static JsonElement Frame(long sequence, AgentSessionServerEvent value, Guid? correlation = null)
-        => AgentSessionProtocolCodec.SerializeFrame(AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.CreateFrame(
-            AgentSessionProtocolCodecTests.Epoch(), sequence, correlation ?? Guid.NewGuid(), value));
+    private static JsonElement Frame(
+        long sequence,
+        AgentSessionServerEvent value,
+        Guid? correlation = null,
+        RuntimeEpoch? epoch = null,
+        ReplayCursor? replayResetCursor = null)
+        => AgentSessionProtocolCodec.SerializeFrame(
+            AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.CreateFrame(
+                epoch ?? AgentSessionProtocolCodecTests.Epoch(),
+                sequence,
+                correlation ?? Guid.NewGuid(),
+                value) with
+            {
+                ReplayResetCursor = replayResetCursor,
+            });
 
     private sealed class TestTransport : ITransport
     {

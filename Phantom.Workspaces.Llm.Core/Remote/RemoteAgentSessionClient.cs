@@ -469,12 +469,25 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
 
     private void AcceptFrame(AgentSessionServerFrame frame)
     {
+        var value = AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(frame);
         if (this.runtimeEpoch is { } epoch && epoch != frame.RuntimeEpoch)
             throw new RemoteAgentProtocolException("The runtime epoch changed.");
         if (this.LastAppliedCursor is { } cursor && frame.Sequence != cursor.Sequence + 1)
-            throw new RemoteAgentProtocolException("A server frame sequence gap or regression was detected.");
-
-        var value = AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(frame);
+        {
+            var replacesReplayGap = this.reconnecting
+                && value is SessionSnapshotEvent
+                && frame.ReplayResetCursor is { } reset
+                && reset == cursor
+                && frame.Sequence > cursor.Sequence + 1;
+            if (!replacesReplayGap)
+                throw new RemoteAgentProtocolException(
+                    "A server frame sequence gap or regression was detected.");
+        }
+        else if (this.LastAppliedCursor is null && frame.ReplayResetCursor is not null)
+        {
+            throw new RemoteAgentProtocolException(
+                "An initial snapshot cannot replace a replay cursor.");
+        }
         if (this.runtimeEpoch is null && value is SessionTerminalEvent terminal)
         {
             this.terminal = true;

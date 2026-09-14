@@ -138,6 +138,144 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
     }
 
     [Fact]
+    public async Task ActiveWriteFailure_OpenReaderStartsGraceAndAllowsSameTokenReconnect()
+    {
+        var time = new FakeTimeProvider();
+        await using var lease = Lease(background: true, time: time);
+        var failedChannel = new ActiveWriteFailingChannel();
+        var first = lease.Attach(new AttachRemoteAgentSessionRequest
+        {
+            AttachmentToken = "active-failure",
+            Channel = failedChannel,
+        });
+        first.StartReceiving((_, _) => ValueTask.CompletedTask);
+        await failedChannel.ReadStarted;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            lease.PublishAsync(
+                new BusyChangedEvent { IsBusy = true },
+                ct: TestContext.Current.CancellationToken).AsTask());
+
+        await failedChannel.ReadCanceled;
+        Assert.Equal(0, lease.ViewerCount);
+        Assert.Null(lease.GetConnectedChannel("active-failure", 1));
+        Assert.False(failedChannel.Reader.Completion.IsCompleted);
+        await using var replacement = lease.Attach(new AttachRemoteAgentSessionRequest
+        {
+            AttachmentToken = "active-failure",
+            Channel = new TestChannel(),
+        });
+        Assert.Equal(1, lease.ViewerCount);
+        await Assert.ThrowsAsync<ObjectDisposedException>(() =>
+            first.PublishAsync(
+                new BusyChangedEvent { IsBusy = false },
+                Guid.NewGuid(),
+                TestContext.Current.CancellationToken).AsTask());
+        await first.DisposeAsync();
+        Assert.Equal(1, lease.ViewerCount);
+    }
+
+    [Fact]
+    public async Task ActiveWriteFailure_StalePublisherCallbackCannotDisconnectReplacementGeneration()
+    {
+        var time = new FakeTimeProvider();
+        await using var lease = Lease(background: true, time: time);
+        var failedChannel = new DelayedWriteFailureChannel();
+        var first = lease.Attach(new AttachRemoteAgentSessionRequest
+        {
+            AttachmentToken = "stale-failure",
+            Channel = failedChannel,
+        });
+        var publication = lease.PublishAsync(
+            new BusyChangedEvent { IsBusy = true },
+            ct: TestContext.Current.CancellationToken).AsTask();
+        await failedChannel.WriteStarted;
+        await first.MarkTransportLostAsync();
+        await using var replacement = lease.Attach(new AttachRemoteAgentSessionRequest
+        {
+            AttachmentToken = "stale-failure",
+            Channel = new TestChannel(),
+        });
+
+        failedChannel.FailWrite();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => publication);
+
+        Assert.Equal(1, lease.ViewerCount);
+        Assert.NotNull(lease.GetConnectedChannel("stale-failure", 2));
+        time.Advance(TimeSpan.FromSeconds(10));
+        Assert.False(lease.IsFenced);
+    }
+
+    [Fact]
+    public async Task ActiveWriteFailure_GraceExpiryDisposesRuntimeAndChildren()
+    {
+        var time = new FakeTimeProvider();
+        var root = Chat();
+        var child = new Mock<IAsyncDisposable>();
+        var childDisposed = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        child.Setup(value => value.DisposeAsync())
+            .Callback(() => childDisposed.TrySetResult())
+            .Returns(ValueTask.CompletedTask);
+        var lease = new RemoteAgentSessionLease(
+            "session",
+            1,
+            Epoch(),
+            root.Object,
+            continueInBackground: false,
+            () => null!,
+            timeProvider: time,
+            runtimeLifetime: new RuntimeTree(root.Object, child.Object));
+        var attachment = lease.Attach(new AttachRemoteAgentSessionRequest
+        {
+            AttachmentToken = "expiring-failure",
+            Channel = new ActiveWriteFailingChannel(),
+        });
+        var released = attachment.Released;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            lease.PublishAsync(
+                new BusyChangedEvent { IsBusy = true },
+                ct: TestContext.Current.CancellationToken).AsTask());
+        Assert.Equal(0, lease.ViewerCount);
+        Assert.False(lease.IsFenced);
+
+        time.Advance(TimeSpan.FromSeconds(5));
+        await released;
+        await childDisposed.Task;
+
+        Assert.True(lease.IsFenced);
+        root.Verify(value => value.DisposeAsync(), Times.Once);
+        child.Verify(value => value.DisposeAsync(), Times.Once);
+    }
+
+    [Fact]
+    public async Task ActiveWriteFailure_ReconnectCancelsGraceExpiry()
+    {
+        var time = new FakeTimeProvider();
+        await using var lease = Lease(background: false, time: time);
+        lease.Attach(new AttachRemoteAgentSessionRequest
+        {
+            AttachmentToken = "recovered-failure",
+            Channel = new ActiveWriteFailingChannel(),
+        });
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            lease.PublishAsync(
+                new BusyChangedEvent { IsBusy = true },
+                ct: TestContext.Current.CancellationToken).AsTask());
+        await using var replacement = lease.Attach(new AttachRemoteAgentSessionRequest
+        {
+            AttachmentToken = "recovered-failure",
+            Channel = new TestChannel(),
+        });
+
+        time.Advance(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(1, lease.ViewerCount);
+        Assert.False(lease.IsFenced);
+    }
+
+    [Fact]
     public async Task TryTerminateAsync_ExactEpoch_FencesThenDisposesOnce()
     {
         await using var registry = new RemoteAgentSessionRuntimeRegistry(TimeProvider.System);
@@ -162,6 +300,24 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
         await first.DisposeAsync();
         Assert.Equal(1, lease.ViewerCount);
         Assert.False(lease.IsFenced);
+    }
+
+    [Fact]
+    public async Task ExplicitDetach_RemovesAttachmentWithoutCreatingReconnectReservation()
+    {
+        var time = new FakeTimeProvider();
+        await using var lease = Lease(background: true, time: time);
+        var attachment = lease.Attach(Attach("explicit"));
+
+        await attachment.ReleaseExplicitlyAsync();
+        time.Advance(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(0, lease.ViewerCount);
+        await using var replacement = lease.Attach(Attach("explicit"));
+        Assert.Equal(1, lease.ViewerCount);
+        await attachment.MarkTransportLostAsync();
+        Assert.Equal(1, lease.ViewerCount);
+        Assert.NotNull(lease.GetConnectedChannel("explicit", 2));
     }
 
     [Fact]
@@ -221,7 +377,7 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
         await attachment.MarkTransportLostAsync();
         await attachment.DisposeAsync();
 
-        Assert.Equal(1, lease.ViewerCount);
+        Assert.Equal(0, lease.ViewerCount);
         Assert.False(lease.IsFenced);
         time.Advance(TimeSpan.FromSeconds(5));
         await attachment.Released;
@@ -529,6 +685,26 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
     }
 
     [Fact]
+    public async Task RuntimeDispose_TerminalWriteFailureDoesNotCreateReconnectGrace()
+    {
+        var time = new FakeTimeProvider();
+        var lease = Lease(background: true, time: time);
+        var attachment = lease.Attach(new AttachRemoteAgentSessionRequest
+        {
+            AttachmentToken = "terminal-failure",
+            Channel = new ActiveWriteFailingChannel(),
+        });
+
+        await Assert.ThrowsAsync<AggregateException>(() => lease.DisposeAsync().AsTask());
+        await attachment.Released;
+        time.Advance(TimeSpan.FromSeconds(10));
+
+        Assert.True(lease.IsFenced);
+        Assert.Equal(0, lease.ViewerCount);
+        Assert.Throws<InvalidOperationException>(() => lease.Attach(Attach("terminal-failure")));
+    }
+
+    [Fact]
     public async Task RuntimeDispose_InterruptAndChannelFailures_DoNotStrandRemainingCleanup()
     {
         var order = new List<string>();
@@ -761,6 +937,113 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
             this.writeStarted.TrySetResult();
             await this.allowWrite.Task.WaitAsync(cancellationToken);
             this.Written = item;
+        }
+    }
+
+    private sealed class ActiveWriteFailingChannel : IMessageChannel
+    {
+        private readonly Channel<JsonElement> input = Channel.CreateUnbounded<JsonElement>();
+        private readonly TaskCompletionSource readStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource readCanceled =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TrackingReader reader;
+        private readonly FailingWriter writer = new();
+
+        internal ActiveWriteFailingChannel()
+        {
+            this.reader = new TrackingReader(this);
+        }
+
+        public ChannelWriter<JsonElement> Writer => this.writer;
+        public ChannelReader<JsonElement> Reader => this.reader;
+        internal Task ReadStarted => this.readStarted.Task;
+        internal Task ReadCanceled => this.readCanceled.Task;
+
+        public ValueTask DisposeAsync()
+        {
+            this.input.Writer.TryComplete();
+            return ValueTask.CompletedTask;
+        }
+
+        private sealed class FailingWriter : ChannelWriter<JsonElement>
+        {
+            public override bool TryComplete(Exception? error = null) => true;
+            public override bool TryWrite(JsonElement item) => false;
+            public override ValueTask<bool> WaitToWriteAsync(
+                CancellationToken cancellationToken = default)
+                => new(true);
+            public override ValueTask WriteAsync(
+                JsonElement item,
+                CancellationToken cancellationToken = default)
+                => ValueTask.FromException(
+                    new InvalidOperationException("active write failed"));
+        }
+
+        private sealed class TrackingReader(ActiveWriteFailingChannel owner)
+            : ChannelReader<JsonElement>
+        {
+            public override Task Completion => owner.input.Reader.Completion;
+
+            public override bool TryRead(out JsonElement item)
+                => owner.input.Reader.TryRead(out item);
+
+            public override ValueTask<bool> WaitToReadAsync(
+                CancellationToken cancellationToken = default)
+            {
+                owner.readStarted.TrySetResult();
+                cancellationToken.Register(
+                    () => owner.readCanceled.TrySetResult());
+                return owner.input.Reader.WaitToReadAsync(cancellationToken);
+            }
+        }
+    }
+
+    private sealed class DelayedWriteFailureChannel : IMessageChannel
+    {
+        private readonly Channel<JsonElement> input = Channel.CreateUnbounded<JsonElement>();
+        private readonly TaskCompletionSource writeStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource failWrite =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly DelayedFailingWriter writer;
+
+        internal DelayedWriteFailureChannel()
+        {
+            this.writer = new DelayedFailingWriter(this);
+        }
+
+        public ChannelWriter<JsonElement> Writer => this.writer;
+        public ChannelReader<JsonElement> Reader => this.input.Reader;
+        internal Task WriteStarted => this.writeStarted.Task;
+        internal void FailWrite() => this.failWrite.TrySetResult();
+
+        public ValueTask DisposeAsync()
+        {
+            this.input.Writer.TryComplete();
+            this.failWrite.TrySetResult();
+            return ValueTask.CompletedTask;
+        }
+
+        private sealed class DelayedFailingWriter(DelayedWriteFailureChannel owner)
+            : ChannelWriter<JsonElement>
+        {
+            public override bool TryComplete(Exception? error = null) => true;
+            public override bool TryWrite(JsonElement item) => false;
+            public override ValueTask<bool> WaitToWriteAsync(
+                CancellationToken cancellationToken = default)
+                => new(true);
+            public override ValueTask WriteAsync(
+                JsonElement item,
+                CancellationToken cancellationToken = default)
+                => new(owner.WriteAsync());
+        }
+
+        private async Task WriteAsync()
+        {
+            this.writeStarted.TrySetResult();
+            await this.failWrite.Task;
+            throw new InvalidOperationException("delayed active write failed");
         }
     }
 }

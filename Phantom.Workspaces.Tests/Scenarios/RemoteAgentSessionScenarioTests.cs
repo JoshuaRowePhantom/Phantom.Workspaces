@@ -58,7 +58,9 @@ public sealed class RemoteAgentSessionScenarioTests
         await proxy.Transport.DropConnectionsAsync();
         await disconnected;
         var owner = await fixture.OwnerChatAsync("replay", 0);
+        var ownerUpdated = WaitForHistoryCountAsync(owner, 1);
         owner.EnqueueSystemNote("while-disconnected");
+        await ownerUpdated;
         var replayed = WaitForHistoryCountAsync(proxy.Chat, 1);
 
         await proxy.Chat.ReconnectNowAsync(TestContext.Current.CancellationToken);
@@ -97,6 +99,103 @@ public sealed class RemoteAgentSessionScenarioTests
         Assert.Equal(
             (await fixture.RuntimeAsync("gap", 0)).Replay.HighWaterMark,
             replacement.Client.LastAppliedCursor!.Value.Sequence);
+    }
+
+    [Fact]
+    public async Task Reconnect_ReplayGap_SameClientReplacesSnapshotAndContinuesContiguously()
+    {
+        await using var fixture = await ScenarioFixture.CreateAsync(
+            Session("same-client-gap", background: true));
+        await using var transport = fixture.CreateTransport();
+        await using var client = new RemoteAgentSessionClient(transport, fixture.Time);
+        var attachmentToken = Guid.NewGuid().ToString("N");
+        var request = fixture.OpenRequest(
+            "same-client-gap",
+            AgentSessionOpenIntent.Start,
+            ScenarioFixture.DefaultOwner,
+            generation: 0,
+            attachmentToken);
+        await client.ConnectAsync(request, TestContext.Current.CancellationToken);
+        var owner = await fixture.OwnerChatAsync("same-client-gap", 0);
+        var ownerQueues = ((IAgentChat)owner).InputQueues;
+        var queueReceived = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        client.FrameReceived += OnInitialFrame;
+        var initialResult = ownerQueues.CreateQueue(CreateQueue("before-gap", 0));
+        Assert.Equal(AgentInputQueueCommandStatus.Applied, initialResult.Status);
+        await queueReceived.Task;
+        client.FrameReceived -= OnInitialFrame;
+        var retained = client.LastAppliedCursor!.Value;
+        var disconnected = WaitForDisconnectAsync(client);
+        await transport.DropConnectionsAsync();
+        await disconnected;
+        var runtime = await fixture.RuntimeAsync("same-client-gap", 0);
+        await runtime.MarkTransportLostAsync(attachmentToken, generation: 1);
+        var changedResult = ownerQueues.CreateQueue(CreateQueue("after-gap", 1));
+        Assert.Equal(AgentInputQueueCommandStatus.Applied, changedResult.Status);
+        for (var index = 0; index < 4097; index++)
+        {
+            await runtime.PublishAsync(
+                new BusyChangedEvent { IsBusy = index % 2 == 0 },
+                ct: TestContext.Current.CancellationToken);
+        }
+        var reconnectFrames = new List<AgentSessionServerFrame>();
+        var retentionReceived = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        client.FrameReceived += OnReconnectFrame;
+
+        await client.ReconnectAsync(TestContext.Current.CancellationToken);
+        await retentionReceived.Task;
+        client.FrameReceived -= OnReconnectFrame;
+        var snapshotFrame = reconnectFrames[0];
+        var snapshot = Assert.IsType<SessionSnapshotEvent>(
+            AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(snapshotFrame));
+        var reset = client.LastAppliedCursor!.Value;
+        Assert.Equal(retained.Epoch, reset.Epoch);
+        Assert.Equal(runtime.Replay.HighWaterMark, reset.Sequence);
+        Assert.Equal("session-snapshot", snapshotFrame.Type);
+        Assert.Equal(retained, snapshotFrame.ReplayResetCursor);
+        Assert.Equal(
+            ["session-snapshot", "session-retention-changed"],
+            reconnectFrames.Select(frame => frame.Type));
+        AssertQueueStateEqual(ownerQueues.Snapshot, snapshot.Snapshot.InputQueues);
+
+        var following = new List<long>();
+        var bothReceived = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        client.FrameReceived += OnFrame;
+        await runtime.PublishAsync(
+            new BusyChangedEvent { IsBusy = true },
+            ct: TestContext.Current.CancellationToken);
+        await runtime.PublishAsync(
+            new BusyChangedEvent { IsBusy = false },
+            ct: TestContext.Current.CancellationToken);
+        await bothReceived.Task;
+        client.FrameReceived -= OnFrame;
+
+        Assert.Equal([reset.Sequence + 1, reset.Sequence + 2], following);
+
+        void OnInitialFrame(object? sender, AgentSessionServerFrame frame)
+        {
+            if (frame.Type == "queue-changed")
+                queueReceived.TrySetResult();
+        }
+
+        void OnFrame(object? sender, AgentSessionServerFrame frame)
+        {
+            if (frame.Type != "busy-changed")
+                return;
+            following.Add(frame.Sequence);
+            if (following.Count == 2)
+                bothReceived.TrySetResult();
+        }
+
+        void OnReconnectFrame(object? sender, AgentSessionServerFrame frame)
+        {
+            reconnectFrames.Add(frame);
+            if (frame.Type == "session-retention-changed")
+                retentionReceived.TrySetResult();
+        }
     }
 
     [Fact]
@@ -718,7 +817,7 @@ public sealed class RemoteAgentSessionScenarioTests
         void Remove() => chat.InputQueues.Changed -= OnChanged;
     }
 
-    private static Task WaitForHistoryCountAsync(RemoteAgentChat chat, int count)
+    private static Task WaitForHistoryCountAsync(IAgentChat chat, int count)
     {
         if (chat.History.Count >= count)
             return Task.CompletedTask;

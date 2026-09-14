@@ -111,6 +111,90 @@ public sealed partial class RemoteAgentSessionClientTests
     }
 
     [Fact]
+    public async Task ReconnectAsync_ReplayGapMarkedSnapshot_ReplacesCursorThenRequiresContiguousDeltas()
+    {
+        var transport = new ReconnectTransport();
+        await using var client = await ConnectAsync(transport);
+        var retained = client.LastAppliedCursor!.Value;
+        var disconnected = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        client.UnexpectedlyDisconnected += (_, _) => disconnected.TrySetResult();
+        transport.Complete(0);
+        await disconnected.Task;
+        var observed = new List<long>();
+        var deltaReceived = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        client.FrameReceived += (_, frame) =>
+        {
+            observed.Add(frame.Sequence);
+            if (frame.Type == "busy-changed")
+                deltaReceived.TrySetResult();
+        };
+
+        var reconnecting = client.ReconnectAsync();
+        await transport.SendAsync(1, Frame(5, new SessionSnapshotEvent
+        {
+            Snapshot = AgentSessionProtocolCodecTests.Snapshot() with { IsBusy = true },
+        }, replayResetCursor: retained));
+        await reconnecting;
+        await transport.SendAsync(1, Frame(6, new BusyChangedEvent { IsBusy = false }));
+        await deltaReceived.Task;
+
+        Assert.Equal(retained.Epoch, client.LastAppliedCursor!.Value.Epoch);
+        Assert.Equal(6, client.LastAppliedCursor.Value.Sequence);
+        Assert.Equal([5L, 6L], observed);
+    }
+
+    [Fact]
+    public async Task ReconnectAsync_ReplayGapSnapshotWithStaleResetCursor_IsRejected()
+    {
+        var transport = new ReconnectTransport();
+        await using var client = await ConnectAsync(transport);
+        var retained = client.LastAppliedCursor!.Value;
+        var disconnected = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        client.UnexpectedlyDisconnected += (_, _) => disconnected.TrySetResult();
+        transport.Complete(0);
+        await disconnected.Task;
+
+        var reconnecting = client.ReconnectAsync();
+        await transport.SendAsync(1, Frame(5, new SessionSnapshotEvent
+        {
+            Snapshot = AgentSessionProtocolCodecTests.Snapshot(),
+        }, replayResetCursor: retained with { Sequence = 0 }));
+
+        await Assert.ThrowsAsync<RemoteAgentProtocolException>(() => reconnecting);
+        Assert.Equal(retained, client.LastAppliedCursor);
+    }
+
+    [Fact]
+    public async Task ReconnectAsync_ReplayGapSnapshotWithDifferentEpoch_IsRejected()
+    {
+        var transport = new ReconnectTransport();
+        await using var client = await ConnectAsync(transport);
+        var retained = client.LastAppliedCursor!.Value;
+        var disconnected = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        client.UnexpectedlyDisconnected += (_, _) => disconnected.TrySetResult();
+        transport.Complete(0);
+        await disconnected.Task;
+        var replacementEpoch = new RuntimeEpoch { Value = Guid.NewGuid() };
+
+        var reconnecting = client.ReconnectAsync();
+        await transport.SendAsync(1, Frame(5, new SessionSnapshotEvent
+        {
+            Snapshot = AgentSessionProtocolCodecTests.Snapshot(),
+        }, epoch: replacementEpoch, replayResetCursor: new ReplayCursor
+            {
+                Epoch = replacementEpoch,
+                Sequence = retained.Sequence,
+            }));
+
+        await Assert.ThrowsAsync<RemoteAgentProtocolException>(() => reconnecting);
+        Assert.Equal(retained, client.LastAppliedCursor);
+    }
+
+    [Fact]
     public async Task ReconnectAsync_ConnectedDetachedTerminalOrExpired_ThrowsInvalidOperationException()
     {
         var connectedTransport = new TestTransport();

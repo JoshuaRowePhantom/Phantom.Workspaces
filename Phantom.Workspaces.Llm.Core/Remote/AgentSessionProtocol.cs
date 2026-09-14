@@ -97,6 +97,7 @@ public sealed record AgentSessionServerFrame
     public required Guid CorrelationId { get; init; }
     public required RuntimeEpoch RuntimeEpoch { get; init; }
     public required long Sequence { get; init; }
+    public ReplayCursor? ReplayResetCursor { get; internal init; }
     public required JsonElement Payload { get; init; }
 }
 
@@ -464,6 +465,9 @@ internal static class AgentSessionProtocolCodec
             CorrelationId = element.GetProperty("correlation-id").GetGuid(),
             RuntimeEpoch = JsonSerializer.Deserialize<RuntimeEpoch>(element.GetProperty("runtime-epoch"), Options),
             Sequence = element.GetProperty("sequence").GetInt64(),
+            ReplayResetCursor = element.TryGetProperty("replay-reset-cursor", out var resetCursor)
+                ? JsonSerializer.Deserialize<ReplayCursor>(resetCursor, Options)
+                : null,
             Payload = element.GetProperty("payload").Clone(),
         };
         ValidateFrame(frame);
@@ -727,6 +731,11 @@ internal static class AgentSessionProtocolCodec
         if (value.CorrelationId == Guid.Empty) throw Protocol("Correlation id cannot be empty.");
         if (value.RuntimeEpoch.Value == Guid.Empty) throw Protocol("Runtime epoch cannot be empty.");
         if (value.Sequence <= 0) throw Protocol("Server frame sequence must be positive.");
+        if (value.ReplayResetCursor is { } reset
+            && (value.Type != "session-snapshot"
+                || reset.Epoch != value.RuntimeEpoch
+                || reset.Sequence >= value.Sequence))
+            throw Protocol("Replay reset metadata is invalid.");
         if (value.Payload.ValueKind != JsonValueKind.Object) throw Protocol("Server frame payload must be an object.");
     }
 
@@ -782,7 +791,8 @@ internal static class AgentSessionProtocolCodec
     };
     private static readonly HashSet<string> FrameNames = new(StringComparer.Ordinal)
     {
-        "protocol-version", "type", "correlation-id", "runtime-epoch", "sequence", "payload",
+        "protocol-version", "type", "correlation-id", "runtime-epoch", "sequence",
+        "replay-reset-cursor", "payload",
     };
     private static readonly HashSet<string> EventTypes = new(StringComparer.Ordinal)
     {

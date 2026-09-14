@@ -33,13 +33,19 @@ internal sealed class AgentSessionReplayBuffer
         get { lock (this.gate) return this.highWaterMark; }
     }
 
-    internal AgentSessionServerFrame Append(Guid correlationId, AgentSessionServerEvent value)
+    internal AgentSessionServerFrame Append(
+        Guid correlationId,
+        AgentSessionServerEvent value,
+        ProtocolReplayCursor? replayResetCursor = null)
     {
         ArgumentNullException.ThrowIfNull(value);
         lock (this.gate)
         {
             var frame = AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.CreateFrame(
-                this.epoch, ++this.highWaterMark, correlationId, value);
+                this.epoch, ++this.highWaterMark, correlationId, value) with
+            {
+                ReplayResetCursor = replayResetCursor,
+            };
             var bytes = Encoding.UTF8.GetByteCount(AgentSessionProtocolCodec.SerializeFrame(frame).GetRawText());
             this.entries.AddLast(new Entry(frame, this.timeProvider.GetUtcNow(), bytes));
             this.retainedBytes += bytes;

@@ -14,6 +14,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     private readonly object gate = new();
     private readonly SemaphoreSlim transitionGate = new(1, 1);
     private readonly Dictionary<string, AttachmentState> attachments = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, long> attachmentGenerations = new(StringComparer.Ordinal);
     private readonly Dictionary<Guid, CommandCacheEntry> commands = [];
     private readonly Dictionary<AgentChatRunningItem, string> runningItemIds =
         new(ReferenceEqualityComparer.Instance);
@@ -85,7 +86,14 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     internal AgentSessionReplayBuffer Replay { get; }
     internal bool IsFenced { get { lock (this.gate) return this.fenced; } }
     internal bool HasTerminated { get { lock (this.gate) return this.hasTerminated; } }
-    internal int ViewerCount { get { lock (this.gate) return this.attachments.Count; } }
+    internal int ViewerCount
+    {
+        get
+        {
+            lock (this.gate)
+                return this.ConnectedViewerCountUnderLock();
+        }
+    }
     internal bool ContinueInBackground { get { lock (this.gate) return this.continueInBackground; } }
 
     internal static JsonElement SerializeSubagent(IRunningSubAgent item) =>
@@ -104,7 +112,11 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(request);
         lock (this.gate)
-            return this.AttachUnderLock(request, staged: false);
+        {
+            var attachment = this.AttachUnderLock(request, staged: false);
+            this.PublishRetentionChangedUnderLock(request.Channel);
+            return attachment;
+        }
     }
 
     private RemoteAgentAttachmentLease AttachUnderLock(
@@ -121,16 +133,32 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             existing.GraceTimer?.Dispose();
             existing.Publisher.AbortUnderLock(
                 new ObjectDisposedException(nameof(RemoteAgentAttachmentLease)));
-            existing.Publisher = new AttachmentPublisher(request.Channel, staged);
             existing.Disconnected = false;
             existing.GraceTimer = null;
             existing.Generation++;
+            this.attachmentGenerations[request.AttachmentToken] = existing.Generation;
+            existing.ReceiveCancellation = new CancellationTokenSource();
+            existing.Publisher = this.CreatePublisher(
+                request.AttachmentToken,
+                existing.Generation,
+                request.Channel,
+                staged);
             return new RemoteAgentAttachmentLease(this, request.AttachmentToken, existing.Generation, request.Cursor);
         }
 
-        var state = new AttachmentState(request.Channel, staged);
+        var generation = this.attachmentGenerations.TryGetValue(
+            request.AttachmentToken,
+            out var previousGeneration)
+                ? previousGeneration + 1
+                : 1;
+        this.attachmentGenerations[request.AttachmentToken] = generation;
+        var publisher = this.CreatePublisher(
+            request.AttachmentToken,
+            generation,
+            request.Channel,
+            staged);
+        var state = new AttachmentState(publisher, generation);
         this.attachments.Add(request.AttachmentToken, state);
-        this.PublishRetentionChangedUnderLock(request.Channel);
         return new RemoteAgentAttachmentLease(this, request.AttachmentToken, state.Generation, request.Cursor);
     }
 
@@ -142,7 +170,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             return snapshot with
             {
                 ContinueInBackground = this.continueInBackground,
-                ViewerCount = this.attachments.Count,
+                ViewerCount = this.ConnectedViewerCountUnderLock(),
             };
         }
     }
@@ -160,26 +188,36 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
                 try
                 {
                     attachment = this.AttachUnderLock(request, staged: true);
+                    ProtocolReplayCursor? replayResetCursor = null;
                     if (request.Cursor is { } cursor)
                     {
                         var replay = this.Replay.ReadAfter(cursor);
                         if (replay.IsCovered && replay.Frames.Count > 0)
+                        {
+                            this.PublishRetentionChangedUnderLock(excludedChannel: null);
                             return new InitialAttachmentState(attachment, replay.Frames, null);
+                        }
+                        if (!replay.IsCovered
+                            && cursor.Epoch == this.Epoch
+                            && cursor.Sequence < this.Replay.HighWaterMark)
+                            replayResetCursor = cursor;
                     }
 
                     var snapshot = this.snapshotFactory() with
                     {
                         ContinueInBackground = this.continueInBackground,
-                        ViewerCount = this.attachments.Count,
+                        ViewerCount = this.ConnectedViewerCountUnderLock(),
                     };
                     var frame = this.Replay.Append(
                         Guid.NewGuid(),
-                        new SessionSnapshotEvent { Snapshot = snapshot });
+                        new SessionSnapshotEvent { Snapshot = snapshot },
+                        replayResetCursor);
                     var serialized = AgentSessionProtocolCodec.SerializeFrame(frame);
                     foreach (var state in this.attachments.Values.Where(
                                  value => !value.Disconnected
                                      && !ReferenceEquals(value.Channel, request.Channel)))
                         state.Publisher.QueueUnderLock(serialized, waitForWrite: false);
+                    this.PublishRetentionChangedUnderLock(excludedChannel: null);
                     return new InitialAttachmentState(attachment, [frame], snapshot);
                 }
                 catch
@@ -310,18 +348,19 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         return true;
     }
 
-    internal ValueTask MarkTransportLostAsync(string token)
+    internal ValueTask MarkTransportLostAsync(string token, long generation)
     {
+        CancellationTokenSource? receiveCancellation = null;
         lock (this.gate)
         {
-            if (this.fenced || !this.attachments.TryGetValue(token, out var state) || state.Disconnected)
+            if (this.fenced
+                || !this.attachments.TryGetValue(token, out var state)
+                || state.Generation != generation
+                || state.Disconnected)
                 return ValueTask.CompletedTask;
-            state.Disconnected = true;
-            state.Publisher.AbortUnderLock(
-                new ObjectDisposedException(nameof(RemoteAgentAttachmentLease)));
-            state.GraceTimer = this.timeProvider.CreateTimer(
-                _ => _ = this.ExpireDisconnectedAsync(token), null, ReconnectGrace, Timeout.InfiniteTimeSpan);
+            receiveCancellation = this.MarkDisconnectedUnderLock(token, state);
         }
+        receiveCancellation.Cancel();
         return ValueTask.CompletedTask;
     }
 
@@ -335,6 +374,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     {
         Task? terminationTask = null;
         Task? publisherTask = null;
+        CancellationTokenSource? receiveCancellation = null;
         var changed = false;
         await this.transitionGate.WaitAsync().ConfigureAwait(false);
         try
@@ -345,6 +385,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
                     return;
                 this.attachments.Remove(token);
                 state.GraceTimer?.Dispose();
+                receiveCancellation = state.ReceiveCancellation;
                 publisherTask = state.Publisher.AbortUnderLock(
                     new ObjectDisposedException(nameof(RemoteAgentAttachmentLease)));
                 state.Released.TrySetResult();
@@ -357,6 +398,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         {
             this.transitionGate.Release();
         }
+        receiveCancellation?.Cancel();
         if (publisherTask is not null)
             await publisherTask.ConfigureAwait(false);
         if (terminationTask is not null)
@@ -373,6 +415,28 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
                 && !state.Disconnected
                     ? state.Channel
                     : null;
+    }
+
+    internal CancellationToken GetReceiveCancellationToken(string token, long generation)
+    {
+        lock (this.gate)
+            return this.attachments.TryGetValue(token, out var state)
+                && state.Generation == generation
+                && !state.Disconnected
+                    ? state.ReceiveCancellation.Token
+                    : new CancellationToken(canceled: true);
+    }
+
+    internal void EnsureConnected(string token, long generation)
+    {
+        lock (this.gate)
+        {
+            if (this.fenced
+                || !this.attachments.TryGetValue(token, out var state)
+                || state.Generation != generation
+                || state.Disconnected)
+                throw new ObjectDisposedException(nameof(RemoteAgentAttachmentLease));
+        }
     }
 
     internal async ValueTask<bool> ActivateAttachmentAsync(
@@ -408,6 +472,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
 
     internal async ValueTask PublishToAttachmentAsync(
         string token,
+        long generation,
         AgentSessionServerEvent value,
         Guid correlationId,
         CancellationToken ct)
@@ -416,7 +481,9 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         Task[] writes;
         lock (this.gate)
         {
-            if (!this.attachments.TryGetValue(token, out var state) || state.Disconnected)
+            if (!this.attachments.TryGetValue(token, out var state)
+                || state.Generation != generation
+                || state.Disconnected)
                 throw new ObjectDisposedException(nameof(RemoteAgentAttachmentLease));
             frame = this.Replay.Append(correlationId, value);
             var serialized = AgentSessionProtocolCodec.SerializeFrame(frame);
@@ -440,28 +507,33 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         return this.termination = this.TerminateCoreAsync();
     }
 
-    private async Task ExpireDisconnectedAsync(string token)
+    private async Task ExpireDisconnectedAsync(string token, long generation)
     {
-        long generation;
         lock (this.gate)
         {
-            if (!this.attachments.TryGetValue(token, out var state) || !state.Disconnected) return;
-            generation = state.Generation;
+            if (!this.attachments.TryGetValue(token, out var state)
+                || state.Generation != generation
+                || !state.Disconnected)
+                return;
         }
         await this.ReleaseAsync(token, generation).ConfigureAwait(false);
     }
 
-    private void PublishRetentionChangedUnderLock(IMessageChannel excludedChannel)
+    private void PublishRetentionChangedUnderLock(IMessageChannel? excludedChannel)
     {
+        var recipients = this.attachments.Values.Where(
+            value => !value.Disconnected
+                && (excludedChannel is null
+                    || !ReferenceEquals(value.Channel, excludedChannel))).ToArray();
+        if (recipients.Length == 0)
+            return;
         var frame = this.Replay.Append(Guid.NewGuid(), new SessionRetentionChangedEvent
         {
             ContinueInBackground = this.continueInBackground,
-            ViewerCount = this.attachments.Count,
+            ViewerCount = this.ConnectedViewerCountUnderLock(),
         });
         var serialized = AgentSessionProtocolCodec.SerializeFrame(frame);
-        foreach (var state in this.attachments.Values.Where(
-                     value => !value.Disconnected
-                         && !ReferenceEquals(value.Channel, excludedChannel)))
+        foreach (var state in recipients)
             state.Publisher.QueueUnderLock(serialized, waitForWrite: false);
     }
 
@@ -473,7 +545,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         {
             if (this.fenced) return;
             background = this.continueInBackground;
-            viewers = this.attachments.Count;
+            viewers = this.ConnectedViewerCountUnderLock();
         }
         await this.PublishAsync(new SessionRetentionChangedEvent
         {
@@ -609,13 +681,81 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             throw new AggregateException("Remote agent session shutdown failed.", failures);
     }
 
-    private sealed class AttachmentState(IMessageChannel channel, bool staged)
+    private int ConnectedViewerCountUnderLock()
+        => this.attachments.Values.Count(state => !state.Disconnected);
+
+    private AttachmentPublisher CreatePublisher(
+        string token,
+        long generation,
+        IMessageChannel channel,
+        bool staged)
+        => new(
+            channel,
+            staged,
+            (publisher, error) =>
+                this.OnPublisherFault(token, generation, publisher, error));
+
+    private void OnPublisherFault(
+        string token,
+        long generation,
+        AttachmentPublisher publisher,
+        Exception error)
+    {
+        CancellationTokenSource? receiveCancellation = null;
+        lock (this.gate)
+        {
+            if (this.fenced
+                || !this.attachments.TryGetValue(token, out var state)
+                || state.Generation != generation
+                || state.Disconnected
+                || !ReferenceEquals(state.Publisher, publisher))
+                return;
+            receiveCancellation = this.MarkDisconnectedUnderLock(
+                token,
+                state,
+                abortPublisher: false);
+        }
+        receiveCancellation.Cancel();
+    }
+
+    private CancellationTokenSource MarkDisconnectedUnderLock(
+        string token,
+        AttachmentState state,
+        bool abortPublisher = true)
+    {
+        state.Disconnected = true;
+        if (abortPublisher)
+        {
+            state.Publisher.AbortUnderLock(
+                new ObjectDisposedException(nameof(RemoteAgentAttachmentLease)));
+        }
+        var generation = state.Generation;
+        state.GraceTimer = this.timeProvider.CreateTimer(
+            _ => ObserveBackgroundFault(this.ExpireDisconnectedAsync(token, generation)),
+            null,
+            ReconnectGrace,
+            Timeout.InfiniteTimeSpan);
+        this.PublishRetentionChangedUnderLock(state.Channel);
+        return state.ReceiveCancellation;
+    }
+
+    private static void ObserveBackgroundFault(Task task)
+        => _ = task.ContinueWith(
+            completed => _ = completed.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+
+    private sealed class AttachmentState(
+        AttachmentPublisher publisher,
+        long generation)
     {
         internal IMessageChannel Channel => this.Publisher.Channel;
-        internal AttachmentPublisher Publisher { get; set; } = new(channel, staged);
+        internal AttachmentPublisher Publisher { get; set; } = publisher;
+        internal CancellationTokenSource ReceiveCancellation { get; set; } = new();
         internal bool Disconnected { get; set; }
         internal ITimer? GraceTimer { get; set; }
-        internal long Generation { get; set; } = 1;
+        internal long Generation { get; set; } = generation;
         internal TaskCompletionSource Released { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
@@ -635,13 +775,18 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource activation =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly Action<AttachmentPublisher, Exception> onFault;
         private readonly Task pump;
         private volatile PublicationState state;
         private volatile Exception? failure;
 
-        internal AttachmentPublisher(IMessageChannel channel, bool staged)
+        internal AttachmentPublisher(
+            IMessageChannel channel,
+            bool staged,
+            Action<AttachmentPublisher, Exception> onFault)
         {
             this.Channel = channel;
+            this.onFault = onFault;
             this.state = staged ? PublicationState.Staged : PublicationState.Active;
             ObserveFault(this.activation.Task);
             this.pump = this.RunAsync();
@@ -741,6 +886,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
                     {
                         this.failure = error;
                         this.state = PublicationState.Closed;
+                        this.onFault(this, error);
                         publication.Completion?.TrySetException(error);
                         this.publications.Writer.TryComplete();
                         while (this.publications.Reader.TryRead(out var remaining))
@@ -929,7 +1075,15 @@ internal sealed class RemoteAgentAttachmentLease : IAsyncDisposable
         AgentSessionServerEvent value,
         Guid correlationId,
         CancellationToken ct = default)
-        => this.owner.PublishToAttachmentAsync(this.token, value, correlationId, ct);
+        => this.owner.PublishToAttachmentAsync(
+            this.token,
+            this.generation,
+            value,
+            correlationId,
+            ct);
+
+    internal void EnsureConnected()
+        => this.owner.EnsureConnected(this.token, this.generation);
 
     internal ValueTask<bool> ActivateAsync(CancellationToken ct = default)
         => this.owner.ActivateAttachmentAsync(this.token, this.generation, ct);
@@ -940,7 +1094,7 @@ internal sealed class RemoteAgentAttachmentLease : IAsyncDisposable
     internal ValueTask MarkTransportLostAsync()
     {
         Volatile.Write(ref this.transportLost, 1);
-        return this.owner.MarkTransportLostAsync(this.token);
+        return this.owner.MarkTransportLostAsync(this.token, this.generation);
     }
 
     internal void StartReceiving(Func<AgentSessionCommand, CancellationToken, ValueTask> handleAsync)
@@ -967,15 +1121,22 @@ internal sealed class RemoteAgentAttachmentLease : IAsyncDisposable
         Func<AgentSessionCommand, CancellationToken, ValueTask> handleAsync,
         CancellationToken ct)
     {
+        using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            ct,
+            this.owner.GetReceiveCancellationToken(this.token, this.generation));
+        var receiveToken = linkedCancellation.Token;
         try
         {
             var channel = this.owner.GetConnectedChannel(this.token, this.generation);
             if (channel is null) return;
-            await foreach (var value in channel.Reader.ReadAllAsync(ct).ConfigureAwait(false))
-                await handleAsync(AgentSessionProtocolCodec.DeserializeCommand(value), ct).ConfigureAwait(false);
-            if (!ct.IsCancellationRequested) await this.MarkTransportLostAsync().ConfigureAwait(false);
+            await foreach (var value in channel.Reader.ReadAllAsync(receiveToken).ConfigureAwait(false))
+                await handleAsync(
+                    AgentSessionProtocolCodec.DeserializeCommand(value),
+                    receiveToken).ConfigureAwait(false);
+            if (!receiveToken.IsCancellationRequested)
+                await this.MarkTransportLostAsync().ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (OperationCanceledException) when (receiveToken.IsCancellationRequested) { }
         catch
         {
             await this.MarkTransportLostAsync().ConfigureAwait(false);

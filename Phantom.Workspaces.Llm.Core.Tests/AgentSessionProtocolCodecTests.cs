@@ -319,6 +319,83 @@ public sealed class AgentSessionProtocolCodecTests
     }
 
     [Fact]
+    public void RoundTrip_ReplayResetSnapshot_PreservesReplacedCursor()
+    {
+        var epoch = Epoch();
+        var reset = new ReplayCursor { Epoch = epoch, Sequence = 4 };
+        var frame = AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.CreateFrame(
+            epoch,
+            9,
+            Guid.NewGuid(),
+            new SessionSnapshotEvent { Snapshot = Snapshot() }) with
+        {
+            ReplayResetCursor = reset,
+        };
+
+        var copy = AgentSessionProtocolCodec.DeserializeFrame(
+            AgentSessionProtocolCodec.SerializeFrame(frame));
+
+        Assert.Equal(reset, copy.ReplayResetCursor);
+    }
+
+    [Fact]
+    public void Serialize_ReplayResetOnDelta_RejectsFrame()
+    {
+        var epoch = Epoch();
+        var frame = AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.CreateFrame(
+            epoch,
+            9,
+            Guid.NewGuid(),
+            new BusyChangedEvent { IsBusy = true }) with
+        {
+            ReplayResetCursor = new ReplayCursor { Epoch = epoch, Sequence = 4 },
+        };
+
+        Assert.Throws<RemoteAgentProtocolException>(() =>
+            AgentSessionProtocolCodec.SerializeFrame(frame));
+    }
+
+    [Fact]
+    public void Serialize_ReplayResetFromDifferentEpoch_RejectsFrame()
+    {
+        var frame = AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.CreateFrame(
+            Epoch(),
+            9,
+            Guid.NewGuid(),
+            new SessionSnapshotEvent { Snapshot = Snapshot() }) with
+        {
+            ReplayResetCursor = new ReplayCursor
+            {
+                Epoch = new RuntimeEpoch
+                {
+                    Value = Guid.Parse("22222222-2222-2222-2222-222222222222"),
+                },
+                Sequence = 4,
+            },
+        };
+
+        Assert.Throws<RemoteAgentProtocolException>(() =>
+            AgentSessionProtocolCodec.SerializeFrame(frame));
+    }
+
+    [Fact]
+    public void Serialize_ReplayResetWithoutAdvancingSequence_RejectsFrame()
+    {
+        var epoch = Epoch();
+        var frame = AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.CreateFrame(
+            epoch,
+            9,
+            Guid.NewGuid(),
+            new SessionSnapshotEvent { Snapshot = Snapshot() }) with
+        {
+            ReplayResetCursor = new ReplayCursor { Epoch = epoch, Sequence = 9 },
+        };
+
+        Assert.Throws<RemoteAgentProtocolException>(() =>
+            AgentSessionProtocolCodec.SerializeFrame(frame));
+    }
+
+    [Fact]
     public void RoundTrip_SessionRetentionChanged_PreservesPreferenceAndViewerCount()
     {
         var frame = AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.CreateFrame(Epoch(), 1, Guid.NewGuid(),
