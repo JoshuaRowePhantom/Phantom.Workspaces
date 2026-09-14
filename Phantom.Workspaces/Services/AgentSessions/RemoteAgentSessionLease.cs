@@ -134,6 +134,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             existing.Publisher.AbortUnderLock(
                 new ObjectDisposedException(nameof(RemoteAgentAttachmentLease)));
             existing.Disconnected = false;
+            existing.InboundFenced = false;
             existing.GraceTimer = null;
             existing.Generation++;
             this.attachmentGenerations[request.AttachmentToken] = existing.Generation;
@@ -355,7 +356,6 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
 
     internal ValueTask MarkTransportLostAsync(string token, long generation)
     {
-        CancellationTokenSource? receiveCancellation = null;
         lock (this.gate)
         {
             if (this.fenced
@@ -363,9 +363,8 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
                 || state.Generation != generation
                 || state.Disconnected)
                 return ValueTask.CompletedTask;
-            receiveCancellation = this.MarkDisconnectedUnderLock(token, state);
+            this.MarkDisconnectedUnderLock(token, state, fenceInbound: false);
         }
-        receiveCancellation.Cancel();
         return ValueTask.CompletedTask;
     }
 
@@ -427,7 +426,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         lock (this.gate)
             return this.attachments.TryGetValue(token, out var state)
                 && state.Generation == generation
-                && !state.Disconnected
+                && !state.InboundFenced
                     ? state.ReceiveCancellation.Token
                     : new CancellationToken(canceled: true);
     }
@@ -439,7 +438,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             if (this.fenced
                 || !this.attachments.TryGetValue(token, out var state)
                 || state.Generation != generation
-                || state.Disconnected)
+                || state.InboundFenced)
                 throw new ObjectDisposedException(nameof(RemoteAgentAttachmentLease));
         }
     }
@@ -718,17 +717,20 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             receiveCancellation = this.MarkDisconnectedUnderLock(
                 token,
                 state,
-                abortPublisher: false);
+                abortPublisher: false,
+                fenceInbound: true);
         }
-        receiveCancellation.Cancel();
+        receiveCancellation?.Cancel();
     }
 
-    private CancellationTokenSource MarkDisconnectedUnderLock(
+    private CancellationTokenSource? MarkDisconnectedUnderLock(
         string token,
         AttachmentState state,
-        bool abortPublisher = true)
+        bool abortPublisher = true,
+        bool fenceInbound = true)
     {
         state.Disconnected = true;
+        state.InboundFenced = fenceInbound;
         if (abortPublisher)
         {
             state.Publisher.AbortUnderLock(
@@ -741,7 +743,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             ReconnectGrace,
             Timeout.InfiniteTimeSpan);
         this.PublishRetentionChangedUnderLock(state.Channel);
-        return state.ReceiveCancellation;
+        return fenceInbound ? state.ReceiveCancellation : null;
     }
 
     private static void ObserveBackgroundFault(Task task)
@@ -759,6 +761,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         internal AttachmentPublisher Publisher { get; set; } = publisher;
         internal CancellationTokenSource ReceiveCancellation { get; set; } = new();
         internal bool Disconnected { get; set; }
+        internal bool InboundFenced { get; set; }
         internal ITimer? GraceTimer { get; set; }
         internal long Generation { get; set; } = generation;
         internal TaskCompletionSource Released { get; } =
