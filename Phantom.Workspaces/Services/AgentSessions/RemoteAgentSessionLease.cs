@@ -643,6 +643,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         {
             this.Channel = channel;
             this.state = staged ? PublicationState.Staged : PublicationState.Active;
+            ObserveFault(this.activation.Task);
             this.pump = this.RunAsync();
             if (!staged)
             {
@@ -658,6 +659,8 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             var completion = waitForWrite
                 ? new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
                 : null;
+            if (completion is not null)
+                ObserveFault(completion.Task);
             var publication = new Publication(frame, completion);
             if (this.state == PublicationState.Staged)
             {
@@ -758,6 +761,13 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
                 this.cancellation.Dispose();
             }
         }
+
+        private static void ObserveFault(Task task)
+            => _ = task.ContinueWith(
+                completed => _ = completed.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
 
         private readonly record struct Publication(
             JsonElement? Frame,
