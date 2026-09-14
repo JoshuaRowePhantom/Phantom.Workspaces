@@ -24,6 +24,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     private readonly Func<AgentSessionSnapshot> snapshotFactory;
     private readonly AgentSessionOwnershipLease? ownershipLease;
     private readonly IAsyncDisposable? runtimeLifetime;
+    private readonly AttachmentPublisherLifetimeHooks? publisherLifetimeHooks;
     private HashSet<string> queueIds;
     private Task? termination;
     private string terminalReason = "runtime-stopped";
@@ -43,7 +44,8 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         TimeProvider? timeProvider = null,
         AgentSessionOwnershipLease? ownershipLease = null,
         IAsyncDisposable? runtimeLifetime = null,
-        CurrentSessionContext? sessionContext = null)
+        CurrentSessionContext? sessionContext = null,
+        AttachmentPublisherLifetimeHooks? publisherLifetimeHooks = null)
     {
         this.SessionId = !string.IsNullOrWhiteSpace(sessionId) ? sessionId : throw new ArgumentException("Session id is required.", nameof(sessionId));
         this.OwnershipGeneration = ownershipGeneration >= 0 ? ownershipGeneration : throw new ArgumentOutOfRangeException(nameof(ownershipGeneration));
@@ -56,6 +58,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         this.timeProvider = timeProvider ?? TimeProvider.System;
         this.ownershipLease = ownershipLease;
         this.runtimeLifetime = runtimeLifetime;
+        this.publisherLifetimeHooks = publisherLifetimeHooks;
         this.SessionContext = sessionContext;
         this.Replay = new AgentSessionReplayBuffer(epoch, this.timeProvider);
         var initialQueues = this.Chat.InputQueues.Snapshot.Queues;
@@ -697,7 +700,8 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             channel,
             staged,
             (publisher, error) =>
-                this.OnPublisherFault(token, generation, publisher, error));
+                this.OnPublisherFault(token, generation, publisher, error),
+            this.publisherLifetimeHooks);
 
     private void OnPublisherFault(
         string token,
@@ -770,6 +774,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
 
     private sealed class AttachmentPublisher
     {
+        private readonly object cancellationLifetimeGate = new();
         private readonly Channel<Publication> publications =
             System.Threading.Channels.Channel.CreateUnbounded<Publication>(new UnboundedChannelOptions
             {
@@ -784,6 +789,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         private readonly TaskCompletionSource activation =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly Action<AttachmentPublisher, Exception> onFault;
+        private readonly AttachmentPublisherLifetimeHooks? lifetimeHooks;
         private readonly Task pump;
         private volatile PublicationState state;
         private volatile Exception? failure;
@@ -791,10 +797,12 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         internal AttachmentPublisher(
             IMessageChannel channel,
             bool staged,
-            Action<AttachmentPublisher, Exception> onFault)
+            Action<AttachmentPublisher, Exception> onFault,
+            AttachmentPublisherLifetimeHooks? lifetimeHooks)
         {
             this.Channel = channel;
             this.onFault = onFault;
+            this.lifetimeHooks = lifetimeHooks;
             this.state = staged ? PublicationState.Staged : PublicationState.Active;
             ObserveFault(this.activation.Task);
             this.pump = this.RunAsync();
@@ -865,8 +873,12 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
                 publication.Completion?.TrySetException(error);
             this.staged.Clear();
             this.activation.TrySetException(error);
-            this.publications.Writer.TryComplete();
-            this.cancellation.Cancel();
+            lock (this.cancellationLifetimeGate)
+            {
+                this.publications.Writer.TryComplete();
+                this.lifetimeHooks?.AfterQueueCompletedBeforeAbortCancellation?.Invoke();
+                this.cancellation.Cancel();
+            }
             this.start.TrySetResult();
             return this.pump;
         }
@@ -912,7 +924,9 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
                     ?? new ObjectDisposedException(nameof(RemoteAgentAttachmentLease));
                 while (this.publications.Reader.TryRead(out var remaining))
                     remaining.Completion?.TrySetException(error);
-                this.cancellation.Dispose();
+                this.lifetimeHooks?.BeforeCancellationDisposed?.Invoke();
+                lock (this.cancellationLifetimeGate)
+                    this.cancellation.Dispose();
             }
         }
 
@@ -1056,6 +1070,12 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
                 state.Publisher.QueueUnderLock(serialized, waitForWrite: false);
         }
     }
+}
+
+internal sealed record AttachmentPublisherLifetimeHooks
+{
+    internal Action? AfterQueueCompletedBeforeAbortCancellation { get; init; }
+    internal Action? BeforeCancellationDisposed { get; init; }
 }
 
 internal sealed class RemoteAgentAttachmentLease : IAsyncDisposable

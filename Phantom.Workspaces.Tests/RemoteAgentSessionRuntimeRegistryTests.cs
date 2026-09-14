@@ -662,6 +662,73 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
     }
 
     [Fact]
+    public async Task RuntimeDispose_PumpFinalizesBetweenQueueCompletionAndAbortCancellation_PreservesPrimaryFailure()
+    {
+        using var allowAbortCancellation = new ManualResetEventSlim();
+        var queueCompleted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var pumpFinalizing = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var testCancellation = TestContext.Current.CancellationToken;
+        var lease = Lease(
+            true,
+            persistTerminal: _ => ValueTask.FromException(
+                new InvalidOperationException("persistence failed")),
+            publisherLifetimeHooks: new AttachmentPublisherLifetimeHooks
+            {
+                AfterQueueCompletedBeforeAbortCancellation = () =>
+                {
+                    queueCompleted.TrySetResult();
+                    allowAbortCancellation.Wait(testCancellation);
+                },
+                BeforeCancellationDisposed = () => pumpFinalizing.TrySetResult(),
+            });
+        lease.Attach(Attach("active"));
+        var disposal = Task.Run(
+            () => lease.DisposeAsync().AsTask(),
+            TestContext.Current.CancellationToken);
+
+        await queueCompleted.Task;
+        await pumpFinalizing.Task;
+        allowAbortCancellation.Set();
+        var failure = await Assert.ThrowsAsync<AggregateException>(() => disposal);
+
+        Assert.Contains(failure.InnerExceptions,
+            error => error.Message == "persistence failed");
+        Assert.DoesNotContain(failure.InnerExceptions,
+            error => error is ObjectDisposedException);
+    }
+
+    [Fact]
+    public async Task RuntimeDispose_ConcurrentAttachmentAbort_PreservesPrimaryPersistenceFailure()
+    {
+        var persistenceEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releasePersistence = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var lease = Lease(true, persistTerminal: PersistTerminalAsync);
+        var attachment = lease.Attach(Attach("active"));
+        var disposal = lease.DisposeAsync().AsTask();
+        await persistenceEntered.Task;
+
+        await attachment.ReleaseExplicitlyAsync();
+        releasePersistence.TrySetResult();
+        var failure = await Assert.ThrowsAsync<AggregateException>(() => disposal);
+
+        Assert.Contains(failure.InnerExceptions,
+            error => error.Message == "persistence failed");
+        Assert.DoesNotContain(failure.InnerExceptions,
+            error => error is ObjectDisposedException);
+
+        async ValueTask PersistTerminalAsync(CancellationToken _)
+        {
+            persistenceEntered.TrySetResult();
+            await releasePersistence.Task;
+            throw new InvalidOperationException("persistence failed");
+        }
+    }
+
+    [Fact]
     public async Task RuntimeDispose_AwaitsTerminalWriteBeforeClosingChannel()
     {
         var channel = new BlockingWriteChannel();
@@ -822,9 +889,11 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
         IAgentChat? chat = null,
         TimeProvider? time = null,
         Func<bool, CancellationToken, ValueTask>? persistRetention = null,
-        Func<CancellationToken, ValueTask>? persistTerminal = null)
+        Func<CancellationToken, ValueTask>? persistTerminal = null,
+        AttachmentPublisherLifetimeHooks? publisherLifetimeHooks = null)
         => new("session", 1, Epoch(), chat ?? Chat().Object, background, () => null!,
-            persistRetention, persistTerminal, time);
+            persistRetention, persistTerminal, time,
+            publisherLifetimeHooks: publisherLifetimeHooks);
 
     private static Mock<IAgentChat> Chat()
     {
