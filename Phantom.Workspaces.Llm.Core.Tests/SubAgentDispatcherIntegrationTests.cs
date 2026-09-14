@@ -595,10 +595,13 @@ public sealed class SubAgentDispatcherIntegrationTests
         await using var scenario = new ControlledDispatchScenario("dispose-created");
 
         await scenario.ReadThroughCreatedAsync();
-        await scenario.WaitForRunningAsync();
+        await scenario.Stream.WaitForClaimedAsync(scenario.TimeoutToken);
         await scenario.DisposeEnumeratorAsync();
 
         Assert.Equal(1, scenario.Stream.DisposalCount);
+        Assert.Equal(0, scenario.TestChatClient.QueuedStreamingResponseCount);
+        Assert.Equal(0, scenario.Client.ActiveDispatchCancellationRegistrationCount);
+        Assert.False(await scenario.Enumerator.MoveNextAsync());
         scenario.AssertInterruptedChildSettled();
     }
 

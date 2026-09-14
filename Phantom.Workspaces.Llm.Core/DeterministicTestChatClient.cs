@@ -102,6 +102,7 @@ public sealed class DeterministicTestChatClient : IChatClient
 
         try
         {
+            queuedStream.MarkClaimed();
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -169,6 +170,7 @@ public sealed class DeterministicTestChatClient : IChatClient
         private readonly ConcurrentQueue<QueuedStreamItem> items = new();
         private readonly SemaphoreSlim itemSignal = new(0);
         private readonly TaskCompletionSource ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource claimed = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource disposalReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource disposalStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource disposed = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -189,6 +191,9 @@ public sealed class DeterministicTestChatClient : IChatClient
         public int DisposalCount => Volatile.Read(ref this.disposalCount);
 
         public void MarkReady() => this.ready.TrySetResult();
+
+        public Task WaitForClaimedAsync(CancellationToken cancellationToken = default)
+            => this.claimed.Task.WaitAsync(cancellationToken);
 
         public void ReleaseDisposal() => this.disposalReady.TrySetResult();
 
@@ -230,6 +235,8 @@ public sealed class DeterministicTestChatClient : IChatClient
 
         internal Task WaitUntilReadyAsync(CancellationToken cancellationToken)
             => this.ready.Task.WaitAsync(cancellationToken);
+
+        internal void MarkClaimed() => this.claimed.TrySetResult();
 
         internal async Task<QueuedStreamItem> DequeueAsync(CancellationToken cancellationToken)
         {
