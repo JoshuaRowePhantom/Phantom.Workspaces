@@ -213,6 +213,7 @@ public sealed partial class RemoteAgentSessionHostTests
         await using var second = await fixture.Host.OpenAsync(
             fixture.Request(AgentSessionOpenIntent.Attach, secondChannel, "second"));
         await firstChannel.Output.ReadAsync();
+        await firstChannel.Output.ReadAsync();
         await secondChannel.Output.ReadAsync();
         var firstCommand = new ModalResponseCommand
         {
@@ -236,6 +237,9 @@ public sealed partial class RemoteAgentSessionHostTests
         Assert.IsType<CommandCompletedEvent>(
             AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(
                 AgentSessionProtocolCodec.DeserializeFrame(await firstChannel.Output.ReadAsync())));
+        Assert.IsType<CommandCompletedEvent>(
+            AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(
+                AgentSessionProtocolCodec.DeserializeFrame(await secondChannel.Output.ReadAsync())));
         var stale = Assert.IsType<OperationErrorEvent>(
             AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(
                 AgentSessionProtocolCodec.DeserializeFrame(await secondChannel.Output.ReadAsync())));
@@ -390,6 +394,7 @@ public sealed partial class RemoteAgentSessionHostTests
             fixture.Request(AgentSessionOpenIntent.Attach, token: "a"));
         await using var second = await fixture.Host.OpenAsync(
             fixture.Request(AgentSessionOpenIntent.Attach, secondChannel, "b"));
+        await fixture.Channel.Output.ReadAsync();
         await fixture.Channel.Output.ReadAsync();
         await fixture.Channel.Output.ReadAsync();
         await secondChannel.Output.ReadAsync();

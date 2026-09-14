@@ -228,12 +228,12 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
             }
             if (command is DetachCommand)
             {
-                await attachment.DisposeAsync().ConfigureAwait(false);
+                await attachment.ReleaseExplicitlyAsync().ConfigureAwait(false);
                 return;
             }
             var result = await runtime.ExecuteCommandOnceAsync(
                 command, token => this.ExecuteCommandAsync(runtime, command, token), ct).ConfigureAwait(false);
-            await attachment.PublishAsync(result, ct).ConfigureAwait(false);
+            await attachment.PublishAsync(result, command.CorrelationId, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception error)
@@ -248,7 +248,7 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
                     Message = "The operation could not be completed.",
                     CorrelationId = command.CorrelationId,
                 },
-            }, ct).ConfigureAwait(false);
+            }, command.CorrelationId, ct).ConfigureAwait(false);
         }
     }
 

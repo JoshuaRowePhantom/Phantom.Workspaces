@@ -293,10 +293,17 @@ public sealed class RemoteAgentChat : IAgentChat
     private void OnUnexpectedlyDisconnected(object? sender, EventArgs e)
     {
         this.SetConnected(false);
-        _ = this.ReconnectAsync();
+        _ = this.ReconnectAfterLossAsync();
     }
 
-    private async Task ReconnectAsync()
+    internal async Task ReconnectNowAsync(CancellationToken ct = default)
+    {
+        this.ThrowIfDisposed();
+        await this.client.ReconnectAsync(ct).ConfigureAwait(false);
+        await this.QueueForeground(() => this.SetConnected(true)).ConfigureAwait(false);
+    }
+
+    private async Task ReconnectAfterLossAsync()
     {
         foreach (var delay in new[] { 250, 500, 1000, 1000, 1000, 1000 })
         {
@@ -305,8 +312,7 @@ public sealed class RemoteAgentChat : IAgentChat
             if (!await timer.WaitForNextTickAsync().ConfigureAwait(false)) return;
             try
             {
-                await this.client.ReconnectAsync().ConfigureAwait(false);
-                await this.QueueForeground(() => this.SetConnected(true)).ConfigureAwait(false);
+                await this.ReconnectNowAsync().ConfigureAwait(false);
                 return;
             }
             catch (InvalidOperationException)
@@ -391,6 +397,7 @@ public sealed class RemoteAgentChat : IAgentChat
             case ModalUpdatedEvent e:
                 var index = this.modals.ToList().FindIndex(m => m.Id == e.Modal.Id);
                 if (index >= 0) this.modals[index] = e.Modal;
+                else this.modals.Add(e.Modal);
                 break;
             case ModalDismissedEvent e:
                 var modal = this.modals.FirstOrDefault(m => m.Id == e.ModalId);

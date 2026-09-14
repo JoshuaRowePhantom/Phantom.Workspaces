@@ -84,15 +84,15 @@ public sealed class AgentSessionTransportListener : ITransportListener
 
     public async ValueTask DisposeAsync()
     {
-        IAsyncDisposable[] leases;
+        TransportAttachmentHandle[] leases;
         lock (this.gate)
         {
             if (this.disposed) return;
             this.disposed = true;
-            leases = this.active.ToArray();
+            leases = this.active.OfType<TransportAttachmentHandle>().ToArray();
             this.active.Clear();
         }
-        foreach (var lease in leases) await lease.DisposeAsync().ConfigureAwait(false);
+        foreach (var lease in leases) await lease.ShutdownAsync().ConfigureAwait(false);
         await this.host.DisposeAsync().ConfigureAwait(false);
     }
 
@@ -140,6 +140,12 @@ public sealed class AgentSessionTransportListener : ITransportListener
         {
             if (Interlocked.Exchange(ref this.disposed, 1) != 0) return;
             onDispose(this);
+            await attachment.MarkTransportLostAsync().ConfigureAwait(false);
+        }
+
+        internal async ValueTask ShutdownAsync()
+        {
+            if (Interlocked.Exchange(ref this.disposed, 1) != 0) return;
             await attachment.DisposeAsync().ConfigureAwait(false);
         }
     }

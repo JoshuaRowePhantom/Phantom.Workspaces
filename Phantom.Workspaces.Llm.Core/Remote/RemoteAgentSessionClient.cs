@@ -512,7 +512,12 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
             else
             {
                 if (!this.abandonedCommands.TryRemove(frame.CorrelationId, out var abandonedCommandId))
-                    throw new RemoteAgentProtocolException("A command response contained an unknown correlation id.");
+                {
+                    // Responses use the session's global sequence and are broadcast to every
+                    // attachment. Only the initiating client owns a matching local waiter.
+                    this.FrameReceived?.Invoke(this, frame);
+                    return;
+                }
                 if (value is CommandCompletedEvent abandonedCompletion
                     && abandonedCompletion.CommandId != abandonedCommandId)
                     throw new RemoteAgentProtocolException("A command acknowledgement contained a mismatched command id.");

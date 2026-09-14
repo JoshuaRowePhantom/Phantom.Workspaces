@@ -75,6 +75,7 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
     // #1485: last observed response per modal id (owner-side hook for tests). Only meaningful
     // between the RespondToModalAsync call and the corresponding PublishModalDismiss.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, JsonElement> lastModalResponses = new();
+    internal event EventHandler? ModalResponseAttempted;
     private AgentChatHistoryService? historyService;
     private readonly AgentChatHistoryCollection history = new();
     private readonly TaskCompletionSource historyPopulated = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1007,12 +1008,14 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
                 if (match is null)
                 {
                     tcs.TrySetException(new ArgumentException($"Unknown modal id '{modalId}'.", nameof(modalId)));
+                    this.ModalResponseAttempted?.Invoke(this, EventArgs.Empty);
                     return;
                 }
                 if (!this.pendingModalDismissals.TryAdd(modalId, tcs))
                 {
                     tcs.TrySetException(new InvalidOperationException(
                         $"Modal '{modalId}' already has a pending response."));
+                    this.ModalResponseAttempted?.Invoke(this, EventArgs.Empty);
                     return;
                 }
                 // Cancellation triggers detach only; the modal remains present because dismissal is
@@ -1030,6 +1033,7 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
                 // Owner-side response consumer hook: the tests' foreground scheduler will drain
                 // PublishModalDismiss synchronously after the response is observed.
                 this.lastModalResponses[modalId] = response;
+                this.ModalResponseAttempted?.Invoke(this, EventArgs.Empty);
             },
             CancellationToken.None,
             TaskCreationOptions.DenyChildAttach,

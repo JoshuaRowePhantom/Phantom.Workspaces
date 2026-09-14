@@ -60,19 +60,20 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
         RunningAgentChatLease? chatLease = null;
         try
         {
+            var sessionContext = new CurrentSessionContext
+            {
+                AgentSessionId = intent.AgentSessionId,
+                OwningProfileEntityId = intent.OwningProfileEntityId,
+                OwnershipGeneration = intent.OwnershipGeneration,
+                RuntimeEpoch = state.Epoch,
+            };
             chatLease = await this.runningChats.AcquireAsync(new AcquireAgentChatRequest
             {
                 AgentSessionId = new AgentSessionId(intent.AgentSessionId),
                 AgentSessionEntity = data,
                 AgentServices = (this.hostServices ?? new AgentServices()) with
                 {
-                    CurrentSessionContext = new CurrentSessionContext
-                    {
-                        AgentSessionId = intent.AgentSessionId,
-                        OwningProfileEntityId = intent.OwningProfileEntityId,
-                        OwnershipGeneration = intent.OwnershipGeneration,
-                        RuntimeEpoch = state.Epoch,
-                    },
+                    CurrentSessionContext = sessionContext,
                 },
                 AgentDefinitionResolver = this.definitionResolver,
                 EntityId = persisted.EntityId.ToString(),
@@ -102,7 +103,8 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
                 token => state.PersistStoppedAsync(token),
                 this.timeProvider,
                 ownership,
-                chatLease);
+                chatLease,
+                sessionContext);
             ownership.Start(state.LeasePeriod);
             return runtime;
         }
@@ -192,7 +194,7 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
         History = chat.History.Select(item => JsonSerializer.SerializeToElement(item)).ToArray(),
         RunningItems = chat.RunningItems.Select(item => JsonSerializer.SerializeToElement(item)).ToArray(),
         Tools = chat.GetToolSnapshot().Select(item => JsonSerializer.SerializeToElement(item)).ToArray(),
-        Subagents = chat.SubAgents.Select(item => JsonSerializer.SerializeToElement(item, item.GetType())).ToArray(),
+        Subagents = chat.SubAgents.Select(RemoteAgentSessionLease.SerializeSubagent).ToArray(),
         Modals = chat.Modals.ToArray(),
         ContinueInBackground = false,
         ViewerCount = 0,

@@ -69,7 +69,8 @@ public sealed class AgentSessionTransportListenerTests
         Assert.Contains("session-snapshot", (await channel.Output.ReadAsync(
             TestContext.Current.CancellationToken)).GetRawText(), StringComparison.Ordinal);
         await lease.DisposeAsync();
-        Assert.Equal(0, runtime.ViewerCount);
+        Assert.Equal(1, runtime.ViewerCount);
+        Assert.False(runtime.IsFenced);
     }
 
     [Fact]
