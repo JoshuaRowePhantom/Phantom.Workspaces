@@ -4,6 +4,7 @@ using Phantom.Workspaces.Transport;
 using ProtocolReplayCursor = Phantom.Workspaces.Llm.Remote.ReplayCursor;
 using System.Collections.Specialized;
 using System.Text.Json;
+using System.Threading.Channels;
 
 namespace Phantom.Workspaces.Services.AgentSessions;
 
@@ -103,10 +104,12 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(request);
         lock (this.gate)
-            return this.AttachUnderLock(request);
+            return this.AttachUnderLock(request, staged: false);
     }
 
-    private RemoteAgentAttachmentLease AttachUnderLock(AttachRemoteAgentSessionRequest request)
+    private RemoteAgentAttachmentLease AttachUnderLock(
+        AttachRemoteAgentSessionRequest request,
+        bool staged)
     {
         if (this.fenced)
             throw new InvalidOperationException("The runtime is stopping.");
@@ -116,14 +119,16 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             if (!existing.Disconnected)
                 throw new InvalidOperationException("The attachment token is already connected.");
             existing.GraceTimer?.Dispose();
-            existing.Channel = request.Channel;
+            existing.Publisher.AbortUnderLock(
+                new ObjectDisposedException(nameof(RemoteAgentAttachmentLease)));
+            existing.Publisher = new AttachmentPublisher(request.Channel, staged);
             existing.Disconnected = false;
             existing.GraceTimer = null;
             existing.Generation++;
             return new RemoteAgentAttachmentLease(this, request.AttachmentToken, existing.Generation, request.Cursor);
         }
 
-        var state = new AttachmentState(request.Channel);
+        var state = new AttachmentState(request.Channel, staged);
         this.attachments.Add(request.AttachmentToken, state);
         this.PublishRetentionChangedUnderLock(request.Channel);
         return new RemoteAgentAttachmentLease(this, request.AttachmentToken, state.Generation, request.Cursor);
@@ -151,29 +156,44 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         {
             lock (this.gate)
             {
-                var attachment = this.AttachUnderLock(request);
-                if (request.Cursor is { } cursor)
+                RemoteAgentAttachmentLease? attachment = null;
+                try
                 {
-                    var replay = this.Replay.ReadAfter(cursor);
-                    if (replay.IsCovered && replay.Frames.Count > 0)
-                        return new InitialAttachmentState(attachment, replay.Frames, null);
-                }
+                    attachment = this.AttachUnderLock(request, staged: true);
+                    if (request.Cursor is { } cursor)
+                    {
+                        var replay = this.Replay.ReadAfter(cursor);
+                        if (replay.IsCovered && replay.Frames.Count > 0)
+                            return new InitialAttachmentState(attachment, replay.Frames, null);
+                    }
 
-                var snapshot = this.snapshotFactory() with
+                    var snapshot = this.snapshotFactory() with
+                    {
+                        ContinueInBackground = this.continueInBackground,
+                        ViewerCount = this.attachments.Count,
+                    };
+                    var frame = this.Replay.Append(
+                        Guid.NewGuid(),
+                        new SessionSnapshotEvent { Snapshot = snapshot });
+                    var serialized = AgentSessionProtocolCodec.SerializeFrame(frame);
+                    foreach (var state in this.attachments.Values.Where(
+                                 value => !value.Disconnected
+                                     && !ReferenceEquals(value.Channel, request.Channel)))
+                        state.Publisher.QueueUnderLock(serialized, waitForWrite: false);
+                    return new InitialAttachmentState(attachment, [frame], snapshot);
+                }
+                catch
                 {
-                    ContinueInBackground = this.continueInBackground,
-                    ViewerCount = this.attachments.Count,
-                };
-                var frame = this.Replay.Append(
-                    Guid.NewGuid(),
-                    new SessionSnapshotEvent { Snapshot = snapshot });
-                var serialized = AgentSessionProtocolCodec.SerializeFrame(frame);
-                foreach (var channel in this.attachments.Values
-                             .Where(value => !value.Disconnected
-                                 && !ReferenceEquals(value.Channel, request.Channel))
-                             .Select(value => value.Channel))
-                    channel.Writer.TryWrite(serialized);
-                return new InitialAttachmentState(attachment, [frame], snapshot);
+                    if (attachment is not null
+                        && this.attachments.Remove(request.AttachmentToken, out var failed))
+                    {
+                        failed.Publisher.AbortUnderLock(
+                            new ObjectDisposedException(nameof(RemoteAgentAttachmentLease)));
+                        failed.Released.TrySetResult();
+                        this.PublishRetentionChangedUnderLock(failed.Channel);
+                    }
+                    throw;
+                }
             }
         }
         finally
@@ -214,19 +234,18 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         AgentSessionServerEvent value, Guid correlationId = default, CancellationToken ct = default)
     {
         AgentSessionServerFrame frame;
-        IMessageChannel[] channels;
+        Task[] writes;
         lock (this.gate)
         {
             if (this.fenced) return;
             frame = this.Replay.Append(correlationId == default ? Guid.NewGuid() : correlationId, value);
-            channels = this.attachments.Values
+            var serialized = AgentSessionProtocolCodec.SerializeFrame(frame);
+            writes = this.attachments.Values
                 .Where(state => !state.Disconnected)
-                .Select(state => state.Channel)
+                .Select(state => state.Publisher.QueueUnderLock(serialized, waitForWrite: true))
                 .ToArray();
         }
-        var serialized = AgentSessionProtocolCodec.SerializeFrame(frame);
-        foreach (var channel in channels)
-            await channel.Writer.WriteAsync(serialized, ct).ConfigureAwait(false);
+        await Task.WhenAll(writes).WaitAsync(ct).ConfigureAwait(false);
     }
 
     internal async ValueTask<AgentSessionServerEvent> ExecuteCommandOnceAsync(
@@ -298,6 +317,8 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             if (this.fenced || !this.attachments.TryGetValue(token, out var state) || state.Disconnected)
                 return ValueTask.CompletedTask;
             state.Disconnected = true;
+            state.Publisher.AbortUnderLock(
+                new ObjectDisposedException(nameof(RemoteAgentAttachmentLease)));
             state.GraceTimer = this.timeProvider.CreateTimer(
                 _ => _ = this.ExpireDisconnectedAsync(token), null, ReconnectGrace, Timeout.InfiniteTimeSpan);
         }
@@ -305,8 +326,15 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     }
 
     internal async ValueTask ReleaseAsync(string token, long generation)
+        => await this.ReleaseCoreAsync(token, generation).ConfigureAwait(false);
+
+    internal async ValueTask AbortOpenAsync(string token, long generation)
+        => await this.ReleaseCoreAsync(token, generation).ConfigureAwait(false);
+
+    private async ValueTask ReleaseCoreAsync(string token, long generation)
     {
         Task? terminationTask = null;
+        Task? publisherTask = null;
         var changed = false;
         await this.transitionGate.WaitAsync().ConfigureAwait(false);
         try
@@ -317,6 +345,8 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
                     return;
                 this.attachments.Remove(token);
                 state.GraceTimer?.Dispose();
+                publisherTask = state.Publisher.AbortUnderLock(
+                    new ObjectDisposedException(nameof(RemoteAgentAttachmentLease)));
                 state.Released.TrySetResult();
                 changed = true;
                 if (!this.fenced && this.attachments.Count == 0 && !this.continueInBackground)
@@ -327,6 +357,8 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         {
             this.transitionGate.Release();
         }
+        if (publisherTask is not null)
+            await publisherTask.ConfigureAwait(false);
         if (terminationTask is not null)
             await terminationTask.ConfigureAwait(false);
         else if (changed)
@@ -341,6 +373,28 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
                 && !state.Disconnected
                     ? state.Channel
                     : null;
+    }
+
+    internal async ValueTask<bool> ActivateAttachmentAsync(
+        string token,
+        long generation,
+        CancellationToken ct)
+    {
+        Task activation;
+        lock (this.gate)
+        {
+            if (!this.attachments.TryGetValue(token, out var state)
+                || state.Generation != generation
+                || state.Disconnected)
+                throw new ObjectDisposedException(nameof(RemoteAgentAttachmentLease));
+            activation = state.Publisher.ActivateUnderLock();
+        }
+        await activation.WaitAsync(ct).ConfigureAwait(false);
+        lock (this.gate)
+            return this.attachments.TryGetValue(token, out var state)
+                && state.Generation == generation
+                && !state.Disconnected
+                && !this.fenced;
     }
 
     internal Task GetReleaseTask(string token, long generation)
@@ -359,20 +413,20 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         CancellationToken ct)
     {
         AgentSessionServerFrame frame;
-        IMessageChannel[] channels;
+        Task[] writes;
         lock (this.gate)
         {
             if (!this.attachments.TryGetValue(token, out var state) || state.Disconnected)
                 throw new ObjectDisposedException(nameof(RemoteAgentAttachmentLease));
             frame = this.Replay.Append(correlationId, value);
-            channels = this.attachments.Values
+            var serialized = AgentSessionProtocolCodec.SerializeFrame(frame);
+            writes = this.attachments.Values
                 .Where(attachment => !attachment.Disconnected)
-                .Select(attachment => attachment.Channel)
+                .Select(attachment => attachment.Publisher.QueueUnderLock(
+                    serialized, waitForWrite: true))
                 .ToArray();
         }
-        var serialized = AgentSessionProtocolCodec.SerializeFrame(frame);
-        foreach (var channel in channels)
-            await channel.Writer.WriteAsync(serialized, ct).ConfigureAwait(false);
+        await Task.WhenAll(writes).WaitAsync(ct).ConfigureAwait(false);
     }
 
     public async ValueTask DisposeAsync() => await this.TryTerminateAsync().ConfigureAwait(false);
@@ -405,10 +459,10 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             ViewerCount = this.attachments.Count,
         });
         var serialized = AgentSessionProtocolCodec.SerializeFrame(frame);
-        foreach (var channel in this.attachments.Values
-                     .Where(value => !value.Disconnected && !ReferenceEquals(value.Channel, excludedChannel))
-                     .Select(value => value.Channel))
-            channel.Writer.TryWrite(serialized);
+        foreach (var state in this.attachments.Values.Where(
+                     value => !value.Disconnected
+                         && !ReferenceEquals(value.Channel, excludedChannel)))
+            state.Publisher.QueueUnderLock(serialized, waitForWrite: false);
     }
 
     private async Task PublishRetentionChangedAsync(CancellationToken ct = default)
@@ -491,27 +545,48 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             catch (Exception error) { failures.Add(error); }
         }
 
-        JsonElement? serializedTerminal = null;
+        Task[] terminalWrites = [];
         if (persistenceFailure is null)
         {
-            var terminal = this.Replay.Append(Guid.NewGuid(), new SessionTerminalEvent
+            lock (this.gate)
             {
-                Reason = this.terminalReason,
-                CompletionState = System.Text.Json.JsonSerializer.SerializeToElement(new
+                var terminal = this.Replay.Append(Guid.NewGuid(), new SessionTerminalEvent
                 {
-                    stopped = true,
-                    failed = this.terminalReason == "runtime-failed",
-                }),
-            });
-            serializedTerminal = AgentSessionProtocolCodec.SerializeFrame(terminal);
+                    Reason = this.terminalReason,
+                    CompletionState = System.Text.Json.JsonSerializer.SerializeToElement(new
+                    {
+                        stopped = true,
+                        failed = this.terminalReason == "runtime-failed",
+                    }),
+                });
+                var serialized = AgentSessionProtocolCodec.SerializeFrame(terminal);
+                terminalWrites = this.attachments.Values
+                    .Where(state => !state.Disconnected)
+                    .Select(state => state.Publisher.QueueUnderLock(
+                        serialized, waitForWrite: true))
+                    .ToArray();
+            }
+        }
+        foreach (var write in terminalWrites)
+        {
+            try { await write.ConfigureAwait(false); }
+            catch (Exception error) { failures.Add(error); }
+        }
+
+        Task[] publisherTasks;
+        lock (this.gate)
+            publisherTasks = states.Select(state => persistenceFailure is null
+                    ? state.Publisher.CompleteUnderLock()
+                    : state.Publisher.AbortUnderLock(
+                        new InvalidOperationException("Terminal persistence failed.")))
+                .ToArray();
+        foreach (var publisherTask in publisherTasks)
+        {
+            try { await publisherTask.ConfigureAwait(false); }
+            catch (Exception error) { failures.Add(error); }
         }
         foreach (var state in states)
         {
-            if (!state.Disconnected && serializedTerminal is { } terminal)
-            {
-                try { await state.Channel.Writer.WriteAsync(terminal).ConfigureAwait(false); }
-                catch (Exception error) { failures.Add(error); }
-            }
             try { await state.Channel.DisposeAsync().ConfigureAwait(false); }
             catch (Exception error) { failures.Add(error); }
         }
@@ -534,14 +609,166 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             throw new AggregateException("Remote agent session shutdown failed.", failures);
     }
 
-    private sealed class AttachmentState(IMessageChannel channel)
+    private sealed class AttachmentState(IMessageChannel channel, bool staged)
     {
-        internal IMessageChannel Channel { get; set; } = channel;
+        internal IMessageChannel Channel => this.Publisher.Channel;
+        internal AttachmentPublisher Publisher { get; set; } = new(channel, staged);
         internal bool Disconnected { get; set; }
         internal ITimer? GraceTimer { get; set; }
         internal long Generation { get; set; } = 1;
         internal TaskCompletionSource Released { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private sealed class AttachmentPublisher
+    {
+        private readonly Channel<Publication> publications =
+            System.Threading.Channels.Channel.CreateUnbounded<Publication>(new UnboundedChannelOptions
+            {
+                SingleReader = true,
+                SingleWriter = false,
+                AllowSynchronousContinuations = false,
+            });
+        private readonly List<Publication> staged = [];
+        private readonly CancellationTokenSource cancellation = new();
+        private readonly TaskCompletionSource start =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource activation =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly Task pump;
+        private volatile PublicationState state;
+        private volatile Exception? failure;
+
+        internal AttachmentPublisher(IMessageChannel channel, bool staged)
+        {
+            this.Channel = channel;
+            this.state = staged ? PublicationState.Staged : PublicationState.Active;
+            this.pump = this.RunAsync();
+            if (!staged)
+            {
+                this.activation.TrySetResult();
+                this.start.TrySetResult();
+            }
+        }
+
+        internal IMessageChannel Channel { get; }
+
+        internal Task QueueUnderLock(JsonElement frame, bool waitForWrite)
+        {
+            var completion = waitForWrite
+                ? new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
+                : null;
+            var publication = new Publication(frame, completion);
+            if (this.state == PublicationState.Staged)
+            {
+                this.staged.Add(publication);
+            }
+            else if (this.state == PublicationState.Active
+                && this.publications.Writer.TryWrite(publication))
+            {
+            }
+            else
+            {
+                completion?.TrySetException(this.failure
+                    ?? new ObjectDisposedException(nameof(RemoteAgentAttachmentLease)));
+            }
+            return completion?.Task ?? Task.CompletedTask;
+        }
+
+        internal Task ActivateUnderLock()
+        {
+            if (this.state != PublicationState.Staged)
+                return this.activation.Task;
+
+            this.staged.Add(new Publication(null, this.activation));
+            foreach (var publication in this.staged)
+                this.publications.Writer.TryWrite(publication);
+            this.staged.Clear();
+            this.state = PublicationState.Active;
+            this.start.TrySetResult();
+            return this.activation.Task;
+        }
+
+        internal Task CompleteUnderLock()
+        {
+            if (this.state == PublicationState.Closed)
+                return this.pump;
+            this.state = PublicationState.Closed;
+            this.publications.Writer.TryComplete();
+            this.start.TrySetResult();
+            return this.pump;
+        }
+
+        internal Task AbortUnderLock(Exception error)
+        {
+            if (this.state == PublicationState.Closed)
+                return this.pump;
+            this.failure = error;
+            this.state = PublicationState.Closed;
+            foreach (var publication in this.staged)
+                publication.Completion?.TrySetException(error);
+            this.staged.Clear();
+            this.activation.TrySetException(error);
+            this.publications.Writer.TryComplete();
+            this.cancellation.Cancel();
+            this.start.TrySetResult();
+            return this.pump;
+        }
+
+        private async Task RunAsync()
+        {
+            await this.start.Task.ConfigureAwait(false);
+            try
+            {
+                await foreach (var publication in this.publications.Reader.ReadAllAsync(
+                                   this.cancellation.Token).ConfigureAwait(false))
+                {
+                    if (publication.Frame is not { } frame)
+                    {
+                        publication.Completion?.TrySetResult();
+                        continue;
+                    }
+                    try
+                    {
+                        await this.Channel.Writer.WriteAsync(
+                            frame, this.cancellation.Token).ConfigureAwait(false);
+                        publication.Completion?.TrySetResult();
+                    }
+                    catch (Exception error)
+                    {
+                        this.failure = error;
+                        this.state = PublicationState.Closed;
+                        publication.Completion?.TrySetException(error);
+                        this.publications.Writer.TryComplete();
+                        while (this.publications.Reader.TryRead(out var remaining))
+                            remaining.Completion?.TrySetException(error);
+                        return;
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (this.cancellation.IsCancellationRequested)
+            {
+            }
+            finally
+            {
+                var error = this.failure
+                    ?? new ObjectDisposedException(nameof(RemoteAgentAttachmentLease));
+                while (this.publications.Reader.TryRead(out var remaining))
+                    remaining.Completion?.TrySetException(error);
+                this.cancellation.Dispose();
+            }
+        }
+
+        private readonly record struct Publication(
+            JsonElement? Frame,
+            TaskCompletionSource? Completion);
+
+        private enum PublicationState
+        {
+            Staged,
+            Active,
+            Closed,
+        }
     }
 
     internal readonly record struct InitialAttachmentState(
@@ -661,8 +888,8 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             if (this.fenced) return;
             var serialized = AgentSessionProtocolCodec.SerializeFrame(
                 this.Replay.Append(Guid.NewGuid(), value));
-            foreach (var channel in this.attachments.Values.Where(state => !state.Disconnected).Select(state => state.Channel))
-                channel.Writer.TryWrite(serialized);
+            foreach (var state in this.attachments.Values.Where(state => !state.Disconnected))
+                state.Publisher.QueueUnderLock(serialized, waitForWrite: false);
         }
     }
 }
@@ -693,6 +920,12 @@ internal sealed class RemoteAgentAttachmentLease : IAsyncDisposable
         Guid correlationId,
         CancellationToken ct = default)
         => this.owner.PublishToAttachmentAsync(this.token, value, correlationId, ct);
+
+    internal ValueTask<bool> ActivateAsync(CancellationToken ct = default)
+        => this.owner.ActivateAttachmentAsync(this.token, this.generation, ct);
+
+    internal ValueTask AbortOpenAsync()
+        => this.owner.AbortOpenAsync(this.token, this.generation);
 
     internal ValueTask MarkTransportLostAsync()
     {

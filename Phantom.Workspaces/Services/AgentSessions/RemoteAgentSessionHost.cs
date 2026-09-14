@@ -99,15 +99,25 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
         {
             throw new AgentSessionUnavailableException();
         }
-        foreach (var frame in initial.Frames)
-        {
-            await request.Channel.Writer.WriteAsync(
-                AgentSessionProtocolCodec.SerializeFrame(frame), ct).ConfigureAwait(false);
-        }
         var attachment = initial.Attachment;
-        attachment.StartReceiving((command, token) =>
-            this.DispatchCommandAsync(request.Peer, open, runtime, attachment, command, token));
-        return attachment;
+        try
+        {
+            foreach (var frame in initial.Frames)
+            {
+                await request.Channel.Writer.WriteAsync(
+                    AgentSessionProtocolCodec.SerializeFrame(frame), ct).ConfigureAwait(false);
+            }
+            if (!await attachment.ActivateAsync(ct).ConfigureAwait(false))
+                throw new AgentSessionUnavailableException();
+            attachment.StartReceiving((command, token) =>
+                this.DispatchCommandAsync(request.Peer, open, runtime, attachment, command, token));
+            return attachment;
+        }
+        catch
+        {
+            await attachment.AbortOpenAsync().ConfigureAwait(false);
+            throw;
+        }
     }
 
     internal ValueTask DispatchCommandAsync(

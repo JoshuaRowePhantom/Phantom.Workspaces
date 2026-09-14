@@ -80,6 +80,276 @@ public sealed partial class RemoteAgentSessionHostTests
     }
 
     [Fact]
+    public async Task OpenAsync_InitialWriteBlocked_DeltaAndTerminalArePublishedAfterSnapshotInSequence()
+    {
+        await using var fixture = new HostFixture();
+        await using var channel = new InitialWriteBlockingChannel();
+        var request = new OpenAgentSessionHostRequest
+        {
+            Peer = Peer(),
+            OpenRequest = Open(AgentSessionOpenIntent.Attach) with
+            {
+                AttachmentToken = "staged",
+            },
+            Channel = channel,
+        };
+
+        var open = fixture.Host.OpenAsync(request);
+        await channel.InitialWriteStarted;
+
+        var delta = fixture.Runtime.PublishAsync(new BusyChangedEvent { IsBusy = true }).AsTask();
+        var terminal = fixture.Runtime.PublishAsync(new SessionTerminalEvent
+        {
+            Reason = "runtime-stopped",
+            CompletionState = JsonSerializer.SerializeToElement(new { stopped = true }),
+        }).AsTask();
+
+        Assert.False(channel.Output.TryRead(out _));
+        channel.AllowInitialWrite();
+        await using var attachment = await open;
+        await Task.WhenAll(delta, terminal);
+
+        var frames = new[]
+        {
+            AgentSessionProtocolCodec.DeserializeFrame(await channel.Output.ReadAsync()),
+            AgentSessionProtocolCodec.DeserializeFrame(await channel.Output.ReadAsync()),
+            AgentSessionProtocolCodec.DeserializeFrame(await channel.Output.ReadAsync()),
+        };
+        Assert.Collection(
+            frames,
+            frame => Assert.Equal("session-snapshot", frame.Type),
+            frame => Assert.Equal("busy-changed", frame.Type),
+            frame => Assert.Equal("session-terminal", frame.Type));
+        Assert.Equal(
+            frames.Select(frame => frame.Sequence).Order().ToArray(),
+            frames.Select(frame => frame.Sequence).ToArray());
+    }
+
+    [Fact]
+    public async Task OpenAsync_MultipleStagedAttachments_EachPublishesInitialFrameFirst()
+    {
+        await using var fixture = new HostFixture();
+        await using var firstChannel = new InitialWriteBlockingChannel();
+        await using var secondChannel = new InitialWriteBlockingChannel();
+        var firstOpen = fixture.Host.OpenAsync(new OpenAgentSessionHostRequest
+        {
+            Peer = Peer(),
+            OpenRequest = Open(AgentSessionOpenIntent.Attach) with { AttachmentToken = "first-staged" },
+            Channel = firstChannel,
+        });
+        await firstChannel.InitialWriteStarted;
+        var secondOpen = fixture.Host.OpenAsync(new OpenAgentSessionHostRequest
+        {
+            Peer = Peer(),
+            OpenRequest = Open(AgentSessionOpenIntent.Attach) with { AttachmentToken = "second-staged" },
+            Channel = secondChannel,
+        });
+        await secondChannel.InitialWriteStarted;
+        var delta = fixture.Runtime.PublishAsync(new BusyChangedEvent { IsBusy = true }).AsTask();
+
+        Assert.False(firstChannel.Output.TryRead(out _));
+        Assert.False(secondChannel.Output.TryRead(out _));
+        secondChannel.AllowInitialWrite();
+        firstChannel.AllowInitialWrite();
+        await using var first = await firstOpen;
+        await using var second = await secondOpen;
+        await delta;
+
+        var firstFrames = await ReadFramesAsync(firstChannel.Output, 4);
+        var secondFrames = await ReadFramesAsync(secondChannel.Output, 2);
+        Assert.Equal("session-snapshot", firstFrames[0].Type);
+        Assert.Equal("busy-changed", firstFrames[^1].Type);
+        Assert.Equal("session-snapshot", secondFrames[0].Type);
+        Assert.Equal("busy-changed", secondFrames[^1].Type);
+        AssertOrdered(firstFrames);
+        AssertOrdered(secondFrames);
+    }
+
+    [Fact]
+    public async Task OpenAsync_InitialWriteFails_ReleasesStagedViewer()
+    {
+        await using var fixture = new HostFixture();
+        await using var channel = new InitialWriteThrowingChannel();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.Host.OpenAsync(new OpenAgentSessionHostRequest
+            {
+                Peer = Peer(),
+                OpenRequest = Open(AgentSessionOpenIntent.Attach) with
+                {
+                    AttachmentToken = "failed-staged",
+                },
+                Channel = channel,
+            }));
+
+        Assert.Equal(0, fixture.Runtime.ViewerCount);
+        Assert.False(fixture.Runtime.IsFenced);
+    }
+
+    [Fact]
+    public async Task OpenAsync_InitialWriteCancelled_ReleasesStagedViewer()
+    {
+        await using var fixture = new HostFixture();
+        await using var channel = new InitialWriteBlockingChannel();
+        using var cancellation = new CancellationTokenSource();
+        var open = fixture.Host.OpenAsync(new OpenAgentSessionHostRequest
+        {
+            Peer = Peer(),
+            OpenRequest = Open(AgentSessionOpenIntent.Attach) with
+            {
+                AttachmentToken = "cancelled-staged",
+            },
+            Channel = channel,
+        }, cancellation.Token);
+        await channel.InitialWriteStarted;
+
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => open);
+        Assert.Equal(0, fixture.Runtime.ViewerCount);
+        Assert.False(fixture.Runtime.IsFenced);
+    }
+
+    [Fact]
+    public async Task OpenAsync_BufferedWriteFailsAfterSnapshot_ReleasesStagedViewer()
+    {
+        await using var fixture = new HostFixture();
+        await using var channel = new BufferedWriteThrowingChannel();
+        var open = fixture.Host.OpenAsync(new OpenAgentSessionHostRequest
+        {
+            Peer = Peer(),
+            OpenRequest = Open(AgentSessionOpenIntent.Attach) with
+            {
+                AttachmentToken = "buffer-failed-staged",
+            },
+            Channel = channel,
+        });
+        await channel.InitialWriteStarted;
+        var delta = fixture.Runtime.PublishAsync(new BusyChangedEvent { IsBusy = true }).AsTask();
+
+        channel.AllowInitialWrite();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => open);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => delta);
+        var snapshot = AgentSessionProtocolCodec.DeserializeFrame(await channel.Output.ReadAsync());
+        Assert.Equal("session-snapshot", snapshot.Type);
+        Assert.False(channel.Output.TryRead(out _));
+        Assert.Equal(0, fixture.Runtime.ViewerCount);
+        Assert.False(fixture.Runtime.IsFenced);
+    }
+
+    [Fact]
+    public async Task AttachAndCapture_DetachedDuringStaging_DropsQueuedFramesAndReservation()
+    {
+        await using var runtime = Runtime(background: true);
+        await using var channel = new DuplexChannel();
+        var initial = await runtime.AttachAndCaptureInitialStateAsync(
+            new AttachRemoteAgentSessionRequest
+            {
+                AttachmentToken = "detached-staged",
+                Channel = channel,
+            });
+        var queued = runtime.PublishAsync(new BusyChangedEvent { IsBusy = true }).AsTask();
+
+        await initial.Attachment.ReleaseExplicitlyAsync();
+
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => queued);
+        await Assert.ThrowsAsync<ObjectDisposedException>(
+            () => initial.Attachment.ActivateAsync().AsTask());
+        Assert.Equal(0, runtime.ViewerCount);
+        Assert.False(runtime.IsFenced);
+    }
+
+    [Fact]
+    public async Task AttachAndCapture_TransportLostDuringStaging_AbortsQueuedFramesAndReservation()
+    {
+        await using var runtime = Runtime(background: true);
+        await using var channel = new DuplexChannel();
+        var initial = await runtime.AttachAndCaptureInitialStateAsync(
+            new AttachRemoteAgentSessionRequest
+            {
+                AttachmentToken = "lost-staged",
+                Channel = channel,
+            });
+        var queued = runtime.PublishAsync(new BusyChangedEvent { IsBusy = true }).AsTask();
+
+        await initial.Attachment.MarkTransportLostAsync();
+
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => queued);
+        await Assert.ThrowsAsync<ObjectDisposedException>(
+            () => initial.Attachment.ActivateAsync().AsTask());
+        await initial.Attachment.AbortOpenAsync();
+        Assert.Equal(0, runtime.ViewerCount);
+        Assert.False(runtime.IsFenced);
+    }
+
+    [Fact]
+    public async Task OpenAsync_RuntimeFencedDuringInitialWrite_FlushesTerminalThenRejectsOldLease()
+    {
+        await using var runtime = Runtime(background: true);
+        await using var registry = new RemoteAgentSessionRuntimeRegistry(TimeProvider.System);
+        await registry.GetOrStartAsync(Intent(), _ => Task.FromResult(runtime));
+        var host = new RemoteAgentSessionHost(
+            Allow(), registry, Mock.Of<IAgentSessionRuntimeHostFactory>());
+        await using var channel = new InitialWriteBlockingChannel();
+        var open = host.OpenAsync(new OpenAgentSessionHostRequest
+        {
+            Peer = Peer(),
+            OpenRequest = Open(AgentSessionOpenIntent.Attach) with
+            {
+                AttachmentToken = "fenced-staged",
+            },
+            Channel = channel,
+        });
+        await channel.InitialWriteStarted;
+
+        var termination = runtime.TryTerminateAsync().AsTask();
+        Assert.False(termination.IsCompleted);
+        channel.AllowInitialWrite();
+
+        await Assert.ThrowsAsync<AgentSessionUnavailableException>(() => open);
+        await termination;
+        var frames = await ReadFramesAsync(channel.Output, 2);
+        Assert.Collection(
+            frames,
+            frame => Assert.Equal("session-snapshot", frame.Type),
+            frame => Assert.Equal("session-terminal", frame.Type));
+        AssertOrdered(frames);
+        Assert.Equal(0, runtime.ViewerCount);
+        Assert.True(runtime.IsFenced);
+    }
+
+    [Fact]
+    public async Task AttachAndCapture_ActivationIsIdempotentAndFlushesQueuedFrameOnce()
+    {
+        await using var runtime = Runtime(background: true);
+        await using var channel = new DuplexChannel();
+        var initial = await runtime.AttachAndCaptureInitialStateAsync(
+            new AttachRemoteAgentSessionRequest
+            {
+                AttachmentToken = "activate-once",
+                Channel = channel,
+            });
+        var queued = runtime.PublishAsync(new BusyChangedEvent { IsBusy = true }).AsTask();
+        await channel.Writer.WriteAsync(
+            AgentSessionProtocolCodec.SerializeFrame(Assert.Single(initial.Frames)));
+
+        var firstActivation = initial.Attachment.ActivateAsync().AsTask();
+        var secondActivation = initial.Attachment.ActivateAsync().AsTask();
+        Assert.True(await firstActivation);
+        Assert.True(await secondActivation);
+        await queued;
+
+        var frames = await ReadFramesAsync(channel.Output, 2);
+        Assert.Collection(
+            frames,
+            frame => Assert.Equal("session-snapshot", frame.Type),
+            frame => Assert.Equal("busy-changed", frame.Type));
+        Assert.False(channel.Output.TryRead(out _));
+        await initial.Attachment.DisposeAsync();
+    }
+
+    [Fact]
     public async Task OpenAsync_ChildSubagent_ReauthorizesMembership()
     {
         await using var fixture = new HostFixture();
@@ -839,6 +1109,21 @@ public sealed partial class RemoteAgentSessionHostTests
             });
     }
 
+    private static async Task<AgentSessionServerFrame[]> ReadFramesAsync(
+        ChannelReader<JsonElement> reader,
+        int count)
+    {
+        var frames = new AgentSessionServerFrame[count];
+        for (var index = 0; index < frames.Length; index++)
+            frames[index] = AgentSessionProtocolCodec.DeserializeFrame(await reader.ReadAsync());
+        return frames;
+    }
+
+    private static void AssertOrdered(IReadOnlyList<AgentSessionServerFrame> frames)
+        => Assert.Equal(
+            frames.Select(frame => frame.Sequence).Order().ToArray(),
+            frames.Select(frame => frame.Sequence).ToArray());
+
     private const string Owner = "22222222-2222-2222-2222-222222222222";
 
     private static CreateQueueCommand Command(RuntimeEpoch? epoch = null) => new()
@@ -1003,6 +1288,151 @@ public sealed partial class RemoteAgentSessionHostTests
             this.input.Writer.TryComplete();
             this.output.Writer.TryComplete();
             return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class InitialWriteBlockingChannel : IMessageChannel
+    {
+        private readonly Channel<JsonElement> input = Channel.CreateUnbounded<JsonElement>();
+        private readonly Channel<JsonElement> output = Channel.CreateUnbounded<JsonElement>();
+        private readonly TaskCompletionSource initialWriteStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource allowInitialWrite =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly BlockingFirstWriter writer;
+        private int writes;
+
+        internal InitialWriteBlockingChannel()
+        {
+            this.writer = new BlockingFirstWriter(this);
+        }
+
+        public ChannelWriter<JsonElement> Writer => this.writer;
+        public ChannelReader<JsonElement> Reader => this.input.Reader;
+        internal ChannelReader<JsonElement> Output => this.output.Reader;
+        internal Task InitialWriteStarted => this.initialWriteStarted.Task;
+        internal void AllowInitialWrite() => this.allowInitialWrite.SetResult();
+
+        public ValueTask DisposeAsync()
+        {
+            this.input.Writer.TryComplete();
+            this.output.Writer.TryComplete();
+            this.allowInitialWrite.TrySetResult();
+            return ValueTask.CompletedTask;
+        }
+
+        private sealed class BlockingFirstWriter(InitialWriteBlockingChannel owner)
+            : ChannelWriter<JsonElement>
+        {
+            public override bool TryComplete(Exception? error = null)
+                => owner.output.Writer.TryComplete(error);
+
+            public override bool TryWrite(JsonElement item)
+                => owner.output.Writer.TryWrite(item);
+
+            public override ValueTask<bool> WaitToWriteAsync(
+                CancellationToken cancellationToken = default)
+                => owner.output.Writer.WaitToWriteAsync(cancellationToken);
+
+            public override ValueTask WriteAsync(
+                JsonElement item,
+                CancellationToken cancellationToken = default)
+                => Interlocked.Increment(ref owner.writes) == 1
+                    ? new(owner.WriteInitialAsync(item, cancellationToken))
+                    : owner.output.Writer.WriteAsync(item, cancellationToken);
+        }
+
+        private async Task WriteInitialAsync(JsonElement item, CancellationToken cancellationToken)
+        {
+            this.initialWriteStarted.TrySetResult();
+            await this.allowInitialWrite.Task.WaitAsync(cancellationToken);
+            await this.output.Writer.WriteAsync(item, cancellationToken);
+        }
+    }
+
+    private sealed class InitialWriteThrowingChannel : IMessageChannel
+    {
+        private readonly Channel<JsonElement> input = Channel.CreateUnbounded<JsonElement>();
+        private readonly ThrowingWriter writer = new();
+
+        public ChannelWriter<JsonElement> Writer => this.writer;
+        public ChannelReader<JsonElement> Reader => this.input.Reader;
+
+        public ValueTask DisposeAsync()
+        {
+            this.input.Writer.TryComplete();
+            return ValueTask.CompletedTask;
+        }
+
+        private sealed class ThrowingWriter : ChannelWriter<JsonElement>
+        {
+            public override bool TryComplete(Exception? error = null) => true;
+            public override bool TryWrite(JsonElement item) => false;
+            public override ValueTask<bool> WaitToWriteAsync(
+                CancellationToken cancellationToken = default)
+                => ValueTask.FromException<bool>(
+                    new InvalidOperationException("snapshot write failed"));
+            public override ValueTask WriteAsync(
+                JsonElement item,
+                CancellationToken cancellationToken = default)
+                => ValueTask.FromException(
+                    new InvalidOperationException("snapshot write failed"));
+        }
+    }
+
+    private sealed class BufferedWriteThrowingChannel : IMessageChannel
+    {
+        private readonly Channel<JsonElement> input = Channel.CreateUnbounded<JsonElement>();
+        private readonly Channel<JsonElement> output = Channel.CreateUnbounded<JsonElement>();
+        private readonly TaskCompletionSource initialWriteStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource allowInitialWrite =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly FirstWriteOnlyWriter writer;
+        private int writes;
+
+        internal BufferedWriteThrowingChannel()
+        {
+            this.writer = new FirstWriteOnlyWriter(this);
+        }
+
+        public ChannelWriter<JsonElement> Writer => this.writer;
+        public ChannelReader<JsonElement> Reader => this.input.Reader;
+        internal ChannelReader<JsonElement> Output => this.output.Reader;
+        internal Task InitialWriteStarted => this.initialWriteStarted.Task;
+        internal void AllowInitialWrite() => this.allowInitialWrite.SetResult();
+
+        public ValueTask DisposeAsync()
+        {
+            this.input.Writer.TryComplete();
+            this.output.Writer.TryComplete();
+            this.allowInitialWrite.TrySetResult();
+            return ValueTask.CompletedTask;
+        }
+
+        private sealed class FirstWriteOnlyWriter(BufferedWriteThrowingChannel owner)
+            : ChannelWriter<JsonElement>
+        {
+            public override bool TryComplete(Exception? error = null)
+                => owner.output.Writer.TryComplete(error);
+            public override bool TryWrite(JsonElement item) => false;
+            public override ValueTask<bool> WaitToWriteAsync(
+                CancellationToken cancellationToken = default)
+                => new(true);
+            public override ValueTask WriteAsync(
+                JsonElement item,
+                CancellationToken cancellationToken = default)
+                => Interlocked.Increment(ref owner.writes) == 1
+                    ? new(owner.WriteInitialAsync(item, cancellationToken))
+                    : ValueTask.FromException(
+                        new InvalidOperationException("buffered write failed"));
+        }
+
+        private async Task WriteInitialAsync(JsonElement item, CancellationToken cancellationToken)
+        {
+            this.initialWriteStarted.TrySetResult();
+            await this.allowInitialWrite.Task.WaitAsync(cancellationToken);
+            await this.output.Writer.WriteAsync(item, cancellationToken);
         }
     }
 }
