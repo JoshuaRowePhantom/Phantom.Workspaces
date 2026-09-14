@@ -323,6 +323,9 @@ public sealed class RemoteAgentSessionScenarioTests
         await stream.WaitForClaimedAsync(TestContext.Current.CancellationToken);
         await ownerRunning;
         await WaitForBusyStateAsync(proxy.Chat, isBusy: true);
+        await WaitForQueueRevisionAsync(
+            proxy.Chat,
+            ((IAgentChat)owner).InputQueues.Snapshot.Revision);
         var ownerBecameIdle = WaitForRunningItemsAsync(owner, 0);
 
         await proxy.Chat.InputQueues.EnqueueAsync(Enqueue(
