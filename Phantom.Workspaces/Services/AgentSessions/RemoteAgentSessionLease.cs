@@ -187,14 +187,20 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
                 RemoteAgentAttachmentLease? attachment = null;
                 try
                 {
+                    var reconnecting = this.attachments.TryGetValue(
+                        request.AttachmentToken,
+                        out var existing)
+                        && existing.Disconnected;
                     attachment = this.AttachUnderLock(request, staged: true);
+                    if (!reconnecting)
+                        this.PublishRetentionChangedUnderLock(request.Channel);
                     ProtocolReplayCursor? replayResetCursor = null;
                     if (request.Cursor is { } cursor)
                     {
                         var replay = this.Replay.ReadAfter(cursor);
                         if (replay.IsCovered && replay.Frames.Count > 0)
                         {
-                            this.PublishRetentionChangedUnderLock(excludedChannel: null);
+                            this.PublishRetentionChangedUnderLock(request.Channel);
                             return new InitialAttachmentState(attachment, replay.Frames, null);
                         }
                         if (!replay.IsCovered
@@ -217,7 +223,6 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
                                  value => !value.Disconnected
                                      && !ReferenceEquals(value.Channel, request.Channel)))
                         state.Publisher.QueueUnderLock(serialized, waitForWrite: false);
-                    this.PublishRetentionChangedUnderLock(excludedChannel: null);
                     return new InitialAttachmentState(attachment, [frame], snapshot);
                 }
                 catch

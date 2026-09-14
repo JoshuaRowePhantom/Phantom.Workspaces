@@ -140,12 +140,12 @@ public sealed class RemoteAgentSessionScenarioTests
                 ct: TestContext.Current.CancellationToken);
         }
         var reconnectFrames = new List<AgentSessionServerFrame>();
-        var retentionReceived = new TaskCompletionSource(
+        var snapshotReceived = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
         client.FrameReceived += OnReconnectFrame;
 
         await client.ReconnectAsync(TestContext.Current.CancellationToken);
-        await retentionReceived.Task;
+        await snapshotReceived.Task;
         client.FrameReceived -= OnReconnectFrame;
         var snapshotFrame = reconnectFrames[0];
         var snapshot = Assert.IsType<SessionSnapshotEvent>(
@@ -156,7 +156,7 @@ public sealed class RemoteAgentSessionScenarioTests
         Assert.Equal("session-snapshot", snapshotFrame.Type);
         Assert.Equal(retained, snapshotFrame.ReplayResetCursor);
         Assert.Equal(
-            ["session-snapshot", "session-retention-changed"],
+            ["session-snapshot"],
             reconnectFrames.Select(frame => frame.Type));
         AssertQueueStateEqual(ownerQueues.Snapshot, snapshot.Snapshot.InputQueues);
 
@@ -193,8 +193,8 @@ public sealed class RemoteAgentSessionScenarioTests
         void OnReconnectFrame(object? sender, AgentSessionServerFrame frame)
         {
             reconnectFrames.Add(frame);
-            if (frame.Type == "session-retention-changed")
-                retentionReceived.TrySetResult();
+            if (frame.Type == "session-snapshot")
+                snapshotReceived.TrySetResult();
         }
     }
 
