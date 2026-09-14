@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Runtime.ExceptionServices;
 using System.Text.Json;
+using System.Threading.Channels;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Transport;
 
@@ -360,16 +361,13 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
         this.detached = true;
         try
         {
-            if (this.channel is not null && this.runtimeEpoch is { } epoch)
-            {
-                await this.channel.Writer.WriteAsync(AgentSessionProtocolCodec.SerializeCommand(new DetachCommand
-                {
-                    CommandId = Guid.NewGuid(), CorrelationId = Guid.NewGuid(), RuntimeEpoch = epoch,
-                }), ct).ConfigureAwait(false);
-            }
+            await this.SendDetachIfConnectedAsync(ct).ConfigureAwait(false);
         }
-        catch when (!ct.IsCancellationRequested) { }
-        await this.CloseChannelAsync().ConfigureAwait(false);
+        catch (Exception error) when (!ct.IsCancellationRequested && IsClosedChannelFailure(error)) { }
+        finally
+        {
+            await this.CloseChannelAsync().ConfigureAwait(false);
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -378,13 +376,41 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
         this.disposed = true;
         try
         {
-            await this.CloseChannelAsync().ConfigureAwait(false);
+            if (!this.detached)
+            {
+                this.detached = true;
+                try
+                {
+                    await this.SendDetachIfConnectedAsync(CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception error) when (IsClosedChannelFailure(error)) { }
+            }
         }
         finally
         {
+            await this.CloseChannelAsync().ConfigureAwait(false);
             this.lifecycleGate.Dispose();
         }
     }
+
+    private async Task SendDetachIfConnectedAsync(CancellationToken ct)
+    {
+        if (this.channel is not { } activeChannel || this.runtimeEpoch is not { } epoch)
+            return;
+
+        await activeChannel.Writer.WriteAsync(AgentSessionProtocolCodec.SerializeCommand(new DetachCommand
+        {
+            CommandId = Guid.NewGuid(),
+            CorrelationId = Guid.NewGuid(),
+            RuntimeEpoch = epoch,
+        }), ct).ConfigureAwait(false);
+    }
+
+    private static bool IsClosedChannelFailure(Exception error) =>
+        error is ChannelClosedException
+            or ObjectDisposedException
+            or IOException
+            or TransportException;
 
     private async Task OpenChannelAsync(AgentSessionOpenRequest request, CancellationToken ct)
     {

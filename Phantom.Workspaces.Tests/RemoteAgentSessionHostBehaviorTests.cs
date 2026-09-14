@@ -83,6 +83,13 @@ public sealed partial class RemoteAgentSessionHostTests
     public async Task OpenAsync_ChildSubagent_ReauthorizesMembership()
     {
         await using var fixture = new HostFixture();
+        fixture.Subagents.Add(new TestRunningSubagent("child"));
+        var childIntent = Intent() with { AgentSessionId = "child" };
+        await using var childRuntime = Runtime(background: true, sessionId: "child");
+        fixture.Factory.Setup(value => value.LoadIntentAsync("child", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(childIntent);
+        fixture.Factory.Setup(value => value.StartAsync(childIntent, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(childRuntime);
         var childChecks = 0;
         fixture.Authorizer.Setup(value => value.AuthorizeAsync(
                 It.IsAny<TransportPeerIdentity>(),
@@ -116,6 +123,145 @@ public sealed partial class RemoteAgentSessionHostTests
                 AgentSessionProtocolCodec.DeserializeFrame(await fixture.Channel.Output.ReadAsync())));
         Assert.Equal("unauthorized", denied.Error.Code);
         Assert.Equal(2, childChecks);
+    }
+
+    [Fact]
+    public async Task OpenSubagentCommand_AuthorizedChild_StartsChildRuntimeAndReturnsAttachDescriptor()
+    {
+        await using var fixture = new HostFixture();
+        fixture.Subagents.Add(new TestRunningSubagent("child"));
+        var childIntent = Intent() with { AgentSessionId = "child" };
+        await using var childRuntime = Runtime(background: true, sessionId: "child");
+        fixture.Factory.Setup(value => value.LoadIntentAsync("child", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(childIntent);
+        fixture.Factory.Setup(value => value.StartAsync(childIntent, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(childRuntime);
+        await using var attachment = await fixture.Host.OpenAsync(
+            fixture.Request(AgentSessionOpenIntent.Attach));
+        await fixture.Channel.Output.ReadAsync();
+        var command = new OpenSubagentCommand
+        {
+            CommandId = Guid.NewGuid(),
+            CorrelationId = Guid.NewGuid(),
+            RuntimeEpoch = fixture.Runtime.Epoch,
+            AgentId = "child",
+        };
+
+        await fixture.Host.DispatchCommandAsync(
+            Peer(), Open(AgentSessionOpenIntent.Attach), fixture.Runtime, attachment, command);
+
+        var frame = AgentSessionProtocolCodec.DeserializeFrame(await fixture.Channel.Output.ReadAsync());
+        var completed = Assert.IsType<CommandCompletedEvent>(
+            AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(frame));
+        var descriptor = JsonSerializer.Deserialize<RemoteSubagentDescriptor>(
+            completed.Result!.Value.GetRawText(),
+            AgentSessionProtocolCodec.Options);
+        Assert.NotNull(descriptor);
+        Assert.Equal("child", descriptor.AgentSessionId);
+        Assert.Equal("child", descriptor.AgentId);
+        Assert.Equal(childIntent.OwningProfileEntityId, descriptor.OwningProfileEntityId);
+        Assert.Equal(childIntent.OwnershipGeneration, descriptor.OwnershipGeneration);
+        Assert.Equal(childRuntime.Epoch, descriptor.RuntimeEpoch);
+
+        await using var childChannel = new DuplexChannel();
+        await using var childAttachment = await fixture.Host.OpenAsync(new OpenAgentSessionHostRequest
+        {
+            Peer = Peer(),
+            OpenRequest = Open(AgentSessionOpenIntent.Attach) with
+            {
+                AgentSessionId = descriptor.AgentSessionId,
+                ExpectedOwningProfileEntityId = descriptor.OwningProfileEntityId,
+                ExpectedOwnershipGeneration = descriptor.OwnershipGeneration,
+                AttachmentToken = "child-viewer",
+            },
+            Channel = childChannel,
+        });
+        var childSnapshot = Assert.IsType<SessionSnapshotEvent>(
+            AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(
+                AgentSessionProtocolCodec.DeserializeFrame(await childChannel.Output.ReadAsync())));
+        Assert.Equal("child", childSnapshot.Snapshot.Information.AgentSessionId);
+        Assert.Equal(1, childRuntime.ViewerCount);
+    }
+
+    private sealed record TestRunningSubagent(string AgentId) : IRunningSubAgent
+    {
+        public string DisplayName => AgentId;
+        public string Description => string.Empty;
+        public AgentChatCompletionState CompletionState => AgentChatCompletionState.Running;
+        public DateTime LastUpdatedAt => DateTime.UtcNow;
+        public IReadOnlyList<IRunningSubAgent> SubAgents => [];
+    }
+
+    [Fact]
+    public async Task ModalResponseCommand_ConcurrentViewers_AcceptsFirstAndRejectsStaleSecond()
+    {
+        await using var fixture = new HostFixture();
+        var responses = 0;
+        fixture.Chat.Setup(value => value.RespondToModalAsync(
+                "modal", It.IsAny<JsonElement>(), It.IsAny<CancellationToken>()))
+            .Returns(() =>
+            {
+                if (Interlocked.Increment(ref responses) != 1)
+                    throw new InvalidOperationException("The modal is no longer pending.");
+                return Task.CompletedTask;
+            });
+        await using var firstChannel = new DuplexChannel();
+        await using var secondChannel = new DuplexChannel();
+        await using var first = await fixture.Host.OpenAsync(
+            fixture.Request(AgentSessionOpenIntent.Attach, firstChannel, "first"));
+        await firstChannel.Output.ReadAsync();
+        await using var second = await fixture.Host.OpenAsync(
+            fixture.Request(AgentSessionOpenIntent.Attach, secondChannel, "second"));
+        await firstChannel.Output.ReadAsync();
+        await secondChannel.Output.ReadAsync();
+        var firstCommand = new ModalResponseCommand
+        {
+            CommandId = Guid.NewGuid(),
+            CorrelationId = Guid.NewGuid(),
+            RuntimeEpoch = fixture.Runtime.Epoch,
+            ModalId = "modal",
+            Response = JsonSerializer.SerializeToElement(new { choice = "accept" }),
+        };
+        var secondCommand = firstCommand with
+        {
+            CommandId = Guid.NewGuid(),
+            CorrelationId = Guid.NewGuid(),
+        };
+
+        await fixture.Host.DispatchCommandAsync(
+            Peer(), Open(AgentSessionOpenIntent.Attach), fixture.Runtime, first, firstCommand);
+        await fixture.Host.DispatchCommandAsync(
+            Peer(), Open(AgentSessionOpenIntent.Attach), fixture.Runtime, second, secondCommand);
+
+        Assert.IsType<CommandCompletedEvent>(
+            AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(
+                AgentSessionProtocolCodec.DeserializeFrame(await firstChannel.Output.ReadAsync())));
+        var stale = Assert.IsType<OperationErrorEvent>(
+            AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(
+                AgentSessionProtocolCodec.DeserializeFrame(await secondChannel.Output.ReadAsync())));
+        Assert.Equal("internal-error", stale.Error.Code);
+        Assert.Equal(2, responses);
+    }
+
+    [Fact]
+    public async Task DetachCommand_ReleasesAttachmentImmediatelyWithoutReplyFrame()
+    {
+        await using var fixture = new HostFixture();
+        await using var attachment = await fixture.Host.OpenAsync(
+            fixture.Request(AgentSessionOpenIntent.Attach));
+        await fixture.Channel.Output.ReadAsync();
+        var command = new DetachCommand
+        {
+            CommandId = Guid.NewGuid(),
+            CorrelationId = Guid.NewGuid(),
+            RuntimeEpoch = fixture.Runtime.Epoch,
+        };
+
+        await fixture.Host.DispatchCommandAsync(
+            Peer(), Open(AgentSessionOpenIntent.Attach), fixture.Runtime, attachment, command);
+
+        Assert.Equal(0, fixture.Runtime.ViewerCount);
+        Assert.False(fixture.Channel.Output.TryRead(out _));
     }
 
     [Fact]
@@ -729,29 +875,36 @@ public sealed partial class RemoteAgentSessionHostTests
         bool background = true,
         TimeProvider? time = null,
         Func<AgentSessionSnapshot>? snapshotFactory = null,
-        Func<CancellationToken, ValueTask>? persistTerminalAsync = null)
+        Func<CancellationToken, ValueTask>? persistTerminalAsync = null,
+        string sessionId = "session")
     {
         var queues = new Mock<IAgentInputQueues>();
         queues.SetupGet(value => value.Snapshot).Returns(new AgentInputQueuesSnapshot { Revision = 0, Queues = [] });
-        return new RemoteAgentSessionLease("session", 1, new RuntimeEpoch { Value = Guid.NewGuid() },
-            Chat(queues).Object, background, snapshotFactory ?? Snapshot,
+        return new RemoteAgentSessionLease(sessionId, 1, new RuntimeEpoch { Value = Guid.NewGuid() },
+            Chat(queues).Object, background, snapshotFactory ?? (() => Snapshot() with
+            {
+                Information = Snapshot().Information with { AgentSessionId = sessionId },
+            }),
             persistTerminalAsync: persistTerminalAsync, timeProvider: time);
     }
 
     private static Mock<IAgentChat> Chat(
         Mock<IAgentInputQueues> queues,
-        AgentChatRunningItemCollection? runningItems = null)
-        => Chat(queues.Object, runningItems);
+        AgentChatRunningItemCollection? runningItems = null,
+        ObservableCollection<IRunningSubAgent>? subagents = null)
+        => Chat(queues.Object, runningItems, subagents);
 
     private static Mock<IAgentChat> Chat(
         IAgentInputQueues queues,
-        AgentChatRunningItemCollection? runningItems = null)
+        AgentChatRunningItemCollection? runningItems = null,
+        ObservableCollection<IRunningSubAgent>? subagents = null)
     {
         var chat = new Mock<IAgentChat>();
         chat.SetupGet(value => value.InputQueues).Returns(queues);
         chat.SetupGet(value => value.RunningItems).Returns(runningItems ?? new AgentChatRunningItemCollection());
         chat.SetupGet(value => value.SubAgents).Returns(
-            new ReadOnlyObservableCollection<IRunningSubAgent>(new ObservableCollection<IRunningSubAgent>()));
+            new ReadOnlyObservableCollection<IRunningSubAgent>(
+                subagents ?? new ObservableCollection<IRunningSubAgent>()));
         chat.SetupGet(value => value.Modals).Returns(
             new ReadOnlyObservableCollection<AgentChatModal>(new ObservableCollection<AgentChatModal>()));
         chat.Setup(value => value.GetToolSnapshot()).Returns([]);
@@ -773,10 +926,11 @@ public sealed partial class RemoteAgentSessionHostTests
         ContinueInBackground = false, ViewerCount = 0,
     };
 
-    private sealed class HostFixture : IAsyncDisposable
+    internal sealed class HostFixture : IAsyncDisposable
     {
         internal readonly Mock<IAgentInputQueues> Queues = new();
         internal readonly Mock<IAgentChat> Chat;
+        internal readonly ObservableCollection<IRunningSubAgent> Subagents = [];
         internal readonly RemoteAgentSessionRuntimeRegistry Registry = new(TimeProvider.System);
         internal readonly Mock<IAgentSessionRuntimeHostFactory> Factory = new();
         internal readonly Mock<IAgentSessionAttachAuthorizer> Authorizer = new();
@@ -789,9 +943,10 @@ public sealed partial class RemoteAgentSessionHostTests
         internal HostFixture(bool started = true)
         {
             this.Queues.SetupGet(value => value.Snapshot).Returns(new AgentInputQueuesSnapshot { Revision = 0, Queues = [] });
-            this.Chat = RemoteAgentSessionHostTests.Chat(this.Queues, this.RunningItems);
+            this.Chat = RemoteAgentSessionHostTests.Chat(this.Queues, this.RunningItems, this.Subagents);
             this.Runtime = new RemoteAgentSessionLease(
-                "session", 1, new RuntimeEpoch { Value = Guid.NewGuid() }, this.Chat.Object, true, Snapshot);
+                "session", 1, new RuntimeEpoch { Value = Guid.NewGuid() }, this.Chat.Object, true,
+                () => Snapshot() with { InputQueues = this.Queues.Object.Snapshot });
             this.Factory.Setup(value => value.LoadIntentAsync("session", It.IsAny<CancellationToken>()))
                 .ReturnsAsync(Intent());
             this.Factory.Setup(value => value.StartAsync(It.IsAny<PersistedAgentSessionRuntimeIntent>(), It.IsAny<CancellationToken>()))
@@ -829,7 +984,7 @@ public sealed partial class RemoteAgentSessionHostTests
         }
     }
 
-    private sealed class DuplexChannel : IMessageChannel
+    internal sealed class DuplexChannel : IMessageChannel
     {
         private readonly Channel<JsonElement> input = Channel.CreateUnbounded<JsonElement>();
         private readonly Channel<JsonElement> output = Channel.CreateUnbounded<JsonElement>();

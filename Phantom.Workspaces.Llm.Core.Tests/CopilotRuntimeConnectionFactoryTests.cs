@@ -84,7 +84,7 @@ public sealed class CopilotRuntimeConnectionFactoryTests
     }
 
     [Fact]
-    public async Task CreateConnection_EnsureConnectedAndEnsureSession_ReusesSelection()
+    public async Task CreateConnectionAsync_ConcurrentLifecyclePaths_ReturnsOneSelection()
     {
         var connectionFactory = new RecordingConnectionFactory();
         var sdkSession = new FakeCopilotSession();

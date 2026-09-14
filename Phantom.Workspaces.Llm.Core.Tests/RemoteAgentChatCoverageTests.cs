@@ -525,11 +525,14 @@ public sealed partial class RemoteAgentChatTests
     }
 
     [Fact]
-    public async Task DisposeAsync_ConnectedProxy_ReleasesViewerWithoutTerminateCommand()
+    public async Task DisposeAsync_ConnectedProxy_ReleasesViewerWithDetachWithoutTerminateCommand()
     {
         var (transport, chat) = await AttachAsync();
         await chat.DisposeAsync();
         Assert.True(transport.ChannelDisposed);
+        var detach = Assert.IsType<DetachCommand>(
+            AgentSessionProtocolCodec.DeserializeCommand(await transport.Outgoing.ReadAsync()));
+        Assert.Equal("detach", detach.Type);
         Assert.False(transport.Outgoing.TryRead(out _));
     }
 

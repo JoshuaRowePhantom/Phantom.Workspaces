@@ -405,13 +405,15 @@ public sealed partial class RemoteAgentSessionClientTests
     }
 
     [Fact]
-    public async Task DisposeAsync_ActivePump_ClosesChannelWithoutTerminateCommandAndReleasesViewer()
+    public async Task DisposeAsync_ActivePump_SendsDetachBeforeClosingChannelAndReleasesViewer()
     {
         var transport = new TestTransport();
         var client = await ConnectAsync(transport);
         await client.DisposeAsync();
         Assert.True(transport.ChannelDisposed);
-        Assert.False(transport.ClientWrites.Reader.TryRead(out _));
+        var detach = Assert.IsType<DetachCommand>(
+            AgentSessionProtocolCodec.DeserializeCommand(await transport.ServerReadAsync()));
+        Assert.Equal("detach", detach.Type);
         Assert.False(transport.Disposed);
     }
 

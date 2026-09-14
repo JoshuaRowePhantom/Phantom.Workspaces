@@ -212,6 +212,23 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
     }
 
     [Fact]
+    public async Task TransportLoss_TransportHandleDisposal_PreservesReservationUntilGraceExpires()
+    {
+        var time = new FakeTimeProvider();
+        await using var lease = Lease(background: false, time: time);
+        var attachment = lease.Attach(Attach("a"));
+
+        await attachment.MarkTransportLostAsync();
+        await attachment.DisposeAsync();
+
+        Assert.Equal(1, lease.ViewerCount);
+        Assert.False(lease.IsFenced);
+        time.Advance(TimeSpan.FromSeconds(5));
+        await attachment.Released;
+        Assert.True(lease.IsFenced);
+    }
+
+    [Fact]
     public async Task TransportLoss_GraceExpiresAsLastViewer_DefaultPolicy_DisposesRuntimeAndChildren()
     {
         var time = new FakeTimeProvider();

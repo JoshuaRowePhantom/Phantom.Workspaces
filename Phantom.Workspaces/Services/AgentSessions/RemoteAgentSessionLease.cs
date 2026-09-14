@@ -640,6 +640,7 @@ internal sealed class RemoteAgentAttachmentLease : IAsyncDisposable
     private readonly string token;
     private readonly long generation;
     private int disposed;
+    private int transportLost;
     private CancellationTokenSource? receiveCancellation;
 
     internal RemoteAgentAttachmentLease(
@@ -658,7 +659,10 @@ internal sealed class RemoteAgentAttachmentLease : IAsyncDisposable
         => this.owner.PublishToAttachmentAsync(this.token, value, ct);
 
     internal ValueTask MarkTransportLostAsync()
-        => this.owner.MarkTransportLostAsync(this.token);
+    {
+        Volatile.Write(ref this.transportLost, 1);
+        return this.owner.MarkTransportLostAsync(this.token);
+    }
 
     internal void StartReceiving(Func<AgentSessionCommand, CancellationToken, ValueTask> handleAsync)
     {
@@ -672,7 +676,8 @@ internal sealed class RemoteAgentAttachmentLease : IAsyncDisposable
         {
             this.receiveCancellation?.Cancel();
             this.receiveCancellation?.Dispose();
-            await this.owner.ReleaseAsync(this.token, this.generation).ConfigureAwait(false);
+            if (Volatile.Read(ref this.transportLost) == 0)
+                await this.owner.ReleaseAsync(this.token, this.generation).ConfigureAwait(false);
         }
     }
 
