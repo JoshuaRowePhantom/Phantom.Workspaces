@@ -164,22 +164,22 @@ public sealed class MxcSdkVersionTests
 public sealed class MxcRuntimePayloadTests
 {
     [Fact]
-    public void MxcRuntimePayload_PublishIsolatesBuildOutputsAndDisablesPersistentServers()
+    public void MxcRuntimePayload_CommandConsumesTopLevelNativeBuild()
     {
-        var arguments = MxcRepositoryTestSupport.CreatePublishArguments(
+        var arguments = MxcRepositoryTestSupport.CreateMxcRuntimePayloadArguments(
             "payload",
             "isolated-artifacts");
 
+        Assert.Equal("msbuild", arguments[0]);
         Assert.Contains("--disable-build-servers", arguments);
         Assert.Contains("-m:1", arguments);
         Assert.Contains("/nodeReuse:false", arguments);
         Assert.Contains("-p:UseSharedCompilation=false", arguments);
         Assert.Contains("-p:UseArtifactsOutput=true", arguments);
         Assert.Contains("-p:ArtifactsPath=isolated-artifacts", arguments);
-        Assert.Contains("-p:PublishCopilotRuntime=false", arguments);
-        Assert.Contains("-p:CopilotSkipCliDownload=true", arguments);
-        Assert.Contains("-p:SelfContained=false", arguments);
-        Assert.Contains("-p:PublishSingleFile=false", arguments);
+        Assert.Contains("-t:PublishMxcRuntimeLoose", arguments);
+        Assert.Contains("-p:NoBuild=true", arguments);
+        Assert.DoesNotContain("publish", arguments);
     }
 
     [Fact]
@@ -212,7 +212,6 @@ public sealed class MxcRuntimePayloadTests
             new MxcRepositoryTestSupport.TestDirectory(
                 ObserveResourcesReleased,
                 message => Console.WriteLine($"MXC build artifacts {message}"));
-        using var sharedOutputLock = MxcRepositoryTestSupport.LockSharedRuntimeConfig();
         publish = await MxcRepositoryTestSupport.InvokeAsync(
             "dotnet",
             new MxcRepositoryTestSupport.InvocationOptions
@@ -220,7 +219,7 @@ public sealed class MxcRuntimePayloadTests
                 Timeout = TimeSpan.FromMinutes(10),
                 Observer = processObserver,
             },
-            MxcRepositoryTestSupport.CreatePublishArguments(
+            MxcRepositoryTestSupport.CreateMxcRuntimePayloadArguments(
                 payload.Path,
                 buildArtifacts.Path));
         Assert.True(
@@ -260,20 +259,15 @@ public sealed class MxcRuntimePayloadTests
             "win-x64",
             "native",
             "phantom-copilot-wrapper.exe")));
-
-        var runtimeConfigs = Directory.GetFiles(
-            buildArtifacts.Path,
-            "*.runtimeconfig.json",
-            SearchOption.AllDirectories);
-        Assert.Contains(
-            runtimeConfigs,
-            path => Path.GetFileName(path).Equals(
-                "Phantom.Workspaces.Containers.runtimeconfig.json",
-                StringComparison.OrdinalIgnoreCase));
-        Assert.All(runtimeConfigs, MxcRepositoryTestSupport.AssertExclusivelyOpenable);
-        Assert.All(
-            Directory.GetFiles(payload.Path, "*.runtimeconfig.json", SearchOption.TopDirectoryOnly),
-            MxcRepositoryTestSupport.AssertExclusivelyOpenable);
+        var nativeDirectory = Path.Combine(payload.Path, "runtimes", "win-x64", "native");
+        Assert.Equal(
+            MxcRepositoryTestSupport.ComputeSha256(
+                MxcRepositoryTestSupport.FindBuiltMxcFile("mxc_ffi.dll")),
+            MxcRepositoryTestSupport.ComputeSha256(Path.Combine(nativeDirectory, "mxc_ffi.dll")));
+        Assert.Equal(
+            MxcRepositoryTestSupport.ComputeSha256(
+                MxcRepositoryTestSupport.FindBuiltMxcFile("plm.exe")),
+            MxcRepositoryTestSupport.ComputeSha256(Path.Combine(nativeDirectory, "plm.exe")));
 
         await buildArtifacts.DisposeAsync();
         await payload.DisposeAsync();
@@ -863,28 +857,6 @@ internal static class MxcRepositoryTestSupport
     internal static string Read(params string[] relativePath)
         => File.ReadAllText(Path.Combine([Root.FullName, .. relativePath]));
 
-    internal static string[] CreatePublishArguments(string outputPath, string artifactsPath) =>
-    [
-        "publish",
-        Path.Combine("Phantom.Workspaces", "Phantom.Workspaces.csproj"),
-        "--nologo",
-        "--disable-build-servers",
-        "-m:1",
-        "/nodeReuse:false",
-        "-r",
-        "win-x64",
-        "-p:SelfContained=false",
-        "-p:PublishSingleFile=false",
-        "-p:PublishReadyToRun=false",
-        "-p:UseSharedCompilation=false",
-        "-p:PublishCopilotRuntime=false",
-        "-p:CopilotSkipCliDownload=true",
-        "-p:UseArtifactsOutput=true",
-        $"-p:ArtifactsPath={artifactsPath}",
-        "-o",
-        outputPath,
-    ];
-
     internal static string[] CreateCopilotWrapperPublishArguments(
         string outputPath,
         string artifactsPath,
@@ -943,6 +915,36 @@ internal static class MxcRepositoryTestSupport
             $"-p:OutDir={applicationOutput}{Path.DirectorySeparatorChar}",
             $"-p:PublishDir={outputPath}{Path.DirectorySeparatorChar}",
             "-p:SkipCopilotWrapperPublish=true",
+        ];
+    }
+
+    internal static string[] CreateMxcRuntimePayloadArguments(
+        string outputPath,
+        string artifactsPath)
+    {
+        var targetFrameworkDirectory = new DirectoryInfo(
+            Path.TrimEndingDirectorySeparator(AppContext.BaseDirectory));
+        var configuration = targetFrameworkDirectory.Parent?.Name
+            ?? throw new InvalidOperationException("Unable to identify the test build configuration.");
+        var nativeSdkOutput = Path.GetDirectoryName(FindBuiltMxcFile("mxc_ffi.dll"))
+            ?? throw new InvalidOperationException("Unable to identify the native SDK output.");
+        return
+        [
+            "msbuild",
+            "--disable-build-servers",
+            Path.Combine("Phantom.Workspaces", "Phantom.Workspaces.csproj"),
+            "-nologo",
+            "-m:1",
+            "/nodeReuse:false",
+            "-t:PublishMxcRuntimeLoose",
+            "-p:NoBuild=true",
+            $"-p:Configuration={configuration}",
+            "-p:RuntimeIdentifier=win-x64",
+            "-p:UseSharedCompilation=false",
+            "-p:UseArtifactsOutput=true",
+            $"-p:ArtifactsPath={artifactsPath}",
+            $"-p:OutDir={nativeSdkOutput}{Path.DirectorySeparatorChar}",
+            $"-p:PublishDir={outputPath}{Path.DirectorySeparatorChar}",
         ];
     }
 
