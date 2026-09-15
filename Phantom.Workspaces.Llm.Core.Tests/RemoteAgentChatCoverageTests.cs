@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Time.Testing;
 using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Transport;
 
@@ -108,6 +109,35 @@ public sealed partial class RemoteAgentChatTests
         Assert.Equal(AgentSessionProtocolCodecTests.Epoch().Value, replay.GetProperty("epoch").GetProperty("value").GetGuid());
         Assert.Equal(1, replay.GetProperty("sequence").GetInt64());
         Assert.Equal(99, chat.Usage.TotalInputTokenCount);
+    }
+
+    [Fact]
+    public async Task DisposeAsync_DuringReconnectBackoff_CancelsOwnedReconnectPump()
+    {
+        var time = new FakeTimeProvider();
+        var transport = new ReconnectingChatTransport();
+        var client = new RemoteAgentSessionClient(transport, time);
+        var attaching = RemoteAgentChat.AttachAsync(new RemoteAgentChatAttachOptions
+        {
+            Client = client,
+            OpenRequest = AgentSessionProtocolCodecTests.Open(),
+            ForegroundScheduler = TaskScheduler.Default,
+        });
+        await transport.SendAsync(0, Frame(1, new SessionSnapshotEvent
+        {
+            Snapshot = AgentSessionProtocolCodecTests.Snapshot(),
+        }));
+        var chat = await attaching;
+        var disconnected = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        client.UnexpectedlyDisconnected += (_, _) => disconnected.TrySetResult();
+        transport.Complete(0);
+        await disconnected.Task;
+
+        await chat.DisposeAsync();
+        time.Advance(TimeSpan.FromSeconds(10));
+
+        Assert.Single(transport.Opens);
     }
 
     [Fact]

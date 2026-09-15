@@ -25,8 +25,10 @@ public sealed class RemoteAgentChat : IAgentChat
     private readonly Dictionary<string, AgentChatRunningItem> runningById = new(StringComparer.Ordinal);
     private readonly SlashCommandRegistry slashCommands = new();
     private readonly RemoteInputQueues inputQueues;
+    private readonly CancellationTokenSource lifetimeCancellation = new();
     private readonly object frameApplicationLock = new();
     private Task frameApplication = Task.CompletedTask;
+    private Task reconnectAfterLoss = Task.CompletedTask;
     private Task? disposalTask;
     private bool disposed;
     private bool detached;
@@ -235,23 +237,35 @@ public sealed class RemoteAgentChat : IAgentChat
     private Task BeginDisposeLocked()
     {
         this.disposed = true;
+        this.lifetimeCancellation.Cancel();
         this.SetConnected(false);
         this.inputQueues.StopAccepting(new ObjectDisposedException(nameof(RemoteAgentChat)));
         this.client.FrameReceived -= this.OnFrameReceived;
         this.client.UnexpectedlyDisconnected -= this.OnUnexpectedlyDisconnected;
-        return this.DisposeCoreAsync(this.frameApplication);
+        return this.DisposeCoreAsync(this.frameApplication, this.reconnectAfterLoss);
     }
 
-    private async Task DisposeCoreAsync(Task pendingFrameApplication)
+    private async Task DisposeCoreAsync(Task pendingFrameApplication, Task pendingReconnect)
     {
         Exception? primaryFailure = null;
+        try
+        {
+            await pendingReconnect.ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            primaryFailure = exception;
+        }
+
         try
         {
             await this.client.DisposeAsync().ConfigureAwait(false);
         }
         catch (Exception exception)
         {
-            primaryFailure = exception;
+            primaryFailure = primaryFailure is null
+                ? exception
+                : new AggregateException(primaryFailure, exception);
         }
 
         try
@@ -271,9 +285,12 @@ public sealed class RemoteAgentChat : IAgentChat
         {
             primaryFailure ??= exception;
         }
+        finally
+        {
+            this.lifetimeCancellation.Dispose();
+        }
 
-        if (primaryFailure is not null)
-            ExceptionDispatchInfo.Capture(primaryFailure).Throw();
+        if (primaryFailure is not null) ExceptionDispatchInfo.Capture(primaryFailure).Throw();
     }
 
     private void OnFrameReceived(object? sender, AgentSessionServerFrame frame)
@@ -293,26 +310,37 @@ public sealed class RemoteAgentChat : IAgentChat
     private void OnUnexpectedlyDisconnected(object? sender, EventArgs e)
     {
         this.SetConnected(false);
-        _ = this.ReconnectAfterLossAsync();
+        lock (this.frameApplicationLock)
+        {
+            if (!this.disposed && !this.detached && this.reconnectAfterLoss.IsCompleted)
+                this.reconnectAfterLoss = this.ReconnectAfterLossAsync(this.lifetimeCancellation.Token);
+        }
     }
 
     internal async Task ReconnectNowAsync(CancellationToken ct = default)
     {
         this.ThrowIfDisposed();
         await this.client.ReconnectAsync(ct).ConfigureAwait(false);
+        // Client readiness means the replacement frame has been dispatched. Queueing this barrier
+        // after dispatch makes chat-level reconnect completion mean every preceding frame has been
+        // applied to the foreground projection.
         await this.QueueForeground(() => this.SetConnected(true)).ConfigureAwait(false);
     }
 
-    private async Task ReconnectAfterLossAsync()
+    private async Task ReconnectAfterLossAsync(CancellationToken ct)
     {
         foreach (var delay in new[] { 250, 500, 1000, 1000, 1000, 1000 })
         {
             if (this.disposed || this.detached) return;
-            using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(delay));
-            if (!await timer.WaitForNextTickAsync().ConfigureAwait(false)) return;
             try
             {
-                await this.ReconnectNowAsync().ConfigureAwait(false);
+                await Task.Delay(TimeSpan.FromMilliseconds(delay), this.client.TimeProvider, ct)
+                    .ConfigureAwait(false);
+                await this.ReconnectNowAsync(ct).ConfigureAwait(false);
+                return;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
                 return;
             }
             catch (InvalidOperationException)

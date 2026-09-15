@@ -18,7 +18,6 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
     private CancellationTokenSource? pumpCancellation;
     private Task? pump;
     private AgentSessionOpenRequest? openRequest;
-    private TaskCompletionSource<AgentSessionServerFrame>? ready;
     private RuntimeEpoch? runtimeEpoch;
     private DateTimeOffset? reconnectDeadline;
     private bool connectAttempted;
@@ -41,6 +40,7 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
 
     public event EventHandler<AgentSessionServerFrame>? FrameReceived;
     internal event EventHandler? UnexpectedlyDisconnected;
+    internal TimeProvider TimeProvider => this.timeProvider;
     public ReplayCursor? LastAppliedCursor { get; private set; }
 
     public static async Task<AgentSessionRemoteStatus> GetStatusAsync(
@@ -139,6 +139,11 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Reopens the protocol channel and completes after the first replacement frame has been
+    /// accepted and synchronously dispatched to frame consumers. Consumers that project frames
+    /// asynchronously must await their own projection barrier before exposing usable state.
+    /// </summary>
     public async Task ReconnectAsync(CancellationToken ct = default)
     {
         Task attempt;
@@ -416,13 +421,14 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
     {
         var opened = await this.transport.ConnectToMessageChannelAsync(
             AgentSessionProtocolCodec.SerializeOpen(request), ct).ConfigureAwait(false);
+        var ready = new TaskCompletionSource<AgentSessionServerFrame>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         this.channel = opened;
-        this.ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
         this.pumpCancellation = new();
-        this.pump = this.PumpAsync(opened, this.pumpCancellation.Token);
+        this.pump = this.PumpAsync(opened, ready, this.pumpCancellation.Token);
         try
         {
-            await this.ready.Task.WaitAsync(ct).ConfigureAwait(false);
+            await ready.Task.WaitAsync(ct).ConfigureAwait(false);
             this.reconnectDeadline = null;
         }
         catch
@@ -432,7 +438,10 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
         }
     }
 
-    private async Task PumpAsync(IMessageChannel activeChannel, CancellationToken ct)
+    private async Task PumpAsync(
+        IMessageChannel activeChannel,
+        TaskCompletionSource<AgentSessionServerFrame> ready,
+        CancellationToken ct)
     {
         Exception? failure = null;
         try
@@ -440,7 +449,7 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
             await foreach (var raw in activeChannel.Reader.ReadAllAsync(ct).ConfigureAwait(false))
             {
                 var frame = AgentSessionProtocolCodec.DeserializeFrame(raw);
-                this.AcceptFrame(frame);
+                this.AcceptFrame(frame, ready);
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
@@ -451,23 +460,28 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
         finally
         {
             await activeChannel.DisposeAsync().ConfigureAwait(false);
+            var notifyDisconnected = false;
             if (ReferenceEquals(this.channel, activeChannel))
             {
                 this.channel = null;
                 if (!this.detached && !this.terminal && !this.disposed)
                 {
                     this.reconnectDeadline = this.timeProvider.GetUtcNow().AddSeconds(5);
-                    this.UnexpectedlyDisconnected?.Invoke(this, EventArgs.Empty);
+                    notifyDisconnected = true;
                 }
             }
             failure ??= new RemoteAgentProtocolException("The remote session channel closed.");
-            this.ready?.TrySetException(failure);
+            ready.TrySetException(failure);
             foreach (var pendingCommand in this.pending.Values)
                 pendingCommand.Completion.TrySetException(failure);
+            if (notifyDisconnected)
+                this.UnexpectedlyDisconnected?.Invoke(this, EventArgs.Empty);
         }
     }
 
-    private void AcceptFrame(AgentSessionServerFrame frame)
+    private void AcceptFrame(
+        AgentSessionServerFrame frame,
+        TaskCompletionSource<AgentSessionServerFrame> ready)
     {
         var value = AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(frame);
         if (this.runtimeEpoch is { } epoch && epoch != frame.RuntimeEpoch)
@@ -491,17 +505,17 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
         if (this.runtimeEpoch is null && value is SessionTerminalEvent terminal)
         {
             this.terminal = true;
-            this.ready?.TrySetException(CreateTerminalException(terminal, frame.CorrelationId));
+            ready.TrySetException(CreateTerminalException(terminal, frame.CorrelationId));
             return;
         }
         if (this.runtimeEpoch is null && value is not SessionSnapshotEvent)
             throw new RemoteAgentProtocolException("The first attached-session frame must be a snapshot.");
         this.runtimeEpoch ??= frame.RuntimeEpoch;
         this.LastAppliedCursor = new ReplayCursor { Epoch = frame.RuntimeEpoch, Sequence = frame.Sequence };
-        if (value is SessionSnapshotEvent || this.reconnecting)
+        var completesOpen = value is SessionSnapshotEvent || this.reconnecting;
+        if (completesOpen)
         {
             this.reconnecting = false;
-            this.ready?.TrySetResult(frame);
         }
 
         if (value is SessionTerminalEvent)
@@ -513,6 +527,8 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
                 if (value is CommandCompletedEvent && pendingCommand.AcceptTerminal)
                 {
                     this.FrameReceived?.Invoke(this, frame);
+                    if (completesOpen)
+                        ready.TrySetResult(frame);
                     return;
                 }
                 this.pending.TryRemove(frame.CorrelationId, out _);
@@ -550,6 +566,8 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
             }
         }
         this.FrameReceived?.Invoke(this, frame);
+        if (completesOpen)
+            ready.TrySetResult(frame);
     }
 
     private static Exception CreateTerminalException(

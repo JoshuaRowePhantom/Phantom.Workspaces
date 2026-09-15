@@ -111,6 +111,28 @@ public sealed partial class RemoteAgentSessionClientTests
     }
 
     [Fact]
+    public async Task ReconnectAsync_FromDisconnectNotification_DoesNotInheritClosedPumpFailure()
+    {
+        var transport = new ReconnectTransport();
+        await using var client = await ConnectAsync(transport);
+        Task? reconnecting = null;
+        var reconnectStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        client.UnexpectedlyDisconnected += (_, _) =>
+        {
+            reconnecting = client.ReconnectAsync();
+            reconnectStarted.TrySetResult();
+        };
+
+        transport.Complete(0);
+        await reconnectStarted.Task;
+        await transport.SendAsync(1, Frame(2, new BusyChangedEvent { IsBusy = true }));
+        await reconnecting!;
+
+        Assert.Equal(2, client.LastAppliedCursor!.Value.Sequence);
+    }
+
+    [Fact]
     public async Task ReconnectAsync_ReplayGapMarkedSnapshot_ReplacesCursorThenRequiresContiguousDeltas()
     {
         var transport = new ReconnectTransport();
@@ -143,6 +165,33 @@ public sealed partial class RemoteAgentSessionClientTests
         Assert.Equal(retained.Epoch, client.LastAppliedCursor!.Value.Epoch);
         Assert.Equal(6, client.LastAppliedCursor.Value.Sequence);
         Assert.Equal([5L, 6L], observed);
+    }
+
+    [Fact]
+    public async Task ReconnectAsync_ReplacementFrameDispatchFails_DoesNotReportReady()
+    {
+        var transport = new ReconnectTransport();
+        await using var client = await ConnectAsync(transport);
+        var retained = client.LastAppliedCursor!.Value;
+        var disconnected = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        client.UnexpectedlyDisconnected += (_, _) => disconnected.TrySetResult();
+        transport.Complete(0);
+        await disconnected.Task;
+        client.FrameReceived += (_, frame) =>
+        {
+            if (frame.ReplayResetCursor is not null)
+                throw new InvalidOperationException("Projection rejected the replacement frame.");
+        };
+
+        var reconnecting = client.ReconnectAsync();
+        await transport.SendAsync(1, Frame(5, new SessionSnapshotEvent
+        {
+            Snapshot = AgentSessionProtocolCodecTests.Snapshot(),
+        }, replayResetCursor: retained));
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => reconnecting);
+        Assert.Equal("Projection rejected the replacement frame.", error.Message);
     }
 
     [Fact]

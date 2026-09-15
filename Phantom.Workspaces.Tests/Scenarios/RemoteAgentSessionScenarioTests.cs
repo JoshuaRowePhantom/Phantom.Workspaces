@@ -83,7 +83,9 @@ public sealed class RemoteAgentSessionScenarioTests
         await disconnected;
         await original.Chat.DisposeAsync();
         var owner = await fixture.OwnerChatAsync("gap", 0);
+        var ownerUpdated = WaitForHistoryCountAsync(owner, 1);
         owner.EnqueueSystemNote("authoritative-snapshot");
+        await ownerUpdated;
 
         await using var replacement = await fixture.OpenProxyAsync(
             "gap",
@@ -99,6 +101,67 @@ public sealed class RemoteAgentSessionScenarioTests
         Assert.Equal(
             (await fixture.RuntimeAsync("gap", 0)).Replay.HighWaterMark,
             replacement.Client.LastAppliedCursor!.Value.Sequence);
+    }
+
+    [Fact]
+    public async Task Reconnect_RepeatedReplayGaps_CompleteAfterSameProxyProjectionConverges()
+    {
+        await using var fixture = await ScenarioFixture.CreateAsync(
+            Session("repeated-projection-gap", background: true));
+        var scheduler = new PausableTaskScheduler();
+        var attachmentToken = Guid.NewGuid().ToString("N");
+        await using var proxy = await fixture.OpenProxyAsync(
+            "repeated-projection-gap",
+            AgentSessionOpenIntent.Start,
+            attachmentToken: attachmentToken,
+            foregroundScheduler: scheduler);
+        var runtime = await fixture.RuntimeAsync("repeated-projection-gap", 0);
+        var owner = await fixture.OwnerChatAsync("repeated-projection-gap", 0);
+
+        for (var cycle = 1; cycle <= 2; cycle++)
+        {
+            var disconnected = WaitForDisconnectAsync(proxy.Client);
+            await proxy.Transport.DropConnectionsAsync();
+            await disconnected;
+            await runtime.MarkTransportLostAsync(attachmentToken, generation: cycle);
+
+            var ownerUpdated = WaitForHistoryCountAsync(owner, cycle);
+            owner.EnqueueSystemNote($"authoritative-{cycle}");
+            await ownerUpdated;
+            for (var index = 0; index < 4097; index++)
+            {
+                await runtime.PublishAsync(
+                    new BusyChangedEvent { IsBusy = index % 2 == 0 },
+                    ct: TestContext.Current.CancellationToken);
+            }
+
+            scheduler.Pause();
+            try
+            {
+                var reconnecting = proxy.Chat.ReconnectNowAsync(TestContext.Current.CancellationToken);
+                await scheduler.WaitForQueuedTaskAsync(TestContext.Current.CancellationToken);
+
+                Assert.False(reconnecting.IsCompleted, reconnecting.Exception?.ToString());
+                Assert.Equal(cycle - 1, TextHistory(proxy.Chat).Length);
+
+                scheduler.RunNext();
+                Assert.Equal(
+                    Enumerable.Range(1, cycle).Select(index => $"authoritative-{index}"),
+                    TextHistory(proxy.Chat));
+                Assert.False(reconnecting.IsCompleted, reconnecting.Exception?.ToString());
+
+                await scheduler.WaitForQueuedTaskAsync(TestContext.Current.CancellationToken);
+                scheduler.RunNext();
+                await reconnecting;
+            }
+            finally
+            {
+                scheduler.Resume();
+            }
+
+            Assert.Equal(runtime.Replay.HighWaterMark, proxy.Client.LastAppliedCursor!.Value.Sequence);
+            Assert.Equal(owner.IsBusy, proxy.Chat.IsBusy);
+        }
     }
 
     [Fact]
@@ -1104,7 +1167,8 @@ public sealed class RemoteAgentSessionScenarioTests
             string owner = DefaultOwner,
             long generation = 0,
             string? attachmentToken = null,
-            ReplayCursor? cursor = null)
+            ReplayCursor? cursor = null,
+            TaskScheduler? foregroundScheduler = null)
         {
             var transport = this.CreateTransport();
             var client = new RemoteAgentSessionClient(transport, Time);
@@ -1119,7 +1183,7 @@ public sealed class RemoteAgentSessionScenarioTests
             {
                 Client = client,
                 OpenRequest = request,
-                ForegroundScheduler = TaskScheduler.Default,
+                ForegroundScheduler = foregroundScheduler ?? TaskScheduler.Default,
             }, TestContext.Current.CancellationToken);
             return new ProxyHandle(transport, client, chat, request);
         }
@@ -1360,6 +1424,84 @@ public sealed class RemoteAgentSessionScenarioTests
         internal void Release() => this.release.TrySetResult();
         internal Task WaitForReleaseAsync(CancellationToken ct) => this.release.Task.WaitAsync(ct);
         internal void MarkCompleted() => this.completed.TrySetResult();
+    }
+
+    private sealed class PausableTaskScheduler : TaskScheduler
+    {
+        private readonly object gate = new();
+        private readonly Queue<Task> queued = [];
+        private TaskCompletionSource queuedSignal = NewSignal();
+        private bool paused;
+
+        internal void Pause()
+        {
+            lock (this.gate)
+            {
+                Assert.Empty(this.queued);
+                this.paused = true;
+                this.queuedSignal = NewSignal();
+            }
+        }
+
+        internal void Resume()
+        {
+            Task[] pending;
+            lock (this.gate)
+            {
+                this.paused = false;
+                pending = this.queued.ToArray();
+                this.queued.Clear();
+                this.queuedSignal = NewSignal();
+            }
+
+            foreach (var task in pending)
+                Assert.True(this.TryExecuteTask(task));
+        }
+
+        internal Task WaitForQueuedTaskAsync(CancellationToken ct)
+        {
+            lock (this.gate)
+                return (this.queued.Count > 0 ? Task.CompletedTask : this.queuedSignal.Task)
+                    .WaitAsync(ct);
+        }
+
+        internal void RunNext()
+        {
+            Task task;
+            lock (this.gate)
+                task = this.queued.Dequeue();
+            Assert.True(this.TryExecuteTask(task));
+        }
+
+        protected override void QueueTask(Task task)
+        {
+            lock (this.gate)
+            {
+                if (this.paused)
+                {
+                    this.queued.Enqueue(task);
+                    this.queuedSignal.TrySetResult();
+                    return;
+                }
+            }
+
+            Assert.True(this.TryExecuteTask(task));
+        }
+
+        protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued)
+        {
+            lock (this.gate)
+                return !this.paused && this.TryExecuteTask(task);
+        }
+
+        protected override IEnumerable<Task> GetScheduledTasks()
+        {
+            lock (this.gate)
+                return this.queued.ToArray();
+        }
+
+        private static TaskCompletionSource NewSignal() =>
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     private sealed class AllowAllAuthorizer : IAgentSessionAttachAuthorizer
