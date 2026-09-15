@@ -1045,6 +1045,61 @@ public sealed class SharedStylesTests
     }
 
     [Fact]
+    public void RunningAgentRowActionButton_Style_IsCompactAndFadesIn()
+    {
+        var styles = ReadSharedStylesText();
+        var style = ExtractStyle(styles, "Button.running-agent-row-action-button");
+
+        Assert.Contains("<Setter Property=\"MinWidth\" Value=\"28\" />", style, StringComparison.Ordinal);
+        Assert.Contains("<Setter Property=\"MinHeight\" Value=\"28\" />", style, StringComparison.Ordinal);
+        Assert.Contains("<Setter Property=\"Padding\" Value=\"6,2\" />", style, StringComparison.Ordinal);
+        Assert.Contains("<Setter Property=\"FontSize\" Value=\"12\" />", style, StringComparison.Ordinal);
+        Assert.Contains("<Setter Property=\"Opacity\" Value=\"0\" />", style, StringComparison.Ordinal);
+        Assert.Contains("<DoubleTransition Property=\"Opacity\" Duration=\"0:0:0.16\" />", style, StringComparison.Ordinal);
+        Assert.DoesNotContain("Foreground", style, StringComparison.Ordinal);
+        Assert.DoesNotContain("BorderBrush", style, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunningAgentRowActionToggle_Style_PreservesReadableHitTargetAndFadesIn()
+    {
+        var styles = ReadSharedStylesText();
+        var style = ExtractStyle(styles, "CheckBox.running-agent-row-action-toggle");
+
+        Assert.Contains("<Setter Property=\"MinHeight\" Value=\"28\" />", style, StringComparison.Ordinal);
+        Assert.Contains("<Setter Property=\"Padding\" Value=\"4,2\" />", style, StringComparison.Ordinal);
+        Assert.Contains("<Setter Property=\"FontSize\" Value=\"12\" />", style, StringComparison.Ordinal);
+        Assert.Contains("<Setter Property=\"Opacity\" Value=\"0\" />", style, StringComparison.Ordinal);
+        Assert.Contains("<DoubleTransition Property=\"Opacity\" Duration=\"0:0:0.16\" />", style, StringComparison.Ordinal);
+        Assert.DoesNotContain("Width", style, StringComparison.Ordinal);
+        Assert.DoesNotContain("Foreground", style, StringComparison.Ordinal);
+        Assert.DoesNotContain("BorderBrush", style, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunningAgentRowActions_RevealSelectorsCoverHoverFocusCheckedAndPending()
+    {
+        var styles = ReadSharedStylesText();
+        string[] selectors =
+        [
+            "Grid.running-agent-row:pointerover Button.running-agent-row-action-button",
+            "Grid.running-agent-row:pointerover CheckBox.running-agent-row-action-toggle",
+            "Grid.running-agent-row:focus-within Button.running-agent-row-action-button",
+            "Grid.running-agent-row:focus-within CheckBox.running-agent-row-action-toggle",
+            "Button.running-agent-row-action-button:focus",
+            "CheckBox.running-agent-row-action-toggle:focus",
+            "Button.running-agent-row-action-button.pending",
+            "CheckBox.running-agent-row-action-toggle:checked",
+        ];
+
+        foreach (var selector in selectors)
+        {
+            var style = ExtractStyle(styles, selector);
+            Assert.Contains("<Setter Property=\"Opacity\" Value=\"1\" />", style, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public void EntityCardControl_ActionButtons_UseSharedActionButtonClass()
     {
         var card = ReadEntityCardControlText();
@@ -2205,4 +2260,3 @@ public sealed class SharedStylesTests
         Assert.True(treeNarrow.HScroll, "tree narrow shows h-scrollbar");
     }
 }
-

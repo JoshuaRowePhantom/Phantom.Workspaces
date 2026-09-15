@@ -719,6 +719,65 @@
     <Style Selector="Border.entity-card-shell-border:focus-within Button.entity-card-action-button">
         <Setter Property="Opacity" Value="1" />
     </Style>
+    <Style Selector="Button.running-agent-row-action-button">
+        <Setter Property="MinWidth" Value="28" />
+        <Setter Property="MinHeight" Value="28" />
+        <Setter Property="Padding" Value="6,2" />
+        <Setter Property="Margin" Value="0" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.16" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="CheckBox.running-agent-row-action-toggle">
+        <Setter Property="MinHeight" Value="28" />
+        <Setter Property="Padding" Value="4,2" />
+        <Setter Property="Margin" Value="0" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.16" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Grid.running-agent-row:pointerover Button.running-agent-row-action-button">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Grid.running-agent-row:pointerover CheckBox.running-agent-row-action-toggle">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Grid.running-agent-row:focus-within Button.running-agent-row-action-button">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Grid.running-agent-row:focus-within CheckBox.running-agent-row-action-toggle">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Button.running-agent-row-action-button:focus">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="CheckBox.running-agent-row-action-toggle:focus">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Button.running-agent-row-action-button:pressed">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="CheckBox.running-agent-row-action-toggle:pressed">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Button.running-agent-row-action-button.pending">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="CheckBox.running-agent-row-action-toggle:checked">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
     <Style Selector="Button.workspace-edit-indicator-button">
         <Setter Property="HorizontalAlignment" Value="Right" />
         <Setter Property="MinWidth" Value="28" />
@@ -1387,5 +1446,4 @@
     </Style>
 
 </Styles>
-
 

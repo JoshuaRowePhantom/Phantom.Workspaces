@@ -30,11 +30,11 @@
                 <ItemsControl ItemsSource="{Binding Rows}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:RunningAgentRowViewModel">
-                            <Grid ColumnDefinitions="*,Auto,Auto,Auto"
-                                  RowDefinitions="Auto,Auto"
-                                  ColumnSpacing="6"
+                            <Grid Classes="running-agent-row"
+                                  RowDefinitions="Auto,Auto,Auto"
                                   Margin="4">
-                                <Button Command="{Binding ActivateCommand}"
+                                <Button Grid.Row="0"
+                                        Command="{Binding ActivateCommand}"
                                         HorizontalAlignment="Stretch"
                                         HorizontalContentAlignment="Left"
                                         Background="Transparent"
@@ -70,36 +70,44 @@
                                         </StackPanel>
                                     </StackPanel>
                                 </Button>
-                                <CheckBox Grid.Column="1"
-                                          Content="Continue in background"
-                                          AutomationProperties.Name="Continue in background"
-                                          ToolTip.Tip="Keep this agent running when the last viewer disconnects."
-                                          IsChecked="{Binding ContinueInBackground, Mode=OneWay}"
-                                          IsEnabled="{Binding IsBackgroundOptionEnabled}"
-                                          Command="{Binding SetContinueInBackgroundCommand}"
-                                          CommandParameter="{Binding IsChecked, RelativeSource={RelativeSource Self}}" />
-                                <Button Grid.Column="2"
-                                        Content="X"
-                                        Background="Red"
-                                        Foreground="White"
-                                        HorizontalAlignment="Right"
-                                        Command="{Binding InterruptCommand}"
-                                        IsEnabled="{Binding IsInterruptEnabled}"
-                                        ToolTip.Tip="Interrupt agent"
-                                        AutomationProperties.Name="Interrupt agent" />
-                                <Button Grid.Column="3"
-                                        Content="Terminate"
-                                        HorizontalAlignment="Right"
-                                        Command="{Binding TerminateCommand}"
-                                        IsEnabled="{Binding IsTerminateEnabled}"
-                                        ToolTip.Tip="Terminate agent session"
-                                        AutomationProperties.Name="Terminate agent session" />
                                 <TextBlock Grid.Row="1"
-                                           Grid.ColumnSpan="4"
                                            Text="{Binding LastOperationError}"
                                            Foreground="Red"
                                            Classes="caption"
                                            IsVisible="{Binding LastOperationError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                <WrapPanel Grid.Row="2"
+                                           Classes="running-agent-row-actions"
+                                           Orientation="Horizontal"
+                                           ItemSpacing="4"
+                                           HorizontalAlignment="Stretch"
+                                           Margin="0,2,0,0">
+                                    <CheckBox Classes="running-agent-row-action-toggle"
+                                              Content="Continue in background"
+                                              AutomationProperties.Name="Continue in background"
+                                              ToolTip.Tip="Keep this agent running when the last viewer disconnects."
+                                              IsChecked="{Binding ContinueInBackground, Mode=OneWay}"
+                                              IsEnabled="{Binding IsBackgroundOptionEnabled}"
+                                              Command="{Binding SetContinueInBackgroundCommand}"
+                                              CommandParameter="{Binding IsChecked, RelativeSource={RelativeSource Self}}" />
+                                    <Button Classes="running-agent-row-action-button"
+                                            Classes.pending="{Binding IsInterruptPending}"
+                                            Content="X"
+                                            Background="Red"
+                                            Foreground="White"
+                                            HorizontalAlignment="Right"
+                                            Command="{Binding InterruptCommand}"
+                                            IsEnabled="{Binding IsInterruptEnabled}"
+                                            ToolTip.Tip="Interrupt agent"
+                                            AutomationProperties.Name="Interrupt agent" />
+                                    <Button Classes="running-agent-row-action-button"
+                                            Classes.pending="{Binding IsTerminationPending}"
+                                            Content="Terminate"
+                                            HorizontalAlignment="Right"
+                                            Command="{Binding TerminateCommand}"
+                                            IsEnabled="{Binding IsTerminateEnabled}"
+                                            ToolTip.Tip="Terminate agent session"
+                                            AutomationProperties.Name="Terminate agent session" />
+                                </WrapPanel>
                             </Grid>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>

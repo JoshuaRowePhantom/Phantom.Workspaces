@@ -414,9 +414,6 @@ public sealed class RunningAgentBrainViewModelTests
     [Fact]
     public void RunningAgentBrainViewModel_Row_HasNoBorderStyling()
     {
-        // This test verifies that RunningAgentBrainControl.axaml doesn't wrap rows in Border elements
-        // The AXAML should have Button elements directly in the ItemTemplate, not wrapped in <Border Classes="interactive-row">
-        
         // Find the AXAML file relative to the solution root
         var currentDir = Directory.GetCurrentDirectory();
         var solutionRoot = currentDir;
@@ -436,9 +433,15 @@ public sealed class RunningAgentBrainViewModelTests
         }
 
         var axaml = File.ReadAllText(axamlPath);
+        var templateStart = axaml.IndexOf("<DataTemplate", StringComparison.Ordinal);
+        var templateEnd = axaml.IndexOf("</DataTemplate>", templateStart, StringComparison.Ordinal);
+        Assert.True(templateStart >= 0 && templateEnd > templateStart);
+        var template = axaml[templateStart..templateEnd];
 
-        // Verify no Border wrapper with interactive-row class in the ItemTemplate
-        Assert.DoesNotContain("<Border Classes=\"interactive-row\"", axaml, StringComparison.Ordinal);
+        Assert.Contains("<Grid Classes=\"running-agent-row\"", template, StringComparison.Ordinal);
+        Assert.Contains("<WrapPanel Grid.Row=\"2\"", template, StringComparison.Ordinal);
+        Assert.DoesNotContain("<Border", template, StringComparison.Ordinal);
+        Assert.DoesNotContain("Background=", template[..template.IndexOf('>')], StringComparison.Ordinal);
         
         // Verify the header text is correct
         Assert.Contains("Running agents", axaml, StringComparison.Ordinal);
