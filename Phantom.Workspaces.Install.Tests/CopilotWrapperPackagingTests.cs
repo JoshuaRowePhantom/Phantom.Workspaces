@@ -24,6 +24,7 @@ public sealed class CopilotWrapperPackagingTests
     [Fact]
     public async Task RuntimePayload_WinX64_IncludesWrapperCliMxcAndLicenses()
     {
+        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         await using var payload = new MxcRepositoryTestSupport.TestDirectory(
             cleanupProgress: message => Console.WriteLine($"Copilot payload {message}"));
         await using var buildArtifacts = new MxcRepositoryTestSupport.TestDirectory(
@@ -34,7 +35,8 @@ public sealed class CopilotWrapperPackagingTests
             "dotnet",
             MxcRepositoryTestSupport.CreateCopilotWrapperPublishArguments(
                 payload.Path,
-                buildArtifacts.Path));
+                buildArtifacts.Path,
+                prerequisite));
         Assert.True(
             wrapperPublish.ExitCode == 0,
             $"Copilot wrapper publish failed.\nSTDOUT:\n{wrapperPublish.StandardOutput}\nSTDERR:\n{wrapperPublish.StandardError}");

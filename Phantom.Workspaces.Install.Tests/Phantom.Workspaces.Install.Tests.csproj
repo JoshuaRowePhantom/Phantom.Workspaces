@@ -29,4 +29,20 @@
           DestinationFiles="@(WindowsProcessProbeFiles->'$(OutDir)%(RecursiveDir)%(Filename)%(Extension)')"
           SkipUnchangedFiles="true" />
   </Target>
+  <Target Name="PrepareCopilotWrapperTestPrerequisite"
+          BeforeTargets="VSTest"
+          Condition="$([MSBuild]::IsOSPlatform('Windows')) And '$(DesignTimeBuild)' != 'true'">
+    <PropertyGroup>
+      <_CopilotWrapperPrerequisiteCache>$(MSBuildProjectDirectory)\$(BaseIntermediateOutputPath)mxcw</_CopilotWrapperPrerequisiteCache>
+      <_CopilotWrapperPrerequisitePathFile>$(MSBuildProjectDirectory)\$(IntermediateOutputPath)copilot-wrapper-prerequisite.path</_CopilotWrapperPrerequisitePathFile>
+    </PropertyGroup>
+    <Exec Command="pwsh -NoProfile -NonInteractive -File &quot;$(MSBuildProjectDirectory)\..\scripts\prepare-copilot-wrapper-test-prerequisite.ps1&quot; -RepositoryRoot &quot;$(MSBuildProjectDirectory)\..&quot; -CacheRoot &quot;$(_CopilotWrapperPrerequisiteCache)&quot; -PathOutputFile &quot;$(_CopilotWrapperPrerequisitePathFile)&quot;"
+          StandardOutputImportance="high"
+          StandardErrorImportance="high" />
+    <Error Condition="!Exists('$(_CopilotWrapperPrerequisitePathFile)')"
+           Text="The Copilot wrapper prerequisite path was not produced before VSTest started." />
+    <Copy SourceFiles="$(_CopilotWrapperPrerequisitePathFile)"
+          DestinationFiles="$(OutDir)copilot-wrapper-prerequisite.path"
+          SkipUnchangedFiles="true" />
+  </Target>
 </Project>
