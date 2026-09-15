@@ -166,9 +166,12 @@ public sealed class MxcRuntimePayloadTests
     [Fact]
     public void MxcRuntimePayload_CommandConsumesTopLevelNativeBuild()
     {
+        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         var arguments = MxcRepositoryTestSupport.CreateMxcRuntimePayloadArguments(
             "payload",
-            "isolated-artifacts");
+            "isolated-artifacts",
+            "empty-normal-output",
+            prerequisite);
 
         Assert.Equal("msbuild", arguments[0]);
         Assert.Contains("--disable-build-servers", arguments);
@@ -179,12 +182,17 @@ public sealed class MxcRuntimePayloadTests
         Assert.Contains("-p:ArtifactsPath=isolated-artifacts", arguments);
         Assert.Contains("-t:PublishMxcRuntimeLoose", arguments);
         Assert.Contains("-p:NoBuild=true", arguments);
+        Assert.Contains("-p:UsePreparedCopilotPayloadForTests=true", arguments);
+        Assert.Contains(
+            $"-p:PreparedCopilotPayloadDirectory={prerequisite.PreparedDirectory}",
+            arguments);
         Assert.DoesNotContain("publish", arguments);
     }
 
     [Fact]
     public async Task MxcRuntimePayload_RequiredNativeUnit_IsPresent()
     {
+        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         var processObserver = new RecordingProcessObserver();
         MxcRepositoryTestSupport.ProcessResult? publish = null;
         MxcRepositoryTestSupport.ProcessResult? validation = null;
@@ -212,6 +220,9 @@ public sealed class MxcRuntimePayloadTests
             new MxcRepositoryTestSupport.TestDirectory(
                 ObserveResourcesReleased,
                 message => Console.WriteLine($"MXC build artifacts {message}"));
+        await using var emptyNormalOutput =
+            new MxcRepositoryTestSupport.TestDirectory(
+                cleanupProgress: message => Console.WriteLine($"Empty normal output {message}"));
         publish = await MxcRepositoryTestSupport.InvokeAsync(
             "dotnet",
             new MxcRepositoryTestSupport.InvocationOptions
@@ -221,7 +232,9 @@ public sealed class MxcRuntimePayloadTests
             },
             MxcRepositoryTestSupport.CreateMxcRuntimePayloadArguments(
                 payload.Path,
-                buildArtifacts.Path));
+                buildArtifacts.Path,
+                emptyNormalOutput.Path,
+                prerequisite));
         Assert.True(
             publish.ExitCode == 0,
             $"Application publish failed.\nSTDOUT:\n{publish.StandardOutput}\nSTDERR:\n{publish.StandardError}");
@@ -262,13 +275,15 @@ public sealed class MxcRuntimePayloadTests
         var nativeDirectory = Path.Combine(payload.Path, "runtimes", "win-x64", "native");
         Assert.Equal(
             MxcRepositoryTestSupport.ComputeSha256(
-                MxcRepositoryTestSupport.FindBuiltMxcFile("mxc_ffi.dll")),
+                prerequisite.MxcFfi),
             MxcRepositoryTestSupport.ComputeSha256(Path.Combine(nativeDirectory, "mxc_ffi.dll")));
         Assert.Equal(
             MxcRepositoryTestSupport.ComputeSha256(
-                MxcRepositoryTestSupport.FindBuiltMxcFile("plm.exe")),
+                prerequisite.Plm),
             MxcRepositoryTestSupport.ComputeSha256(Path.Combine(nativeDirectory, "plm.exe")));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(emptyNormalOutput.Path));
 
+        await emptyNormalOutput.DisposeAsync();
         await buildArtifacts.DisposeAsync();
         await payload.DisposeAsync();
         Assert.True(
@@ -694,12 +709,14 @@ public sealed class CopilotWrapperNestedPublishTests
         Assert.Contains("-m:1", arguments);
         Assert.Contains("/nodeReuse:false", arguments);
         Assert.Contains("-p:UseSharedCompilation=false", arguments);
-        Assert.Contains("-p:RequirePreparedCopilotWrapper=true", arguments);
         Assert.Contains(
-            $"-p:CopilotWrapperPreparedExecutable={prerequisite.WrapperExecutable}",
+            $"-p:PreparedCopilotPayloadDirectory={prerequisite.PreparedDirectory}",
             arguments);
-        Assert.Contains("-p:CopilotWrapperPreparedConfiguration=Release", arguments);
-        Assert.Contains("-p:CopilotWrapperPreparedRuntimeIdentifier=win-x64", arguments);
+        Assert.Contains("-p:PreparedCopilotPayloadConfiguration=Release", arguments);
+        Assert.Contains("-p:PreparedCopilotPayloadRuntimeIdentifier=win-x64", arguments);
+        Assert.Contains("-p:UsePreparedCopilotPayloadForTests=true", arguments);
+        Assert.Contains("-p:NoBuild=true", arguments);
+        Assert.DoesNotContain("-restore", arguments);
     }
 
     [Fact]
@@ -707,13 +724,33 @@ public sealed class CopilotWrapperNestedPublishTests
     {
         var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
 
-        Assert.Equal(1, prerequisite.Manifest.SchemaVersion);
+        Assert.Equal(3, prerequisite.Manifest.SchemaVersion);
+        Assert.Matches("^[0-9a-f]{64}$", prerequisite.Manifest.SourceFingerprint);
         Assert.Equal("Release", prerequisite.Manifest.Configuration);
         Assert.Equal("win-x64", prerequisite.Manifest.RuntimeIdentifier);
         Assert.Equal("x86_64-pc-windows-msvc", prerequisite.Manifest.NativeTarget);
         Assert.Equal("release", prerequisite.Manifest.NativeProfile);
         Assert.Equal(["mxc_ffi", "plm"], prerequisite.Manifest.NativePackages);
         Assert.Equal(["dotnetsdk"], prerequisite.Manifest.NativeFeatures);
+        Assert.Equal("1.0.13", prerequisite.Manifest.CopilotSdkPackageVersion);
+        Assert.False(string.IsNullOrWhiteSpace(
+            prerequisite.Manifest.CopilotSdkPackageSha512));
+        Assert.Equal("1.0.83", prerequisite.Manifest.CopilotCliVersion);
+        Assert.Equal("win32-x64", prerequisite.Manifest.CopilotCliPlatform);
+        Assert.EndsWith(
+            "/v1.0.83/github-copilot-1.0.83-win32-x64.tgz",
+            prerequisite.Manifest.CopilotCliDownloadUrl,
+            StringComparison.Ordinal);
+        Assert.EndsWith(
+            "/v1.0.83/SHA256SUMS.txt",
+            prerequisite.Manifest.CopilotCliChecksumsUrl,
+            StringComparison.Ordinal);
+        Assert.Matches(
+            "^[0-9a-f]{64}$",
+            prerequisite.Manifest.CopilotCliArchiveSha256);
+        Assert.Matches(
+            "^[0-9a-f]{64}$",
+            prerequisite.Manifest.CopilotCliChecksumsSha256);
         Assert.StartsWith(
             Path.GetFileName(prerequisite.CacheDirectory),
             prerequisite.Manifest.CacheKey,
@@ -723,6 +760,10 @@ public sealed class CopilotWrapperNestedPublishTests
         Assert.Contains(
             "/release_win-x64/",
             prerequisite.Manifest.ContainerRuntimeConfigGraphPath,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            "/Phantom.Workspaces.Copilot.Cli.Wrapper/release_win-x64/",
+            prerequisite.Manifest.CopilotCliGraphPath,
             StringComparison.OrdinalIgnoreCase);
     }
 
@@ -865,7 +906,6 @@ internal static class MxcRepositoryTestSupport
         "msbuild",
         "--disable-build-servers",
         Path.Combine("Phantom.Workspaces", "Phantom.Workspaces.csproj"),
-        "-restore",
         "-nologo",
         "-m:1",
         "-t:PublishCopilotWrapperLoose",
@@ -878,75 +918,90 @@ internal static class MxcRepositoryTestSupport
         "-p:UseArtifactsOutput=true",
         $"-p:ArtifactsPath={artifactsPath}",
         $"-p:PublishDir={outputPath}{Path.DirectorySeparatorChar}",
-        "-p:RequirePreparedCopilotWrapper=true",
-        $"-p:CopilotWrapperPreparedExecutable={prerequisite.WrapperExecutable}",
-        $"-p:CopilotWrapperPreparedConfiguration={prerequisite.Manifest.Configuration}",
-        $"-p:CopilotWrapperPreparedRuntimeIdentifier={prerequisite.Manifest.RuntimeIdentifier}",
+        .. CreatePreparedCopilotPayloadProperties(prerequisite),
     ];
 
     internal static string[] CreateCopilotRuntimePayloadArguments(
         string outputPath,
-        string artifactsPath)
-    {
-        var targetFrameworkDirectory = new DirectoryInfo(
-            Path.TrimEndingDirectorySeparator(AppContext.BaseDirectory));
-        var configuration = targetFrameworkDirectory.Parent?.Name
-            ?? throw new InvalidOperationException("Unable to identify the test build configuration.");
-        var applicationOutput = Path.Combine(
-            Root.FullName,
-            "Phantom.Workspaces",
-            "bin",
-            configuration,
-            "net10.0");
-        return
-        [
-            "msbuild",
-            "--disable-build-servers",
-            Path.Combine("Phantom.Workspaces", "Phantom.Workspaces.csproj"),
-            "-nologo",
-            "-m:1",
-            "/nodeReuse:false",
-            "-t:PublishCopilotRuntimeLoose;PublishMxcRuntimeLoose",
-            $"-p:Configuration={configuration}",
-            "-p:RuntimeIdentifier=win-x64",
-            "-p:UseSharedCompilation=false",
-            "-p:UseArtifactsOutput=true",
-            $"-p:ArtifactsPath={artifactsPath}",
-            $"-p:OutDir={applicationOutput}{Path.DirectorySeparatorChar}",
-            $"-p:PublishDir={outputPath}{Path.DirectorySeparatorChar}",
-            "-p:SkipCopilotWrapperPublish=true",
-        ];
-    }
+        string artifactsPath,
+        string normalOutputPath,
+        CopilotWrapperPrerequisite prerequisite,
+        string runtimeIdentifier = "win-x64",
+        string? preparedDirectory = null,
+        string? preparedFingerprint = null,
+        bool usePreparedPayload = true,
+        bool noBuild = true,
+        string? preparedCopilotCliSha256 = null) =>
+    [
+        "msbuild",
+        "--disable-build-servers",
+        Path.Combine("Phantom.Workspaces", "Phantom.Workspaces.csproj"),
+        "-nologo",
+        "-m:1",
+        "/nodeReuse:false",
+        "-t:PublishCopilotRuntimeLoose;PublishMxcRuntimeLoose",
+        $"-p:Configuration={prerequisite.Manifest.Configuration}",
+        $"-p:RuntimeIdentifier={runtimeIdentifier}",
+        "-p:UseSharedCompilation=false",
+        "-p:UseArtifactsOutput=true",
+        $"-p:ArtifactsPath={artifactsPath}",
+        $"-p:OutDir={normalOutputPath}{Path.DirectorySeparatorChar}",
+        $"-p:PublishDir={outputPath}{Path.DirectorySeparatorChar}",
+        .. CreatePreparedCopilotPayloadProperties(
+            prerequisite,
+            preparedDirectory: preparedDirectory,
+            preparedFingerprint: preparedFingerprint,
+            usePreparedPayload: usePreparedPayload,
+            noBuild: noBuild,
+            preparedCopilotCliSha256: preparedCopilotCliSha256),
+    ];
 
     internal static string[] CreateMxcRuntimePayloadArguments(
         string outputPath,
-        string artifactsPath)
-    {
-        var targetFrameworkDirectory = new DirectoryInfo(
-            Path.TrimEndingDirectorySeparator(AppContext.BaseDirectory));
-        var configuration = targetFrameworkDirectory.Parent?.Name
-            ?? throw new InvalidOperationException("Unable to identify the test build configuration.");
-        var nativeSdkOutput = Path.GetDirectoryName(FindBuiltMxcFile("mxc_ffi.dll"))
-            ?? throw new InvalidOperationException("Unable to identify the native SDK output.");
-        return
-        [
-            "msbuild",
-            "--disable-build-servers",
-            Path.Combine("Phantom.Workspaces", "Phantom.Workspaces.csproj"),
-            "-nologo",
-            "-m:1",
-            "/nodeReuse:false",
-            "-t:PublishMxcRuntimeLoose",
-            "-p:NoBuild=true",
-            $"-p:Configuration={configuration}",
-            "-p:RuntimeIdentifier=win-x64",
-            "-p:UseSharedCompilation=false",
-            "-p:UseArtifactsOutput=true",
-            $"-p:ArtifactsPath={artifactsPath}",
-            $"-p:OutDir={nativeSdkOutput}{Path.DirectorySeparatorChar}",
-            $"-p:PublishDir={outputPath}{Path.DirectorySeparatorChar}",
-        ];
-    }
+        string artifactsPath,
+        string normalOutputPath,
+        CopilotWrapperPrerequisite prerequisite) =>
+    [
+        "msbuild",
+        "--disable-build-servers",
+        Path.Combine("Phantom.Workspaces", "Phantom.Workspaces.csproj"),
+        "-nologo",
+        "-m:1",
+        "/nodeReuse:false",
+        "-t:PublishMxcRuntimeLoose",
+        $"-p:Configuration={prerequisite.Manifest.Configuration}",
+        "-p:RuntimeIdentifier=win-x64",
+        "-p:UseSharedCompilation=false",
+        "-p:UseArtifactsOutput=true",
+        $"-p:ArtifactsPath={artifactsPath}",
+        $"-p:OutDir={normalOutputPath}{Path.DirectorySeparatorChar}",
+        $"-p:PublishDir={outputPath}{Path.DirectorySeparatorChar}",
+        .. CreatePreparedCopilotPayloadProperties(prerequisite),
+    ];
+
+    private static string[] CreatePreparedCopilotPayloadProperties(
+        CopilotWrapperPrerequisite prerequisite,
+        string? preparedDirectory = null,
+        string? preparedFingerprint = null,
+        bool usePreparedPayload = true,
+        bool noBuild = true,
+        string? preparedCopilotCliSha256 = null) =>
+    [
+        $"-p:NoBuild={noBuild.ToString().ToLowerInvariant()}",
+        $"-p:UsePreparedCopilotPayloadForTests={usePreparedPayload.ToString().ToLowerInvariant()}",
+        $"-p:PreparedCopilotPayloadDirectory={preparedDirectory ?? prerequisite.PreparedDirectory}",
+        $"-p:PreparedCopilotPayloadFingerprint={preparedFingerprint ?? prerequisite.Manifest.CacheKey}",
+        $"-p:PreparedCopilotPayloadConfiguration={prerequisite.Manifest.Configuration}",
+        $"-p:PreparedCopilotPayloadRuntimeIdentifier={prerequisite.Manifest.RuntimeIdentifier}",
+        $"-p:PreparedCopilotPayloadManifestSha256={ComputeSha256(prerequisite.ManifestFile)}",
+        $"-p:PreparedCopilotWrapperSha256={prerequisite.ArtifactSha256("prepared/phantom-copilot-wrapper.exe")}",
+        $"-p:PreparedCopilotCliSha256={preparedCopilotCliSha256 ?? prerequisite.ArtifactSha256("prepared/copilot.exe")}",
+        $"-p:PreparedCopilotRuntimeSha256={prerequisite.ArtifactSha256("prepared/copilot_runtime.dll")}",
+        $"-p:PreparedCopilotLicenseSha256={prerequisite.ArtifactSha256("prepared/LICENSE.md")}",
+        $"-p:PreparedMxcFfiSha256={prerequisite.ArtifactSha256("prepared/mxc_ffi.dll")}",
+        $"-p:PreparedPlmSha256={prerequisite.ArtifactSha256("prepared/plm.exe")}",
+        $"-p:PreparedMxcLicenseSha256={prerequisite.ArtifactSha256("prepared/MXC-LICENSE.md")}",
+    ];
 
     internal static Task<ProcessResult> InvokeAsync(string fileName, params string[] arguments) =>
         InvokeAsync(
@@ -1015,6 +1070,26 @@ internal static class MxcRepositoryTestSupport
         var manifest = JsonSerializer.Deserialize<CopilotWrapperPrerequisiteManifest>(
             File.ReadAllText(manifestPath));
         Assert.NotNull(manifest);
+        Assert.Equal(3, manifest.SchemaVersion);
+        Assert.Matches("^[0-9a-f]{64}$", manifest.CacheKey);
+        Assert.Matches("^[0-9a-f]{64}$", manifest.SourceFingerprint);
+        var expectedCacheRoot = Path.GetFullPath(Path.Combine(
+            Root.FullName,
+            "Phantom.Workspaces.Install.Tests",
+            "obj",
+            "mxcw"));
+        Assert.Equal(
+            expectedCacheRoot,
+            Directory.GetParent(cacheDirectory)!.FullName,
+            ignoreCase: true);
+        Assert.Equal(
+            manifest.CacheKey[..16],
+            Path.GetFileName(Path.TrimEndingDirectorySeparator(cacheDirectory)));
+        var fingerprintFile = Path.Combine(cacheDirectory, "prerequisite.fingerprint");
+        Assert.True(
+            File.Exists(fingerprintFile),
+            $"The prepared wrapper prerequisite fingerprint is missing: '{fingerprintFile}'.");
+        Assert.Equal(manifest.CacheKey, File.ReadAllText(fingerprintFile).Trim());
 
         string ArtifactPath(string relativePath)
         {
@@ -1029,14 +1104,23 @@ internal static class MxcRepositoryTestSupport
                 artifact.RelativePath.Replace('/', Path.DirectorySeparatorChar));
         }
 
-        return new CopilotWrapperPrerequisite(
+        var prerequisite = new CopilotWrapperPrerequisite(
             cacheDirectory,
+            Path.Combine(cacheDirectory, "prepared"),
+            fingerprintFile,
+            manifestPath,
             manifest,
             ArtifactPath("prepared/phantom-copilot-wrapper.exe"),
+            ArtifactPath("prepared/copilot.exe"),
+            ArtifactPath("prepared/copilot_runtime.dll"),
+            ArtifactPath("prepared/LICENSE.md"),
             ArtifactPath("prepared/mxc_ffi.dll"),
             ArtifactPath("prepared/plm.exe"),
+            ArtifactPath("prepared/MXC-LICENSE.md"),
             ArtifactPath("prepared/NativeMethods.g.cs"),
             ArtifactPath("prepared/Phantom.Workspaces.Containers.runtimeconfig.json"));
+        prerequisite.AssertArtifactHashes();
+        return prerequisite;
     }
 
     internal static string ComputeSha256(string path) =>
@@ -1222,25 +1306,95 @@ internal static class MxcRepositoryTestSupport
 
     internal sealed record CopilotWrapperPrerequisite(
         string CacheDirectory,
+        string PreparedDirectory,
+        string FingerprintFile,
+        string ManifestFile,
         CopilotWrapperPrerequisiteManifest Manifest,
         string WrapperExecutable,
+        string CopilotExecutable,
+        string CopilotRuntimeLibrary,
+        string CopilotLicense,
         string MxcFfi,
         string Plm,
+        string MxcLicense,
         string NativeBindings,
         string ContainerRuntimeConfig)
     {
+        internal string ArtifactSha256(string relativePath) =>
+            Assert.Single(
+                Manifest.Artifacts,
+                artifact => string.Equals(
+                    artifact.RelativePath,
+                    relativePath,
+                    StringComparison.Ordinal)).Sha256;
+
         internal void AssertArtifactHashes()
         {
+            var expectedArtifacts = new[]
+            {
+                "prepared/phantom-copilot-wrapper.exe",
+                "prepared/copilot.exe",
+                "prepared/copilot_runtime.dll",
+                "prepared/LICENSE.md",
+                "prepared/mxc_ffi.dll",
+                "prepared/plm.exe",
+                "prepared/MXC-LICENSE.md",
+                "prepared/NativeMethods.g.cs",
+                "prepared/Phantom.Workspaces.Containers.runtimeconfig.json",
+            };
+            Assert.Equal(
+                expectedArtifacts,
+                Manifest.Artifacts
+                    .Select(artifact => artifact.RelativePath));
+            Assert.Equal(Manifest.CacheKey, ComputeCacheKey());
             foreach (var artifact in Manifest.Artifacts)
             {
-                var path = Path.Combine(
+                Assert.Matches("^[0-9a-f]{64}$", artifact.Sha256);
+                Assert.False(Path.IsPathFullyQualified(artifact.RelativePath));
+                var path = Path.GetFullPath(Path.Combine(
                     CacheDirectory,
-                    artifact.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+                    artifact.RelativePath.Replace('/', Path.DirectorySeparatorChar)));
+                Assert.True(
+                    path.StartsWith(
+                        Path.TrimEndingDirectorySeparator(CacheDirectory)
+                            + Path.DirectorySeparatorChar,
+                        StringComparison.OrdinalIgnoreCase),
+                    $"Prepared artifact path escapes its cache: '{artifact.RelativePath}'.");
                 Assert.True(
                     File.Exists(path),
                     $"Prepared wrapper artifact is missing: '{path}'.");
                 Assert.Equal(artifact.Sha256, ComputeSha256(path));
             }
+        }
+
+        private string ComputeCacheKey()
+        {
+            using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+
+            void Add(string value)
+            {
+                var bytes = System.Text.Encoding.UTF8.GetBytes(value);
+                hasher.AppendData(BitConverter.GetBytes(bytes.Length));
+                hasher.AppendData(bytes);
+            }
+
+            Add("copilot-wrapper-test-prerequisite-v3-cache");
+            Add(Manifest.SourceFingerprint);
+            Add(Manifest.CopilotSdkPackageVersion);
+            Add(Manifest.CopilotSdkPackageSha512);
+            Add(Manifest.CopilotCliVersion);
+            Add(Manifest.CopilotCliPlatform);
+            Add(Manifest.CopilotCliDownloadUrl);
+            Add(Manifest.CopilotCliChecksumsUrl);
+            Add(Manifest.CopilotCliArchiveSha256);
+            Add(Manifest.CopilotCliChecksumsSha256);
+            foreach (var artifact in Manifest.Artifacts)
+            {
+                Add(artifact.RelativePath);
+                Add(artifact.Sha256);
+            }
+
+            return Convert.ToHexString(hasher.GetHashAndReset()).ToLowerInvariant();
         }
     }
 
@@ -1248,12 +1402,22 @@ internal static class MxcRepositoryTestSupport
     {
         public required int SchemaVersion { get; init; }
         public required string CacheKey { get; init; }
+        public required string SourceFingerprint { get; init; }
         public required string Configuration { get; init; }
         public required string RuntimeIdentifier { get; init; }
         public required string NativeTarget { get; init; }
         public required string NativeProfile { get; init; }
         public required string[] NativePackages { get; init; }
         public required string[] NativeFeatures { get; init; }
+        public required string CopilotSdkPackageVersion { get; init; }
+        public required string CopilotSdkPackageSha512 { get; init; }
+        public required string CopilotCliVersion { get; init; }
+        public required string CopilotCliPlatform { get; init; }
+        public required string CopilotCliDownloadUrl { get; init; }
+        public required string CopilotCliChecksumsUrl { get; init; }
+        public required string CopilotCliArchiveSha256 { get; init; }
+        public required string CopilotCliChecksumsSha256 { get; init; }
+        public required string CopilotCliGraphPath { get; init; }
         public required string ContainerRuntimeConfigGraphPath { get; init; }
         public required string RustcIdentity { get; init; }
         public required string CargoIdentity { get; init; }

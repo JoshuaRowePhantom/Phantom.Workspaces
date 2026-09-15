@@ -37,11 +37,82 @@ function Get-Sha256 {
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
+function Get-PreparedCacheKey {
+    param(
+        [string] $SourceFingerprint,
+        [string] $CopilotSdkPackageVersion,
+        [string] $CopilotSdkPackageSha512,
+        [string] $CopilotCliVersion,
+        [string] $CopilotCliPlatform,
+        [string] $CopilotCliDownloadUrl,
+        [string] $CopilotCliChecksumsUrl,
+        [string] $CopilotCliArchiveSha256,
+        [string] $CopilotCliChecksumsSha256,
+        [object[]] $Artifacts
+    )
+
+    $hasher = [Security.Cryptography.IncrementalHash]::CreateHash(
+        [Security.Cryptography.HashAlgorithmName]::SHA256)
+    try
+    {
+        Add-HashText $hasher 'copilot-wrapper-test-prerequisite-v3-cache'
+        foreach ($value in @(
+            $SourceFingerprint
+            $CopilotSdkPackageVersion
+            $CopilotSdkPackageSha512
+            $CopilotCliVersion
+            $CopilotCliPlatform
+            $CopilotCliDownloadUrl
+            $CopilotCliChecksumsUrl
+            $CopilotCliArchiveSha256
+            $CopilotCliChecksumsSha256))
+        {
+            Add-HashText $hasher $value
+        }
+        $normalizedArtifacts = foreach ($artifact in $Artifacts)
+        {
+            if ($artifact -is [Collections.IDictionary])
+            {
+                [pscustomobject]@{
+                    RelativePath = [string] $artifact['RelativePath']
+                    Sha256 = [string] $artifact['Sha256']
+                }
+            }
+            else
+            {
+                [pscustomobject]@{
+                    RelativePath = [string] $artifact.RelativePath
+                    Sha256 = [string] $artifact.Sha256
+                }
+            }
+        }
+        foreach ($artifact in $normalizedArtifacts)
+        {
+            Add-HashText $hasher $artifact.RelativePath
+            Add-HashText $hasher $artifact.Sha256
+        }
+
+        return [Convert]::ToHexString($hasher.GetHashAndReset()).ToLowerInvariant()
+    }
+    finally
+    {
+        $hasher.Dispose()
+    }
+}
+
 function Test-CompletedCache {
     param(
         [string] $Directory,
-        [string] $ExpectedCacheKey
+        [string] $ExpectedCacheRoot,
+        [string] $ExpectedSourceFingerprint
     )
+
+    if ([string]::IsNullOrWhiteSpace($Directory) -or
+        [IO.Path]::GetFullPath((Split-Path -Parent $Directory)) -ne
+            [IO.Path]::GetFullPath($ExpectedCacheRoot))
+    {
+        return $false
+    }
 
     $manifestPath = Join-Path $Directory 'prerequisite.json'
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf))
@@ -52,13 +123,48 @@ function Test-CompletedCache {
     try
     {
         $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-        if ($manifest.SchemaVersion -ne 1 -or $manifest.CacheKey -ne $ExpectedCacheKey)
+        if ($manifest.SchemaVersion -ne 3 -or
+            $manifest.SourceFingerprint -ne $ExpectedSourceFingerprint -or
+            $manifest.CacheKey -notmatch '^[0-9a-f]{64}$' -or
+            (Split-Path -Leaf $Directory) -ne $manifest.CacheKey.Substring(0, 16))
+        {
+            return $false
+        }
+        $fingerprintPath = Join-Path $Directory 'prerequisite.fingerprint'
+        if (-not (Test-Path -LiteralPath $fingerprintPath -PathType Leaf) -or
+            (Get-Content -LiteralPath $fingerprintPath -Raw).Trim() -ne $manifest.CacheKey)
         {
             return $false
         }
 
-        foreach ($artifact in $manifest.Artifacts)
+        $expectedArtifacts = @(
+            'prepared/LICENSE.md'
+            'prepared/MXC-LICENSE.md'
+            'prepared/NativeMethods.g.cs'
+            'prepared/Phantom.Workspaces.Containers.runtimeconfig.json'
+            'prepared/copilot.exe'
+            'prepared/copilot_runtime.dll'
+            'prepared/mxc_ffi.dll'
+            'prepared/phantom-copilot-wrapper.exe'
+            'prepared/plm.exe'
+        )
+        $artifacts = @($manifest.Artifacts)
+        if ($artifacts.Count -ne $expectedArtifacts.Count -or
+            (Compare-Object `
+                $expectedArtifacts `
+                @($artifacts.RelativePath | Sort-Object -Unique)))
         {
+            return $false
+        }
+
+        foreach ($artifact in $artifacts)
+        {
+            if ($artifact.Sha256 -notmatch '^[0-9a-f]{64}$' -or
+                [IO.Path]::IsPathRooted($artifact.RelativePath) -or
+                $artifact.RelativePath -match '(^|[\\/])\.\.([\\/]|$)')
+            {
+                return $false
+            }
             $artifactPath = Join-Path $Directory $artifact.RelativePath
             if (-not (Test-Path -LiteralPath $artifactPath -PathType Leaf))
             {
@@ -70,7 +176,18 @@ function Test-CompletedCache {
             }
         }
 
-        return $true
+        $computedCacheKey = Get-PreparedCacheKey `
+            -SourceFingerprint $manifest.SourceFingerprint `
+            -CopilotSdkPackageVersion $manifest.CopilotSdkPackageVersion `
+            -CopilotSdkPackageSha512 $manifest.CopilotSdkPackageSha512 `
+            -CopilotCliVersion $manifest.CopilotCliVersion `
+            -CopilotCliPlatform $manifest.CopilotCliPlatform `
+            -CopilotCliDownloadUrl $manifest.CopilotCliDownloadUrl `
+            -CopilotCliChecksumsUrl $manifest.CopilotCliChecksumsUrl `
+            -CopilotCliArchiveSha256 $manifest.CopilotCliArchiveSha256 `
+            -CopilotCliChecksumsSha256 $manifest.CopilotCliChecksumsSha256 `
+            -Artifacts $artifacts
+        return $computedCacheKey -eq $manifest.CacheKey
     }
     catch
     {
@@ -102,6 +219,70 @@ if ($LASTEXITCODE -ne 0)
 }
 $dotnetIdentity = ".NET SDK $dotnetSdkIdentity; MSBuild $msbuildIdentity"
 
+$packagesPath = Join-Path $RepositoryRoot 'Directory.Packages.props'
+[xml] $packages = Get-Content -LiteralPath $packagesPath -Raw
+$copilotSdkPackageNodes = @(
+    $packages.Project.ItemGroup.PackageVersion |
+        Where-Object { $_.Include -eq 'GitHub.Copilot.SDK' }
+)
+if ($copilotSdkPackageNodes.Count -ne 1)
+{
+    throw "Directory.Packages.props must declare exactly one GitHub.Copilot.SDK version."
+}
+$copilotSdkPackageVersion = [string] $copilotSdkPackageNodes[0].Version
+
+$globalPackagesOutput = (& dotnet nuget locals global-packages --list 2>&1 | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or
+    $globalPackagesOutput -notmatch '(?m)^global-packages:\s*(?<path>.+?)\s*$')
+{
+    throw "dotnet nuget locals could not resolve the global packages directory."
+}
+$globalPackagesDirectory = [IO.Path]::GetFullPath($Matches.path)
+$copilotSdkPackageDirectory = Join-Path `
+    $globalPackagesDirectory `
+    "github.copilot.sdk\$copilotSdkPackageVersion"
+if (-not (Test-Path -LiteralPath $copilotSdkPackageDirectory -PathType Container))
+{
+    throw "GitHub.Copilot.SDK $copilotSdkPackageVersion was not restored before prerequisite preparation."
+}
+$copilotSdkPackageHashPath = Join-Path `
+    $copilotSdkPackageDirectory `
+    "github.copilot.sdk.$copilotSdkPackageVersion.nupkg.sha512"
+$copilotSdkPropsPath = Join-Path `
+    $copilotSdkPackageDirectory `
+    'build\GitHub.Copilot.SDK.props'
+$copilotSdkTargetsPath = Join-Path `
+    $copilotSdkPackageDirectory `
+    'build\GitHub.Copilot.SDK.targets'
+foreach ($packageFile in @(
+    $copilotSdkPackageHashPath
+    $copilotSdkPropsPath
+    $copilotSdkTargetsPath))
+{
+    if (-not (Test-Path -LiteralPath $packageFile -PathType Leaf))
+    {
+        throw "Restored GitHub.Copilot.SDK provenance file is missing: '$packageFile'."
+    }
+}
+$copilotSdkPackageSha512 = (
+    Get-Content -LiteralPath $copilotSdkPackageHashPath -Raw).Trim()
+[xml] $copilotSdkProps = Get-Content -LiteralPath $copilotSdkPropsPath -Raw
+$copilotCliVersion = [string] $copilotSdkProps.Project.PropertyGroup.CopilotCliVersion
+if ([string]::IsNullOrWhiteSpace($copilotCliVersion))
+{
+    throw "GitHub.Copilot.SDK did not declare CopilotCliVersion."
+}
+$copilotCliPlatform = 'win32-x64'
+$copilotCliReleaseBaseUrl = if (
+    [string]::IsNullOrWhiteSpace($env:COPILOT_CLI_DOWNLOAD_BASE_URL))
+{
+    'https://github.com/github/copilot-cli/releases/download'
+}
+else
+{
+    $env:COPILOT_CLI_DOWNLOAD_BASE_URL.TrimEnd('/')
+}
+
 $trackedFiles = @(
     & git -C $RepositoryRoot ls-files --recurse-submodules
 )
@@ -128,7 +309,7 @@ $hasher = [Security.Cryptography.IncrementalHash]::CreateHash(
     [Security.Cryptography.HashAlgorithmName]::SHA256)
 try
 {
-    Add-HashText $hasher 'copilot-wrapper-test-prerequisite-v1'
+    Add-HashText $hasher 'copilot-wrapper-test-prerequisite-v3-source'
     Add-HashText $hasher $configuration
     Add-HashText $hasher $runtimeIdentifier
     Add-HashText $hasher $nativeTarget
@@ -138,6 +319,13 @@ try
     Add-HashText $hasher $rustcIdentity
     Add-HashText $hasher $cargoIdentity
     Add-HashText $hasher $dotnetIdentity
+    Add-HashText $hasher $copilotSdkPackageVersion
+    Add-HashText $hasher $copilotSdkPackageSha512
+    Add-HashText $hasher (Get-Sha256 $copilotSdkPropsPath)
+    Add-HashText $hasher (Get-Sha256 $copilotSdkTargetsPath)
+    Add-HashText $hasher $copilotCliVersion
+    Add-HashText $hasher $copilotCliPlatform
+    Add-HashText $hasher $copilotCliReleaseBaseUrl
 
     foreach ($relativePath in $sourceFiles)
     {
@@ -151,17 +339,17 @@ try
         $hasher.AppendData([IO.File]::ReadAllBytes($fullPath))
     }
 
-    $cacheKey = [Convert]::ToHexString($hasher.GetHashAndReset()).ToLowerInvariant()
+    $sourceFingerprint = [Convert]::ToHexString(
+        $hasher.GetHashAndReset()).ToLowerInvariant()
 }
 finally
 {
     $hasher.Dispose()
 }
 
-$cacheDirectory = Join-Path $CacheRoot $cacheKey.Substring(0, 16)
 $mutex = [System.Threading.Mutex]::new(
     $false,
-    "Local\Phantom.Workspaces.CopilotWrapperPrerequisite.$cacheKey")
+    "Local\Phantom.Workspaces.CopilotWrapperPrerequisite.$sourceFingerprint")
 $ownsMutex = $false
 $stagingDirectory = $null
 try
@@ -175,27 +363,44 @@ try
         $ownsMutex = $true
     }
 
-    if (-not (Test-CompletedCache $cacheDirectory $cacheKey))
+    $cacheDirectory = $null
+    if (Test-Path -LiteralPath $PathOutputFile -PathType Leaf)
     {
-        if (Test-Path -LiteralPath $cacheDirectory)
+        $candidateCacheDirectory = (
+            Get-Content -LiteralPath $PathOutputFile -Raw).Trim()
+        if (-not [string]::IsNullOrWhiteSpace($candidateCacheDirectory) -and
+            (Test-CompletedCache `
+                $candidateCacheDirectory `
+                $CacheRoot `
+                $sourceFingerprint))
         {
-            Remove-Item -LiteralPath $cacheDirectory -Recurse -Force
+            $cacheDirectory = $candidateCacheDirectory
+            $cacheKey = (
+                Get-Content `
+                    -LiteralPath (Join-Path $cacheDirectory 'prerequisite.fingerprint') `
+                    -Raw).Trim()
         }
+    }
 
+    if ($null -eq $cacheDirectory)
+    {
         New-Item -ItemType Directory -Path $CacheRoot -Force | Out-Null
-        Get-ChildItem -LiteralPath $CacheRoot -Directory -Filter "$($cacheKey.Substring(0, 16)).staging-*" |
+        Get-ChildItem `
+                -LiteralPath $CacheRoot `
+                -Directory `
+                -Filter "$($sourceFingerprint.Substring(0, 16)).staging-*" |
             Remove-Item -Recurse -Force
 
         $stagingDirectory = Join-Path `
             $CacheRoot `
-            "$($cacheKey.Substring(0, 16)).staging-$PID"
+            "$($sourceFingerprint.Substring(0, 16)).staging-$PID"
         $cargoTargetDirectory = Join-Path $stagingDirectory 'cargo'
         $dotnetArtifactsDirectory = Join-Path $stagingDirectory 'dotnet'
         $publishDirectory = Join-Path $stagingDirectory 'publish'
         $preparedDirectory = Join-Path $stagingDirectory 'prepared'
         New-Item -ItemType Directory -Path $preparedDirectory -Force | Out-Null
 
-        Write-Host "Preparing immutable Copilot wrapper prerequisite $cacheKey before VSTest starts; the real cargo build -p mxc_ffi -p plm may remain output-quiet during codegen/link."
+        Write-Host "Preparing immutable Copilot wrapper prerequisite for source $sourceFingerprint before VSTest starts; the real cargo build -p mxc_ffi -p plm may remain output-quiet during codegen/link."
 
         $savedCargoTargetDirectory = $env:CARGO_TARGET_DIR
         try
@@ -233,6 +438,42 @@ try
         $wrapperSource = Join-Path `
             $publishDirectory `
             'runtimes\win-x64\native\phantom-copilot-wrapper.exe'
+        $wrapperBuildDirectory = Join-Path `
+            $dotnetArtifactsDirectory `
+            'bin\Phantom.Workspaces.Copilot.Cli.Wrapper\release_win-x64'
+        $copilotSource = Get-ChildItem `
+                -LiteralPath $wrapperBuildDirectory `
+                -Filter 'copilot.exe' `
+                -File `
+                -Recurse |
+            Where-Object {
+                $_.FullName.Contains(
+                    [IO.Path]::Combine('runtimes', 'win-x64', 'native'),
+                    [StringComparison]::OrdinalIgnoreCase)
+            } |
+            Select-Object -First 1 -ExpandProperty FullName
+        $copilotRuntimeSource = Get-ChildItem `
+                -LiteralPath $wrapperBuildDirectory `
+                -Filter 'copilot_runtime.dll' `
+                -File `
+                -Recurse |
+            Where-Object {
+                $_.FullName.Contains(
+                    [IO.Path]::Combine('runtimes', 'win-x64', 'native'),
+                    [StringComparison]::OrdinalIgnoreCase)
+            } |
+            Select-Object -First 1 -ExpandProperty FullName
+        $copilotLicenseSource = Get-ChildItem `
+                -LiteralPath $wrapperBuildDirectory `
+                -Filter 'LICENSE.md' `
+                -File `
+                -Recurse |
+            Where-Object {
+                $_.FullName.Contains(
+                    [IO.Path]::Combine('runtimes', 'win-x64', 'native'),
+                    [StringComparison]::OrdinalIgnoreCase)
+            } |
+            Select-Object -First 1 -ExpandProperty FullName
         $mxcFfiSource = Join-Path `
             $cargoTargetDirectory `
             "$nativeTarget\$nativeProfile\mxc_ffi.dll"
@@ -242,6 +483,7 @@ try
         $bindingsSource = Join-Path `
             $RepositoryRoot `
             'microsoft\mxc\sdk\dotnet\Microsoft.Mxc.Sdk\Native\NativeMethods.g.cs'
+        $mxcLicenseSource = Join-Path $RepositoryRoot 'microsoft\mxc\LICENSE.md'
         $runtimeConfigSource = Get-ChildItem `
                 -LiteralPath (Join-Path $dotnetArtifactsDirectory 'bin\Phantom.Workspaces.Containers') `
                 -Filter 'Phantom.Workspaces.Containers.runtimeconfig.json' `
@@ -254,10 +496,78 @@ try
             } |
             Select-Object -First 1 -ExpandProperty FullName
 
+        $copilotInputRoot = Join-Path `
+            $dotnetArtifactsDirectory `
+            'obj\Phantom.Workspaces.Llm.Core\release_win-x64\copilot-cli'
+        $copilotArchiveMatches = @(
+            Get-ChildItem `
+                -LiteralPath $copilotInputRoot `
+                -Filter 'copilot.tgz' `
+                -File `
+                -Recurse
+        )
+        if ($copilotArchiveMatches.Count -ne 1)
+        {
+            throw "The wrapper prerequisite must resolve exactly one Copilot CLI source archive; found $($copilotArchiveMatches.Count)."
+        }
+        $copilotInputDirectory = $copilotArchiveMatches[0].Directory.FullName
+        if ($copilotArchiveMatches[0].Directory.Name -ne $copilotCliPlatform -or
+            $copilotArchiveMatches[0].Directory.Parent.Name -ne $copilotCliVersion)
+        {
+            throw "The Copilot CLI input path does not match SDK version $copilotCliVersion and platform $copilotCliPlatform."
+        }
+        $copilotArchivePath = $copilotArchiveMatches[0].FullName
+        $copilotChecksumsPath = Join-Path $copilotInputDirectory 'SHA256SUMS.txt'
+        $copilotInputExecutable = Join-Path `
+            $copilotInputDirectory `
+            "prebuilds\$copilotCliPlatform\copilot-runtime.exe"
+        $copilotInputRuntimeLibrary = Join-Path `
+            $copilotInputDirectory `
+            "prebuilds\$copilotCliPlatform\runtime.node"
+        $copilotInputLicense = Join-Path $copilotInputDirectory 'LICENSE.md'
+        foreach ($copilotInput in @(
+            $copilotChecksumsPath
+            $copilotInputExecutable
+            $copilotInputRuntimeLibrary
+            $copilotInputLicense))
+        {
+            if (-not (Test-Path -LiteralPath $copilotInput -PathType Leaf))
+            {
+                throw "The Copilot CLI source input is incomplete: '$copilotInput'."
+            }
+        }
+
+        $copilotAssetName = "github-copilot-$copilotCliVersion-$copilotCliPlatform.tgz"
+        $copilotChecksumPattern =
+            "^(?<hash>[0-9a-fA-F]{64})[\t ]+\*?$([Regex]::Escape($copilotAssetName))[\t ]*$"
+        $copilotChecksumMatches = @(
+            Get-Content -LiteralPath $copilotChecksumsPath |
+                Where-Object { $_ -match $copilotChecksumPattern }
+        )
+        if ($copilotChecksumMatches.Count -ne 1 -or
+            $copilotChecksumMatches[0] -notmatch $copilotChecksumPattern)
+        {
+            throw "The Copilot CLI checksum manifest must contain exactly one entry for '$copilotAssetName'."
+        }
+        $copilotCliArchiveSha256 = (Get-Sha256 $copilotArchivePath)
+        if ($copilotCliArchiveSha256 -ne $Matches.hash.ToLowerInvariant())
+        {
+            throw "The Copilot CLI source archive hash does not match SHA256SUMS.txt."
+        }
+        $copilotCliChecksumsSha256 = Get-Sha256 $copilotChecksumsPath
+        $copilotCliDownloadUrl =
+            "$copilotCliReleaseBaseUrl/v$copilotCliVersion/$copilotAssetName"
+        $copilotCliChecksumsUrl =
+            "$copilotCliReleaseBaseUrl/v$copilotCliVersion/SHA256SUMS.txt"
+
         $requiredSources = @(
             $wrapperSource
+            $copilotSource
+            $copilotRuntimeSource
+            $copilotLicenseSource
             $mxcFfiSource
             $plmSource
+            $mxcLicenseSource
             $bindingsSource
             $runtimeConfigSource
         )
@@ -272,11 +582,30 @@ try
                 throw "The wrapper prerequisite did not produce required artifact '$requiredSource'."
             }
         }
+        if ((Get-Sha256 $copilotSource) -ne
+            (Get-Sha256 $copilotInputExecutable))
+        {
+            throw "The published copilot.exe does not match the checksum-verified CLI source."
+        }
+        if ((Get-Sha256 $copilotRuntimeSource) -ne
+            (Get-Sha256 $copilotInputRuntimeLibrary))
+        {
+            throw "The published copilot_runtime.dll does not match the checksum-verified CLI source."
+        }
+        if ((Get-Sha256 $copilotLicenseSource) -ne
+            (Get-Sha256 $copilotInputLicense))
+        {
+            throw "The published Copilot LICENSE.md does not match the checksum-verified CLI source."
+        }
 
         $artifactSources = [ordered]@{
             'prepared/phantom-copilot-wrapper.exe' = $wrapperSource
+            'prepared/copilot.exe' = $copilotSource
+            'prepared/copilot_runtime.dll' = $copilotRuntimeSource
+            'prepared/LICENSE.md' = $copilotLicenseSource
             'prepared/mxc_ffi.dll' = $mxcFfiSource
             'prepared/plm.exe' = $plmSource
+            'prepared/MXC-LICENSE.md' = $mxcLicenseSource
             'prepared/NativeMethods.g.cs' = $bindingsSource
             'prepared/Phantom.Workspaces.Containers.runtimeconfig.json' = $runtimeConfigSource
         }
@@ -290,15 +619,38 @@ try
             }
         }
 
+        $cacheKey = Get-PreparedCacheKey `
+            -SourceFingerprint $sourceFingerprint `
+            -CopilotSdkPackageVersion $copilotSdkPackageVersion `
+            -CopilotSdkPackageSha512 $copilotSdkPackageSha512 `
+            -CopilotCliVersion $copilotCliVersion `
+            -CopilotCliPlatform $copilotCliPlatform `
+            -CopilotCliDownloadUrl $copilotCliDownloadUrl `
+            -CopilotCliChecksumsUrl $copilotCliChecksumsUrl `
+            -CopilotCliArchiveSha256 $copilotCliArchiveSha256 `
+            -CopilotCliChecksumsSha256 $copilotCliChecksumsSha256 `
+            -Artifacts @($artifacts)
         $manifest = [ordered]@{
-            SchemaVersion = 1
+            SchemaVersion = 3
             CacheKey = $cacheKey
+            SourceFingerprint = $sourceFingerprint
             Configuration = $configuration
             RuntimeIdentifier = $runtimeIdentifier
             NativeTarget = $nativeTarget
             NativeProfile = $nativeProfile
             NativePackages = $nativePackages
             NativeFeatures = $nativeFeatures
+            CopilotSdkPackageVersion = $copilotSdkPackageVersion
+            CopilotSdkPackageSha512 = $copilotSdkPackageSha512
+            CopilotCliVersion = $copilotCliVersion
+            CopilotCliPlatform = $copilotCliPlatform
+            CopilotCliDownloadUrl = $copilotCliDownloadUrl
+            CopilotCliChecksumsUrl = $copilotCliChecksumsUrl
+            CopilotCliArchiveSha256 = $copilotCliArchiveSha256
+            CopilotCliChecksumsSha256 = $copilotCliChecksumsSha256
+            CopilotCliGraphPath = [IO.Path]::GetRelativePath(
+                $dotnetArtifactsDirectory,
+                $copilotSource).Replace('\', '/')
             ContainerRuntimeConfigGraphPath = [IO.Path]::GetRelativePath(
                 $dotnetArtifactsDirectory,
                 $runtimeConfigSource).Replace('\', '/')
@@ -309,12 +661,28 @@ try
         }
         $manifest | ConvertTo-Json -Depth 5 |
             Set-Content -LiteralPath (Join-Path $stagingDirectory 'prerequisite.json') -Encoding utf8
+        Set-Content `
+            -LiteralPath (Join-Path $stagingDirectory 'prerequisite.fingerprint') `
+            -Value $cacheKey `
+            -Encoding utf8NoBOM
 
         Remove-Item -LiteralPath $cargoTargetDirectory -Recurse -Force
         Remove-Item -LiteralPath $dotnetArtifactsDirectory -Recurse -Force
         Remove-Item -LiteralPath $publishDirectory -Recurse -Force
 
-        [IO.Directory]::Move($stagingDirectory, $cacheDirectory)
+        $cacheDirectory = Join-Path $CacheRoot $cacheKey.Substring(0, 16)
+        if (Test-CompletedCache $cacheDirectory $CacheRoot $sourceFingerprint)
+        {
+            Remove-Item -LiteralPath $stagingDirectory -Recurse -Force
+        }
+        else
+        {
+            if (Test-Path -LiteralPath $cacheDirectory)
+            {
+                Remove-Item -LiteralPath $cacheDirectory -Recurse -Force
+            }
+            [IO.Directory]::Move($stagingDirectory, $cacheDirectory)
+        }
         $stagingDirectory = $null
         Write-Host "Prepared Copilot wrapper prerequisite $cacheKey."
     }
