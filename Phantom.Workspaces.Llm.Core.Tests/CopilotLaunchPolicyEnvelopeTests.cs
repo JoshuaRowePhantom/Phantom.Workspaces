@@ -1,5 +1,8 @@
 using Microsoft.Extensions.Time.Testing;
 using Phantom.Workspaces.Llm.Copilot;
+using System.Runtime.Versioning;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text.Json.Nodes;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
@@ -15,7 +18,8 @@ public sealed class CopilotLaunchPolicyEnvelopeTests
         using var lease = store.Create(CopilotRuntimeConnectionFactoryTests.CreatePolicy(), 42);
         if (OperatingSystem.IsWindows())
         {
-            Assert.True(CopilotLaunchPolicyStore.HasRestrictedAcl(Path.GetDirectoryName(lease.Path)!));
+            AssertRestrictedAcl(directory.Path);
+            AssertRestrictedAcl(Path.GetDirectoryName(lease.Path)!);
         }
 
         var envelope = store.Consume(lease.Path, expectedParentProcessId: 42);
@@ -24,6 +28,142 @@ public sealed class CopilotLaunchPolicyEnvelopeTests
         Assert.Equal(42, envelope.ParentProcessId);
         Assert.Equal(16, Convert.FromHexString(envelope.Nonce).Length);
         Assert.False(File.Exists(lease.Path));
+        Assert.False(Directory.Exists(Path.GetDirectoryName(lease.Path)));
+    }
+
+    [Fact]
+    public void PolicyEnvelope_PreExistingWrongOwner_IsRepairedWhenPermitted()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        using var directory = new TestDirectory();
+        var info = Directory.CreateDirectory(directory.Path);
+        var security = info.GetAccessControl();
+        var current = WindowsIdentity.GetCurrent().User
+            ?? throw new InvalidOperationException("The current Windows user has no SID.");
+        var administrators = new SecurityIdentifier(
+            WellKnownSidType.BuiltinAdministratorsSid,
+            null);
+        if (Equals(current, administrators))
+            return;
+
+        try
+        {
+            security.SetOwner(administrators);
+            info.SetAccessControl(security);
+        }
+        catch (Exception exception) when (
+            exception is UnauthorizedAccessException
+                or PrivilegeNotHeldException
+                or InvalidOperationException)
+        {
+            return;
+        }
+
+        Assert.Equal(
+            administrators,
+            info.GetAccessControl().GetOwner(typeof(SecurityIdentifier)));
+
+        var store = new CopilotLaunchPolicyStore(directory.Path, TimeProvider.System);
+        using var lease = store.Create(CopilotRuntimeConnectionFactoryTests.CreatePolicy(), 42);
+
+        AssertRestrictedAcl(directory.Path);
+        AssertRestrictedAcl(Path.GetDirectoryName(lease.Path)!);
+    }
+
+    [Fact]
+    public void PolicyEnvelope_PreExistingWrongOwnerCannotBeRepaired_Rejects()
+    {
+        using var directory = new TestDirectory();
+        Directory.CreateDirectory(directory.Path);
+        var security = new RecordingDirectorySecurity(directory.Path, failRoot: true);
+        var store = new CopilotLaunchPolicyStore(directory.Path, TimeProvider.System, security);
+
+        Assert.Throws<UnauthorizedAccessException>(
+            () => store.Create(CopilotRuntimeConnectionFactoryTests.CreatePolicy(), 42));
+
+        Assert.True(security.RootRepairAttempted);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(directory.Path));
+    }
+
+    [Fact]
+    public void PolicyEnvelope_EnvelopeAclFailure_CleansUpDirectory()
+    {
+        using var directory = new TestDirectory();
+        var security = new RecordingDirectorySecurity(directory.Path, failRoot: false);
+        var store = new CopilotLaunchPolicyStore(directory.Path, TimeProvider.System, security);
+
+        Assert.Throws<UnauthorizedAccessException>(
+            () => store.Create(CopilotRuntimeConnectionFactoryTests.CreatePolicy(), 42));
+
+        Assert.True(Directory.Exists(directory.Path));
+        Assert.Equal(2, security.RestrictAttempts);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(directory.Path));
+    }
+
+    [Fact]
+    public async Task PolicyEnvelope_ConcurrentCreation_RestrictsAndConsumesEveryEnvelope()
+    {
+        using var directory = new TestDirectory();
+        var store = new CopilotLaunchPolicyStore(directory.Path, TimeProvider.System);
+        var createTasks = Enumerable.Range(0, 8)
+            .Select(index => Task.Run(
+                () => store.Create(CopilotRuntimeConnectionFactoryTests.CreatePolicy(), 100 + index)))
+            .ToArray();
+        var leases = await Task.WhenAll(createTasks);
+
+        try
+        {
+            Assert.Equal(8, leases.Select(lease => lease.Path).Distinct().Count());
+            foreach (var (lease, index) in leases.Select((lease, index) => (lease, index)))
+            {
+                if (OperatingSystem.IsWindows())
+                    AssertRestrictedAcl(Path.GetDirectoryName(lease.Path)!);
+
+                var envelope = store.Consume(lease.Path, 100 + index);
+                Assert.Equal(100 + index, envelope.ParentProcessId);
+                Assert.False(File.Exists(lease.Path));
+                Assert.False(Directory.Exists(Path.GetDirectoryName(lease.Path)));
+            }
+        }
+        finally
+        {
+            foreach (var lease in leases)
+                lease.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task PolicyEnvelope_DirectoryReplacedDuringAclApplication_RejectsAndPreservesTarget()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        using var directory = new TestDirectory();
+        var parent = Path.GetDirectoryName(directory.Path)!;
+        var target = Directory.CreateDirectory(Path.Combine(parent, $"policy-target-{Guid.NewGuid():N}"));
+        var marker = Path.Combine(target.FullName, "marker.txt");
+        File.WriteAllText(marker, "preserve");
+        var stagedJunction = Path.Combine(parent, $"policy-junction-{Guid.NewGuid():N}");
+        await CreateJunctionAsync(stagedJunction, target.FullName);
+        var security = new ReplacingDirectorySecurity(directory.Path, stagedJunction);
+        var store = new CopilotLaunchPolicyStore(directory.Path, TimeProvider.System, security);
+
+        try
+        {
+            Assert.Throws<UnauthorizedAccessException>(
+                () => store.Create(CopilotRuntimeConnectionFactoryTests.CreatePolicy(), 42));
+
+            Assert.True(File.Exists(marker));
+            Assert.Empty(Directory.EnumerateFileSystemEntries(directory.Path));
+        }
+        finally
+        {
+            if (Directory.Exists(stagedJunction))
+                Directory.Delete(stagedJunction);
+            Directory.Delete(target.FullName, recursive: true);
+        }
     }
 
     [Fact]
@@ -227,6 +367,78 @@ public sealed class CopilotLaunchPolicyEnvelopeTests
         Assert.True(
             process.ExitCode == 0,
             $"Junction creation failed: {await output} {await error}");
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static void AssertRestrictedAcl(string path)
+    {
+        var security = new DirectoryInfo(path).GetAccessControl();
+        var current = WindowsIdentity.GetCurrent().User
+            ?? throw new InvalidOperationException("The current Windows user has no SID.");
+        var system = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
+        var rules = security.GetAccessRules(
+                includeExplicit: true,
+                includeInherited: true,
+                typeof(SecurityIdentifier))
+            .Cast<FileSystemAccessRule>()
+            .ToArray();
+
+        Assert.Equal(current, security.GetOwner(typeof(SecurityIdentifier)));
+        Assert.True(security.AreAccessRulesProtected);
+        Assert.True(security.AreAccessRulesCanonical);
+        Assert.Equal(2, rules.Length);
+        Assert.All(rules, rule =>
+        {
+            Assert.False(rule.IsInherited);
+            Assert.Equal(AccessControlType.Allow, rule.AccessControlType);
+            Assert.Equal(FileSystemRights.FullControl, rule.FileSystemRights);
+            Assert.Equal(
+                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                rule.InheritanceFlags);
+            Assert.Equal(PropagationFlags.None, rule.PropagationFlags);
+            Assert.True(
+                Equals(rule.IdentityReference, current)
+                    || Equals(rule.IdentityReference, system));
+        });
+        Assert.Contains(rules, rule => Equals(rule.IdentityReference, current));
+        Assert.Contains(rules, rule => Equals(rule.IdentityReference, system));
+        Assert.True(CopilotLaunchPolicyStore.HasRestrictedAcl(path));
+    }
+
+    private sealed class RecordingDirectorySecurity(
+        string root,
+        bool failRoot) : ICopilotLaunchPolicyDirectorySecurity
+    {
+        public int RestrictAttempts { get; private set; }
+        public bool RootRepairAttempted { get; private set; }
+
+        public void RestrictDirectory(string path)
+        {
+            RestrictAttempts++;
+            if (string.Equals(path, root, StringComparison.OrdinalIgnoreCase))
+            {
+                RootRepairAttempted = true;
+                if (failRoot)
+                    throw new UnauthorizedAccessException("The wrong owner could not be repaired.");
+                return;
+            }
+
+            throw new UnauthorizedAccessException("The envelope ACL could not be applied.");
+        }
+    }
+
+    private sealed class ReplacingDirectorySecurity(
+        string root,
+        string stagedJunction) : ICopilotLaunchPolicyDirectorySecurity
+    {
+        public void RestrictDirectory(string path)
+        {
+            if (string.Equals(path, root, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            Directory.Delete(path);
+            Directory.Move(stagedJunction, path);
+        }
     }
 
     private sealed class TestDirectory : IDisposable

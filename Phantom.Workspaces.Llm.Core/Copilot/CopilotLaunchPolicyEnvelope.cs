@@ -12,6 +12,11 @@ internal interface ICopilotLaunchPolicyStore
     CopilotLaunchPolicyLease Create(MxcProcessPolicy policy, int? parentProcessId = null);
 }
 
+internal interface ICopilotLaunchPolicyDirectorySecurity
+{
+    void RestrictDirectory(string path);
+}
+
 /// <summary>A short-lived, one-use handoff for a locally compiled Copilot launch policy.</summary>
 public sealed record CopilotLaunchPolicyEnvelope(
     int SchemaVersion,
@@ -80,6 +85,7 @@ public sealed class CopilotLaunchPolicyStore : ICopilotLaunchPolicyStore
 
     private readonly string launchRoot;
     private readonly TimeProvider timeProvider;
+    private readonly ICopilotLaunchPolicyDirectorySecurity directorySecurity;
 
     /// <summary>Create a store rooted in the per-user local launch directory.</summary>
     public CopilotLaunchPolicyStore()
@@ -89,11 +95,21 @@ public sealed class CopilotLaunchPolicyStore : ICopilotLaunchPolicyStore
 
     /// <summary>Create a store with explicit paths and time source.</summary>
     public CopilotLaunchPolicyStore(string launchRoot, TimeProvider timeProvider)
+        : this(launchRoot, timeProvider, new CopilotLaunchPolicyDirectorySecurity())
+    {
+    }
+
+    internal CopilotLaunchPolicyStore(
+        string launchRoot,
+        TimeProvider timeProvider,
+        ICopilotLaunchPolicyDirectorySecurity directorySecurity)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(launchRoot);
         ArgumentNullException.ThrowIfNull(timeProvider);
+        ArgumentNullException.ThrowIfNull(directorySecurity);
         this.launchRoot = System.IO.Path.GetFullPath(launchRoot);
         this.timeProvider = timeProvider;
+        this.directorySecurity = directorySecurity;
     }
 
     /// <summary>The canonical default root used by both the host and wrapper.</summary>
@@ -111,12 +127,9 @@ public sealed class CopilotLaunchPolicyStore : ICopilotLaunchPolicyStore
         ArgumentNullException.ThrowIfNull(policy);
         Directory.CreateDirectory(this.launchRoot);
         CopilotPathSecurity.EnsureNoReparsePoints(this.launchRoot);
-        RestrictDirectory(this.launchRoot);
+        this.directorySecurity.RestrictDirectory(this.launchRoot);
+        CopilotPathSecurity.EnsureNoReparsePoints(this.launchRoot);
         CleanupExpiredFiles();
-        var directory = System.IO.Path.Combine(this.launchRoot, Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(directory);
-        CopilotPathSecurity.EnsureNoReparsePoints(directory, this.launchRoot);
-        RestrictDirectory(directory);
 
         var now = this.timeProvider.GetUtcNow();
         var envelope = new CopilotLaunchPolicyEnvelope(
@@ -130,9 +143,14 @@ public sealed class CopilotLaunchPolicyStore : ICopilotLaunchPolicyStore
         if (bytes.Length > MaximumEnvelopeBytes)
             throw new InvalidOperationException("The compiled Copilot launch policy exceeds 1 MiB.");
 
+        var directory = System.IO.Path.Combine(this.launchRoot, Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
         var path = System.IO.Path.Combine(directory, "policy.json");
         try
         {
+            CopilotPathSecurity.EnsureNoReparsePoints(directory, this.launchRoot);
+            this.directorySecurity.RestrictDirectory(directory);
+            CopilotPathSecurity.EnsureNoReparsePoints(directory, this.launchRoot);
             using var stream = new FileStream(
                 path,
                 FileMode.CreateNew,
@@ -146,7 +164,7 @@ public sealed class CopilotLaunchPolicyStore : ICopilotLaunchPolicyStore
         }
         catch
         {
-            Directory.Delete(directory, recursive: true);
+            TryDeleteEnvelopeDirectory(directory);
             throw;
         }
     }
@@ -218,13 +236,21 @@ public sealed class CopilotLaunchPolicyStore : ICopilotLaunchPolicyStore
         var system = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
         var rules = security.GetAccessRules(true, true, typeof(SecurityIdentifier))
             .Cast<FileSystemAccessRule>()
-            .Where(rule => rule.AccessControlType == AccessControlType.Allow)
             .ToArray();
         return Equals(security.GetOwner(typeof(SecurityIdentifier)), current)
-            && rules.Length > 0
+            && security.AreAccessRulesCanonical
+            && rules.Length == 2
             && rules.All(rule =>
-                Equals(rule.IdentityReference, current)
-                || Equals(rule.IdentityReference, system));
+                !rule.IsInherited
+                && rule.AccessControlType == AccessControlType.Allow
+                && rule.FileSystemRights == FileSystemRights.FullControl
+                && rule.InheritanceFlags
+                    == (InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit)
+                && rule.PropagationFlags == PropagationFlags.None
+                && (Equals(rule.IdentityReference, current)
+                    || Equals(rule.IdentityReference, system)))
+            && rules.Any(rule => Equals(rule.IdentityReference, current))
+            && rules.Any(rule => Equals(rule.IdentityReference, system));
     }
 
     private string ValidateContainedNormalFile(string path)
@@ -269,29 +295,22 @@ public sealed class CopilotLaunchPolicyStore : ICopilotLaunchPolicyStore
         }
     }
 
-    private static void RestrictDirectory(string path)
+    private static void TryDeleteEnvelopeDirectory(string directory)
     {
-        if (!OperatingSystem.IsWindows())
-            return;
+        try
+        {
+            if (!Directory.Exists(directory))
+                return;
 
-        var current = WindowsIdentity.GetCurrent().User
-            ?? throw new InvalidOperationException("The current Windows user has no security identifier.");
-        var system = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
-        var security = new DirectorySecurity();
-        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
-        security.AddAccessRule(new FileSystemAccessRule(
-            current,
-            FileSystemRights.FullControl,
-            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
-            PropagationFlags.None,
-            AccessControlType.Allow));
-        security.AddAccessRule(new FileSystemAccessRule(
-            system,
-            FileSystemRights.FullControl,
-            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
-            PropagationFlags.None,
-            AccessControlType.Allow));
-        new DirectoryInfo(path).SetAccessControl(security);
+            var recursive = (File.GetAttributes(directory) & FileAttributes.ReparsePoint) == 0;
+            Directory.Delete(directory, recursive);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
     }
 
     private static bool IsHex(string value)
@@ -317,6 +336,49 @@ public sealed class CopilotLaunchPolicyStore : ICopilotLaunchPolicyStore
         }
         catch (UnauthorizedAccessException)
         {
+        }
+    }
+
+    internal sealed class CopilotLaunchPolicyDirectorySecurity
+        : ICopilotLaunchPolicyDirectorySecurity
+    {
+        public void RestrictDirectory(string path)
+        {
+            if (!OperatingSystem.IsWindows())
+                return;
+
+            RestrictWindowsDirectory(path);
+        }
+
+        [SupportedOSPlatform("windows")]
+        private static void RestrictWindowsDirectory(string path)
+        {
+            var current = WindowsIdentity.GetCurrent().User
+                ?? throw new InvalidOperationException("The current Windows user has no security identifier.");
+            var system = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
+            var security = new DirectorySecurity();
+            var existingOwner = new DirectoryInfo(path)
+                .GetAccessControl(AccessControlSections.Owner)
+                .GetOwner(typeof(SecurityIdentifier));
+            if (!Equals(existingOwner, current))
+                security.SetOwner(current);
+            security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+            security.AddAccessRule(new FileSystemAccessRule(
+                current,
+                FileSystemRights.FullControl,
+                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                PropagationFlags.None,
+                AccessControlType.Allow));
+            security.AddAccessRule(new FileSystemAccessRule(
+                system,
+                FileSystemRights.FullControl,
+                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                PropagationFlags.None,
+                AccessControlType.Allow));
+
+            new DirectoryInfo(path).SetAccessControl(security);
+            if (!CopilotLaunchPolicyStore.HasRestrictedAcl(path))
+                throw new UnauthorizedAccessException("The Copilot launch directory ACL could not be restricted.");
         }
     }
 }
