@@ -94,7 +94,8 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
     private readonly List<ToolStateNode> toolRoots = [];
     private readonly SemaphoreSlim toolMutationLock = new(1, 1);
     private readonly CancellationTokenSource cts = new();
-    private TaskCompletionSource? restoreCompletion;
+    private Task? creationTask;
+    private Task creationDriver = Task.CompletedTask;
     private readonly SlashCommandRegistry outerSlashCommands = new();
     private readonly ReplaceableSlashCommandHandlerRegistry replaceableCommands = new();
     private Task processTask = Task.CompletedTask;
@@ -153,6 +154,11 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
     // paths (issue #913).
     internal TaskScheduler ForegroundSchedulerForTesting => this.foregroundScheduler;
 
+    // Creation-failure tests inspect these exact owner tasks instead of relying on the
+    // process-global UnobservedTaskException event and finalizer timing.
+    internal Task CreationDriverForTesting => this.creationDriver;
+    internal Task ProcessTaskForTesting => this.processTask;
+
     internal AgentChat(InternalCreateAgentChatRequest request)
     {
        VerifyOnForegroundContext(request.ForegroundScheduler);
@@ -209,47 +215,99 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
     // The onConstructed hook runs on the construction (foreground) context after the chat is
     // constructed but before InitializeAsync, so callers (tests) can observe running-item
     // mutations that occur during initialization (issue #1068).
-    internal static async Task<AgentChat> CreateAsync(
+    internal static Task<AgentChat> CreateAsync(
         InternalCreateAgentChatRequest request,
         Action<AgentChat>? onConstructed)
     {
-       var chat = new AgentChat(request);
-       var restoreCompletion = new TaskCompletionSource(
-           TaskCreationOptions.RunContinuationsAsynchronously);
-       chat.restoreCompletion = restoreCompletion;
-       onConstructed?.Invoke(chat);
-       try
-       {
-           await chat.InitializeAsync();
-           restoreCompletion.TrySetResult();
-       }
-       catch (Exception exception)
-       {
-           if (exception is OperationCanceledException cancellation)
-           {
-               restoreCompletion.TrySetCanceled(cancellation.CancellationToken);
-           }
-           else
-           {
-               restoreCompletion.TrySetException(exception);
-           }
+        AgentChat chat;
+        try
+        {
+            chat = new AgentChat(request);
+        }
+        catch (Exception exception)
+        {
+            var failedConstruction = new TaskCompletionSource<AgentChat>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            if (exception is OperationCanceledException cancellation)
+            {
+                failedConstruction.TrySetCanceled(cancellation.CancellationToken);
+            }
+            else
+            {
+                failedConstruction.TrySetException(exception);
+            }
+            return failedConstruction.Task;
+        }
 
-           if (Interlocked.Exchange(ref chat.disposeStarted, 1) == 0)
-           {
-               try
-               {
-                   await chat.DisposeCoreAsync(awaitRestoreCompletion: false);
-               }
-               catch (Exception cleanupException)
-               {
-                   throw new AggregateException(exception, cleanupException);
-               }
-           }
+        var creation = new TaskCompletionSource<AgentChat>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        chat.creationTask = creation.Task;
+        chat.creationDriver = CompleteCreationAsync(chat, creation, onConstructed);
+        return creation.Task;
+    }
 
-           ExceptionDispatchInfo.Capture(exception).Throw();
-       }
-       await restoreCompletion.Task;
-       return chat;
+    private static async Task CompleteCreationAsync(
+        AgentChat chat,
+        TaskCompletionSource<AgentChat> creation,
+        Action<AgentChat>? onConstructed)
+    {
+        Exception failure;
+        try
+        {
+            onConstructed?.Invoke(chat);
+            await chat.InitializeAsync();
+            creation.TrySetResult(chat);
+            return;
+        }
+        catch (Exception exception)
+        {
+            failure = exception;
+        }
+
+        var cancellationToken = failure is OperationCanceledException cancellation
+            ? chat.ResolveCreationCancellationToken(cancellation)
+            : default;
+        chat.historyPopulated.TrySetCanceled(cancellationToken);
+
+        Exception? cleanupFailure = null;
+        if (Interlocked.Exchange(ref chat.disposeStarted, 1) == 0)
+        {
+            try
+            {
+                await chat.DisposeCoreAsync(awaitCreation: false);
+            }
+            catch (Exception exception)
+            {
+                cleanupFailure = exception;
+            }
+        }
+
+        if (cleanupFailure is not null)
+        {
+            creation.TrySetException(new AggregateException(failure, cleanupFailure));
+        }
+        else if (failure is OperationCanceledException)
+        {
+            creation.TrySetCanceled(cancellationToken);
+        }
+        else
+        {
+            creation.TrySetException(failure);
+        }
+    }
+
+    private CancellationToken ResolveCreationCancellationToken(
+        OperationCanceledException cancellation)
+    {
+        if (this.request.CancellationToken.IsCancellationRequested)
+        {
+            return this.request.CancellationToken;
+        }
+        if (this.cts.IsCancellationRequested)
+        {
+            return this.cts.Token;
+        }
+        return cancellation.CancellationToken;
     }
 
     private async Task InitializeAsync()
@@ -461,7 +519,7 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
        var resolvedAgentSessionId = this.persistenceProvider.ExtractAgentSessionId(frameworkSession);
        var persistedMessages = await this.request.ConfiguredStore.ReadMessagesAsync(
            new ReadMessagesRequest { AgentSessionId = resolvedAgentSessionId },
-           this.request.CancellationToken);
+           initializationToken);
 
        // RunSessionInitAsync runs the running-item mutations, the initial persisted-history load
        // (History.Add fires CollectionChanged), and historyPopulated.TrySetResult(). These mutate
@@ -1639,9 +1697,11 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
     /// <summary>
     /// Completes when initialization has atomically published the restored session and child-chat
     /// state, or preserves the initialization failure/cancellation. Consumers that receive an
-    /// instance through the construction hook can use this as the lifecycle handshake.
+    /// instance through the construction hook can use this as the lifecycle handshake. This is the
+    /// same task returned by <see cref="CreateAsync(InternalCreateAgentChatRequest, Action{AgentChat}?)"/>
+    /// rather than a separately faultable readiness signal.
     /// </summary>
-    internal Task RestoreCompleted => this.restoreCompletion?.Task ?? Task.CompletedTask;
+    internal Task RestoreCompleted => this.creationTask ?? Task.CompletedTask;
 
     private void LoadInitialHistory(IReadOnlyList<ChatMessage>? initialMessages)
     {
@@ -1668,10 +1728,10 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
             return;
         }
 
-        await this.DisposeCoreAsync(awaitRestoreCompletion: true);
+        await this.DisposeCoreAsync(awaitCreation: true);
     }
 
-    private async Task DisposeCoreAsync(bool awaitRestoreCompletion)
+    private async Task DisposeCoreAsync(bool awaitCreation)
     {
         var failures = new List<Exception>();
         this.commonInputQueues.Dispose();
@@ -1691,13 +1751,10 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
         }
         try
         {
-            if (awaitRestoreCompletion && this.restoreCompletion is { } completion)
+            if (awaitCreation && this.creationTask is { } creation)
             {
-                await completion.Task;
+                await creation.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
             }
-        }
-        catch (OperationCanceledException)
-        {
         }
         catch (Exception error)
         {

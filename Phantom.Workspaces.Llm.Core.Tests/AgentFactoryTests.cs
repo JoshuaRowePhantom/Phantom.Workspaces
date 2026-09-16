@@ -1469,15 +1469,42 @@ public class AgentFactoryTests
             AgentPersistenceStoreOverride = store,
         };
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            AgentFactory.CreateAgentChatAsync(
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            var failure = await Record.ExceptionAsync(() =>
+                AgentFactory.CreateAgentChatAsync(
                 new CreateAgentChatRequest
                 {
-                    AgentSessionId = "unknown-session",
+                    AgentSessionId = $"unknown-session-{attempt}",
                     AgentServices = services,
                 }));
+            var exception = Assert.IsType<InvalidOperationException>(failure);
 
-        Assert.Contains("Agent definition could not be resolved", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("Agent definition could not be resolved", exception.Message, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public async Task CreateAgentChatAsync_PropagatesRequestTokenIntoInitialization()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var store = new RecordingAgentPersistenceStore();
+        var services = new AgentServices
+        {
+            AgentPersistenceStoreOverride = store,
+            ChatClientOverride = new DeterministicTestChatClient(),
+        };
+
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest
+            {
+                AgentSessionId = "token-propagation",
+                AgentDefinition = CreateEchoPromptAgentDefinition(),
+                AgentServices = services,
+                CancellationToken = cancellation.Token,
+            });
+
+        Assert.True(store.LastReadCancellationToken.CanBeCanceled);
     }
 
     [Fact]
@@ -2065,6 +2092,7 @@ public class AgentFactoryTests
         public int ReadCalls => this.readCalls;
         public int StoreCalls => this.storeCalls;
         public int RestoreCalls => this.restoreCalls;
+        public CancellationToken LastReadCancellationToken { get; private set; }
 
         public IReadOnlyList<string> StoredAgentSessionIds => this.storedAgentSessionIds;
 
@@ -2102,6 +2130,7 @@ public class AgentFactoryTests
             CancellationToken cancellationToken = default)
         {
             Interlocked.Increment(ref this.readCalls);
+            this.LastReadCancellationToken = cancellationToken;
             return ValueTask.FromResult(Array.Empty<ChatMessage>());
         }
 

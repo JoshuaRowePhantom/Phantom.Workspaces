@@ -636,7 +636,7 @@ public static class AgentFactory
                 ExecutionTrustContext = executionTrustContext,
                 ConfiguredStore = configuredStore,
                 ClientOverride = services?.ChatClientOverride,
-                CancellationToken = CancellationToken.None,
+                CancellationToken = ct,
                 ForegroundScheduler = createAgentChatRequest.ForegroundScheduler,
                 TimeProvider = createAgentChatRequest.TimeProvider ?? TimeProvider.System,
             });

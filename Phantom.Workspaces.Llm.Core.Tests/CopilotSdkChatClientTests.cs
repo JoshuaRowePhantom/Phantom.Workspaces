@@ -1413,54 +1413,29 @@ public sealed class CopilotSdkChatClientTests
     // ---------------- GitHub issue #1142: crash + recovery on interrupt+resend -----------------
 
     [Fact]
-    public async Task RunStreamingTurn_WhenImmediateSendFaults_DoesNotRaiseUnobservedException()
+    public async Task RunStreamingTurn_WhenImmediateSendFaults_ForwarderOwnsExactSendTask()
     {
         // Reproduces GitHub issue #1142: after Ctrl-Break invalidates the session, a follow-up
         // Immediate steering item triggers session.SendAsync on the dead session which faults
-        // with "Session not found". Before the fix, the fire-and-forget Task was discarded, so
-        // its exception surfaced on the finalizer thread as an AggregateException. The fix
-        // observes the Task inside ForwardSteeringAsync — no UnobservedTaskException must fire.
-        var raised = new List<Exception>();
-        void Handler(object? sender, UnobservedTaskExceptionEventArgs e)
-        {
-            foreach (var inner in e.Exception.Flatten().InnerExceptions)
-            {
-                raised.Add(inner);
-            }
+        // with "Session not found". Verify ownership directly instead of subscribing to the
+        // process-global UnobservedTaskException event, which can capture unrelated finalizers.
+        var synchronous = CopilotSdkChatClient.ForwardSteeringAsync(
+            _ => throw new InvalidOperationException("Session not found: synchronous"),
+            logger: null);
+        await synchronous;
+        Assert.True(synchronous.IsCompletedSuccessfully);
 
-            e.SetObserved();
-        }
+        var sendCompletion = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var asynchronous = CopilotSdkChatClient.ForwardSteeringAsync(
+            _ => sendCompletion.Task,
+            logger: null);
 
-        TaskScheduler.UnobservedTaskException += Handler;
-        try
-        {
-            var task = CopilotSdkChatClient.ForwardSteeringAsync(
-                _ => throw new InvalidOperationException("Session not found: fake-guid"),
-                logger: null);
-
-            await task;
-
-            // Also cover the "Task already faulted" flavour: SendAsync sometimes returns a
-            // faulted Task rather than throwing synchronously.
-            var faultedTask = CopilotSdkChatClient.ForwardSteeringAsync(
-                _ => Task.FromException(new InvalidOperationException("Session not found: fake-guid")),
-                logger: null);
-            await faultedTask;
-
-            // Trigger finalization of any orphaned tasks that were dropped without observation
-            // during this test method — none should exist from ForwardSteeringAsync's paths.
-            for (var i = 0; i < 3; i++)
-            {
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
-            }
-        }
-        finally
-        {
-            TaskScheduler.UnobservedTaskException -= Handler;
-        }
-
-        Assert.Empty(raised);
+        Assert.False(asynchronous.IsCompleted);
+        sendCompletion.SetException(
+            new InvalidOperationException("Session not found: returned task"));
+        await asynchronous;
+        Assert.True(asynchronous.IsCompletedSuccessfully);
     }
 
     [Fact]

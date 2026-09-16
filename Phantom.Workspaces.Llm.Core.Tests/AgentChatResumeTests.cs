@@ -47,7 +47,7 @@ public sealed class AgentChatResumeTests
         return childIds;
     }
 
-    private static async Task<AgentChat> CreateRestoredParentAsync(
+    private static Task<AgentChat> CreateRestoredParentAsync(
         IAgentPersistenceStore store,
         string parentSessionId,
         AgentServices? services = null,
@@ -55,8 +55,7 @@ public sealed class AgentChatResumeTests
         Action<AgentChat>? onConstructed = null,
         CancellationToken cancellationToken = default,
         IReadOnlyList<IAsyncDisposable>? ownedResources = null)
-    {
-        var createTask = AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        => AgentChat.CreateAsync(new InternalCreateAgentChatRequest
         {
             AgentDefinition = EchoAgentDefinition,
             AgentSessionId = parentSessionId,
@@ -69,9 +68,6 @@ public sealed class AgentChatResumeTests
             OwnedResources = ownedResources,
         }, onConstructed);
 
-        return await createTask;
-    }
-
     private static AgentChatFactory CreateFactory(InMemoryAgentPersistenceStore store) =>
         new(store, new AgentServices { ChatClientOverride = new DeterministicTestChatClient() }, TaskScheduler.Default);
 
@@ -81,6 +77,26 @@ public sealed class AgentChatResumeTests
         protected override void QueueTask(Task task) =>
             ThreadPool.QueueUserWorkItem(_ => TryExecuteTask(task));
         protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued) => false;
+    }
+
+    private sealed class InlineTaskScheduler : TaskScheduler
+    {
+        protected override IEnumerable<Task>? GetScheduledTasks() => null;
+        protected override void QueueTask(Task task) => TryExecuteTask(task);
+        protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued) =>
+            TryExecuteTask(task);
+    }
+
+    private static async Task AssertFailedConstructionTasksSettledAsync(AgentChat chat)
+    {
+        await chat.CreationDriverForTesting;
+
+        Assert.True(chat.RestoreCompleted.IsCompleted);
+        Assert.True(chat.HistoryPopulated.IsCompleted);
+        Assert.True(chat.Initialization.IsCompleted);
+        Assert.True(chat.ProcessTaskForTesting.IsCompleted);
+        Assert.False(chat.Initialization.IsFaulted);
+        Assert.False(chat.ProcessTaskForTesting.IsFaulted);
     }
 
     [Fact]
@@ -488,15 +504,169 @@ public sealed class AgentChatResumeTests
             onConstructed: chat => observed = chat,
             ownedResources: [resource]);
 
-        var creationError = await Assert.ThrowsAsync<ResumeTestException>(() => creation);
         var initializingChat = Assert.IsType<AgentChat>(observed);
-        var readinessError = await Assert.ThrowsAsync<ResumeTestException>(
-            () => initializingChat.RestoreCompleted);
+        Assert.Same(creation, initializingChat.RestoreCompleted);
+        var creationError = await Assert.ThrowsAsync<ResumeTestException>(() => creation);
 
         Assert.Same(expected, creationError);
-        Assert.Same(expected, readinessError);
         Assert.Empty(initializingChat.SubAgents);
         Assert.Equal(1, resource.DisposeCount);
+        await AssertFailedConstructionTasksSettledAsync(initializingChat);
+    }
+
+    [Fact]
+    public async Task AgentChat_Create_UnresolvedDefinitionUsesPublicTaskAsReadinessSignal()
+    {
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            var resource = new TrackingAsyncDisposable();
+            AgentChat? observed = null;
+            var creation = AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+            {
+                AgentDefinition = null,
+                AgentSessionId = $"missing-agent-{attempt}",
+                ConfiguredStore = new InMemoryAgentPersistenceStore(),
+                OwnedResources = [resource],
+            }, onConstructed: chat => observed = chat);
+
+            var initializingChat = Assert.IsType<AgentChat>(observed);
+            Assert.Same(creation, initializingChat.RestoreCompleted);
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => creation);
+
+            Assert.Contains(
+                "Agent definition could not be resolved",
+                exception.Message,
+                StringComparison.Ordinal);
+            Assert.True(creation.IsFaulted);
+            Assert.Equal(1, resource.DisposeCount);
+            await AssertFailedConstructionTasksSettledAsync(initializingChat);
+        }
+    }
+
+    [Fact]
+    public async Task AgentChat_Create_RestoreFailureUsesPublicTaskAsReadinessSignal()
+    {
+        var expected = new ResumeTestException("agent restore failed");
+        var store = new ControlledChildReadStore(
+            new InMemoryAgentPersistenceStore(),
+            restoreFailure: expected);
+        AgentChat? observed = null;
+
+        var creation = CreateRestoredParentAsync(
+            store,
+            "parent-restore-failed",
+            onConstructed: chat => observed = chat);
+
+        var initializingChat = Assert.IsType<AgentChat>(observed);
+        Assert.Same(creation, initializingChat.RestoreCompleted);
+        var exception = await Assert.ThrowsAsync<ResumeTestException>(() => creation);
+
+        Assert.Same(expected, exception);
+        Assert.True(initializingChat.HistoryPopulated.IsCanceled);
+        await AssertFailedConstructionTasksSettledAsync(initializingChat);
+    }
+
+    [Fact]
+    public async Task AgentChat_Create_CancellationPreservesRequestTokenIdentity()
+    {
+        var inner = new InMemoryAgentPersistenceStore();
+        await StoreChildrenAsync(inner, "parent-token-cancelled", 1);
+        var store = new ControlledChildReadStore(inner, block: true);
+        using var cancellation = new CancellationTokenSource();
+        AgentChat? observed = null;
+
+        var creation = CreateRestoredParentAsync(
+            store,
+            "parent-token-cancelled",
+            onConstructed: chat => observed = chat,
+            cancellationToken: cancellation.Token);
+        await store.ReadStarted;
+        cancellation.Cancel();
+
+        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => creation);
+        var initializingChat = Assert.IsType<AgentChat>(observed);
+
+        Assert.Same(creation, initializingChat.RestoreCompleted);
+        Assert.Equal(cancellation.Token, exception.CancellationToken);
+        Assert.True(initializingChat.HistoryPopulated.IsCompleted);
+        await AssertFailedConstructionTasksSettledAsync(initializingChat);
+    }
+
+    [Fact]
+    public async Task AgentChat_Create_ConstructedCallbackFailureCleansUpAndOwnsSingleTask()
+    {
+        var expected = new ResumeTestException("construction callback failed");
+        var resource = new TrackingAsyncDisposable();
+        AgentChat? observed = null;
+
+        var creation = CreateRestoredParentAsync(
+            new InMemoryAgentPersistenceStore(),
+            "parent-callback-failed",
+            onConstructed: chat =>
+            {
+                observed = chat;
+                throw expected;
+            },
+            ownedResources: [resource]);
+
+        var initializingChat = Assert.IsType<AgentChat>(observed);
+        Assert.Same(creation, initializingChat.RestoreCompleted);
+        var exception = await Assert.ThrowsAsync<ResumeTestException>(() => creation);
+
+        Assert.Same(expected, exception);
+        Assert.True(initializingChat.HistoryPopulated.IsCanceled);
+        Assert.Equal(1, resource.DisposeCount);
+        await AssertFailedConstructionTasksSettledAsync(initializingChat);
+    }
+
+    [Fact]
+    public async Task AgentChat_Create_SynchronousInitializationCompletesSharedTask()
+    {
+        AgentChat? observed = null;
+        var creation = CreateRestoredParentAsync(
+            new InMemoryAgentPersistenceStore(),
+            "parent-synchronous",
+            foregroundScheduler: new InlineTaskScheduler(),
+            onConstructed: chat => observed = chat);
+
+        Assert.True(creation.IsCompletedSuccessfully);
+        await using var chat = await creation;
+        Assert.Same(creation, Assert.IsType<AgentChat>(observed).RestoreCompleted);
+    }
+
+    [Fact]
+    public async Task AgentChat_Create_ConcurrentDisposeAndRestoreFailureCleansUpExactlyOnce()
+    {
+        var expected = new ResumeTestException("late restore failure");
+        var inner = new InMemoryAgentPersistenceStore();
+        await StoreChildrenAsync(inner, "parent-dispose-failed", 1);
+        var store = new ControlledChildReadStore(
+            inner,
+            block: true,
+            failure: expected,
+            ignoreCancellation: true);
+        var resource = new TrackingAsyncDisposable();
+        AgentChat? observed = null;
+
+        var creation = CreateRestoredParentAsync(
+            store,
+            "parent-dispose-failed",
+            onConstructed: chat => observed = chat,
+            ownedResources: [resource]);
+        await store.ReadStarted;
+        var initializingChat = Assert.IsType<AgentChat>(observed);
+        var disposal = initializingChat.DisposeAsync().AsTask();
+        store.Release();
+
+        var exception = await Assert.ThrowsAsync<ResumeTestException>(() => creation);
+        await disposal;
+
+        Assert.Same(expected, exception);
+        Assert.Same(creation, initializingChat.RestoreCompleted);
+        Assert.Equal(1, resource.DisposeCount);
+        Assert.Empty(initializingChat.SubAgents);
+        await AssertFailedConstructionTasksSettledAsync(initializingChat);
     }
 
     [Fact]
@@ -516,11 +686,11 @@ public sealed class AgentChatResumeTests
         await store.ReadStarted;
         cancellation.Cancel();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => creation);
         var initializingChat = Assert.IsType<AgentChat>(observed);
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => initializingChat.RestoreCompleted);
+        Assert.Same(creation, initializingChat.RestoreCompleted);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => creation);
         Assert.Empty(initializingChat.SubAgents);
+        await AssertFailedConstructionTasksSettledAsync(initializingChat);
     }
 
     [Fact]
@@ -545,6 +715,7 @@ public sealed class AgentChatResumeTests
         Assert.True(store.CancellationObserved);
         Assert.True(initializingChat.RestoreCompleted.IsCanceled);
         Assert.Empty(initializingChat.SubAgents);
+        await AssertFailedConstructionTasksSettledAsync(initializingChat);
     }
 
     [Fact]
@@ -607,7 +778,9 @@ public sealed class AgentChatResumeTests
     private sealed class ControlledChildReadStore(
         IAgentPersistenceStore inner,
         bool block = false,
-        Exception? failure = null) : IAgentPersistenceStore
+        Exception? failure = null,
+        Exception? restoreFailure = null,
+        bool ignoreCancellation = false) : IAgentPersistenceStore
     {
         private readonly TaskCompletionSource readStarted =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -616,6 +789,7 @@ public sealed class AgentChatResumeTests
 
         internal Task ReadStarted => this.readStarted.Task;
         internal bool CancellationObserved { get; private set; }
+        internal void Release() => this.releaseRead.TrySetResult();
 
         public ValueTask StoreAsync(StoreRequestAgent request, CancellationToken cancellationToken = default)
             => inner.StoreAsync(request, cancellationToken);
@@ -623,7 +797,9 @@ public sealed class AgentChatResumeTests
         public ValueTask<PersistedAgent?> RestoreAsync(
             RestoreRequest request,
             CancellationToken cancellationToken = default)
-            => inner.RestoreAsync(request, cancellationToken);
+            => restoreFailure is not null
+                ? ValueTask.FromException<PersistedAgent?>(restoreFailure)
+                : inner.RestoreAsync(request, cancellationToken);
 
         public ValueTask<Microsoft.Extensions.AI.ChatMessage[]> ReadMessagesAsync(
             ReadMessagesRequest request,
@@ -645,7 +821,14 @@ public sealed class AgentChatResumeTests
             {
                 try
                 {
-                    await this.releaseRead.Task.WaitAsync(cancellationToken);
+                    if (ignoreCancellation)
+                    {
+                        await this.releaseRead.Task;
+                    }
+                    else
+                    {
+                        await this.releaseRead.Task.WaitAsync(cancellationToken);
+                    }
                 }
                 catch (OperationCanceledException)
                 {
