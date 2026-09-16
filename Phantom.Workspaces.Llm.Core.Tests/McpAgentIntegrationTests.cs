@@ -10,7 +10,7 @@ public sealed class McpAgentIntegrationTests
     {
         var endpoint = BuildStdioEndpoint();
         var agent = CreateMcpAgentDefinition(endpoint);
-        Assert.IsType<McpTool>(Assert.Single(agent.Tools ?? []));
+        AssertMcpToolContract(agent, "test-mcp", endpoint);
 
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest
@@ -51,7 +51,7 @@ public sealed class McpAgentIntegrationTests
     {
         await using var server = await TestMcpServerProcess.StartAsync();
         var agent = CreateMcpAgentDefinition(server.BoundUrl);
-        Assert.IsType<McpTool>(Assert.Single(agent.Tools ?? []));
+        AssertMcpToolContract(agent, "test-mcp", server.BoundUrl);
 
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest
@@ -121,6 +121,15 @@ public sealed class McpAgentIntegrationTests
             """;
 
         return Assert.IsType<PromptAgent>(AgentDefinitionLoader.LoadAgentFromJson(agentJson));
+    }
+
+    private static void AssertMcpToolContract(PromptAgent agent, string serverName, string endpoint)
+    {
+        var tool = Assert.IsAssignableFrom<McpTool>(Assert.Single(agent.Tools ?? []));
+        Assert.Equal("mcp", tool.Kind);
+        Assert.Equal(serverName, tool.Name);
+        Assert.Equal(serverName, tool.ServerName);
+        Assert.Equal(endpoint, Assert.IsType<AnonymousConnection>(tool.Connection).Endpoint);
     }
 
     private static string BuildStdioEndpoint()

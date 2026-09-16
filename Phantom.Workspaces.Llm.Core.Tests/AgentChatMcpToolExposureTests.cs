@@ -1,8 +1,10 @@
+using AgentSchema;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Echo;
 using System.Reflection;
+using System.Text.Json;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
@@ -15,6 +17,86 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 [Trait("Category", "Integration")]
 public sealed class AgentChatMcpToolExposureTests
 {
+    [Fact]
+    public async Task AgentChat_WithSchemaLoadedPhantomMcpTool_RegistersListsAndInvokesContract()
+    {
+        await using var server = await InProcessMcpServer.StartAsync(new AsyncBarrier(1));
+        var agentJson = $$"""
+            {
+              "kind": "prompt",
+              "name": "derived-mcp-contract",
+              "model": { "id": "test", "provider": "echo", "apiType": "Echo" },
+              "tools": [
+                {
+                  "kind": "mcp",
+                  "name": "derived-server",
+                  "description": "Derived MCP registration",
+                  "serverName": "derived-server",
+                  "serverDescription": "Derived MCP server metadata",
+                  "allowedTools": ["ping", "fail"],
+                  "connection": { "kind": "Anonymous", "endpoint": "{{server.BoundUrl}}" },
+                  "type": "streamable",
+                  "executor": "local-worker"
+                }
+              ]
+            }
+            """;
+
+        var definition = Assert.IsType<PromptAgent>(AgentDefinitionLoader.LoadAgentFromJson(agentJson));
+        var schemaTool = Assert.IsAssignableFrom<McpTool>(Assert.Single(definition.Tools ?? []));
+        Assert.Equal("derived-server", schemaTool.Name);
+        Assert.Equal("Derived MCP registration", schemaTool.Description);
+        Assert.Equal("Derived MCP server metadata", schemaTool.ServerDescription);
+        Assert.Equal(["ping", "fail"], schemaTool.AllowedTools);
+
+        // Exactness is contractual here: these assertions verify the Phantom extension fields that
+        // distinguish the supported subtype from the base MCP schema contract.
+        var phantomTool = Assert.IsType<PhantomMcpTool>(schemaTool);
+        Assert.Equal(McpHttpTransport.Streamable, phantomTool.Transport);
+        Assert.Equal("local-worker", phantomTool.Executor);
+
+        var (chat, _) = await CreateChatAsync(agentJson);
+        await using var _chat = chat;
+        await chat.Initialization;
+
+        var serverNode = Assert.Single(chat.Tools);
+        Assert.Equal("derived-server", serverNode.Name);
+        Assert.Equal(2, serverNode.Children.Count);
+        Assert.Equal(2, serverNode.Children.Select(static child => child.Name).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+
+        var providers = GetAIContextProviders(chat);
+        Assert.Single(providers);
+        var exposed = await EnumerateProviderToolsAsync(providers);
+        var ping = Assert.IsAssignableFrom<AIFunction>(
+            Assert.Single(exposed, tool => string.Equals(tool.Name, "ping", StringComparison.OrdinalIgnoreCase)));
+        var fail = Assert.IsAssignableFrom<AIFunction>(
+            Assert.Single(exposed, tool => string.Equals(tool.Name, "fail", StringComparison.OrdinalIgnoreCase)));
+
+        Assert.Equal("Returns a pong response.", ping.Description);
+        Assert.Equal("object", ping.JsonSchema.GetProperty("type").GetString());
+        Assert.True(ping.JsonSchema.GetProperty("properties").TryGetProperty("message", out _));
+
+        var pingResult = await ping.InvokeAsync(
+            new AIFunctionArguments { ["message"] = "derived" },
+            CancellationToken.None);
+        Assert.Contains("pong:derived", JsonSerializer.Serialize(pingResult), StringComparison.Ordinal);
+
+        var failResult = await fail.InvokeAsync(
+            new AIFunctionArguments { ["message"] = "derived" },
+            CancellationToken.None);
+        var serializedFailure = JsonSerializer.Serialize(failResult);
+        using (var failureDocument = JsonDocument.Parse(serializedFailure))
+        {
+            Assert.True(failureDocument.RootElement.GetProperty("isError").GetBoolean());
+            Assert.NotEmpty(failureDocument.RootElement.GetProperty("content").EnumerateArray());
+        }
+
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            async () => await ping.InvokeAsync(new AIFunctionArguments(), canceled.Token));
+    }
+
     [Fact]
     public async Task AgentChat_WithMcpTool_RegistersMcpProviderInAIContextProviders()
     {
@@ -383,6 +465,12 @@ public sealed class AgentChatMcpToolExposureTests
     }
 
     private static async Task<string[]> EnumerateProvidersAsync(IReadOnlyList<AIContextProvider> providers)
+        => (await EnumerateProviderToolsAsync(providers))
+            .Select(tool => tool.Name)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .ToArray();
+
+    private static async Task<AITool[]> EnumerateProviderToolsAsync(IReadOnlyList<AIContextProvider> providers)
     {
         var agent = new ChatClientAgent(new EchoChatClient(), new ChatClientAgentOptions
         {
@@ -390,14 +478,17 @@ public sealed class AgentChatMcpToolExposureTests
         });
         var session = await agent.CreateSessionAsync(CancellationToken.None);
 
-        var names = new List<string>();
+        var tools = new List<AITool>();
         foreach (var provider in providers)
         {
-            var tools = await AIContextProviderToolReader.GetToolsAsync(provider, agent, session, CancellationToken.None);
-            names.AddRange(tools.Select(tool => tool.Name).Where(name => !string.IsNullOrWhiteSpace(name)));
+            tools.AddRange(await AIContextProviderToolReader.GetToolsAsync(
+                provider,
+                agent,
+                session,
+                CancellationToken.None));
         }
 
-        return names.ToArray();
+        return tools.ToArray();
     }
 
     private static string[] ParseLoadedToolsDiagnostic(AgentChat chat)
