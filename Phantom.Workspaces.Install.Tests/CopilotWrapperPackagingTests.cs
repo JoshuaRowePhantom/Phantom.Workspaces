@@ -97,6 +97,71 @@ public sealed class CopilotWrapperPackagingTests
             StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RuntimePayload_GitHubFinalCommand_AcceptedNativeExitIsClean(
+        bool useNativeErrorPreference)
+    {
+        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        await using var payload = CreateValidatorPayload(prerequisite);
+
+        var result = await InvokeValidatorAsGitHubStepAsync(
+            payload.Path,
+            useNativeErrorPreference);
+
+        Assert.True(
+            result.ExitCode == 0,
+            $"Validator leaked its accepted native exit.\nSTDOUT:\n{result.StandardOutput}\nSTDERR:\n{result.StandardError}");
+        Assert.Contains(
+            "Copilot runtime payload validation passed",
+            result.StandardOutput,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RuntimePayload_GitHubFinalCommand_UnexpectedNativeExitFails()
+    {
+        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        await using var payload = CreateValidatorPayload(prerequisite);
+        File.Copy(
+            Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.System),
+                "whoami.exe"),
+            Path.Combine(payload.Path, "runtimes", "win-x64", "native", "copilot.exe"),
+            overwrite: true);
+
+        var result = await InvokeValidatorAsGitHubStepAsync(
+            payload.Path,
+            useNativeErrorPreference: true);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains(
+            "did not reach expected server-mode argument validation (exit 0)",
+            result.StandardError + result.StandardOutput,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RuntimePayload_GitHubFinalCommand_NativeLaunchFailureFails()
+    {
+        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        await using var payload = CreateValidatorPayload(prerequisite);
+        await File.WriteAllTextAsync(
+            Path.Combine(payload.Path, "runtimes", "win-x64", "native", "copilot.exe"),
+            "not a Windows executable");
+
+        var result = await InvokeValidatorAsGitHubStepAsync(
+            payload.Path,
+            useNativeErrorPreference: true);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains(
+            "copilot.exe could not be launched",
+            result.StandardError + result.StandardOutput,
+            StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task RuntimePayload_MissingPreparedFingerprint_FailsClosed()
     {
@@ -326,6 +391,59 @@ public sealed class CopilotWrapperPackagingTests
         await using var stream = File.OpenRead(path);
         return await System.Security.Cryptography.SHA256.HashDataAsync(stream);
     }
+
+    private static MxcRepositoryTestSupport.TestDirectory CreateValidatorPayload(
+        MxcRepositoryTestSupport.CopilotWrapperPrerequisite prerequisite)
+    {
+        var payload = new MxcRepositoryTestSupport.TestDirectory();
+        var nativeDirectory = Path.Combine(payload.Path, "runtimes", "win-x64", "native");
+        Directory.CreateDirectory(nativeDirectory);
+        foreach (var (fileName, source) in new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["phantom-copilot-wrapper.exe"] = prerequisite.WrapperExecutable,
+            ["copilot.exe"] = prerequisite.CopilotExecutable,
+            ["copilot_runtime.dll"] = prerequisite.CopilotRuntimeLibrary,
+            ["mxc_ffi.dll"] = prerequisite.MxcFfi,
+            ["plm.exe"] = prerequisite.Plm,
+            ["LICENSE.md"] = prerequisite.CopilotLicense,
+            ["MXC-LICENSE.md"] = prerequisite.MxcLicense,
+        })
+        {
+            File.Copy(source, Path.Combine(nativeDirectory, fileName));
+        }
+
+        return payload;
+    }
+
+    private static async Task<MxcRepositoryTestSupport.ProcessResult> InvokeValidatorAsGitHubStepAsync(
+        string payloadDirectory,
+        bool useNativeErrorPreference)
+    {
+        await using var scripts = new MxcRepositoryTestSupport.TestDirectory();
+        var validator = Path.Combine(
+            MxcRepositoryTestSupport.Root.FullName,
+            "packaging",
+            "validate",
+            "Assert-CopilotRuntimePayload.ps1");
+        var scriptPath = Path.Combine(scripts.Path, "github-step.ps1");
+        await File.WriteAllTextAsync(
+            scriptPath,
+            $$"""
+            $ErrorActionPreference = 'stop'
+            $PSNativeCommandUseErrorActionPreference = ${{useNativeErrorPreference.ToString().ToLowerInvariant()}}
+            & '{{EscapePowerShellLiteral(validator)}}' -PayloadDirectory '{{EscapePowerShellLiteral(payloadDirectory)}}' -RuntimeIdentifier 'win-x64'
+            if ((Test-Path -LiteralPath variable:\LASTEXITCODE)) { exit $LASTEXITCODE }
+            """);
+        return await MxcRepositoryTestSupport.InvokeAsync(
+            "pwsh",
+            "-NoProfile",
+            "-NonInteractive",
+            "-File",
+            scriptPath);
+    }
+
+    private static string EscapePowerShellLiteral(string value) =>
+        value.Replace("'", "''", StringComparison.Ordinal);
 
     private static string RandomFingerprint() =>
         Convert.ToHexString(

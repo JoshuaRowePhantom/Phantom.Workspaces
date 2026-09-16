@@ -94,13 +94,35 @@ if ($SkipStartupSmoke)
 }
 else
 {
-    $startup = & $copilotExe 2>&1
-    if ($LASTEXITCODE -ne 1 -or
+    $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+    try
+    {
+        $PSNativeCommandUseErrorActionPreference = $false
+        try
+        {
+            $startup = & $copilotExe 2>&1
+            $startupExitCode = $LASTEXITCODE
+        }
+        catch
+        {
+            throw "Bundled copilot.exe could not be launched: $($_.Exception.Message) (issue #1376)."
+        }
+    }
+    finally
+    {
+        $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
+    }
+
+    if ($startupExitCode -ne 1 -or
         ($startup | Out-String) -notmatch 'SDK server mode requires --server or --headless')
     {
-        throw "Bundled copilot.exe did not reach expected server-mode argument validation (exit $LASTEXITCODE): $startup (issue #1376)."
+        throw "Bundled copilot.exe did not reach expected server-mode argument validation (exit $startupExitCode): $startup (issue #1376)."
     }
     Write-Host "OK  Copilot runtime launches and validates server mode."
 }
 
 Write-Host "Copilot runtime payload validation passed for $RuntimeIdentifier."
+
+# GitHub's pwsh runner exits with the last native exit code after the generated step script ends.
+# Exit 1 is the expected no-argument probe result, so do not leak that accepted state to the caller.
+$global:LASTEXITCODE = 0
