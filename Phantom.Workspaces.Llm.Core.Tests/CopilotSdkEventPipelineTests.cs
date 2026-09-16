@@ -497,7 +497,7 @@ public sealed class CopilotSdkEventPipelineTests
             AgentServices = new AgentServices { RunningAgentChatFactory = factory },
         });
 
-        await parent.WaitForRestoredSubAgentsMarkedTerminalAsync();
+        await parent.RestoreCompleted;
 
         Assert.Equal(childIds.Length, parent.SubAgents.Count);
         foreach (var stub in parent.SubAgents.Cast<SubAgent>())
@@ -564,7 +564,7 @@ public sealed class CopilotSdkEventPipelineTests
             AgentServices = new AgentServices { RunningAgentChatFactory = factory },
         });
 
-        await parent.WaitForRestoredSubAgentsMarkedTerminalAsync();
+        await parent.RestoreCompleted;
 
         var stub = Assert.IsType<SubAgent>(Assert.Single(parent.SubAgents));
         await using var lease = await stub.AcquireLeaseAsync();

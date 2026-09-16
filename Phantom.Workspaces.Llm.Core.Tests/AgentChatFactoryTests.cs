@@ -721,7 +721,7 @@ public sealed class AgentChatFactoryTests
         // #1186 documents.
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         await using var lease = await factory.GetAsync(new AgentSessionId(parentSessionId), ct: cts.Token);
-        await lease.LocalAgentChat.WaitForRestoredSubAgentsMarkedTerminalAsync().WaitAsync(cts.Token);
+        await lease.LocalAgentChat.RestoreCompleted.WaitAsync(cts.Token);
 
         Assert.Equal(2, lease.LocalAgentChat.SubAgents.Count);
     }

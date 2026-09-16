@@ -94,6 +94,7 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
     private readonly List<ToolStateNode> toolRoots = [];
     private readonly SemaphoreSlim toolMutationLock = new(1, 1);
     private readonly CancellationTokenSource cts = new();
+    private TaskCompletionSource? restoreCompletion;
     private readonly SlashCommandRegistry outerSlashCommands = new();
     private readonly ReplaceableSlashCommandHandlerRegistry replaceableCommands = new();
     private Task processTask = Task.CompletedTask;
@@ -213,13 +214,51 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
         Action<AgentChat>? onConstructed)
     {
        var chat = new AgentChat(request);
+       var restoreCompletion = new TaskCompletionSource(
+           TaskCreationOptions.RunContinuationsAsynchronously);
+       chat.restoreCompletion = restoreCompletion;
        onConstructed?.Invoke(chat);
-       await chat.InitializeAsync();
+       try
+       {
+           await chat.InitializeAsync();
+           restoreCompletion.TrySetResult();
+       }
+       catch (Exception exception)
+       {
+           if (exception is OperationCanceledException cancellation)
+           {
+               restoreCompletion.TrySetCanceled(cancellation.CancellationToken);
+           }
+           else
+           {
+               restoreCompletion.TrySetException(exception);
+           }
+
+           if (Interlocked.Exchange(ref chat.disposeStarted, 1) == 0)
+           {
+               try
+               {
+                   await chat.DisposeCoreAsync(awaitRestoreCompletion: false);
+               }
+               catch (Exception cleanupException)
+               {
+                   throw new AggregateException(exception, cleanupException);
+               }
+           }
+
+           ExceptionDispatchInfo.Capture(exception).Throw();
+       }
+       await restoreCompletion.Task;
        return chat;
     }
 
     private async Task InitializeAsync()
     {
+       using var initializationCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+           this.request.CancellationToken,
+           this.cts.Token);
+       var initializationToken = initializationCancellation.Token;
+
        PersistedAgent? restoredAgent = null;
        if (!string.IsNullOrWhiteSpace(this.request.AgentSessionId))
        {
@@ -228,7 +267,7 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
                {
                    AgentSessionId = this.request.AgentSessionId,
                },
-               this.request.CancellationToken);
+               initializationToken);
        }
 
        var restoredAgentDefinitionJson = restoredAgent.HasValue ? restoredAgent.Value.AgentDefinitionJson : null;
@@ -276,14 +315,14 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
            ? new ChatClientResult(this.request.ClientOverride, this.request.DisplayNameOverride ?? string.Empty)
            : this.request.ChatClientFactoryOverride is not null
                ? new ChatClientResult(
-                   await this.request.ChatClientFactoryOverride(this.request.CancellationToken).ConfigureAwait(false),
+                   await this.request.ChatClientFactoryOverride(initializationToken).ConfigureAwait(false),
                    this.request.DisplayNameOverride ?? string.Empty)
                : await AgentFactory.CreateChatClientAsync(
                    resolvedAgentDefinition,
                    servicesWithRegistry,
                    queueManager: this.queueManager,
                    subAgentChatRegistry: this,
-                   cancellationToken: this.request.CancellationToken).ConfigureAwait(false);
+                   cancellationToken: initializationToken).ConfigureAwait(false);
        this.replaceableCommands.Current = innerRegistry;
        var resolvedClient = clientInfo.ChatClient;
         this.modelClient = resolvedClient.GetService(typeof(IModelSlashCommandClient)) as IModelSlashCommandClient;
@@ -370,7 +409,7 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
        this.runtimeContextProviderRegistrations = await this.CreateRuntimeContextProviderRegistrationsAsync(
            resolvedAgentDefinition,
            this.request.AgentServices,
-           this.request.CancellationToken);
+           initializationToken);
        this.chatOptions.AIContextProviders = this.runtimeContextProviderRegistrations
            .Where(registration => registration.Provider is not null)
            .Select(registration => new ToolFilteringAIContextProvider(
@@ -393,8 +432,8 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
            ? await this.chatClientAgent.DeserializeSessionAsync(
                restoredAgentSessionJson.ToJsonElement()
                    ?? throw new InvalidOperationException("Stored agent session JSON could not be read."),
-               cancellationToken: this.request.CancellationToken)
-           : await this.chatClientAgent.CreateSessionAsync(this.request.CancellationToken);
+               cancellationToken: initializationToken)
+           : await this.chatClientAgent.CreateSessionAsync(initializationToken);
 
        if (!string.IsNullOrWhiteSpace(this.request.AgentSessionId))
        {
@@ -465,7 +504,7 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
 
                if (!string.IsNullOrWhiteSpace(this.request.AgentSessionId))
                {
-                   await this.RestoreSubAgentsAsync(this.request.CancellationToken);
+                   await this.RestoreSubAgentsAsync(initializationToken);
                }
 
                // The session-init step is transient progress only: clear the running item without
@@ -1571,96 +1610,38 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
                 "for chats created through the factory; construct this chat through IAgentChatFactory " +
                 "or supply an explicit RunningAgentChatFactory in AgentServices.");
 
-        foreach (var childId in childIds)
-        {
-            var stub = new SubAgent(childId, factory);
-            lock (this.subAgentsLock)
-            {
-                this.subAgentTableMap[childId.Value] = stub;
-            }
-            // #1459: The observable-collection Add runs on the foreground scheduler, so it is
-            // fire-and-forget from the restore path's perspective. Track it under a lock (mirroring
-            // restoredSubAgentTerminalTasks) so callers can await restore completion deterministically;
-            // otherwise the Add can still be pending when a caller reads SubAgents.Count, observing 0.
-            var addTask = Task.Factory.StartNew(
-                () => this.subAgentItems.Add(stub),
-                CancellationToken.None,
-                TaskCreationOptions.DenyChildAttach,
-                this.foregroundScheduler);
-            lock (this.restoredSubAgentAddTasksLock)
-            {
-                this.restoredSubAgentAddTasks.Add(addTask);
-            }
+        var stubs = childIds.Select(childId => new SubAgent(childId, factory)).ToArray();
 
-            // #1128: A reloaded sub-agent's SDK run is no longer executing, so no terminal
-            // Complete/Fail event will ever arrive to move it out of the default Running
-            // state; the UI would otherwise show a perpetual pulsating brain / running
-            // marker. Materialise the child eagerly, hold the lease for the lifetime of the
-            // parent chat (so subsequent lease acquisitions — e.g. AgentViewModel's
-            // AddSubAgentSlotLazy — see the same AgentChat with the terminal override
-            // already applied), and force it Succeeded via SetCompletionState (which now
-            // raises CompletionStateChanged on the child's foreground scheduler).
-            var terminalTask = this.MarkRestoredSubAgentTerminalAsync(stub, cancellationToken);
-            lock (this.restoredSubAgentTerminalTasksLock)
+        cancellationToken.ThrowIfCancellationRequested();
+        foreach (var stub in stubs)
+        {
+            stub.SetRestoredCompletionState(AgentChatCompletionState.Succeeded);
+        }
+
+        lock (this.subAgentsLock)
+        {
+            foreach (var stub in stubs)
             {
-                this.restoredSubAgentTerminalTasks.Add(terminalTask);
+                this.subAgentTableMap[stub.SessionId.Value] = stub;
             }
         }
+
+        // RestoreSubAgentsAsync is invoked by RunSessionInitAsync on the foreground scheduler.
+        // Publish the complete prepared snapshot here rather than queuing detached Add operations:
+        // once AgentChat.CreateAsync completes, SubAgents is authoritative and no stale callback can
+        // mutate it after cancellation, disposal, or replacement.
+        foreach (var stub in stubs)
+        {
+            this.subAgentItems.Add(stub);
+        }
     }
-
-    private readonly List<Task> restoredSubAgentTerminalTasks = new();
-    private readonly object restoredSubAgentTerminalTasksLock = new();
-
-    private readonly List<Task> restoredSubAgentAddTasks = new();
-    private readonly object restoredSubAgentAddTasksLock = new();
 
     /// <summary>
-    /// Test-only: awaits completion of every fire-and-forget task queued by
-    /// <see cref="RestoreSubAgentsAsync"/> — both the "mark restored sub-agent terminal"
-    /// tasks (#1128) and the foreground-scheduler <c>subAgentItems.Add</c> tasks (#1459).
-    /// Enables deterministic verification of the restore transition (including that
-    /// <see cref="SubAgents"/> is fully populated) without polling.
+    /// Completes when initialization has atomically published the restored session and child-chat
+    /// state, or preserves the initialization failure/cancellation. Consumers that receive an
+    /// instance through the construction hook can use this as the lifecycle handshake.
     /// </summary>
-    internal Task WaitForRestoredSubAgentsMarkedTerminalAsync()
-    {
-        Task[] terminalTasks;
-        lock (this.restoredSubAgentTerminalTasksLock)
-        {
-            terminalTasks = this.restoredSubAgentTerminalTasks.ToArray();
-        }
-
-        Task[] addTasks;
-        lock (this.restoredSubAgentAddTasksLock)
-        {
-            addTasks = this.restoredSubAgentAddTasks.ToArray();
-        }
-
-        return Task.WhenAll(terminalTasks.Concat(addTasks));
-    }
-
-    private Task MarkRestoredSubAgentTerminalAsync(
-        SubAgent stub,
-        CancellationToken cancellationToken)
-    {
-        // #1186: Previously this method acquired a full lease on the child stub
-        // (SubAgent.AcquireLeaseAsync -> AgentChatFactory.GetAsync -> full
-        // AgentChat.CreateAsync -> AgentChat.InitializeAsync -> AgentFactory.CreateChatClientAsync)
-        // just to flip the terminal completion state. For hosted Copilot sub-agents whose
-        // persisted AgentDefinition was empty (Model == null), CreateChatClientAsync's
-        // null-model guard threw "Agent definition does not specify a model.", faulting
-        // the whole restore path and hanging the startup splash indefinitely.
-        //
-        // Restored sub-agents are receive-only stubs whose SDK run is long gone, so we do
-        // not need a real IChatClient or a validated model to represent their terminal
-        // state. Record the override on the stub itself; SubAgent.AcquireLeaseAsync applies
-        // it lazily when (and only when) a caller — e.g. AgentViewModel's
-        // AddSubAgentSlotLazy — actually needs the child materialised. In the meantime,
-        // IRunningSubAgent.CompletionState surfaces the restored state directly, so the
-        // pulsating-brain / running marker never appears for a reloaded terminal child.
-        _ = cancellationToken; // no I/O; nothing to cancel
-        stub.SetRestoredCompletionState(AgentChatCompletionState.Succeeded);
-        return Task.CompletedTask;
-    }
+    internal Task RestoreCompleted => this.restoreCompletion?.Task ?? Task.CompletedTask;
 
     private void LoadInitialHistory(IReadOnlyList<ChatMessage>? initialMessages)
     {
@@ -1687,6 +1668,11 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
             return;
         }
 
+        await this.DisposeCoreAsync(awaitRestoreCompletion: true);
+    }
+
+    private async Task DisposeCoreAsync(bool awaitRestoreCompletion)
+    {
         var failures = new List<Exception>();
         this.commonInputQueues.Dispose();
 
@@ -1698,6 +1684,20 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
         try
         {
             await this.cts.CancelAsync();
+        }
+        catch (Exception error)
+        {
+            failures.Add(error);
+        }
+        try
+        {
+            if (awaitRestoreCompletion && this.restoreCompletion is { } completion)
+            {
+                await completion.Task;
+            }
+        }
+        catch (OperationCanceledException)
+        {
         }
         catch (Exception error)
         {

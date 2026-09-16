@@ -48,10 +48,13 @@ public sealed class AgentChatResumeTests
     }
 
     private static async Task<AgentChat> CreateRestoredParentAsync(
-        InMemoryAgentPersistenceStore store,
+        IAgentPersistenceStore store,
         string parentSessionId,
         AgentServices? services = null,
-        TaskScheduler? foregroundScheduler = null)
+        TaskScheduler? foregroundScheduler = null,
+        Action<AgentChat>? onConstructed = null,
+        CancellationToken cancellationToken = default,
+        IReadOnlyList<IAsyncDisposable>? ownedResources = null)
     {
         var createTask = AgentChat.CreateAsync(new InternalCreateAgentChatRequest
         {
@@ -62,16 +65,9 @@ public sealed class AgentChatResumeTests
             DisplayNameOverride = "restored-parent",
             AgentServices = services,
             ForegroundScheduler = foregroundScheduler,
-        });
-
-        // Initialization now unconditionally dispatches session init onto the foreground scheduler
-        // and awaits it (issue #1100). A CapturingTaskScheduler only runs work when driven, so run
-        // the queued init task here to let creation complete; the restore-time sub-agent stub adds
-        // it queues stay pending for the test to drain and observe.
-        if (foregroundScheduler is CapturingTaskScheduler capturing)
-        {
-            capturing.RunPending();
-        }
+            CancellationToken = cancellationToken,
+            OwnedResources = ownedResources,
+        }, onConstructed);
 
         return await createTask;
     }
@@ -79,43 +75,11 @@ public sealed class AgentChatResumeTests
     private static AgentChatFactory CreateFactory(InMemoryAgentPersistenceStore store) =>
         new(store, new AgentServices { ChatClientOverride = new DeterministicTestChatClient() }, TaskScheduler.Default);
 
-    /// <summary>
-    /// A <see cref="TaskScheduler"/> that queues tasks without executing them until
-    /// <see cref="Drain"/> is called. Enables deterministic verification that mutations
-    /// are scheduled (not run inline) and provides explicit drain control.
-    /// </summary>
-    private sealed class CapturingTaskScheduler : TaskScheduler
+    private sealed class ObservingTaskScheduler : TaskScheduler
     {
-        private readonly List<Task> _queue = [];
-
-        public int QueuedCount => _queue.Count;
-
-        public void Drain()
-        {
-            while (_queue.Count > 0)
-            {
-                var tasks = _queue.ToList();
-                _queue.Clear();
-                foreach (var task in tasks)
-                    TryExecuteTask(task);
-            }
-        }
-
-        /// <summary>
-        /// Executes the tasks currently queued in a single pass, leaving any tasks they queue as a
-        /// side effect pending. Used to drive AgentChat initialization to completion without also
-        /// running the init-queued mutations, so the test retains control of when those run.
-        /// </summary>
-        public void RunPending()
-        {
-            var tasks = _queue.ToList();
-            _queue.Clear();
-            foreach (var task in tasks)
-                TryExecuteTask(task);
-        }
-
-        protected override IEnumerable<Task>? GetScheduledTasks() => _queue;
-        protected override void QueueTask(Task task) => _queue.Add(task);
+        protected override IEnumerable<Task>? GetScheduledTasks() => null;
+        protected override void QueueTask(Task task) =>
+            ThreadPool.QueueUserWorkItem(_ => TryExecuteTask(task));
         protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued) => false;
     }
 
@@ -126,12 +90,10 @@ public sealed class AgentChatResumeTests
         var parentSessionId = "parent-lazy";
         await StoreChildrenAsync(store, parentSessionId, 1);
 
-        var scheduler = new CapturingTaskScheduler();
         await using var factory = CreateFactory(store);
         var services = new AgentServices { RunningAgentChatFactory = factory };
 
-        await using var parent = await CreateRestoredParentAsync(store, parentSessionId, services, scheduler);
-        scheduler.Drain();
+        await using var parent = await CreateRestoredParentAsync(store, parentSessionId, services);
 
         var stub = Assert.IsType<SubAgent>(Assert.Single(parent.SubAgents));
         Assert.Null(stub.AgentChat);
@@ -144,12 +106,10 @@ public sealed class AgentChatResumeTests
         var parentSessionId = "parent-count";
         await StoreChildrenAsync(store, parentSessionId, 2);
 
-        var scheduler = new CapturingTaskScheduler();
         await using var factory = CreateFactory(store);
         var services = new AgentServices { RunningAgentChatFactory = factory };
 
-        await using var parent = await CreateRestoredParentAsync(store, parentSessionId, services, scheduler);
-        scheduler.Drain();
+        await using var parent = await CreateRestoredParentAsync(store, parentSessionId, services);
 
         Assert.Equal(2, parent.SubAgents.Count);
     }
@@ -161,12 +121,10 @@ public sealed class AgentChatResumeTests
         var parentSessionId = "parent-ids";
         var childIds = await StoreChildrenAsync(store, parentSessionId, 2);
 
-        var scheduler = new CapturingTaskScheduler();
         await using var factory = CreateFactory(store);
         var services = new AgentServices { RunningAgentChatFactory = factory };
 
-        await using var parent = await CreateRestoredParentAsync(store, parentSessionId, services, scheduler);
-        scheduler.Drain();
+        await using var parent = await CreateRestoredParentAsync(store, parentSessionId, services);
 
         var stubSessionIds = parent.SubAgents.Cast<SubAgent>().Select(s => s.SessionId.Value).ToList();
         Assert.Contains(childIds[0], stubSessionIds);
@@ -180,11 +138,10 @@ public sealed class AgentChatResumeTests
         var parentSessionId = "parent-nofactory";
         await StoreChildrenAsync(store, parentSessionId, 2);
 
-        var scheduler = new CapturingTaskScheduler();
         // No factory in services + persisted children => restore must throw.
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
         {
-            await using var parent = await CreateRestoredParentAsync(store, parentSessionId, services: null, scheduler);
+            await using var parent = await CreateRestoredParentAsync(store, parentSessionId, services: null);
         });
     }
 
@@ -195,12 +152,10 @@ public sealed class AgentChatResumeTests
         var parentSessionId = "parent-multi";
         var childIds = await StoreChildrenAsync(store, parentSessionId, 2);
 
-        var scheduler = new CapturingTaskScheduler();
         await using var factory = CreateFactory(store);
         var services = new AgentServices { RunningAgentChatFactory = factory };
 
-        await using var parent = await CreateRestoredParentAsync(store, parentSessionId, services, scheduler);
-        scheduler.Drain();
+        await using var parent = await CreateRestoredParentAsync(store, parentSessionId, services);
 
         var stubs = parent.SubAgents.Cast<SubAgent>().ToList();
 
@@ -219,18 +174,22 @@ public sealed class AgentChatResumeTests
         var parentSessionId = "parent-scheduler";
         await StoreChildrenAsync(store, parentSessionId, 1);
 
-        var scheduler = new CapturingTaskScheduler();
+        var scheduler = new ObservingTaskScheduler();
         await using var factory = CreateFactory(store);
         var services = new AgentServices { RunningAgentChatFactory = factory };
+        var addedOnForeground = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
 
-        await using var parent = await CreateRestoredParentAsync(store, parentSessionId, services, scheduler);
+        await using var parent = await CreateRestoredParentAsync(
+            store,
+            parentSessionId,
+            services,
+            scheduler,
+            chat => ((System.Collections.Specialized.INotifyCollectionChanged)chat.SubAgents)
+                .CollectionChanged += (_, _) =>
+                    addedOnForeground.TrySetResult(TaskScheduler.Current == scheduler));
 
-        // Before draining: stub is queued but not yet in SubAgents
-        Assert.Empty(parent.SubAgents);
-
-        scheduler.Drain();
-
-        // After draining: stub is present
+        Assert.True(await addedOnForeground.Task);
         Assert.Single(parent.SubAgents);
     }
 
@@ -248,7 +207,7 @@ public sealed class AgentChatResumeTests
         var services = new AgentServices { RunningAgentChatFactory = factory };
 
         await using var parent = await CreateRestoredParentAsync(store, parentSessionId, services);
-        await parent.WaitForRestoredSubAgentsMarkedTerminalAsync();
+        await parent.RestoreCompleted;
 
         var stubs = parent.SubAgents.Cast<SubAgent>().ToList();
         Assert.Equal(2, stubs.Count);
@@ -273,7 +232,7 @@ public sealed class AgentChatResumeTests
         var services = new AgentServices { RunningAgentChatFactory = factory };
 
         await using var parent = await CreateRestoredParentAsync(store, parentSessionId, services);
-        await parent.WaitForRestoredSubAgentsMarkedTerminalAsync();
+        await parent.RestoreCompleted;
 
         var stub = Assert.IsType<SubAgent>(Assert.Single(parent.SubAgents));
         await using var lease = await stub.AcquireLeaseAsync();
@@ -302,7 +261,7 @@ public sealed class AgentChatResumeTests
         var services = new AgentServices { RunningAgentChatFactory = factory };
 
         await using var parent = await CreateRestoredParentAsync(store, parentSessionId, services);
-        await parent.WaitForRestoredSubAgentsMarkedTerminalAsync();
+        await parent.RestoreCompleted;
 
         // All restored children must clear their running markers even if they persisted
         // as running (multiple persisted running sub-agents case from the issue).
@@ -327,7 +286,7 @@ public sealed class AgentChatResumeTests
         var services = new AgentServices { RunningAgentChatFactory = factory };
 
         await using var parent = await CreateRestoredParentAsync(store, parentSessionId, services);
-        await parent.WaitForRestoredSubAgentsMarkedTerminalAsync();
+        await parent.RestoreCompleted;
 
         Assert.Equal(AgentChatCompletionState.Running, parent.CompletionState);
     }
@@ -352,7 +311,7 @@ public sealed class AgentChatResumeTests
             AgentServices = services,
         });
 
-        await parent.WaitForRestoredSubAgentsMarkedTerminalAsync();
+        await parent.RestoreCompleted;
 
         // No sub-agents were persisted, so no restore-driven overrides fire.
         Assert.Empty(parent.SubAgents);
@@ -392,7 +351,7 @@ public sealed class AgentChatResumeTests
         var services = new AgentServices { RunningAgentChatFactory = factory };
 
         await using var parent = await CreateRestoredParentAsync(store, parentSessionId, services);
-        await parent.WaitForRestoredSubAgentsMarkedTerminalAsync();
+        await parent.RestoreCompleted;
 
         // Every restored sub-agent's materialised AgentChat.LastUpdatedAt must equal its
         // persisted timestamp, never the reload time.
@@ -430,7 +389,7 @@ public sealed class AgentChatResumeTests
         var services = new AgentServices { RunningAgentChatFactory = factory };
 
         await using var parent = await CreateRestoredParentAsync(store, parentSessionId, services);
-        await parent.WaitForRestoredSubAgentsMarkedTerminalAsync();
+        await parent.RestoreCompleted;
 
         var stub = Assert.IsType<SubAgent>(Assert.Single(parent.SubAgents));
         await using var lease = await stub.AcquireLeaseAsync();
@@ -467,15 +426,240 @@ public sealed class AgentChatResumeTests
         var services = new AgentServices { RunningAgentChatFactory = factory };
 
         await using var parent = await CreateRestoredParentAsync(store, parentSessionId, services);
-        await parent.WaitForRestoredSubAgentsMarkedTerminalAsync();
+        await parent.RestoreCompleted;
 
         foreach (var stub in parent.SubAgents.Cast<SubAgent>())
         {
-            await using var lease = await stub.AcquireLeaseAsync();
-            // #1128 preserved: still Succeeded after restore.
-            Assert.Equal(AgentChatCompletionState.Succeeded, lease.LocalAgentChat.CompletionState);
-            // #1140: timestamp preserved.
-            Assert.Equal(persistedTime, lease.LocalAgentChat.LastUpdatedAt);
+            var lease = await stub.AcquireLeaseAsync();
+            Assert.NotNull(lease);
+            var restoredChild = lease.LocalAgentChat;
+            Assert.NotNull(restoredChild);
+            await using (lease)
+            {
+                // #1128 preserved: still Succeeded after restore.
+                Assert.Equal(AgentChatCompletionState.Succeeded, restoredChild.CompletionState);
+                // #1140: timestamp preserved.
+                Assert.Equal(persistedTime, restoredChild.LastUpdatedAt);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task AgentChat_Resume_CreateCompletionPublishesCompleteSnapshotExactlyOnce()
+    {
+        var store = new InMemoryAgentPersistenceStore();
+        var parentSessionId = "parent-atomic-resume";
+        await StoreChildrenAsync(store, parentSessionId, 3);
+        await using var factory = CreateFactory(store);
+        var services = new AgentServices { RunningAgentChatFactory = factory };
+        AgentChat? observed = null;
+        var publications = 0;
+
+        await using var parent = await CreateRestoredParentAsync(
+            store,
+            parentSessionId,
+            services,
+            onConstructed: chat =>
+            {
+                observed = chat;
+                ((System.Collections.Specialized.INotifyCollectionChanged)chat.SubAgents)
+                    .CollectionChanged += (_, _) => Interlocked.Increment(ref publications);
+            });
+
+        var initializingChat = Assert.IsType<AgentChat>(observed);
+        Assert.Same(initializingChat.RestoreCompleted, initializingChat.RestoreCompleted);
+        await initializingChat.RestoreCompleted;
+        Assert.True(initializingChat.RestoreCompleted.IsCompletedSuccessfully);
+        Assert.Equal(3, publications);
+        Assert.Equal(3, parent.SubAgents.Count);
+    }
+
+    [Fact]
+    public async Task AgentChat_Resume_FailurePreservesOriginalExceptionInReadinessSignal()
+    {
+        var expected = new ResumeTestException("child-link read failed");
+        var store = new ControlledChildReadStore(new InMemoryAgentPersistenceStore(), failure: expected);
+        var resource = new TrackingAsyncDisposable();
+        AgentChat? observed = null;
+
+        var creation = CreateRestoredParentAsync(
+            store,
+            "parent-failed-resume",
+            onConstructed: chat => observed = chat,
+            ownedResources: [resource]);
+
+        var creationError = await Assert.ThrowsAsync<ResumeTestException>(() => creation);
+        var initializingChat = Assert.IsType<AgentChat>(observed);
+        var readinessError = await Assert.ThrowsAsync<ResumeTestException>(
+            () => initializingChat.RestoreCompleted);
+
+        Assert.Same(expected, creationError);
+        Assert.Same(expected, readinessError);
+        Assert.Empty(initializingChat.SubAgents);
+        Assert.Equal(1, resource.DisposeCount);
+    }
+
+    [Fact]
+    public async Task AgentChat_Resume_CancellationPublishesCancellationWithoutPartialState()
+    {
+        var inner = new InMemoryAgentPersistenceStore();
+        await StoreChildrenAsync(inner, "parent-cancelled-resume", 2);
+        var store = new ControlledChildReadStore(inner, block: true);
+        using var cancellation = new CancellationTokenSource();
+        AgentChat? observed = null;
+
+        var creation = CreateRestoredParentAsync(
+            store,
+            "parent-cancelled-resume",
+            onConstructed: chat => observed = chat,
+            cancellationToken: cancellation.Token);
+        await store.ReadStarted;
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => creation);
+        var initializingChat = Assert.IsType<AgentChat>(observed);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => initializingChat.RestoreCompleted);
+        Assert.Empty(initializingChat.SubAgents);
+    }
+
+    [Fact]
+    public async Task AgentChat_Resume_DisposalDuringReadCancelsAndDrainsInitialization()
+    {
+        var inner = new InMemoryAgentPersistenceStore();
+        await StoreChildrenAsync(inner, "parent-disposed-resume", 2);
+        var store = new ControlledChildReadStore(inner, block: true);
+        AgentChat? observed = null;
+
+        var creation = CreateRestoredParentAsync(
+            store,
+            "parent-disposed-resume",
+            onConstructed: chat => observed = chat);
+        await store.ReadStarted;
+        var initializingChat = Assert.IsType<AgentChat>(observed);
+
+        var disposal = initializingChat.DisposeAsync().AsTask();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => creation);
+        await disposal;
+        Assert.True(store.CancellationObserved);
+        Assert.True(initializingChat.RestoreCompleted.IsCanceled);
+        Assert.Empty(initializingChat.SubAgents);
+    }
+
+    [Fact]
+    public async Task AgentChat_Resume_RecreatedSessionCannotReceiveStalePublication()
+    {
+        var store = new InMemoryAgentPersistenceStore();
+        const string parentSessionId = "parent-recreated-resume";
+        await StoreChildrenAsync(store, parentSessionId, 2);
+        await using var factory = CreateFactory(store);
+        var services = new AgentServices { RunningAgentChatFactory = factory };
+
+        var first = await CreateRestoredParentAsync(store, parentSessionId, services);
+        await first.DisposeAsync();
+        var firstSnapshot = first.SubAgents.ToArray();
+
+        await using var replacement = await CreateRestoredParentAsync(store, parentSessionId, services);
+        await replacement.RestoreCompleted;
+
+        Assert.Equal(2, firstSnapshot.Length);
+        Assert.Equal(firstSnapshot, first.SubAgents);
+        Assert.Equal(2, replacement.SubAgents.Count);
+        Assert.DoesNotContain(replacement.SubAgents, firstSnapshot.Contains);
+    }
+
+    [Fact]
+    public async Task AgentChat_Resume_ConcurrentSessionsHaveIndependentReadiness()
+    {
+        var store = new InMemoryAgentPersistenceStore();
+        await StoreChildrenAsync(store, "parent-concurrent-a", 1);
+        await StoreChildrenAsync(store, "parent-concurrent-b", 2);
+        await using var factory = CreateFactory(store);
+        var services = new AgentServices { RunningAgentChatFactory = factory };
+
+        var firstCreation = CreateRestoredParentAsync(store, "parent-concurrent-a", services);
+        var secondCreation = CreateRestoredParentAsync(store, "parent-concurrent-b", services);
+        var parents = await Task.WhenAll(firstCreation, secondCreation);
+        await using var first = parents[0];
+        await using var second = parents[1];
+
+        await Task.WhenAll(first.RestoreCompleted, second.RestoreCompleted);
+        Assert.Single(first.SubAgents);
+        Assert.Equal(2, second.SubAgents.Count);
+        Assert.All(first.SubAgents, item => Assert.StartsWith("resume-child-", item.AgentId));
+        Assert.All(second.SubAgents, item => Assert.StartsWith("resume-child-", item.AgentId));
+    }
+
+    private sealed class ResumeTestException(string message) : Exception(message);
+
+    private sealed class TrackingAsyncDisposable : IAsyncDisposable
+    {
+        internal int DisposeCount { get; private set; }
+
+        public ValueTask DisposeAsync()
+        {
+            this.DisposeCount++;
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class ControlledChildReadStore(
+        IAgentPersistenceStore inner,
+        bool block = false,
+        Exception? failure = null) : IAgentPersistenceStore
+    {
+        private readonly TaskCompletionSource readStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource releaseRead =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal Task ReadStarted => this.readStarted.Task;
+        internal bool CancellationObserved { get; private set; }
+
+        public ValueTask StoreAsync(StoreRequestAgent request, CancellationToken cancellationToken = default)
+            => inner.StoreAsync(request, cancellationToken);
+
+        public ValueTask<PersistedAgent?> RestoreAsync(
+            RestoreRequest request,
+            CancellationToken cancellationToken = default)
+            => inner.RestoreAsync(request, cancellationToken);
+
+        public ValueTask<Microsoft.Extensions.AI.ChatMessage[]> ReadMessagesAsync(
+            ReadMessagesRequest request,
+            CancellationToken cancellationToken = default)
+            => inner.ReadMessagesAsync(request, cancellationToken);
+
+        public ValueTask AddSubAgentLinkAsync(
+            string parentSessionId,
+            string childSessionId,
+            CancellationToken cancellationToken = default)
+            => inner.AddSubAgentLinkAsync(parentSessionId, childSessionId, cancellationToken);
+
+        public async ValueTask<IReadOnlyList<AgentSessionId>> ReadSubAgentChildIdsAsync(
+            string parentSessionId,
+            CancellationToken cancellationToken = default)
+        {
+            this.readStarted.TrySetResult();
+            if (block)
+            {
+                try
+                {
+                    await this.releaseRead.Task.WaitAsync(cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    this.CancellationObserved = true;
+                    throw;
+                }
+            }
+
+            if (failure is not null)
+            {
+                throw failure;
+            }
+
+            return await inner.ReadSubAgentChildIdsAsync(parentSessionId, cancellationToken);
         }
     }
 }
