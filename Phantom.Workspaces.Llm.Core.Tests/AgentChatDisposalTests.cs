@@ -25,18 +25,19 @@ public sealed class AgentChatDisposalTests
     }
 
     [Fact]
-    public async Task AgentChat_Dispose_CancelsProcessLoop()
+    public async Task AgentChat_Dispose_WithFrozenDomainTime_CancelsWhenDisposalTimeoutExpires()
     {
-        // The process loop is in the middle of an LLM call (waiting for a response that will
-        // never arrive). Disposal must cancel the in-progress run and complete promptly.
         var client = new DeterministicTestChatClient();
-        var timeProvider = new FakeTimeProvider();
+        var frozenDomainTime = new FakeTimeProvider();
+        var disposalTime = new FakeTimeProvider();
         var agent = AgentDefinitionLoader.LoadAgentFromJson(EchoAgentJson);
-        var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+        var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
         {
             AgentDefinition = agent,
-            AgentServices = new AgentServices { ChatClientOverride = client },
-            TimeProvider = timeProvider,
+            ConfiguredStore = new InMemoryAgentPersistenceStore(),
+            ClientOverride = client,
+            TimeProvider = frozenDomainTime,
+            DisposalTimeProvider = disposalTime,
         });
 
         chat.EnqueueUserMessage("hello");
@@ -45,9 +46,21 @@ public sealed class AgentChatDisposalTests
         var disposal = chat.DisposeAsync().AsTask();
         Assert.False(disposal.IsCompleted);
 
-        timeProvider.Advance(AgentChat.DisposeDrainTimeout);
+        disposalTime.Advance(AgentChat.DisposeDrainTimeout);
 
         await disposal;
+    }
+
+    [Fact]
+    public void InternalCreateAgentChatRequest_DisposalTimeProvider_DefaultsToSystemTime()
+    {
+        var request = new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(EchoAgentJson),
+            ConfiguredStore = new InMemoryAgentPersistenceStore(),
+        };
+
+        Assert.Same(TimeProvider.System, request.DisposalTimeProvider);
     }
 
 

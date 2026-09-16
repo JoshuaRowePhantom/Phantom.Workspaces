@@ -46,6 +46,7 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
     private readonly object sessionLock = new();
     private readonly InternalCreateAgentChatRequest request;
     private readonly TimeProvider timeProvider;
+    private readonly TimeProvider disposalTimeProvider;
     private readonly ILogger logger;
     private AgentChatSession? session;
     private AgentDefinition? agentDefinition;
@@ -167,6 +168,7 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
        VerifyOnForegroundContext(request.ForegroundScheduler);
        this.request = request;
        this.timeProvider = request.TimeProvider;
+        this.disposalTimeProvider = request.DisposalTimeProvider;
         this.logger = request.AgentServices?.LoggerFactory?.CreateLogger<AgentChat>()
             ?? (ILogger)NullLogger<AgentChat>.Instance;
         this.lastUpdatedAt = this.timeProvider.GetUtcNow().UtcDateTime;
@@ -1494,6 +1496,7 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
                 ForegroundScheduler = this.foregroundScheduler,
                 CancellationToken = cancellationToken,
                 TimeProvider = this.timeProvider,
+                DisposalTimeProvider = this.disposalTimeProvider,
             }),
             cancellationToken,
             TaskCreationOptions.DenyChildAttach,
@@ -1756,7 +1759,7 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
         {
             try
             {
-                await activeTurn.WaitAsync(DisposeDrainTimeout, this.timeProvider);
+                await activeTurn.WaitAsync(DisposeDrainTimeout, this.disposalTimeProvider);
             }
             catch (TimeoutException)
             {

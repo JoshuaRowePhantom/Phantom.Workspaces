@@ -1,5 +1,6 @@
 using AgentSchema;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
 using Phantom.Workspaces.Llm.Interfaces;
 
@@ -154,6 +155,8 @@ public class AgentChatPersistenceIntegrationTests
     {
         var store = new InMemoryAgentPersistenceStore();
         var client = new DeterministicTestChatClient();
+        var frozenDomainTime = new FakeTimeProvider();
+        var frozenDisposalTime = new FakeTimeProvider();
         var stream = client.EnqueueStreamingResponse();
         stream.EnqueueUpdate(
             new ChatResponseUpdate
@@ -182,6 +185,8 @@ public class AgentChatPersistenceIntegrationTests
             ConfiguredStore = store,
             ClientOverride = client,
             DisplayNameOverride = "test",
+            TimeProvider = frozenDomainTime,
+            DisposalTimeProvider = frozenDisposalTime,
         });
         chat.EnqueueUserMessage("hi");
         await terminal.WaitForClaimedAsync();
@@ -195,9 +200,12 @@ public class AgentChatPersistenceIntegrationTests
         var messages = await store.ReadMessagesAsync(
             new ReadMessagesRequest { AgentSessionId = chat.AgentSessionId },
             CancellationToken.None);
-        Assert.Contains(messages, message =>
-            message.Contents.OfType<FunctionResultContent>()
-                .Any(result => result.CallId == "call-shell-1"));
+        var finalResult = Assert.Single(
+            messages
+                .SelectMany(message => message.Contents)
+                .OfType<FunctionResultContent>(),
+            result => result.CallId == "call-shell-1");
+        Assert.Equal("shell-ok", finalResult.Result);
     }
 
     [Fact]

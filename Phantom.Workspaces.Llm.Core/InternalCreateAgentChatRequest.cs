@@ -55,6 +55,13 @@ internal sealed record InternalCreateAgentChatRequest
     public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
 
     /// <summary>
+    /// The time source for bounded lifecycle safety waits. This is intentionally independent of
+    /// <see cref="TimeProvider"/>, which callers may freeze to control domain timestamps. The
+    /// production default uses real elapsed time so shutdown cannot be blocked by a frozen clock.
+    /// </summary>
+    public TimeProvider DisposalTimeProvider { get; init; } = TimeProvider.System;
+
+    /// <summary>
     /// When set, overrides the <c>UseProvidedChatClientAsIs</c> value that would otherwise be
     /// resolved from <see cref="ClientOverride"/> and the client's
     /// <see cref="ISelfInvokingToolChatClient"/> status.  Used in tests to exercise the
