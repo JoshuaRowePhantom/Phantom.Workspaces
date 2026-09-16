@@ -19,7 +19,7 @@ public sealed class GitWorkspaceUpdateToolTests
     private static async Task<IDataAccessLayer> CreateProductionStyleDataAccessLayerAsync()
     {
         var underlying = new InMemoryDataAccessLayer();
-        var dal = new SchemaValidatingDataAccessLayer(new ReferentialIntegrityDataAccessLayer(underlying));
+        var dal = ValidatedDataAccessLayerFactory.Create(underlying);
         var errors = await new SchemaPopulator(dal).Populate();
         Assert.Empty(errors);
         return dal;

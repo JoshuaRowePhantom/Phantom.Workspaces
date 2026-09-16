@@ -500,7 +500,7 @@ public sealed class SchemaAccessorTests
     private static async Task<IDataAccessLayer> CreatePopulatedDataAccessLayerAsync()
     {
         var underlying = new InMemoryDataAccessLayer();
-        var dataAccessLayer = new SchemaValidatingDataAccessLayer(new ReferentialIntegrityDataAccessLayer(underlying));
+        var dataAccessLayer = ValidatedDataAccessLayerFactory.Create(underlying);
         var populator = new SchemaPopulator(dataAccessLayer);
         var errors = await populator.Populate();
         Assert.Empty(errors);
@@ -553,4 +553,3 @@ public sealed class SchemaAccessorTests
         };
     }
 }
-

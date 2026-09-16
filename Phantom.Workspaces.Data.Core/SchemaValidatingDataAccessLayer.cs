@@ -20,14 +20,24 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
     private static readonly IReadOnlySet<string> EmptyEntityTypeNames = new HashSet<string>(StringComparer.Ordinal);
 
     private readonly SchemaAccessor _schemaAccessor;
+    private readonly Action<SchemaValidationPass>? _validationPassStarted;
     private IReadOnlySet<string>? _cachedRegisteredEntityTypeNames;
 
     public SchemaValidatingDataAccessLayer(
         IDataAccessLayer underlyingDataAccessLayer,
         SchemaAccessor schemaAccessor)
+        : this(underlyingDataAccessLayer, schemaAccessor, validationPassStarted: null)
+    {
+    }
+
+    internal SchemaValidatingDataAccessLayer(
+        IDataAccessLayer underlyingDataAccessLayer,
+        SchemaAccessor schemaAccessor,
+        Action<SchemaValidationPass>? validationPassStarted)
         : base(underlyingDataAccessLayer)
     {
         _schemaAccessor = schemaAccessor;
+        _validationPassStarted = validationPassStarted;
     }
 
     public SchemaValidatingDataAccessLayer(IDataAccessLayer underlyingDataAccessLayer)
@@ -39,6 +49,12 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         UpdateRequest request,
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        _validationPassStarted?.Invoke(
+            new SchemaValidationPass(
+                request.UpdateMetadata.ValidationPassKind,
+                request.Changes.Count));
+
         var validationResults = new List<EntityUpdateResult>();
         var requestHasSchemas = request.Changes.Any(change => change.Data is { ValueKind: JsonValueKind.Object } data && this.IsSchemaEntity(data));
 

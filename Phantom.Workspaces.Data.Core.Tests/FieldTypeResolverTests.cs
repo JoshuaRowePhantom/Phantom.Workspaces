@@ -114,7 +114,7 @@ public sealed class FieldTypeResolverTests
     private static async Task<IDataAccessLayer> CreatePopulatedDataAccessLayerAsync()
     {
         var underlying = new InMemoryDataAccessLayer();
-        var dataAccessLayer = new SchemaValidatingDataAccessLayer(new ReferentialIntegrityDataAccessLayer(underlying));
+        var dataAccessLayer = ValidatedDataAccessLayerFactory.Create(underlying);
         var populator = new SchemaPopulator(dataAccessLayer);
         var errors = await populator.Populate();
         Assert.Empty(errors);
@@ -140,4 +140,3 @@ public sealed class FieldTypeResolverTests
                     && name.EnumerateArray().Select(static part => part.GetString()).SequenceEqual(nameComponents)));
     }
 }
-

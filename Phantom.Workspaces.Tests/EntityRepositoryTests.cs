@@ -1,4 +1,5 @@
 using Avalonia.Headless.XUnit;
+using System.Collections.Concurrent;
 using System.Text.Json;
 using Phantom.Workspaces.Data;
 
@@ -8,6 +9,71 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityRepositoryTests
 {
+    [AvaloniaFact]
+    public async Task CreateAsync_InMemoryEagerStartup_ValidatesEmbeddedSeedExactlyOnce()
+    {
+        var validationPasses = new ConcurrentQueue<SchemaValidationPass>();
+
+        await EntityRepository.CreateAsync(
+            new EntityRepositoryInitializationOptions
+            {
+                RepositorySource = new UnknownRepositorySource(),
+                ValidationPassStarted = validationPasses.Enqueue,
+            },
+            TestContext.Current.CancellationToken);
+
+        var seedPass = Assert.Single(
+            validationPasses,
+            static pass => pass.Kind == SchemaValidationPassKind.TrustedEmbeddedSeed);
+        Assert.True(seedPass.ChangeCount > 100);
+    }
+
+    [AvaloniaFact]
+    public async Task CreateAsync_ConcurrentInMemoryInstances_ValidateSeedsIndependently()
+    {
+        var firstPasses = new ConcurrentQueue<SchemaValidationPass>();
+        var secondPasses = new ConcurrentQueue<SchemaValidationPass>();
+
+        var repositories = await Task.WhenAll(
+            EntityRepository.CreateAsync(
+                new EntityRepositoryInitializationOptions
+                {
+                    RepositorySource = new UnknownRepositorySource(),
+                    ValidationPassStarted = firstPasses.Enqueue,
+                },
+                TestContext.Current.CancellationToken),
+            EntityRepository.CreateAsync(
+                new EntityRepositoryInitializationOptions
+                {
+                    RepositorySource = new UnknownRepositorySource(),
+                    ValidationPassStarted = secondPasses.Enqueue,
+                },
+                TestContext.Current.CancellationToken));
+
+        Assert.NotSame(repositories[0], repositories[1]);
+        Assert.Single(firstPasses, static pass => pass.Kind == SchemaValidationPassKind.TrustedEmbeddedSeed);
+        Assert.Single(secondPasses, static pass => pass.Kind == SchemaValidationPassKind.TrustedEmbeddedSeed);
+    }
+
+    [AvaloniaFact]
+    public async Task CreateAsync_PreCancelled_DoesNotStartSeedValidation()
+    {
+        var validationPasses = new ConcurrentQueue<SchemaValidationPass>();
+        using var cancellationSource = new CancellationTokenSource();
+        await cancellationSource.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => EntityRepository.CreateAsync(
+                new EntityRepositoryInitializationOptions
+                {
+                    RepositorySource = new UnknownRepositorySource(),
+                    ValidationPassStarted = validationPasses.Enqueue,
+                },
+                cancellationSource.Token));
+
+        Assert.Empty(validationPasses);
+    }
+
     [AvaloniaFact]
     public async Task TryGetEntityByName_FindsSeededMainView()
     {

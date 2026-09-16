@@ -44,7 +44,24 @@ public sealed class EntityRepository
         RepositorySource repositorySource,
         string? userComputerProfileOverride = null)
     {
-        var underlyingDataAccessLayer = await CreateUnderlyingDataAccessLayerAsync(repositorySource).ConfigureAwait(false);
+        return await CreateAsync(
+            new EntityRepositoryInitializationOptions
+            {
+                RepositorySource = repositorySource,
+                UserComputerProfileOverride = userComputerProfileOverride,
+            },
+            CancellationToken.None).ConfigureAwait(false);
+    }
+
+    internal static async Task<EntityRepository> CreateAsync(
+        EntityRepositoryInitializationOptions options,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var repositorySource = options.RepositorySource;
+        var underlyingDataAccessLayer = await CreateUnderlyingDataAccessLayerAsync(repositorySource, cancellationToken).ConfigureAwait(false);
         var isWebSource = repositorySource is WebRepositorySource or DevTunnelNameRepositorySource;
         IDataAccessLayer innerDataAccessLayer;
         if (isWebSource)
@@ -53,11 +70,9 @@ public sealed class EntityRepository
         }
         else
         {
-            var schemaAccessor = new SchemaAccessor(underlyingDataAccessLayer);
-            innerDataAccessLayer = new MergeProcessingDataAccessLayer(
-                new ReferentialIntegrityDataAccessLayer(
-                    new SchemaValidatingDataAccessLayer(underlyingDataAccessLayer, schemaAccessor),
-                    schemaAccessor));
+            innerDataAccessLayer = ValidatedDataAccessLayerFactory.Create(
+                underlyingDataAccessLayer,
+                options.ValidationPassStarted);
         }
         if (!isWebSource)
         {
@@ -68,22 +83,27 @@ public sealed class EntityRepository
                 await mongoDbDataAccessLayer.MigrateAsync().ConfigureAwait(false);
             }
 
-            await EnsureSeedDataIfNeededAsync(innerDataAccessLayer).ConfigureAwait(false);
+            await EnsureSeedDataIfNeededAsync(innerDataAccessLayer, cancellationToken).ConfigureAwait(false);
         }
 
         var coreDataAccessLayer = new ScheduleDataAccessLayer(innerDataAccessLayer);
-        var workspaceEntitySession = await WorkspaceEntitySessionBootstrapper.InitializeAsync(coreDataAccessLayer, userComputerProfileOverride).ConfigureAwait(false);
+        var workspaceEntitySession = await WorkspaceEntitySessionBootstrapper.InitializeAsync(
+            coreDataAccessLayer,
+            options.UserComputerProfileOverride,
+            cancellationToken).ConfigureAwait(false);
         var repository = new EntityRepository(repositorySource, coreDataAccessLayer, workspaceEntitySession);
         return repository;
     }
 
     private static async Task<IDataAccessLayer> CreateUnderlyingDataAccessLayerAsync(
-        RepositorySource repositorySource)
+        RepositorySource repositorySource,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         return repositorySource switch
         {
             WebRepositorySource web => CreateWebDataAccessLayer(web),
-            DevTunnelNameRepositorySource devTunnel => await CreateDevTunnelNameDataAccessLayerAsync(devTunnel).ConfigureAwait(false),
+            DevTunnelNameRepositorySource devTunnel => await CreateDevTunnelNameDataAccessLayerAsync(devTunnel, cancellationToken).ConfigureAwait(false),
             LocalGitRepositorySource git => new GitDataAccessLayer(git.Path),
             MongoDbRepositorySource mongo => await CreateMongoDbDataAccessLayerAsync(mongo).ConfigureAwait(false),
             _ => new InMemoryDataAccessLayer(),
@@ -122,7 +142,8 @@ public sealed class EntityRepository
     }
 
     private static async Task<IDataAccessLayer> CreateDevTunnelNameDataAccessLayerAsync(
-        DevTunnelNameRepositorySource repositorySource)
+        DevTunnelNameRepositorySource repositorySource,
+        CancellationToken cancellationToken)
     {
         // Discover the relay endpoint (and forwarded port) from the tunnel name, and keep it fresh:
         // on a connection DROP the reconnecting layer re-resolves the tunnel (picking up a changed
@@ -160,7 +181,7 @@ public sealed class EntityRepository
             },
             delayScheduler: Services.DevTunnel.RealDelayScheduler.Instance);
 
-        await reconnectingDataAccessLayer.StartAsync().ConfigureAwait(false);
+        await reconnectingDataAccessLayer.StartAsync(cancellationToken).ConfigureAwait(false);
         return reconnectingDataAccessLayer;
     }
 
@@ -202,9 +223,10 @@ public sealed class EntityRepository
     }
 
     private static async Task EnsureSeedDataIfNeededAsync(
-        IDataAccessLayer dataAccessLayer)
+        IDataAccessLayer dataAccessLayer,
+        CancellationToken cancellationToken)
     {
-        var errors = await new SchemaPopulator(dataAccessLayer).Populate();
+        var errors = await new SchemaPopulator(dataAccessLayer).PopulateAsync(cancellationToken);
         if (errors.Count == 0)
         {
             return;

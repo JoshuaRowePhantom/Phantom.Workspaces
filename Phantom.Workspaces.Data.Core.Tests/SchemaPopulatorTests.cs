@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Json.Schema;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
 
@@ -9,6 +10,207 @@ namespace Phantom.Workspaces.Data.Tests;
 #pragma warning disable CS0618
 public sealed class SchemaPopulatorTests
 {
+    [Fact]
+    public async Task Populate_ValidatedPipeline_PerformsExactlyOneTrustedSeedValidationPass()
+    {
+        var validationPasses = new List<SchemaValidationPass>();
+        var dataAccessLayer = ValidatedDataAccessLayerFactory.Create(
+            new InMemoryDataAccessLayer(),
+            validationPasses.Add);
+
+        var errors = await new SchemaPopulator(dataAccessLayer).Populate();
+
+        Assert.Empty(errors);
+        var seedPass = Assert.Single(
+            validationPasses,
+            static pass => pass.Kind == SchemaValidationPassKind.TrustedEmbeddedSeed);
+        Assert.Equal(validationPasses.Count, validationPasses.Distinct().Count());
+        Assert.True(seedPass.ChangeCount > 100);
+    }
+
+    [Fact]
+    public async Task ValidatedPipeline_MalformedExternalUpdate_ValidatesOnceAndDoesNotPublish()
+    {
+        var store = new InMemoryDataAccessLayer();
+        var validationPasses = new List<SchemaValidationPass>();
+        var dataAccessLayer = ValidatedDataAccessLayerFactory.Create(store, validationPasses.Add);
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "177b3dbe-82b1-4c21-b9d9-6b010a54d0f1",
+              "entity-types": ["not-a-registered-entity-type"]
+            }
+            """);
+
+        var result = await dataAccessLayer.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown { Text = "Malformed external update." },
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = new EntityId("177b3dbe-82b1-4c21-b9d9-6b010a54d0f1"),
+                        EntityChangeMode = EntityChangeMode.Replace,
+                        Data = document.RootElement.Clone(),
+                    },
+                ],
+            });
+
+        Assert.Contains(result.EntityResults, static entity => entity.Errors.Count > 0);
+        Assert.Single(validationPasses, static pass => pass.Kind == SchemaValidationPassKind.ExternalUpdate);
+        var export = await store.ExportAsync(new ExportRequest());
+        Assert.DoesNotContain(
+            export.ChangeBatches.SelectMany(static batch => batch.Entities),
+            static entity => entity.EntityId == new EntityId("177b3dbe-82b1-4c21-b9d9-6b010a54d0f1"));
+    }
+
+    [Fact]
+    public async Task ValidatedPipeline_MalformedTrustedSeed_ValidatesOnceAndDoesNotPublish()
+    {
+        var store = new InMemoryDataAccessLayer();
+        var validationPasses = new List<SchemaValidationPass>();
+        var dataAccessLayer = ValidatedDataAccessLayerFactory.Create(store, validationPasses.Add);
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "68e9fc24-6819-4d63-ab3b-80dce902ea18",
+              "entity-types": ["not-a-registered-entity-type"]
+            }
+            """);
+
+        var result = await dataAccessLayer.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown { Text = "Malformed trusted embedded seed." },
+                    ValidationPassKind = SchemaValidationPassKind.TrustedEmbeddedSeed,
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = new EntityId("68e9fc24-6819-4d63-ab3b-80dce902ea18"),
+                        EntityChangeMode = EntityChangeMode.Replace,
+                        Data = document.RootElement.Clone(),
+                    },
+                ],
+            });
+
+        Assert.Contains(result.EntityResults, static entity => entity.Errors.Count > 0);
+        Assert.Single(validationPasses, static pass => pass.Kind == SchemaValidationPassKind.TrustedEmbeddedSeed);
+        var export = await store.ExportAsync(new ExportRequest());
+        Assert.DoesNotContain(
+            export.ChangeBatches.SelectMany(static batch => batch.Entities),
+            static entity => entity.EntityId == new EntityId("68e9fc24-6819-4d63-ab3b-80dce902ea18"));
+    }
+
+    [Fact]
+    public async Task ValidatedPipeline_DisposedSourceDocument_ExternalUpdateValidatesOnce()
+    {
+        var store = new InMemoryDataAccessLayer();
+        var validationPasses = new List<SchemaValidationPass>();
+        var dataAccessLayer = ValidatedDataAccessLayerFactory.Create(store, validationPasses.Add);
+        Assert.Empty(await new SchemaPopulator(dataAccessLayer).Populate());
+        var export = await store.ExportAsync(new ExportRequest());
+        var snapshot = export.ChangeBatches
+            .SelectMany(static batch => batch.Entities)
+            .First(static entity => entity.Data is not null && entity.ConcurrencyTag is not null);
+        JsonElement detachedData;
+        using (var sourceDocument = JsonDocument.Parse(snapshot.Data!.Value.GetRawText()))
+        {
+            detachedData = sourceDocument.RootElement.Clone();
+        }
+
+        var result = await dataAccessLayer.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown { Text = "External update from detached data." },
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = snapshot.EntityId,
+                        ConcurrencyTag = snapshot.ConcurrencyTag,
+                        EntityChangeMode = EntityChangeMode.Replace,
+                        Data = detachedData,
+                    },
+                ],
+            });
+
+        Assert.DoesNotContain(result.EntityResults, static entity => entity.Errors.Count > 0);
+        Assert.Single(validationPasses, static pass => pass.Kind == SchemaValidationPassKind.TrustedEmbeddedSeed);
+        Assert.Single(validationPasses, static pass => pass.Kind == SchemaValidationPassKind.ExternalUpdate);
+    }
+
+    [Fact]
+    public async Task Populate_PreCancelled_DoesNotEnterValidationOrPublishSeed()
+    {
+        var store = new InMemoryDataAccessLayer();
+        var validationPasses = new List<SchemaValidationPass>();
+        var dataAccessLayer = ValidatedDataAccessLayerFactory.Create(store, validationPasses.Add);
+        using var cancellationSource = new CancellationTokenSource();
+        await cancellationSource.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => new SchemaPopulator(dataAccessLayer).PopulateAsync(cancellationSource.Token));
+
+        Assert.Empty(validationPasses);
+        var export = await store.ExportAsync(new ExportRequest());
+        Assert.Empty(export.ChangeBatches.SelectMany(static batch => batch.Entities));
+    }
+
+    [Fact]
+    public void EmbeddedSchemas_EveryResource_ParsesAndPassesDraft202012MetaSchemaValidation()
+    {
+        var assembly = typeof(SchemaPopulator).Assembly;
+        var resources = assembly.GetManifestResourceNames()
+            .Where(static name => name.StartsWith("Phantom.Workspaces.Data.JsonSchemas.", StringComparison.Ordinal))
+            .Where(static name => name.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(static name => name, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Contains(
+            resources,
+            static name => name.EndsWith(".ancestor.json", StringComparison.Ordinal));
+
+        var schemaRegistry = new SchemaRegistry();
+        var schemas = new List<(string ResourceName, JsonElement Data)>();
+        foreach (var resourceName in resources)
+        {
+            using var stream = assembly.GetManifestResourceStream(resourceName);
+            Assert.NotNull(stream);
+            using var document = JsonDocument.Parse(stream!);
+            var data = document.RootElement.Clone();
+            schemas.Add((resourceName, data));
+            _ = JsonSchema.FromText(
+                data.GetRawText(),
+                new BuildOptions
+                {
+                    SchemaRegistry = schemaRegistry,
+                    Dialect = WorkspacesSchemaDialect.AllowingUnknownKeywords,
+                });
+        }
+
+        foreach (var (resourceName, data) in schemas)
+        {
+            var result = MetaSchemas.Draft202012.Evaluate(
+                data,
+                new EvaluationOptions
+                {
+                    OutputFormat = OutputFormat.Hierarchical,
+                    PreserveDroppedAnnotations = true,
+                });
+            Assert.True(result.IsValid, $"{resourceName}: {result}");
+        }
+    }
+
     [Fact]
     public async Task Populate_LoadsEmbeddedEntities_IntoInMemoryStore()
     {
@@ -1136,8 +1338,7 @@ public sealed class SchemaPopulatorTests
     private static IDataAccessLayer CreateValidatedDataAccessLayer(
         IDataAccessLayer underlyingDataAccessLayer)
     {
-        return new SchemaValidatingDataAccessLayer(
-            new ReferentialIntegrityDataAccessLayer(underlyingDataAccessLayer));
+        return ValidatedDataAccessLayerFactory.Create(underlyingDataAccessLayer);
     }
 
     [Fact]

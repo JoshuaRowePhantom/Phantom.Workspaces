@@ -135,8 +135,7 @@ public sealed class AzureDevOpsEntitySchemaTests
     private static async Task<IReadOnlyCollection<string[]>> GetSeededNamesAsync()
     {
         var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
-        var validatedDataAccessLayer = new SchemaValidatingDataAccessLayer(
-            new ReferentialIntegrityDataAccessLayer(inMemoryDataAccessLayer));
+        var validatedDataAccessLayer = ValidatedDataAccessLayerFactory.Create(inMemoryDataAccessLayer);
         var schemaPopulator = new SchemaPopulator(validatedDataAccessLayer);
 
         var errors = await schemaPopulator.Populate();

@@ -8,7 +8,7 @@ public sealed class EntitySchemaComposerTests
     private static async Task<SchemaValidatingDataAccessLayer> CreatePopulatedComposerAsync()
     {
         var underlying = new InMemoryDataAccessLayer();
-        var dataAccessLayer = new SchemaValidatingDataAccessLayer(new ReferentialIntegrityDataAccessLayer(underlying));
+        var dataAccessLayer = new ReferentialIntegrityDataAccessLayer(underlying);
         var populator = new SchemaPopulator(dataAccessLayer);
         Assert.Empty(await populator.Populate());
         return dataAccessLayer;

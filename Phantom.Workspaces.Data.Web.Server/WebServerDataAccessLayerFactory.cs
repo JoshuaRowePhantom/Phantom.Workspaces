@@ -7,12 +7,19 @@ public static class WebServerDataAccessLayerFactory
 {
     public static async Task<IDataAccessLayer> CreateDefaultAsync(CancellationToken cancellationToken = default)
     {
-        var dataAccessLayer = new MergeProcessingDataAccessLayer(
-            new ReferentialIntegrityDataAccessLayer(
-                new SchemaValidatingDataAccessLayer(
-                    new InMemoryDataAccessLayer())));
+        return await CreateDefaultAsync(validationPassStarted: null, cancellationToken).ConfigureAwait(false);
+    }
 
-        var errors = await new SchemaPopulator(dataAccessLayer).Populate().ConfigureAwait(false);
+    internal static async Task<IDataAccessLayer> CreateDefaultAsync(
+        Action<SchemaValidationPass>? validationPassStarted,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var dataAccessLayer = ValidatedDataAccessLayerFactory.Create(
+            new InMemoryDataAccessLayer(),
+            validationPassStarted);
+
+        var errors = await new SchemaPopulator(dataAccessLayer).PopulateAsync(cancellationToken).ConfigureAwait(false);
         if (errors.Count > 0)
         {
             throw new InvalidOperationException(

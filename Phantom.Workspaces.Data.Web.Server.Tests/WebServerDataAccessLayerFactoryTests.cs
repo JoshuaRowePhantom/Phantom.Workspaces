@@ -18,10 +18,21 @@ public sealed class WebServerDataAccessLayerFactoryTests
         Assert.IsType<MergeProcessingDataAccessLayer>(dataAccessLayer);
         var referentialLayer = ReadInnerDataAccessLayer(dataAccessLayer);
         Assert.IsType<ReferentialIntegrityDataAccessLayer>(referentialLayer);
-        var schemaLayer = ReadInnerDataAccessLayer(referentialLayer);
-        Assert.IsType<SchemaValidatingDataAccessLayer>(schemaLayer);
-        var storageLayer = ReadInnerDataAccessLayer(schemaLayer);
+        var storageLayer = ReadInnerDataAccessLayer(referentialLayer);
         Assert.IsType<InMemoryDataAccessLayer>(storageLayer);
+    }
+
+    [Fact]
+    public async Task CreateDefaultAsync_ValidatesEmbeddedSeedExactlyOnce()
+    {
+        var validationPasses = new List<SchemaValidationPass>();
+
+        await WebServerDataAccessLayerFactory.CreateDefaultAsync(
+            validationPasses.Add);
+
+        Assert.Single(
+            validationPasses,
+            static pass => pass.Kind == SchemaValidationPassKind.TrustedEmbeddedSeed);
     }
 
     [Fact]

@@ -15,4 +15,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Phantom.Workspaces.Data.Web.Server.Tests" />
+  </ItemGroup>
+
 </Project>

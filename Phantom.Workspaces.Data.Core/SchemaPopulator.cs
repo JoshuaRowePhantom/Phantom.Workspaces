@@ -17,11 +17,18 @@ public sealed class SchemaPopulator
         this.dataAccessLayer = dataAccessLayer;
     }
 
-    public async Task<IReadOnlyCollection<UpdateError>> Populate()
+    public Task<IReadOnlyCollection<UpdateError>> Populate()
     {
+        return this.PopulateAsync(CancellationToken.None);
+    }
+
+    internal async Task<IReadOnlyCollection<UpdateError>> PopulateAsync(
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
         var errors = new List<UpdateError>();
-        var rawChanges = this.LoadEntityChanges(errors).ToArray();
-        var changes = await this.ApplyCurrentConcurrencyTagsAsync(rawChanges).ConfigureAwait(false);
+        var rawChanges = this.LoadEntityChanges(errors, cancellationToken).ToArray();
+        var changes = await this.ApplyCurrentConcurrencyTagsAsync(rawChanges, cancellationToken).ConfigureAwait(false);
 
         var updateResult = await this.dataAccessLayer.UpdateAsync(
             new UpdateRequest
@@ -32,9 +39,11 @@ public sealed class SchemaPopulator
                     {
                         Text = "Populate built-in schema entities.",
                     },
+                    ValidationPassKind = SchemaValidationPassKind.TrustedEmbeddedSeed,
                 },
                 Changes = changes,
-            }).ConfigureAwait(false);
+            },
+            cancellationToken).ConfigureAwait(false);
 
         foreach (var entityResult in updateResult.EntityResults)
         {
@@ -45,7 +54,8 @@ public sealed class SchemaPopulator
     }
 
     private async Task<IReadOnlyCollection<EntityChange>> ApplyCurrentConcurrencyTagsAsync(
-        IReadOnlyCollection<EntityChange> changes)
+        IReadOnlyCollection<EntityChange> changes,
+        CancellationToken cancellationToken)
     {
         var entityIds = changes
             .Where(static change => change.EntityId is not null)
@@ -62,7 +72,8 @@ public sealed class SchemaPopulator
             {
                 Entities = entityIds.Select(static entityId => new GetEntityRequest { EntityId = entityId }).ToArray(),
                 Timestamps = [null],
-            }).ConfigureAwait(false);
+            },
+            cancellationToken).ConfigureAwait(false);
         var snapshotsById = getResult.Batches
             .SelectMany(static batch => batch.Entities)
             .ToDictionary(static snapshot => snapshot.EntityId, static snapshot => snapshot);
@@ -83,7 +94,8 @@ public sealed class SchemaPopulator
     }
 
     private IReadOnlyCollection<EntityChange> LoadEntityChanges(
-        ICollection<UpdateError> errors)
+        ICollection<UpdateError> errors,
+        CancellationToken cancellationToken)
     {
         var assembly = Assembly.GetExecutingAssembly();
         var markdownResourcesByPath = this.GetMarkdownResourcesByPath(assembly);
@@ -92,6 +104,7 @@ public sealed class SchemaPopulator
 
         foreach (var resourceName in assembly.GetManifestResourceNames())
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!resourceName.StartsWith("Phantom.Workspaces.Data.JsonEntities.", StringComparison.Ordinal)
                 || !resourceName.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
             {

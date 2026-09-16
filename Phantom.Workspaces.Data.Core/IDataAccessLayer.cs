@@ -100,6 +100,9 @@ public sealed record UpdateMetadata
 {
     [JsonPropertyName("comment")]
     public required Markdown Comment { get; init; }
+
+    [JsonIgnore]
+    internal SchemaValidationPassKind ValidationPassKind { get; init; }
 }
 
 public sealed record EntityChange

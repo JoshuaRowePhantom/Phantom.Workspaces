@@ -92,8 +92,13 @@ public sealed class EntityBroker
         CancellationToken cancellationToken = default,
         string? userComputerProfileOverride = null)
     {
-        var repository = await EntityRepository.CreateAsync(repositorySource, userComputerProfileOverride);
-        cancellationToken.ThrowIfCancellationRequested();
+        var repository = await EntityRepository.CreateAsync(
+            new EntityRepositoryInitializationOptions
+            {
+                RepositorySource = repositorySource,
+                UserComputerProfileOverride = userComputerProfileOverride,
+            },
+            cancellationToken);
 
         var broker = new EntityBroker(repository);
         await broker.InitializeAsync(cancellationToken);

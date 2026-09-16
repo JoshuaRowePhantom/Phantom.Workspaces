@@ -24,6 +24,14 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
     {
     }
 
+    internal ReferentialIntegrityDataAccessLayer(
+        IDataAccessLayer underlyingDataAccessLayer,
+        SchemaAccessor schemaAccessor,
+        Action<SchemaValidationPass>? validationPassStarted)
+        : base(underlyingDataAccessLayer, schemaAccessor, validationPassStarted)
+    {
+    }
+
     public ReferentialIntegrityDataAccessLayer(IDataAccessLayer underlyingDataAccessLayer)
         : this(underlyingDataAccessLayer, new SchemaAccessor(underlyingDataAccessLayer))
     {
