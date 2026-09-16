@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Time.Testing;
 using Phantom.Workspaces.Llm;
 using Xunit;
 
@@ -30,19 +31,26 @@ public sealed class AgentChatDisposalTests
         // The process loop is in the middle of an LLM call (waiting for a response that will
         // never arrive). Disposal must cancel the in-progress run and complete promptly.
         var client = new DeterministicTestChatClient();
+        var timeProvider = new FakeTimeProvider();
         var agent = AgentDefinitionLoader.LoadAgentFromJson(EchoAgentJson);
         var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
         {
             AgentDefinition = agent,
             AgentServices = new AgentServices { ChatClientOverride = client },
+            TimeProvider = timeProvider,
         });
 
         chat.EnqueueUserMessage("hello");
         using var requestTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await client.WaitForRequestAsync(requestTimeout.Token);
 
-        using var disposeTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        await chat.DisposeAsync().AsTask().WaitAsync(disposeTimeout.Token);
+        var disposal = chat.DisposeAsync().AsTask();
+        Assert.False(disposal.IsCompleted);
+
+        timeProvider.Advance(AgentChat.DisposeDrainTimeout);
+
+        using var disposeGuard = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await disposal.WaitAsync(disposeGuard.Token);
     }
 
 

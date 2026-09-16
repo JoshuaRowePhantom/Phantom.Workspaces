@@ -34,6 +34,8 @@ namespace Phantom.Workspaces.Llm;
 /// </summary>
 public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAgent, ISubAgentTable
 {
+    internal static TimeSpan DisposeDrainTimeout { get; } = TimeSpan.FromSeconds(2);
+
     internal const string SecondaryProviderCleanupExceptionDataKey =
         "Phantom.Workspaces.Llm.SecondaryProviderCleanupException";
 
@@ -111,6 +113,7 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
     private bool processingStarted;
     private readonly object processingStateLock = new();
     private CancellationTokenSource? activeRunCancellation;
+    private TaskCompletionSource? activeTurnCompletion;
     private int disposeStarted;
 
     // Sub-agent registry
@@ -1741,6 +1744,25 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
             this.modelClient.ModelChanged -= this.OnModelChanged;
         }
 
+        // Let an in-flight turn consume its terminal update before cancelling the stream token.
+        // The bound preserves prompt disposal when a provider never reports completion.
+        Task? activeTurn;
+        lock (this.processingStateLock)
+        {
+            activeTurn = this.activeTurnCompletion?.Task;
+        }
+
+        if (activeTurn is { IsCompleted: false })
+        {
+            try
+            {
+                await activeTurn.WaitAsync(DisposeDrainTimeout, this.timeProvider);
+            }
+            catch (TimeoutException)
+            {
+            }
+        }
+
         try
         {
             await this.cts.CancelAsync();
@@ -2154,7 +2176,8 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
         try
         {
             this.isBusy = true;
-            while (!cancellationToken.IsCancellationRequested)
+            while (!cancellationToken.IsCancellationRequested
+                   && Volatile.Read(ref this.disposeStarted) == 0)
             {
                 chatMessagesToSubmit.Clear();
                 turnCompletions.Clear();
@@ -2188,9 +2211,12 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
                 // synchronously notifies observers; an interrupt from that notification must not be
                 // lost before the provider read starts.
                 var runCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                var activeTurnCompletion =
+                    new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                 lock (this.processingStateLock)
                 {
                     this.activeRunCancellation = runCancellation;
+                    this.activeTurnCompletion = activeTurnCompletion;
                 }
 
                 AgentChatRunningItem? currentPartialTextResponseItem = null;
@@ -2306,42 +2332,56 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
                 }
                 finally
                 {
-                    lock (this.processingStateLock)
+                    try
                     {
-                        if (ReferenceEquals(this.activeRunCancellation, runCancellation))
+                        lock (this.processingStateLock)
                         {
-                            this.activeRunCancellation = null;
+                            if (ReferenceEquals(this.activeRunCancellation, runCancellation))
+                            {
+                                this.activeRunCancellation = null;
+                            }
+                        }
+
+                        // Clean up the provider enumerator and run CTS in the background so a provider stuck
+                        // on a canceled read cannot block the agent. The in-flight read is observed before
+                        // disposing to honor the async-enumerator contract.
+                        var providerCleanup = CleanUpRunAsync(
+                            providerEnumerator,
+                            abandonedMoveNext,
+                            runCancellation);
+
+                        lock (this.steeringLock)
+                        {
+                            this.activeConflator = null;
+                        }
+
+                        foreach (var turnCompletion in turnCompletions)
+                        {
+                            // Claim the terminal ordering before publishing RunningItems removal. The
+                            // settlement is completed below only after history has been projected.
+                            turnCompletion.ClaimTerminal();
+                        }
+
+                        if (currentPartialTextResponseItem is not null)
+                        {
+                            this.CompleteRunningItem(currentPartialTextResponseItem);
+                        }
+
+                        foreach (var turnCompletion in turnCompletions)
+                        {
+                            turnCompletion.CompleteAfter(providerCleanup);
                         }
                     }
-
-                    // Clean up the provider enumerator and run CTS in the background so a provider stuck
-                    // on a canceled read cannot block the agent. The in-flight read is observed before
-                    // disposing to honor the async-enumerator contract.
-                    var providerCleanup = CleanUpRunAsync(
-                        providerEnumerator,
-                        abandonedMoveNext,
-                        runCancellation);
-
-                    lock (this.steeringLock)
+                    finally
                     {
-                        this.activeConflator = null;
-                    }
-
-                    foreach (var turnCompletion in turnCompletions)
-                    {
-                        // Claim the terminal ordering before publishing RunningItems removal. The
-                        // settlement is completed below only after history has been projected.
-                        turnCompletion.ClaimTerminal();
-                    }
-
-                    if (currentPartialTextResponseItem is not null)
-                    {
-                        this.CompleteRunningItem(currentPartialTextResponseItem);
-                    }
-
-                    foreach (var turnCompletion in turnCompletions)
-                    {
-                        turnCompletion.CompleteAfter(providerCleanup);
+                        activeTurnCompletion.TrySetResult();
+                        lock (this.processingStateLock)
+                        {
+                            if (ReferenceEquals(this.activeTurnCompletion, activeTurnCompletion))
+                            {
+                                this.activeTurnCompletion = null;
+                            }
+                        }
                     }
                 }
             }
@@ -2364,6 +2404,13 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
     private async Task RunHostedProcessLoopAsync(
         CancellationToken cancellationToken)
     {
+        var activeTurnCompletion =
+            new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (this.processingStateLock)
+        {
+            this.activeTurnCompletion = activeTurnCompletion;
+        }
+
         var currentSession = this.GetSession();
         AgentChatRunningItem? runningItem = null;
         PartialResponseConflator? partialResponses = null;
@@ -2455,7 +2502,13 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
             {
                 this.isBusy = false;
                 this.processingStarted = false;
+                if (ReferenceEquals(this.activeTurnCompletion, activeTurnCompletion))
+                {
+                    this.activeTurnCompletion = null;
+                }
             }
+
+            activeTurnCompletion.TrySetResult();
         }
     }
 

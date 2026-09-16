@@ -150,6 +150,57 @@ public class AgentChatPersistenceIntegrationTests
     }
 
     [Fact]
+    public async Task AgentChat_DisposeImmediatelyAfterTurnCompletes_PersistsFinalTurnMessage()
+    {
+        var store = new InMemoryAgentPersistenceStore();
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(
+            new ChatResponseUpdate
+            {
+                Role = ChatRole.Assistant,
+                Contents = [new FunctionCallContent("call-shell-1", "shell", null)],
+            });
+        stream.EnqueueUpdate(
+            new ChatResponseUpdate
+            {
+                Role = ChatRole.Tool,
+                Contents = [new FunctionResultContent("call-shell-1", "shell-ok")],
+            });
+        var terminal = stream.EnqueueUpdate(
+            new ChatResponseUpdate
+            {
+                Role = ChatRole.Assistant,
+                FinishReason = ChatFinishReason.Stop,
+            },
+            isReady: false);
+        stream.Complete();
+
+        var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson),
+            ConfiguredStore = store,
+            ClientOverride = client,
+            DisplayNameOverride = "test",
+        });
+        chat.EnqueueUserMessage("hi");
+        chat.EnqueueUserMessage("hi");
+        await terminal.WaitForClaimedAsync();
+        await WaitForHistoryCountAsync(chat.History, 3, "user + function call + function result");
+
+        var disposal = chat.DisposeAsync().AsTask();
+        terminal.MarkReady();
+        await disposal;
+
+        var messages = await store.ReadMessagesAsync(
+            new ReadMessagesRequest { AgentSessionId = chat.AgentSessionId },
+            CancellationToken.None);
+        Assert.Contains(messages, message =>
+            message.Contents.OfType<FunctionResultContent>()
+                .Any(result => result.CallId == "call-shell-1"));
+    }
+
+    [Fact]
     public async Task StoreChatHistoryAsync_NotCalledOnStore()
     {
         // IncrementalPersistenceChatHistoryProvider.StoreChatHistoryAsync is a no-op,

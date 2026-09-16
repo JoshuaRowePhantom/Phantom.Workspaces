@@ -188,8 +188,8 @@ public sealed class RemoteCopilotSdkSessionTests
         string sourceAgentSessionId;
         await using (var chat1 = await AgentChat.CreateAsync(setup.BuildChatRequest()))
         {
-            chat1.EnqueueUserMessage("first");
-            await WaitForHistoryCountAsync(chat1.History, 5, "user + text + source-FC/FR + shell-FC/FR");
+            var turn = chat1.EnqueueUserMessageWithCompletion("first");
+            await turn.Settlement.WaitAsync(ct);
             sourceAgentSessionId = chat1.AgentSessionId;
         }
 

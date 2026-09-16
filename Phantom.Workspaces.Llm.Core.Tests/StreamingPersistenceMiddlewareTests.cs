@@ -69,6 +69,61 @@ public class StreamingPersistenceMiddlewareTests
     }
 
     [Fact]
+    public async Task StreamingPersistenceMiddleware_LastMessageStabilizedByTerminalFinishReason_IsPersistedBeforeStreamCompletes()
+    {
+        var spyStore = new SpyAgentPersistenceStore();
+        var terminalGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var terminalPullStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var client = new TerminalGatingChatClient(
+            terminalGate,
+            terminalPullStarted,
+            [
+                new ChatResponseUpdate
+                {
+                    Role = ChatRole.Assistant,
+                    Contents = [new FunctionCallContent("call-shell-1", "shell", null)],
+                },
+                new ChatResponseUpdate
+                {
+                    Role = ChatRole.Tool,
+                    Contents = [new FunctionResultContent("call-shell-1", "shell-ok")],
+                },
+                new ChatResponseUpdate
+                {
+                    Role = ChatRole.Assistant,
+                    FinishReason = ChatFinishReason.Stop,
+                },
+            ]);
+        var provider = CreateProvider(spyStore);
+        var middleware = new StreamingPersistenceMiddleware(client, provider, spyStore);
+        var session = CreateSession(provider);
+        middleware.SetCurrentSession(session);
+        var enumerator = middleware.GetStreamingResponseAsync([], null, CancellationToken.None)
+            .GetAsyncEnumerator(CancellationToken.None);
+
+        Assert.True(await enumerator.MoveNextAsync());
+        Assert.True(await enumerator.MoveNextAsync());
+        Assert.Single(spyStore.StoredMessages);
+        Assert.DoesNotContain(
+            spyStore.StoredMessages,
+            message => message.Contents.OfType<FunctionResultContent>()
+                .Any(result => result.CallId == "call-shell-1"));
+
+        var terminalMove = enumerator.MoveNextAsync().AsTask();
+        await terminalPullStarted.Task;
+        Assert.False(terminalMove.IsCompleted);
+
+        terminalGate.SetResult();
+        Assert.True(await terminalMove);
+        Assert.Contains(
+            spyStore.StoredMessages,
+            message => message.Contents.OfType<FunctionResultContent>()
+                .Any(result => result.CallId == "call-shell-1"));
+
+        await enumerator.DisposeAsync();
+    }
+
+    [Fact]
     public async Task NUpdates_EachPersistedExactlyOnce()
     {
         // Four updates forming four distinct messages via alternating role transitions:
@@ -601,6 +656,47 @@ public class StreamingPersistenceMiddlewareTests
         }
 
         public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+            => Task.FromResult(new ChatResponse([]));
+
+        public object? GetService(Type serviceType, object? serviceKey = null)
+            => serviceType == typeof(IChatClient) ? this : null;
+
+        public void Dispose() { }
+    }
+
+    private sealed class TerminalGatingChatClient : IChatClient
+    {
+        private readonly TaskCompletionSource terminalGate;
+        private readonly TaskCompletionSource terminalPullStarted;
+        private readonly ChatResponseUpdate[] updates;
+
+        public TerminalGatingChatClient(
+            TaskCompletionSource terminalGate,
+            TaskCompletionSource terminalPullStarted,
+            ChatResponseUpdate[] updates)
+        {
+            this.terminalGate = terminalGate;
+            this.terminalPullStarted = terminalPullStarted;
+            this.updates = updates;
+        }
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            yield return this.updates[0];
+            yield return this.updates[1];
+
+            this.terminalPullStarted.SetResult();
+            await this.terminalGate.Task.WaitAsync(cancellationToken);
+            yield return this.updates[2];
+        }
+
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
             => Task.FromResult(new ChatResponse([]));
 
         public object? GetService(Type serviceType, object? serviceKey = null)
