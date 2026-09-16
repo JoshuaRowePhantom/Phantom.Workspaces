@@ -63,6 +63,31 @@ public sealed class AgentChatDisposalTests
         Assert.Same(TimeProvider.System, request.DisposalTimeProvider);
     }
 
+    [Fact]
+    public async Task AgentChat_HostedDispose_WithFrozenDomainTime_CancelsWhenDisposalTimeoutExpires()
+    {
+        var client = new BlockingHostedChatClient();
+        var frozenDomainTime = new FakeTimeProvider();
+        var disposalTime = new FakeTimeProvider();
+        var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(EchoAgentJson),
+            ConfiguredStore = new InMemoryAgentPersistenceStore(),
+            ClientOverride = client,
+            TimeProvider = frozenDomainTime,
+            DisposalTimeProvider = disposalTime,
+        });
+        await client.StreamingStarted;
+
+        var disposal = chat.DisposeAsync().AsTask();
+        Assert.False(disposal.IsCompleted);
+
+        disposalTime.Advance(AgentChat.DisposeDrainTimeout);
+        await disposal;
+
+        Assert.True(client.CancellationObserved);
+    }
+
 
     private const string EchoAgentJson =
         """
@@ -153,6 +178,48 @@ public sealed class AgentChatDisposalTests
         {
             this.Disposed = true;
             return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class BlockingHostedChatClient : IChatClient, IHostedAgentChatClient
+    {
+        private readonly TaskCompletionSource streamingStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task StreamingStarted => this.streamingStarted.Task;
+
+        public bool CancellationObserved { get; private set; }
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            var never = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            this.streamingStarted.SetResult();
+            try
+            {
+                await never.Task.WaitAsync(cancellationToken);
+            }
+            finally
+            {
+                this.CancellationObserved = cancellationToken.IsCancellationRequested;
+            }
+
+            yield break;
+        }
+
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public object? GetService(Type serviceType, object? serviceKey = null)
+            => serviceKey is null && serviceType.IsInstanceOfType(this) ? this : null;
+
+        public void Dispose()
+        {
         }
     }
 
