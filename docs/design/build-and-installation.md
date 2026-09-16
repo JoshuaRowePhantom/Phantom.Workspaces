@@ -1051,12 +1051,13 @@ touch the developer's actual install or processes (respecting "don't kill my pro
 - **Copilot runtime bundled** (per RID) — `packaging\validate\Assert-CopilotRuntimePayload.ps1`
   asserts the published payload contains the loose file `runtimes\<rid>\native\copilot.exe`
   (`Publish_IncludesCopilotRuntime_ForEachRid`) and the GitHub Copilot CLI `LICENSE.md` beside it
-  (`Distribution_IncludesCopilotCliLicense`), and — for the host-arch RID — runs the bundled
-  `copilot.exe --version` to confirm the runtime launches (`InstalledPayload_StartsCopilotProvider_Smoke`).
+  (`Distribution_IncludesCopilotCliLicense`), and — for the host-arch RID — launches the bundled
+  `copilot.exe` and confirms its expected server-mode argument validation
+  (`InstalledPayload_StartsCopilotProvider_Smoke`).
   Wired into `release.yml` (release gate) and `publish-validation.yml`. Rationale: the SDK resolves
   the CLI strictly from `AppContext.BaseDirectory\runtimes\<rid>\native\copilot.exe` (no PATH
   search); single-file publish drops that Content-registered binary, so it must be re-added as a
-  loose file (issue #1376). The `--version` smoke is skipped for the cross-arch payload because the
+  loose file (issue #1376). The startup smoke is skipped for the cross-arch payload because the
   bundled binary only executes on a matching CPU.
 - **Copilot SDK version pin** — `packaging\validate\Assert-CopilotSdkVersion.ps1` asserts
   `GitHub.Copilot.SDK` is pinned to the reviewed version in `Directory.Packages.props`

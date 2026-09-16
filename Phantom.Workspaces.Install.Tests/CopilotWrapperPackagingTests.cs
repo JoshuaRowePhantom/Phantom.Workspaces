@@ -89,8 +89,7 @@ public sealed class CopilotWrapperPackagingTests
             "validate",
             "Assert-CopilotRuntimePayload.ps1",
             "-PayloadDirectory", payload.Path,
-            "-RuntimeIdentifier", "win-x64",
-            "-SkipStartupSmoke");
+            "-RuntimeIdentifier", "win-x64");
         Assert.Equal(0, validation.ExitCode);
         Assert.Contains(
             "Copilot runtime payload validation passed",

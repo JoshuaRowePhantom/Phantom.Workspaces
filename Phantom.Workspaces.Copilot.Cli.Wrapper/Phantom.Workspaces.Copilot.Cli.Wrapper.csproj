@@ -14,4 +14,16 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Phantom.Workspaces.Copilot.Cli.Wrapper.Tests" />
   </ItemGroup>
+  <Target Name="ValidateParentOwnedPublishDirectory"
+          AfterTargets="Publish"
+          Condition="'$(CopilotWrapperParentPublishDirectory)' != ''">
+    <PropertyGroup>
+      <_CanonicalChildPublishDirectory>$([System.IO.Path]::TrimEndingDirectorySeparator($([System.IO.Path]::GetFullPath('$(PublishDir)', '$(MSBuildProjectDirectory)'))))</_CanonicalChildPublishDirectory>
+      <_CanonicalParentPublishDirectory>$([System.IO.Path]::TrimEndingDirectorySeparator($([System.IO.Path]::GetFullPath('$(CopilotWrapperParentPublishDirectory)'))))</_CanonicalParentPublishDirectory>
+    </PropertyGroup>
+    <Error Condition="'$(_CanonicalChildPublishDirectory)' != '$(_CanonicalParentPublishDirectory)'"
+           Text="The wrapper child resolved PublishDir '$(_CanonicalChildPublishDirectory)' differently from the parent-owned directory '$(_CanonicalParentPublishDirectory)'." />
+    <Message Importance="high"
+             Text="Copilot wrapper child confirmed parent PublishDir: $(_CanonicalChildPublishDirectory)$(DirectorySeparatorChar)" />
+  </Target>
 </Project>

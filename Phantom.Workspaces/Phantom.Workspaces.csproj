@@ -76,11 +76,13 @@
   </Target>
   <Target Name="ValidatePreparedCopilotPayload"
           BeforeTargets="PublishCopilotWrapperLoose;PublishCopilotRuntimeLoose;PublishMxcRuntimeLoose"
-          Condition="'$(UsePreparedCopilotPayloadForTests)' != '' Or '$(PreparedCopilotPayloadDirectory)' != '' Or '$(PreparedCopilotPayloadFingerprint)' != '' Or '$(PreparedCopilotPayloadConfiguration)' != '' Or '$(PreparedCopilotPayloadRuntimeIdentifier)' != '' Or '$(PreparedCopilotPayloadManifestSha256)' != '' Or '$(PreparedCopilotWrapperSha256)' != '' Or '$(PreparedCopilotCliSha256)' != '' Or '$(PreparedCopilotRuntimeSha256)' != '' Or '$(PreparedCopilotLicenseSha256)' != '' Or '$(PreparedMxcFfiSha256)' != '' Or '$(PreparedPlmSha256)' != '' Or '$(PreparedMxcLicenseSha256)' != '' Or '$(UsePreparedCopilotPayload)' != '' Or '$(RequirePreparedCopilotWrapper)' != '' Or '$(CopilotWrapperPreparedExecutable)' != '' Or '$(CopilotWrapperPreparedConfiguration)' != '' Or '$(CopilotWrapperPreparedRuntimeIdentifier)' != ''">
+          Condition="'$(UsePreparedCopilotPayloadForTests)' != '' Or '$(PreparedCopilotPayloadDirectory)' != '' Or '$(PreparedCopilotPayloadFingerprint)' != '' Or '$(PreparedCopilotPayloadConfiguration)' != '' Or '$(PreparedCopilotPayloadRuntimeIdentifier)' != '' Or '$(PreparedCopilotPayloadManifestSha256)' != '' Or '$(PreparedCopilotWrapperSha256)' != '' Or '$(PreparedCopilotCliSha256)' != '' Or '$(PreparedCopilotRuntimeSha256)' != '' Or '$(PreparedCopilotLicenseSha256)' != '' Or '$(PreparedMxcFfiSha256)' != '' Or '$(PreparedPlmSha256)' != '' Or '$(PreparedMxcLicenseSha256)' != '' Or '$(SimulateMissingCopilotWrapperChildOutputForTests)' != '' Or '$(UsePreparedCopilotPayload)' != '' Or '$(RequirePreparedCopilotWrapper)' != '' Or '$(CopilotWrapperPreparedExecutable)' != '' Or '$(CopilotWrapperPreparedConfiguration)' != '' Or '$(CopilotWrapperPreparedRuntimeIdentifier)' != ''">
     <Error Condition="'$(UsePreparedCopilotPayload)' != '' Or '$(RequirePreparedCopilotWrapper)' != '' Or '$(CopilotWrapperPreparedExecutable)' != '' Or '$(CopilotWrapperPreparedConfiguration)' != '' Or '$(CopilotWrapperPreparedRuntimeIdentifier)' != ''"
            Text="Legacy prepared Copilot properties are unsafe and are not supported." />
     <Error Condition="'$(UsePreparedCopilotPayloadForTests)' != 'true'"
            Text="Prepared Copilot payload properties require explicit test-only opt-in with UsePreparedCopilotPayloadForTests=true." />
+    <Error Condition="'$(SimulateMissingCopilotWrapperChildOutputForTests)' != '' And '$(SimulateMissingCopilotWrapperChildOutputForTests)' != 'true'"
+           Text="SimulateMissingCopilotWrapperChildOutputForTests only accepts true in prepared test mode." />
     <Error Condition="'$(NoBuild)' != 'true'"
            Text="Prepared Copilot payload inputs may only be used by a build-free target invocation with NoBuild=true." />
     <Error Condition="'$(PreparedCopilotPayloadDirectory)' == '' Or !$([System.IO.Path]::IsPathFullyQualified('$(PreparedCopilotPayloadDirectory)')) Or !Exists('$(PreparedCopilotPayloadDirectory)')"
@@ -162,20 +164,125 @@
     <Error Condition="'%(_PreparedCopilotPayloadHashedArtifact.FileHash)' != '%(_PreparedCopilotPayloadHashedArtifact.ExpectedSha256)'"
            Text="Prepared Copilot payload artifact '%(_PreparedCopilotPayloadHashedArtifact.ArtifactName)' does not match its provenance hash." />
   </Target>
+  <UsingTask TaskName="ResolveCopilotWrapperPublishDirectory"
+             TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <ProjectDirectory ParameterType="System.String" Required="true" />
+      <IntermediateDirectory ParameterType="System.String" Required="true" />
+      <Configuration ParameterType="System.String" Required="true" />
+      <RuntimeIdentifier ParameterType="System.String" Required="true" />
+      <PublishDirectory ParameterType="System.String" Output="true" />
+    </ParameterGroup>
+    <Task>
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        static void RejectReparsePoints(string path)
+        {
+            var root = Path.GetPathRoot(path)
+                ?? throw new InvalidOperationException($"Path '{path}' has no filesystem root.");
+            var relative = path.Substring(root.Length);
+            var current = root;
+            foreach (var component in relative.Split(
+                new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+                StringSplitOptions.RemoveEmptyEntries))
+            {
+                current = Path.Combine(current, component);
+                if ((Directory.Exists(current) || File.Exists(current))
+                    && (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+                {
+                    throw new InvalidOperationException(
+                        $"Copilot wrapper publish directory cannot traverse reparse point '{current}'.");
+                }
+            }
+        }
+
+        static string SafeSegment(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                throw new InvalidOperationException(
+                    "Configuration and RuntimeIdentifier must be non-empty.");
+            }
+
+            var chars = value.Select(character =>
+                    char.IsLetterOrDigit(character) || character == '-' || character == '_'
+                        ? character
+                        : '_')
+                .ToArray();
+            var segment = new string(chars);
+            return segment.Substring(0, Math.Min(segment.Length, 8));
+        }
+
+        var projectRoot = Path.GetFullPath(ProjectDirectory);
+        if (!Path.IsPathRooted(projectRoot))
+        {
+            throw new InvalidOperationException(
+                $"MSBuildProjectDirectory must be fully qualified: '{ProjectDirectory}'.");
+        }
+
+        var intermediateRoot = Path.GetFullPath(
+            Path.IsPathRooted(IntermediateDirectory)
+                ? IntermediateDirectory
+                : Path.Combine(projectRoot, IntermediateDirectory));
+        RejectReparsePoints(intermediateRoot);
+
+        var invocation = Guid.NewGuid().ToString("N").Substring(0, 16);
+        var candidate = Path.GetFullPath(Path.Combine(
+            intermediateRoot,
+            "cw",
+            SafeSegment(Configuration),
+            SafeSegment(RuntimeIdentifier),
+            invocation));
+        var intermediatePrefix = intermediateRoot.TrimEnd(
+            Path.DirectorySeparatorChar,
+            Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (!candidate.StartsWith(intermediatePrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Copilot wrapper publish directory escaped its parent intermediate root: '{candidate}'.");
+        }
+
+        Directory.CreateDirectory(candidate);
+        RejectReparsePoints(candidate);
+        PublishDirectory = candidate.TrimEnd(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar)
+            + Path.DirectorySeparatorChar;
+      ]]></Code>
+    </Task>
+  </UsingTask>
+  <Target Name="ResolveCopilotWrapperPublishPath"
+          Condition="'$(RuntimeIdentifier)' == 'win-x64' And '$(PublishCopilotRuntime)' != 'false' And '$(SkipCopilotWrapperPublish)' != 'true'">
+    <PropertyGroup>
+      <_CopilotWrapperIntermediateRoot Condition="'$(CopilotWrapperPublishIntermediateRoot)' != ''">$(CopilotWrapperPublishIntermediateRoot)</_CopilotWrapperIntermediateRoot>
+      <_CopilotWrapperIntermediateRoot Condition="'$(_CopilotWrapperIntermediateRoot)' == ''">$(IntermediateOutputPath)</_CopilotWrapperIntermediateRoot>
+    </PropertyGroup>
+    <ResolveCopilotWrapperPublishDirectory
+        ProjectDirectory="$(MSBuildProjectDirectory)"
+        IntermediateDirectory="$(_CopilotWrapperIntermediateRoot)"
+        Configuration="$(Configuration)"
+        RuntimeIdentifier="$(RuntimeIdentifier)">
+      <Output TaskParameter="PublishDirectory"
+              PropertyName="_CopilotWrapperPublishDir" />
+    </ResolveCopilotWrapperPublishDirectory>
+    <PropertyGroup>
+      <_CopilotWrapperExecutable>$(_CopilotWrapperPublishDir)phantom-copilot-wrapper.exe</_CopilotWrapperExecutable>
+    </PropertyGroup>
+    <Message Importance="high"
+             Text="Copilot wrapper child PublishDir: $(_CopilotWrapperPublishDir)" />
+  </Target>
   <Target Name="PublishCopilotWrapperLoose"
-          DependsOnTargets="ValidatePreparedCopilotPayload"
+          DependsOnTargets="ValidatePreparedCopilotPayload;ResolveCopilotWrapperPublishPath"
           Condition="'$(RuntimeIdentifier)' == 'win-x64' And '$(PublishCopilotRuntime)' != 'false' And '$(SkipCopilotWrapperPublish)' != 'true'">
     <PropertyGroup>
       <_CopilotWrapperProject>$(MSBuildProjectDirectory)\..\Phantom.Workspaces.Copilot.Cli.Wrapper\Phantom.Workspaces.Copilot.Cli.Wrapper.csproj</_CopilotWrapperProject>
-      <_CopilotWrapperPublishDir>$(IntermediateOutputPath)copilot-wrapper\</_CopilotWrapperPublishDir>
-      <_CopilotWrapperExecutable>$(_CopilotWrapperPublishDir)phantom-copilot-wrapper.exe</_CopilotWrapperExecutable>
       <_CopilotWrapperSource Condition="'$(UsePreparedCopilotPayloadForTests)' == 'true'">$(PreparedCopilotPayloadDirectory)\phantom-copilot-wrapper.exe</_CopilotWrapperSource>
     </PropertyGroup>
     <Error Condition="'$(UsePreparedCopilotPayloadForTests)' == 'true' And !Exists('$(_CopilotWrapperSource)')"
            Text="The prepared Copilot wrapper does not exist at '$(_CopilotWrapperSource)'." />
     <MSBuild Projects="$(_CopilotWrapperProject)"
              Targets="Publish"
-             Properties="Configuration=$(Configuration);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=true;PublishSingleFile=true;PublishReadyToRun=false;PublishTrimmed=false;IncludeNativeLibrariesForSelfExtract=true;PublishDir=$(_CopilotWrapperPublishDir)"
+             Properties="Configuration=$(Configuration);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=true;PublishSingleFile=true;PublishReadyToRun=false;PublishTrimmed=false;IncludeNativeLibrariesForSelfExtract=true;PublishDir=$([MSBuild]::Escape('$(_CopilotWrapperPublishDir)'));CopilotWrapperParentPublishDirectory=$([MSBuild]::Escape('$(_CopilotWrapperPublishDir)'))"
              Condition="'$(UsePreparedCopilotPayloadForTests)' != 'true'" />
     <MakeDir Directories="$(_CopilotWrapperPublishDir)"
              Condition="'$(UsePreparedCopilotPayloadForTests)' == 'true'" />
@@ -183,6 +290,8 @@
           DestinationFiles="$(_CopilotWrapperExecutable)"
           SkipUnchangedFiles="true"
           Condition="'$(UsePreparedCopilotPayloadForTests)' == 'true'" />
+    <Delete Files="$(_CopilotWrapperExecutable)"
+            Condition="'$(UsePreparedCopilotPayloadForTests)' == 'true' And '$(SimulateMissingCopilotWrapperChildOutputForTests)' == 'true'" />
     <Error Condition="!Exists('$(_CopilotWrapperExecutable)')"
            Text="The Copilot MXC wrapper was not published at '$(_CopilotWrapperExecutable)'." />
     <Copy SourceFiles="$(_CopilotWrapperExecutable)"

@@ -55,7 +55,7 @@ function Get-PreparedCacheKey {
         [Security.Cryptography.HashAlgorithmName]::SHA256)
     try
     {
-        Add-HashText $hasher 'copilot-wrapper-test-prerequisite-v3-cache'
+        Add-HashText $hasher 'copilot-wrapper-test-prerequisite-v4-cache'
         foreach ($value in @(
             $SourceFingerprint
             $CopilotSdkPackageVersion
@@ -123,7 +123,7 @@ function Test-CompletedCache {
     try
     {
         $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-        if ($manifest.SchemaVersion -ne 3 -or
+        if ($manifest.SchemaVersion -ne 4 -or
             $manifest.SourceFingerprint -ne $ExpectedSourceFingerprint -or
             $manifest.CacheKey -notmatch '^[0-9a-f]{64}$' -or
             (Split-Path -Leaf $Directory) -ne $manifest.CacheKey.Substring(0, 16))
@@ -309,7 +309,7 @@ $hasher = [Security.Cryptography.IncrementalHash]::CreateHash(
     [Security.Cryptography.HashAlgorithmName]::SHA256)
 try
 {
-    Add-HashText $hasher 'copilot-wrapper-test-prerequisite-v3-source'
+    Add-HashText $hasher 'copilot-wrapper-test-prerequisite-v4-source'
     Add-HashText $hasher $configuration
     Add-HashText $hasher $runtimeIdentifier
     Add-HashText $hasher $nativeTarget
@@ -352,6 +352,7 @@ $mutex = [System.Threading.Mutex]::new(
     "Local\Phantom.Workspaces.CopilotWrapperPrerequisite.$sourceFingerprint")
 $ownsMutex = $false
 $stagingDirectory = $null
+$productionIntermediateDirectory = $null
 try
 {
     try
@@ -397,6 +398,10 @@ try
         $cargoTargetDirectory = Join-Path $stagingDirectory 'cargo'
         $dotnetArtifactsDirectory = Join-Path $stagingDirectory 'dotnet'
         $publishDirectory = Join-Path $stagingDirectory 'publish'
+        $releaseAssetsDirectory = Join-Path $stagingDirectory 'release-assets'
+        $productionIntermediateDirectory = Join-Path `
+            $RepositoryRoot `
+            "artifacts\cw-$PID-$([Guid]::NewGuid().ToString('N').Substring(0, 8))"
         $preparedDirectory = Join-Path $stagingDirectory 'prepared'
         New-Item -ItemType Directory -Path $preparedDirectory -Force | Out-Null
 
@@ -407,28 +412,80 @@ try
         {
             $env:CARGO_TARGET_DIR = $cargoTargetDirectory
             $publishArguments = @(
-                'msbuild'
-                '--disable-build-servers'
+                'publish'
                 (Join-Path $RepositoryRoot 'Phantom.Workspaces\Phantom.Workspaces.csproj')
-                '-restore'
+                '--disable-build-servers'
                 '-nologo'
                 '-m:1'
-                '-t:PublishCopilotWrapperLoose'
                 '/nodeReuse:false'
-                "-p:Configuration=$configuration"
-                "-p:RuntimeIdentifier=$runtimeIdentifier"
-                '-p:SelfContained=true'
-                '-p:PublishReadyToRun=false'
+                '-c'
+                $configuration
+                '-r'
+                $runtimeIdentifier
+                '-o'
+                $publishDirectory
                 '-p:UseSharedCompilation=false'
                 '-p:UseArtifactsOutput=true'
                 "-p:ArtifactsPath=$dotnetArtifactsDirectory"
-                "-p:PublishDir=$publishDirectory\"
+                "-p:CopilotWrapperPublishIntermediateRoot=$productionIntermediateDirectory\"
             )
-            & dotnet @publishArguments
+            $publishLog = @(& dotnet @publishArguments 2>&1)
+            $publishLog | Write-Host
             if ($LASTEXITCODE -ne 0)
             {
-                throw "The real Copilot wrapper prerequisite publish failed with exit code $LASTEXITCODE."
+                throw "The real production Release publish failed with exit code $LASTEXITCODE."
             }
+
+            $parentPrefix = 'Copilot wrapper child PublishDir: '
+            $childPrefix = 'Copilot wrapper child confirmed parent PublishDir: '
+            $parentPublishDirectories = @(
+                $publishLog |
+                    ForEach-Object { [string] $_ } |
+                    Where-Object { $_.Contains($parentPrefix, [StringComparison]::Ordinal) } |
+                    ForEach-Object {
+                        $_.Substring($_.IndexOf(
+                            $parentPrefix,
+                            [StringComparison]::Ordinal) + $parentPrefix.Length).Trim().TrimEnd('\', '/')
+                    }
+            )
+            $childPublishDirectories = @(
+                $publishLog |
+                    ForEach-Object { [string] $_ } |
+                    Where-Object { $_.Contains($childPrefix, [StringComparison]::Ordinal) } |
+                    ForEach-Object {
+                        $_.Substring($_.IndexOf(
+                            $childPrefix,
+                            [StringComparison]::Ordinal) + $childPrefix.Length).Trim().TrimEnd('\', '/')
+                    }
+            )
+            if ($parentPublishDirectories.Count -ne 1 -or
+                $childPublishDirectories.Count -ne 1 -or
+                $parentPublishDirectories[0] -ne $childPublishDirectories[0] -or
+                -not [IO.Path]::IsPathFullyQualified($parentPublishDirectories[0]))
+            {
+                throw "The production publish did not prove one identical absolute parent/child wrapper PublishDir."
+            }
+
+            & (Join-Path $RepositoryRoot 'packaging\validate\Assert-CopilotRuntimePayload.ps1') `
+                -PayloadDirectory $publishDirectory `
+                -RuntimeIdentifier $runtimeIdentifier
+            & (Join-Path $RepositoryRoot 'packaging\validate\Assert-MxcRuntimePayload.ps1') `
+                -PayloadDirectory $publishDirectory `
+                -RuntimeIdentifier $runtimeIdentifier
+            & (Join-Path $RepositoryRoot 'packaging\zip\New-ReleaseZip.ps1') `
+                -PublishDirectory $publishDirectory `
+                -Version '0.0.0-test' `
+                -RuntimeIdentifier $runtimeIdentifier `
+                -OutputDirectory $releaseAssetsDirectory
+            $zipPath = Join-Path `
+                $releaseAssetsDirectory `
+                "Phantom.Workspaces-0.0.0-test-$runtimeIdentifier.zip"
+            & (Join-Path $RepositoryRoot 'packaging\validate\Assert-CopilotRuntimeZip.ps1') `
+                -ZipPath $zipPath `
+                -RuntimeIdentifier $runtimeIdentifier
+            & (Join-Path $RepositoryRoot 'packaging\validate\Assert-MxcRuntimeZip.ps1') `
+                -ZipPath $zipPath `
+                -RuntimeIdentifier $runtimeIdentifier
         }
         finally
         {
@@ -496,9 +553,17 @@ try
             } |
             Select-Object -First 1 -ExpandProperty FullName
 
-        $copilotInputRoot = Join-Path `
-            $dotnetArtifactsDirectory `
-            'obj\Phantom.Workspaces.Llm.Core\release_win-x64\copilot-cli'
+        $copilotInputRoots = @(
+            (Join-Path $productionIntermediateDirectory 'copilot-cli')
+            (Join-Path $dotnetArtifactsDirectory 'obj\Phantom.Workspaces.Llm.Core\release_win-x64\copilot-cli')
+        )
+        $copilotInputRoot = $copilotInputRoots |
+            Where-Object { Test-Path -LiteralPath $_ -PathType Container } |
+            Select-Object -First 1
+        if ([string]::IsNullOrWhiteSpace($copilotInputRoot))
+        {
+            throw "The production publish did not retain its checksum-verified Copilot CLI inputs."
+        }
         $copilotArchiveMatches = @(
             Get-ChildItem `
                 -LiteralPath $copilotInputRoot `
@@ -631,7 +696,7 @@ try
             -CopilotCliChecksumsSha256 $copilotCliChecksumsSha256 `
             -Artifacts @($artifacts)
         $manifest = [ordered]@{
-            SchemaVersion = 3
+            SchemaVersion = 4
             CacheKey = $cacheKey
             SourceFingerprint = $sourceFingerprint
             Configuration = $configuration
@@ -657,6 +722,10 @@ try
             RustcIdentity = $rustcIdentity
             CargoIdentity = $cargoIdentity
             DotNetIdentity = $dotnetIdentity
+            ProductionPublishValidated = $true
+            ProductionPublishWrapperPath = [IO.Path]::GetRelativePath(
+                $publishDirectory,
+                $wrapperSource).Replace('\', '/')
             Artifacts = $artifacts
         }
         $manifest | ConvertTo-Json -Depth 5 |
@@ -669,6 +738,8 @@ try
         Remove-Item -LiteralPath $cargoTargetDirectory -Recurse -Force
         Remove-Item -LiteralPath $dotnetArtifactsDirectory -Recurse -Force
         Remove-Item -LiteralPath $publishDirectory -Recurse -Force
+        Remove-Item -LiteralPath $releaseAssetsDirectory -Recurse -Force
+        Remove-Item -LiteralPath $productionIntermediateDirectory -Recurse -Force
 
         $cacheDirectory = Join-Path $CacheRoot $cacheKey.Substring(0, 16)
         if (Test-CompletedCache $cacheDirectory $CacheRoot $sourceFingerprint)
@@ -702,6 +773,11 @@ finally
     if ($stagingDirectory -and (Test-Path -LiteralPath $stagingDirectory))
     {
         Remove-Item -LiteralPath $stagingDirectory -Recurse -Force
+    }
+    if ($productionIntermediateDirectory -and
+        (Test-Path -LiteralPath $productionIntermediateDirectory))
+    {
+        Remove-Item -LiteralPath $productionIntermediateDirectory -Recurse -Force
     }
     if ($ownsMutex)
     {

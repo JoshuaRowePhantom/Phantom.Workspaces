@@ -9,7 +9,8 @@
     single-file publish previously dropped that Content-registered binary, so the installed payload
     had no runtime and the provider failed with "Copilot runtime not found". These checks fail the
     build if the loose runtime and its required license are absent, and (unless -SkipStartupSmoke)
-    run the bundled `copilot.exe --version` to confirm the runtime actually launches.
+    launch the bundled `copilot.exe` without server-mode arguments and confirm it reaches the
+    runtime's expected argument validation.
 
     Implements the CI / packaging checks documented in docs/design/build-and-installation.md:
       - Publish_IncludesCopilotRuntime_ForEachRid
@@ -24,7 +25,7 @@
     The runtime identifier the payload was published for (e.g. win-x64, win-arm64).
 
 .PARAMETER SkipStartupSmoke
-    Skip launching copilot.exe --version. Set this when validating a payload whose RID differs from
+    Skip launching copilot.exe. Set this when validating a payload whose RID differs from
     the host architecture (e.g. asserting the win-arm64 payload on an x64 runner), because the
     bundled binary cannot execute on a mismatched CPU.
 #>
@@ -89,20 +90,17 @@ Write-Host "OK  Copilot CLI LICENSE.md present: $licenseFile"
 # InstalledPayload_StartsCopilotProvider_Smoke — confirm the bundled runtime actually launches.
 if ($SkipStartupSmoke)
 {
-    Write-Host "SKIP Startup smoke (copilot.exe --version) for $RuntimeIdentifier (cross-RID payload)."
+    Write-Host "SKIP Startup smoke for $RuntimeIdentifier (cross-RID payload)."
 }
 else
 {
-    $version = & $copilotExe --version 2>&1
-    if ($LASTEXITCODE -ne 0)
+    $startup = & $copilotExe 2>&1
+    if ($LASTEXITCODE -ne 1 -or
+        ($startup | Out-String) -notmatch 'SDK server mode requires --server or --headless')
     {
-        throw "Bundled copilot.exe failed to launch (exit $LASTEXITCODE): $version (issue #1376)."
+        throw "Bundled copilot.exe did not reach expected server-mode argument validation (exit $LASTEXITCODE): $startup (issue #1376)."
     }
-    if ([string]::IsNullOrWhiteSpace(($version | Out-String)))
-    {
-        throw "Bundled copilot.exe --version produced no output (issue #1376)."
-    }
-    Write-Host "OK  Copilot runtime launches: $($version | Select-Object -First 1)"
+    Write-Host "OK  Copilot runtime launches and validates server mode."
 }
 
 Write-Host "Copilot runtime payload validation passed for $RuntimeIdentifier."
