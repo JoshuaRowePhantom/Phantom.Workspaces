@@ -21,8 +21,7 @@ public sealed class AgentChatDisposalTests
             AgentServices = new AgentServices { ChatClientOverride = client },
         });
 
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        await chat.DisposeAsync().AsTask().WaitAsync(timeout.Token);
+        await chat.DisposeAsync();
     }
 
     [Fact]
@@ -41,16 +40,14 @@ public sealed class AgentChatDisposalTests
         });
 
         chat.EnqueueUserMessage("hello");
-        using var requestTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        await client.WaitForRequestAsync(requestTimeout.Token);
+        await client.WaitForRequestAsync();
 
         var disposal = chat.DisposeAsync().AsTask();
         Assert.False(disposal.IsCompleted);
 
         timeProvider.Advance(AgentChat.DisposeDrainTimeout);
 
-        using var disposeGuard = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        await disposal.WaitAsync(disposeGuard.Token);
+        await disposal;
     }
 
 

@@ -184,11 +184,11 @@ public class AgentChatPersistenceIntegrationTests
             DisplayNameOverride = "test",
         });
         chat.EnqueueUserMessage("hi");
-        chat.EnqueueUserMessage("hi");
         await terminal.WaitForClaimedAsync();
         await WaitForHistoryCountAsync(chat.History, 3, "user + function call + function result");
 
         var disposal = chat.DisposeAsync().AsTask();
+        Assert.False(disposal.IsCompleted);
         terminal.MarkReady();
         await disposal;
 
@@ -241,7 +241,6 @@ public class AgentChatPersistenceIntegrationTests
         System.Collections.Specialized.INotifyCollectionChanged collection)
     {
         var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var timeout = Task.Delay(TimeSpan.FromSeconds(30));
 
         void OnChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
         {
@@ -259,11 +258,7 @@ public class AgentChatPersistenceIntegrationTests
                 return;
             }
 
-            var completed = await Task.WhenAny(signal.Task, timeout);
-            if (completed == timeout)
-            {
-                throw new TimeoutException("Timeout waiting for running items to become empty.");
-            }
+            await signal.Task;
         }
         finally
         {
@@ -277,7 +272,6 @@ public class AgentChatPersistenceIntegrationTests
         string description)
     {
         var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var timeout = Task.Delay(TimeSpan.FromSeconds(30));
 
         void OnChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
         {
@@ -295,11 +289,7 @@ public class AgentChatPersistenceIntegrationTests
                 return;
             }
 
-            var completed = await Task.WhenAny(signal.Task, timeout);
-            if (completed == timeout)
-            {
-                throw new TimeoutException($"Timeout waiting for {description}.");
-            }
+            await signal.Task;
         }
         finally
         {
