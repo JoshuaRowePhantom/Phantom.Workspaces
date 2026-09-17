@@ -45,6 +45,16 @@ public sealed class GitRepositoryMetadataReaderTests : IDisposable
     }
 
     [Fact]
+    public void IsGitRepository_PathWithTrailingSeparator_StillDetectsDotGitDirectory()
+    {
+        var repoPath = Path.Combine(this.temporaryRootPath, "trailing-separator-repo");
+        Directory.CreateDirectory(Path.Combine(repoPath, ".git"));
+
+        Assert.True(GitRepositoryMetadataReader.IsGitRepository(
+            repoPath + Path.DirectorySeparatorChar));
+    }
+
+    [Fact]
     public void TryReadMetadata_ReturnsMetadata_ForValidRepository()
     {
         var repoPath = Path.Combine(this.temporaryRootPath, "valid-repo");
@@ -202,6 +212,59 @@ public sealed class GitRepositoryMetadataReaderTests : IDisposable
         Assert.Equal(withoutOverload, withEmptyExcludes);
         Assert.Contains(withoutOverload, r => string.Equals(r, Path.GetFullPath(repoOne), StringComparison.OrdinalIgnoreCase));
         Assert.Contains(withoutOverload, r => string.Equals(r, Path.GetFullPath(repoTwo), StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void EnumerateGitRepositories_DriveRootLikeInput_EnumeratesSuppliedRootNotProcessCurrentDirectory()
+    {
+        var root = Path.Combine(this.temporaryRootPath, "drive-root-fixture");
+        var repositoryPath = Path.Combine(root, "repository-at-root");
+        InitializeGitRepository(repositoryPath, "https://example.com/drive-root.git");
+
+        var results = GitRepositoryMetadataReader
+            .EnumerateGitRepositories(
+                root + Path.DirectorySeparatorChar,
+                1,
+                CancellationToken.None)
+            .ToArray();
+
+        Assert.Contains(
+            results,
+            result => string.Equals(
+                Path.GetFullPath(repositoryPath),
+                Path.GetFullPath(result),
+                StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void EnumerateGitRepositories_RootRetainsTrailingSeparator_StillFindsNestedRepository()
+    {
+        var root = Path.Combine(this.temporaryRootPath, "trailing-root");
+        var repositoryPath = Path.Combine(root, "nested", "repository");
+        InitializeGitRepository(repositoryPath, "https://example.com/trailing-root.git");
+
+        var results = GitRepositoryMetadataReader
+            .EnumerateGitRepositories(
+                root + Path.DirectorySeparatorChar,
+                2,
+                CancellationToken.None)
+            .ToArray();
+
+        Assert.Contains(
+            results,
+            result => string.Equals(
+                Path.GetFullPath(repositoryPath),
+                Path.GetFullPath(result),
+                StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void IsUnderAnyExclude_RootWithTrailingSeparator_StillMatchesExcludeAtSameRoot()
+    {
+        var root = Path.Combine(this.temporaryRootPath, "excluded-root")
+            + Path.DirectorySeparatorChar;
+
+        Assert.True(GitRepositoryMetadataReader.IsUnderAnyExclude(root, [root]));
     }
 
     private static void InitializeGitRepository(string repositoryPath, string remoteUrl)

@@ -14,6 +14,113 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
     private string temporaryRootPath => this.temporaryRoot.Path;
 
     [Fact]
+    public void ExpandAndNormalize_WindowsDriveRoot_RemainsRootedAndDoesNotStripSeparator()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        const string driveRoot = @"X:\";
+
+        var normalized = GitWorkspaceScanTool.ExpandAndNormalize(driveRoot);
+
+        Assert.Equal(Path.GetFullPath(driveRoot), normalized);
+        Assert.True(Path.IsPathRooted(normalized));
+        Assert.True(Path.EndsInDirectorySeparator(normalized));
+    }
+
+    [Fact]
+    public void ExpandAndNormalize_OrdinaryDirectoryWithTrailingSeparator_StillNormalizesToFullPath()
+    {
+        var directory = Path.Combine(this.temporaryRootPath, "ordinary-directory")
+            + Path.DirectorySeparatorChar;
+
+        var normalized = GitWorkspaceScanTool.ExpandAndNormalize(directory);
+
+        Assert.Equal(Path.GetFullPath(directory), normalized);
+    }
+
+    [Fact]
+    public void ExpandAndNormalize_UncRoot_RemainsValidRoot()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        const string uncRoot = @"\\server\share\";
+
+        var normalized = GitWorkspaceScanTool.ExpandAndNormalize(uncRoot);
+
+        Assert.Equal(Path.GetFullPath(uncRoot), normalized);
+        Assert.True(Path.IsPathFullyQualified(normalized));
+        Assert.True(Path.EndsInDirectorySeparator(normalized));
+    }
+
+    [Fact]
+    public void ExpandAndNormalize_WindowsDriveRelativePath_PreservesDotNetResolution()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var driveRelativePath = Path.GetPathRoot(Environment.CurrentDirectory)![..2];
+
+        Assert.Equal(
+            Path.GetFullPath(driveRelativePath),
+            GitWorkspaceScanTool.ExpandAndNormalize(driveRelativePath));
+    }
+
+    [Fact]
+    public async Task NormalizeRepositoryPath_TrailingSeparatorVariants_ProduceSameDeterministicId()
+    {
+        var repositoryPath = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "repository-id"));
+        InitializeGitRepository(repositoryPath, "https://example.com/id.git");
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var context = await CreateExecutionContextAsync(
+            dataAccessLayer,
+            this.temporaryRootPath,
+            Path.Combine(this.temporaryRootPath, "other")) with
+        {
+            Participants = [],
+        };
+
+        await new GitWorkspaceScanTool(new FixedLocalDriveRootProvider([repositoryPath]))
+            .ExecuteAsync(context);
+        await new GitWorkspaceScanTool(
+                new FixedLocalDriveRootProvider([repositoryPath + Path.DirectorySeparatorChar]))
+            .ExecuteAsync(context);
+
+        Assert.Equal(
+            1,
+            await CountEntitiesByNameAsync(
+                dataAccessLayer,
+                new EntityName("git-worktrees", repositoryPath)));
+    }
+
+    [Fact]
+    public void GetLocalDriveRoots_FixedDrives_ReturnsRootedPathsUnchanged()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var roots = new LocalDriveRootProvider().GetLocalDriveRoots();
+
+        Assert.All(
+            roots,
+            root =>
+            {
+                Assert.True(Path.IsPathFullyQualified(root));
+                Assert.Equal(Path.GetPathRoot(root), root);
+                Assert.Equal(root, GitWorkspaceScanTool.ExpandAndNormalize(root));
+            });
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ScansOnlyCurrentComputerUserProfileParticipantsAndUpsertsGitWorktreeEntities()
     {
         var currentProfileRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "current-profile-root"));
