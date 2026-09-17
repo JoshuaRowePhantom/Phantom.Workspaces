@@ -169,6 +169,8 @@ public sealed class EntityCardViewModel : ViewModelBase
 
     public string DisplayName => this.entity?.DisplayName ?? this.displayName;
 
+    public bool HasUnreadAttention => this.entity?.HasUnreadAttention ?? false;
+
     public string EntityType => this.entity?.EntityType ?? this.entityType;
 
     public string CardViewName => this.cardViewName;
@@ -728,6 +730,12 @@ public sealed class EntityCardViewModel : ViewModelBase
         if (string.Equals(e.PropertyName, nameof(SubscribedEntityViewModel.CanEditEntity), StringComparison.Ordinal))
         {
             this.ToggleEditModeCommand.RaiseCanExecuteChanged();
+            return;
+        }
+
+        if (string.Equals(e.PropertyName, nameof(SubscribedEntityViewModel.HasUnreadAttention), StringComparison.Ordinal))
+        {
+            this.RaisePropertyChanged(nameof(this.HasUnreadAttention));
             return;
         }
 

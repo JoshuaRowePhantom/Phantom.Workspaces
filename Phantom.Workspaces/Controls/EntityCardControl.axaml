@@ -23,9 +23,20 @@
                     <StackPanel Classes="workspace-entity-header-row"
                                  MinWidth="100"
                                  Margin="0,0,12,0">
-                        <sharedControls:SafeSelectableTextBlock Classes="workspace-entity-title"
-                                   Text="{Binding DisplayName}"
-                                   SearchQuery="{Binding SearchQuery}" />
+                        <Grid Classes="workspace-entity-title-row"
+                              ColumnDefinitions="Auto,*">
+                            <ProgressBar Grid.Column="0"
+                                         Classes="glyph-indicator exclamation-indicator"
+                                         IsIndeterminate="{Binding HasUnreadAttention}"
+                                         ToolTip.Tip="Unread notification"
+                                         Margin="0,0,4,0"
+                                         VerticalAlignment="Center" />
+                            <sharedControls:SafeSelectableTextBlock Grid.Column="1"
+                                       Classes="workspace-entity-title"
+                                       Text="{Binding DisplayName}"
+                                       SearchQuery="{Binding SearchQuery}"
+                                       TextWrapping="Wrap" />
+                        </Grid>
                         <sharedControls:SafeSelectableTextBlock Classes="muted"
                                    Text="{Binding EntityTypeLabels}"
                                    SearchQuery="{Binding SearchQuery}" />
@@ -128,7 +139,6 @@
                            Classes.workspace-validation-error="{Binding Validation.HasError}" />
     </StackPanel>
 </UserControl>
-
 
 
 
