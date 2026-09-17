@@ -11,9 +11,9 @@ using Avalonia.Platform;
 namespace Phantom.Workspaces.Services.Updates;
 
 /// <summary>
-/// Renders the tray icon image at runtime. The application ships no <c>.ico</c> asset, so a small
-/// square glyph is drawn into a bitmap and wrapped as a <see cref="WindowIcon"/>. An optional
-/// "update available" badge overlays a green circle so the tray can reflect availability.
+/// Renders the system-tray icon at runtime, independently of the <c>.ico</c> embedded in the
+/// application executable for Explorer and taskbar presentation. An optional "update available"
+/// badge overlays a green circle so the tray can reflect availability.
 /// </summary>
 internal static class TrayIconImageFactory
 {

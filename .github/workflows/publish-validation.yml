@@ -56,6 +56,8 @@ jobs:
               -ExpectedVersion $version `
               -ApplicationAssemblyPath (Join-Path $buildArtifacts 'bin/Phantom.Workspaces/release_win-x64/Phantom.Workspaces.dll') `
               -ApplicationExecutablePath (Join-Path $publishDir 'Phantom.Workspaces.exe')
+            .\packaging\validate\Assert-WindowsApplicationIcon.ps1 `
+              -ApplicationExecutablePath (Join-Path $publishDir 'Phantom.Workspaces.exe')
             # Issue #1376: assert the bundled Copilot runtime + CLI license ship in the payload.
             # Run the startup smoke only for the host RID (win-x64 on the x64 runner).
             $skipSmoke = $rid -ne 'win-x64'

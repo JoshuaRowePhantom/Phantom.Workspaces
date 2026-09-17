@@ -5,6 +5,7 @@
     <Nullable>enable</Nullable>
     <Version Condition="'$(PhantomReleaseVersion)' != ''">$(PhantomReleaseVersion)</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>..\Phantom.Workspaces.Gui.Shared\Assets\brain.ico</ApplicationIcon>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <ActiveDebugProfile>Phantom.Workspaces.MongoDb</ActiveDebugProfile>
     <!-- Per-RID self-contained single-file publish targets (no AnyCPU single file). -->
