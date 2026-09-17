@@ -283,12 +283,17 @@ Notes / proposed project settings (added to `Phantom.Workspaces.csproj` or a
 
 ### Versioning
 
-Single source of truth for version, consumed by the build, the `assemblyIdentity`, and any
-package manifest:
+Single source of truth for the application version, consumed by the build, the
+`assemblyIdentity`, and any package manifest:
 
-- Define `Version` / `InformationalVersion` centrally in `Directory.Build.props` (e.g.
-  `<Version>0.1.0</Version>`), or derive from Git tags via a tool (Nerdbank.GitVersioning or
-  `MinVer`) so a tag like `v0.1.0` drives the assembly + package version deterministically.
+- `Directory.Build.props` defines the repository's default `Version`. Release entry points pass
+  the tag-derived value as `PhantomReleaseVersion`; `Phantom.Workspaces.csproj` maps that scoped
+  property to its `Version`, from which the SDK derives the application's assembly, file, and
+  informational versions. Release entry points must not pass the well-known `Version` as a global
+  MSBuild property because it would override independently versioned transitive projects.
+- Vendored products keep their own version domains. In particular, `Microsoft.Mxc.Sdk`'s project
+  version must remain equal to the native `mxc_ffi` product version and must not be changed to the
+  Phantom application release version.
 - The Windows `app.manifest` version and the release tag are kept in sync with this value
   (the CI release job reads it). The deferred winget `PackageVersion` (`docs/design/winget.md`)
   would consume the same source.
@@ -711,9 +716,12 @@ The **`release.yml`** workflow, triggered on a `v*` tag (or `workflow_dispatch`)
    caches, license-key env).
 2. **Build/test** — restore, build `-c Release`, run `.\scripts\run-tests.ps1`; fail on
    non-zero / failing log (upload the log artifact on failure).
-3. **Derive version** — read the single version source (tag → `Version`/`InformationalVersion`)
-   so every artifact and asset name is consistent.
-4. **Publish** — `dotnet publish` the GUI for `win-x64` (self-contained single-file, ReadyToRun).
+3. **Derive version** — read the tag and pass it as the application-scoped
+   `PhantomReleaseVersion`; use the same value for release asset names.
+4. **Publish** — `dotnet publish` the GUI for `win-x64` (self-contained single-file, ReadyToRun)
+   into clean, isolated build and publish directories. Validate the GUI assembly/executable
+   metadata from that exact build and validate every `Microsoft.Mxc.Sdk.dll` in that isolated
+   graph against the SDK project's own version and the published native runtime.
 5. **Package** — assemble the portable zip per arch (lead); later build Inno/WiX (or MSIX);
    **sign** the binaries/installer with the signing cert; compute each asset's `.sha256`.
 6. **Release** — create the GitHub Release for the tag, attach the assets + checksum files,
@@ -1065,6 +1073,12 @@ touch the developer's actual install or processes (respecting "don't kill my pro
   by the SDK version (SDK `1.0.13` -> CLI `1.0.83`), so an unreviewed bump would silently change the
   bundled binary.
 - **Version consistency** — assembly `InformationalVersion` == `app.manifest` == release tag.
+- **Independent version domains** —
+  `packaging\validate\Assert-PhantomReleaseVersion.ps1` checks the application assembly and
+  executable against `PhantomReleaseVersion`, while `Assert-MxcSdkVersion.ps1` checks every
+  managed SDK assembly in the clean build-artifact root against the SDK project and native
+  runtime versions. Payload and ZIP validation receive that artifact root explicitly; they never
+  select a newer assembly from a developer's repository-wide `bin` directories.
 - **Release-artifact hash** — uploaded asset SHA256 matches the published `.sha256`.
 - **Subsystem assertion** — verify the published exe's PE header is GUI-subsystem (no console
   flash) — a tiny header check in CI.

@@ -89,6 +89,8 @@ public sealed class MxcRuntimeZipTests
         startInfo.ArgumentList.Add(Path.Combine(sandbox.Path, "missing.zip"));
         startInfo.ArgumentList.Add("-RuntimeIdentifier");
         startInfo.ArgumentList.Add(Rid);
+        startInfo.ArgumentList.Add("-ManagedOutputPath");
+        startInfo.ArgumentList.Add(sandbox.Path);
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start MXC zip validator.");

@@ -53,6 +53,81 @@ public sealed class ReleasePackagingTests
         Assert.DoesNotContain("win-arm64", release, StringComparison.Ordinal);
         Assert.DoesNotContain("win-arm64", validation, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void ReleaseVersion_EntryPointsUseApplicationScopedPropertyAndKeepArchiveNames()
+    {
+        var applicationProject = MxcRepositoryTestSupport.Read(
+            "Phantom.Workspaces", "Phantom.Workspaces.csproj");
+        var directoryBuildProps = MxcRepositoryTestSupport.Read("Directory.Build.props");
+        var release = MxcRepositoryTestSupport.Read(".github", "workflows", "release.yml");
+        var validation = MxcRepositoryTestSupport.Read(
+            ".github", "workflows", "publish-validation.yml");
+        var installScript = MxcRepositoryTestSupport.Read("scripts", "test-install.ps1");
+
+        Assert.Contains(
+            "<Version Condition=\"'$(PhantomReleaseVersion)' != ''\">$(PhantomReleaseVersion)</Version>",
+            applicationProject,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("PhantomReleaseVersion", directoryBuildProps, StringComparison.Ordinal);
+        Assert.All(
+            new[] { release, validation },
+            caller =>
+            {
+                Assert.Contains("-p:PhantomReleaseVersion=$version", caller, StringComparison.Ordinal);
+                Assert.DoesNotContain("-p:Version=", caller, StringComparison.Ordinal);
+                Assert.Contains("Assert-PhantomReleaseVersion.ps1", caller, StringComparison.Ordinal);
+                Assert.Contains("-ManagedOutputPath $buildArtifacts", caller, StringComparison.Ordinal);
+                Assert.Contains(
+                    "Remove-Item -LiteralPath $publishDir,$buildArtifacts",
+                    caller,
+                    StringComparison.Ordinal);
+            });
+        Assert.Contains(
+            "-p:PhantomReleaseVersion=$version",
+            installScript,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("-p:Version=", installScript, StringComparison.Ordinal);
+        Assert.Contains(
+            "Phantom.Workspaces-$version-$rid.zip",
+            release,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Phantom.Workspaces-$version-$rid.zip",
+            validation,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ReleaseVersion_ValidationSuffixEvaluatesOnlyOnApplicationEntryProject()
+    {
+        var property = "-p:PhantomReleaseVersion=0.0.0-validation";
+        var appResult = await MxcRepositoryTestSupport.InvokeAsync(
+            "dotnet",
+            "msbuild",
+            Path.Combine("Phantom.Workspaces", "Phantom.Workspaces.csproj"),
+            "-nologo",
+            "-getProperty:Version",
+            property);
+        var sdkResult = await MxcRepositoryTestSupport.InvokeAsync(
+            "dotnet",
+            "msbuild",
+            Path.Combine(
+                "microsoft",
+                "mxc",
+                "sdk",
+                "dotnet",
+                "Microsoft.Mxc.Sdk",
+                "Microsoft.Mxc.Sdk.csproj"),
+            "-nologo",
+            "-getProperty:Version",
+            property);
+
+        Assert.Equal(0, appResult.ExitCode);
+        Assert.Equal("0.0.0-validation", appResult.StandardOutput.Trim());
+        Assert.Equal(0, sdkResult.ExitCode);
+        Assert.Equal("0.8.0", sdkResult.StandardOutput.Trim());
+    }
 }
 
 [Collection(MxcIntegrationCollection.Name)]
@@ -88,12 +163,92 @@ public sealed class MxcNativeUnitTests
 public sealed class MxcSdkVersionTests
 {
     [Fact]
+    public void MxcSdkVersion_AppReleaseVersionOverride_LeavesSdkAssemblyVersionUnchanged()
+    {
+        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+
+        Assert.Equal("0.0.21", prerequisite.Manifest.AppReleaseVersion);
+        Assert.Equal(
+            prerequisite.Manifest.AppReleaseVersion,
+            System.Reflection.AssemblyName
+                .GetAssemblyName(prerequisite.AppAssembly)
+                .Version!
+                .ToString(3));
+        Assert.Equal("0.0.21", prerequisite.Manifest.AppAssemblyVersion);
+        Assert.Equal("0.0.21", prerequisite.Manifest.AppFileVersion);
+        Assert.StartsWith(
+            "0.0.21",
+            prerequisite.Manifest.AppInformationalVersion,
+            StringComparison.Ordinal);
+        Assert.Equal("0.0.21", prerequisite.Manifest.AppExecutableFileVersion);
+        Assert.StartsWith(
+            "0.0.21",
+            prerequisite.Manifest.AppExecutableProductVersion,
+            StringComparison.Ordinal);
+        Assert.Equal(
+            "0.8.0",
+            System.Reflection.AssemblyName
+                .GetAssemblyName(prerequisite.MxcSdkAssembly)
+                .Version!
+                .ToString(3));
+        Assert.Equal("0.8.0", prerequisite.Manifest.MxcSdkProjectVersion);
+        Assert.Equal("0.8.0", prerequisite.Manifest.MxcSdkAssemblyVersion);
+        Assert.NotEqual(
+            prerequisite.Manifest.AppReleaseVersion,
+            prerequisite.Manifest.MxcSdkAssemblyVersion);
+        Assert.Equal("0.0.1", prerequisite.Manifest.CopilotWrapperAssemblyVersion);
+        Assert.Equal("0.0.1", prerequisite.Manifest.LlmCoreAssemblyVersion);
+        Assert.Equal(
+            "0.0.1",
+            System.Reflection.AssemblyName
+                .GetAssemblyName(prerequisite.CopilotWrapperAssembly)
+                .Version!
+                .ToString(3));
+        Assert.Equal(
+            "0.0.1",
+            System.Reflection.AssemblyName
+                .GetAssemblyName(prerequisite.LlmCoreAssembly)
+                .Version!
+                .ToString(3));
+        Assert.Equal(
+            "Phantom.Workspaces-0.0.21-win-x64.zip",
+            prerequisite.Manifest.ReleaseArchiveName);
+    }
+
+    [Fact]
+    public async Task MxcSdkVersion_ProductPublishWithReleaseVersion_ValidatorPasses()
+    {
+        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        var appResult = await MxcRepositoryTestSupport.InvokePowerShellAsync(
+            "packaging", "validate", "Assert-PhantomReleaseVersion.ps1",
+            "-ExpectedVersion", prerequisite.Manifest.AppReleaseVersion,
+            "-ApplicationAssemblyPath", prerequisite.AppAssembly,
+            "-ApplicationExecutablePath", prerequisite.AppAssembly);
+        var mxcResult = await MxcRepositoryTestSupport.InvokePowerShellAsync(
+            "packaging", "validate", "Assert-MxcSdkVersion.ps1",
+            "-NativeLibraryPath", prerequisite.MxcFfi,
+            "-ManagedOutputPath", prerequisite.PreparedDirectory);
+
+        Assert.True(appResult.ExitCode == 0, appResult.StandardError);
+        Assert.Contains(
+            "application release version validated",
+            appResult.StandardOutput,
+            StringComparison.Ordinal);
+        Assert.True(mxcResult.ExitCode == 0, mxcResult.StandardError);
+        Assert.Contains(
+            "native runtime version validated",
+            mxcResult.StandardOutput,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task MxcSdkVersion_ManagedAndNativeUnits_Match()
     {
         var nativeLibrary = MxcRepositoryTestSupport.FindBuiltMxcFile("mxc_ffi.dll");
         var result = await MxcRepositoryTestSupport.InvokePowerShellAsync(
             "packaging", "validate", "Assert-MxcSdkVersion.ps1",
-            "-NativeLibraryPath", nativeLibrary);
+            "-NativeLibraryPath", nativeLibrary,
+            "-ManagedOutputPath", MxcRepositoryTestSupport.BuiltMxcOutputDirectory);
 
         Assert.True(result.ExitCode == 0, result.StandardError);
         Assert.Contains("native runtime version validated", result.StandardOutput, StringComparison.Ordinal);
@@ -118,7 +273,8 @@ public sealed class MxcSdkVersionTests
         using var output = new MxcRepositoryTestSupport.TestDirectory();
         var result = await MxcRepositoryTestSupport.InvokePowerShellAsync(
             "packaging", "validate", "Assert-MxcSdkVersion.ps1",
-            "-NativeLibraryPath", Path.Combine(output.Path, "missing.dll"));
+            "-NativeLibraryPath", Path.Combine(output.Path, "missing.dll"),
+            "-ManagedOutputPath", MxcRepositoryTestSupport.BuiltMxcOutputDirectory);
 
         Assert.NotEqual(0, result.ExitCode);
         Assert.Contains("MXC native library not found", result.StandardError, StringComparison.Ordinal);
@@ -131,6 +287,30 @@ public sealed class MxcSdkVersionTests
         File.Copy(
             typeof(MxcSdkVersionTests).Assembly.Location,
             Path.Combine(output.Path, "Microsoft.Mxc.Sdk.dll"));
+        var result = await MxcRepositoryTestSupport.InvokePowerShellAsync(
+            "packaging", "validate", "Assert-MxcSdkVersion.ps1",
+            "-NativeLibraryPath", MxcRepositoryTestSupport.FindBuiltMxcFile("mxc_ffi.dll"),
+            "-ManagedOutputPath", output.Path);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("does not match project version", result.StandardError, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task MxcSdkVersion_StaleWrongAssemblyAlongsideCurrent_Fails()
+    {
+        using var output = new MxcRepositoryTestSupport.TestDirectory();
+        var staleDirectory = Path.Combine(output.Path, "stale");
+        var currentDirectory = Path.Combine(output.Path, "current");
+        Directory.CreateDirectory(staleDirectory);
+        Directory.CreateDirectory(currentDirectory);
+        var staleAssembly = Path.Combine(staleDirectory, "Microsoft.Mxc.Sdk.dll");
+        var currentAssembly = Path.Combine(currentDirectory, "Microsoft.Mxc.Sdk.dll");
+        File.Copy(typeof(MxcSdkVersionTests).Assembly.Location, staleAssembly);
+        File.Copy(MxcRepositoryTestSupport.FindBuiltMxcFile("Microsoft.Mxc.Sdk.dll"), currentAssembly);
+        File.SetLastWriteTimeUtc(staleAssembly, DateTime.UtcNow.AddDays(-1));
+        File.SetLastWriteTimeUtc(currentAssembly, DateTime.UtcNow);
+
         var result = await MxcRepositoryTestSupport.InvokePowerShellAsync(
             "packaging", "validate", "Assert-MxcSdkVersion.ps1",
             "-NativeLibraryPath", MxcRepositoryTestSupport.FindBuiltMxcFile("mxc_ffi.dll"),
@@ -153,7 +333,8 @@ public sealed class MxcSdkVersionTests
             nativeVersion);
         var result = await MxcRepositoryTestSupport.InvokePowerShellAsync(
             "packaging", "validate", "Assert-MxcSdkVersion.ps1",
-            "-NativeLibraryPath", nativeLibrary);
+            "-NativeLibraryPath", nativeLibrary,
+            "-ManagedOutputPath", MxcRepositoryTestSupport.BuiltMxcOutputDirectory);
 
         Assert.NotEqual(0, result.ExitCode);
         Assert.Contains(expectedError, result.StandardError, StringComparison.Ordinal);
@@ -253,7 +434,8 @@ public sealed class MxcRuntimePayloadTests
                 Observer = processObserver,
             },
             "-PayloadDirectory", payload.Path,
-            "-RuntimeIdentifier", "win-x64");
+            "-RuntimeIdentifier", "win-x64",
+            "-ManagedOutputPath", prerequisite.PreparedDirectory);
 
         Assert.True(validation.ExitCode == 0, validation.StandardError);
         Assert.Contains(
@@ -529,7 +711,8 @@ public sealed class MxcRuntimePayloadTests
         var result = await MxcRepositoryTestSupport.InvokePowerShellAsync(
             "packaging", "validate", "Assert-MxcRuntimePayload.ps1",
             "-PayloadDirectory", payload.Path,
-            "-RuntimeIdentifier", "win-arm64");
+            "-RuntimeIdentifier", "win-arm64",
+            "-ManagedOutputPath", MxcRepositoryTestSupport.BuiltMxcOutputDirectory);
 
         Assert.NotEqual(0, result.ExitCode);
         Assert.Contains("supports only win-x64", result.StandardError, StringComparison.Ordinal);
@@ -547,7 +730,8 @@ public sealed class MxcRuntimePayloadTests
         var result = await MxcRepositoryTestSupport.InvokePowerShellAsync(
             "packaging", "validate", "Assert-MxcRuntimePayload.ps1",
             "-PayloadDirectory", payload.Path,
-            "-RuntimeIdentifier", "win-x64");
+            "-RuntimeIdentifier", "win-x64",
+            "-ManagedOutputPath", MxcRepositoryTestSupport.BuiltMxcOutputDirectory);
 
         Assert.NotEqual(0, result.ExitCode);
         Assert.Contains($"expected '", result.StandardError, StringComparison.Ordinal);
@@ -565,7 +749,8 @@ public sealed class MxcRuntimePayloadTests
         var result = await MxcRepositoryTestSupport.InvokePowerShellAsync(
             "packaging", "validate", "Assert-MxcRuntimePayload.ps1",
             "-PayloadDirectory", payload.Path,
-            "-RuntimeIdentifier", "win-x64");
+            "-RuntimeIdentifier", "win-x64",
+            "-ManagedOutputPath", MxcRepositoryTestSupport.BuiltMxcOutputDirectory);
 
         Assert.NotEqual(0, result.ExitCode);
         Assert.Contains("unmodified upstream MIT license", result.StandardError, StringComparison.Ordinal);
@@ -582,7 +767,8 @@ public sealed class MxcRuntimePayloadTests
         var result = await MxcRepositoryTestSupport.InvokePowerShellAsync(
             "packaging", "validate", "Assert-MxcRuntimePayload.ps1",
             "-PayloadDirectory", payload.Path,
-            "-RuntimeIdentifier", "win-x64");
+            "-RuntimeIdentifier", "win-x64",
+            "-ManagedOutputPath", MxcRepositoryTestSupport.BuiltMxcOutputDirectory);
 
         Assert.NotEqual(0, result.ExitCode);
         Assert.Contains("Unexpected mxc.lic", result.StandardError, StringComparison.Ordinal);
@@ -724,8 +910,11 @@ public sealed class CopilotWrapperNestedPublishTests
     {
         var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
 
-        Assert.Equal(4, prerequisite.Manifest.SchemaVersion);
+        Assert.Equal(5, prerequisite.Manifest.SchemaVersion);
         Assert.True(prerequisite.Manifest.ProductionPublishValidated);
+        Assert.Equal("0.0.21", prerequisite.Manifest.AppReleaseVersion);
+        Assert.Equal("0.0.21", prerequisite.Manifest.AppAssemblyVersion);
+        Assert.Equal("0.8.0", prerequisite.Manifest.MxcSdkAssemblyVersion);
         Assert.Equal(
             "runtimes/win-x64/native/phantom-copilot-wrapper.exe",
             prerequisite.Manifest.ProductionPublishWrapperPath);
@@ -1052,6 +1241,16 @@ internal static class MxcRepositoryTestSupport
     private static readonly TimeSpan ValidatorProcessTimeout = TimeSpan.FromSeconds(30);
 
     internal static DirectoryInfo Root { get; } = FindRepositoryRoot();
+    internal static string BuiltMxcOutputDirectory => Path.Combine(
+        Root.FullName,
+        "microsoft",
+        "mxc",
+        "sdk",
+        "dotnet",
+        "Microsoft.Mxc.Sdk",
+        "bin",
+        "Debug",
+        "net8.0");
 
     internal static string Read(params string[] relativePath)
         => File.ReadAllText(Path.Combine([Root.FullName, .. relativePath]));
@@ -1248,7 +1447,7 @@ internal static class MxcRepositoryTestSupport
         var manifest = JsonSerializer.Deserialize<CopilotWrapperPrerequisiteManifest>(
             File.ReadAllText(manifestPath));
         Assert.NotNull(manifest);
-        Assert.Equal(4, manifest.SchemaVersion);
+        Assert.Equal(5, manifest.SchemaVersion);
         Assert.Matches("^[0-9a-f]{64}$", manifest.CacheKey);
         Assert.Matches("^[0-9a-f]{64}$", manifest.SourceFingerprint);
         var expectedCacheRoot = Path.GetFullPath(Path.Combine(
@@ -1296,7 +1495,11 @@ internal static class MxcRepositoryTestSupport
             ArtifactPath("prepared/plm.exe"),
             ArtifactPath("prepared/MXC-LICENSE.md"),
             ArtifactPath("prepared/NativeMethods.g.cs"),
-            ArtifactPath("prepared/Phantom.Workspaces.Containers.runtimeconfig.json"));
+            ArtifactPath("prepared/Phantom.Workspaces.Containers.runtimeconfig.json"),
+            ArtifactPath("prepared/Phantom.Workspaces.dll"),
+            ArtifactPath("prepared/Microsoft.Mxc.Sdk.dll"),
+            ArtifactPath("prepared/phantom-copilot-wrapper.dll"),
+            ArtifactPath("prepared/Phantom.Workspaces.Llm.Core.dll"));
         prerequisite.AssertArtifactHashes();
         return prerequisite;
     }
@@ -1420,9 +1623,7 @@ internal static class MxcRepositoryTestSupport
 
     internal static string FindBuiltMxcFile(string fileName)
     {
-        var outputDirectory = Path.Combine(
-            Root.FullName, "microsoft", "mxc", "sdk", "dotnet", "Microsoft.Mxc.Sdk", "bin", "Debug", "net8.0");
-        var path = Path.Combine(outputDirectory, fileName);
+        var path = Path.Combine(BuiltMxcOutputDirectory, fileName);
         Assert.True(File.Exists(path), $"Expected the solution build to produce '{path}'.");
         return path;
     }
@@ -1496,7 +1697,11 @@ internal static class MxcRepositoryTestSupport
         string Plm,
         string MxcLicense,
         string NativeBindings,
-        string ContainerRuntimeConfig)
+        string ContainerRuntimeConfig,
+        string AppAssembly,
+        string MxcSdkAssembly,
+        string CopilotWrapperAssembly,
+        string LlmCoreAssembly)
     {
         internal string ArtifactSha256(string relativePath) =>
             Assert.Single(
@@ -1510,7 +1715,11 @@ internal static class MxcRepositoryTestSupport
         {
             var expectedArtifacts = new[]
             {
+                "prepared/Microsoft.Mxc.Sdk.dll",
+                "prepared/Phantom.Workspaces.Llm.Core.dll",
+                "prepared/Phantom.Workspaces.dll",
                 "prepared/phantom-copilot-wrapper.exe",
+                "prepared/phantom-copilot-wrapper.dll",
                 "prepared/copilot.exe",
                 "prepared/copilot_runtime.dll",
                 "prepared/LICENSE.md",
@@ -1556,7 +1765,7 @@ internal static class MxcRepositoryTestSupport
                 hasher.AppendData(bytes);
             }
 
-            Add("copilot-wrapper-test-prerequisite-v4-cache");
+            Add("copilot-wrapper-test-prerequisite-v5-cache");
             Add(Manifest.SourceFingerprint);
             Add(Manifest.CopilotSdkPackageVersion);
             Add(Manifest.CopilotSdkPackageSha512);
@@ -1581,6 +1790,17 @@ internal static class MxcRepositoryTestSupport
         public required int SchemaVersion { get; init; }
         public required string CacheKey { get; init; }
         public required string SourceFingerprint { get; init; }
+        public required string AppReleaseVersion { get; init; }
+        public required string AppAssemblyVersion { get; init; }
+        public required string AppFileVersion { get; init; }
+        public required string AppInformationalVersion { get; init; }
+        public required string AppExecutableFileVersion { get; init; }
+        public required string AppExecutableProductVersion { get; init; }
+        public required string MxcSdkProjectVersion { get; init; }
+        public required string MxcSdkAssemblyVersion { get; init; }
+        public required string CopilotWrapperAssemblyVersion { get; init; }
+        public required string LlmCoreAssemblyVersion { get; init; }
+        public required string ReleaseArchiveName { get; init; }
         public required string Configuration { get; init; }
         public required string RuntimeIdentifier { get; init; }
         public required string NativeTarget { get; init; }

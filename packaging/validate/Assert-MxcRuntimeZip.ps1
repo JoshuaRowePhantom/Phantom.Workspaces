@@ -3,7 +3,9 @@ param(
     [Parameter(Mandatory)]
     [string] $ZipPath,
     [Parameter(Mandatory)]
-    [string] $RuntimeIdentifier
+    [string] $RuntimeIdentifier,
+    [Parameter(Mandatory)]
+    [string] $ManagedOutputPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -18,7 +20,9 @@ try
 {
     [IO.Compression.ZipFile]::ExtractToDirectory($ZipPath, $extractRoot)
     & (Join-Path $PSScriptRoot 'Assert-MxcRuntimePayload.ps1') `
-        -PayloadDirectory $extractRoot -RuntimeIdentifier $RuntimeIdentifier
+        -PayloadDirectory $extractRoot `
+        -RuntimeIdentifier $RuntimeIdentifier `
+        -ManagedOutputPath $ManagedOutputPath
 }
 finally
 {

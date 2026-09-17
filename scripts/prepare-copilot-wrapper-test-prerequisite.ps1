@@ -11,6 +11,7 @@ $ErrorActionPreference = 'Stop'
 
 $configuration = 'Release'
 $runtimeIdentifier = 'win-x64'
+$appReleaseVersion = '0.0.21'
 $nativeTarget = 'x86_64-pc-windows-msvc'
 $nativeProfile = 'release'
 $nativePackages = @('mxc_ffi', 'plm')
@@ -55,7 +56,7 @@ function Get-PreparedCacheKey {
         [Security.Cryptography.HashAlgorithmName]::SHA256)
     try
     {
-        Add-HashText $hasher 'copilot-wrapper-test-prerequisite-v4-cache'
+        Add-HashText $hasher 'copilot-wrapper-test-prerequisite-v5-cache'
         foreach ($value in @(
             $SourceFingerprint
             $CopilotSdkPackageVersion
@@ -123,7 +124,7 @@ function Test-CompletedCache {
     try
     {
         $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-        if ($manifest.SchemaVersion -ne 4 -or
+        if ($manifest.SchemaVersion -ne 5 -or
             $manifest.SourceFingerprint -ne $ExpectedSourceFingerprint -or
             $manifest.CacheKey -notmatch '^[0-9a-f]{64}$' -or
             (Split-Path -Leaf $Directory) -ne $manifest.CacheKey.Substring(0, 16))
@@ -140,12 +141,16 @@ function Test-CompletedCache {
         $expectedArtifacts = @(
             'prepared/LICENSE.md'
             'prepared/MXC-LICENSE.md'
+            'prepared/Microsoft.Mxc.Sdk.dll'
             'prepared/NativeMethods.g.cs'
             'prepared/Phantom.Workspaces.Containers.runtimeconfig.json'
+            'prepared/Phantom.Workspaces.Llm.Core.dll'
+            'prepared/Phantom.Workspaces.dll'
             'prepared/copilot.exe'
             'prepared/copilot_runtime.dll'
             'prepared/mxc_ffi.dll'
             'prepared/phantom-copilot-wrapper.exe'
+            'prepared/phantom-copilot-wrapper.dll'
             'prepared/plm.exe'
         )
         $artifacts = @($manifest.Artifacts)
@@ -309,9 +314,10 @@ $hasher = [Security.Cryptography.IncrementalHash]::CreateHash(
     [Security.Cryptography.HashAlgorithmName]::SHA256)
 try
 {
-    Add-HashText $hasher 'copilot-wrapper-test-prerequisite-v4-source'
+    Add-HashText $hasher 'copilot-wrapper-test-prerequisite-v5-source'
     Add-HashText $hasher $configuration
     Add-HashText $hasher $runtimeIdentifier
+    Add-HashText $hasher $appReleaseVersion
     Add-HashText $hasher $nativeTarget
     Add-HashText $hasher $nativeProfile
     Add-HashText $hasher ($nativePackages -join ',')
@@ -424,6 +430,7 @@ try
                 $runtimeIdentifier
                 '-o'
                 $publishDirectory
+                "-p:PhantomReleaseVersion=$appReleaseVersion"
                 '-p:UseSharedCompilation=false'
                 '-p:UseArtifactsOutput=true'
                 "-p:ArtifactsPath=$dotnetArtifactsDirectory"
@@ -435,6 +442,37 @@ try
             {
                 throw "The real production Release publish failed with exit code $LASTEXITCODE."
             }
+
+            $appAssemblySource = Join-Path `
+                $dotnetArtifactsDirectory `
+                'bin\Phantom.Workspaces\release_win-x64\Phantom.Workspaces.dll'
+            $mxcSdkAssemblySource = Join-Path `
+                $dotnetArtifactsDirectory `
+                'bin\Microsoft.Mxc.Sdk\release\Microsoft.Mxc.Sdk.dll'
+            $wrapperAssemblySource = Join-Path `
+                $dotnetArtifactsDirectory `
+                'bin\Phantom.Workspaces.Copilot.Cli.Wrapper\release_win-x64\phantom-copilot-wrapper.dll'
+            $llmCoreAssemblySource = Join-Path `
+                $dotnetArtifactsDirectory `
+                'bin\Phantom.Workspaces.Llm.Core\release_win-x64\Phantom.Workspaces.Llm.Core.dll'
+            $appExecutableSource = Join-Path $publishDirectory 'Phantom.Workspaces.exe'
+            [xml] $mxcSdkProject = Get-Content -LiteralPath (
+                Join-Path $RepositoryRoot `
+                    'microsoft\mxc\sdk\dotnet\Microsoft.Mxc.Sdk\Microsoft.Mxc.Sdk.csproj') -Raw
+            $mxcSdkProjectVersions = @(
+                $mxcSdkProject.Project.PropertyGroup |
+                    ForEach-Object { [string] $_.Version } |
+                    Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+            )
+            if ($mxcSdkProjectVersions.Count -ne 1)
+            {
+                throw 'Microsoft.Mxc.Sdk.csproj must declare exactly one project version.'
+            }
+            $mxcSdkProjectVersion = $mxcSdkProjectVersions[0].Trim()
+            & (Join-Path $RepositoryRoot 'packaging\validate\Assert-PhantomReleaseVersion.ps1') `
+                -ExpectedVersion $appReleaseVersion `
+                -ApplicationAssemblyPath $appAssemblySource `
+                -ApplicationExecutablePath $appExecutableSource
 
             $parentPrefix = 'Copilot wrapper child PublishDir: '
             $childPrefix = 'Copilot wrapper child confirmed parent PublishDir: '
@@ -471,21 +509,25 @@ try
                 -RuntimeIdentifier $runtimeIdentifier
             & (Join-Path $RepositoryRoot 'packaging\validate\Assert-MxcRuntimePayload.ps1') `
                 -PayloadDirectory $publishDirectory `
-                -RuntimeIdentifier $runtimeIdentifier
+                -RuntimeIdentifier $runtimeIdentifier `
+                -ManagedOutputPath $dotnetArtifactsDirectory
             & (Join-Path $RepositoryRoot 'packaging\zip\New-ReleaseZip.ps1') `
                 -PublishDirectory $publishDirectory `
-                -Version '0.0.0-test' `
+                -Version $appReleaseVersion `
                 -RuntimeIdentifier $runtimeIdentifier `
                 -OutputDirectory $releaseAssetsDirectory
+            $releaseArchiveName =
+                "Phantom.Workspaces-$appReleaseVersion-$runtimeIdentifier.zip"
             $zipPath = Join-Path `
                 $releaseAssetsDirectory `
-                "Phantom.Workspaces-0.0.0-test-$runtimeIdentifier.zip"
+                $releaseArchiveName
             & (Join-Path $RepositoryRoot 'packaging\validate\Assert-CopilotRuntimeZip.ps1') `
                 -ZipPath $zipPath `
                 -RuntimeIdentifier $runtimeIdentifier
             & (Join-Path $RepositoryRoot 'packaging\validate\Assert-MxcRuntimeZip.ps1') `
                 -ZipPath $zipPath `
-                -RuntimeIdentifier $runtimeIdentifier
+                -RuntimeIdentifier $runtimeIdentifier `
+                -ManagedOutputPath $dotnetArtifactsDirectory
         }
         finally
         {
@@ -635,6 +677,10 @@ try
             $mxcLicenseSource
             $bindingsSource
             $runtimeConfigSource
+            $appAssemblySource
+            $mxcSdkAssemblySource
+            $wrapperAssemblySource
+            $llmCoreAssemblySource
         )
         foreach ($requiredSource in $requiredSources)
         {
@@ -664,7 +710,11 @@ try
         }
 
         $artifactSources = [ordered]@{
+            'prepared/Microsoft.Mxc.Sdk.dll' = $mxcSdkAssemblySource
+            'prepared/Phantom.Workspaces.Llm.Core.dll' = $llmCoreAssemblySource
+            'prepared/Phantom.Workspaces.dll' = $appAssemblySource
             'prepared/phantom-copilot-wrapper.exe' = $wrapperSource
+            'prepared/phantom-copilot-wrapper.dll' = $wrapperAssemblySource
             'prepared/copilot.exe' = $copilotSource
             'prepared/copilot_runtime.dll' = $copilotRuntimeSource
             'prepared/LICENSE.md' = $copilotLicenseSource
@@ -696,9 +746,30 @@ try
             -CopilotCliChecksumsSha256 $copilotCliChecksumsSha256 `
             -Artifacts @($artifacts)
         $manifest = [ordered]@{
-            SchemaVersion = 4
+            SchemaVersion = 5
             CacheKey = $cacheKey
             SourceFingerprint = $sourceFingerprint
+            AppReleaseVersion = $appReleaseVersion
+            AppAssemblyVersion = [Reflection.AssemblyName]::GetAssemblyName(
+                $appAssemblySource).Version.ToString(3)
+            AppFileVersion = ([Version] (
+                [Diagnostics.FileVersionInfo]::GetVersionInfo(
+                    $appAssemblySource).FileVersion)).ToString(3)
+            AppInformationalVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo(
+                $appAssemblySource).ProductVersion
+            AppExecutableFileVersion = ([Version] (
+                [Diagnostics.FileVersionInfo]::GetVersionInfo(
+                    $appExecutableSource).FileVersion)).ToString(3)
+            AppExecutableProductVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo(
+                $appExecutableSource).ProductVersion
+            MxcSdkProjectVersion = $mxcSdkProjectVersion
+            MxcSdkAssemblyVersion = [Reflection.AssemblyName]::GetAssemblyName(
+                $mxcSdkAssemblySource).Version.ToString(3)
+            CopilotWrapperAssemblyVersion = [Reflection.AssemblyName]::GetAssemblyName(
+                $wrapperAssemblySource).Version.ToString(3)
+            LlmCoreAssemblyVersion = [Reflection.AssemblyName]::GetAssemblyName(
+                $llmCoreAssemblySource).Version.ToString(3)
+            ReleaseArchiveName = $releaseArchiveName
             Configuration = $configuration
             RuntimeIdentifier = $runtimeIdentifier
             NativeTarget = $nativeTarget

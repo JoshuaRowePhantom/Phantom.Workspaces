@@ -2,34 +2,31 @@
 param(
     [Parameter(Mandatory)]
     [string] $NativeLibraryPath,
+    [Parameter(Mandatory)]
     [string] $ManagedOutputPath
 )
 
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).ProviderPath
 $managedProject = Join-Path $repositoryRoot 'microsoft\mxc\sdk\dotnet\Microsoft.Mxc.Sdk\Microsoft.Mxc.Sdk.csproj'
-$managedOutput = if ($ManagedOutputPath)
-{
-    $ManagedOutputPath
-}
-else
-{
-    Join-Path $repositoryRoot 'microsoft\mxc\sdk\dotnet\Microsoft.Mxc.Sdk\bin'
-}
 
 [xml] $project = Get-Content -LiteralPath $managedProject -Raw
 $managedVersion = ([string] $project.Project.PropertyGroup.Version).Trim()
-$managedAssembly = Get-ChildItem -LiteralPath $managedOutput -Filter 'Microsoft.Mxc.Sdk.dll' -Recurse -File |
-    Sort-Object LastWriteTimeUtc -Descending |
-    Select-Object -First 1
-if (-not $managedAssembly)
+$managedAssemblies = @(
+    Get-ChildItem -LiteralPath $ManagedOutputPath -Filter 'Microsoft.Mxc.Sdk.dll' -Recurse -File
+)
+if ($managedAssemblies.Count -eq 0)
 {
-    throw "Built Microsoft.Mxc.Sdk.dll not found under '$managedOutput'. Build the solution before validating the payload."
+    throw "Built Microsoft.Mxc.Sdk.dll not found under '$ManagedOutputPath'. Build the solution before validating the payload."
 }
-$managedAssemblyVersion = [Reflection.AssemblyName]::GetAssemblyName($managedAssembly.FullName).Version.ToString(3)
-if ($managedVersion -ne $managedAssemblyVersion)
+foreach ($managedAssembly in $managedAssemblies)
 {
-    throw "Built managed SDK version '$managedAssemblyVersion' does not match project version '$managedVersion'."
+    $managedAssemblyVersion = [Reflection.AssemblyName]::GetAssemblyName(
+        $managedAssembly.FullName).Version.ToString(3)
+    if ($managedVersion -ne $managedAssemblyVersion)
+    {
+        throw "Built managed SDK version '$managedAssemblyVersion' does not match project version '$managedVersion' in '$($managedAssembly.FullName)'."
+    }
 }
 if (-not (Test-Path -LiteralPath $NativeLibraryPath -PathType Leaf))
 {

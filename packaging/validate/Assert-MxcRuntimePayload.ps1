@@ -3,7 +3,9 @@ param(
     [Parameter(Mandatory)]
     [string] $PayloadDirectory,
     [Parameter(Mandatory)]
-    [string] $RuntimeIdentifier
+    [string] $RuntimeIdentifier,
+    [Parameter(Mandatory)]
+    [string] $ManagedOutputPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -38,6 +40,7 @@ if (Test-Path -LiteralPath (Join-Path $nativeDirectory 'mxc.lic'))
 }
 
 & (Join-Path $PSScriptRoot 'Assert-MxcSdkVersion.ps1') `
-    -NativeLibraryPath (Join-Path $nativeDirectory 'mxc_ffi.dll')
+    -NativeLibraryPath (Join-Path $nativeDirectory 'mxc_ffi.dll') `
+    -ManagedOutputPath $ManagedOutputPath
 
 Write-Host "MXC runtime payload validation passed for $RuntimeIdentifier."

@@ -86,10 +86,18 @@ jobs:
           New-Item -ItemType Directory -Force -Path $output | Out-Null
           foreach ($rid in @('win-x64')) {
             $publishDir = Join-Path $env:RUNNER_TEMP "publish/$rid"
+            $buildArtifacts = Join-Path $env:RUNNER_TEMP "build/$rid"
+            Remove-Item -LiteralPath $publishDir,$buildArtifacts -Recurse -Force -ErrorAction SilentlyContinue
             dotnet publish Phantom.Workspaces/Phantom.Workspaces.csproj `
               -c Release -r $rid `
-              -p:Version=$version -o $publishDir
+              -p:PhantomReleaseVersion=$version `
+              -p:UseArtifactsOutput=true -p:ArtifactsPath=$buildArtifacts `
+              -o $publishDir
             if ($LASTEXITCODE -ne 0) { throw "publish failed for $rid" }
+            .\packaging\validate\Assert-PhantomReleaseVersion.ps1 `
+              -ExpectedVersion $version `
+              -ApplicationAssemblyPath (Join-Path $buildArtifacts 'bin/Phantom.Workspaces/release_win-x64/Phantom.Workspaces.dll') `
+              -ApplicationExecutablePath (Join-Path $publishDir 'Phantom.Workspaces.exe')
             # Issue #1376: fail the release if the bundled Copilot runtime / CLI license is absent.
             # The bundled binary only executes on a matching CPU, so run the startup smoke for the
             # host RID (win-x64 on the x64 runner) and skip it for the cross-arch payload.
@@ -97,7 +105,8 @@ jobs:
             .\packaging\validate\Assert-CopilotRuntimePayload.ps1 `
               -PayloadDirectory $publishDir -RuntimeIdentifier $rid -SkipStartupSmoke:$skipSmoke
             .\packaging\validate\Assert-MxcRuntimePayload.ps1 `
-              -PayloadDirectory $publishDir -RuntimeIdentifier $rid
+              -PayloadDirectory $publishDir -RuntimeIdentifier $rid `
+              -ManagedOutputPath $buildArtifacts
             .\packaging\zip\New-ReleaseZip.ps1 `
               -PublishDirectory $publishDir -Version $version `
               -RuntimeIdentifier $rid -OutputDirectory $output
@@ -108,7 +117,8 @@ jobs:
             .\packaging\validate\Assert-CopilotRuntimeZip.ps1 `
               -ZipPath $zipPath -RuntimeIdentifier $rid -SkipStartupSmoke:$skipSmoke
             .\packaging\validate\Assert-MxcRuntimeZip.ps1 `
-              -ZipPath $zipPath -RuntimeIdentifier $rid
+              -ZipPath $zipPath -RuntimeIdentifier $rid `
+              -ManagedOutputPath $buildArtifacts
           }
           "assets=$output" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 

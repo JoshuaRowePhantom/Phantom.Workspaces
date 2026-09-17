@@ -44,22 +44,33 @@ jobs:
           New-Item -ItemType Directory -Force -Path $output | Out-Null
           foreach ($rid in @('win-x64')) {
             $publishDir = Join-Path $env:RUNNER_TEMP "publish/$rid"
+            $buildArtifacts = Join-Path $env:RUNNER_TEMP "build/$rid"
+            Remove-Item -LiteralPath $publishDir,$buildArtifacts -Recurse -Force -ErrorAction SilentlyContinue
             dotnet publish Phantom.Workspaces/Phantom.Workspaces.csproj `
-              -c Release -r $rid -p:Version=$version -o $publishDir
+              -c Release -r $rid `
+              -p:PhantomReleaseVersion=$version `
+              -p:UseArtifactsOutput=true -p:ArtifactsPath=$buildArtifacts `
+              -o $publishDir
             if ($LASTEXITCODE -ne 0) { throw "publish failed for $rid" }
+            .\packaging\validate\Assert-PhantomReleaseVersion.ps1 `
+              -ExpectedVersion $version `
+              -ApplicationAssemblyPath (Join-Path $buildArtifacts 'bin/Phantom.Workspaces/release_win-x64/Phantom.Workspaces.dll') `
+              -ApplicationExecutablePath (Join-Path $publishDir 'Phantom.Workspaces.exe')
             # Issue #1376: assert the bundled Copilot runtime + CLI license ship in the payload.
             # Run the startup smoke only for the host RID (win-x64 on the x64 runner).
             $skipSmoke = $rid -ne 'win-x64'
             .\packaging\validate\Assert-CopilotRuntimePayload.ps1 `
               -PayloadDirectory $publishDir -RuntimeIdentifier $rid -SkipStartupSmoke:$skipSmoke
             .\packaging\validate\Assert-MxcRuntimePayload.ps1 `
-              -PayloadDirectory $publishDir -RuntimeIdentifier $rid
+              -PayloadDirectory $publishDir -RuntimeIdentifier $rid `
+              -ManagedOutputPath $buildArtifacts
             .\packaging\zip\New-ReleaseZip.ps1 `
               -PublishDirectory $publishDir -Version $version `
               -RuntimeIdentifier $rid -OutputDirectory $output
             $zipPath = Join-Path $output "Phantom.Workspaces-$version-$rid.zip"
             .\packaging\validate\Assert-MxcRuntimeZip.ps1 `
-              -ZipPath $zipPath -RuntimeIdentifier $rid
+              -ZipPath $zipPath -RuntimeIdentifier $rid `
+              -ManagedOutputPath $buildArtifacts
           }
 
       - name: Upload validation assets

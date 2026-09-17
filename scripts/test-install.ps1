@@ -95,7 +95,7 @@ function Invoke-Publish([string] $version, [string] $rid, [string] $outputDirect
         'publish', $guiProject,
         '-c', 'Release',
         '-r', $rid,
-        "-p:Version=$version",
+        "-p:PhantomReleaseVersion=$version",
         '-o', $outputDirectory
     )
     if ($FastPublish)
