@@ -2,8 +2,8 @@ using AgentSchema;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Data;
-using Phantom.Workspaces.Data.Offline;
 using Phantom.Workspaces.Llm.Echo;
+using Phantom.Workspaces.Testing;
 using System.Text.Json;
 
 namespace Phantom.Workspaces.Llm.Tests;
@@ -13,7 +13,7 @@ public sealed class WorkspaceEntityToolsetFactoryTests
     [Fact]
     public async Task CreateToolsetAsync_WhenKindMatches_ReturnsWorkspaceEntityTools()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var factory = ToolsetFactory.CreateWorkspaceEntityToolsetFactory(dataAccessLayer);
 
         var toolset = await factory.CreateToolsetAsync(CreateCustomTool("workspace-entity"), new AgentServices());
@@ -34,9 +34,10 @@ public sealed class WorkspaceEntityToolsetFactoryTests
     [Fact]
     public async Task ProvideAIContextAsync_LoadsInstructionsFromGlobalNote()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
         await StoreGlobalInstructionNoteAsync(
-            dataAccessLayer,
+            fixture,
             ["documentation", "entity-workspace-agent-tool-instructions"],
             "Use workspaces_entity_get and workspaces_entity_update.");
         var provider = new WorkspaceEntityContextProvider(dataAccessLayer);
@@ -55,7 +56,7 @@ public sealed class WorkspaceEntityToolsetFactoryTests
     [Fact]
     public async Task WorkspacesEntityGet_ReturnsStructuredJsonElement_NotDoubleEncoded()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var updateTool = await GetToolAsync(dataAccessLayer, "workspaces_entity_update");
         var getTool = await GetToolAsync(dataAccessLayer, "workspaces_entity_get");
         var entityId = Guid.NewGuid();
@@ -71,7 +72,7 @@ public sealed class WorkspaceEntityToolsetFactoryTests
                         "entity-id": "{{entityId:D}}",
                         "entity-change-mode": "replace",
                         "data": {
-                          "entity-types": ["entity", "sample"],
+                          "entity-types": ["entity", "task"],
                           "names": [["samples", "one"]],
                           "display-name": "Sample Entity"
                         }
@@ -105,7 +106,7 @@ public sealed class WorkspaceEntityToolsetFactoryTests
     [Fact]
     public async Task WorkspacesEntityGet_WithPropertiesFilter_ReturnsRequestedFields()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var updateTool = await GetToolAsync(dataAccessLayer, "workspaces_entity_update");
         var getTool = await GetToolAsync(dataAccessLayer, "workspaces_entity_get");
         var entityId = Guid.NewGuid();
@@ -121,11 +122,12 @@ public sealed class WorkspaceEntityToolsetFactoryTests
                         "entity-id": "{{entityId:D}}",
                         "entity-change-mode": "replace",
                         "data": {
-                          "entity-types": ["entity", "sample"],
+                          "entity-types": ["entity", "note"],
                           "names": [["samples", "one"]],
                           "display-name": "Sample Entity",
                           "content": {
                             "default": {
+                              "mime-type": "text/plain",
                               "content": {
                                 "text": "hello"
                               }
@@ -158,7 +160,7 @@ public sealed class WorkspaceEntityToolsetFactoryTests
     [Fact]
     public async Task WorkspacesEntityUpdate_ReplaceAndDelete_WithConcurrencyTag_Succeeds()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var updateTool = await GetToolAsync(dataAccessLayer, "workspaces_entity_update");
         var getTool = await GetToolAsync(dataAccessLayer, "workspaces_entity_get");
         var entityId = Guid.NewGuid();
@@ -174,9 +176,9 @@ public sealed class WorkspaceEntityToolsetFactoryTests
                         "entity-id": "{{entityId:D}}",
                         "entity-change-mode": "replace",
                         "data": {
-                          "entity-types": ["entity", "sample"],
+                          "entity-types": ["entity", "task"],
                           "names": [["samples", "delete-me"]],
-                          "value": "before"
+                          "display-name": "before"
                         }
                       }
                     ]
@@ -220,7 +222,9 @@ public sealed class WorkspaceEntityToolsetFactoryTests
     [Fact]
     public async Task WorkspacesEntityUpdate_RelationshipWithoutReasonNote_IsRejectedAndNotWritten()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
+        var (targetId, userId) = await SeedRelationshipParticipantsAsync(fixture);
         var updateTool = await GetToolAsync(dataAccessLayer, "workspaces_entity_update");
         var getTool = await GetToolAsync(dataAccessLayer, "workspaces_entity_get");
         var relationshipId = Guid.NewGuid();
@@ -237,7 +241,7 @@ public sealed class WorkspaceEntityToolsetFactoryTests
                         "entity-change-mode": "replace",
                         "data": {
                           "entity-types": ["entity", "assigned-to", "relationship"],
-                          "participants": { "target": "{{Guid.NewGuid():D}}", "user": "{{Guid.NewGuid():D}}" }
+                          "participants": { "target": "{{targetId}}", "user": "{{userId}}" }
                         }
                       }
                     ]
@@ -262,7 +266,9 @@ public sealed class WorkspaceEntityToolsetFactoryTests
     [Fact]
     public async Task WorkspacesEntityUpdate_RelationshipWithReasonNote_Succeeds()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
+        var (targetId, userId) = await SeedRelationshipParticipantsAsync(fixture);
         var updateTool = await GetToolAsync(dataAccessLayer, "workspaces_entity_update");
         var relationshipId = Guid.NewGuid();
 
@@ -278,7 +284,7 @@ public sealed class WorkspaceEntityToolsetFactoryTests
                         "entity-change-mode": "replace",
                         "data": {
                           "entity-types": ["entity", "assigned-to", "relationship"],
-                          "participants": { "target": "{{Guid.NewGuid():D}}", "user": "{{Guid.NewGuid():D}}" },
+                          "participants": { "target": "{{targetId}}", "user": "{{userId}}" },
                           "note": "Task is assigned to the user per the project board."
                         }
                       }
@@ -294,7 +300,7 @@ public sealed class WorkspaceEntityToolsetFactoryTests
     [Fact]
     public async Task WorkspacesEntityGenerateGuid_ReturnsGuid()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var generateGuidTool = await GetToolAsync(dataAccessLayer, "workspaces_entity_generate_guid");
 
         var result = await generateGuidTool.InvokeAsync(new AIFunctionArguments(new Dictionary<string, object?>()), CancellationToken.None);
@@ -305,7 +311,7 @@ public sealed class WorkspaceEntityToolsetFactoryTests
     [Fact]
     public async Task WorkspacesEntityGet_WithJsonEncodedStringPayload_ReturnsValidationError()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var getTool = await GetToolAsync(dataAccessLayer, "workspaces_entity_get");
 
         var result = await getTool.InvokeAsync(
@@ -376,7 +382,7 @@ public sealed class WorkspaceEntityToolsetFactoryTests
     }
 
     private static async Task<AIFunction> GetToolAsync(
-        InMemoryDataAccessLayer dataAccessLayer,
+        IDataAccessLayer dataAccessLayer,
         string toolName)
     {
         var factory = new WorkspaceEntityContextProvider(dataAccessLayer);
@@ -419,7 +425,7 @@ public sealed class WorkspaceEntityToolsetFactoryTests
     }
 
     private static async Task StoreGlobalInstructionNoteAsync(
-        IDataAccessLayer dataAccessLayer,
+        ValidatingEntitySeedFixture fixture,
         string[] entityName,
         string markdownText)
     {
@@ -441,28 +447,36 @@ public sealed class WorkspaceEntityToolsetFactoryTests
             """);
         var entityData = jsonDocument.RootElement.Clone();
 
-        var updateResult = await dataAccessLayer.UpdateAsync(
-            new UpdateRequest
-            {
-                UpdateMetadata = new UpdateMetadata
-                {
-                    Comment = new Markdown
-                    {
-                        Text = "Seed global workspace entity instruction note.",
-                    },
-                },
-                Changes =
-                [
-                    new EntityChange
-                    {
-                        EntityId = new EntityId(entityData.GetProperty("entity-id").GetString()!),
-                        Data = entityData,
-                        EntityChangeMode = EntityChangeMode.Replace,
-                    },
-                ],
-            },
-            CancellationToken.None);
+        await fixture.SeedValidEntityAsync(entityData);
+    }
 
-        Assert.DoesNotContain(updateResult.EntityResults, static result => result.UpdateState == UpdateState.Failed);
+    private static async Task<IDataAccessLayer> CreateDataAccessLayerAsync()
+        => (await ValidatingEntitySeedFixture.CreateAsync()).DataAccessLayer;
+
+    private static async Task<(EntityId TargetId, EntityId UserId)> SeedRelationshipParticipantsAsync(
+        ValidatingEntitySeedFixture fixture)
+    {
+        var targetId = new EntityId();
+        var userId = new EntityId();
+        await fixture.SeedManyValidAsync(
+            [
+                JsonDocument.Parse(
+                    $$"""
+                    {
+                      "entity-id": "{{targetId}}",
+                      "entity-types": ["entity", "task"],
+                      "names": [["tasks", "relationship-target"]]
+                    }
+                    """).RootElement.Clone(),
+                JsonDocument.Parse(
+                    $$"""
+                    {
+                      "entity-id": "{{userId}}",
+                      "entity-types": ["entity", "user"],
+                      "names": [["users", "username", "relationship-user"]]
+                    }
+                    """).RootElement.Clone(),
+            ]);
+        return (targetId, userId);
     }
 }

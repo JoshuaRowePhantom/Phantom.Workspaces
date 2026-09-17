@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
 using Phantom.Workspaces.ScheduledTools;
+using Phantom.Workspaces.Testing;
 using Phantom.Workspaces.Testing.Gui;
 using Phantom.Workspaces.Tools;
 using Phantom.Workspaces.ViewModels;
@@ -59,10 +60,10 @@ public sealed class ScheduledToolsRunningViewModelTests
     private static readonly string[] HostName = ["computer", "this-machine"];
     private const string HostLabel = "computer / this-machine";
 
-    private static async Task<(InMemoryDataAccessLayer DataAccessLayer, ScheduledToolHost Host, Guid HostId)>
+    private static async Task<(IDataAccessLayer DataAccessLayer, ScheduledToolHost Host, Guid HostId)>
         CreateHostAsync(IWorkspaceTool tool)
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var userId = Guid.NewGuid();
         var computerId = Guid.NewGuid();
         var hostId = Guid.NewGuid();
@@ -81,7 +82,7 @@ public sealed class ScheduledToolsRunningViewModelTests
         await AddEntityAsync(dataAccessLayer, scheduleId,
             $$"""{ "entity-id": "{{scheduleId}}", "entity-types": ["entity", "schedule"], "names": [["schedule","s"]], "repeat": { "frequency": "00:00:01Z", "days-of-week": [], "start-at": [] } }""");
         await AddEntityAsync(dataAccessLayer, relationshipId,
-            $$"""{ "entity-id": "{{relationshipId}}", "entity-types": ["entity", "tool-relationship"], "names": [["tool-relationships","r"]], "participants": { "tool": "{{toolId}}", "schedule": ["{{scheduleId}}"], "target": ["{{hostId}}"] } }""");
+            $$"""{ "entity-id": "{{relationshipId}}", "entity-types": ["entity", "relationship", "tool-relationship"], "names": [["tool-relationships","r"]], "participants": { "tool": "{{toolId}}", "schedule": ["{{scheduleId}}"], "target": ["{{hostId}}"] } }""");
 
         var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([tool]));
         return (dataAccessLayer, host, hostId);
@@ -97,6 +98,9 @@ public sealed class ScheduledToolsRunningViewModelTests
         });
         Assert.DoesNotContain(result.EntityResults, r => r.UpdateState == UpdateState.Failed);
     }
+
+    private static async Task<IDataAccessLayer> CreateDataAccessLayerAsync()
+        => (await ValidatingEntitySeedFixture.CreateAsync()).DataAccessLayer;
 
     private static async Task WriteRunAsync(
         IDataAccessLayer dataAccessLayer,
@@ -142,7 +146,7 @@ public sealed class ScheduledToolsRunningViewModelTests
     [Fact]
     public async Task HasFailure_IsTrueWhenLastRunFailed()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var timeProvider = new FixedTimeProvider();
         await WriteRunAsync(dataAccessLayer, timeProvider, "stub", success: false, message: "something broke");
 
@@ -159,7 +163,7 @@ public sealed class ScheduledToolsRunningViewModelTests
     [Fact]
     public async Task HasFailure_IsFalseWhenLastRunSucceeded()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var timeProvider = new FixedTimeProvider();
         await WriteRunAsync(dataAccessLayer, timeProvider, "stub", success: true);
 
@@ -175,7 +179,7 @@ public sealed class ScheduledToolsRunningViewModelTests
     [Fact]
     public async Task RefreshHistoryAsync_SetsLastRunStatusFromMostRecentRun()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var timeProvider = new FixedTimeProvider();
         // Older run succeeded; newer run failed — LastRunStatus should be "failed".
         await WriteRunAsync(dataAccessLayer, timeProvider, "stub", success: true);
@@ -192,7 +196,7 @@ public sealed class ScheduledToolsRunningViewModelTests
     [Fact]
     public async Task RecentRuns_LoadedOnExpand_ShowsMostRecentFirst()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var timeProvider = new FixedTimeProvider();
         await WriteRunAsync(dataAccessLayer, timeProvider, "stub", success: true);
         await WriteRunAsync(dataAccessLayer, timeProvider, "stub", success: false);
@@ -215,7 +219,7 @@ public sealed class ScheduledToolsRunningViewModelTests
     [Fact]
     public async Task RecentRuns_ShowsAllRuns_WhenMoreThanTen()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var timeProvider = new FixedTimeProvider();
         for (var i = 0; i < 12; i++)
         {
@@ -235,7 +239,7 @@ public sealed class ScheduledToolsRunningViewModelTests
     [Fact]
     public async Task RecentRuns_IncludesMessageFromContent()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var timeProvider = new FixedTimeProvider();
         await WriteRunAsync(dataAccessLayer, timeProvider, "stub", success: false, message: "disk full");
 
@@ -253,7 +257,7 @@ public sealed class ScheduledToolsRunningViewModelTests
     [Fact]
     public async Task RecentRuns_DurationIsEndMinusStart_WhenCompleted()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var timeProvider = new FixedTimeProvider();
         var writer = new ToolExecutionResultWriter(dataAccessLayer, timeProvider);
         var handle = await writer.StartAsync(HostName, "stub", TestContext.Current.CancellationToken);
@@ -274,7 +278,7 @@ public sealed class ScheduledToolsRunningViewModelTests
     [Fact]
     public async Task HasFailure_IsTrueOnViewModel_WhenAnyToolHasLastRunFailed()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var timeProvider = new FixedTimeProvider();
         await WriteRunAsync(dataAccessLayer, timeProvider, "stub", success: false, message: "oops");
 
@@ -288,7 +292,7 @@ public sealed class ScheduledToolsRunningViewModelTests
     [Fact]
     public async Task HasFailure_IsFalseOnViewModel_WhenAllRunsSucceeded()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var timeProvider = new FixedTimeProvider();
         await WriteRunAsync(dataAccessLayer, timeProvider, "stub", success: true);
 
@@ -302,7 +306,7 @@ public sealed class ScheduledToolsRunningViewModelTests
     [Fact]
     public async Task RefreshHistoryAsync_DoesNotDuplicateRow_WhenCalledTwice()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var timeProvider = new FixedTimeProvider();
         await WriteRunAsync(dataAccessLayer, timeProvider, "stub", success: true);
 
@@ -317,7 +321,7 @@ public sealed class ScheduledToolsRunningViewModelTests
     [Fact]
     public async Task ExpandCommand_TogglesIsExpanded_AndTriggersRecentRunsLoad()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var timeProvider = new FixedTimeProvider();
         await WriteRunAsync(dataAccessLayer, timeProvider, "stub", success: true);
 
@@ -349,7 +353,7 @@ public sealed class ScheduledToolsRunningViewModelTests
     [Fact]
     public async Task ExpandCommand_CollapsesRow_WhenExecutedWhileExpanded()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var timeProvider = new FixedTimeProvider();
         await WriteRunAsync(dataAccessLayer, timeProvider, "stub", success: true);
 
@@ -369,7 +373,7 @@ public sealed class ScheduledToolsRunningViewModelTests
     public async Task RefreshHistoryAsync_PreservesSynchronizationContext_MutatesToolsOnCapturedContext()
     {
         using var pump = new SingleThreadPump(installSynchronizationContext: true);
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var timeProvider = new FixedTimeProvider();
         await WriteRunAsync(dataAccessLayer, timeProvider, "stub", success: true);
 
@@ -591,7 +595,7 @@ public sealed class ScheduledToolsRunningViewModelTests
     [Fact]
     public async Task LoadRecentRunsForTool_WhenRunFailed_ShowsFailedGlyphAndMessage()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var timeProvider = new FixedTimeProvider();
         await WriteRunAsync(dataAccessLayer, timeProvider, "stub", success: false, message: "disk full");
 
@@ -611,7 +615,7 @@ public sealed class ScheduledToolsRunningViewModelTests
     [Fact]
     public async Task LoadRecentRunsForTool_WhenOrphanRunningReconciled_ShowsFailedGlyphAndReconciliationMessage()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
 
         // Seed an orphan running result (as a prior process would have left it).
         var orphanId = Guid.NewGuid();
@@ -705,7 +709,7 @@ public sealed class ScheduledToolsRunningViewModelTests
     [Fact]
     public async Task RefreshHistoryAsync_LoadsQueryResults_OffTheForegroundScheduler()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var timeProvider = new FixedTimeProvider();
         for (var i = 0; i < 20; i++)
         {
@@ -732,7 +736,7 @@ public sealed class ScheduledToolsRunningViewModelTests
     [Fact]
     public async Task RefreshHistoryAsync_LargeHistory_DoesNotBlockForegroundScheduler()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var timeProvider = new FixedTimeProvider();
         // Simulate a large recorded history across many tool types.
         for (var i = 0; i < 200; i++)
@@ -760,7 +764,7 @@ public sealed class ScheduledToolsRunningViewModelTests
     [Fact]
     public async Task RefreshHistoryAsync_MergesFinalHistoryOnForegroundScheduler()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var timeProvider = new FixedTimeProvider();
         await WriteRunAsync(dataAccessLayer, timeProvider, "stub", success: true);
         await WriteRunAsync(dataAccessLayer, timeProvider, "stub-2", success: false);
@@ -787,7 +791,7 @@ public sealed class ScheduledToolsRunningViewModelTests
     [Fact]
     public async Task RefreshHistoryAsync_UsesInjectedForegroundScheduler_NotSynchronizationContext()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var timeProvider = new FixedTimeProvider();
         await WriteRunAsync(dataAccessLayer, timeProvider, "stub", success: true);
 
@@ -820,7 +824,7 @@ public sealed class ScheduledToolsRunningViewModelTests
     [Fact]
     public async Task RefreshHistoryAsync_AfterAsyncLoad_HistoryIsRenderedCorrectly()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var timeProvider = new FixedTimeProvider();
         // Two tools; each has multiple runs so LastRunStatus reflects the most recent.
         await WriteRunAsync(dataAccessLayer, timeProvider, "tool-a", success: true);
@@ -961,7 +965,7 @@ public sealed class ScheduledToolsRunningViewModelTests
     [Fact]
     public async Task RefreshHistoryAsync_WithLargeHistory_LoadsOnlyBoundedRecentWindow()
     {
-        var inner = new InMemoryDataAccessLayer();
+        var inner = await CreateDataAccessLayerAsync();
         var timeProvider = new FixedTimeProvider();
         for (var i = 0; i < 30; i++)
         {
@@ -983,7 +987,7 @@ public sealed class ScheduledToolsRunningViewModelTests
     [Fact]
     public async Task LoadRecentRunsForToolAsync_FiltersByToolInQuery_DoesNotMaterializeOtherToolsRuns()
     {
-        var inner = new InMemoryDataAccessLayer();
+        var inner = await CreateDataAccessLayerAsync();
         var timeProvider = new FixedTimeProvider();
         await WriteRunAsync(inner, timeProvider, "stub", success: true);
         await WriteRunAsync(inner, timeProvider, "other-tool", success: false);
@@ -1009,7 +1013,7 @@ public sealed class ScheduledToolsRunningViewModelTests
     [Fact]
     public async Task RefreshHistoryAsync_WithLargeHistory_CompletesWithinBound()
     {
-        var inner = new InMemoryDataAccessLayer();
+        var inner = await CreateDataAccessLayerAsync();
         var timeProvider = new FixedTimeProvider();
         for (var i = 0; i < 40; i++)
         {
@@ -1192,7 +1196,7 @@ public sealed class ScheduledToolsRunningViewModelTests
     [Fact]
     public async Task RefreshHistoryAsync_MoreRunsThanLimit_ShowsMostRecentRuns()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var hostA = new[] { "computer", "host-a" };
         var t0 = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
@@ -1216,7 +1220,7 @@ public sealed class ScheduledToolsRunningViewModelTests
     [Fact]
     public async Task LoadRecentRunsForTool_ManyOtherHostRuns_StillShowsSelectedHostRuns()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var hostA = new[] { "computer", "host-a" };
         var hostB = new[] { "computer", "host-b" };
         var t0 = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
@@ -1251,7 +1255,7 @@ public sealed class ScheduledToolsRunningViewModelTests
     [Fact]
     public async Task LoadWindowForTool_BusyHour_ReturnsSelectedHostRunsWithinWindow()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var hostA = new[] { "computer", "host-a" };
         var hostB = new[] { "computer", "host-b" };
         var t0 = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);

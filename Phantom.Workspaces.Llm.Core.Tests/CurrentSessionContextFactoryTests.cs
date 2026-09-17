@@ -1,5 +1,5 @@
 using Phantom.Workspaces.Data;
-using Phantom.Workspaces.Data.Offline;
+using Phantom.Workspaces.Testing;
 using System.Text.Json;
 
 namespace Phantom.Workspaces.Llm.Tests;
@@ -14,11 +14,12 @@ public sealed class CurrentSessionContextFactoryTests
     [Fact]
     public async Task CreateForHostAsync_ResolvesUserComputerProfileFromDataAccessLayer()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
-        var user = await SeedEntityAsync(dataAccessLayer, ["entity", "user"], ["users", "username", UserName]);
-        var computer = await SeedEntityAsync(dataAccessLayer, ["entity", "computer"], ["computers", "hostname", ComputerName]);
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
+        var user = await SeedEntityAsync(fixture, ["entity", "user"], ["users", "username", UserName]);
+        var computer = await SeedEntityAsync(fixture, ["entity", "computer"], ["computers", "hostname", ComputerName]);
         var profile = await SeedEntityAsync(
-            dataAccessLayer,
+            fixture,
             ["entity", "user-computer-profile"],
             ["computer-user-profiles", "users", "username", UserName, "computers", "hostname", ComputerName]);
 
@@ -38,9 +39,10 @@ public sealed class CurrentSessionContextFactoryTests
     [Fact]
     public async Task CreateForHostAsync_MissingProfile_LeavesProfileNullButKeepsUserAndComputer()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
-        var user = await SeedEntityAsync(dataAccessLayer, ["entity", "user"], ["users", "username", UserName]);
-        var computer = await SeedEntityAsync(dataAccessLayer, ["entity", "computer"], ["computers", "hostname", ComputerName]);
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
+        var user = await SeedEntityAsync(fixture, ["entity", "user"], ["users", "username", UserName]);
+        var computer = await SeedEntityAsync(fixture, ["entity", "computer"], ["computers", "hostname", ComputerName]);
 
         var context = await CurrentSessionContextFactory.CreateForHostAsync(
             SessionId, dataAccessLayer, UserName, ComputerName, ComputerName,
@@ -54,7 +56,7 @@ public sealed class CurrentSessionContextFactoryTests
     [Fact]
     public async Task CreateForHostAsync_PassesThroughAgentDefinitionReference()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = (await ValidatingEntitySeedFixture.CreateAsync()).DataAccessLayer;
         var definitionReference = new EntityName("agent-definitions", "researcher");
 
         var context = await CurrentSessionContextFactory.CreateForHostAsync(
@@ -65,42 +67,31 @@ public sealed class CurrentSessionContextFactoryTests
     }
 
     private static async Task<EntitySnapshot> SeedEntityAsync(
-        IDataAccessLayer dataAccessLayer,
+        ValidatingEntitySeedFixture fixture,
         string[] entityTypes,
         string[] entityName)
     {
         var entityId = new EntityId();
+        var references = entityTypes.Contains("user-computer-profile", StringComparer.Ordinal)
+            ? $$"""
+              ,
+              "computer-reference": ["computers", "hostname", "{{ComputerName}}"],
+              "user-reference": ["users", "username", "{{UserName}}"]
+              """
+            : string.Empty;
         using var jsonDocument = JsonDocument.Parse(
             $$"""
             {
               "entity-id": "{{entityId.Value}}",
               "entity-types": {{JsonSerializer.Serialize(entityTypes)}},
-              "names": [{{JsonSerializer.Serialize(entityName)}}]
+              "names": [{{JsonSerializer.Serialize(entityName)}}]{{references}}
             }
             """);
         var data = jsonDocument.RootElement.Clone();
 
-        var updateResult = await dataAccessLayer.UpdateAsync(
-            new UpdateRequest
-            {
-                UpdateMetadata = new UpdateMetadata
-                {
-                    Comment = new Markdown { Text = "Seed entity for current-session factory tests." },
-                },
-                Changes =
-                [
-                    new EntityChange
-                    {
-                        EntityId = entityId,
-                        Data = data,
-                        EntityChangeMode = EntityChangeMode.Replace,
-                    },
-                ],
-            },
-            CancellationToken.None);
-        Assert.DoesNotContain(updateResult.EntityResults, static result => result.UpdateState == UpdateState.Failed);
+        await fixture.SeedValidEntityAsync(data);
 
-        var getResult = await dataAccessLayer.GetAsync(
+        var getResult = await fixture.DataAccessLayer.GetAsync(
             new GetRequest
             {
                 Entities = [new GetEntityRequest { EntityId = entityId }],

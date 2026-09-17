@@ -1,6 +1,6 @@
 using System.Text.Json;
 using Phantom.Workspaces.Data;
-using Phantom.Workspaces.Data.Offline;
+using Phantom.Workspaces.Testing;
 
 namespace Phantom.Workspaces.Tools.Tests;
 
@@ -14,7 +14,7 @@ public sealed class DiscoveryToolsTests
             userName: "test-user",
             operatingSystemName: "windows",
             homeDirectoryPath: @"C:\Users\test-user");
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var context = await CreateExecutionContextAsync(dataAccessLayer, provider);
         var tool = new ComputerDiscoveryTool(provider);
 
@@ -36,7 +36,7 @@ public sealed class DiscoveryToolsTests
             userName: "test-user",
             operatingSystemName: "windows",
             homeDirectoryPath: @"C:\Users\test-user");
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var context = await CreateExecutionContextAsync(dataAccessLayer, provider);
         var tool = new UserDiscoveryTool(provider);
 
@@ -57,7 +57,7 @@ public sealed class DiscoveryToolsTests
             userName: "test-user",
             operatingSystemName: "windows",
             homeDirectoryPath: @"C:\Users\test-user");
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var context = await CreateExecutionContextAsync(dataAccessLayer, provider);
         var tool = new ComputerUserProfileDiscoveryTool(provider);
 
@@ -89,7 +89,7 @@ public sealed class DiscoveryToolsTests
             operatingSystemName: "windows",
             homeDirectoryPath: @"C:\Users\test-user",
             effectiveComputerName: "override-machine");
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var context = await CreateExecutionContextAsync(dataAccessLayer, provider);
         var tool = new ComputerUserProfileDiscoveryTool(provider);
 
@@ -178,6 +178,9 @@ public sealed class DiscoveryToolsTests
             Schedule = currentComputerEntity,
         };
     }
+
+    private static async Task<IDataAccessLayer> CreateDataAccessLayerAsync()
+        => (await ValidatingEntitySeedFixture.CreateAsync()).DataAccessLayer;
 
     private static async Task<EntitySnapshot?> GetEntityByNameAsync(
         IDataAccessLayer dataAccessLayer,

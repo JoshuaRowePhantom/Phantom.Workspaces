@@ -1,6 +1,6 @@
 using System.Text.Json;
 using Phantom.Workspaces.Data;
-using Phantom.Workspaces.Data.Offline;
+using Phantom.Workspaces.Testing;
 
 namespace Phantom.Workspaces.Tools.Tests;
 
@@ -9,7 +9,7 @@ public sealed class WorkspaceToolExecutionContextTests
     [Fact]
     public async Task Context_CarriesCurrentComputerUserAndProfileEntities()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = (await ValidatingEntitySeedFixture.CreateAsync()).DataAccessLayer;
 
         var currentComputerEntity = await UpsertEntityAsync(
             dataAccessLayer,

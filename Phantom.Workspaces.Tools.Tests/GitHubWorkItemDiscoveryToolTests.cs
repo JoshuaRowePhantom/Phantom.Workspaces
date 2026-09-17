@@ -1,20 +1,22 @@
 using System.Text.Json;
 using Phantom.Workspaces.Data;
-using Phantom.Workspaces.Data.Offline;
+using Phantom.Workspaces.Testing;
 using Phantom.Workspaces.Tools.GitHub;
 
 namespace Phantom.Workspaces.Tools.Tests;
 
 public sealed class GitHubWorkItemDiscoveryToolTests
 {
-    private static WorkspaceToolExecutionContext CreateContext(
-        IDataAccessLayer dataAccessLayer,
+    private static async Task<WorkspaceToolExecutionContext> CreateContextAsync(
+        ValidatingEntitySeedFixture fixture,
         params EntitySnapshot[] participants)
     {
-        var dummyEntity = CreateDummyEntity(new EntityId("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), "dummy");
+        var dummyEntity = await SeedAndGetAsync(
+            fixture,
+            CreateDummyEntity(new EntityId("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), "dummy"));
         return new WorkspaceToolExecutionContext
         {
-            DataAccessLayer = dataAccessLayer,
+            DataAccessLayer = fixture.DataAccessLayer,
             CancellationToken = CancellationToken.None,
             CurrentComputerEntity = dummyEntity,
             CurrentUserEntity = dummyEntity,
@@ -26,42 +28,44 @@ public sealed class GitHubWorkItemDiscoveryToolTests
         };
     }
 
-    private static EntitySnapshot CreateDummyEntity(EntityId entityId, string name)
+    private static JsonElement CreateDummyEntity(EntityId entityId, string name)
     {
         using var document = JsonDocument.Parse($$"""
             {
               "entity-id": "{{entityId.Value}}",
-              "entity-types": ["entity"],
+              "entity-types": ["entity", "task"],
               "names": [["test", "{{name}}"]]
             }
             """);
-        return new EntitySnapshot
-        {
-            EntityId = entityId,
-            ModifiedTime = new Timestamp(),
-            Relationships = [],
-            Data = document.RootElement.Clone(),
-        };
+        return document.RootElement.Clone();
     }
 
-    private static EntitySnapshot CreateGitRepositoryEntity(string entityId, string githubUrl)
+    private static JsonElement CreateGitRepositoryEntity(string entityId, string githubUrl)
     {
         using var document = JsonDocument.Parse($$"""
             {
               "entity-id": "{{entityId}}",
-              "entity-types": ["entity", "git-repository", "external"],
+              "entity-types": ["entity", "repository", "git-repository", "external"],
               "names": [["git-repositories", "test-repo"]],
               "display-name": {"default": "Test Repo"},
               "urls": {"default": "{{githubUrl}}"}
             }
             """);
-        return new EntitySnapshot
-        {
-            EntityId = new EntityId(Guid.Parse(entityId)),
-            ModifiedTime = new Timestamp(),
-            Relationships = [],
-            Data = document.RootElement.Clone(),
-        };
+        return document.RootElement.Clone();
+    }
+
+    private static async Task<EntitySnapshot> SeedAndGetAsync(
+        ValidatingEntitySeedFixture fixture,
+        JsonElement entity)
+    {
+        var entityId = await fixture.SeedValidEntityAsync(entity);
+        var result = await fixture.DataAccessLayer.GetAsync(
+            new GetRequest
+            {
+                Entities = [new GetEntityRequest { EntityId = entityId }],
+                Timestamps = [null],
+            });
+        return Assert.Single(Assert.Single(result.Batches).Entities);
     }
 
     private static async Task<EntitySnapshot?> GetEntityByNameAsync(
@@ -72,8 +76,18 @@ public sealed class GitHubWorkItemDiscoveryToolTests
         {
             Entities = [new GetEntityRequest { EntityName = entityName }],
         });
-        return result.Batches.SelectMany(static b => b.Entities).FirstOrDefault();
+        return result.Batches
+            .SelectMany(static batch => batch.Entities)
+            .FirstOrDefault(entity => HasName(entity, entityName));
     }
+
+    private static bool HasName(EntitySnapshot entity, EntityName expected)
+        => entity.Data is { } data
+            && data.TryGetProperty("names", out var names)
+            && names.EnumerateArray().Any(
+                name => name.EnumerateArray()
+                    .Select(static component => component.GetString() ?? string.Empty)
+                    .SequenceEqual(expected.Components, StringComparer.Ordinal));
 
     private static async Task<int> CountEntitiesWithNameAsync(
         IDataAccessLayer dataAccessLayer,
@@ -84,6 +98,19 @@ public sealed class GitHubWorkItemDiscoveryToolTests
             Entities = [new GetEntityRequest { EntityName = entityName }],
         });
         return result.Batches.SelectMany(static b => b.Entities).Count();
+    }
+
+    private static async Task<EntitySnapshot?> GetEntityByIdAsync(
+        IDataAccessLayer dataAccessLayer,
+        EntityId entityId)
+    {
+        var result = await dataAccessLayer.GetAsync(
+            new GetRequest
+            {
+                Entities = [new GetEntityRequest { EntityId = entityId }],
+                Timestamps = [null],
+            });
+        return result.Batches.SelectMany(static batch => batch.Entities).FirstOrDefault();
     }
 
     private static async Task<EntitySnapshot> UpsertEntityAsync(
@@ -114,11 +141,12 @@ public sealed class GitHubWorkItemDiscoveryToolTests
     [Fact]
     public async Task GitHubWorkItemDiscoveryTool_MapsIssueFieldsToWorkItemEntity()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
-        var repoEntity = CreateGitRepositoryEntity(
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
+        var repoEntity = await SeedAndGetAsync(fixture, CreateGitRepositoryEntity(
             "11111111-1111-1111-1111-111111111111",
-            "https://github.com/myorg/myrepo");
-        var context = CreateContext(dataAccessLayer, repoEntity);
+            "https://github.com/myorg/myrepo"));
+        var context = await CreateContextAsync(fixture, repoEntity);
 
         var issueJson = """
             [
@@ -159,11 +187,12 @@ public sealed class GitHubWorkItemDiscoveryToolTests
     [Fact]
     public async Task GitHubWorkItemDiscoveryTool_SkipsIssuesThatArePullRequests()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
-        var repoEntity = CreateGitRepositoryEntity(
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
+        var repoEntity = await SeedAndGetAsync(fixture, CreateGitRepositoryEntity(
             "22222222-2222-2222-2222-222222222222",
-            "https://github.com/myorg/myrepo");
-        var context = CreateContext(dataAccessLayer, repoEntity);
+            "https://github.com/myorg/myrepo"));
+        var context = await CreateContextAsync(fixture, repoEntity);
 
         var issueJson = """
             [
@@ -195,17 +224,18 @@ public sealed class GitHubWorkItemDiscoveryToolTests
     [Fact]
     public async Task GitHubWorkItemDiscoveryTool_WritesRelatedRelationship_WhenLinkedPrEntityExists()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
-        var repoEntity = CreateGitRepositoryEntity(
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
+        var repoEntity = await SeedAndGetAsync(fixture, CreateGitRepositoryEntity(
             "33333333-3333-3333-3333-333333333333",
-            "https://github.com/myorg/myrepo");
-        var context = CreateContext(dataAccessLayer, repoEntity);
+            "https://github.com/myorg/myrepo"));
+        var context = await CreateContextAsync(fixture, repoEntity);
 
         var prEntityId = new EntityId(Guid.Parse("44444444-4444-4444-4444-444444444444"));
         await UpsertEntityAsync(dataAccessLayer, prEntityId, $$"""
             {
               "entity-id": "44444444-4444-4444-4444-444444444444",
-              "entity-types": ["entity", "git-pull-request", "external"],
+              "entity-types": ["entity", "task", "pull-request", "git-pull-request", "external"],
               "names": [["github", "myorg", "myrepo", "pull-requests", "42"]],
               "display-name": {"default": "PR #42"},
               "urls": {"default": "https://github.com/myorg/myrepo/pull/42"}
@@ -259,18 +289,23 @@ public sealed class GitHubWorkItemDiscoveryToolTests
         Assert.NotNull(relEntity);
         var relRaw = relEntity.Data?.GetRawText() ?? string.Empty;
         Assert.Contains("\"related\"", relRaw, StringComparison.Ordinal);
-        Assert.Contains(workItemEntity.EntityId.Value.ToString(), relRaw, StringComparison.Ordinal);
+        var participants = relEntity.Data!.Value.GetProperty("participants").GetProperty("entities");
+        var relatedWorkItemId = new EntityId(participants[0].GetString()!);
+        var relatedWorkItem = await GetEntityByIdAsync(dataAccessLayer, relatedWorkItemId);
+        Assert.NotNull(relatedWorkItem);
+        Assert.True(HasName(relatedWorkItem, new EntityName("github", "myorg", "myrepo", "work-items", "1")));
         Assert.Contains("44444444-4444-4444-4444-444444444444", relRaw, StringComparison.Ordinal);
     }
 
     [Fact]
     public async Task GitHubWorkItemDiscoveryTool_ClosedIssue_MapsToClosedStatus()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
-        var repoEntity = CreateGitRepositoryEntity(
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
+        var repoEntity = await SeedAndGetAsync(fixture, CreateGitRepositoryEntity(
             "55555555-5555-5555-5555-555555555555",
-            "https://github.com/myorg/myrepo");
-        var context = CreateContext(dataAccessLayer, repoEntity);
+            "https://github.com/myorg/myrepo"));
+        var context = await CreateContextAsync(fixture, repoEntity);
 
         var issueJson = """
             [
@@ -302,11 +337,12 @@ public sealed class GitHubWorkItemDiscoveryToolTests
     [Fact]
     public async Task GitHubWorkItemDiscoveryTool_UpsertIsIdempotent_DoesNotDuplicateEntity()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
-        var repoEntity = CreateGitRepositoryEntity(
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
+        var repoEntity = await SeedAndGetAsync(fixture, CreateGitRepositoryEntity(
             "66666666-6666-6666-6666-666666666666",
-            "https://github.com/myorg/myrepo");
-        var context = CreateContext(dataAccessLayer, repoEntity);
+            "https://github.com/myorg/myrepo"));
+        var context = await CreateContextAsync(fixture, repoEntity);
 
         var issueJson = """
             [

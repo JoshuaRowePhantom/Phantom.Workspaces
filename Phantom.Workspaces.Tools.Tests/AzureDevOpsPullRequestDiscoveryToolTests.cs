@@ -1,50 +1,13 @@
 using System.Text.Json;
 using Phantom.Workspaces.Data;
-using Phantom.Workspaces.Data.Offline;
+using Phantom.Workspaces.Testing;
 using Phantom.Workspaces.Tools.AzureDevOps;
 
 namespace Phantom.Workspaces.Tools.Tests;
 
 public sealed class AzureDevOpsPullRequestDiscoveryToolTests
 {
-    private static WorkspaceToolExecutionContext CreateContext(
-        IDataAccessLayer dataAccessLayer,
-        params EntitySnapshot[] participants)
-    {
-        var dummyEntity = CreateDummyEntity(new EntityId("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), "dummy");
-        return new WorkspaceToolExecutionContext
-        {
-            DataAccessLayer = dataAccessLayer,
-            CancellationToken = CancellationToken.None,
-            CurrentComputerEntity = dummyEntity,
-            CurrentUserEntity = dummyEntity,
-            CurrentComputerUserProfileEntity = dummyEntity,
-            ToolRelationship = dummyEntity,
-            Participants = participants,
-            Tool = dummyEntity,
-            Schedule = dummyEntity,
-        };
-    }
-
-    private static EntitySnapshot CreateDummyEntity(EntityId entityId, string name)
-    {
-        using var document = JsonDocument.Parse($$"""
-            {
-              "entity-id": "{{entityId.Value}}",
-              "entity-types": ["entity"],
-              "names": [["test", "{{name}}"]]
-            }
-            """);
-        return new EntitySnapshot
-        {
-            EntityId = entityId,
-            ModifiedTime = new Timestamp(),
-            Relationships = [],
-            Data = document.RootElement.Clone(),
-        };
-    }
-
-    private static EntitySnapshot CreateAzureDevOpsRepositoryEntity(
+    private static JsonElement CreateAzureDevOpsRepositoryEntity(
         string entityId,
         string repositoryUrl,
         string repositoryId = "repo-guid-0000-0000-0000-000000000000")
@@ -59,13 +22,7 @@ public sealed class AzureDevOpsPullRequestDiscoveryToolTests
               "repository-id": "{{repositoryId}}"
             }
             """);
-        return new EntitySnapshot
-        {
-            EntityId = new EntityId(Guid.Parse(entityId)),
-            ModifiedTime = new Timestamp(),
-            Relationships = [],
-            Data = document.RootElement.Clone(),
-        };
+        return document.RootElement.Clone();
     }
 
     private static async Task<EntitySnapshot?> GetEntityByNameAsync(
@@ -82,13 +39,14 @@ public sealed class AzureDevOpsPullRequestDiscoveryToolTests
     [Fact]
     public async Task AzureDevOpsPullRequestDiscoveryTool_UpsertsPullRequest()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
         var repoEntityId = "11111111-1111-1111-1111-111111111111";
         var repoEntity = CreateAzureDevOpsRepositoryEntity(
             repoEntityId,
             "https://dev.azure.com/myorg/myproject/_git/MyRepo",
             "repo-0000-0000-0000-000000000001");
-        var context = CreateContext(dataAccessLayer, repoEntity);
+        var context = await ValidatedWorkspaceToolTestContext.CreateAsync(fixture, repoEntity);
 
         var prResponse = """
             {
@@ -131,12 +89,13 @@ public sealed class AzureDevOpsPullRequestDiscoveryToolTests
     [Fact]
     public async Task AzureDevOpsPullRequestDiscoveryTool_MapsAdoStatusToPullRequestStatus()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
         var repoEntity = CreateAzureDevOpsRepositoryEntity(
             "22222222-2222-2222-2222-222222222222",
             "https://dev.azure.com/myorg/myproject/_git/MyRepo",
             "repo-guid-0002");
-        var context = CreateContext(dataAccessLayer, repoEntity);
+        var context = await ValidatedWorkspaceToolTestContext.CreateAsync(fixture, repoEntity);
 
         var prResponse = """
             {
@@ -198,12 +157,13 @@ public sealed class AzureDevOpsPullRequestDiscoveryToolTests
     [Fact]
     public async Task AzureDevOpsPullRequestDiscoveryTool_IsDraftMappedToDraftStatus()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
         var repoEntity = CreateAzureDevOpsRepositoryEntity(
             "33333333-3333-3333-3333-333333333333",
             "https://dev.azure.com/myorg/myproject/_git/MyRepo",
             "repo-guid-0003");
-        var context = CreateContext(dataAccessLayer, repoEntity);
+        var context = await ValidatedWorkspaceToolTestContext.CreateAsync(fixture, repoEntity);
 
         var prResponse = """
             {
@@ -237,10 +197,17 @@ public sealed class AzureDevOpsPullRequestDiscoveryToolTests
     [Fact]
     public async Task AzureDevOpsPullRequestDiscoveryTool_SkipsNonRepositoryParticipants()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
-        var nonRepoEntity = CreateDummyEntity(
-            new EntityId("44444444-4444-4444-4444-444444444444"), "not-a-repo");
-        var context = CreateContext(dataAccessLayer, nonRepoEntity);
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
+        var nonRepoEntity = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "44444444-4444-4444-4444-444444444444",
+              "entity-types": ["entity", "task"],
+              "names": [["tasks", "not-a-repo"]]
+            }
+            """).RootElement.Clone();
+        var context = await ValidatedWorkspaceToolTestContext.CreateAsync(fixture, nonRepoEntity);
 
         var callCount = 0;
         var tool = new AzureDevOpsPullRequestDiscoveryTool(

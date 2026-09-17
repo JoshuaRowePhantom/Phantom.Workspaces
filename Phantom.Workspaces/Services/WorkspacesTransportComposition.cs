@@ -128,7 +128,11 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
                 ? channel => identities.SetIdentity(channel, localPeer)
                 : null);
         this.userComputerProfileTransportFactory =
-            new UserComputerProfileTransportFactory(dataAccessLayer, workspaceEntitySession, registry);
+            new UserComputerProfileTransportFactory(
+                dataAccessLayer,
+                workspaceEntitySession,
+                registry,
+                hubFactories?.Select(static factory => factory.HubUrl).Distinct(StringComparer.Ordinal).ToArray());
         this.httpClientTransportFactory = new HttpClientTransportFactory();
         this.reverseHttpForwardingTransportFactory = new ReverseHttpForwardingTransportFactory(
             new HttpClientTransportFactory(),

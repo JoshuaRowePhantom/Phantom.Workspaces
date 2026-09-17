@@ -7,6 +7,7 @@ using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Testing;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.Chat;
 
@@ -19,7 +20,7 @@ public sealed class WorkspacesTransportCompositionTests
     [Fact]
     public async Task Composition_TransportFactoryRegistry_BuildsLocalTransportFactory()
     {
-        await using var composition = CreateComposition();
+        await using var composition = await CreateCompositionAsync();
 
         using var descriptor = JsonDocument.Parse("""{"type":"local"}""");
         var transport = await composition.TransportFactoryRegistry.ConnectToAsync(descriptor.RootElement, Ct());
@@ -31,7 +32,7 @@ public sealed class WorkspacesTransportCompositionTests
     [Fact]
     public async Task Composition_TransportFactoryRegistry_BuildsUserComputerProfileTransportFactory()
     {
-        await using var composition = CreateComposition();
+        await using var composition = await CreateCompositionAsync();
 
         // The session's own profile id resolves to a local descriptor, so the user-computer-profile
         // factory routes back through the registry to the LocalTransportFactory: proves both factories
@@ -47,7 +48,7 @@ public sealed class WorkspacesTransportCompositionTests
     [Fact]
     public async Task Composition_UnknownDescriptor_ThrowsTransportException()
     {
-        await using var composition = CreateComposition();
+        await using var composition = await CreateCompositionAsync();
 
         using var descriptor = JsonDocument.Parse("""{"type":"nonexistent-transport"}""");
         await Assert.ThrowsAsync<TransportException>(
@@ -57,7 +58,7 @@ public sealed class WorkspacesTransportCompositionTests
     [Fact]
     public async Task Composition_ExposesTrustedExecutorAndHostSurfaces()
     {
-        await using var composition = CreateComposition();
+        await using var composition = await CreateCompositionAsync();
 
         Assert.True(composition.TrustedExecutor.CanExecute("some-target"));
         Assert.NotNull(composition.TransportHost);
@@ -70,7 +71,7 @@ public sealed class WorkspacesTransportCompositionTests
     public async Task Composition_PublishesTransportFactoryRegistry()
     {
         var provider = new TransportFactoryRegistryProvider();
-        await using var composition = CreateComposition(agentServices: null, provider);
+        await using var composition = await CreateCompositionAsync(agentServices: null, provider);
 
         Assert.Same(composition.TransportFactoryRegistry, provider.Registry);
     }
@@ -83,7 +84,7 @@ public sealed class WorkspacesTransportCompositionTests
         // channel carrying an `agent-definition` is dispatched to a listener that builds
         // the executor IChatClient via AgentFactory. Without this, LocalListeners is empty
         // and remote chat-client channels have no listener in production.
-        await using var composition = CreateComposition();
+        await using var composition = await CreateCompositionAsync();
 
         var agentDef = new AgentSchema.PromptAgent
         {
@@ -108,7 +109,7 @@ public sealed class WorkspacesTransportCompositionTests
     [Fact]
     public async Task Composition_ExposesRemoteMcpHostHandler()
     {
-        await using var composition = CreateComposition();
+        await using var composition = await CreateCompositionAsync();
 
         Assert.NotNull(composition.RemoteMcpHostHandler);
     }
@@ -121,7 +122,7 @@ public sealed class WorkspacesTransportCompositionTests
         // remote-bound McpToolContextProvider on another machine — is served by this machine's
         // RemoteMcpHostHandler. A connection with no endpoint is not hostable, but the listener still
         // accepts the `mcp` channel and returns a session handle (with a null inner host).
-        await using var composition = CreateComposition();
+        await using var composition = await CreateCompositionAsync();
 
         var openRequest = Json("""{"type":"mcp","connection":{}}""");
         var channel = new StubMessageChannel();
@@ -134,8 +135,7 @@ public sealed class WorkspacesTransportCompositionTests
     [Fact]
     public async Task Composition_WithRunningChats_AuthenticatesAndDispatchesAgentSessionLocally()
     {
-        var dataAccessLayer = new EntityLookupDataAccessLayer(
-            (LocalProfileId, """{"entity-id":"11111111-1111-1111-1111-111111111111"}"""));
+        var dataAccessLayer = await CreateSeededDataAccessLayerAsync();
         var session = new WorkspaceEntitySession
         {
             UserEntityId = new EntityId("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
@@ -177,7 +177,7 @@ public sealed class WorkspacesTransportCompositionTests
         // AgentServices.CopilotClientFactory) and bridging only its SDK session over the channel.
         var factory = new StubCopilotClientFactory();
         var agentServices = new Phantom.Workspaces.Llm.AgentServices { CopilotClientFactory = factory };
-        await using var composition = CreateComposition(agentServices);
+        await using var composition = await CreateCompositionAsync(agentServices);
 
         var openRequest = Json("""{"type":"copilot-sdk-session"}""");
         var channel = new StubMessageChannel();
@@ -239,8 +239,7 @@ public sealed class WorkspacesTransportCompositionTests
     [Fact]
     public async Task Composition_WithHubFactories_ExposesThemToTransportHost()
     {
-        var dataAccessLayer = new EntityLookupDataAccessLayer(
-            (LocalProfileId, """{"entity-id":"11111111-1111-1111-1111-111111111111"}"""));
+        var dataAccessLayer = await CreateSeededDataAccessLayerAsync();
         var session = new WorkspaceEntitySession
         {
             UserEntityId = new EntityId("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
@@ -258,15 +257,14 @@ public sealed class WorkspacesTransportCompositionTests
         Assert.Same(hubFactory, Assert.Single(composition.TransportHost.HubFactories));
     }
 
-    private static WorkspacesTransportComposition CreateComposition()
-        => CreateComposition(agentServices: null);
+    private static Task<WorkspacesTransportComposition> CreateCompositionAsync()
+        => CreateCompositionAsync(agentServices: null);
 
-    private static WorkspacesTransportComposition CreateComposition(
+    private static async Task<WorkspacesTransportComposition> CreateCompositionAsync(
         Phantom.Workspaces.Llm.AgentServices? agentServices,
         TransportFactoryRegistryProvider? registryProvider = null)
     {
-        var dataAccessLayer = new EntityLookupDataAccessLayer(
-            (LocalProfileId, """{"entity-id":"11111111-1111-1111-1111-111111111111"}"""));
+        var dataAccessLayer = await CreateSeededDataAccessLayerAsync();
         var session = new WorkspaceEntitySession
         {
             UserEntityId = new EntityId("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
@@ -281,57 +279,40 @@ public sealed class WorkspacesTransportCompositionTests
             registryProvider: registryProvider);
     }
 
+    private static async Task<IDataAccessLayer> CreateSeededDataAccessLayerAsync()
+    {
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        await fixture.SeedManyValidAsync(
+            [
+                Json(
+                    """
+                    {
+                      "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                      "entity-types": ["entity", "user"],
+                      "names": [["users", "username", "composition-test"]]
+                    }
+                    """),
+                Json(
+                    """
+                    {
+                      "entity-id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                      "entity-types": ["entity", "computer"],
+                      "names": [["computers", "name", "composition-test"]]
+                    }
+                    """),
+                Json(
+                    """
+                    {
+                      "entity-id": "11111111-1111-1111-1111-111111111111",
+                      "entity-types": ["entity", "user-computer-profile"],
+                      "computer-reference": ["computers", "name", "composition-test"],
+                      "user-reference": ["users", "username", "composition-test"]
+                    }
+                    """),
+            ]);
+        return fixture.DataAccessLayer;
+    }
+
     private static CancellationToken Ct() => new CancellationTokenSource(System.TimeSpan.FromSeconds(10)).Token;
 
-    private sealed class EntityLookupDataAccessLayer : IDataAccessLayer
-    {
-        private readonly System.Collections.Generic.Dictionary<EntityId, JsonElement> entities = [];
-
-        public EntityLookupDataAccessLayer(params (EntityId EntityId, string Json)[] seedEntities)
-        {
-            foreach (var (entityId, json) in seedEntities)
-            {
-                this.entities[entityId] = JsonDocument.Parse(json).RootElement.Clone();
-            }
-        }
-
-        public Task<GetResult> GetAsync(GetRequest request, CancellationToken cancellationToken = default)
-        {
-            var snapshots = request.Entities
-                .Where(entity => entity.EntityId is not null && this.entities.ContainsKey(entity.EntityId.Value))
-                .Select(entity => new EntitySnapshot
-                {
-                    EntityId = entity.EntityId!.Value,
-                    ModifiedTime = new Timestamp(System.DateTimeOffset.UnixEpoch, "test"),
-                    Data = this.entities[entity.EntityId.Value].Clone(),
-                    Relationships = [],
-                })
-                .ToArray();
-            return Task.FromResult(new GetResult
-            {
-                Batches =
-                [
-                    new TimestampedEntityBatch
-                    {
-                        Entities = snapshots,
-                    },
-                ],
-            });
-        }
-
-        public Task<UpdateResult> UpdateAsync(UpdateRequest request, CancellationToken cancellationToken = default)
-            => throw new System.NotSupportedException();
-
-        public Task<QueryResult> QueryAsync(QueryRequest request, CancellationToken cancellationToken = default)
-            => Task.FromResult(new QueryResult { Batches = [] });
-
-        public Task<GetHistoryResult> GetHistoryAsync(GetHistoryRequest request, CancellationToken cancellationToken = default)
-            => throw new System.NotSupportedException();
-
-        public Task<ExportResult> ExportAsync(ExportRequest request, CancellationToken cancellationToken = default)
-            => throw new System.NotSupportedException();
-
-        public Task<GetChangedEntitiesResult> GetChangedEntitiesAsync(GetChangedEntitiesRequest request, CancellationToken cancellationToken = default)
-            => throw new System.NotSupportedException();
-    }
 }

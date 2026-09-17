@@ -11,6 +11,7 @@ using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Models;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.UsageProviders;
+using Phantom.Workspaces.Testing;
 using Xunit;
 
 namespace Phantom.Workspaces.Tests;
@@ -44,62 +45,26 @@ public sealed class UsageMetricsServiceTests
         }
     }
 
-    private sealed class FakeDataAccessLayer : IDataAccessLayer
+    private static JsonElement CreateUserAccountEntity(string provider, string userName)
     {
-        private readonly IReadOnlyList<QueryEntitySnapshot> entities;
-
-        public FakeDataAccessLayer(IReadOnlyList<QueryEntitySnapshot> entities)
-        {
-            this.entities = entities;
-        }
-
-        public Task<QueryResult> QueryAsync(QueryRequest request, CancellationToken cancellationToken = default)
-            => Task.FromResult(new QueryResult
-            {
-                Batches =
-                [
-                    new TimestampedQueryBatch
-                    {
-                        Timestamp = null,
-                        Entities = this.entities,
-                    },
-                ],
-            });
-
-        public Task<UpdateResult> UpdateAsync(UpdateRequest request, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<GetResult> GetAsync(GetRequest request, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<GetHistoryResult> GetHistoryAsync(GetHistoryRequest request, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<ExportResult> ExportAsync(ExportRequest request, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<GetChangedEntitiesResult> GetChangedEntitiesAsync(GetChangedEntitiesRequest request, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-    }
-
-    private static QueryEntitySnapshot CreateUserAccountEntity(string provider, string userName)
-    {
+        var entityId = new EntityId();
         using var doc = JsonDocument.Parse($$"""
             {
-              "entity-id": "{{Guid.NewGuid()}}",
+              "entity-id": "{{entityId}}",
               "entity-types": ["entity", "user-account"],
               "provider": "{{provider}}",
               "user-name": "{{userName}}"
             }
             """);
-        return new QueryEntitySnapshot
-        {
-            EntityId = new EntityId(Guid.NewGuid().ToString()),
-            ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
-            Data = doc.RootElement.Clone(),
-            Relationships = [],
-            MatchingClauseIdentifiers = [],
-        };
+        return doc.RootElement.Clone();
+    }
+
+    private static async Task<IDataAccessLayer> CreateDataAccessLayerAsync(
+        IReadOnlyList<JsonElement> entities)
+    {
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync(TestContext.Current.CancellationToken);
+        await fixture.SeedManyValidAsync(entities);
+        return fixture.DataAccessLayer;
     }
 
     [Fact]
@@ -115,7 +80,7 @@ public sealed class UsageMetricsServiceTests
                 return Task.FromResult<IReadOnlyList<UsageMetric>>(Array.Empty<UsageMetric>());
             });
 
-        var dal = new FakeDataAccessLayer([
+        var dal = await CreateDataAccessLayerAsync([
             CreateUserAccountEntity("https://example.com", "user1"),
         ]);
 
@@ -153,7 +118,7 @@ public sealed class UsageMetricsServiceTests
                 ]);
             });
 
-        var dal = new FakeDataAccessLayer([
+        var dal = await CreateDataAccessLayerAsync([
             CreateUserAccountEntity("https://example.com", "user1"),
         ]);
 
@@ -205,7 +170,7 @@ public sealed class UsageMetricsServiceTests
                 return Task.FromResult<IReadOnlyList<UsageMetric>>(Array.Empty<UsageMetric>());
             });
 
-        var dal = new FakeDataAccessLayer([
+        var dal = await CreateDataAccessLayerAsync([
             CreateUserAccountEntity("https://example.com", "user1"),
         ]);
 
@@ -276,7 +241,7 @@ public sealed class UsageMetricsServiceTests
                 throw new InvalidOperationException("Provider error");
             });
 
-        var dal = new FakeDataAccessLayer([
+        var dal = await CreateDataAccessLayerAsync([
             CreateUserAccountEntity("https://example.com", "user1"),
         ]);
 
@@ -337,7 +302,7 @@ public sealed class UsageMetricsServiceTests
                 ]);
             });
 
-        var dal = new FakeDataAccessLayer([
+        var dal = await CreateDataAccessLayerAsync([
             CreateUserAccountEntity("https://example.com", "user1"),
             CreateUserAccountEntity("https://different.com", "user2"), // No matching provider
         ]);
@@ -380,7 +345,7 @@ public sealed class UsageMetricsServiceTests
                 return Task.FromResult<IReadOnlyList<UsageMetric>>(Array.Empty<UsageMetric>());
             });
 
-        var dal = new FakeDataAccessLayer([
+        var dal = await CreateDataAccessLayerAsync([
             CreateUserAccountEntity("https://example.com", "user1"),
         ]);
 
@@ -423,7 +388,7 @@ public sealed class UsageMetricsServiceTests
                 return Task.FromResult<IReadOnlyList<UsageMetric>>(Array.Empty<UsageMetric>());
             });
 
-        var dal = new FakeDataAccessLayer([
+        var dal = await CreateDataAccessLayerAsync([
             CreateUserAccountEntity("https://example.com", "user1"),
         ]);
 
@@ -475,7 +440,7 @@ public sealed class UsageMetricsServiceTests
                 ]);
             });
 
-        var dal = new FakeDataAccessLayer([
+        var dal = await CreateDataAccessLayerAsync([
             CreateUserAccountEntity("https://example.com", "user1"),
         ]);
 
@@ -537,7 +502,7 @@ public sealed class UsageMetricsServiceTests
                 ]);
             });
 
-        var dal = new FakeDataAccessLayer([
+        var dal = await CreateDataAccessLayerAsync([
             CreateUserAccountEntity("https://example1.com", "user1"),
             CreateUserAccountEntity("https://example2.com", "user2"),
         ]);
@@ -581,7 +546,7 @@ public sealed class UsageMetricsServiceTests
                 return Task.FromResult<IReadOnlyList<UsageMetric>>(Array.Empty<UsageMetric>());
             });
 
-        var dal = new FakeDataAccessLayer([
+        var dal = await CreateDataAccessLayerAsync([
             CreateUserAccountEntity("https://example.com", "user1"),
         ]);
 
@@ -618,7 +583,7 @@ public sealed class UsageMetricsServiceTests
             providerUri,
             (_, _) => Task.FromResult<IReadOnlyList<UsageMetric>>(Array.Empty<UsageMetric>()));
 
-        var dal = new FakeDataAccessLayer(Array.Empty<QueryEntitySnapshot>());
+        var dal = await CreateDataAccessLayerAsync([]);
 
         var usageMetrics = new UsageMetrics();
         var timeProvider = new FakeTimeProvider();
@@ -650,7 +615,7 @@ public sealed class UsageMetricsServiceTests
                 return Task.FromResult<IReadOnlyList<UsageMetric>>(Array.Empty<UsageMetric>());
             });
 
-        var dal = new FakeDataAccessLayer([
+        var dal = await CreateDataAccessLayerAsync([
             CreateUserAccountEntity("https://example.com", "user1"),
         ]);
 
@@ -704,7 +669,7 @@ public sealed class UsageMetricsServiceTests
                 return Task.FromResult<IReadOnlyList<UsageMetric>>(Array.Empty<UsageMetric>());
             });
 
-        var dal = new FakeDataAccessLayer([
+        var dal = await CreateDataAccessLayerAsync([
             CreateUserAccountEntity("https://example.com", "user1"),
         ]);
 
@@ -754,7 +719,7 @@ public sealed class UsageMetricsServiceTests
                 return Task.FromResult<IReadOnlyList<UsageMetric>>(Array.Empty<UsageMetric>());
             });
 
-        var dal = new FakeDataAccessLayer([
+        var dal = await CreateDataAccessLayerAsync([
             CreateUserAccountEntity("https://example.com", "user1"),
         ]);
 
@@ -815,7 +780,7 @@ public sealed class UsageMetricsServiceTests
                 return Task.FromResult<IReadOnlyList<UsageMetric>>([new UsageMetric { Title = "Actions Minutes" }]);
             });
 
-        var dal = new FakeDataAccessLayer([
+        var dal = await CreateDataAccessLayerAsync([
             CreateUserAccountEntity("https://github.com", "octocat"),
         ]);
 
@@ -860,7 +825,8 @@ public sealed class UsageMetricsServiceTests
             new Uri("https://example.com"),
             (_, _) => Task.FromResult<IReadOnlyList<UsageMetric>>([new UsageMetric { Title = "API Calls" }]));
 
-        var dal = new MutableFakeDataAccessLayer();
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync(TestContext.Current.CancellationToken);
+        var dal = fixture.DataAccessLayer;
 
         var mutationCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var mutationScheduler = new ActionBlockScheduler(task =>
@@ -893,7 +859,9 @@ public sealed class UsageMetricsServiceTests
         Assert.Empty(usageMetrics.Accounts);
 
         // Account appears after startup; the next poll must discover and refresh it.
-        dal.Entities = [CreateUserAccountEntity("https://example.com", "user1")];
+        await fixture.SeedValidEntityAsync(
+            CreateUserAccountEntity("https://example.com", "user1"),
+            TestContext.Current.CancellationToken);
         timeProvider.Advance(TimeSpan.FromSeconds(60));
 
         await mutationCompleted.Task;
@@ -901,49 +869,6 @@ public sealed class UsageMetricsServiceTests
         Assert.Equal(1, provider.CallCount);
         var account = Assert.Single(usageMetrics.Accounts);
         Assert.Equal("user1", account.UserName);
-    }
-
-    /// <summary>
-    /// A fake DAL whose returned entity set can be changed after construction, so tests can simulate
-    /// accounts being created after the service has started.
-    /// </summary>
-    private sealed class MutableFakeDataAccessLayer : IDataAccessLayer
-    {
-        private volatile IReadOnlyList<QueryEntitySnapshot> entities = Array.Empty<QueryEntitySnapshot>();
-
-        public IReadOnlyList<QueryEntitySnapshot> Entities
-        {
-            get => this.entities;
-            set => this.entities = value;
-        }
-
-        public Task<QueryResult> QueryAsync(QueryRequest request, CancellationToken cancellationToken = default)
-            => Task.FromResult(new QueryResult
-            {
-                Batches =
-                [
-                    new TimestampedQueryBatch
-                    {
-                        Timestamp = null,
-                        Entities = this.entities,
-                    },
-                ],
-            });
-
-        public Task<UpdateResult> UpdateAsync(UpdateRequest request, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<GetResult> GetAsync(GetRequest request, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<GetHistoryResult> GetHistoryAsync(GetHistoryRequest request, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<ExportResult> ExportAsync(ExportRequest request, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<GetChangedEntitiesResult> GetChangedEntitiesAsync(GetChangedEntitiesRequest request, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
     }
 
     /// <summary>
@@ -1042,7 +967,7 @@ public sealed class UsageMetricsServiceTests
         var provider = new FakeUsageProvider(
             new Uri("https://example.com"),
             (_, _) => Task.FromResult<IReadOnlyList<UsageMetric>>(Array.Empty<UsageMetric>()));
-        var dal = new FakeDataAccessLayer([CreateUserAccountEntity("https://example.com", "user1")]);
+        var dal = await CreateDataAccessLayerAsync([CreateUserAccountEntity("https://example.com", "user1")]);
         var usageMetrics = new UsageMetrics();
         var logger = new SignalingLogger<UsageMetricsService>();
 
@@ -1063,7 +988,7 @@ public sealed class UsageMetricsServiceTests
         var provider = new FakeUsageProvider(
             new Uri("https://example.com"),
             (_, _) => Task.FromResult<IReadOnlyList<UsageMetric>>(Array.Empty<UsageMetric>()));
-        var dal = new FakeDataAccessLayer([CreateUserAccountEntity("https://example.com", "user1")]);
+        var dal = await CreateDataAccessLayerAsync([CreateUserAccountEntity("https://example.com", "user1")]);
         var usageMetrics = new UsageMetrics();
         var logger = new SignalingLogger<UsageMetricsService>();
 
@@ -1085,7 +1010,7 @@ public sealed class UsageMetricsServiceTests
         var provider = new FakeUsageProvider(
             new Uri("https://example.com"),
             (_, _) => Task.FromResult<IReadOnlyList<UsageMetric>>([new UsageMetric { Title = "API Calls" }]));
-        var dal = new FakeDataAccessLayer([CreateUserAccountEntity("https://example.com", "user1")]);
+        var dal = await CreateDataAccessLayerAsync([CreateUserAccountEntity("https://example.com", "user1")]);
         var mutationScheduler = new ActionBlockScheduler(task => task());
         var usageMetrics = new UsageMetrics(mutationScheduler);
         var logger = new SignalingLogger<UsageMetricsService>();
@@ -1147,7 +1072,7 @@ public sealed class UsageMetricsServiceTests
                 ]);
             });
 
-        var dal = new FakeDataAccessLayer([
+        var dal = await CreateDataAccessLayerAsync([
             CreateUserAccountEntity("https://example.com", "user1"),
         ]);
 

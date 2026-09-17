@@ -399,7 +399,7 @@ public sealed class GitHubWorkItemDiscoveryTool : IWorkspaceTool
 
         return new JsonObject
         {
-            ["entity-types"] = new JsonArray("entity", "work-item", "git-work-item", "external"),
+            ["entity-types"] = new JsonArray("entity", "task", "work-item", "git-work-item", "external"),
             ["names"] = namesArray,
             ["display-name"] = new JsonObject
             {

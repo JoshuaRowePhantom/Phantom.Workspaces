@@ -9,15 +9,18 @@ public sealed class UserComputerProfileTransportFactory : ITransportFactory
     private readonly IDataAccessLayer dataAccessLayer;
     private readonly WorkspaceEntitySession workspaceEntitySession;
     private readonly ITransportFactoryRegistry transportFactoryRegistry;
+    private readonly IReadOnlyCollection<string> reverseHttpHubUrls;
 
     public UserComputerProfileTransportFactory(
         IDataAccessLayer dataAccessLayer,
         WorkspaceEntitySession workspaceEntitySession,
-        ITransportFactoryRegistry transportFactoryRegistry)
+        ITransportFactoryRegistry transportFactoryRegistry,
+        IReadOnlyCollection<string>? reverseHttpHubUrls = null)
     {
         this.dataAccessLayer = dataAccessLayer ?? throw new ArgumentNullException(nameof(dataAccessLayer));
         this.workspaceEntitySession = workspaceEntitySession ?? throw new ArgumentNullException(nameof(workspaceEntitySession));
         this.transportFactoryRegistry = transportFactoryRegistry ?? throw new ArgumentNullException(nameof(transportFactoryRegistry));
+        this.reverseHttpHubUrls = reverseHttpHubUrls ?? [];
     }
 
     public async Task<ITransport?> ConnectToAsync(JsonElement connectionDescriptor, CancellationToken ct = default)
@@ -35,7 +38,7 @@ public sealed class UserComputerProfileTransportFactory : ITransportFactory
         }
 
         var entityId = new EntityId(entityIdText);
-        var profileEntity = await this.GetRequiredProfileEntityAsync(entityId, ct).ConfigureAwait(false);
+        _ = await this.GetRequiredProfileEntityAsync(entityId, ct).ConfigureAwait(false);
         JsonElement routedDescriptor;
         if (entityId == this.workspaceEntitySession.UserComputerProfileEntityId)
         {
@@ -44,14 +47,26 @@ public sealed class UserComputerProfileTransportFactory : ITransportFactory
         }
         else
         {
-            if (!profileEntity.TryGetProperty("connection-descriptor", out var entityConnectionDescriptor)
-                || entityConnectionDescriptor.ValueKind != JsonValueKind.Object)
+            if (connectionDescriptor.TryGetProperty("connection-descriptor", out var routedConnectionDescriptor)
+                && routedConnectionDescriptor.ValueKind == JsonValueKind.Object)
+            {
+                routedDescriptor = routedConnectionDescriptor.Clone();
+            }
+            else if (this.reverseHttpHubUrls.Count > 0)
+            {
+                routedDescriptor = JsonSerializer.SerializeToElement(
+                    new Dictionary<string, object>
+                    {
+                        ["type"] = "reverse-http",
+                        ["hub-urls"] = this.reverseHttpHubUrls,
+                        ["entity-id"] = entityId.ToString(),
+                    });
+            }
+            else
             {
                 throw new TransportException(
-                    $"User computer profile entity '{entityId}' does not contain a connection-descriptor object.");
+                    $"Remote user computer profile descriptor '{entityId}' has no transient route and no configured reverse HTTP hub.");
             }
-
-            routedDescriptor = entityConnectionDescriptor.Clone();
         }
 
         var transport = await this.transportFactoryRegistry.ConnectToAsync(routedDescriptor, ct).ConfigureAwait(false);

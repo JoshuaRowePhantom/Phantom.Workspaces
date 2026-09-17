@@ -6,4 +6,8 @@
     <IsPackable>false</IsPackable>
     <RootNamespace>Phantom.Workspaces.Testing</RootNamespace>
   </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Phantom.Workspaces.Data.Core\Phantom.Workspaces.Data.Core.csproj" />
+    <ProjectReference Include="..\Phantom.Workspaces.Data.Offline\Phantom.Workspaces.Data.Offline.csproj" />
+  </ItemGroup>
 </Project>

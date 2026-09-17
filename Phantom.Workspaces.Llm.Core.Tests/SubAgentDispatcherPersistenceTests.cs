@@ -1,9 +1,11 @@
 using System.Collections.ObjectModel;
 using System.Text.Json;
 using AgentSchema;
+using Microsoft.Extensions.Time.Testing;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Vector;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Testing;
 
 namespace Phantom.Workspaces.Llm.Tests;
 
@@ -34,29 +36,39 @@ public sealed class SubAgentDispatcherPersistenceTests
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var dispatcherEntityName = new EntityName("dispatchers", "test-dispatcher");
-        var dataAccessLayer = new RecordingDataAccessLayer();
         var factory = new RestoringAgentChatFactory();
 
         var firstUpdated = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
         var secondUpdated = new DateTimeOffset(2026, 1, 2, 0, 0, 0, TimeSpan.Zero);
+        var timeProvider = new FakeTimeProvider(firstUpdated);
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync(timeProvider, timeout.Token);
+        var dispatcherEntityId = await SeedAgentSessionAsync(
+            fixture,
+            dispatcherEntityName,
+            "dispatcher-session",
+            description: null,
+            parentEntityId: null);
 
-        dataAccessLayer.SeedChild(
+        await SeedAgentSessionAsync(
+            fixture,
             dispatcherEntityName,
             id: "alpha",
             description: "first sub-agent",
             sessionId: "session-alpha",
-            modifiedTime: firstUpdated);
-        dataAccessLayer.SeedChild(
+            parentEntityId: dispatcherEntityId);
+        timeProvider.SetUtcNow(secondUpdated);
+        await SeedAgentSessionAsync(
+            fixture,
             dispatcherEntityName,
             id: "beta",
             description: "second sub-agent",
             sessionId: "session-beta",
-            modifiedTime: secondUpdated);
+            parentEntityId: dispatcherEntityId);
 
         var client = new SubAgentDispatcherChatClient(
             factory,
             new DeterministicEmbeddingsProvider(),
-            dataAccessLayer,
+            fixture.DataAccessLayer,
             dispatcherEntityName,
             CreateOptions());
 
@@ -88,13 +100,19 @@ public sealed class SubAgentDispatcherPersistenceTests
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var dispatcherEntityName = new EntityName("dispatchers", "test-dispatcher");
-        var dataAccessLayer = new RecordingDataAccessLayer();
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync(timeout.Token);
+        _ = await SeedAgentSessionAsync(
+            fixture,
+            dispatcherEntityName,
+            "dispatcher-session",
+            description: null,
+            parentEntityId: null);
         var factory = new RestoringAgentChatFactory();
 
         var client = new SubAgentDispatcherChatClient(
             factory,
             new DeterministicEmbeddingsProvider(),
-            dataAccessLayer,
+            fixture.DataAccessLayer,
             dispatcherEntityName,
             CreateOptions());
 
@@ -107,9 +125,22 @@ public sealed class SubAgentDispatcherPersistenceTests
         {
         }
 
+        var children = await fixture.DataAccessLayer.GetAsync(
+            new GetRequest
+            {
+                Entities =
+                [
+                    new GetEntityRequest
+                    {
+                        EntityName = dispatcherEntityName,
+                        EnumerateChildren = EnumerateChildrenAction.EnumerateChildren,
+                    },
+                ],
+            },
+            timeout.Token);
         var write = Assert.Single(
-            dataAccessLayer.WrittenEntities.Values,
-            e => e.TryGetProperty("sub-agent-description", out _));
+            children.Batches.SelectMany(static batch => batch.Entities),
+            entity => entity.Data is { } data && data.TryGetProperty("sub-agent-description", out _)).Data!.Value;
 
         Assert.True(write.TryGetProperty("parent-agent-session-ids", out var parents));
         Assert.Equal(JsonValueKind.Array, parents.ValueKind);
@@ -122,156 +153,38 @@ public sealed class SubAgentDispatcherPersistenceTests
         client.Dispose();
     }
 
-    /// <summary>
-    /// A data access layer that stores replaced entities in memory and supports child enumeration
-    /// by name prefix, mirroring the behaviour the dispatcher relies on for restore.
-    /// </summary>
-    private sealed class RecordingDataAccessLayer : IDataAccessLayer
+    private static async Task<EntityId> SeedAgentSessionAsync(
+        ValidatingEntitySeedFixture fixture,
+        EntityName dispatcherName,
+        string sessionId,
+        string? description,
+        EntityId? parentEntityId,
+        string? id = null)
     {
-        private readonly Dictionary<EntityId, StoredEntity> _entities = new();
-
-        public IReadOnlyDictionary<EntityId, JsonElement> WrittenEntities =>
-            _entities.ToDictionary(e => e.Key, e => e.Value.Data);
-
-        public void SeedChild(
-            EntityName dispatcherName,
-            string id,
-            string description,
-            string sessionId,
-            DateTimeOffset modifiedTime)
+        var entityId = new EntityId();
+        var name = id is null
+            ? dispatcherName
+            : new EntityName([.. dispatcherName.Components, id]);
+        var data = new Dictionary<string, object?>
         {
-            var entityId = new EntityId(Guid.NewGuid());
-            var name = new EntityName([.. dispatcherName.Components, id]);
-            var data = new Dictionary<string, object?>
-            {
-                ["entity-id"] = entityId.ToString(),
-                ["entity-types"] = new[] { "entity", "agent-session" },
-                ["names"] = new[] { name.Components },
-                ["display-name"] = new Dictionary<string, object?> { ["default"] = id },
-                ["agent-session-id"] = sessionId,
-                ["sub-agent-description"] = description,
-                ["parent-agent-session-ids"] = new[] { Guid.NewGuid().ToString("D") },
-            };
-
-            _entities[entityId] = new StoredEntity(
-                entityId,
-                name,
-                JsonSerializer.SerializeToElement(data),
-                new Timestamp(modifiedTime, "seed"));
+            ["entity-id"] = entityId.ToString(),
+            ["entity-types"] = new[] { "entity", "agent-session" },
+            ["names"] = new[] { name.Components },
+            ["display-name"] = new Dictionary<string, object?> { ["default"] = id ?? "dispatcher" },
+            ["agent-session-id"] = sessionId,
+        };
+        if (description is not null)
+        {
+            data["sub-agent-description"] = description;
         }
 
-        public Task<UpdateResult> UpdateAsync(UpdateRequest request, CancellationToken cancellationToken = default)
+        if (parentEntityId is { } parent)
         {
-            var results = new List<EntityUpdateResult>();
-            foreach (var change in request.Changes)
-            {
-                var entityId = change.EntityId ?? new EntityId(Guid.NewGuid());
-                if (change.Data is { } data)
-                {
-                    var name = ReadName(data);
-                    _entities[entityId] = new StoredEntity(
-                        entityId,
-                        name,
-                        data.Clone(),
-                        new Timestamp(DateTimeOffset.UtcNow, "write"));
-                }
-
-                results.Add(new EntityUpdateResult
-                {
-                    UpdateState = UpdateState.Updated,
-                    RequestedEntityId = entityId,
-                    ResultingEntityId = entityId,
-                    ConcurrencyMatchState = ConcurrencyMatchState.Matched,
-                    Errors = [],
-                });
-            }
-
-            return Task.FromResult(new UpdateResult { EntityResults = results });
+            data["parent-agent-session-ids"] = new[] { parent.ToString() };
         }
 
-        public Task<GetResult> GetAsync(GetRequest request, CancellationToken cancellationToken = default)
-        {
-            var matched = new List<EntitySnapshot>();
-            foreach (var entityRequest in request.Entities)
-            {
-                foreach (var stored in _entities.Values)
-                {
-                    if (entityRequest.EntityId is { } requestedId && stored.Id != requestedId)
-                    {
-                        continue;
-                    }
-
-                    if (entityRequest.EntityName is { } requestedName
-                        && !MatchesName(stored.Name, requestedName, entityRequest.EnumerateChildren))
-                    {
-                        continue;
-                    }
-
-                    matched.Add(new EntitySnapshot
-                    {
-                        EntityId = stored.Id,
-                        ModifiedTime = stored.ModifiedTime,
-                        Data = stored.Data,
-                        Relationships = [],
-                    });
-                }
-            }
-
-            return Task.FromResult(new GetResult
-            {
-                Batches = [new TimestampedEntityBatch { Entities = matched }],
-            });
-        }
-
-        private static bool MatchesName(EntityName candidate, EntityName requested, EnumerateChildrenAction enumerate)
-        {
-            var candidateComponents = candidate.Components;
-            var requestedComponents = requested.Components;
-            if (!candidateComponents.Take(requestedComponents.Length).SequenceEqual(requestedComponents, StringComparer.Ordinal))
-            {
-                return false;
-            }
-
-            return enumerate switch
-            {
-                EnumerateChildrenAction.EnumerateSelf => candidateComponents.Length == requestedComponents.Length,
-                EnumerateChildrenAction.EnumerateChildren => candidateComponents.Length == requestedComponents.Length + 1,
-                EnumerateChildrenAction.EnumerateAllChildren => candidateComponents.Length > requestedComponents.Length,
-                _ => false,
-            };
-        }
-
-        private static EntityName ReadName(JsonElement data)
-        {
-            if (data.TryGetProperty("names", out var names) && names.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var name in names.EnumerateArray())
-                {
-                    if (name.ValueKind == JsonValueKind.Array)
-                    {
-                        return new EntityName(name.EnumerateArray().Select(c => c.GetString() ?? string.Empty).ToArray());
-                    }
-                }
-            }
-
-            return EntityName.Root;
-        }
-
-        public Task<QueryResult> QueryAsync(QueryRequest request, CancellationToken cancellationToken = default)
-            => Task.FromResult(new QueryResult { Batches = [] });
-
-        public Task<GetHistoryResult> GetHistoryAsync(GetHistoryRequest request, CancellationToken cancellationToken = default)
-            => Task.FromResult(new GetHistoryResult { History = [] });
-
-#pragma warning disable CS0618 // Type or member is obsolete
-        public Task<ExportResult> ExportAsync(ExportRequest request, CancellationToken cancellationToken = default)
-            => Task.FromResult(new ExportResult { ChangeBatches = [], FinalSnapshotTime = new Timestamp(DateTimeOffset.UtcNow, "fake") });
-#pragma warning restore CS0618
-
-        public Task<GetChangedEntitiesResult> GetChangedEntitiesAsync(GetChangedEntitiesRequest request, CancellationToken cancellationToken = default)
-            => Task.FromResult(new GetChangedEntitiesResult { Entities = [] });
-
-        private sealed record StoredEntity(EntityId Id, EntityName Name, JsonElement Data, Timestamp ModifiedTime);
+        await fixture.SeedValidEntityAsync(JsonSerializer.SerializeToElement(data));
+        return entityId;
     }
 
     /// <summary>

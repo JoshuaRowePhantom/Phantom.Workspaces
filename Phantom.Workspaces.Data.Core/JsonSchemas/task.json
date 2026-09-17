@@ -4,6 +4,36 @@
   "allOf": [
     {
       "$ref": "entity.json"
+    },
+    {
+      "if": {
+        "properties": {
+          "entity-types": {
+            "contains": {
+              "enum": [
+                "pull-request",
+                "work-item"
+              ]
+            }
+          }
+        },
+        "required": [
+          "entity-types"
+        ]
+      },
+      "else": {
+        "properties": {
+          "status": {
+            "enum": [
+              "pending",
+              "in-progress",
+              "completed",
+              "blocked",
+              "cancelled"
+            ]
+          }
+        }
+      }
     }
   ],
   "type": "object",
@@ -22,14 +52,7 @@
     },
     "status": {
       "type": "string",
-      "enum": [
-        "pending",
-        "in-progress",
-        "completed",
-        "blocked",
-        "cancelled"
-      ],
-      "description": "Current status of the task",
+      "description": "Current status of the task. Specialized task types such as pull requests and work items define their own status vocabulary.",
       "x-field-status": {
         "good-status-values": [
           "completed"

@@ -363,7 +363,7 @@ public sealed class AzureDevOpsWorkItemDiscoveryTool : IWorkspaceTool
 
         var obj = new JsonObject
         {
-            ["entity-types"] = new JsonArray("entity", "work-item", "azure-devops-work-item", "external"),
+            ["entity-types"] = new JsonArray("entity", "task", "work-item", "azure-devops-work-item", "external"),
             ["names"] = namesArray,
             ["display-name"] = new JsonObject { ["default"] = title },
             ["title"] = title,

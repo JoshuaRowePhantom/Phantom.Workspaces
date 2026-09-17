@@ -7,6 +7,7 @@ using Phantom.Workspaces.Data.Offline;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Echo;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Testing;
 using Phantom.Workspaces.Transport.Chat;
 using Phantom.Workspaces.Transport.Http;
 using Phantom.Workspaces.Transport.Shell;
@@ -20,12 +21,11 @@ namespace Phantom.Workspaces.Transport.Tests.Scenarios;
 ///
 /// <para><b>Two-instance identity is real, not decorative.</b> Both instances are represented
 /// end-to-end by two real <c>user-computer-profile</c> entities seeded via
-/// <see cref="SchemaPopulator.Populate"/> into a real <see cref="InMemoryDataAccessLayer"/>.
+/// <see cref="ValidatingEntitySeedFixture"/> through the production validation pipeline.
 /// Instance A opens a <c>{"type":"user-computer-profile","entity-id":&lt;B&gt;}</c> descriptor which
 /// the production <see cref="UserComputerProfileTransportFactory"/> resolves through A's real
-/// <see cref="TransportFactoryRegistry"/> — Instance B's <c>connection-descriptor</c> on its seeded
-/// profile document is what selects the underlying transport factory (forward-HTTP vs.
-/// reverse-HTTP), so the two seeded profile IDs genuinely drive the routing.</para>
+/// <see cref="TransportFactoryRegistry"/>. The runtime connection descriptor supplies the route
+/// metadata; the persisted profile remains schema-valid.</para>
 ///
 /// <para><b>Forward-HTTP cells</b> plumb a real <see cref="HttpTransport"/> against a real
 /// <see cref="ServerHttpTransport"/> in-process (via <see cref="PairedWebSocket"/>) and register
@@ -236,18 +236,15 @@ public sealed class AgentStackCrossInstanceTests
 
     // -------------------- profile-routing setup --------------------
 
-    // Instance A's forward-HTTP wiring. Seed a real InMemoryDataAccessLayer (SchemaPopulator-populated)
-    // with two user-computer-profile entities; Instance B's document carries a real forward-HTTP
-    // connection-descriptor. Instance A's TransportFactoryRegistry hosts the ForwardHttpInstance
-    // itself (as an ITransportFactory) — so profile routing hands back the production HttpTransport
-    // that is paired against a production ServerHttpTransport hosting the executor listeners.
-    private static async Task<UserComputerProfileTransportFactory> BuildForwardProfileRoutingAsync(
+    // Instance A's TransportFactoryRegistry hosts the ForwardHttpInstance itself, so profile routing
+    // hands back the production HttpTransport paired with the executor listeners.
+    private static async Task<ProfileRouting> BuildForwardProfileRoutingAsync(
         ForwardHttpInstance forward,
         CancellationToken ct)
     {
         var instanceBConnectionDescriptor = ParseJson(
             $$"""{"type":"{{ForwardHttpInstance.DescriptorType}}","instance":"instance-b"}""");
-        var profiles = await SeedTwoInstanceProfilesAsync(instanceBConnectionDescriptor, ct);
+        var profiles = await SeedTwoInstanceProfilesAsync(ct);
 
         var innerRegistry = new TransportFactoryRegistry();
         innerRegistry.Register(forward);
@@ -259,19 +256,21 @@ public sealed class AgentStackCrossInstanceTests
             UserComputerProfileEntityId = InstanceAProfileId,
         };
 
-        return new UserComputerProfileTransportFactory(profiles, session, innerRegistry);
+        return new ProfileRouting(
+            new UserComputerProfileTransportFactory(profiles, session, innerRegistry),
+            instanceBConnectionDescriptor);
     }
 
     // Instance A's reverse-HTTP wiring: reuse the harness to build a real
     // ReverseHttpForwardingTransportFactory (over the in-process hub shim), then route via
     // UserComputerProfileTransportFactory using Instance B's {"type":"reverse-http",...} descriptor.
-    private static async Task<UserComputerProfileTransportFactory> BuildReverseProfileRoutingAsync(
+    private static async Task<ProfileRouting> BuildReverseProfileRoutingAsync(
         HubRelayHarness harness,
         CancellationToken ct)
     {
         var instanceBConnectionDescriptor = ParseJson(
             $$"""{"type":"reverse-http","hub-urls":["{{HubRelayHarness.DefaultHubUrl}}"],"entity-id":"{{harness.ExecutorEntityId:D}}"}""");
-        var profiles = await SeedTwoInstanceProfilesAsync(instanceBConnectionDescriptor, ct);
+        var profiles = await SeedTwoInstanceProfilesAsync(ct);
 
         var innerRegistry = new TransportFactoryRegistry();
         innerRegistry.Register(harness.CreateForwardingFactory());
@@ -283,69 +282,39 @@ public sealed class AgentStackCrossInstanceTests
             UserComputerProfileEntityId = InstanceAProfileId,
         };
 
-        return new UserComputerProfileTransportFactory(profiles, session, innerRegistry);
+        return new ProfileRouting(
+            new UserComputerProfileTransportFactory(profiles, session, innerRegistry),
+            instanceBConnectionDescriptor);
     }
 
     private static async Task<ITransport> ConnectToInstanceBAsync(
-        UserComputerProfileTransportFactory profileFactory,
+        ProfileRouting profileRouting,
         CancellationToken ct)
     {
-        var descriptor = ParseJson(
-            $$"""{"type":"user-computer-profile","entity-id":"{{InstanceBProfileId.Value}}"}""");
-        var transport = await profileFactory.ConnectToAsync(descriptor, ct);
+        var descriptor = BuildProfileDescriptor(profileRouting.ConnectionDescriptor);
+        var transport = await profileRouting.Factory.ConnectToAsync(descriptor, ct);
         Assert.NotNull(transport);
         return transport!;
     }
 
-    // Seed a real InMemoryDataAccessLayer with two user-computer-profile entities. SchemaPopulator
-    // populates the built-in schema first (real repo shape); two schema-shaped profile documents are
-    // then appended. Instance B's document carries the connection-descriptor so
-    // UserComputerProfileTransportFactory routes to it via the factory registry.
-    private static async Task<IDataAccessLayer> SeedTwoInstanceProfilesAsync(
-        JsonElement instanceBConnectionDescriptor,
-        CancellationToken ct)
+    private static async Task<IDataAccessLayer> SeedTwoInstanceProfilesAsync(CancellationToken ct)
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
-        var populator = new SchemaPopulator(dataAccessLayer);
-        var populateErrors = await populator.Populate();
-        Assert.Empty(populateErrors);
-
-        var instanceAData = BuildProfileEntity(InstanceAProfileId, InstanceAComputerId, connectionDescriptor: null);
-        var instanceBData = BuildProfileEntity(InstanceBProfileId, InstanceBComputerId, instanceBConnectionDescriptor);
-
-        var updateResult = await dataAccessLayer.UpdateAsync(
-            new UpdateRequest
-            {
-                UpdateMetadata = new UpdateMetadata
-                {
-                    Comment = new Markdown { Text = "Seed two user-computer-profile entities for #1083 tests." },
-                },
-                Changes =
-                [
-                    new EntityChange
-                    {
-                        EntityId = InstanceAProfileId,
-                        Data = instanceAData,
-                        EntityChangeMode = EntityChangeMode.Replace,
-                    },
-                    new EntityChange
-                    {
-                        EntityId = InstanceBProfileId,
-                        Data = instanceBData,
-                        EntityChangeMode = EntityChangeMode.Replace,
-                    },
-                ],
-            },
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync(ct);
+        await fixture.SeedManyValidAsync(
+            [
+                BuildNamedEntity(SharedUserId, "user", ["users", "by-id", SharedUserId.ToString()]),
+                BuildNamedEntity(InstanceAComputerId, "computer", ["computers", "by-id", InstanceAComputerId.ToString()]),
+                BuildNamedEntity(InstanceBComputerId, "computer", ["computers", "by-id", InstanceBComputerId.ToString()]),
+                BuildProfileEntity(InstanceAProfileId, InstanceAComputerId),
+                BuildProfileEntity(InstanceBProfileId, InstanceBComputerId),
+            ],
             ct);
-        Assert.All(updateResult.EntityResults, result => Assert.Empty(result.Errors));
-
-        return dataAccessLayer;
+        return fixture.DataAccessLayer;
     }
 
     private static JsonElement BuildProfileEntity(
         EntityId profileId,
-        EntityId computerId,
-        JsonElement? connectionDescriptor)
+        EntityId computerId)
     {
         using var stream = new MemoryStream();
         using (var writer = new Utf8JsonWriter(stream))
@@ -353,6 +322,7 @@ public sealed class AgentStackCrossInstanceTests
             writer.WriteStartObject();
             writer.WriteString("entity-id", profileId.Value.ToString());
             writer.WriteStartArray("entity-types");
+            writer.WriteStringValue("entity");
             writer.WriteStringValue("user-computer-profile");
             writer.WriteEndArray();
             writer.WriteStartArray("computer-reference");
@@ -365,17 +335,60 @@ public sealed class AgentStackCrossInstanceTests
             writer.WriteStringValue("by-id");
             writer.WriteStringValue(SharedUserId.Value.ToString());
             writer.WriteEndArray();
-            if (connectionDescriptor is { } descriptor)
-            {
-                writer.WritePropertyName("connection-descriptor");
-                descriptor.WriteTo(writer);
-            }
-
             writer.WriteEndObject();
         }
 
         return JsonDocument.Parse(stream.ToArray()).RootElement.Clone();
     }
+
+    private static JsonElement BuildNamedEntity(
+        EntityId entityId,
+        string entityType,
+        IReadOnlyList<string> name)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("entity-id", entityId.ToString());
+            writer.WriteStartArray("entity-types");
+            writer.WriteStringValue("entity");
+            writer.WriteStringValue(entityType);
+            writer.WriteEndArray();
+            writer.WriteStartArray("names");
+            writer.WriteStartArray();
+            foreach (var component in name)
+            {
+                writer.WriteStringValue(component);
+            }
+
+            writer.WriteEndArray();
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+        }
+
+        return JsonDocument.Parse(stream.ToArray()).RootElement.Clone();
+    }
+
+    private static JsonElement BuildProfileDescriptor(JsonElement connectionDescriptor)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("type", "user-computer-profile");
+            writer.WriteString("entity-id", InstanceBProfileId.ToString());
+            writer.WritePropertyName("connection-descriptor");
+            connectionDescriptor.WriteTo(writer);
+            writer.WriteEndObject();
+        }
+
+        return JsonDocument.Parse(stream.ToArray()).RootElement.Clone();
+    }
+
+    private sealed record ProfileRouting(
+        UserComputerProfileTransportFactory Factory,
+        JsonElement ConnectionDescriptor);
 
     // -------------------- helpers --------------------
 

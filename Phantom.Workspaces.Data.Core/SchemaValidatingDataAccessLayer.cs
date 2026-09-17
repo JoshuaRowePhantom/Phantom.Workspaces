@@ -720,37 +720,20 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         writer.WriteStartObject();
         writer.WritePropertyName("allOf");
         writer.WriteStartArray();
+        var applicableSchemaIds = schemas
+            .Where(static schema => schema.SchemaEntity is not null)
+            .Select(
+                schema => this.TryGetSchemaPayloadId(schema.SchemaEntity!.Value, out var id)
+                    ? id
+                    : null)
+            .OfType<string>()
+            .ToHashSet(StringComparer.Ordinal);
         foreach (var schema in schemas)
         {
-            if (schema.SchemaEntity is { } schemaEntity
-                && schemaEntity.TryGetProperty("schema", out _))
+            if (schema.SchemaEntity is { } schemaEntity)
             {
-                if (this.TryGetSchemaPayloadId(schemaEntity, out var payloadId)
-                    && Uri.TryCreate(payloadId, UriKind.Absolute, out _))
-                {
-                    writer.WriteStartObject();
-                    writer.WriteString("$ref", payloadId);
-                    writer.WriteEndObject();
-                }
-                else
-                {
-                    using var schemaDocument = JsonDocument.Parse(this.GetSchemaText(schemaEntity));
-                    schemaDocument.RootElement.WriteTo(writer);
-                }
-            }
-            else if (schema.SchemaEntity is { } schemaEntityWithId
-                && schemaEntityWithId.TryGetProperty("$id", out var idElement)
-                && idElement.ValueKind == JsonValueKind.String
-                && !string.IsNullOrWhiteSpace(idElement.GetString()))
-            {
-                writer.WriteStartObject();
-                writer.WriteString("$ref", idElement.GetString());
-                writer.WriteEndObject();
-            }
-            else if (schema.SchemaEntity is { } inlineSchemaEntity)
-            {
-                using var schemaDocument = JsonDocument.Parse(this.GetSchemaText(inlineSchemaEntity));
-                schemaDocument.RootElement.WriteTo(writer);
+                using var schemaDocument = JsonDocument.Parse(this.GetSchemaText(schemaEntity));
+                this.WriteFlattenedSchema(writer, schemaDocument.RootElement, applicableSchemaIds);
             }
         }
 
@@ -764,4 +747,119 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
 
         return System.Text.Encoding.UTF8.GetString(stream.ToArray());
     }
+
+    private void WriteFlattenedSchema(
+        Utf8JsonWriter writer,
+        JsonElement schema,
+        IReadOnlySet<string> applicableSchemaIds)
+    {
+        Uri? baseUri = null;
+        if (schema.ValueKind == JsonValueKind.Object
+            && schema.TryGetProperty("$id", out var id)
+            && id.ValueKind == JsonValueKind.String)
+        {
+            Uri.TryCreate(id.GetString(), UriKind.Absolute, out baseUri);
+        }
+
+        this.WriteFlattenedSchemaElement(writer, schema, baseUri, applicableSchemaIds, isRoot: true);
+    }
+
+    private void WriteFlattenedSchemaElement(
+        Utf8JsonWriter writer,
+        JsonElement element,
+        Uri? baseUri,
+        IReadOnlySet<string> applicableSchemaIds,
+        bool isRoot)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            writer.WriteStartObject();
+            foreach (var property in element.EnumerateObject())
+            {
+                if (isRoot && property.NameEquals("$id"))
+                {
+                    continue;
+                }
+
+                if (isRoot
+                    && property.NameEquals("allOf")
+                    && property.Value.ValueKind == JsonValueKind.Array)
+                {
+                    var remaining = property.Value.EnumerateArray()
+                        .Where(item => !IsReferenceToApplicableSchema(item, baseUri, applicableSchemaIds))
+                        .ToArray();
+                    if (remaining.Length > 0)
+                    {
+                        writer.WritePropertyName(property.Name);
+                        writer.WriteStartArray();
+                        foreach (var item in remaining)
+                        {
+                            this.WriteFlattenedSchemaElement(
+                                writer,
+                                item,
+                                baseUri,
+                                applicableSchemaIds,
+                                isRoot: false);
+                        }
+
+                        writer.WriteEndArray();
+                    }
+
+                    continue;
+                }
+
+                writer.WritePropertyName(property.Name);
+                if (property.NameEquals("$ref")
+                    && property.Value.ValueKind == JsonValueKind.String
+                    && baseUri is not null
+                    && Uri.TryCreate(baseUri, property.Value.GetString(), out var absoluteReference))
+                {
+                    writer.WriteStringValue(absoluteReference.AbsoluteUri);
+                }
+                else
+                {
+                    this.WriteFlattenedSchemaElement(
+                        writer,
+                        property.Value,
+                        baseUri,
+                        applicableSchemaIds,
+                        isRoot: false);
+                }
+            }
+
+            writer.WriteEndObject();
+            return;
+        }
+
+        if (element.ValueKind == JsonValueKind.Array)
+        {
+            writer.WriteStartArray();
+            foreach (var item in element.EnumerateArray())
+            {
+                this.WriteFlattenedSchemaElement(
+                    writer,
+                    item,
+                    baseUri,
+                    applicableSchemaIds,
+                    isRoot: false);
+            }
+
+            writer.WriteEndArray();
+            return;
+        }
+
+        element.WriteTo(writer);
+    }
+
+    private static bool IsReferenceToApplicableSchema(
+        JsonElement item,
+        Uri? baseUri,
+        IReadOnlySet<string> applicableSchemaIds)
+        => baseUri is not null
+            && item.ValueKind == JsonValueKind.Object
+            && item.EnumerateObject().Count() == 1
+            && item.TryGetProperty("$ref", out var reference)
+            && reference.ValueKind == JsonValueKind.String
+            && Uri.TryCreate(baseUri, reference.GetString(), out var absoluteReference)
+            && applicableSchemaIds.Contains(absoluteReference.AbsoluteUri);
 }

@@ -2,6 +2,7 @@ using System.Text.Json;
 using AgentSchema;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Testing;
 
 namespace Phantom.Workspaces.Tests;
 
@@ -10,30 +11,35 @@ public sealed class AgentDefinitionResolverTests
     [Fact]
     public async Task ResolveAsync_AgentDefinitionReference_LoadsReferencedManifest()
     {
-        var reference = new EntityName("defaults", "agent-manifests", "github-copilot");
+        var reference = new EntityName("tests", "agent-manifests", "github-copilot");
         using var sessionDoc = JsonDocument.Parse(
             """
             {
-              "agent-definition-reference": ["defaults", "agent-manifests", "github-copilot"],
+              "agent-definition-reference": ["tests", "agent-manifests", "github-copilot"],
               "agent-session-id": "bea98bb4-4129-4815-861f-3927fe511315"
             }
             """);
-        using var manifestDoc = JsonDocument.Parse(
-            """
-            {
-              "manifest": {
-                "name": "github-copilot",
-                "displayName": "GitHub Copilot",
-                "template": {
-                  "kind": "prompt",
-                  "name": "github-copilot",
-                  "model": { "id": "echo", "provider": "echo", "apiType": "Echo" }
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync(TestContext.Current.CancellationToken);
+        await fixture.SeedValidEntityAsync(
+            Parse(
+                """
+                {
+                  "entity-id": "10000000-0000-4000-8000-000000000006",
+                  "entity-types": ["entity", "agent-manifest"],
+                  "names": [["tests", "agent-manifests", "github-copilot"]],
+                  "manifest": {
+                    "name": "github-copilot",
+                    "displayName": "GitHub Copilot",
+                    "template": {
+                      "kind": "prompt",
+                      "name": "github-copilot",
+                      "model": { "id": "echo", "provider": "echo", "apiType": "Echo" }
+                    }
+                  }
                 }
-              }
-            }
-            """);
-        var dataAccessLayer = new FakeDataAccessLayer(
-            byName: new Dictionary<EntityName, JsonElement> { [reference] = manifestDoc.RootElement.Clone() });
+                """),
+            TestContext.Current.CancellationToken);
+        var dataAccessLayer = fixture.DataAccessLayer;
         var resolver = new AgentDefinitionResolver(dataAccessLayer);
 
         var resolved = await resolver.ResolveAsync(new AgentDefinitionResolveRequest
@@ -56,7 +62,8 @@ public sealed class AgentDefinitionResolverTests
               "agent-session-id": "bea98bb4-4129-4815-861f-3927fe511315"
             }
             """);
-        var resolver = new AgentDefinitionResolver(new FakeDataAccessLayer());
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync(TestContext.Current.CancellationToken);
+        var resolver = new AgentDefinitionResolver(fixture.DataAccessLayer);
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => resolver.ResolveAsync(new AgentDefinitionResolveRequest
         {
@@ -77,19 +84,23 @@ public sealed class AgentDefinitionResolverTests
               "agent-session-id": "bea98bb4-4129-4815-861f-3927fe511315"
             }
             """);
-        using var definitionDoc = JsonDocument.Parse(
-            """
-            {
-              "definition": {
-                "kind": "prompt",
-                "name": "source-definition",
-                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
-                "tools": []
-              }
-            }
-            """);
-        var dataAccessLayer = new FakeDataAccessLayer(
-            byId: new Dictionary<EntityId, JsonElement> { [definitionId] = definitionDoc.RootElement.Clone() });
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync(TestContext.Current.CancellationToken);
+        await fixture.SeedValidEntityAsync(
+            Parse(
+                $$"""
+                {
+                  "entity-id": "{{definitionId}}",
+                  "entity-types": ["entity", "agent-definition"],
+                  "definition": {
+                    "kind": "prompt",
+                    "name": "source-definition",
+                    "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                    "tools": []
+                  }
+                }
+                """),
+            TestContext.Current.CancellationToken);
+        var dataAccessLayer = fixture.DataAccessLayer;
         var resolver = new AgentDefinitionResolver(dataAccessLayer);
 
         var resolved = await resolver.ResolveAsync(new AgentDefinitionResolveRequest
@@ -101,62 +112,6 @@ public sealed class AgentDefinitionResolverTests
         Assert.Equal("source-definition", promptAgent.Name);
     }
 
-    private sealed class FakeDataAccessLayer : IDataAccessLayer
-    {
-        private readonly IReadOnlyDictionary<EntityName, JsonElement> byName;
-        private readonly IReadOnlyDictionary<EntityId, JsonElement> byId;
-
-        public FakeDataAccessLayer(
-            IReadOnlyDictionary<EntityName, JsonElement>? byName = null,
-            IReadOnlyDictionary<EntityId, JsonElement>? byId = null)
-        {
-            this.byName = byName ?? new Dictionary<EntityName, JsonElement>();
-            this.byId = byId ?? new Dictionary<EntityId, JsonElement>();
-        }
-
-        public Task<GetResult> GetAsync(GetRequest request, CancellationToken cancellationToken = default)
-        {
-            var entities = new List<EntitySnapshot>();
-            foreach (var entityRequest in request.Entities)
-            {
-                if (entityRequest.EntityName is EntityName name && this.byName.TryGetValue(name, out var nameData))
-                {
-                    entities.Add(CreateSnapshot(nameData));
-                }
-                else if (entityRequest.EntityId is EntityId id && this.byId.TryGetValue(id, out var idData))
-                {
-                    entities.Add(CreateSnapshot(idData, id));
-                }
-            }
-
-            return Task.FromResult(new GetResult
-            {
-                Batches = [new TimestampedEntityBatch { Entities = entities }],
-            });
-        }
-
-        public Task<UpdateResult> UpdateAsync(UpdateRequest request, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<QueryResult> QueryAsync(QueryRequest request, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<GetHistoryResult> GetHistoryAsync(GetHistoryRequest request, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<ExportResult> ExportAsync(ExportRequest request, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<GetChangedEntitiesResult> GetChangedEntitiesAsync(GetChangedEntitiesRequest request, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        private static EntitySnapshot CreateSnapshot(JsonElement data, EntityId? entityId = null)
-            => new()
-            {
-                EntityId = entityId ?? new EntityId(),
-                ModifiedTime = new Timestamp(DateTimeOffset.UnixEpoch, "test"),
-                Data = data,
-                Relationships = [],
-            };
-    }
+    private static JsonElement Parse(string json)
+        => JsonDocument.Parse(json).RootElement.Clone();
 }

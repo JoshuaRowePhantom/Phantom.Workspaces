@@ -1,50 +1,13 @@
 using System.Text.Json;
 using Phantom.Workspaces.Data;
-using Phantom.Workspaces.Data.Offline;
+using Phantom.Workspaces.Testing;
 using Phantom.Workspaces.Tools.AzureDevOps;
 
 namespace Phantom.Workspaces.Tools.Tests;
 
 public sealed class AzureDevOpsRepositoryDiscoveryToolTests
 {
-    private static WorkspaceToolExecutionContext CreateContext(
-        IDataAccessLayer dataAccessLayer,
-        params EntitySnapshot[] participants)
-    {
-        var dummyEntity = CreateDummyEntity(new EntityId("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), "dummy");
-        return new WorkspaceToolExecutionContext
-        {
-            DataAccessLayer = dataAccessLayer,
-            CancellationToken = CancellationToken.None,
-            CurrentComputerEntity = dummyEntity,
-            CurrentUserEntity = dummyEntity,
-            CurrentComputerUserProfileEntity = dummyEntity,
-            ToolRelationship = dummyEntity,
-            Participants = participants,
-            Tool = dummyEntity,
-            Schedule = dummyEntity,
-        };
-    }
-
-    private static EntitySnapshot CreateDummyEntity(EntityId entityId, string name)
-    {
-        using var document = JsonDocument.Parse($$"""
-            {
-              "entity-id": "{{entityId.Value}}",
-              "entity-types": ["entity"],
-              "names": [["test", "{{name}}"]]
-            }
-            """);
-        return new EntitySnapshot
-        {
-            EntityId = entityId,
-            ModifiedTime = new Timestamp(),
-            Relationships = [],
-            Data = document.RootElement.Clone(),
-        };
-    }
-
-    private static EntitySnapshot CreateAzureDevOpsProjectEntity(string entityId, string projectUrl)
+    private static JsonElement CreateAzureDevOpsProjectEntity(string entityId, string projectUrl)
     {
         using var document = JsonDocument.Parse($$"""
             {
@@ -55,13 +18,7 @@ public sealed class AzureDevOpsRepositoryDiscoveryToolTests
               "urls": {"default": "{{projectUrl}}"}
             }
             """);
-        return new EntitySnapshot
-        {
-            EntityId = new EntityId(Guid.Parse(entityId)),
-            ModifiedTime = new Timestamp(),
-            Relationships = [],
-            Data = document.RootElement.Clone(),
-        };
+        return document.RootElement.Clone();
     }
 
     private static async Task<EntitySnapshot?> GetEntityByNameAsync(
@@ -78,12 +35,13 @@ public sealed class AzureDevOpsRepositoryDiscoveryToolTests
     [Fact]
     public async Task AzureDevOpsRepositoryDiscoveryTool_UpsertsRepository()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
         var projectEntityId = "11111111-1111-1111-1111-111111111111";
         var projectEntity = CreateAzureDevOpsProjectEntity(
             projectEntityId,
             "https://dev.azure.com/myorg/myproject");
-        var context = CreateContext(dataAccessLayer, projectEntity);
+        var context = await ValidatedWorkspaceToolTestContext.CreateAsync(fixture, projectEntity);
 
         var repoResponse = """
             {
@@ -118,10 +76,17 @@ public sealed class AzureDevOpsRepositoryDiscoveryToolTests
     [Fact]
     public async Task AzureDevOpsRepositoryDiscoveryTool_SkipsNonProjectParticipants()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
-        var nonProjectEntity = CreateDummyEntity(
-            new EntityId("22222222-2222-2222-2222-222222222222"), "not-a-project");
-        var context = CreateContext(dataAccessLayer, nonProjectEntity);
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
+        var nonProjectEntity = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "22222222-2222-4222-8222-222222222222",
+              "entity-types": ["entity", "task"],
+              "names": [["tasks", "not-a-project"]]
+            }
+            """).RootElement.Clone();
+        var context = await ValidatedWorkspaceToolTestContext.CreateAsync(fixture, nonProjectEntity);
 
         var callCount = 0;
         var tool = new AzureDevOpsRepositoryDiscoveryTool(
@@ -140,11 +105,12 @@ public sealed class AzureDevOpsRepositoryDiscoveryToolTests
     [Fact]
     public async Task AzureDevOpsRepositoryDiscoveryTool_SetsUrlToAzureDevOpsWebUrl()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
         var projectEntity = CreateAzureDevOpsProjectEntity(
             "33333333-3333-3333-3333-333333333333",
             "https://dev.azure.com/contoso/myproj");
-        var context = CreateContext(dataAccessLayer, projectEntity);
+        var context = await ValidatedWorkspaceToolTestContext.CreateAsync(fixture, projectEntity);
 
         var repoResponse = """
             {
@@ -175,6 +141,7 @@ public sealed class AzureDevOpsRepositoryDiscoveryToolTests
     [Fact]
     public void TryExtractProjectInfo_ReturnNullForNonProjectEntity()
     {
+        // below-validation-boundary: parser-isolation test; no persisted runtime state is represented.
         using var doc = JsonDocument.Parse("""
             {
               "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",

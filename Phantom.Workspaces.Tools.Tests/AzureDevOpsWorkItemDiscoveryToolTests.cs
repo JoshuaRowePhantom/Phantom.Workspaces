@@ -1,67 +1,24 @@
 using System.Text.Json;
 using Phantom.Workspaces.Data;
-using Phantom.Workspaces.Data.Offline;
+using Phantom.Workspaces.Testing;
 using Phantom.Workspaces.Tools.AzureDevOps;
 
 namespace Phantom.Workspaces.Tools.Tests;
 
 public sealed class AzureDevOpsWorkItemDiscoveryToolTests
 {
-    private static WorkspaceToolExecutionContext CreateContext(
-        IDataAccessLayer dataAccessLayer,
-        params EntitySnapshot[] participants)
-    {
-        var dummyEntity = CreateDummyEntity(new EntityId("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), "dummy");
-        return new WorkspaceToolExecutionContext
-        {
-            DataAccessLayer = dataAccessLayer,
-            CancellationToken = CancellationToken.None,
-            CurrentComputerEntity = dummyEntity,
-            CurrentUserEntity = dummyEntity,
-            CurrentComputerUserProfileEntity = dummyEntity,
-            ToolRelationship = dummyEntity,
-            Participants = participants,
-            Tool = dummyEntity,
-            Schedule = dummyEntity,
-        };
-    }
-
-    private static EntitySnapshot CreateDummyEntity(EntityId entityId, string name)
-    {
-        using var document = JsonDocument.Parse($$"""
-            {
-              "entity-id": "{{entityId.Value}}",
-              "entity-types": ["entity"],
-              "names": [["test", "{{name}}"]]
-            }
-            """);
-        return new EntitySnapshot
-        {
-            EntityId = entityId,
-            ModifiedTime = new Timestamp(),
-            Relationships = [],
-            Data = document.RootElement.Clone(),
-        };
-    }
-
-    private static EntitySnapshot CreateAzureDevOpsProjectEntity(string entityId, string projectUrl)
+    private static JsonElement CreateAzureDevOpsProjectEntity(string entityId, string projectUrl)
     {
         using var document = JsonDocument.Parse($$"""
             {
               "entity-id": "{{entityId}}",
-              "entity-types": ["entity", "azure-devops-project", "external"],
+              "entity-types": ["entity", "repository", "azure-devops-project", "external"],
               "names": [["azure-devops", "myorg", "myproject"]],
               "display-name": {"default": "My Project"},
               "urls": {"default": "{{projectUrl}}"}
             }
             """);
-        return new EntitySnapshot
-        {
-            EntityId = new EntityId(Guid.Parse(entityId)),
-            ModifiedTime = new Timestamp(),
-            Relationships = [],
-            Data = document.RootElement.Clone(),
-        };
+        return document.RootElement.Clone();
     }
 
     private static async Task<EntitySnapshot?> GetEntityByNameAsync(
@@ -86,11 +43,12 @@ public sealed class AzureDevOpsWorkItemDiscoveryToolTests
     [Fact]
     public async Task AzureDevOpsWorkItemDiscoveryTool_MapsTagsToLabels()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
         var projectEntity = CreateAzureDevOpsProjectEntity(
             "11111111-1111-1111-1111-111111111111",
             "https://dev.azure.com/myorg/myproject");
-        var context = CreateContext(dataAccessLayer, projectEntity);
+        var context = await ValidatedWorkspaceToolTestContext.CreateAsync(fixture, projectEntity);
 
         var wiqlResponse = """{"workItems": [{"id": 99}]}""";
         var batchResponse = """
@@ -136,11 +94,12 @@ public sealed class AzureDevOpsWorkItemDiscoveryToolTests
         const string projectId = "proj-guid-1111-1111-1111-111111111111";
         const string repoId = "repo-guid-2222-2222-2222-222222222222";
 
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
         var projectEntity = CreateAzureDevOpsProjectEntity(
             "22222222-2222-2222-2222-222222222222",
             "https://dev.azure.com/myorg/myproject");
-        var context = CreateContext(dataAccessLayer, projectEntity);
+        var context = await ValidatedWorkspaceToolTestContext.CreateAsync(fixture, projectEntity);
 
         var wiqlResponse = """{"workItems": [{"id": 77}]}""";
         var vstfsUrl = $"vstfs:///Git/Commit/{projectId}%2F{repoId}%2F{commitSha}";
@@ -189,11 +148,12 @@ public sealed class AzureDevOpsWorkItemDiscoveryToolTests
     [Fact]
     public async Task AzureDevOpsWorkItemDiscoveryTool_MapsStatesToStatus()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
         var projectEntity = CreateAzureDevOpsProjectEntity(
             "33333333-3333-3333-3333-333333333333",
             "https://dev.azure.com/myorg/myproject");
-        var context = CreateContext(dataAccessLayer, projectEntity);
+        var context = await ValidatedWorkspaceToolTestContext.CreateAsync(fixture, projectEntity);
 
         var wiqlResponse = """{"workItems": [{"id": 1}, {"id": 2}, {"id": 3}]}""";
         var batchResponse = """

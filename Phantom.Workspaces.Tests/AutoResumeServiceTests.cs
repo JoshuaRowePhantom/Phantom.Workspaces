@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Testing;
 
 namespace Phantom.Workspaces.Tests;
 
@@ -97,9 +98,8 @@ public sealed class AutoResumeServiceTests
     {
         var entityId = new EntityId("aaaabbbb-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
         var agentSessionId = "test-session-auto-resume-local";
-        var dal = CreateFakeDataAccessLayer([
-            CreateAgentSessionSnapshot(entityId, agentSessionId, trustedExecutor: ".", resumePrompt: null),
-        ]);
+        var dal = await CreateDataAccessLayerAsync(
+            CreateAgentSessionEntity(entityId, agentSessionId, trustedExecutor: ".", resumePrompt: null));
 
         var results = await AutoResumeService.FindMatchingSessionsAsync(dal, ".", TestContext.Current.CancellationToken);
 
@@ -114,9 +114,8 @@ public sealed class AutoResumeServiceTests
     {
         var entityId = new EntityId("aaaabbbb-aaaa-4aaa-8aaa-aaaaaaaaaaab");
         var agentSessionId = "test-session-auto-resume-custom-prompt";
-        var dal = CreateFakeDataAccessLayer([
-            CreateAgentSessionSnapshot(entityId, agentSessionId, trustedExecutor: ".", resumePrompt: "My custom prompt"),
-        ]);
+        var dal = await CreateDataAccessLayerAsync(
+            CreateAgentSessionEntity(entityId, agentSessionId, trustedExecutor: ".", resumePrompt: "My custom prompt"));
 
         var results = await AutoResumeService.FindMatchingSessionsAsync(dal, ".", TestContext.Current.CancellationToken);
 
@@ -129,9 +128,8 @@ public sealed class AutoResumeServiceTests
     {
         var entityId = new EntityId("aaaabbbb-aaaa-4aaa-8aaa-aaaaaaaaaaac");
         var agentSessionId = "test-session-auto-resume-non-matching";
-        var dal = CreateFakeDataAccessLayer([
-            CreateAgentSessionSnapshot(entityId, agentSessionId, trustedExecutor: "different-executor", resumePrompt: null),
-        ]);
+        var dal = await CreateDataAccessLayerAsync(
+            CreateAgentSessionEntity(entityId, agentSessionId, trustedExecutor: "different-executor", resumePrompt: null));
 
         var results = await AutoResumeService.FindMatchingSessionsAsync(dal, ".", TestContext.Current.CancellationToken);
 
@@ -143,9 +141,8 @@ public sealed class AutoResumeServiceTests
     {
         var entityId = new EntityId("aaaabbbb-aaaa-4aaa-8aaa-aaaaaaaaaaad");
         var agentSessionId = "test-session-no-auto-resume";
-        var dal = CreateFakeDataAccessLayer([
-            CreateAgentSessionSnapshotWithNoAutoResume(entityId, agentSessionId),
-        ]);
+        var dal = await CreateDataAccessLayerAsync(
+            CreateAgentSessionEntityWithNoAutoResume(entityId, agentSessionId));
 
         var results = await AutoResumeService.FindMatchingSessionsAsync(dal, ".", TestContext.Current.CancellationToken);
 
@@ -157,10 +154,9 @@ public sealed class AutoResumeServiceTests
     {
         var matchingEntityId = new EntityId("aaaabbbb-aaaa-4aaa-8aaa-aaaaaaaaaaae");
         var nonMatchingEntityId = new EntityId("aaaabbbb-aaaa-4aaa-8aaa-aaaaaaaaaaaf");
-        var dal = CreateFakeDataAccessLayer([
-            CreateAgentSessionSnapshot(matchingEntityId, "matching-session", trustedExecutor: ".", resumePrompt: null),
-            CreateAgentSessionSnapshot(nonMatchingEntityId, "non-matching-session", trustedExecutor: "other-executor", resumePrompt: null),
-        ]);
+        var dal = await CreateDataAccessLayerAsync(
+            CreateAgentSessionEntity(matchingEntityId, "matching-session", trustedExecutor: ".", resumePrompt: null),
+            CreateAgentSessionEntity(nonMatchingEntityId, "non-matching-session", trustedExecutor: "other-executor", resumePrompt: null));
 
         var results = await AutoResumeService.FindMatchingSessionsAsync(dal, ".", TestContext.Current.CancellationToken);
 
@@ -168,12 +164,14 @@ public sealed class AutoResumeServiceTests
         Assert.Equal(matchingEntityId, session.EntityId);
     }
 
-    private static IDataAccessLayer CreateFakeDataAccessLayer(IReadOnlyList<QueryEntitySnapshot> entities)
+    private static async Task<IDataAccessLayer> CreateDataAccessLayerAsync(params JsonElement[] entities)
     {
-        return new FakeQueryDataAccessLayer(entities);
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        await fixture.SeedManyValidAsync(entities);
+        return fixture.DataAccessLayer;
     }
 
-    private static QueryEntitySnapshot CreateAgentSessionSnapshot(
+    private static JsonElement CreateAgentSessionEntity(
         EntityId entityId,
         string agentSessionId,
         string trustedExecutor,
@@ -192,17 +190,10 @@ public sealed class AutoResumeServiceTests
               }
             }
             """);
-        return new QueryEntitySnapshot
-        {
-            EntityId = entityId,
-            ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
-            Data = doc.RootElement.Clone(),
-            Relationships = [],
-            MatchingClauseIdentifiers = [],
-        };
+        return doc.RootElement.Clone();
     }
 
-    private static QueryEntitySnapshot CreateAgentSessionSnapshotWithNoAutoResume(
+    private static JsonElement CreateAgentSessionEntityWithNoAutoResume(
         EntityId entityId,
         string agentSessionId)
     {
@@ -213,51 +204,6 @@ public sealed class AutoResumeServiceTests
               "agent-session-id": "{{agentSessionId}}"
             }
             """);
-        return new QueryEntitySnapshot
-        {
-            EntityId = entityId,
-            ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
-            Data = doc.RootElement.Clone(),
-            Relationships = [],
-            MatchingClauseIdentifiers = [],
-        };
-    }
-
-    private sealed class FakeQueryDataAccessLayer : IDataAccessLayer
-    {
-        private readonly IReadOnlyList<QueryEntitySnapshot> entities;
-
-        public FakeQueryDataAccessLayer(IReadOnlyList<QueryEntitySnapshot> entities)
-        {
-            this.entities = entities;
-        }
-
-        public Task<QueryResult> QueryAsync(QueryRequest request, CancellationToken cancellationToken = default)
-            => Task.FromResult(new QueryResult
-            {
-                Batches =
-                [
-                    new TimestampedQueryBatch
-                    {
-                        Timestamp = null,
-                        Entities = this.entities,
-                    },
-                ],
-            });
-
-        public Task<UpdateResult> UpdateAsync(UpdateRequest request, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<GetResult> GetAsync(GetRequest request, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<GetHistoryResult> GetHistoryAsync(GetHistoryRequest request, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<ExportResult> ExportAsync(ExportRequest request, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<GetChangedEntitiesResult> GetChangedEntitiesAsync(GetChangedEntitiesRequest request, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+        return doc.RootElement.Clone();
     }
 }

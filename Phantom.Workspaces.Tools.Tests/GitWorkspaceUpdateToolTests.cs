@@ -4,7 +4,6 @@ using System.Text.Json.Nodes;
 using LibGit2Sharp;
 using Microsoft.Extensions.Logging.Abstractions;
 using Phantom.Workspaces.Data;
-using Phantom.Workspaces.Data.Offline;
 using Phantom.Workspaces.Testing;
 using Phantom.Workspaces.Tools;
 
@@ -27,7 +26,8 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
         var remoteUrl = "https://example.com/repo.git";
         InitializeGitRepository(repoPath, remoteUrl);
 
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
         var normalizedPath = Path.GetFullPath(repoPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant();
         var entityId = DeterministicEntityId.Create("git-workspace", normalizedPath);
         await UpsertEntityAsync(
@@ -44,7 +44,7 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
             """,
             concurrencyTag: null);
 
-        var context = CreateContext(dataAccessLayer);
+        var context = await CreateContextAsync(fixture);
         var tool = new GitWorkspaceUpdateTool();
 
         var result = await tool.ExecuteAsync(context);
@@ -64,7 +64,8 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
     [Fact]
     public async Task ExecuteAsync_SkipsEntitiesWithNoPath()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
         var entityId = new EntityId("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
         await UpsertEntityAsync(
             dataAccessLayer,
@@ -79,7 +80,7 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
             """,
             concurrencyTag: null);
 
-        var context = CreateContext(dataAccessLayer);
+        var context = await CreateContextAsync(fixture);
         var tool = new GitWorkspaceUpdateTool();
 
         var result = await tool.ExecuteAsync(context);
@@ -94,7 +95,8 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
     [Fact]
     public async Task ExecuteAsync_SkipsEntitiesWithInvalidPath()
     {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
         var entityId = new EntityId("cccccccc-cccc-cccc-cccc-cccccccccccc");
         var missingPath = Path.Combine(this.temporaryRootPath, "does-not-exist");
         await UpsertEntityAsync(
@@ -111,7 +113,7 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
             """,
             concurrencyTag: null);
 
-        var context = CreateContext(dataAccessLayer);
+        var context = await CreateContextAsync(fixture);
         var tool = new GitWorkspaceUpdateTool();
 
         var result = await tool.ExecuteAsync(context);
@@ -130,7 +132,8 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
         InitializeGitRepository(repoPath, "https://example.com/summary.git");
         var missingPath = Path.Combine(this.temporaryRootPath, "summary-missing");
 
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
         await UpsertEntityAsync(
             dataAccessLayer,
             new EntityId("dddddddd-dddd-dddd-dddd-dddddddddddd"),
@@ -156,7 +159,7 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
             """,
             concurrencyTag: null);
 
-        var context = CreateContext(dataAccessLayer);
+        var context = await CreateContextAsync(fixture);
         var tool = new GitWorkspaceUpdateTool();
 
         var result = await tool.ExecuteAsync(context);
@@ -171,7 +174,8 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
         var repoPath = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "refresh-display"));
         InitializeGitRepository(repoPath, "https://example.com/refresh-display.git");
 
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
         var normalizedPath = Path.GetFullPath(repoPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant();
         var deterministicId = DeterministicEntityId.Create("git-workspace", normalizedPath);
 
@@ -181,7 +185,7 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
             $$"""
             {
               "entity-id": "{{deterministicId}}",
-              "entity-types": ["entity", "git-worktree"],
+              "entity-types": ["entity", "filesystem-path", "git-worktree"],
               "names": [["git-worktrees", "{{EscapeForJsonString(repoPath)}}"]],
               "display-name": {"default": "CustomRefreshName"},
               "path": "{{EscapeForJsonString(repoPath)}}"
@@ -189,7 +193,7 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
             """,
             concurrencyTag: null);
 
-        var context = CreateContext(dataAccessLayer);
+        var context = await CreateContextAsync(fixture);
         var tool = new GitWorkspaceUpdateTool();
 
         await tool.ExecuteAsync(context);
@@ -206,7 +210,8 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
         var repoPath = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "refresh-names"));
         InitializeGitRepository(repoPath, "https://example.com/refresh-names.git");
 
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
         var normalizedPath = Path.GetFullPath(repoPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant();
         var deterministicId = DeterministicEntityId.Create("git-workspace", normalizedPath);
 
@@ -216,7 +221,7 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
             $$"""
             {
               "entity-id": "{{deterministicId}}",
-              "entity-types": ["entity", "git-worktree"],
+              "entity-types": ["entity", "filesystem-path", "git-worktree"],
               "names": [["custom-refresh-name", "preserved"], ["another", "name"]],
               "display-name": {"default": "repo"},
               "path": "{{EscapeForJsonString(repoPath)}}"
@@ -224,7 +229,7 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
             """,
             concurrencyTag: null);
 
-        var context = CreateContext(dataAccessLayer);
+        var context = await CreateContextAsync(fixture);
         var tool = new GitWorkspaceUpdateTool();
 
         await tool.ExecuteAsync(context);
@@ -243,7 +248,8 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
         var repoPath = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "refresh-git-fields"));
         InitializeGitRepository(repoPath, "https://example.com/refresh-git-fields.git");
 
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
         var normalizedPath = Path.GetFullPath(repoPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant();
         var deterministicId = DeterministicEntityId.Create("git-workspace", normalizedPath);
 
@@ -253,7 +259,7 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
             $$"""
             {
               "entity-id": "{{deterministicId}}",
-              "entity-types": ["entity", "git-worktree"],
+              "entity-types": ["entity", "filesystem-path", "git-worktree"],
               "names": [["git-worktrees", "{{EscapeForJsonString(repoPath)}}"]],
               "display-name": {"default": "repo"},
               "path": "{{EscapeForJsonString(repoPath)}}",
@@ -262,7 +268,7 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
             """,
             concurrencyTag: null);
 
-        var context = CreateContext(dataAccessLayer);
+        var context = await CreateContextAsync(fixture);
         var tool = new GitWorkspaceUpdateTool();
 
         await tool.ExecuteAsync(context);
@@ -285,7 +291,8 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
         var repoPath = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "refresh-id"));
         InitializeGitRepository(repoPath, "https://example.com/refresh-id.git");
 
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
         var normalizedPath = Path.GetFullPath(repoPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant();
         var deterministicId = DeterministicEntityId.Create("git-workspace", normalizedPath);
 
@@ -295,7 +302,7 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
             $$"""
             {
               "entity-id": "{{deterministicId}}",
-              "entity-types": ["entity", "git-worktree"],
+              "entity-types": ["entity", "filesystem-path", "git-worktree"],
               "names": [["git-worktrees", "{{EscapeForJsonString(repoPath)}}"]],
               "display-name": {"default": "repo"},
               "path": "{{EscapeForJsonString(repoPath)}}"
@@ -303,7 +310,7 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
             """,
             concurrencyTag: null);
 
-        var context = CreateContext(dataAccessLayer);
+        var context = await CreateContextAsync(fixture);
         var tool = new GitWorkspaceUpdateTool();
 
         await tool.ExecuteAsync(context);
@@ -319,7 +326,8 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
         var repoPath = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "update-profile-id"));
         InitializeGitRepository(repoPath, "https://example.com/update-profile-id.git");
 
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
         var normalizedPath = Path.GetFullPath(repoPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant();
         var deterministicId = DeterministicEntityId.Create("git-workspace", normalizedPath);
 
@@ -339,7 +347,7 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
             """,
             concurrencyTag: null);
 
-        var context = CreateContext(dataAccessLayer);
+        var context = await CreateContextAsync(fixture);
         var tool = new GitWorkspaceUpdateTool();
 
         await tool.ExecuteAsync(context);
@@ -350,53 +358,56 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
         Assert.Equal(context.CurrentComputerUserProfileEntity.EntityId.ToString(), profileIdElement.GetString());
     }
 
-    private static WorkspaceToolExecutionContext CreateContext(IDataAccessLayer dataAccessLayer)
+    private static async Task<WorkspaceToolExecutionContext> CreateContextAsync(
+        ValidatingEntitySeedFixture fixture)
     {
-        var placeholder = CreateSnapshot(
-            """
+        var placeholderId = new EntityId();
+        var toolId = new EntityId();
+        await fixture.SeedManyValidAsync(
+            [
+                JsonDocument.Parse(
+                    $$"""
+                    {
+                      "entity-id": "{{placeholderId}}",
+                      "entity-types": ["entity", "task"],
+                      "names": [["tasks", "git-workspace-update-context"]]
+                    }
+                    """).RootElement.Clone(),
+                JsonDocument.Parse(
+                    $$"""
+                    {
+                      "entity-id": "{{toolId}}",
+                      "entity-types": ["entity", "tool"],
+                      "names": [["tools", "git-workspace-update"]],
+                      "tool-type": "git-workspace-update"
+                    }
+                    """).RootElement.Clone(),
+            ]);
+        var result = await fixture.DataAccessLayer.GetAsync(
+            new GetRequest
             {
-              "entity-id": "00000000-0000-0000-0000-000000000000",
-              "entity-types": ["entity"],
-              "names": [["placeholder"]]
-            }
-            """);
+                Entities =
+                [
+                    new GetEntityRequest { EntityId = placeholderId },
+                    new GetEntityRequest { EntityId = toolId },
+                ],
+                Timestamps = [null],
+            });
+        var entities = result.Batches.SelectMany(static batch => batch.Entities).ToArray();
+        var placeholder = Assert.Single(entities, entity => entity.EntityId == placeholderId);
+        var tool = Assert.Single(entities, entity => entity.EntityId == toolId);
         return new WorkspaceToolExecutionContext
         {
-            DataAccessLayer = dataAccessLayer,
+            DataAccessLayer = fixture.DataAccessLayer,
             CancellationToken = CancellationToken.None,
             CurrentComputerEntity = placeholder,
             CurrentUserEntity = placeholder,
             CurrentComputerUserProfileEntity = placeholder,
             ToolRelationship = placeholder,
             Participants = [placeholder],
-            Tool = CreateSnapshot("""{ "entity-types": ["entity", "tool"], "tool-type": "git-workspace-update" }"""),
+            Tool = tool,
             Schedule = placeholder,
         };
-    }
-
-    private static EntitySnapshot CreateSnapshot(string json)
-    {
-        using var document = JsonDocument.Parse(json);
-        var entityId = TryReadEntityId(document.RootElement) ?? new EntityId(Guid.NewGuid());
-        return new EntitySnapshot
-        {
-            EntityId = entityId,
-            ModifiedTime = new Timestamp(DateTimeOffset.UnixEpoch, "0"),
-            Data = document.RootElement.Clone(),
-            Relationships = [],
-        };
-    }
-
-    private static EntityId? TryReadEntityId(JsonElement element)
-    {
-        if (element.TryGetProperty("entity-id", out var entityIdElement)
-            && entityIdElement.ValueKind == JsonValueKind.String
-            && Guid.TryParse(entityIdElement.GetString(), out var guid))
-        {
-            return new EntityId(guid);
-        }
-
-        return null;
     }
 
     private static async Task<EntitySnapshot?> GetEntityByIdAsync(

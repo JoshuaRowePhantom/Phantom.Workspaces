@@ -3,7 +3,6 @@ using LibGit2Sharp;
 using Microsoft.Extensions.Logging;
 using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 using Phantom.Workspaces.Data;
-using Phantom.Workspaces.Data.Offline;
 using Phantom.Workspaces.Testing;
 
 namespace Phantom.Workspaces.Tools.Tests;
@@ -24,7 +23,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         InitializeGitRepository(currentProfileRepositoryPath, "https://example.com/current.git");
         InitializeGitRepository(otherProfileRepositoryPath, "https://example.com/other.git");
 
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var context = await CreateExecutionContextAsync(
             dataAccessLayer,
             currentProfileRoot,
@@ -59,7 +58,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         var repositoryPath = Path.GetFullPath(Path.Combine(currentProfileRoot, "repo-fs-path"));
         InitializeGitRepository(repositoryPath, "https://example.com/fs-path.git");
 
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var context = await CreateExecutionContextAsync(
             dataAccessLayer,
             currentProfileRoot,
@@ -74,7 +73,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
     }
 
     [Fact]
-    public async Task ExecuteAsync_ParticipantTypedFilesystemFolderOnly_PathIsNotScanned()
+    public async Task ExecuteAsync_ParticipantWithoutFilesystemPathType_IsNotScanned()
     {
         var currentProfileRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "current-profile-root"));
         var otherProfileRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other-profile-root"));
@@ -82,25 +81,24 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         var repositoryPath = Path.GetFullPath(Path.Combine(folderRoot, "repo-fs-folder"));
         InitializeGitRepository(repositoryPath, "https://example.com/fs-folder.git");
 
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var context = await CreateExecutionContextAsync(
             dataAccessLayer,
             currentProfileRoot,
             otherProfileRoot);
 
-        // Participant typed only with the non-existent "filesystem-folder" type, belonging to the current profile.
+        // A task participant cannot carry a persisted filesystem path, so it is not a scan root.
         var filesystemFolderOnlyParticipant = await UpsertEntityAsync(
             dataAccessLayer,
             new EntityId("88888888-8888-8888-8888-888888888888"),
             $$"""
             {
               "entity-id": "88888888-8888-8888-8888-888888888888",
-              "entity-types": ["entity", "filesystem-folder"],
+              "entity-types": ["entity", "task"],
               "names": [
                 ["filesystem-folders", "current-profile-folder"],
                 ["computer-user-profiles", "users", "username", "test-user", "computers", "hostname", "test-computer"]
-              ],
-              "path": "{{EscapeForJsonString(folderRoot)}}"
+              ]
             }
             """,
             concurrencyTag: null);
@@ -123,7 +121,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         var repositoryPath = Path.GetFullPath(Path.Combine(currentProfileRoot, "repo-drive-scan"));
         InitializeGitRepository(repositoryPath, "https://example.com/drive.git");
 
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var context = await CreateExecutionContextAsync(
             dataAccessLayer,
             currentProfileRoot,
@@ -147,7 +145,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         var rootRepoPath = Path.GetFullPath(Path.Combine(scanRoot, "root-repo"));
         InitializeGitRepository(rootRepoPath, "https://example.com/root.git");
 
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var context = await CreateExecutionContextAsync(
             dataAccessLayer,
             scanRoot,
@@ -171,7 +169,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         InitializeGitRepository(rootRepoPath, "https://example.com/root.git");
         AddLinkedWorktree(rootRepoPath, "linked-wt", linkedWorktreePath);
 
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var context = await CreateExecutionContextAsync(
             dataAccessLayer,
             scanRoot,
@@ -198,7 +196,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         InitializeGitRepository(rootRepoPath, "https://example.com/outside.git");
         AddLinkedWorktree(rootRepoPath, "outside-wt", linkedWorktreePath);
 
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var context = await CreateExecutionContextAsync(
             dataAccessLayer,
             scanRoot,
@@ -222,7 +220,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         InitializeGitRepository(rootRepoPath, "https://example.com/outside-owning.git");
         AddLinkedWorktree(rootRepoPath, "outside-owning-wt", linkedWorktreePath);
 
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var context = await CreateExecutionContextAsync(
             dataAccessLayer,
             scanRoot,
@@ -247,7 +245,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         InitializeGitRepository(rootRepoPath, "https://example.com/dedup.git");
         AddLinkedWorktree(rootRepoPath, "linked-inside", linkedWorktreePath);
 
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var context = await CreateExecutionContextAsync(
             dataAccessLayer,
             scanRoot,
@@ -275,7 +273,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         InitializeGitRepository(rootRepoPath, "https://example.com/norm.git");
         AddLinkedWorktree(rootRepoPath, "norm-linked", linkedWorktreePath);
 
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var context = await CreateExecutionContextAsync(
             dataAccessLayer,
             scanRoot,
@@ -301,7 +299,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         InitializeGitRepository(includedRepoPath, "https://example.com/included.git");
         InitializeGitRepository(excludedRepoPath, "https://example.com/excluded.git");
 
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var excludesJson = JsonSerializer.Serialize(new[] { excludedDirectory });
         var context = await CreateExecutionContextAsync(
             dataAccessLayer,
@@ -327,7 +325,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         Environment.SetEnvironmentVariable(variableName, scanRoot);
         try
         {
-            var dataAccessLayer = new InMemoryDataAccessLayer();
+            var dataAccessLayer = await CreateDataAccessLayerAsync();
             var context = await CreateExecutionContextAsync(
                 dataAccessLayer,
                 "%" + variableName + "%",
@@ -355,7 +353,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         Environment.SetEnvironmentVariable(variableName, homeDirectory);
         try
         {
-            var dataAccessLayer = new InMemoryDataAccessLayer();
+            var dataAccessLayer = await CreateDataAccessLayerAsync();
             // Point currentProfileRoot at the env-var reference so the profile's home-directory
             // is stored as "%VAR%" (not the expanded path).
             var context = await CreateExecutionContextAsync(
@@ -394,7 +392,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         Environment.SetEnvironmentVariable(variableName, excludedDirectory);
         try
         {
-            var dataAccessLayer = new InMemoryDataAccessLayer();
+            var dataAccessLayer = await CreateDataAccessLayerAsync();
             var excludesJson = JsonSerializer.Serialize(new[] { "%" + variableName + "%" });
             var context = await CreateExecutionContextAsync(
                 dataAccessLayer,
@@ -435,7 +433,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         Environment.SetEnvironmentVariable("TMP", fakeTempDirectory);
         try
         {
-            var dataAccessLayer = new InMemoryDataAccessLayer();
+            var dataAccessLayer = await CreateDataAccessLayerAsync();
             // Pass toolExcludesJson: null so the tool entity has no `excludes` property and
             // the in-code DefaultExcludes ([%TEMP%]) is applied.
             var context = await CreateExecutionContextAsync(
@@ -466,7 +464,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         var excludedRepoPath = Path.GetFullPath(Path.Combine(scanRoot, "exact-repo"));
         InitializeGitRepository(excludedRepoPath, "https://example.com/at-root.git");
 
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var excludesJson = JsonSerializer.Serialize(new[] { excludedRepoPath });
         var context = await CreateExecutionContextAsync(
             dataAccessLayer,
@@ -690,6 +688,9 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         return getResult.Batches.SelectMany(static batch => batch.Entities).FirstOrDefault();
     }
 
+    private static async Task<IDataAccessLayer> CreateDataAccessLayerAsync()
+        => (await ValidatingEntitySeedFixture.CreateAsync()).DataAccessLayer;
+
     private static async Task<EntitySnapshot> UpsertEntityAsync(
         IDataAccessLayer dataAccessLayer,
         EntityId entityId,
@@ -754,7 +755,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         Directory.CreateDirectory(Path.Combine(invalidRepoPath, ".git"));
 
         var logger = new TestLogger<GitWorkspaceScanTool>();
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var context = await CreateExecutionContextAsync(
             dataAccessLayer,
             this.temporaryRootPath,
@@ -776,7 +777,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         Directory.CreateDirectory(scanRoot);
 
         var logger = new TestLogger<GitWorkspaceScanTool>();
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var context = await CreateExecutionContextAsync(
             dataAccessLayer,
             scanRoot,
@@ -801,7 +802,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         InitializeGitRepository(repoPath, "https://example.com/debug.git");
 
         var logger = new TestLogger<GitWorkspaceScanTool>();
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var context = await CreateExecutionContextAsync(
             dataAccessLayer,
             scanRoot,
@@ -828,7 +829,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         InitializeGitRepository(repoPath2, "https://example.com/two.git");
 
         var logger = new TestLogger<GitWorkspaceScanTool>();
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var context = await CreateExecutionContextAsync(
             dataAccessLayer,
             scanRoot,
@@ -853,7 +854,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         var repoPath = Path.GetFullPath(Path.Combine(scanRoot, "my-repo"));
         InitializeGitRepository(repoPath, "https://example.com/preserve-display.git");
 
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var context = await CreateExecutionContextAsync(
             dataAccessLayer,
             scanRoot,
@@ -898,7 +899,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         var repoPath = Path.GetFullPath(Path.Combine(scanRoot, "my-repo"));
         InitializeGitRepository(repoPath, "https://example.com/preserve-names.git");
 
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var context = await CreateExecutionContextAsync(
             dataAccessLayer,
             scanRoot,
@@ -945,7 +946,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         var repoPath = Path.GetFullPath(Path.Combine(scanRoot, "my-repo"));
         InitializeGitRepository(repoPath, "https://example.com/update-git.git");
 
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var context = await CreateExecutionContextAsync(
             dataAccessLayer,
             scanRoot,
@@ -990,7 +991,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         var repoPath = Path.GetFullPath(Path.Combine(scanRoot, "my-repo"));
         InitializeGitRepository(repoPath, "https://example.com/preserve-id.git");
 
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var context = await CreateExecutionContextAsync(
             dataAccessLayer,
             scanRoot,
@@ -1021,7 +1022,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         var repoPath = Path.GetFullPath(Path.Combine(scanRoot, "profile-id-repo"));
         InitializeGitRepository(repoPath, "https://example.com/profile-id.git");
 
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var context = await CreateExecutionContextAsync(
             dataAccessLayer,
             scanRoot,
@@ -1045,7 +1046,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         var repoPath = Path.GetFullPath(Path.Combine(scanRoot, "backfill-repo"));
         InitializeGitRepository(repoPath, "https://example.com/backfill.git");
 
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var context = await CreateExecutionContextAsync(
             dataAccessLayer,
             scanRoot,
@@ -1107,7 +1108,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         Directory.CreateDirectory(scanRoot);
 
         var logger = new TestLogger<GitWorkspaceScanTool>();
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var context = await CreateExecutionContextAsync(
             dataAccessLayer,
             scanRoot,
@@ -1133,7 +1134,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         InitializeGitRepository(repoPath, "https://example.com/summary.git");
 
         var logger = new TestLogger<GitWorkspaceScanTool>();
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var context = await CreateExecutionContextAsync(
             dataAccessLayer,
             scanRoot,
@@ -1160,7 +1161,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         InitializeGitRepository(repoPath, "https://example.com/result.git");
 
         var logger = new TestLogger<GitWorkspaceScanTool>();
-        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
         var context = await CreateExecutionContextAsync(
             dataAccessLayer,
             scanRoot,

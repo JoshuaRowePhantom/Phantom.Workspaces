@@ -2,6 +2,7 @@ using System.Text.Json;
 using AgentSchema;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Testing;
 
 namespace Phantom.Workspaces.Tests;
 
@@ -35,7 +36,7 @@ public sealed class AgentDefinitionToolExtractorTests
           ]
         }
         """);
-        var resolver = new AgentDefinitionResolver(new FakeDataAccessLayer());
+        var resolver = await CreateResolverAsync();
 
         var tools = await AgentDefinitionToolExtractor.ExtractAgentDefinitionToolsAsync(
             dispatcher, resolver, cancellationToken: TestContext.Current.CancellationToken);
@@ -50,9 +51,11 @@ public sealed class AgentDefinitionToolExtractorTests
     [Fact]
     public async Task ManifestReference_ResolvesToReferencedDefinition()
     {
-        var reference = new EntityName("defaults", "agent-manifests", "github-copilot");
         var manifestEntity = Parse("""
         {
+          "entity-id": "10000000-0000-4000-8000-000000000007",
+          "entity-types": ["entity", "agent-manifest"],
+          "names": [["tests", "agent-manifests", "github-copilot"]],
           "manifest": {
             "name": "github-copilot",
             "displayName": "GitHub Copilot",
@@ -74,13 +77,12 @@ public sealed class AgentDefinitionToolExtractorTests
               "kind": "agent-definition",
               "name": "bar",
               "description": "The bar sub-agent",
-              "manifest-reference": ["defaults", "agent-manifests", "github-copilot"]
+              "manifest-reference": ["tests", "agent-manifests", "github-copilot"]
             }
           ]
         }
         """);
-        var resolver = new AgentDefinitionResolver(new FakeDataAccessLayer(
-            byName: new Dictionary<EntityName, JsonElement> { [reference] = manifestEntity }));
+        var resolver = await CreateResolverAsync(manifestEntity);
 
         var tools = await AgentDefinitionToolExtractor.ExtractAgentDefinitionToolsAsync(
             dispatcher, resolver, cancellationToken: TestContext.Current.CancellationToken);
@@ -95,9 +97,11 @@ public sealed class AgentDefinitionToolExtractorTests
     [Fact]
     public async Task InlineAndReferenceEntries_AreBothResolved_PreservingOrder()
     {
-        var reference = new EntityName("defaults", "agent-manifests", "github-copilot");
         var manifestEntity = Parse("""
         {
+          "entity-id": "10000000-0000-4000-8000-000000000008",
+          "entity-types": ["entity", "agent-manifest"],
+          "names": [["tests", "agent-manifests", "github-copilot"]],
           "manifest": {
             "name": "github-copilot",
             "displayName": "GitHub Copilot",
@@ -130,13 +134,12 @@ public sealed class AgentDefinitionToolExtractorTests
               "kind": "agent-definition",
               "name": "bar",
               "description": "The bar sub-agent",
-              "manifest-reference": ["defaults", "agent-manifests", "github-copilot"]
+              "manifest-reference": ["tests", "agent-manifests", "github-copilot"]
             }
           ]
         }
         """);
-        var resolver = new AgentDefinitionResolver(new FakeDataAccessLayer(
-            byName: new Dictionary<EntityName, JsonElement> { [reference] = manifestEntity }));
+        var resolver = await CreateResolverAsync(manifestEntity);
 
         var tools = await AgentDefinitionToolExtractor.ExtractAgentDefinitionToolsAsync(
             dispatcher, resolver, cancellationToken: TestContext.Current.CancellationToken);
@@ -158,7 +161,7 @@ public sealed class AgentDefinitionToolExtractorTests
           "model": { "id": "sub-agent-dispatcher", "provider": "sub-agent-dispatcher" }
         }
         """);
-        var resolver = new AgentDefinitionResolver(new FakeDataAccessLayer());
+        var resolver = await CreateResolverAsync();
 
         var tools = await AgentDefinitionToolExtractor.ExtractAgentDefinitionToolsAsync(
             dispatcher, resolver, cancellationToken: TestContext.Current.CancellationToken);
@@ -179,7 +182,7 @@ public sealed class AgentDefinitionToolExtractorTests
           ]
         }
         """);
-        var resolver = new AgentDefinitionResolver(new FakeDataAccessLayer());
+        var resolver = await CreateResolverAsync();
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             AgentDefinitionToolExtractor.ExtractAgentDefinitionToolsAsync(
@@ -187,51 +190,15 @@ public sealed class AgentDefinitionToolExtractorTests
         Assert.Contains("'broken'", ex.Message, StringComparison.Ordinal);
     }
 
-    private sealed class FakeDataAccessLayer : IDataAccessLayer
+    private static async Task<AgentDefinitionResolver> CreateResolverAsync(
+        JsonElement? entity = null)
     {
-        private readonly IReadOnlyDictionary<EntityName, JsonElement> byName;
-
-        public FakeDataAccessLayer(IReadOnlyDictionary<EntityName, JsonElement>? byName = null)
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        if (entity is { } value)
         {
-            this.byName = byName ?? new Dictionary<EntityName, JsonElement>();
+            await fixture.SeedValidEntityAsync(value);
         }
 
-        public Task<GetResult> GetAsync(GetRequest request, CancellationToken cancellationToken = default)
-        {
-            var entities = new List<EntitySnapshot>();
-            foreach (var entityRequest in request.Entities)
-            {
-                if (entityRequest.EntityName is EntityName name && this.byName.TryGetValue(name, out var nameData))
-                {
-                    entities.Add(new EntitySnapshot
-                    {
-                        EntityId = new EntityId(),
-                        ModifiedTime = new Timestamp(DateTimeOffset.UnixEpoch, "test"),
-                        Data = nameData,
-                        Relationships = [],
-                    });
-                }
-            }
-
-            return Task.FromResult(new GetResult
-            {
-                Batches = [new TimestampedEntityBatch { Entities = entities }],
-            });
-        }
-
-        public Task<UpdateResult> UpdateAsync(UpdateRequest request, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<QueryResult> QueryAsync(QueryRequest request, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<GetHistoryResult> GetHistoryAsync(GetHistoryRequest request, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<ExportResult> ExportAsync(ExportRequest request, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<GetChangedEntitiesResult> GetChangedEntitiesAsync(GetChangedEntitiesRequest request, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+        return new AgentDefinitionResolver(fixture.DataAccessLayer);
     }
 }
