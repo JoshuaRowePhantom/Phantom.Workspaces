@@ -24,6 +24,10 @@ Filesystem path entities map workspace concepts to local or remote filesystem pa
 - `path` (string, required): The filesystem path on the computer
   - Can be absolute: `"/home/alice/projects/my-app"`, `"C:\\Users\\Alice\\Projects\\my-app"`
   - Can be relative (interpreted relative to a context)
+- `exists-on-filesystem` (boolean, optional, default annotation `true`): Whether the owning tool
+  found the path on its local filesystem during its latest check. Git workspace tooling writes
+  this value explicitly. JSON Schema's `default` is documentation only and does not add the
+  property to stored entities.
 - `computer-reference` (array, required): Reference to the computer entity where this path exists
   - Example: `["computers", "hostname", "devbox"]`
 

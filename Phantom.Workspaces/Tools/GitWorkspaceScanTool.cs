@@ -91,8 +91,9 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
                 discoveredWorktreePath,
                 currentProfileNames,
                 gitMetadata,
-                owningRepositoryPath,
-                context.CurrentComputerUserProfileEntity.EntityId);
+                existsOnFilesystem: true,
+                owningRepository: owningRepositoryPath,
+                computerUserProfileId: context.CurrentComputerUserProfileEntity.EntityId);
 
             _ = await WorkspaceToolEntityUtilities.UpsertEntityByDeterministicIdAsync(
                 context.DataAccessLayer,

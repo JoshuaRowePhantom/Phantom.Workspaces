@@ -26,6 +26,11 @@
     "path": {
       "type": "string",
       "description": "The filesystem path of the path."
+    },
+    "exists-on-filesystem": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether the filesystem path this entity refers to currently exists locally, as last checked by the owning tool. This is an authoritative, explicitly-written value; JSON Schema's default here is documentation only and is never auto-persisted."
     }
   }
 }

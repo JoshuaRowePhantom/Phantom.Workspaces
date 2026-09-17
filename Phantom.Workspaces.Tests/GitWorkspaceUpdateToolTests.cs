@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -72,7 +73,7 @@ public sealed class GitWorkspaceUpdateToolTests
         await SeedGitEntityAsync(dataAccessLayer, "/repo/path");
         Func<string, ILogger, GitMetadata?> fakeReader = (_, _) =>
             new GitMetadata { BranchName = "main", HeadCommitHash = "abc123" };
-        var tool = new GitWorkspaceUpdateTool(metadataReader: fakeReader);
+        var tool = new GitWorkspaceUpdateTool(metadataReader: fakeReader, directoryExists: _ => true);
 
         var result = await tool.ExecuteAsync(Context(dataAccessLayer));
 
@@ -87,7 +88,7 @@ public sealed class GitWorkspaceUpdateToolTests
         await SeedGitEntityAsync(dataAccessLayer, "/repo/path");
         Func<string, ILogger, GitMetadata?> fakeReader = (_, _) =>
             new GitMetadata { BranchName = "main", HeadCommitHash = "abc123" };
-        var tool = new GitWorkspaceUpdateTool(metadataReader: fakeReader);
+        var tool = new GitWorkspaceUpdateTool(metadataReader: fakeReader, directoryExists: _ => true);
 
         await tool.ExecuteAsync(Context(dataAccessLayer)); // first run — populates git section
 
@@ -105,7 +106,10 @@ public sealed class GitWorkspaceUpdateToolTests
         Func<string, ILogger, GitMetadata?> fakeReader = (_, _) =>
             new GitMetadata { BranchName = "main", HeadCommitHash = "abc123" };
         var logger = new TestLogger<GitWorkspaceUpdateTool>();
-        var tool = new GitWorkspaceUpdateTool(metadataReader: fakeReader, logger: logger);
+        var tool = new GitWorkspaceUpdateTool(
+            metadataReader: fakeReader,
+            logger: logger,
+            directoryExists: _ => true);
 
         await tool.ExecuteAsync(Context(dataAccessLayer)); // first run
         logger.Entries.Clear();
@@ -125,7 +129,7 @@ public sealed class GitWorkspaceUpdateToolTests
         var commit = "initial";
         Func<string, ILogger, GitMetadata?> fakeReader = (_, _) =>
             new GitMetadata { BranchName = "main", HeadCommitHash = commit };
-        var tool = new GitWorkspaceUpdateTool(metadataReader: fakeReader);
+        var tool = new GitWorkspaceUpdateTool(metadataReader: fakeReader, directoryExists: _ => true);
 
         await tool.ExecuteAsync(Context(dataAccessLayer)); // first run with "initial"
         commit = "updated-commit";
@@ -188,7 +192,7 @@ public sealed class GitWorkspaceUpdateToolTests
         }, TestContext.Current.CancellationToken);
         Func<string, ILogger, GitMetadata?> fakeReader = (_, _) =>
             new GitMetadata { BranchName = "main", HeadCommitHash = "abc123" };
-        var tool = new GitWorkspaceUpdateTool(metadataReader: fakeReader);
+        var tool = new GitWorkspaceUpdateTool(metadataReader: fakeReader, directoryExists: _ => true);
 
         var result = await tool.ExecuteAsync(Context(dataAccessLayer));
 
@@ -203,11 +207,96 @@ public sealed class GitWorkspaceUpdateToolTests
         await SeedGitEntityAsync(dataAccessLayer, "/repo/test-path");
         Func<string, ILogger, GitMetadata?> fakeReader = (_, _) =>
             new GitMetadata { BranchName = "develop", HeadCommitHash = "def456" };
-        var tool = new GitWorkspaceUpdateTool(metadataReader: fakeReader);
+        var tool = new GitWorkspaceUpdateTool(metadataReader: fakeReader, directoryExists: _ => true);
 
         var result = await tool.ExecuteAsync(Context(dataAccessLayer));
 
         Assert.NotNull(result.ResultContent);
         Assert.Contains("changed: 1", result.ResultContent, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_MissingThenRestored_AgainstFullDalStack_ReconcilesSystemHideRelationship()
+    {
+        var dataAccessLayer = await CreateProductionStyleDataAccessLayerAsync();
+        var entityId = new EntityId(Guid.NewGuid());
+        using var document = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{entityId}}",
+              "entity-types": ["entity", "git-worktree", "filesystem-path"],
+              "names": [["git-worktrees", "C:/missing/full-dal-worktree"]],
+              "display-name": {"default": "full-dal-worktree"},
+              "path": "C:/missing/full-dal-worktree",
+              "exists-on-filesystem": true,
+              "git": {"branch": "preserved"}
+            }
+            """);
+        var seedResult = await dataAccessLayer.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown { Text = "Seed full-DAL missing worktree." },
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = entityId,
+                        EntityChangeMode = EntityChangeMode.Replace,
+                        Data = document.RootElement.Clone(),
+                    },
+                ],
+            },
+            TestContext.Current.CancellationToken);
+        Assert.DoesNotContain(seedResult.EntityResults, static item => item.UpdateState == UpdateState.Failed);
+        var context = Context(dataAccessLayer);
+        var missingTool = new GitWorkspaceUpdateTool(directoryExists: _ => false);
+
+        await missingTool.ExecuteAsync(context);
+
+        var missingEntity = await GetEntityAsync(dataAccessLayer, entityId);
+        Assert.False(missingEntity!.Data!.Value.GetProperty("exists-on-filesystem").GetBoolean());
+        Assert.Equal(
+            "preserved",
+            missingEntity.Data.Value.GetProperty("git").GetProperty("branch").GetString());
+        var relationshipId = DeterministicEntityId.Create(
+            "git-workspace-missing",
+            entityId.ToString());
+        var missingRelationship = await GetEntityAsync(dataAccessLayer, relationshipId);
+        Assert.Equal(
+            "This Git workspace does not exist on the filesystem.",
+            missingRelationship!.Data!.Value.GetProperty("note").GetString());
+
+        var restoredTool = new GitWorkspaceUpdateTool(
+            metadataReader: (_, _) => new GitMetadata
+            {
+                BranchName = "restored",
+                HeadCommitHash = "abc123",
+            },
+            directoryExists: _ => true);
+        await restoredTool.ExecuteAsync(context);
+
+        var restoredEntity = await GetEntityAsync(dataAccessLayer, entityId);
+        Assert.True(restoredEntity!.Data!.Value.GetProperty("exists-on-filesystem").GetBoolean());
+        Assert.Equal(
+            "restored",
+            restoredEntity.Data.Value.GetProperty("git").GetProperty("branch").GetString());
+        var removedRelationship = await GetEntityAsync(dataAccessLayer, relationshipId);
+        Assert.True(removedRelationship is null || removedRelationship.Data is null);
+    }
+
+    private static async Task<EntitySnapshot?> GetEntityAsync(
+        IDataAccessLayer dataAccessLayer,
+        EntityId entityId)
+    {
+        var result = await dataAccessLayer.GetAsync(
+            new GetRequest
+            {
+                Entities = [new GetEntityRequest { EntityId = entityId }],
+            },
+            TestContext.Current.CancellationToken);
+        return result.Batches.SelectMany(static batch => batch.Entities).FirstOrDefault();
     }
 }
