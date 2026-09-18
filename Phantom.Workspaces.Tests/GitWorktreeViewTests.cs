@@ -138,6 +138,7 @@ public sealed class GitWorktreeViewTests
                 path,
                 profileNames,
                 metadata: null,
+                existsOnFilesystem: true,
                 owningRepository: null,
                 computerUserProfileId: profileId);
 

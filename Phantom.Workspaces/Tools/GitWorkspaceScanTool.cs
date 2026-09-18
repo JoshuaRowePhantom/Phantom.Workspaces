@@ -91,8 +91,9 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
                 discoveredWorktreePath,
                 currentProfileNames,
                 gitMetadata,
-                owningRepositoryPath,
-                context.CurrentComputerUserProfileEntity.EntityId);
+                existsOnFilesystem: true,
+                owningRepository: owningRepositoryPath,
+                computerUserProfileId: context.CurrentComputerUserProfileEntity.EntityId);
 
             _ = await WorkspaceToolEntityUtilities.UpsertEntityByDeterministicIdAsync(
                 context.DataAccessLayer,
@@ -165,15 +166,14 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
 
     private static string NormalizeRepositoryPath(string repositoryPath)
     {
-        return Path.GetFullPath(repositoryPath)
-            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+        return Path.GetFullPath(Path.Combine(repositoryPath, "."))
             .ToLowerInvariant();
     }
 
     /// <summary>
     /// Expands <c>%NAME%</c> environment variable references in <paramref name="raw"/> and returns
-    /// a full, trailing-separator-trimmed path. Returns the empty string for null/whitespace input
-    /// or when the resulting value is not a valid path.
+    /// a full path. Returns the empty string for null/whitespace input or when the resulting value
+    /// is not a valid path.
     /// </summary>
     internal static string ExpandAndNormalize(string? raw)
     {
@@ -190,8 +190,7 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
 
         try
         {
-            return Path.GetFullPath(expanded)
-                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            return Path.GetFullPath(expanded);
         }
         catch (ArgumentException)
         {

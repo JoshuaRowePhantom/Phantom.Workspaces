@@ -82,6 +82,44 @@ public sealed class EntitySchemaComposerTests
     }
 
     [Fact]
+    public void FilesystemPathSchema_ExistsOnFilesystemProperty_DeclaresBooleanTypeAndDefaultTrue()
+    {
+        var assembly = typeof(SchemaPopulator).Assembly;
+        var resourceName = assembly.GetManifestResourceNames()
+            .Single(name => name.EndsWith(".filesystem-path.json", StringComparison.Ordinal));
+        using var stream = assembly.GetManifestResourceStream(resourceName);
+        Assert.NotNull(stream);
+        using var document = JsonDocument.Parse(stream!);
+
+        var property = document.RootElement
+            .GetProperty("properties")
+            .GetProperty("exists-on-filesystem");
+
+        Assert.Equal("boolean", property.GetProperty("type").GetString());
+        Assert.True(property.GetProperty("default").GetBoolean());
+    }
+
+    [Fact]
+    public async Task GitWorktreeEntity_MissingExistsOnFilesystemProperty_IsStillValid()
+    {
+        IEntitySchemaComposer composer = await CreatePopulatedComposerAsync();
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "33333333-3333-3333-3333-333333333334",
+              "entity-types": ["entity", "git-worktree", "filesystem-path"],
+              "names": [["git-worktrees", "C:/dev/legacy-repo"]],
+              "display-name": { "default": "legacy-repo" },
+              "path": "C:/dev/legacy-repo"
+            }
+            """);
+
+        var errors = await composer.GetValidationErrorsAsync(document.RootElement);
+
+        Assert.Empty(errors);
+    }
+
+    [Fact]
     public async Task GetValidationErrorsAsync_GitEntityWithGitMetadata_ReturnsNoErrors()
     {
         IEntitySchemaComposer composer = await CreatePopulatedComposerAsync();

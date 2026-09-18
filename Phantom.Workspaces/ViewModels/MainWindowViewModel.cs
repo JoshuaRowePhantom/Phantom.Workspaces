@@ -2473,7 +2473,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
        }
 
        this.UnsubscribeFromInnerDockChanges(pane);
+       var removedEntities = pane.Tabs
+           .Select(static tab => tab.Entity)
+           .Append(pane.Entity)
+           .ToArray();
        this.WorkspacePanes.RemoveAt(paneIndex);
+       this.UpdateUnreadAttentionState(removedEntities);
 
        // #1198: cascade disposal into the removed pane so every child WorkspaceTabViewModel
        // is disposed. For agent-session tabs this releases the RunningAgentChatLease so the
@@ -2758,6 +2763,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         else
             pane.Tabs.Add(newTab);
 
+        this.UpdateUnreadAttentionState(oldTab.Entity);
+
         if (wasActive)
         {
             var newDocument = pane.GetDocumentForTab(newTab.Id);
@@ -2788,6 +2795,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
             // Removing from pane.Tabs removes the WorkspaceDocument via ItemsSource automatically.
             pane.Tabs.Remove(tab);
+            this.UpdateUnreadAttentionState(tab.Entity);
 
             // Navigate to MRU tab if we just closed the active tab
             if (wasActive)
@@ -2921,6 +2929,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
             // Removing from pane.Tabs removes the WorkspaceDocument via ItemsSource automatically.
             pane.Tabs.Remove(tab);
+            this.UpdateUnreadAttentionState(tab.Entity);
 
             // Navigate to MRU tab if we just closed the active tab
             if (wasActive)
@@ -3285,6 +3294,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             if (pane.Tabs.Contains(tabVm))
             {
                 pane.HandleChildTabClosed(tabVm);
+                this.UpdateUnreadAttentionState(tabVm.Entity);
                 break;
             }
         }
@@ -4344,19 +4354,63 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private void OnNotificationsChanged(object? sender, EventArgs e)
     {
+        this.UpdateUnreadAttentionState();
+    }
+
+    private void UpdateUnreadAttentionState(params SubscribedEntityViewModel?[] removedEntities)
+    {
         var notifications = this.notificationService.Notifications;
+        var entityAttention = new Dictionary<EntityId, (SubscribedEntityViewModel Entity, bool HasUnread)>();
+        foreach (var removedEntity in removedEntities)
+        {
+            if (removedEntity is not null)
+            {
+                removedEntity.HasUnreadAttention = false;
+            }
+        }
+
         foreach (var pane in this.WorkspacePanes)
         {
             var anyUnread = false;
             foreach (var tab in pane.Tabs)
             {
                 var doc = pane.GetDocumentForTab(tab.Id);
-                if (doc is null) continue;
-                var hasUnread = notifications.Any(n => n.TabKey == doc.Id && !n.IsRead);
-                doc.HasUnreadNotification = hasUnread;
-                if (hasUnread) anyUnread = true;
+                var hasUnread = doc is not null
+                    && notifications.Any(n => n.TabKey == doc.Id && !n.IsRead);
+                if (doc is not null)
+                {
+                    doc.HasUnreadNotification = hasUnread;
+                }
+
+                anyUnread |= hasUnread;
+                if (tab.Entity is { } tabEntity)
+                {
+                    MergeEntityAttention(entityAttention, tabEntity, hasUnread);
+                }
             }
+
             pane.AnyTabHasUnreadNotification = anyUnread;
+            MergeEntityAttention(entityAttention, pane.Entity, anyUnread);
+        }
+
+        foreach (var (entity, hasUnread) in entityAttention.Values)
+        {
+            entity.HasUnreadAttention = hasUnread;
+        }
+    }
+
+    private static void MergeEntityAttention(
+        IDictionary<EntityId, (SubscribedEntityViewModel Entity, bool HasUnread)> entityAttention,
+        SubscribedEntityViewModel entity,
+        bool hasUnread)
+    {
+        if (entityAttention.TryGetValue(entity.EntityId, out var existing))
+        {
+            entityAttention[entity.EntityId] = (existing.Entity, existing.HasUnread || hasUnread);
+        }
+        else
+        {
+            entityAttention.Add(entity.EntityId, (entity, hasUnread));
         }
     }
 

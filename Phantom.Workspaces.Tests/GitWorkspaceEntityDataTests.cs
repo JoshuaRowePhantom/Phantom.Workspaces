@@ -22,7 +22,7 @@ public sealed class GitWorkspaceEntityDataTests
             OriginRemoteUrl = "https://github.com/test/repo.git",
         };
 
-        var result = GitWorkspaceEntityData.Build(path, profileNames, metadata);
+        var result = GitWorkspaceEntityData.Build(path, profileNames, metadata, existsOnFilesystem: true);
 
         Assert.NotNull(result);
         Assert.True(result.ContainsKey("entity-types"));
@@ -48,7 +48,7 @@ public sealed class GitWorkspaceEntityDataTests
         var path = Path.Combine(Path.GetTempPath(), "test-repo");
         var profileNames = new[] { new EntityName("user-computer-profile", "TEST-MACHINE") };
 
-        var result = GitWorkspaceEntityData.Build(path, profileNames, null);
+        var result = GitWorkspaceEntityData.Build(path, profileNames, null, existsOnFilesystem: true);
 
         Assert.NotNull(result);
         Assert.False(result.ContainsKey("git"));
@@ -65,7 +65,7 @@ public sealed class GitWorkspaceEntityDataTests
         var profileNames = new[] { new EntityName("user-computer-profile", "TEST-MACHINE") };
         var metadata = new GitMetadata { BranchName = "main" };
 
-        var result = GitWorkspaceEntityData.Build(path, profileNames, metadata);
+        var result = GitWorkspaceEntityData.Build(path, profileNames, metadata, existsOnFilesystem: true);
 
         var names = result["names"]!.AsArray();
         Assert.NotEmpty(names);
@@ -93,7 +93,7 @@ public sealed class GitWorkspaceEntityDataTests
         var profileNames = Array.Empty<EntityName>();
         var metadata = new GitMetadata { BranchName = "main" };
 
-        var result = GitWorkspaceEntityData.Build(path, profileNames, metadata);
+        var result = GitWorkspaceEntityData.Build(path, profileNames, metadata, existsOnFilesystem: true);
 
         var names = result["names"]!.AsArray();
         Assert.NotEmpty(names);
@@ -225,7 +225,12 @@ public sealed class GitWorkspaceEntityDataTests
         var metadata = new GitMetadata { BranchName = "feature" };
         var owningRepository = Path.Combine(Path.GetTempPath(), "main-repo");
 
-        var result = GitWorkspaceEntityData.Build(path, profileNames, metadata, owningRepository);
+        var result = GitWorkspaceEntityData.Build(
+            path,
+            profileNames,
+            metadata,
+            existsOnFilesystem: true,
+            owningRepository: owningRepository);
 
         Assert.True(result.ContainsKey("owning-repository"));
         Assert.Equal(owningRepository, result["owning-repository"]?.GetValue<string>());
@@ -238,7 +243,12 @@ public sealed class GitWorkspaceEntityDataTests
         var profileNames = new[] { new EntityName("user-computer-profile", "TEST-MACHINE") };
         var metadata = new GitMetadata { BranchName = "main" };
 
-        var result = GitWorkspaceEntityData.Build(path, profileNames, metadata, null);
+        var result = GitWorkspaceEntityData.Build(
+            path,
+            profileNames,
+            metadata,
+            existsOnFilesystem: true,
+            owningRepository: null);
 
         Assert.False(result.ContainsKey("owning-repository"));
     }
@@ -255,6 +265,7 @@ public sealed class GitWorkspaceEntityDataTests
             path,
             profileNames,
             metadata,
+            existsOnFilesystem: true,
             owningRepository: null,
             computerUserProfileId: profileId);
 
@@ -273,9 +284,34 @@ public sealed class GitWorkspaceEntityDataTests
             path,
             profileNames,
             metadata,
+            existsOnFilesystem: true,
             owningRepository: null,
             computerUserProfileId: null);
 
         Assert.False(result.ContainsKey("computer-user-profile-id"));
+    }
+
+    [Fact]
+    public void Build_PathExists_SetsExistsOnFilesystemTrue()
+    {
+        var result = GitWorkspaceEntityData.Build(
+            Path.Combine(Path.GetTempPath(), "existing-repo"),
+            [],
+            metadata: null,
+            existsOnFilesystem: true);
+
+        Assert.True(result["exists-on-filesystem"]?.GetValue<bool>());
+    }
+
+    [Fact]
+    public void Build_PathMissing_SetsExistsOnFilesystemFalse()
+    {
+        var result = GitWorkspaceEntityData.Build(
+            Path.Combine(Path.GetTempPath(), "missing-repo"),
+            [],
+            metadata: null,
+            existsOnFilesystem: false);
+
+        Assert.False(result["exists-on-filesystem"]?.GetValue<bool>());
     }
 }

@@ -165,7 +165,8 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
         var result = await tool.ExecuteAsync(context);
 
         Assert.NotNull(result.ResultContent);
-        Assert.Contains("1", result.ResultContent, StringComparison.Ordinal);
+        Assert.Contains("changed: 2", result.ResultContent, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("errors: 0", result.ResultContent, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -358,8 +359,415 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
         Assert.Equal(context.CurrentComputerUserProfileEntity.EntityId.ToString(), profileIdElement.GetString());
     }
 
+    [Fact]
+    public async Task ExecuteAsync_QueriesAllExistingGitAndGitWorktreeEntities_NotJustNewlyDiscoveredOnes()
+    {
+        var firstPath = Path.Combine(this.temporaryRootPath, "query-all-first");
+        var secondPath = Path.Combine(this.temporaryRootPath, "query-all-second");
+        Directory.CreateDirectory(firstPath);
+        Directory.CreateDirectory(secondPath);
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
+        var firstId = new EntityId(Guid.NewGuid());
+        var secondId = new EntityId(Guid.NewGuid());
+        await SeedGitWorkspaceAsync(dataAccessLayer, firstId, firstPath, entityType: "git");
+        await SeedGitWorkspaceAsync(dataAccessLayer, secondId, secondPath);
+        var tool = CreateTool(directoryExists: _ => true);
+
+        await tool.ExecuteAsync(await CreateContextAsync(fixture));
+
+        Assert.True((await GetEntityByIdAsync(dataAccessLayer, firstId))!.Data!.Value
+            .GetProperty("exists-on-filesystem").GetBoolean());
+        Assert.True((await GetEntityByIdAsync(dataAccessLayer, secondId))!.Data!.Value
+            .GetProperty("exists-on-filesystem").GetBoolean());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WorktreeFolderDeleted_SetsExistsOnFilesystemFalseAndHidesEntity()
+    {
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
+        var entityId = new EntityId(Guid.NewGuid());
+        await SeedGitWorkspaceAsync(
+            dataAccessLayer,
+            entityId,
+            Path.Combine(this.temporaryRootPath, "deleted-worktree"),
+            existsOnFilesystem: true);
+        var tool = CreateTool(directoryExists: _ => false);
+
+        await tool.ExecuteAsync(await CreateContextAsync(fixture));
+
+        var entity = await GetEntityByIdAsync(dataAccessLayer, entityId);
+        Assert.False(entity!.Data!.Value.GetProperty("exists-on-filesystem").GetBoolean());
+        var hideRelationship = await GetEntityByIdAsync(dataAccessLayer, MissingRelationshipId(entityId));
+        Assert.NotNull(hideRelationship?.Data);
+        Assert.Equal(
+            entityId.ToString(),
+            hideRelationship.Data.Value.GetProperty("participants").GetProperty("target").GetString());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WorktreeFolderDeleted_AddsGenericNoteToHideRelationship_WithoutLeakingPath()
+    {
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
+        var entityId = new EntityId(Guid.NewGuid());
+        var missingPath = Path.Combine(this.temporaryRootPath, "private", "deleted-worktree");
+        await SeedGitWorkspaceAsync(dataAccessLayer, entityId, missingPath, existsOnFilesystem: true);
+
+        await CreateTool(directoryExists: _ => false).ExecuteAsync(await CreateContextAsync(fixture));
+
+        var relationship = await GetEntityByIdAsync(dataAccessLayer, MissingRelationshipId(entityId));
+        var note = relationship!.Data!.Value.GetProperty("note").GetString();
+        Assert.Equal("This Git workspace does not exist on the filesystem.", note);
+        Assert.DoesNotContain(missingPath, note, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_NewlyMissingWorktree_DoesNotRefreshGitMetadata()
+    {
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
+        var entityId = new EntityId(Guid.NewGuid());
+        await SeedGitWorkspaceAsync(
+            dataAccessLayer,
+            entityId,
+            Path.Combine(this.temporaryRootPath, "missing-no-metadata"),
+            existsOnFilesystem: true,
+            gitJson: """{"branch":"preserved","head-commit":"abc"}""");
+        var metadataReadCount = 0;
+        var tool = new GitWorkspaceUpdateTool(
+            metadataReader: (_, _) =>
+            {
+                metadataReadCount++;
+                return new GitMetadata { BranchName = "unexpected" };
+            },
+            directoryExists: _ => false);
+
+        await tool.ExecuteAsync(await CreateContextAsync(fixture));
+
+        var entity = await GetEntityByIdAsync(dataAccessLayer, entityId);
+        Assert.Equal(0, metadataReadCount);
+        Assert.Equal("preserved", entity!.Data!.Value.GetProperty("git").GetProperty("branch").GetString());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WorktreeFolderRestored_SetsExistsOnFilesystemTrueAndUnhidesEntity()
+    {
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
+        var entityId = new EntityId(Guid.NewGuid());
+        await SeedGitWorkspaceAsync(
+            dataAccessLayer,
+            entityId,
+            Path.Combine(this.temporaryRootPath, "restored-worktree"),
+            existsOnFilesystem: false);
+        await SeedMissingRelationshipAsync(dataAccessLayer, entityId);
+
+        await CreateTool(directoryExists: _ => true).ExecuteAsync(await CreateContextAsync(fixture));
+
+        var entity = await GetEntityByIdAsync(dataAccessLayer, entityId);
+        Assert.True(entity!.Data!.Value.GetProperty("exists-on-filesystem").GetBoolean());
+        var hideRelationship = await GetEntityByIdAsync(dataAccessLayer, MissingRelationshipId(entityId));
+        Assert.True(hideRelationship is null || hideRelationship.Data is null);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WorktreeFolderRestored_PreservesIndependentUserHiddenState()
+    {
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
+        var entityId = new EntityId(Guid.NewGuid());
+        var userRelationshipId = new EntityId(Guid.NewGuid());
+        var userId = new EntityId(Guid.NewGuid());
+        await fixture.SeedValidEntityAsync(
+            JsonDocument.Parse(
+                $$"""
+                {
+                  "entity-id": "{{userId}}",
+                  "entity-types": ["entity", "user"],
+                  "names": [["users", "username", "independent-hidden-state"]]
+                }
+                """).RootElement.Clone());
+        await SeedGitWorkspaceAsync(
+            dataAccessLayer,
+            entityId,
+            Path.Combine(this.temporaryRootPath, "restored-user-hidden"),
+            existsOnFilesystem: false);
+        await SeedMissingRelationshipAsync(dataAccessLayer, entityId);
+        await SeedNotInterestingRelationshipAsync(
+            dataAccessLayer,
+            userRelationshipId,
+            entityId,
+            "Hidden by the user.",
+            userId);
+
+        await CreateTool(directoryExists: _ => true).ExecuteAsync(await CreateContextAsync(fixture));
+
+        var systemRelationship = await GetEntityByIdAsync(dataAccessLayer, MissingRelationshipId(entityId));
+        var userRelationship = await GetEntityByIdAsync(dataAccessLayer, userRelationshipId);
+        Assert.True(systemRelationship is null || systemRelationship.Data is null);
+        Assert.NotNull(userRelationship?.Data);
+        Assert.Equal(
+            "Hidden by the user.",
+            userRelationship.Data.Value.GetProperty("note").GetString());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_StillMissingWorktree_RepeatedRuns_DoesNotDuplicateHideRelationshipOrNote()
+    {
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
+        var entityId = new EntityId(Guid.NewGuid());
+        await SeedGitWorkspaceAsync(
+            dataAccessLayer,
+            entityId,
+            Path.Combine(this.temporaryRootPath, "still-missing"),
+            existsOnFilesystem: true);
+        var tool = CreateTool(directoryExists: _ => false);
+        var context = await CreateContextAsync(fixture);
+        await tool.ExecuteAsync(context);
+        var firstRelationship = await GetEntityByIdAsync(dataAccessLayer, MissingRelationshipId(entityId));
+
+        var secondResult = await tool.ExecuteAsync(context);
+
+        var secondRelationship = await GetEntityByIdAsync(dataAccessLayer, MissingRelationshipId(entityId));
+        Assert.Equal(firstRelationship?.ConcurrencyTag, secondRelationship?.ConcurrencyTag);
+        Assert.Contains("unchanged: 1", secondResult.ResultContent, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_StillMissingWorktree_UserRemovedHideRelationship_DoesNotReHideOnNextRun()
+    {
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
+        var entityId = new EntityId(Guid.NewGuid());
+        await SeedGitWorkspaceAsync(
+            dataAccessLayer,
+            entityId,
+            Path.Combine(this.temporaryRootPath, "missing-user-unhidden"),
+            existsOnFilesystem: true);
+        var tool = CreateTool(directoryExists: _ => false);
+        var context = await CreateContextAsync(fixture);
+        await tool.ExecuteAsync(context);
+        var hideRelationship = await GetEntityByIdAsync(dataAccessLayer, MissingRelationshipId(entityId));
+        Assert.NotNull(hideRelationship);
+        await DeleteEntityAsync(dataAccessLayer, hideRelationship!);
+
+        await tool.ExecuteAsync(context);
+
+        var afterSecondRun = await GetEntityByIdAsync(dataAccessLayer, MissingRelationshipId(entityId));
+        Assert.True(afterSecondRun is null || afterSecondRun.Data is null);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_PreExistingEntityMissingExistsOnFilesystemProperty_BackfillsAuthoritativeValueFromDisk()
+    {
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
+        var entityId = new EntityId(Guid.NewGuid());
+        await SeedGitWorkspaceAsync(
+            dataAccessLayer,
+            entityId,
+            Path.Combine(this.temporaryRootPath, "backfilled-worktree"));
+
+        await CreateTool(directoryExists: _ => true).ExecuteAsync(await CreateContextAsync(fixture));
+
+        var entity = await GetEntityByIdAsync(dataAccessLayer, entityId);
+        Assert.True(entity!.Data!.Value.GetProperty("exists-on-filesystem").GetBoolean());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_EntityOwnedByDifferentComputerUserProfile_DoesNotEvaluateOrChangeFilesystemExistence()
+    {
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
+        var entityId = new EntityId(Guid.NewGuid());
+        await SeedGitWorkspaceAsync(
+            dataAccessLayer,
+            entityId,
+            Path.Combine(this.temporaryRootPath, "foreign-worktree"),
+            existsOnFilesystem: true,
+            computerUserProfileId: new EntityId(Guid.NewGuid()));
+        var existenceCheckCount = 0;
+        var tool = CreateTool(
+            directoryExists: _ =>
+            {
+                existenceCheckCount++;
+                return false;
+            });
+
+        var result = await tool.ExecuteAsync(await CreateContextAsync(fixture));
+
+        var entity = await GetEntityByIdAsync(dataAccessLayer, entityId);
+        Assert.Equal(0, existenceCheckCount);
+        Assert.True(entity!.Data!.Value.GetProperty("exists-on-filesystem").GetBoolean());
+        Assert.Contains("foreign: 1", result.ResultContent, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(await GetEntityByIdAsync(dataAccessLayer, MissingRelationshipId(entityId)));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_EntityWithNoComputerUserProfileId_TreatsAsLocalAndReconciles()
+    {
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var dataAccessLayer = fixture.DataAccessLayer;
+        var entityId = new EntityId(Guid.NewGuid());
+        await SeedGitWorkspaceAsync(
+            dataAccessLayer,
+            entityId,
+            Path.Combine(this.temporaryRootPath, "legacy-missing"));
+
+        var context = await CreateContextAsync(fixture);
+        await CreateTool(directoryExists: _ => false).ExecuteAsync(context);
+
+        var entity = await GetEntityByIdAsync(dataAccessLayer, entityId);
+        Assert.False(entity!.Data!.Value.GetProperty("exists-on-filesystem").GetBoolean());
+        Assert.Equal(
+            context.CurrentComputerUserProfileEntity.EntityId.ToString(),
+            entity.Data.Value.GetProperty("computer-user-profile-id").GetString());
+        Assert.NotNull((await GetEntityByIdAsync(dataAccessLayer, MissingRelationshipId(entityId)))?.Data);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ConcurrencyConflictOnOneEntity_ReportsErrorAndProcessesRemainingEntities()
+    {
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var inner = fixture.DataAccessLayer;
+        var failingEntityId = new EntityId(Guid.NewGuid());
+        var succeedingEntityId = new EntityId(Guid.NewGuid());
+        await SeedGitWorkspaceAsync(
+            inner,
+            failingEntityId,
+            Path.Combine(this.temporaryRootPath, "conflicting-worktree"));
+        await SeedGitWorkspaceAsync(
+            inner,
+            succeedingEntityId,
+            Path.Combine(this.temporaryRootPath, "successful-worktree"));
+        var dataAccessLayer = new FailingEntityUpdateDataAccessLayer(inner, failingEntityId);
+
+        var result = await CreateTool(directoryExists: _ => true)
+            .ExecuteAsync(await CreateContextAsync(fixture, dataAccessLayer));
+
+        Assert.Contains("errors: 1", result.ResultContent, StringComparison.OrdinalIgnoreCase);
+        var succeeded = await GetEntityByIdAsync(inner, succeedingEntityId);
+        Assert.True(succeeded!.Data!.Value.GetProperty("exists-on-filesystem").GetBoolean());
+    }
+
+    private static GitWorkspaceUpdateTool CreateTool(Func<string, bool> directoryExists)
+        => new(
+            metadataReader: (_, _) => new GitMetadata
+            {
+                BranchName = "main",
+                HeadCommitHash = "abc123",
+            },
+            directoryExists: directoryExists);
+
+    private static EntityId MissingRelationshipId(EntityId targetEntityId)
+        => DeterministicEntityId.Create("git-workspace-missing", targetEntityId.ToString());
+
+    private static async Task SeedGitWorkspaceAsync(
+        IDataAccessLayer dataAccessLayer,
+        EntityId entityId,
+        string path,
+        bool? existsOnFilesystem = null,
+        EntityId? computerUserProfileId = null,
+        string? gitJson = null,
+        string entityType = "git-worktree")
+    {
+        var entityTypes = entityType == "git"
+            ? new JsonArray("entity", "git")
+            : new JsonArray("entity", "git-worktree", "filesystem-path");
+        var data = new JsonObject
+        {
+            ["entity-id"] = entityId.ToString(),
+            ["entity-types"] = entityTypes,
+            ["names"] = new JsonArray(new JsonArray("git-worktrees", path)),
+            ["display-name"] = new JsonObject { ["default"] = "worktree" },
+            ["path"] = path,
+        };
+        if (existsOnFilesystem is { } exists)
+        {
+            data["exists-on-filesystem"] = exists;
+        }
+
+        if (computerUserProfileId is { } profileId)
+        {
+            data["computer-user-profile-id"] = profileId.ToString();
+        }
+
+        if (gitJson is not null)
+        {
+            data["git"] = JsonNode.Parse(gitJson);
+        }
+
+        await UpsertEntityAsync(
+            dataAccessLayer,
+            entityId,
+            data.ToJsonString(),
+            concurrencyTag: null);
+    }
+
+    private static Task SeedMissingRelationshipAsync(
+        IDataAccessLayer dataAccessLayer,
+        EntityId targetEntityId)
+        => SeedNotInterestingRelationshipAsync(
+            dataAccessLayer,
+            MissingRelationshipId(targetEntityId),
+            targetEntityId,
+            "This Git workspace does not exist on the filesystem.");
+
+    private static async Task SeedNotInterestingRelationshipAsync(
+        IDataAccessLayer dataAccessLayer,
+        EntityId relationshipId,
+        EntityId targetEntityId,
+        string note,
+        EntityId? userId = null)
+    {
+        var userParticipant = userId is { } user
+            ? $", \"user\": \"{user}\""
+            : string.Empty;
+        await UpsertEntityAsync(
+            dataAccessLayer,
+            relationshipId,
+            $$"""
+            {
+              "entity-id": "{{relationshipId}}",
+              "entity-types": ["entity", "not-interesting", "relationship"],
+              "participants": { "target": "{{targetEntityId}}"{{userParticipant}} },
+              "note": "{{note}}"
+            }
+            """,
+            concurrencyTag: null);
+    }
+
+    private static async Task DeleteEntityAsync(
+        IDataAccessLayer dataAccessLayer,
+        EntitySnapshot entity)
+    {
+        var result = await dataAccessLayer.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown { Text = "Delete test relationship." },
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = entity.EntityId,
+                        ConcurrencyTag = entity.ConcurrencyTag,
+                        EntityChangeMode = EntityChangeMode.Replace,
+                        Data = null,
+                    },
+                ],
+            });
+        Assert.DoesNotContain(result.EntityResults, static item => item.UpdateState == UpdateState.Failed);
+    }
+
     private static async Task<WorkspaceToolExecutionContext> CreateContextAsync(
-        ValidatingEntitySeedFixture fixture)
+        ValidatingEntitySeedFixture fixture,
+        IDataAccessLayer? dataAccessLayer = null)
     {
         var placeholderId = new EntityId();
         var toolId = new EntityId();
@@ -398,7 +806,7 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
         var tool = Assert.Single(entities, entity => entity.EntityId == toolId);
         return new WorkspaceToolExecutionContext
         {
-            DataAccessLayer = fixture.DataAccessLayer,
+            DataAccessLayer = dataAccessLayer ?? fixture.DataAccessLayer,
             CancellationToken = CancellationToken.None,
             CurrentComputerEntity = placeholder,
             CurrentUserEntity = placeholder,
@@ -476,4 +884,59 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
 
     private static string EscapeForJsonString(string value) =>
         value.Replace("\\", "\\\\", StringComparison.Ordinal);
+
+    private sealed class FailingEntityUpdateDataAccessLayer(
+        IDataAccessLayer inner,
+        EntityId failingEntityId) : IDataAccessLayer
+    {
+        public Task<UpdateResult> UpdateAsync(
+            UpdateRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            var failedChange = request.Changes.SingleOrDefault(change => change.EntityId == failingEntityId);
+            if (failedChange is null)
+            {
+                return inner.UpdateAsync(request, cancellationToken);
+            }
+
+            return Task.FromResult(
+                new UpdateResult
+                {
+                    EntityResults =
+                    [
+                        new EntityUpdateResult
+                        {
+                            UpdateState = UpdateState.Failed,
+                            RequestedEntityId = failingEntityId,
+                            ResultingEntityId = failingEntityId,
+                            ConcurrencyMatchState = ConcurrencyMatchState.NotMatched,
+                            Errors = [new UpdateError { Message = "Simulated concurrency conflict." }],
+                        },
+                    ],
+                });
+        }
+
+        public Task<GetResult> GetAsync(GetRequest request, CancellationToken cancellationToken = default)
+            => inner.GetAsync(request, cancellationToken);
+
+        public Task<QueryResult> QueryAsync(QueryRequest request, CancellationToken cancellationToken = default)
+            => inner.QueryAsync(request, cancellationToken);
+
+        public Task<GetHistoryResult> GetHistoryAsync(
+            GetHistoryRequest request,
+            CancellationToken cancellationToken = default)
+            => inner.GetHistoryAsync(request, cancellationToken);
+
+#pragma warning disable CS0618
+        public Task<ExportResult> ExportAsync(
+            ExportRequest request,
+            CancellationToken cancellationToken = default)
+            => inner.ExportAsync(request, cancellationToken);
+#pragma warning restore CS0618
+
+        public Task<GetChangedEntitiesResult> GetChangedEntitiesAsync(
+            GetChangedEntitiesRequest request,
+            CancellationToken cancellationToken = default)
+            => inner.GetChangedEntitiesAsync(request, cancellationToken);
+    }
 }

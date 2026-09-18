@@ -228,6 +228,49 @@ public sealed class ShortcutManagerTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task GetShortcutsForAsync_WorkspaceEntityWithRelatedWorkspace_NeverIncludesOpenWorkspace()
+    {
+        var shortcutManager = new ShortcutManager();
+        shortcutManager.AddShortcutHandler(new OpenEntityShortcutHandler());
+        shortcutManager.AddShortcutHandler(new OpenAssociatedWorkspaceShortcutHandler());
+        await using var mainWindowViewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await mainWindowViewModel.InitializeAsync();
+        var relatedWorkspaceId = new EntityId(Guid.NewGuid());
+        var relatedWorkspace = await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(
+            MainWindowIntegrationTests.GetEntityBroker(mainWindowViewModel),
+            relatedWorkspaceId,
+            CreateEntityJson(relatedWorkspaceId, "workspace"));
+        var source = CreateEntityWithRelationship("workspace", relatedWorkspaceId);
+
+        var shortcuts = await GetShortcutsAsync(shortcutManager, mainWindowViewModel, source);
+
+        Assert.NotNull(relatedWorkspace);
+        Assert.Single(shortcuts, shortcut => shortcut == Shortcut.Open);
+        Assert.DoesNotContain(Shortcut.OpenWorkspace, shortcuts);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task GetShortcutsForAsync_NonWorkspaceEntityWithRelatedWorkspace_IncludesOpenWorkspace()
+    {
+        var shortcutManager = new ShortcutManager();
+        shortcutManager.AddShortcutHandler(new OpenEntityShortcutHandler());
+        shortcutManager.AddShortcutHandler(new OpenAssociatedWorkspaceShortcutHandler());
+        await using var mainWindowViewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await mainWindowViewModel.InitializeAsync();
+        var relatedWorkspaceId = new EntityId(Guid.NewGuid());
+        var relatedWorkspace = await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(
+            MainWindowIntegrationTests.GetEntityBroker(mainWindowViewModel),
+            relatedWorkspaceId,
+            CreateEntityJson(relatedWorkspaceId, "workspace"));
+        var source = CreateEntityWithRelationship("task", relatedWorkspaceId);
+
+        var shortcuts = await GetShortcutsAsync(shortcutManager, mainWindowViewModel, source);
+
+        Assert.NotNull(relatedWorkspace);
+        Assert.Single(shortcuts, shortcut => shortcut == Shortcut.OpenWorkspace);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task GetShortcutsForAsync_WithAsyncHandler_DoesNotBlockCallingThread()
     {
         var shortcutManager = new ShortcutManager();
@@ -367,6 +410,54 @@ public sealed class ShortcutManagerTests
             },
             deleteEntityAsync);
     }
+
+    private static SubscribedEntityViewModel CreateEntityWithRelationship(
+        string entityType,
+        EntityId relatedWorkspaceId)
+    {
+        var entityId = new EntityId(Guid.NewGuid());
+        var relationshipId = new EntityId(Guid.NewGuid());
+        using var entityDocument = JsonDocument.Parse(CreateEntityJson(entityId, entityType));
+        using var relationshipDocument = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{relationshipId.Value}}",
+              "entity-types": ["entity", "related", "relationship"],
+              "participants": {
+                "entities": ["{{entityId.Value}}", "{{relatedWorkspaceId.Value}}"]
+              }
+            }
+            """);
+        return new SubscribedEntityViewModel(
+            new EntitySnapshot
+            {
+                EntityId = entityId,
+                ConcurrencyTag = new ConcurrencyTag("1"),
+                ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
+                Data = entityDocument.RootElement.Clone(),
+                Relationships =
+                [
+                    new EntitySnapshot
+                    {
+                        EntityId = relationshipId,
+                        ConcurrencyTag = new ConcurrencyTag("1"),
+                        ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
+                        Data = relationshipDocument.RootElement.Clone(),
+                        Relationships = [],
+                    },
+                ],
+            });
+    }
+
+    private static string CreateEntityJson(EntityId entityId, string entityType)
+        => $$"""
+           {
+             "entity-id": "{{entityId.Value}}",
+             "entity-types": ["entity", "{{entityType}}"],
+             "display-name": { "default": "Test {{entityType}}" },
+             "regions": []
+           }
+           """;
 
     private static async Task<Shortcut[]> GetShortcutsAsync(
         ShortcutManager shortcutManager,

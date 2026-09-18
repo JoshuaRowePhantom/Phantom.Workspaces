@@ -7,6 +7,7 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <RootNamespace>Phantom.Workspaces.Tests</RootNamespace>
+    <UseSystemDrawing>true</UseSystemDrawing>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Avalonia.Headless" />
@@ -16,6 +17,7 @@
     <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="Moq" />
+    <PackageReference Include="System.Drawing.Common" />
     <PackageReference Include="xunit.v3" />
     <PackageReference Include="xunit.runner.visualstudio" />
   </ItemGroup>

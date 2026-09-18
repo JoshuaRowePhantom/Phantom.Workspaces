@@ -111,8 +111,8 @@ public static class GitRepositoryMetadataReader
     /// <summary>
     /// Returns true if <paramref name="path"/> is equal to, or lies under, any of the supplied
     /// exclude paths. Excludes are expected to be already expanded (env-var substituted) and
-    /// normalized via <see cref="Path.GetFullPath(string)"/> with trailing separators trimmed.
-    /// A directory-separator boundary is required to avoid false positives such as
+    /// normalized via <see cref="Path.GetFullPath(string)"/>. Path-relative comparison provides
+    /// a directory-separator boundary to avoid false positives such as
     /// <c>C:\root\TempStuff</c> matching an exclude of <c>C:\root\Temp</c>.
     /// </summary>
     internal static bool IsUnderAnyExclude(string path, IReadOnlyCollection<string> excludes)
@@ -125,8 +125,7 @@ public static class GitRepositoryMetadataReader
         string fullPath;
         try
         {
-            fullPath = Path.GetFullPath(path)
-                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            fullPath = Path.GetFullPath(path);
         }
         catch (ArgumentException)
         {
@@ -140,17 +139,25 @@ public static class GitRepositoryMetadataReader
                 continue;
             }
 
-            if (string.Equals(fullPath, exclude, StringComparison.OrdinalIgnoreCase))
+            string relativePath;
+            try
             {
-                return true;
+                relativePath = Path.GetRelativePath(Path.GetFullPath(exclude), fullPath);
+            }
+            catch (ArgumentException)
+            {
+                continue;
             }
 
-            if (fullPath.StartsWith(exclude + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-
-            if (fullPath.StartsWith(exclude + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(relativePath, ".", StringComparison.Ordinal)
+                || (!Path.IsPathFullyQualified(relativePath)
+                    && !string.Equals(relativePath, "..", StringComparison.Ordinal)
+                    && !relativePath.StartsWith(
+                        $"..{Path.DirectorySeparatorChar}",
+                        StringComparison.Ordinal)
+                    && !relativePath.StartsWith(
+                        $"..{Path.AltDirectorySeparatorChar}",
+                        StringComparison.Ordinal)))
             {
                 return true;
             }

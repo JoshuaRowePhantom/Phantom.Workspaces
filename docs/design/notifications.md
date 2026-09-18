@@ -235,6 +235,16 @@ shift); only its `BorderBrush` changes:
 
 `UnreadNotificationBorderConverter` returns `Gold` when `true`, `Transparent` when `false`.
 
+## Notification indicator on entities
+
+The canonical `SubscribedEntityViewModel` for an entity exposes runtime-only
+`HasUnreadAttention`. `MainWindowViewModel` projects unread notifications from all open tabs onto
+that property using any-tab aggregation, and projects each pane's aggregate onto its workspace
+entity. Entity cards and tree nodes share `EntityCardControl`, which renders the same
+`glyph-indicator exclamation-indicator` immediately before the entity title. Closing a tab or
+workspace pane recomputes the projection so transient attention is cleared and is never persisted
+in entity JSON.
+
 ## Source layout
 
 In `Phantom.Workspaces`:

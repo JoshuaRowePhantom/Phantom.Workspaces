@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 
@@ -14,6 +15,7 @@ public sealed class SubscribedEntityViewModel : ViewModelBase
     private EntitySnapshot snapshot;
     private bool isRawJsonVisible;
     private bool deleted;
+    private bool hasUnreadAttention;
     private readonly Func<SubscribedEntityViewModel, Task>? deleteEntityAsync;
     private readonly Func<SubscribedEntityViewModel, string, Task>? toggleInterestAsync;
     private readonly Func<SubscribedEntityViewModel, JsonElement, Task>? saveEntityAsync;
@@ -106,6 +108,13 @@ public sealed class SubscribedEntityViewModel : ViewModelBase
     public bool CanToggleRawJson => !this.Deleted && this.Data is JsonElement;
 
     public bool CanEditEntity => this.saveEntityAsync is not null && !this.Deleted && this.Data is JsonElement;
+
+    [JsonIgnore]
+    public bool HasUnreadAttention
+    {
+        get => this.hasUnreadAttention;
+        set => this.SetProperty(ref this.hasUnreadAttention, value);
+    }
 
     /// <summary>
     /// Persists an edited entity snapshot through the data-access layer.

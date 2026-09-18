@@ -27,6 +27,7 @@ internal static class GitWorkspaceEntityData
     /// <param name="path">The filesystem path to the git worktree.</param>
     /// <param name="profileNames">The collection of profile names for the current user-computer-profile.</param>
     /// <param name="metadata">Git metadata (branch, HEAD commit, remotes); may be null.</param>
+    /// <param name="existsOnFilesystem">Whether the worktree path currently exists.</param>
     /// <param name="owningRepository">The path to the owning repository for linked worktrees; null for root repos.</param>
     /// <param name="computerUserProfileId">
     /// Entity id of the user-computer-profile that hosts this worktree. When supplied, the
@@ -40,6 +41,7 @@ internal static class GitWorkspaceEntityData
         string path,
         IReadOnlyCollection<EntityName> profileNames,
         GitMetadata? metadata,
+        bool existsOnFilesystem,
         string? owningRepository = null,
         EntityId? computerUserProfileId = null)
     {
@@ -78,6 +80,7 @@ internal static class GitWorkspaceEntityData
                 ["default"] = name,
             },
             ["path"] = fullPath,
+            ["exists-on-filesystem"] = existsOnFilesystem,
         };
 
         if (!string.IsNullOrWhiteSpace(owningRepository))
