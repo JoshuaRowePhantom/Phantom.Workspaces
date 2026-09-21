@@ -114,6 +114,23 @@ public sealed class ProcessRunnerModalSafetyTests
     }
 
     [Fact]
+    public async Task ProcessRunner_BadImageGrandchildLaunch_DoesNotBlockOnHardError()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var result = await RunAsync(WindowsProbeScenario.ProcessRunnerBadImageGrandchild);
+
+        Assert.False(result.TimedOut);
+        Assert.False(result.CreateProcessSucceeded);
+        Assert.Contains(result.CreateProcessWin32Error, new int?[] { 193, 216 });
+        Assert.Equal(nameof(ProcessRunnerWindowsStage.CreateProcess), result.FailureStage);
+        Assert.True(result.CleanupCompleted);
+        Assert.True(result.JobHandleClosed);
+        Assert.True(result.OutputHandleClosed);
+    }
+
+    [Fact]
     public async Task ProcessRunner_Timeout_ClosesKillOnCloseJobAndDescendantTree()
     {
         if (!OperatingSystem.IsWindows())

@@ -94,9 +94,85 @@ if ($SkipStartupSmoke)
 }
 else
 {
+    if ($IsWindows)
+    {
+        try
+        {
+            $executableStream = [System.IO.File]::Open(
+                $copilotExe,
+                [System.IO.FileMode]::Open,
+                [System.IO.FileAccess]::Read,
+                [System.IO.FileShare]::Read)
+            try
+            {
+                $peReader = [System.Reflection.PortableExecutable.PEReader]::new($executableStream)
+                try
+                {
+                    $characteristics = $peReader.PEHeaders.CoffHeader.Characteristics
+                    if (-not $characteristics.HasFlag(
+                            [System.Reflection.PortableExecutable.Characteristics]::ExecutableImage))
+                    {
+                        throw [System.BadImageFormatException]::new(
+                            'The file is not marked as an executable image.')
+                    }
+                }
+                finally
+                {
+                    $peReader.Dispose()
+                }
+            }
+            finally
+            {
+                $executableStream.Dispose()
+            }
+        }
+        catch
+        {
+            throw "Bundled copilot.exe could not be launched: invalid Windows executable image: " +
+                "$($_.Exception.Message) (issue #1376)."
+        }
+
+        if (-not ('Phantom.Workspaces.NativeErrorMode' -as [type]))
+        {
+            Add-Type -TypeDefinition @'
+using System.Runtime.InteropServices;
+
+namespace Phantom.Workspaces
+{
+    public static class NativeErrorMode
+    {
+        [DllImport("kernel32.dll")]
+        public static extern uint GetThreadErrorMode();
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool SetThreadErrorMode(uint newMode, out uint oldMode);
+    }
+}
+'@
+        }
+    }
+
     $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+    [uint32] $previousThreadErrorMode = 0
+    $threadErrorModeChanged = $false
     try
     {
+        if ($IsWindows)
+        {
+            $requestedThreadErrorMode =
+                [Phantom.Workspaces.NativeErrorMode]::GetThreadErrorMode() -bor 0x0001 -bor 0x0002
+            if (-not [Phantom.Workspaces.NativeErrorMode]::SetThreadErrorMode(
+                    $requestedThreadErrorMode,
+                    [ref] $previousThreadErrorMode))
+            {
+                throw [System.ComponentModel.Win32Exception]::new(
+                    [System.Runtime.InteropServices.Marshal]::GetLastWin32Error(),
+                    'Failed to suppress Windows hard-error UI for the Copilot startup smoke.')
+            }
+            $threadErrorModeChanged = $true
+        }
+
         $PSNativeCommandUseErrorActionPreference = $false
         try
         {
@@ -111,6 +187,18 @@ else
     finally
     {
         $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
+        if ($threadErrorModeChanged)
+        {
+            [uint32] $discardedThreadErrorMode = 0
+            if (-not [Phantom.Workspaces.NativeErrorMode]::SetThreadErrorMode(
+                    $previousThreadErrorMode,
+                    [ref] $discardedThreadErrorMode))
+            {
+                throw [System.ComponentModel.Win32Exception]::new(
+                    [System.Runtime.InteropServices.Marshal]::GetLastWin32Error(),
+                    'Failed to restore the Windows thread error mode after the Copilot startup smoke.')
+            }
+        }
     }
 
     if ($startupExitCode -ne 1 -or

@@ -1602,9 +1602,12 @@ internal static class MxcRepositoryTestSupport
         var scriptParts = arguments.TakeWhile(argument => !argument.StartsWith('-')).Count();
         return InvokePowerShellAsync(
             scriptPath,
-            new InvocationOptions { Timeout = ValidatorProcessTimeout },
+            CreateValidatorInvocationOptions(),
             [.. arguments.Skip(scriptParts)]);
     }
+
+    internal static InvocationOptions CreateValidatorInvocationOptions() =>
+        new() { Timeout = ValidatorProcessTimeout };
 
     internal static Task<ProcessResult> InvokePowerShellAsync(
         string scriptPath,

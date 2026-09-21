@@ -27,6 +27,7 @@ public enum WindowsProbeScenario
     ProcessRunnerConfigureFailure,
     ProcessRunnerAssignFailure,
     ProcessRunnerResumeFailure,
+    ProcessRunnerBadImageGrandchild,
     ConPtyConfigureFailure,
     ConPtyAssignFailure,
     ConPtyResumeFailure,
@@ -38,6 +39,7 @@ public enum WindowsProcessPathCategory
     FixedProbeBinary,
     FixedCommandShim,
     FixedMissingBinary,
+    FixedMalformedBinary,
 }
 
 public enum WindowsLaunchMechanism

@@ -113,6 +113,8 @@ var pathCategory = scenario switch
         WindowsProcessPathCategory.FixedCommandShim,
     WindowsProbeScenario.ConPtyLaunchFailure =>
         WindowsProcessPathCategory.FixedMissingBinary,
+    WindowsProbeScenario.ProcessRunnerBadImageGrandchild =>
+        WindowsProcessPathCategory.FixedMalformedBinary,
     WindowsProbeScenario.Direct
         or WindowsProbeScenario.ConPty
         or WindowsProbeScenario.OrdinaryProcessExecutor
@@ -194,7 +196,8 @@ try
             or WindowsProbeScenario.ProcessRunnerCancellationTree
             or WindowsProbeScenario.ProcessRunnerConfigureFailure
             or WindowsProbeScenario.ProcessRunnerAssignFailure
-            or WindowsProbeScenario.ProcessRunnerResumeFailure =>
+            or WindowsProbeScenario.ProcessRunnerResumeFailure
+            or WindowsProbeScenario.ProcessRunnerBadImageGrandchild =>
             await RunProcessRunnerAsync(scenario, pathCategory, mechanism, containment),
         _ => throw new InvalidOperationException("Unknown fixed probe scenario."),
     };
@@ -628,6 +631,7 @@ static async Task<WindowsChildProcessProbeResult> RunProcessRunnerAsync(
             ProcessRunnerWindowsStage.ResumeThread,
         _ => (ProcessRunnerWindowsStage?)null,
     };
+    string? malformedDirectory = null;
 
     if (scenario is WindowsProbeScenario.ProcessRunnerTimeoutTree
         or WindowsProbeScenario.ProcessRunnerCancellationTree)
@@ -650,12 +654,30 @@ static async Task<WindowsChildProcessProbeResult> RunProcessRunnerAsync(
 
     try
     {
-        var executable = injectedStage is null
-            ? Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe"
-            : Environment.ProcessPath!;
-        IReadOnlyList<string> arguments = injectedStage is null
-            ? ["/d", "/s", "/c", "echo PROBE_READY"]
-            : ["--child-exit", "0"];
+        string executable;
+        IReadOnlyList<string> arguments;
+        if (scenario == WindowsProbeScenario.ProcessRunnerBadImageGrandchild)
+        {
+            malformedDirectory = Path.Combine(
+                Environment.CurrentDirectory,
+                "TestResults",
+                $"bad-image-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(malformedDirectory);
+            executable = Path.Combine(malformedDirectory, "malformed.exe");
+            await File.WriteAllTextAsync(executable, "not a Windows executable");
+            arguments = [];
+        }
+        else if (injectedStage is null)
+        {
+            executable = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
+            arguments = ["/d", "/s", "/c", "echo PROBE_READY"];
+        }
+        else
+        {
+            executable = Environment.ProcessPath!;
+            arguments = ["--child-exit", "0"];
+        }
+
         var result = await ProcessRunner.RunProcessAsync(
             new RunProcessParameters(
                 executable,
@@ -686,7 +708,9 @@ static async Task<WindowsChildProcessProbeResult> RunProcessRunnerAsync(
             activeJobProcessesBeforeCleanup: result.ActiveJobProcessesBeforeCleanup,
             activeJobProcessesAfterCleanup: result.ActiveJobProcessesAfterCleanup);
     }
-    catch (Win32Exception ex) when (injectedStage is not null)
+    catch (Win32Exception ex) when (
+        injectedStage is not null
+        || scenario == WindowsProbeScenario.ProcessRunnerBadImageGrandchild)
     {
         return ProcessRunnerFailureResult(
             observer,
@@ -694,6 +718,11 @@ static async Task<WindowsChildProcessProbeResult> RunProcessRunnerAsync(
             mechanism,
             containment,
             ex.NativeErrorCode);
+    }
+    finally
+    {
+        if (malformedDirectory is not null)
+            Directory.Delete(malformedDirectory, recursive: true);
     }
 }
 
@@ -923,26 +952,38 @@ static WindowsChildProcessProbeResult ProcessRunnerFailureResult(
     WindowsProcessPathCategory pathCategory,
     WindowsLaunchMechanism mechanism,
     WindowsContainmentDescriptor? containment,
-    int error) =>
-    Result(
+    int error)
+{
+    var processCreated = observer.Succeeded(ProcessRunnerWindowsStage.CreateProcess);
+    var outputHandlesClosed =
+        observer.Released(ProcessRunnerWindowsResource.StandardOutputPipe)
+        && observer.Released(ProcessRunnerWindowsResource.StandardErrorPipe);
+    var jobHandleClosed = observer.Released(ProcessRunnerWindowsResource.Job);
+    var processHandleClosed =
+        !processCreated || observer.Released(ProcessRunnerWindowsResource.Process);
+    var threadHandleClosed =
+        !processCreated || observer.Released(ProcessRunnerWindowsResource.Thread);
+    return Result(
         pathCategory,
         mechanism,
         containment,
-        observer.Succeeded(ProcessRunnerWindowsStage.CreateProcess),
+        processCreated,
         error,
         null,
         jobConfigured: observer.Succeeded(ProcessRunnerWindowsStage.ConfigureJob),
         jobAssigned: observer.Succeeded(ProcessRunnerWindowsStage.AssignJob),
         resumed: observer.Succeeded(ProcessRunnerWindowsStage.ResumeThread),
         innerJobAssigned: observer.Succeeded(ProcessRunnerWindowsStage.AssignJob),
-        cleanupCompleted: observer.AllResourcesReleased,
-        processHandleClosed: observer.Released(ProcessRunnerWindowsResource.Process),
-        threadHandleClosed: observer.Released(ProcessRunnerWindowsResource.Thread),
-        jobHandleClosed: observer.Released(ProcessRunnerWindowsResource.Job),
-        outputHandleClosed:
-            observer.Released(ProcessRunnerWindowsResource.StandardOutputPipe)
-            && observer.Released(ProcessRunnerWindowsResource.StandardErrorPipe),
+        cleanupCompleted: processHandleClosed
+            && threadHandleClosed
+            && jobHandleClosed
+            && outputHandlesClosed,
+        processHandleClosed: processHandleClosed,
+        threadHandleClosed: threadHandleClosed,
+        jobHandleClosed: jobHandleClosed,
+        outputHandleClosed: outputHandlesClosed,
         failureStage: observer.FailedStage?.ToString());
+}
 
 static WindowsChildProcessProbeResult Result(
     WindowsProcessPathCategory pathCategory,

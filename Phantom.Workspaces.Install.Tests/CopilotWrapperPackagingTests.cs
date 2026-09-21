@@ -163,6 +163,72 @@ public sealed class CopilotWrapperPackagingTests
     }
 
     [Fact]
+    public async Task RuntimePayload_GitHubFinalCommand_NonExecutablePeFailsBeforeLaunch()
+    {
+        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        await using var payload = CreateValidatorPayload(prerequisite);
+        var executable = Path.Combine(
+            payload.Path,
+            "runtimes",
+            "win-x64",
+            "native",
+            "copilot.exe");
+        ClearExecutableImageCharacteristic(executable);
+
+        var result = await InvokeValidatorAsGitHubStepAsync(
+            payload.Path,
+            useNativeErrorPreference: true);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains(
+            "copilot.exe could not be launched",
+            result.StandardError + result.StandardOutput,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "invalid Windows executable image",
+            result.StandardError + result.StandardOutput,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RuntimePayload_GitHubFinalCommand_NativeLaunchFailure_CompletesRepeatedlyWithoutHang()
+    {
+        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        var attempts = Enumerable.Range(0, 4).Select(async _ =>
+        {
+            await using var payload = CreateValidatorPayload(prerequisite);
+            await File.WriteAllTextAsync(
+                Path.Combine(payload.Path, "runtimes", "win-x64", "native", "copilot.exe"),
+                "not a Windows executable");
+            return await InvokeValidatorAsGitHubStepAsync(
+                payload.Path,
+                useNativeErrorPreference: true);
+        }).ToArray();
+
+        var results = await Task.WhenAll(attempts);
+
+        Assert.All(results, result =>
+        {
+            Assert.NotEqual(0, result.ExitCode);
+            Assert.Contains(
+                "copilot.exe could not be launched",
+                result.StandardError + result.StandardOutput,
+                StringComparison.Ordinal);
+            Assert.True(result.DirectProcessInJob);
+            Assert.Equal(0U, result.ActiveJobProcessesAfterCleanup);
+        });
+    }
+
+    [Fact]
+    public void InvokeValidatorAsGitHubStep_UsesValidatorTimeout_NotLongRunningTimeout()
+    {
+        var options = MxcRepositoryTestSupport.CreateValidatorInvocationOptions();
+
+        Assert.Equal(TimeSpan.FromSeconds(30), options.Timeout);
+        Assert.True(options.Timeout < TimeSpan.FromSeconds(90));
+    }
+
+    [Fact]
     public async Task RuntimePayload_MissingPreparedFingerprint_FailsClosed()
     {
         var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
@@ -436,6 +502,7 @@ public sealed class CopilotWrapperPackagingTests
             """);
         return await MxcRepositoryTestSupport.InvokeAsync(
             "pwsh",
+            MxcRepositoryTestSupport.CreateValidatorInvocationOptions(),
             "-NoProfile",
             "-NonInteractive",
             "-File",
@@ -444,6 +511,19 @@ public sealed class CopilotWrapperPackagingTests
 
     private static string EscapePowerShellLiteral(string value) =>
         value.Replace("'", "''", StringComparison.Ordinal);
+
+    private static void ClearExecutableImageCharacteristic(string path)
+    {
+        using var stream = File.Open(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        using var reader = new BinaryReader(stream, System.Text.Encoding.UTF8, leaveOpen: true);
+        stream.Position = 0x3c;
+        var peHeaderOffset = reader.ReadInt32();
+        stream.Position = peHeaderOffset + 22;
+        var characteristics = reader.ReadUInt16();
+        stream.Position -= sizeof(ushort);
+        using var writer = new BinaryWriter(stream);
+        writer.Write((ushort)(characteristics & ~0x0002));
+    }
 
     private static string RandomFingerprint() =>
         Convert.ToHexString(
