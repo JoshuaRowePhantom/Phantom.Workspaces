@@ -107,15 +107,28 @@ public sealed class CopilotLaunchPolicyEnvelopeTests
     {
         using var directory = new TestDirectory();
         var store = new CopilotLaunchPolicyStore(directory.Path, TimeProvider.System);
-        var createTasks = Enumerable.Range(0, 8)
+        const int creatorCount = 8;
+        using var start = new Barrier(creatorCount + 1);
+        var createTasks = Enumerable.Range(0, creatorCount)
             .Select(index => Task.Run(
-                () => store.Create(CopilotRuntimeConnectionFactoryTests.CreatePolicy(), 100 + index)))
+                () =>
+                {
+                    start.SignalAndWait();
+                    return store.Create(
+                        CopilotRuntimeConnectionFactoryTests.CreatePolicy(),
+                        100 + index);
+                }))
             .ToArray();
+        start.SignalAndWait();
         var leases = await Task.WhenAll(createTasks);
 
         try
         {
-            Assert.Equal(8, leases.Select(lease => lease.Path).Distinct().Count());
+            Assert.Equal(creatorCount, leases.Select(lease => lease.Path).Distinct().Count());
+            Assert.All(leases, lease => Assert.True(File.Exists(lease.Path)));
+            if (OperatingSystem.IsWindows())
+                AssertRestrictedAcl(directory.Path);
+
             foreach (var (lease, index) in leases.Select((lease, index) => (lease, index)))
             {
                 if (OperatingSystem.IsWindows())
@@ -132,6 +145,101 @@ public sealed class CopilotLaunchPolicyEnvelopeTests
             foreach (var lease in leases)
                 lease.Dispose();
         }
+    }
+
+    [Fact]
+    public async Task PolicyEnvelope_ConcurrentCreation_HoldsCanonicalRootLockOnlyForRootAcl()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        using var directory = new TestDirectory();
+        using var distinctDirectory = new TestDirectory();
+        var equivalentRoot = directory.Path + Path.DirectorySeparatorChar;
+        Assert.Same(
+            CopilotLaunchPolicyStore.GetLaunchRootLock(directory.Path),
+            CopilotLaunchPolicyStore.GetLaunchRootLock(equivalentRoot));
+        Assert.NotSame(
+            CopilotLaunchPolicyStore.GetLaunchRootLock(directory.Path),
+            CopilotLaunchPolicyStore.GetLaunchRootLock(distinctDirectory.Path));
+
+        var security = new RootLockAssertingDirectorySecurity(directory.Path);
+        var stores = new[]
+        {
+            new CopilotLaunchPolicyStore(directory.Path, TimeProvider.System, security),
+            new CopilotLaunchPolicyStore(equivalentRoot, TimeProvider.System, security),
+        };
+        using var start = new Barrier(stores.Length + 1);
+        var createTasks = stores.Select((store, index) => Task.Run(
+            () =>
+            {
+                start.SignalAndWait();
+                return store.Create(
+                    CopilotRuntimeConnectionFactoryTests.CreatePolicy(),
+                    200 + index);
+            })).ToArray();
+        start.SignalAndWait();
+        var leases = await Task.WhenAll(createTasks);
+
+        try
+        {
+            Assert.Equal(1, security.RootAttempts);
+            Assert.Equal(stores.Length, security.EnvelopeAttempts);
+            AssertRestrictedAcl(directory.Path);
+            foreach (var lease in leases)
+                AssertRestrictedAcl(Path.GetDirectoryName(lease.Path)!);
+        }
+        finally
+        {
+            foreach (var lease in leases)
+                lease.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task PolicyEnvelope_ConcurrentEnvelopeAclFailure_IsIsolated()
+    {
+        using var directory = new TestDirectory();
+        var security = new FailFirstEnvelopeDirectorySecurity(directory.Path);
+        var store = new CopilotLaunchPolicyStore(directory.Path, TimeProvider.System, security);
+        using var start = new Barrier(3);
+        var createTasks = Enumerable.Range(0, 2).Select(index => Task.Run(
+            () =>
+            {
+                start.SignalAndWait();
+                try
+                {
+                    return new CreationResult(
+                        index,
+                        store.Create(
+                            CopilotRuntimeConnectionFactoryTests.CreatePolicy(),
+                            300 + index),
+                        null);
+                }
+                catch (Exception exception)
+                {
+                    return new CreationResult(index, null, exception);
+                }
+            })).ToArray();
+        start.SignalAndWait();
+        var results = await Task.WhenAll(createTasks);
+
+        var failure = Assert.Single(results, result => result.Exception is not null);
+        Assert.IsType<UnauthorizedAccessException>(failure.Exception);
+        var success = Assert.Single(results, result => result.Lease is not null);
+        using var lease = success.Lease!;
+        Assert.Single(Directory.EnumerateDirectories(directory.Path));
+        if (OperatingSystem.IsWindows())
+        {
+            AssertRestrictedAcl(directory.Path);
+            AssertRestrictedAcl(Path.GetDirectoryName(lease.Path)!);
+        }
+
+        var envelope = store.Consume(lease.Path, 300 + success.Index);
+
+        Assert.Equal(300 + success.Index, envelope.ParentProcessId);
+        Assert.False(File.Exists(lease.Path));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(directory.Path));
     }
 
     [Fact]
@@ -440,6 +548,72 @@ public sealed class CopilotLaunchPolicyEnvelopeTests
             Directory.Move(stagedJunction, path);
         }
     }
+
+    private sealed class RootLockAssertingDirectorySecurity(string root)
+        : ICopilotLaunchPolicyDirectorySecurity
+    {
+        private readonly string canonicalRoot = Canonicalize(root);
+        private readonly object rootLock = CopilotLaunchPolicyStore.GetLaunchRootLock(root);
+        private readonly ICopilotLaunchPolicyDirectorySecurity inner =
+            new CopilotLaunchPolicyStore.CopilotLaunchPolicyDirectorySecurity();
+        private int rootAttempts;
+        private int envelopeAttempts;
+
+        public int RootAttempts => Volatile.Read(ref this.rootAttempts);
+        public int EnvelopeAttempts => Volatile.Read(ref this.envelopeAttempts);
+
+        public void RestrictDirectory(string path)
+        {
+            if (string.Equals(
+                Canonicalize(path),
+                this.canonicalRoot,
+                StringComparison.OrdinalIgnoreCase))
+            {
+                Assert.True(Monitor.IsEntered(this.rootLock));
+                Interlocked.Increment(ref this.rootAttempts);
+            }
+            else
+            {
+                Assert.False(Monitor.IsEntered(this.rootLock));
+                Interlocked.Increment(ref this.envelopeAttempts);
+            }
+
+            this.inner.RestrictDirectory(path);
+        }
+    }
+
+    private sealed class FailFirstEnvelopeDirectorySecurity(string root)
+        : ICopilotLaunchPolicyDirectorySecurity
+    {
+        private readonly string canonicalRoot = Canonicalize(root);
+        private readonly ICopilotLaunchPolicyDirectorySecurity inner =
+            new CopilotLaunchPolicyStore.CopilotLaunchPolicyDirectorySecurity();
+        private int envelopeAttempts;
+
+        public void RestrictDirectory(string path)
+        {
+            if (!string.Equals(
+                    Canonicalize(path),
+                    this.canonicalRoot,
+                    OperatingSystem.IsWindows()
+                        ? StringComparison.OrdinalIgnoreCase
+                        : StringComparison.Ordinal)
+                && Interlocked.Increment(ref this.envelopeAttempts) == 1)
+            {
+                throw new UnauthorizedAccessException("The envelope ACL could not be applied.");
+            }
+
+            this.inner.RestrictDirectory(path);
+        }
+    }
+
+    private static string Canonicalize(string path) =>
+        Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+
+    private sealed record CreationResult(
+        int Index,
+        CopilotLaunchPolicyLease? Lease,
+        Exception? Exception);
 
     private sealed class TestDirectory : IDisposable
     {

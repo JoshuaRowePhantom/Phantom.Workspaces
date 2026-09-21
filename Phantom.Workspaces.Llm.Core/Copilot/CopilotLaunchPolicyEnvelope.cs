@@ -1,4 +1,5 @@
 using Phantom.Workspaces.Llm.Processes;
+using System.Collections.Concurrent;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Runtime.Versioning;
@@ -76,6 +77,10 @@ public sealed class CopilotLaunchPolicyStore : ICopilotLaunchPolicyStore
     /// <summary>Maximum serialized envelope size.</summary>
     public const int MaximumEnvelopeBytes = 1024 * 1024;
     private static readonly TimeSpan MaximumLifetime = TimeSpan.FromMinutes(5);
+    private static readonly ConcurrentDictionary<string, object> LaunchRootLocks = new(
+        OperatingSystem.IsWindows()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal);
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -107,7 +112,7 @@ public sealed class CopilotLaunchPolicyStore : ICopilotLaunchPolicyStore
         ArgumentException.ThrowIfNullOrWhiteSpace(launchRoot);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(directorySecurity);
-        this.launchRoot = System.IO.Path.GetFullPath(launchRoot);
+        this.launchRoot = CanonicalizeLaunchRoot(launchRoot);
         this.timeProvider = timeProvider;
         this.directorySecurity = directorySecurity;
     }
@@ -125,10 +130,14 @@ public sealed class CopilotLaunchPolicyStore : ICopilotLaunchPolicyStore
         int? parentProcessId = null)
     {
         ArgumentNullException.ThrowIfNull(policy);
-        Directory.CreateDirectory(this.launchRoot);
-        CopilotPathSecurity.EnsureNoReparsePoints(this.launchRoot);
-        this.directorySecurity.RestrictDirectory(this.launchRoot);
-        CopilotPathSecurity.EnsureNoReparsePoints(this.launchRoot);
+        lock (GetLaunchRootLock(this.launchRoot))
+        {
+            Directory.CreateDirectory(this.launchRoot);
+            CopilotPathSecurity.EnsureNoReparsePoints(this.launchRoot);
+            if (!OperatingSystem.IsWindows() || !HasRestrictedAcl(this.launchRoot))
+                this.directorySecurity.RestrictDirectory(this.launchRoot);
+            CopilotPathSecurity.EnsureNoReparsePoints(this.launchRoot);
+        }
         CleanupExpiredFiles();
 
         var now = this.timeProvider.GetUtcNow();
@@ -168,6 +177,12 @@ public sealed class CopilotLaunchPolicyStore : ICopilotLaunchPolicyStore
             throw;
         }
     }
+
+    internal static object GetLaunchRootLock(string launchRoot) =>
+        LaunchRootLocks.GetOrAdd(CanonicalizeLaunchRoot(launchRoot), static _ => new object());
+
+    private static string CanonicalizeLaunchRoot(string launchRoot) =>
+        System.IO.Path.TrimEndingDirectorySeparator(System.IO.Path.GetFullPath(launchRoot));
 
     /// <summary>Validate, deserialize, and delete an envelope before process launch.</summary>
     public CopilotLaunchPolicyEnvelope Consume(string path, int expectedParentProcessId)
