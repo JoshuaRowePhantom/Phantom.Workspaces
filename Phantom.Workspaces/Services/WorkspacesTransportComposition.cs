@@ -57,6 +57,7 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
             UserComputerProfileEntityId = workspaceEntitySession.UserComputerProfileEntityId.ToString(),
         };
         this.ConnectionStatusRegistry = new ReverseConnectionStatusRegistry();
+        this.ReachabilityRouteStore = new DataAccessReachabilityRouteStore(dataAccessLayer);
         this.LocalListeners = new TransportRegistry();
 
         // Issue #1314: register the server-side chat-client transport listener in the production
@@ -121,6 +122,17 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
             this.LocalListeners.Register(agentSessionTransportListener);
         }
 
+        this.ReverseHttpServerTransportFactory = new ReverseHttpServerTransportFactory(
+            this.ConnectionStatusRegistry,
+            requireAuthenticatedRelays: this.AgentSessionPeerIdentities is not null,
+            hubProfileEntityId: workspaceEntitySession.UserComputerProfileEntityId);
+        foreach (var hubFactory in hubFactories ?? [])
+        {
+            hubFactory.ConfigureReachability(
+                this.ReachabilityRouteStore,
+                workspaceEntitySession.UserComputerProfileEntityId);
+        }
+
         var registry = new TransportFactoryRegistry();
         this.localTransportFactory = new LocalTransportFactory(
             this.LocalListeners,
@@ -132,7 +144,10 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
                 dataAccessLayer,
                 workspaceEntitySession,
                 registry,
-                hubFactories?.Select(static factory => factory.HubUrl).Distinct(StringComparer.Ordinal).ToArray());
+                hubFactories?.Select(static factory => factory.HubUrl).Distinct(StringComparer.Ordinal).ToArray(),
+                this.ReverseHttpServerTransportFactory,
+                this.ReachabilityRouteStore,
+                trustedTransientRoutesEnabled: true);
         this.httpClientTransportFactory = new HttpClientTransportFactory();
         this.reverseHttpForwardingTransportFactory = new ReverseHttpForwardingTransportFactory(
             new HttpClientTransportFactory(),
@@ -149,7 +164,11 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
 
         this.HubFactories = hubFactories ?? [];
         this.TransportHost = new WorkspacesTransportHost(
-            this.LocalListeners, this.HubFactories, this.AgentSessionPeerIdentities);
+            this.LocalListeners,
+            this.HubFactories,
+            this.AgentSessionPeerIdentities,
+            this.ReachabilityRouteStore,
+            workspaceEntitySession.UserComputerProfileEntityId);
     }
 
     /// <summary>The resolved registry that builds transports for every registered descriptor type.</summary>
@@ -163,6 +182,12 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
 
     /// <summary>Transport-layer connection-status surface for inbound reverse-HTTP registrations.</summary>
     public ReverseConnectionStatusRegistry ConnectionStatusRegistry { get; }
+
+    /// <summary>The DAL-backed persistent route store shared by all publishers and the profile router.</summary>
+    public IReachabilityRouteStore ReachabilityRouteStore { get; }
+
+    /// <summary>The live inbound reverse registry shared with the web host and profile router.</summary>
+    public ReverseHttpServerTransportFactory ReverseHttpServerTransportFactory { get; }
 
     /// <summary>The transport-backed <see cref="Llm.Interfaces.ITrustedExecutor"/> over the registry.</summary>
     public TransportTrustedExecutor TrustedExecutor { get; }
@@ -187,5 +212,6 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
         await this.localTransportFactory.DisposeAsync().ConfigureAwait(false);
         await this.reverseHttpForwardingTransportFactory.DisposeAsync().ConfigureAwait(false);
         await this.httpClientTransportFactory.DisposeAsync().ConfigureAwait(false);
+        await this.ReverseHttpServerTransportFactory.DisposeAsync().ConfigureAwait(false);
     }
 }

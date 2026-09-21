@@ -23,12 +23,12 @@ var dataAccessLayer = await WebServerDataAccessLayerFactory.CreateDefaultAsync()
 builder.Services.AddSingleton<IDataAccessLayer>(dataAccessLayer);
 
 var transportRegistry = new TransportRegistry();
-transportRegistry.Register(new ReverseHttpServerTransportFactory());
-builder.Services.AddSingleton(transportRegistry);
 var reverseConnectionStatusRegistry = new ReverseConnectionStatusRegistry();
 builder.Services.AddSingleton(reverseConnectionStatusRegistry);
 var reverseTransportServerFactory = new ReverseHttpServerTransportFactory(reverseConnectionStatusRegistry);
 builder.Services.AddSingleton(reverseTransportServerFactory);
+transportRegistry.Register(reverseTransportServerFactory);
+builder.Services.AddSingleton(transportRegistry);
 var transportFactoryRegistry = new TransportFactoryRegistry();
 transportFactoryRegistry.Register(new LocalTransportFactory(transportRegistry));
 transportFactoryRegistry.Register(new HttpClientTransportFactory());

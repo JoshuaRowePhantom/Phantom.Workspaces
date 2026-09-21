@@ -1,0 +1,36 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/reachability-route.json",
+  "description": "One durable, credential-free reachability route slot for a user-computer-profile.",
+  "type": "object",
+  "properties": {
+    "descriptor": {
+      "$ref": "reachable-transport-descriptor.json"
+    },
+    "owner-profile-entity-id": {
+      "$ref": "core.json#/$defs/entity-id"
+    },
+    "priority": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000,
+      "default": 100,
+      "description": "Lower is preferred."
+    },
+    "last-confirmed": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expires-at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Must be strictly after last-confirmed; enforced by IReachabilityRouteStore."
+    }
+  },
+  "required": [
+    "descriptor",
+    "owner-profile-entity-id",
+    "last-confirmed",
+    "expires-at"
+  ],
+  "unevaluatedProperties": false
+}

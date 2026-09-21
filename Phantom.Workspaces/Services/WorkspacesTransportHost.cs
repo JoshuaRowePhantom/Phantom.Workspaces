@@ -1,3 +1,4 @@
+using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.ReverseHttp;
 
@@ -17,6 +18,8 @@ public sealed class WorkspacesTransportHost : IAsyncDisposable
     private readonly TransportRegistry localListeners;
     private readonly IReadOnlyList<ReverseHttpClientTransportFactory> hubFactories;
     private readonly TransportPeerIdentityProvider? peerIdentities;
+    private readonly IReachabilityRouteStore? reachabilityRouteStore;
+    private readonly EntityId? localProfileEntityId;
     private readonly CancellationTokenSource shutdown = new();
     private readonly List<Task> hubLoops = [];
     private readonly SemaphoreSlim startGate = new(1, 1);
@@ -26,16 +29,22 @@ public sealed class WorkspacesTransportHost : IAsyncDisposable
     public WorkspacesTransportHost(
         TransportRegistry localListeners,
         IReadOnlyList<ReverseHttpClientTransportFactory> hubFactories,
-        TransportPeerIdentityProvider? peerIdentities = null)
+        TransportPeerIdentityProvider? peerIdentities = null,
+        IReachabilityRouteStore? reachabilityRouteStore = null,
+        EntityId? localProfileEntityId = null)
     {
         this.localListeners = localListeners ?? throw new ArgumentNullException(nameof(localListeners));
         this.hubFactories = hubFactories ?? throw new ArgumentNullException(nameof(hubFactories));
         this.peerIdentities = peerIdentities;
+        this.reachabilityRouteStore = reachabilityRouteStore;
+        this.localProfileEntityId = localProfileEntityId;
     }
 
     public event EventHandler? ConnectionStateChanged;
 
     public IReadOnlyList<ReverseHttpClientTransportFactory> HubFactories => this.hubFactories;
+
+    public Exception? LastReachabilityPublicationError { get; private set; }
 
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
@@ -47,6 +56,22 @@ public sealed class WorkspacesTransportHost : IAsyncDisposable
             if (this.started)
             {
                 return;
+            }
+
+            if (this.reachabilityRouteStore is not null && this.localProfileEntityId is not null)
+            {
+                try
+                {
+                    await this.reachabilityRouteStore.ClearOwnedRoutesAsync(
+                        this.localProfileEntityId.Value,
+                        this.localProfileEntityId.Value,
+                        cancellationToken).ConfigureAwait(false);
+                    this.LastReachabilityPublicationError = null;
+                }
+                catch (ReachabilityRouteStoreException exception)
+                {
+                    this.LastReachabilityPublicationError = exception;
+                }
             }
 
             foreach (var factory in this.hubFactories)
@@ -98,7 +123,11 @@ public sealed class WorkspacesTransportHost : IAsyncDisposable
 
         while (!token.IsCancellationRequested)
         {
-            var dispatcher = new ReverseExecutionDispatcher(current, this.localListeners, this.peerIdentities);
+            var dispatcher = new ReverseExecutionDispatcher(
+                current,
+                this.localListeners,
+                this.peerIdentities,
+                factory.ApplyHubProfileEntityIdAsync);
             try
             {
                 await current.Reader.Completion.WaitAsync(token).ConfigureAwait(false);

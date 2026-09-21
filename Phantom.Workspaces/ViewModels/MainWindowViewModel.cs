@@ -29,6 +29,7 @@ using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Navigation;
 using Phantom.Workspaces.Services.Notifications;
+using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.ReverseHttp;
 using Phantom.Workspaces.ViewModels.Configuration;
 
@@ -886,12 +887,19 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     /// </summary>
     internal static IReadOnlyList<ReverseHttpClientTransportFactory> BuildReverseHttpHubFactories(
         RepositorySource repositorySource,
-        EntityId localProfileEntityId)
+        EntityId localProfileEntityId,
+        ILoggerFactory? loggerFactory = null)
     {
         if (repositorySource is WebRepositorySource web
             && !string.IsNullOrWhiteSpace(web.Endpoint))
         {
-            return [new ReverseHttpClientTransportFactory(web.Endpoint, localProfileEntityId.ToString())];
+            return
+            [
+                new ReverseHttpClientTransportFactory(
+                    web.Endpoint,
+                    localProfileEntityId.ToString(),
+                    loggerFactory?.CreateLogger<ReverseHttpClientTransportFactory>()),
+            ];
         }
 
         return [];
@@ -906,7 +914,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         var hubFactories = BuildReverseHttpHubFactories(
             this.RepositorySource,
-            this.entityBroker!.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId);
+            this.entityBroker!.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId,
+            this.applicationServices.LoggerFactory);
 
         var composition = new Services.WorkspacesTransportComposition(
             this.entityBroker!.EntityRepository.DataAccessLayer,
@@ -917,7 +926,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.transportComposition = composition;
         this.trustedExecutorSelector.SetRemoteExecutor(composition.TrustedExecutor);
         await composition.StartAsync();
-        this.webHost = new WorkspacesWebHost(composition.ConnectionStatusRegistry);
+        this.webHost = new WorkspacesWebHost(
+            composition.ConnectionStatusRegistry,
+            composition.ReverseHttpServerTransportFactory,
+            composition.ReachabilityRouteStore,
+            this.entityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId,
+            logger: this.applicationServices.LoggerFactory?.CreateLogger<WorkspacesWebHost>());
         this.ConnectionStatus = new ConnectionStatusViewModel(
             composition.ConnectionStatusRegistry,
             action => Dispatcher.UIThread.Post(action));
@@ -1004,8 +1018,18 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var protocol = listenUri.Scheme;
         var hostService = this.DevTunnelHostServiceFactory();
         this.devTunnelHostService = hostService;
-        hostService.StatusChanged += (_, status) => Dispatcher.UIThread.Post(
-            () => this.ConnectionStatus?.SetDevTunnelStatus(status.State, status.AccessPointUrl, status.LastError));
+        hostService.StatusChanged += (_, status) =>
+        {
+            Dispatcher.UIThread.Post(
+                () => this.ConnectionStatus?.SetDevTunnelStatus(status.State, status.AccessPointUrl, status.LastError));
+            if (this.webHost is not null)
+            {
+                var publishedEndpoint = status.State == Services.DevTunnel.DevTunnelHostState.Hosting
+                    ? status.AccessPointUrl
+                    : this.webHost.ListenUrl;
+                _ = ObservePublishedEndpointAsync(this.webHost, publishedEndpoint);
+            }
+        };
 
         // Hosting runs in the background and surfaces progress/errors through the status event, so a
         // sign-in or relay failure never blocks GUI startup. The task is observed to avoid an
@@ -1022,6 +1046,24 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             catch (Exception)
             {
                 // Surfaced via DevTunnelHostStatus.Error.
+            }
+        }
+
+        static async Task ObservePublishedEndpointAsync(
+            WorkspacesWebHost webHost,
+            string? endpoint)
+        {
+            try
+            {
+                await webHost.SetPublishedEndpointAsync(endpoint).ConfigureAwait(false);
+            }
+            catch (ReachabilityRouteStoreException exception)
+            {
+                webHost.ReportPublicationError(exception);
+            }
+            catch (InvalidOperationException exception)
+            {
+                webHost.ReportPublicationError(exception);
             }
         }
     }

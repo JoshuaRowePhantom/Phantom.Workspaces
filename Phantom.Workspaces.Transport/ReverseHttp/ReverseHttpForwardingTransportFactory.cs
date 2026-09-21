@@ -82,11 +82,23 @@ public sealed class ReverseHttpForwardingTransportFactory : ITransportFactory
             _ = DisposeLosingAttemptsAsync(pending);
             try
             {
-                using var relayRequest = JsonDocument.Parse(JsonSerializer.Serialize(new Dictionary<string, string>
+                var relayRequestData = new Dictionary<string, object>
                 {
                     ["type"] = "reverse-http",
                     ["entity-id"] = entityId,
-                }));
+                };
+                if (this.authenticatedPeer is not null)
+                {
+                    relayRequestData["authenticated-peer"] = new Dictionary<string, object?>
+                    {
+                        ["authentication-scheme"] = this.authenticatedPeer.AuthenticationScheme,
+                        ["stable-peer-id"] = this.authenticatedPeer.StablePeerId,
+                        ["user-entity-id"] = this.authenticatedPeer.UserEntityId,
+                        ["user-computer-profile-entity-id"] = this.authenticatedPeer.UserComputerProfileEntityId,
+                    };
+                }
+
+                using var relayRequest = JsonDocument.Parse(JsonSerializer.Serialize(relayRequestData));
                 var relayChannel = await winner.Transport.ConnectToMessageChannelAsync(relayRequest.RootElement, ct).ConfigureAwait(false);
                 var transport = new ReverseHttpTransport(relayChannel, this.authenticatedPeer);
                 try

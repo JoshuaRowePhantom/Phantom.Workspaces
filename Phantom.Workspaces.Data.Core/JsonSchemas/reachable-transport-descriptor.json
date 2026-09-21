@@ -1,0 +1,66 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/reachable-transport-descriptor.json",
+  "description": "Closed, credential-free transport descriptor for a durable reachability route. Adding a transport kind requires an explicit schema and code change.",
+  "type": "object",
+  "required": [
+    "type"
+  ],
+  "oneOf": [
+    {
+      "$ref": "#/$defs/http-descriptor"
+    },
+    {
+      "$ref": "#/$defs/reverse-http-descriptor"
+    }
+  ],
+  "$defs": {
+    "http-descriptor": {
+      "description": "Direct receive-only HTTP(S) listener.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "http"
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https?://(?!.*@)\\S+$"
+        }
+      },
+      "required": [
+        "type",
+        "url"
+      ],
+      "unevaluatedProperties": false
+    },
+    "reverse-http-descriptor": {
+      "description": "Reverse-HTTP client registered with one or more hubs.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "reverse-http"
+        },
+        "hub-urls": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https?://(?!.*@)\\S+$"
+          },
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true
+        },
+        "entity-id": {
+          "$ref": "core.json#/$defs/entity-id"
+        }
+      },
+      "required": [
+        "type",
+        "hub-urls",
+        "entity-id"
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}

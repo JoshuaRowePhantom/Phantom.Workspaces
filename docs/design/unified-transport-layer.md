@@ -42,7 +42,7 @@
     | `$user-computer-profile` | `{ "type": "user-computer-profile", "entity-id": $entityId, "target": $connection }` | Look up the profile entity, rewrite to `$http` or `$reverse-http` wrapper (or `$local` if the current machine is the profile) |
     | (future) `$container` | `{ "type": "container", ... }` | Isolated container process |
 
-> **`$user-computer-profile` — `target` field.** The `target` field is a **chained connection descriptor** — a descriptor for a service or listener reachable *within* or *via* the remote machine identified by `entity-id`. `UserComputerProfileTransportFactory` first routes to the remote machine (using its stored `connection-descriptor`), then on the remote machine, dispatches the `target` descriptor through the remote machine's `ITransportFactoryRegistry`. This allows reaching, for example, a local MCP server on a remote machine:
+> **`$user-computer-profile` — `target` field.** The `target` field is a **chained connection descriptor** — a descriptor for a service or listener reachable *within* or *via* the remote machine identified by `entity-id`. `UserComputerProfileTransportFactory` first selects a route from the target profile's `reachability.routes` map (or the shared live inbound registry), then dispatches the `target` descriptor on that machine. This allows reaching, for example, a local MCP server on a remote machine:
 >
 > ```json
 > {
@@ -52,9 +52,24 @@
 > }
 > ```
 >
-> When `target` is absent, `UserComputerProfileTransportFactory` connects to the machine's default transport (the stored `connection-descriptor` resolved directly).
+> When `target` is absent, `UserComputerProfileTransportFactory` connects to the selected machine transport directly.
 
-12. **`UserComputerProfileTransportFactory`** resolves the `entity-id` in a `$user-computer-profile` descriptor, determines whether the profile refers to the current machine (→ `$local`) or a remote machine (→ `$http` or `$reverse-http` wrapping the embedded `target`), and re-dispatches through `ITransportFactoryRegistry`.
+12. **`UserComputerProfileTransportFactory`** resolves the `entity-id` in a `$user-computer-profile` descriptor and applies this precedence: local profile; live authenticated inbound reverse registration; trusted explicit `force-route`; unexpired persisted routes ordered by `(priority, transport type, route id)` with fallback; trusted legacy/configured-hub compatibility route; otherwise a no-route error. A non-local target never falls back to local execution.
+
+### Durable profile reachability
+
+`user-computer-profile.reachability.routes` is a bounded map keyed by `direct-http` or
+`reverse-http:<stable-hub-id>`. Each value contains a closed credential-free `http` or
+`reverse-http` descriptor, its owning profile id, confirmation and expiry timestamps, and an
+optional priority (lower wins). Publishers update only their stable slot with optimistic
+concurrency, renew before expiry, and remove only owner-matching slots on graceful shutdown.
+Readers ignore expired or wrong-owner slots.
+
+Persisted routes use `reachable-transport-descriptor.json`; transient session bindings use the
+separate closed `executor-connection-descriptor.json`, which additionally permits `local` and
+`user-computer-profile` plus an optional one-level `force-route`. URLs are normalized before
+persistence, may not contain credentials, and plain HTTP is restricted to loopback/private
+addresses. Reachability selects a path but does not grant authorization.
 
 ### Server-side registries
 
@@ -357,22 +372,24 @@ public sealed record TransportFrame
 - Multiplexes all `ConnectToMessageChannelAsync`/`ConnectToStreamAsync` requests for the same server over that one registration channel by embedding `channel-open`/`stream-open` frames in the registration channel's messages.
 - One `ReverseHttpClientTransportFactory` instance per remote Phantom.Workspaces server it connects to.
 - When the remote GUI Phantom.Workspaces instance starts, it proactively calls `ConnectToAsync` with the hosting instance's `$http` descriptor to register itself.
-- **Registration side-effect:** Each `ReverseHttpClientTransportFactory` instance manages **one slot** in the `hub-urls` list of this machine's user-computer-profile entity, keyed internally by the hub's entity-id. The list contains at most one URL per configured hub — it is bounded by configuration, not connection history. The `connection-descriptor` shape is:
+- **Registration side-effect:** Each `ReverseHttpClientTransportFactory` instance manages **one
+  stable slot** in this machine's `user-computer-profile.reachability.routes` map. The key is
+  `reverse-http:<hub-profile-id>` and the closed route descriptor is:
   ```json
   { "type": "reverse-http", "hub-urls": ["https://A-devtunnel/...", "http://192.168.1.5:5000"], "entity-id": "<this-machine's-entity-id>" }
   ```
   Lifecycle rules:
-  - **Connect:** On first successful registration with hub H, the factory **upserts** its URL into the list for hub H's slot. If no slot exists yet, one is created. The list grows to at most N entries where N equals the number of hubs this machine is configured to register with (typically 1).
-  - **Reconnect:** If the devtunnel URL rotates and the factory re-registers with hub H, it **replaces** its existing slot in place. The list does not grow.
-  > **Stale URL window during rotation.** When a devtunnel URL changes (reconnect), there is a brief window between `Disconnect` (slot removed) and the new connection's `Connect` (slot upserted) where the `hub-urls` list has one fewer entry. `ReverseHttpForwardingTransportFactory` races all listed URLs in parallel with a connect timeout of **10 seconds** per attempt. If a stale or missing URL causes one parallel attempt to time out or fail, the remaining URLs are still tried; the race succeeds as long as at least one URL resolves. Callers observe increased latency only, not an error, during rotation.
-  - **Disconnect:** When the registration channel to hub H closes, the factory **removes** its slot from the list.
-  - **Shutdown:** All slots are removed; `hub-urls` becomes empty (or the `connection-descriptor` field is cleared).
-  - **Crash / ungraceful termination:** If the PW process terminates without running the Shutdown path, the `hub-urls` list retains stale entries in the entity store. These entries are harmless until someone tries to use them: `ReverseHttpForwardingTransportFactory` will connect to hub A successfully, but `ReverseHttpServerTransportFactory` relay behavior on A will find no live registration for the crashed machine and the relay channel-open will fail. This failure propagates as a transport error to the caller.
-  - **Startup (crash recovery):** On startup, before performing any registrations, `ReverseHttpClientTransportFactory` **clears** the entire `hub-urls` list (sets it to empty) in the machine's user-computer-profile entity. This removes any stale crash-era entries. It then re-populates the list as new registrations succeed via the normal Connect path. This means there is a brief window at startup where `hub-urls` is empty — callers during this window will receive a transport error until at least one registration succeeds.
+  - **Connect:** after successful registration, the factory upserts its owned slot with the current
+    normalized hub URL and a fresh lease.
+  - **Reconnect:** URL rotation updates the same stable slot, without growing the map or touching
+    another hub's slot.
+  - **Disconnect/shutdown:** only that owned hub slot is removed.
+  - **Crash:** readers ignore the route after `expires-at`; startup recovery clears only slots owned
+    by the current profile before successful registrations republish them.
+  - **Renewal:** `last-confirmed` and `expires-at` are refreshed at half the lease interval.
 
-  The stored `hub-urls` list is the URL-only projection of these slots; slot keys (hub entity-ids) are held in memory only and are not persisted.
-
-  > **Stale-entry semantics:** Because crash recovery clears the list at startup, stale entries only exist in the interval between a crash and the next restart. During that window, relay attempts to the crashed machine fail fast at the hub (no registration found) rather than timing out at the network level. There is no silent data corruption — a failed relay is always surfaced as a transport error.
+  Multiple URLs inside one reverse descriptor continue to race in parallel with a bounded
+  connection timeout. A failed route causes the profile router to attempt the next valid route.
 
 #### Auto-reconnect
 
@@ -460,19 +477,17 @@ The `hub-urls` field is written into Machine C's user-computer-profile entity by
 
 - Handles `{ "type": "user-computer-profile", "entity-id": $entityId }` descriptors.
 - Resolves the user-computer-profile entity from the entity store by `entity-id`.
-- Reads the entity's `connection-descriptor` field (a self-describing transport descriptor set at registration time) and calls `ITransportFactoryRegistry.ConnectToAsync(connection-descriptor)` directly — **no caller-identity check**. The descriptor encodes all routing information needed.
+- Resolves local identity first, then the shared live authenticated reverse-registration registry,
+  then valid unexpired `reachability.routes`, with a trusted explicit `force-route` able to precede
+  persisted routes. A trusted legacy/configured-hub route is retained only as a compatibility
+  fallback. Non-local profiles never fall back to local execution.
 
 > **Local identity:** `UserComputerProfileTransportFactory` is constructed with a reference to `EntityRepository` (the process-lifetime singleton). It compares the entity-id in the connection descriptor against `EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId` — the ID resolved at startup by `WorkspaceEntitySessionBootstrapper`. If they match, the connection is local and routes to `LocalTransportFactory`. This is the same identity that appears throughout the rest of the system (shortcut handlers, meta-variable substitution, agent-session `trusted-executor` fields).
 
-The three cases, determined entirely by what is stored in the entity:
-
-| Entity `connection-descriptor` | Who stored it | Resolved by |
-|---|---|---|
-| `{ "type": "local" }` | Local machine startup | `LocalTransportFactory` |
-| `{ "type": "http", "url": "https://C/..." }` | Machine C's own startup (forward-reachable) | `HttpClientTransportFactory` |
-| `{ "type": "reverse-http", "hub-urls": ["https://A/...", ...], "entity-id": "C-guid" }` | `ReverseHttpClientTransportFactory` on Machine C when it registered with hub A | `ReverseHttpServerTransportFactory` (server-side, on the machine that has C's registration); `ReverseHttpForwardingTransportFactory` (client-side, on the machine initiating the connection) |
-
-`UserComputerProfileTransportFactory` contains no routing logic of its own beyond entity resolution and `ConnectToAsync` dispatch. The right factory is chosen by whichever `ITransportFactoryRegistry` is local to the calling machine.
+Persisted route entries are ordered by priority, then transport type (`http` before
+`reverse-http`), then route id. Each candidate is dispatched through the caller's
+`ITransportFactoryRegistry`; connection failures fall through deterministically to the next route.
+The live registry remains authoritative even if publishing its durable route failed.
 
 > **`target` field.** If the descriptor includes a `target` field, after reaching Machine B's transport endpoint, the factory forwards the `target` descriptor to Machine B's `ITransportFactoryRegistry` for further routing. This enables nested routing: e.g., reaching a local MCP server on Machine B from Machine A.
 
@@ -748,7 +763,7 @@ Sub-items are ordered by dependency. Items at the same level may be done in para
 - `Scenario5_HubRelayTests.cs` — Machine B uses `ReverseHttpForwardingTransportFactory`; Machine C registered with fixture hub via `SimulateClientRegistrationAsync`; Machine C chat client resolved via `AgentFactory.CreateChatClient` with BYOK `ScriptedByokChatServer`; assert frames travel B → relay pump on A → C byte-transparent.
 - `RelayErrorTests.cs` — relay target not registered → `channel-open-error` → `TransportException` on B.
 - `HubUrlFallbackTests.cs` — one hub URL fails → falls back to second; all URLs fail → throws within bounded timeout.
-- Machine C crash (stale `hub-urls`) → `ReverseHttpServerTransportFactory` relay behavior returns error; on restart `hub-urls` is cleared.
+- Machine C crash (stale route lease) → `ReverseHttpServerTransportFactory` relay behavior returns error; readers ignore the expired persisted route, and owner-scoped startup recovery clears it before successful registrations republish current routes.
 
 ---
 
@@ -1660,12 +1675,13 @@ Same structure as Scenario 3 but `metadata["trust-profile"]` references a trust 
   "entity-types": ["entity", "llm-trust-profile"],
   "names": [["trust-profiles", "machine-c-workstation"]],
   "default-execution-target": { "type": "user-computer-profile", "entity-id": "c1c2c3c4-..." },
-  "allowed-client-instances": ["c1c2c3c4-..."],
-                 "type": "reverse-http",
+  "allowed-client-instances": ["c1c2c3c4-..."]
 }
 ```
-          3. Machine A: ReverseHttpServerTransportFactory relay behavior fires
-Machine C's user-computer-profile `connection-descriptor` is `{ "type": "reverse-http", "entity-id": "c1c2c3c4-..." }` — resolvable on Machine A, not directly from Machine B.
+
+Machine C publishes a `reverse-http:<hub-A-profile-id>` slot in its
+`user-computer-profile.reachability.routes` map. Machine A can use its live registration directly;
+Machine B can discover the persisted hub route.
 
 #### User workflow
 
@@ -1705,14 +1721,9 @@ Same structure as Scenario 3 with `metadata["trust-profile"]` referencing `machi
 5.  ITransportFactoryRegistry.ConnectToAsync($connection)   [running on Machine B]
       → UserComputerProfileTransportFactory matches
           a. Fetch user-computer-profile entity for entity-id "c1c2c3c4-..."
-          b. Read entity.connection-descriptor:
-                { "type": "reverse-http",
-                  "hub-urls": ["https://A-devtunnel/...", "http://192.168.1.5:5000"],
-                  "entity-id": "c1c2c3c4-..." }
-             (Written by Machine C's ReverseHttpClientTransportFactory instances — one URL
-              per hub they successfully registered with.)
-          c. ITransportFactoryRegistry.ConnectToAsync(connection-descriptor)
-             [No caller-identity check — the descriptor is self-describing]
+          b. Ignore expired and wrong-owner reachability routes.
+          c. Order routes by priority, transport type, then route id.
+          d. ITransportFactoryRegistry.ConnectToAsync(route.descriptor)
       → ReverseHttpForwardingTransportFactory matches on Machine B
           (Machine A would route the same descriptor to ReverseHttpServerTransportFactory instead)
           1. Race all hub-urls in parallel via HttpClientTransportFactory.ConnectToAsync.
@@ -1816,8 +1827,8 @@ This part describes the one-time setup that must complete before Machine B can r
 
 2.  ReverseHttpClientTransportFactory.InitializeAsync — crash recovery:
         EntityRepository.UpdateAsync(entity-id: "c1c2c3c4-...",
-            op: set connection-descriptor.hub-urls = [])
-    Clears any stale hub-urls left by a previous crash before writing new ones.
+            op: remove each reachability.routes slot owned by this profile)
+    Clears only this profile's stale slots before writing current routes.
 
 3.  HttpClientTransportFactory.ConnectToAsync({
             "type": "http",
@@ -1854,12 +1865,18 @@ This part describes the one-time setup that must complete before Machine B can r
 7.  ReverseHttpClientTransportFactory upserts Machine A's URL into Machine C's
     user-computer-profile entity (hub slot for Machine A):
         EntityRepository.UpdateAsync(entity-id: "c1c2c3c4-...",
-            op: set connection-descriptor = {
-                "type": "reverse-http",
-                "hub-urls": ["https://A-devtunnel/...", "http://192.168.1.5:5000"],
-                "entity-id": "c1c2c3c4-..."
+            op: upsert reachability.routes["reverse-http:<hub-A-profile-id>"] = {
+                "descriptor": {
+                    "type": "reverse-http",
+                    "hub-urls": ["https://A-devtunnel/...", "http://192.168.1.5:5000"],
+                    "entity-id": "c1c2c3c4-..."
+                },
+                "owner-profile-entity-id": "c1c2c3c4-...",
+                "last-confirmed": "...",
+                "expires-at": "...",
+                "priority": 100
             })
-    This is the descriptor Machine B will read in Part 2.
+    Machine B reads this leased route in Part 2.
 
 8.  The registration IMessageChannel stays open indefinitely.
     Machine C's ReverseHttpClientTransportFactory holds it and listens for
@@ -1903,15 +1920,10 @@ The user has opened the `my-relay-copilot-agent` manifest on Machine B. `CreateA
     [running on Machine B]
         → UserComputerProfileTransportFactory matches
             a. Fetch Machine C's user-computer-profile entity from the entity store
-            b. Read entity.connection-descriptor:
-                 { "type": "reverse-http",
-                   "hub-urls": ["https://A-devtunnel/...", "http://192.168.1.5:5000"],
-                   "entity-id": "c1c2c3c4-..." }
-               (Written by Machine C's ReverseHttpClientTransportFactory in Part 1 step 7)
+            b. Read valid unexpired entity.reachability.routes entries.
             c. Compare "c1c2c3c4-..." vs EntityRepository.WorkspaceEntitySession
                .UserComputerProfileEntityId on Machine B → not the local machine
-            d. ITransportFactoryRegistry.ConnectToAsync(connection-descriptor)
-               [re-dispatches — no caller-identity check]
+            d. ITransportFactoryRegistry.ConnectToAsync(route.descriptor)
 
 6.  ReverseHttpForwardingTransportFactory.ConnectToAsync({
             "type": "reverse-http",
@@ -2021,7 +2033,7 @@ The user has opened the `my-relay-copilot-agent` manifest on Machine B. `CreateA
         b. Open MCP sessions per the mcp-servers array [all running on Machine C]:
                 workspace-gui (execution-target = Machine B):
                     ITransportFactoryRegistry.ConnectToAsync on Machine C resolves
-                    user-computer-profile → Machine B's connection-descriptor
+                    user-computer-profile → Machine B's live or persisted reachability route
                     ReverseHttpForwardingTransportFactory on Machine C opens a separate relay channel
                     through Machine A to Machine B's WorkspaceGuiMcpServerListener.
                     McpClientOverTransport wraps it.
@@ -2262,16 +2274,18 @@ The user has opened the `my-relay-copilot-agent` manifest on Machine B. `CreateA
     Machine A's ServerHttpTransport for the Machine B connection receives transport-close
     → disposes remaining channels/streams → removes transport from HttpServerTransportFactory.
 
-hub-urls persistence rule:
-    Machine C's hub-urls list in its user-computer-profile entity is NOT cleared
+reachability slot persistence rule:
+    Machine C's reverse-http route slot in its user-computer-profile entity is NOT cleared
     by teardown of a single relay session.
     It persists until Machine C's registration channel to Machine A itself closes
     (i.e. Machine C's HttpTransport WebSocket to Machine A drops), at which point
-    ReverseHttpClientTransportFactory removes its slot from hub-urls.
+    ReverseHttpClientTransportFactory removes only its owned route slot.
     Slot removal is tied to registration lifetime, not individual relay session lifetime.
 ```
 
-**Teardown complete.** All per-turn objects are disposed. Machine A retains no per-turn state. Machine C's `user-computer-profile.connection-descriptor` continues to advertise `hub-urls` for future sessions until Machine C's registration channel to Machine A closes.
+**Teardown complete.** All per-turn objects are disposed. Machine A retains no per-turn state.
+Machine C's leased `user-computer-profile.reachability.routes` entry continues to advertise the
+hub route for future sessions until the registration closes or the lease expires.
 
 ---
 
@@ -2295,7 +2309,7 @@ ReverseHttpForwardingTransportFactory                                           
                                                                                │    workspace-entity
 UserComputerProfileTransportFactory                                            │      → relay(C→A→B)→WorkspaceEntityMcpServerListener on Machine B
   (resolved "c1c2c3c4-..."                                                     │    local-dev-tools
-   → connection-descriptor                                                     │      → LocalTransport
+   → reachability.routes                                                        │      → LocalTransport
    → dispatched to ReverseHttpForwardingTransportFactory)                                   │           → dev-tools --mcp (stdio)
                                                                                │
 sub-agent AgentChats (if sub-agent turn):                                      │

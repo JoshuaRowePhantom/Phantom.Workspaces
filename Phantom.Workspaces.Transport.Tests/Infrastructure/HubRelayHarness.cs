@@ -27,7 +27,7 @@ internal sealed class HubRelayHarness : IAsyncDisposable
     public Guid ExecutorEntityId { get; }
 
     /// <summary>Default hub URL used by <see cref="ConnectMachineBAsync"/> and <see cref="CreateForwardingFactory"/>.</summary>
-    public const string DefaultHubUrl = "https://hub-a.example";
+    public const string DefaultHubUrl = "https://hub-a.example/";
 
     /// <summary>The registration channel serviced on the executor (Machine C) side.</summary>
     public IMessageChannel ExecutorRegistrationChannel { get; private set; } = null!;
@@ -45,17 +45,24 @@ internal sealed class HubRelayHarness : IAsyncDisposable
     /// in-process hub fixture, the executor registration channel, and the reverse-execution dispatcher
     /// wiring — is set up identically to the single-<see cref="IChatClient"/> overload.
     /// </summary>
-    public static async Task<HubRelayHarness> CreateAsync(TransportRegistry executorRegistry, CancellationToken ct)
+    public static async Task<HubRelayHarness> CreateAsync(
+        TransportRegistry executorRegistry,
+        CancellationToken ct,
+        TransportPeerIdentityProvider? peerIdentities = null,
+        ReverseHttpServerTransportFactory? reverseHttpServer = null)
     {
         ArgumentNullException.ThrowIfNull(executorRegistry);
-        var fixture = new InProcessReverseHubFixture();
+        var fixture = new InProcessReverseHubFixture(reverseHttpServer);
         var harness = new HubRelayHarness(fixture, Guid.NewGuid());
         harness.ownedAsync.Add(fixture);
 
         await fixture.SimulateClientRegistrationAsync(harness.ExecutorEntityId, ct).ConfigureAwait(false);
         harness.ExecutorRegistrationChannel = fixture.LastClientRegistrationChannel!;
 
-        var dispatcher = new ReverseExecutionDispatcher(harness.ExecutorRegistrationChannel, executorRegistry);
+        var dispatcher = new ReverseExecutionDispatcher(
+            harness.ExecutorRegistrationChannel,
+            executorRegistry,
+            peerIdentities);
         harness.ownedAsync.Insert(0, dispatcher);
         return harness;
     }
@@ -69,6 +76,7 @@ internal sealed class HubRelayHarness : IAsyncDisposable
     /// the executor without directly calling <see cref="ConnectMachineBAsync"/>.
     /// </summary>
     public ITransportFactory CreateForwardingFactory(
+        TransportPeerIdentity? authenticatedPeer = null,
         params (string Url, InProcessHubHttpTransportFactory.HubBehavior Behavior)[] hubs)
     {
         if (hubs.Length == 0)
@@ -82,7 +90,10 @@ internal sealed class HubRelayHarness : IAsyncDisposable
             shim.SetBehavior(url, behavior);
         }
 
-        var forwarding = new ReverseHttpForwardingTransportFactory(shim, TimeSpan.FromSeconds(20));
+        var forwarding = new ReverseHttpForwardingTransportFactory(
+            shim,
+            TimeSpan.FromSeconds(20),
+            authenticatedPeer);
         this.ownedAsync.Add(forwarding);
         return forwarding;
     }
@@ -124,6 +135,8 @@ internal sealed class HubRelayHarness : IAsyncDisposable
     /// </summary>
     public async ValueTask CrashExecutorAsync()
     {
+        await this.Fixture.ReverseHttpServer.DisconnectRegistrationAsync(this.ExecutorEntityId.ToString("D"))
+            .ConfigureAwait(false);
         await this.ExecutorRegistrationChannel.DisposeAsync().ConfigureAwait(false);
     }
 

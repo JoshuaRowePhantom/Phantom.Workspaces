@@ -9,11 +9,11 @@ public sealed class InProcessReverseHubFixture : IAsyncDisposable
     private readonly List<IMessageChannel> registrationChannels = [];
     private readonly List<IAsyncDisposable> leases = [];
 
-    public InProcessReverseHubFixture()
+    public InProcessReverseHubFixture(ReverseHttpServerTransportFactory? reverseHttpServer = null)
     {
         this.HttpServer = new InProcessHttpServerTransportFactory();
         this.HubRegistry = this.HttpServer.Registry;
-        this.ReverseHttpServer = new ReverseHttpServerTransportFactory();
+        this.ReverseHttpServer = reverseHttpServer ?? new ReverseHttpServerTransportFactory();
         this.HubRegistry.Register(this.ReverseHttpServer);
     }
 

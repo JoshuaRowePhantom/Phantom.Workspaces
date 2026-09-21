@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading.Channels;
 using Microsoft.Extensions.AI;
+using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.Chat;
@@ -111,6 +112,37 @@ public sealed class WorkspacesTransportHostTests
         Assert.NotSame(firstChannel, http.Channels[^1]);
     }
 
+    [Fact]
+    public async Task RegistrationInfo_UsesHubProfileIdentityForStablePublishedRoute()
+    {
+        var profileId = new EntityId("11111111-1111-4111-8111-111111111111");
+        var hubProfileId = new EntityId("22222222-2222-4222-8222-222222222222");
+        var store = new RecordingRouteStore();
+        var http = new FakeHubHttpTransportFactory();
+        var factory = new ReverseHttpClientTransportFactory(
+            http,
+            "https://hub.example/",
+            profileId.ToString(),
+            store,
+            hubProfileEntityId: null);
+        await using var host = new WorkspacesTransportHost(new TransportRegistry(), [factory]);
+        var ct = Ct();
+        await host.StartAsync(ct);
+
+        await http.Channels.Single().DeliverInbound(
+            Json(
+                $$"""
+                {
+                  "type": "reverse-registration-info",
+                  "hub-profile-entity-id": "{{hubProfileId}}"
+                }
+                """));
+        var republished = await store.Operations.ReadAsync(ct);
+
+        Assert.Equal($"upsert:reverse-http:{hubProfileId}", republished);
+        Assert.False(store.Operations.TryRead(out _));
+    }
+
     private static CancellationToken Ct() => new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token;
 
     private static JsonElement Json(string json) => JsonDocument.Parse(json).RootElement.Clone();
@@ -191,6 +223,43 @@ public sealed class WorkspacesTransportHostTests
     private sealed class NoopDisposable : IAsyncDisposable
     {
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class RecordingRouteStore : IReachabilityRouteStore
+    {
+        private readonly Channel<string> operations = Channel.CreateUnbounded<string>();
+
+        public ChannelReader<string> Operations => this.operations.Reader;
+
+        public Task<IReadOnlyList<ReachabilityRoute>> GetRoutesAsync(
+            EntityId profileEntityId,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<ReachabilityRoute>>([]);
+
+        public Task UpsertRouteAsync(
+            EntityId profileEntityId,
+            ReachabilityRoute route,
+            CancellationToken cancellationToken = default)
+        {
+            this.operations.Writer.TryWrite($"upsert:{route.RouteId}");
+            return Task.CompletedTask;
+        }
+
+        public Task RemoveRouteAsync(
+            EntityId profileEntityId,
+            string routeId,
+            EntityId ownerProfileEntityId,
+            CancellationToken cancellationToken = default)
+        {
+            this.operations.Writer.TryWrite($"remove:{routeId}");
+            return Task.CompletedTask;
+        }
+
+        public Task ClearOwnedRoutesAsync(
+            EntityId profileEntityId,
+            EntityId ownerProfileEntityId,
+            CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
     }
 
     private sealed class EchoChatClient : IChatClient

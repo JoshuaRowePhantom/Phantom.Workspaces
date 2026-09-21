@@ -181,6 +181,18 @@ public sealed class ReverseHttpTransport : ITransport
                 {
                     closing.CompleteIncoming();
                 }
+                else if (!frame.TryGetProperty("channelId", out _))
+                {
+                    foreach (var channel in this.channels.Values)
+                    {
+                        channel.CompleteIncoming();
+                    }
+
+                    foreach (var stream in this.streams.Values)
+                    {
+                        stream.CompleteIncoming();
+                    }
+                }
 
                 break;
 

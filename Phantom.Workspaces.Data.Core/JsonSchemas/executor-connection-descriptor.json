@@ -1,0 +1,45 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/executor-connection-descriptor.json",
+  "description": "Closed transient executor connection descriptor. This broader union is not valid for persisted reachability route descriptors.",
+  "type": "object",
+  "required": [
+    "type"
+  ],
+  "oneOf": [
+    {
+      "properties": {
+        "type": {
+          "const": "local"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "unevaluatedProperties": false
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "user-computer-profile"
+        },
+        "entity-id": {
+          "$ref": "core.json#/$defs/entity-id"
+        },
+        "force-route": {
+          "$ref": "reachable-transport-descriptor.json"
+        }
+      },
+      "required": [
+        "type",
+        "entity-id"
+      ],
+      "unevaluatedProperties": false
+    },
+    {
+      "$ref": "reachable-transport-descriptor.json#/$defs/http-descriptor"
+    },
+    {
+      "$ref": "reachable-transport-descriptor.json#/$defs/reverse-http-descriptor"
+    }
+  ]
+}

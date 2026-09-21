@@ -257,6 +257,44 @@ public sealed class WorkspacesTransportCompositionTests
         Assert.Same(hubFactory, Assert.Single(composition.TransportHost.HubFactories));
     }
 
+    [Fact]
+    public async Task WorkspacesTransportComposition_InboundRegistrySharedWithWebHost_RouterObservesInboundRegistrations()
+    {
+        var dataAccessLayer = await CreateSeededDataAccessLayerAsync(includeRemoteProfile: true);
+        var session = new WorkspaceEntitySession
+        {
+            UserEntityId = new EntityId("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            ComputerEntityId = new EntityId("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+            UserComputerProfileEntityId = LocalProfileId,
+        };
+        await using var composition = new WorkspacesTransportComposition(dataAccessLayer, session);
+        var registrationChannel = new StubMessageChannel();
+        using var registrationRequest = JsonDocument.Parse(
+            """{"type":"reverse-register","entity-id":"22222222-2222-4222-8222-222222222222"}""");
+        await using var registration = await composition.ReverseHttpServerTransportFactory.OnChannelOpenAsync(
+            registrationRequest.RootElement,
+            registrationChannel,
+            Ct());
+        using var target = JsonDocument.Parse(
+            """{"type":"user-computer-profile","entity-id":"22222222-2222-4222-8222-222222222222"}""");
+
+        await using var transport = await composition.TransportFactoryRegistry.ConnectToAsync(target.RootElement, Ct());
+
+        Assert.NotNull(transport);
+        Assert.True(composition.ReverseHttpServerTransportFactory.IsRegistered(
+            "22222222-2222-4222-8222-222222222222"));
+    }
+
+    [Fact]
+    public async Task MainWindowReverseHttpRegistration_NonWebSourceDaemon_WiresSharedRegistryAndRouteStore()
+    {
+        await using var composition = await CreateCompositionAsync();
+
+        Assert.NotNull(composition.ReachabilityRouteStore);
+        Assert.NotNull(composition.ReverseHttpServerTransportFactory);
+        Assert.Empty(composition.HubFactories);
+    }
+
     private static Task<WorkspacesTransportComposition> CreateCompositionAsync()
         => CreateCompositionAsync(agentServices: null);
 
@@ -279,11 +317,11 @@ public sealed class WorkspacesTransportCompositionTests
             registryProvider: registryProvider);
     }
 
-    private static async Task<IDataAccessLayer> CreateSeededDataAccessLayerAsync()
+    private static async Task<IDataAccessLayer> CreateSeededDataAccessLayerAsync(bool includeRemoteProfile = false)
     {
         var fixture = await ValidatingEntitySeedFixture.CreateAsync();
-        await fixture.SeedManyValidAsync(
-            [
+        var entities = new List<JsonElement>
+        {
                 Json(
                     """
                     {
@@ -309,7 +347,31 @@ public sealed class WorkspacesTransportCompositionTests
                       "user-reference": ["users", "username", "composition-test"]
                     }
                     """),
-            ]);
+        };
+        if (includeRemoteProfile)
+        {
+            entities.Add(
+                Json(
+                    """
+                    {
+                      "entity-id": "22222222-2222-4222-8222-222222222223",
+                      "entity-types": ["entity", "computer"],
+                      "names": [["computers", "name", "composition-remote"]]
+                    }
+                    """));
+            entities.Add(
+                Json(
+                    """
+                    {
+                      "entity-id": "22222222-2222-4222-8222-222222222222",
+                      "entity-types": ["entity", "user-computer-profile"],
+                      "computer-reference": ["computers", "name", "composition-remote"],
+                      "user-reference": ["users", "username", "composition-test"]
+                    }
+                    """));
+        }
+
+        await fixture.SeedManyValidAsync(entities);
         return fixture.DataAccessLayer;
     }
 

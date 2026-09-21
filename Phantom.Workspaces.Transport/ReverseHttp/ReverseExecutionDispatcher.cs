@@ -18,20 +18,24 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
     private readonly IMessageChannel registrationChannel;
     private readonly TransportRegistry registry;
     private readonly TransportPeerIdentityProvider? peerIdentities;
+    private readonly Func<string, CancellationToken, Task>? registrationInfoHandler;
     private readonly ConcurrentDictionary<string, DispatchedChannel> channels = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, DispatchedStream> streams = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, IAsyncDisposable> sessions = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource shutdown = new();
     private readonly Task readLoop;
+    private int sessionsClosed;
 
     public ReverseExecutionDispatcher(
         IMessageChannel registrationChannel,
         TransportRegistry registry,
-        TransportPeerIdentityProvider? peerIdentities = null)
+        TransportPeerIdentityProvider? peerIdentities = null,
+        Func<string, CancellationToken, Task>? registrationInfoHandler = null)
     {
         this.registrationChannel = registrationChannel ?? throw new ArgumentNullException(nameof(registrationChannel));
         this.registry = registry ?? throw new ArgumentNullException(nameof(registry));
         this.peerIdentities = peerIdentities;
+        this.registrationInfoHandler = registrationInfoHandler;
         this.readLoop = this.RunAsync();
     }
 
@@ -44,6 +48,41 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
         }
         catch
         {
+        }
+
+        await this.CloseHostedSessionsAsync().ConfigureAwait(false);
+        this.shutdown.Dispose();
+    }
+
+    private async Task RunAsync()
+    {
+        try
+        {
+            await foreach (var frame in this.registrationChannel.Reader.ReadAllAsync(this.shutdown.Token).ConfigureAwait(false))
+            {
+                await this.DispatchAsync(frame).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (ChannelClosedException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+        finally
+        {
+            await this.CloseHostedSessionsAsync().ConfigureAwait(false);
+        }
+    }
+
+    private async Task CloseHostedSessionsAsync()
+    {
+        if (Interlocked.Exchange(ref this.sessionsClosed, 1) != 0)
+        {
+            return;
         }
 
         foreach (var channel in this.channels.Values)
@@ -70,27 +109,6 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
         this.channels.Clear();
         this.streams.Clear();
         this.sessions.Clear();
-        this.shutdown.Dispose();
-    }
-
-    private async Task RunAsync()
-    {
-        try
-        {
-            await foreach (var frame in this.registrationChannel.Reader.ReadAllAsync(this.shutdown.Token).ConfigureAwait(false))
-            {
-                await this.DispatchAsync(frame).ConfigureAwait(false);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-        }
-        catch (ChannelClosedException)
-        {
-        }
-        catch (InvalidOperationException)
-        {
-        }
     }
 
     private async Task DispatchAsync(JsonElement frame)
@@ -104,6 +122,16 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
 
         switch (type)
         {
+            case "reverse-registration-info":
+                if (this.registrationInfoHandler is not null
+                    && frame.TryGetProperty("hub-profile-entity-id", out var hubProfileEntityId)
+                    && hubProfileEntityId.GetString() is { Length: > 0 } hubId)
+                {
+                    await this.registrationInfoHandler(hubId, this.shutdown.Token).ConfigureAwait(false);
+                }
+
+                break;
+
             case "channel-open":
                 await this.HandleChannelOpenAsync(frame).ConfigureAwait(false);
                 break;

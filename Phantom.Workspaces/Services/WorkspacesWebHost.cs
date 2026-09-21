@@ -30,19 +30,50 @@ namespace Phantom.Workspaces.Services;
 public sealed class WorkspacesWebHost : IAsyncDisposable
 {
     private readonly ReverseConnectionStatusRegistry statusRegistry;
+    private readonly ReverseHttpServerTransportFactory reverseHttpServerTransportFactory;
+    private readonly IReachabilityRouteStore? reachabilityRouteStore;
+    private readonly EntityId? localProfileEntityId;
+    private readonly TimeProvider timeProvider;
+    private readonly ILogger<WorkspacesWebHost> logger;
+    private readonly bool ownsReverseHttpServerTransportFactory;
+    private readonly SemaphoreSlim directRouteGate = new(1, 1);
     private WebApplication? application;
     private Task? runTask;
     private CancellationTokenSource? cancellationTokenSource;
     private HttpServerTransportFactory? httpServerTransportFactory;
+    private ReachabilityRouteLease? directRouteLease;
     private bool httpServerTransportFactoryDisposed;
 
     public WorkspacesWebHost(ReverseConnectionStatusRegistry statusRegistry)
+        : this(statusRegistry, null, null, null)
+    {
+    }
+
+    public WorkspacesWebHost(
+        ReverseConnectionStatusRegistry statusRegistry,
+        ReverseHttpServerTransportFactory? reverseHttpServerTransportFactory,
+        IReachabilityRouteStore? reachabilityRouteStore,
+        EntityId? localProfileEntityId,
+        TimeProvider? timeProvider = null,
+        ILogger<WorkspacesWebHost>? logger = null)
     {
         this.statusRegistry = statusRegistry ?? throw new ArgumentNullException(nameof(statusRegistry));
+        this.reverseHttpServerTransportFactory =
+            reverseHttpServerTransportFactory ?? new ReverseHttpServerTransportFactory(statusRegistry);
+        this.ownsReverseHttpServerTransportFactory = reverseHttpServerTransportFactory is null;
+        this.reachabilityRouteStore = reachabilityRouteStore;
+        this.localProfileEntityId = localProfileEntityId;
+        this.timeProvider = timeProvider ?? TimeProvider.System;
+        this.logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<WorkspacesWebHost>.Instance;
     }
 
     /// <summary>The transport-layer connection-status registry fed by inbound reverse registrations.</summary>
     public ReverseConnectionStatusRegistry ConnectionStatusRegistry => this.statusRegistry;
+
+    internal ReverseHttpServerTransportFactory ReverseHttpServerTransportFactory
+        => this.reverseHttpServerTransportFactory;
+
+    public Exception? LastReachabilityPublicationError { get; private set; }
 
     /// <summary>Whether the web server is currently running.</summary>
     public bool IsRunning => this.application is not null && this.runTask is not null;
@@ -121,19 +152,17 @@ public sealed class WorkspacesWebHost : IAsyncDisposable
         this.application.MapGet("/", () => $"Phantom.Workspaces ({typeof(WorkspacesWebHost).Namespace})");
         this.application.MapWebDataAccessEndpoints();
         this.application.MapAgentEndpoints();
-        var serverTransportFactory = new ReverseHttpServerTransportFactory(this.statusRegistry);
-
         // #1209: expose the raw HTTP transport endpoint (/transport/connect) that reverse-HTTP
         // clients bootstrap against. Backed by a TransportRegistry that lists the reverse-HTTP
         // server factory so `reverse-register` and `reverse-http` channel-opens dispatch through
         // the same status registry. Mirrors Phantom.Workspaces.Web.Server/Program.cs.
         var transportRegistry = new TransportRegistry();
-        transportRegistry.Register(serverTransportFactory);
+        transportRegistry.Register(this.reverseHttpServerTransportFactory);
         this.httpServerTransportFactory = new HttpServerTransportFactory(transportRegistry);
         this.httpServerTransportFactory.Map(this.application);
         this.httpServerTransportFactoryDisposed = false;
 
-        this.application.MapTransportReverseEndpoints(serverTransportFactory, this.statusRegistry);
+        this.application.MapTransportReverseEndpoints(this.reverseHttpServerTransportFactory, this.statusRegistry);
 
         var lifetime = this.application.Services.GetRequiredService<IHostApplicationLifetime>();
         this.runTask = this.application.RunAsync();
@@ -153,6 +182,39 @@ public sealed class WorkspacesWebHost : IAsyncDisposable
         this.ListenUrl = this.ListenUrls.Count > 0
             ? this.ListenUrls[0]
             : remoteHostingSettings.PrimaryListenUrl;
+        await this.SetPublishedEndpointAsync(this.ListenUrl, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task SetPublishedEndpointAsync(
+        string? endpoint,
+        CancellationToken cancellationToken = default)
+    {
+        await this.directRouteGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (this.directRouteLease is not null)
+            {
+                await this.directRouteLease.DisposeAsync().ConfigureAwait(false);
+                this.directRouteLease = null;
+            }
+
+            if (!this.IsRunning || string.IsNullOrWhiteSpace(endpoint))
+            {
+                return;
+            }
+
+            await this.StartDirectRoutePublicationAsync(endpoint, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            this.directRouteGate.Release();
+        }
+    }
+
+    internal void ReportPublicationError(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        this.OnPublicationStatusChanged(exception);
     }
 
     /// <summary>
@@ -164,6 +226,8 @@ public sealed class WorkspacesWebHost : IAsyncDisposable
         {
             return;
         }
+
+        await this.SetPublishedEndpointAsync(null, cancellationToken).ConfigureAwait(false);
 
         await this.application.StopAsync(cancellationToken).ConfigureAwait(false);
         if (this.runTask is not null)
@@ -195,5 +259,58 @@ public sealed class WorkspacesWebHost : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await this.StopAsync().ConfigureAwait(false);
+        if (this.ownsReverseHttpServerTransportFactory)
+        {
+            await this.reverseHttpServerTransportFactory.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    private async Task StartDirectRoutePublicationAsync(
+        string endpointUrl,
+        CancellationToken cancellationToken)
+    {
+        if (this.reachabilityRouteStore is null
+            || this.localProfileEntityId is null)
+        {
+            return;
+        }
+
+        string endpoint;
+        try
+        {
+            endpoint = DataAccessReachabilityRouteStore.NormalizeEndpoint(endpointUrl);
+        }
+        catch (ArgumentException exception)
+        {
+            this.OnPublicationStatusChanged(exception);
+            return;
+        }
+
+        this.directRouteLease = new ReachabilityRouteLease(
+            this.reachabilityRouteStore,
+            this.localProfileEntityId.Value,
+            "direct-http",
+            () => System.Text.Json.JsonSerializer.SerializeToElement(
+                new Dictionary<string, object>
+                {
+                    ["type"] = "http",
+                    ["url"] = endpoint,
+                }),
+            priority: 50,
+            this.timeProvider,
+            TimeSpan.FromMinutes(2),
+            this.OnPublicationStatusChanged);
+        await this.directRouteLease.StartAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private void OnPublicationStatusChanged(Exception? exception)
+    {
+        this.LastReachabilityPublicationError = exception;
+        if (exception is not null)
+        {
+            this.logger.LogError(
+                exception,
+                "The direct HTTP listener is ready, but its reachability route could not be persisted.");
+        }
     }
 }

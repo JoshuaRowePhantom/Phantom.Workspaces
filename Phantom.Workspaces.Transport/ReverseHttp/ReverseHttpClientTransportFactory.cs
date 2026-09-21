@@ -1,4 +1,7 @@
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Transport.Http;
 
 namespace Phantom.Workspaces.Transport.ReverseHttp;
@@ -9,11 +12,26 @@ public sealed class ReverseHttpClientTransportFactory : ITransportFactory
     private readonly string hubUrl;
     private readonly string entityId;
     private readonly List<string> hubUrls = [];
+    private readonly ILogger logger;
+    private readonly TimeProvider timeProvider;
+    private readonly TimeSpan routeLeaseDuration;
     private ITransport? hubTransport;
     private IMessageChannel? registrationChannel;
+    private IReachabilityRouteStore? reachabilityRouteStore;
+    private EntityId? profileEntityId;
+    private EntityId? hubProfileEntityId;
+    private ReachabilityRouteLease? reachabilityLease;
 
     public ReverseHttpClientTransportFactory(string hubUrl, string entityId)
         : this(new HttpClientTransportFactory(), hubUrl, entityId)
+    {
+    }
+
+    public ReverseHttpClientTransportFactory(
+        string hubUrl,
+        string entityId,
+        ILogger<ReverseHttpClientTransportFactory>? logger)
+        : this(new HttpClientTransportFactory(), hubUrl, entityId, null, null, null, logger)
     {
     }
 
@@ -23,10 +41,29 @@ public sealed class ReverseHttpClientTransportFactory : ITransportFactory
     }
 
     public ReverseHttpClientTransportFactory(ITransportFactory httpClientTransportFactory, string hubUrl, string entityId)
+        : this(httpClientTransportFactory, hubUrl, entityId, null, null, null, null)
     {
-        this.httpClientTransportFactory = httpClientTransportFactory;
-        this.hubUrl = hubUrl;
-        this.entityId = entityId;
+    }
+
+    public ReverseHttpClientTransportFactory(
+        ITransportFactory httpClientTransportFactory,
+        string hubUrl,
+        string entityId,
+        IReachabilityRouteStore? reachabilityRouteStore,
+        EntityId? hubProfileEntityId,
+        TimeProvider? timeProvider = null,
+        ILogger<ReverseHttpClientTransportFactory>? logger = null,
+        TimeSpan? routeLeaseDuration = null)
+    {
+        this.httpClientTransportFactory = httpClientTransportFactory ?? throw new ArgumentNullException(nameof(httpClientTransportFactory));
+        this.hubUrl = hubUrl ?? throw new ArgumentNullException(nameof(hubUrl));
+        this.entityId = entityId ?? throw new ArgumentNullException(nameof(entityId));
+        this.reachabilityRouteStore = reachabilityRouteStore;
+        this.profileEntityId = reachabilityRouteStore is null ? null : new EntityId(entityId);
+        this.hubProfileEntityId = hubProfileEntityId;
+        this.timeProvider = timeProvider ?? TimeProvider.System;
+        this.logger = logger ?? NullLogger<ReverseHttpClientTransportFactory>.Instance;
+        this.routeLeaseDuration = routeLeaseDuration ?? TimeSpan.FromMinutes(2);
     }
 
     public string HubUrl => this.hubUrl;
@@ -34,6 +71,29 @@ public sealed class ReverseHttpClientTransportFactory : ITransportFactory
     public string EntityId => this.entityId;
 
     public IReadOnlyList<string> HubUrls => this.hubUrls;
+
+    public Exception? LastReachabilityPublicationError { get; private set; }
+
+    public void ConfigureReachability(
+        IReachabilityRouteStore routeStore,
+        EntityId profileEntityId,
+        EntityId? hubProfileEntityId = null)
+    {
+        ArgumentNullException.ThrowIfNull(routeStore);
+        if (this.registrationChannel is not null)
+        {
+            throw new InvalidOperationException("Reachability must be configured before registration.");
+        }
+
+        if (!string.Equals(profileEntityId.ToString(), this.entityId, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("The reachability profile must match the reverse registration identity.", nameof(profileEntityId));
+        }
+
+        this.reachabilityRouteStore = routeStore;
+        this.profileEntityId = profileEntityId;
+        this.hubProfileEntityId = hubProfileEntityId;
+    }
 
     public static TimeSpan GetReconnectDelayForAttempt(int attempt, double jitterFactor = 1.0)
     {
@@ -74,6 +134,7 @@ public sealed class ReverseHttpClientTransportFactory : ITransportFactory
         using var registerDescriptor = JsonDocument.Parse($$"""{"type":"reverse-register","entity-id":"{{this.entityId}}"}""");
         this.registrationChannel = await this.hubTransport.ConnectToMessageChannelAsync(registerDescriptor.RootElement, ct).ConfigureAwait(false);
         this.UpsertHubUrl();
+        await this.StartReachabilityLeaseAsync(ct).ConfigureAwait(false);
         return this.registrationChannel;
     }
 
@@ -91,6 +152,12 @@ public sealed class ReverseHttpClientTransportFactory : ITransportFactory
             this.hubTransport = null;
         }
 
+        if (this.reachabilityLease is not null)
+        {
+            await this.reachabilityLease.DisposeAsync().ConfigureAwait(false);
+            this.reachabilityLease = null;
+        }
+
         return await this.EnsureRegisteredAsync(ct).ConfigureAwait(false);
     }
 
@@ -104,6 +171,12 @@ public sealed class ReverseHttpClientTransportFactory : ITransportFactory
         if (this.hubTransport is not null)
         {
             await this.hubTransport.DisposeAsync().ConfigureAwait(false);
+        }
+
+        if (this.reachabilityLease is not null)
+        {
+            await this.reachabilityLease.DisposeAsync().ConfigureAwait(false);
+            this.reachabilityLease = null;
         }
 
         this.hubUrls.Clear();
@@ -120,5 +193,74 @@ public sealed class ReverseHttpClientTransportFactory : ITransportFactory
         {
             this.hubUrls[0] = this.hubUrl;
         }
+    }
+
+    private async Task StartReachabilityLeaseAsync(CancellationToken cancellationToken)
+    {
+        if (this.reachabilityRouteStore is null || this.profileEntityId is null)
+        {
+            return;
+        }
+
+        if (this.hubProfileEntityId is not { } hubId)
+        {
+            return;
+        }
+
+        this.reachabilityLease = new ReachabilityRouteLease(
+            this.reachabilityRouteStore,
+            this.profileEntityId.Value,
+            $"reverse-http:{hubId}",
+            () => JsonSerializer.SerializeToElement(
+                new Dictionary<string, object>
+                {
+                    ["type"] = "reverse-http",
+                    ["hub-urls"] = new[] { this.hubUrl },
+                    ["entity-id"] = this.entityId,
+                }),
+            priority: 100,
+            this.timeProvider,
+            this.routeLeaseDuration,
+            this.OnPublicationStatusChanged);
+        await this.reachabilityLease.StartAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private void OnPublicationStatusChanged(Exception? exception)
+    {
+        this.LastReachabilityPublicationError = exception;
+        if (exception is not null)
+        {
+            this.logger.LogError(
+                exception,
+                "Reverse HTTP registration for profile {ProfileEntityId} is live, but its route could not be persisted.",
+                this.entityId);
+        }
+    }
+
+    internal async Task ApplyHubProfileEntityIdAsync(
+        string hubProfileEntityId,
+        CancellationToken cancellationToken)
+    {
+        if (!Guid.TryParse(hubProfileEntityId, out var parsedHubProfileEntityId)
+            || this.reachabilityRouteStore is null
+            || this.profileEntityId is null)
+        {
+            return;
+        }
+
+        var hubId = new EntityId(parsedHubProfileEntityId);
+        if (this.hubProfileEntityId == hubId)
+        {
+            return;
+        }
+
+        if (this.reachabilityLease is not null)
+        {
+            await this.reachabilityLease.DisposeAsync().ConfigureAwait(false);
+            this.reachabilityLease = null;
+        }
+
+        this.hubProfileEntityId = hubId;
+        await this.StartReachabilityLeaseAsync(cancellationToken).ConfigureAwait(false);
     }
 }

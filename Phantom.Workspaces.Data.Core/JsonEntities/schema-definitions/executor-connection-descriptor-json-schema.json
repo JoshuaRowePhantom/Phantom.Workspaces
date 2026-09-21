@@ -1,0 +1,32 @@
+{
+  "entity-id": "15930000-0000-4000-8000-000000000003",
+  "entity-types": [
+    "entity",
+    "json-schema",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/executor-connection-descriptor.json"
+    ],
+    [
+      "entity-types",
+      "executor-connection-descriptor-json-schema"
+    ]
+  ],
+  "display-name": {
+    "default": "Executor Connection Descriptor Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "content": {
+        "text": "# Executor Connection Descriptor Schema\n\nClosed transient executor routing descriptors."
+      }
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/executor-connection-descriptor.json"
+  }
+}

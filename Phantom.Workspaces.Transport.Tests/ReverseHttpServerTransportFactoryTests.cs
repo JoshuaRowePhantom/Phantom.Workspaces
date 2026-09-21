@@ -20,6 +20,23 @@ public sealed class ReverseHttpServerTransportFactoryTests
     }
 
     [Fact]
+    public async Task ReverseHttpServerTransportFactory_Registration_AnnouncesStableHubProfileIdentity()
+    {
+        var hubProfileId = new Data.EntityId("10000000-0000-4000-8000-000000001593");
+        var factory = new ReverseHttpServerTransportFactory(null, hubProfileEntityId: hubProfileId);
+        var channel = new RelayTestMessageChannel();
+        using var request = JsonDocument.Parse("""{"type":"reverse-register","entity-id":"machine-c"}""");
+
+        await using var lease = await factory.OnChannelOpenAsync(request.RootElement, channel);
+        var registrationInfo = await channel.Sent.ReadAsync();
+
+        Assert.Equal("reverse-registration-info", registrationInfo.GetProperty("type").GetString());
+        Assert.Equal(
+            hubProfileId.ToString(),
+            registrationInfo.GetProperty("hub-profile-entity-id").GetString());
+    }
+
+    [Fact]
     public async Task ReverseHttpServerTransportFactory_Registration_Dispose_RemovesChannel()
     {
         var factory = new ReverseHttpServerTransportFactory();

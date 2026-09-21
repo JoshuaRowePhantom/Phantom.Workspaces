@@ -81,19 +81,21 @@
     },
     "executor-bindings": {
       "type": "object",
-      "description": "NEW (#1437, per-component-executor-binding). The resolved executors for this session, so the topology reconstructs on resume. Every value is a transport connection-descriptor object (the same type-discriminated JSON consumed by ITransportFactory.ConnectToAsync: `local`, `user-computer-profile`, `http`, `reverse-http`, ...) - there is NO parallel executor schema. Back-compat (on read): if `session` is absent but `host-profile-entity-id` is present, the session executor is derived as `{\"type\":\"user-computer-profile\",\"entity-id\":<that id>}`.",
+      "description": "The resolved executors for this session, so the topology reconstructs on resume. Every value is a closed executor-connection-descriptor.",
       "properties": {
         "session": {
-          "type": "object",
-          "additionalProperties": true,
+          "$ref": "executor-connection-descriptor.json",
           "description": "The explicit overall session executor connection-descriptor (default `{\"type\":\"local\"}`); per-component executors override it."
         },
         "components": {
           "type": "object",
-          "additionalProperties": { "type": "object", "additionalProperties": true },
+          "additionalProperties": {
+            "$ref": "executor-connection-descriptor.json"
+          },
           "description": "Per-executor map of executor name -> resolved connection-descriptor object (never a bare client-instance string)."
         }
-      }
+      },
+      "unevaluatedProperties": false
     },
     "auto-resume": {
       "type": "object",

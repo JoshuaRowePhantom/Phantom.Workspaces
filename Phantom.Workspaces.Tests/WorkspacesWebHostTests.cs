@@ -4,10 +4,14 @@ using System.Net.Sockets;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Time.Testing;
+using System.Text.Json;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
 using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Testing;
+using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.Http;
 using Phantom.Workspaces.Transport.ReverseHttp;
 using Xunit;
@@ -169,6 +173,96 @@ public sealed class WorkspacesWebHostTests
         }
     }
 
+    [Fact]
+    public async Task ReachabilityRouteStore_DirectListenerPublishesAfterBind_UpsertsOwnedDirectHttpSlot()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var profileId = new EntityId("10000000-0000-4000-8000-000000000003");
+        var fixture = await CreateReachabilityFixtureAsync();
+        var routeStore = new DataAccessReachabilityRouteStore(fixture.DataAccessLayer);
+        var statusRegistry = new ReverseConnectionStatusRegistry();
+        await using var reverseServer = new ReverseHttpServerTransportFactory(statusRegistry);
+        await using var host = new WorkspacesWebHost(
+            statusRegistry,
+            reverseServer,
+            routeStore,
+            profileId);
+        var settings = new RemoteHostingSettings
+        {
+            Enabled = true,
+            ListenUrl = $"http://127.0.0.1:{GetFreePort()}",
+        };
+
+        Assert.Empty(await routeStore.GetRoutesAsync(profileId, ct));
+        await host.StartAsync(settings, fixture.DataAccessLayer, ct);
+        var route = Assert.Single(await routeStore.GetRoutesAsync(profileId, ct));
+
+        Assert.Equal("direct-http", route.RouteId);
+        Assert.Equal(host.ListenUrl, route.Descriptor.GetProperty("url").GetString()?.TrimEnd('/'));
+
+        await host.StopAsync(ct);
+        Assert.Empty(await routeStore.GetRoutesAsync(profileId, ct));
+    }
+
+    [Fact]
+    public async Task ReachabilityRouteStore_PublicEndpointChanges_UpdatesOwnedDirectHttpSlot()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var profileId = new EntityId("10000000-0000-4000-8000-000000000003");
+        var fixture = await CreateReachabilityFixtureAsync();
+        var routeStore = new DataAccessReachabilityRouteStore(fixture.DataAccessLayer);
+        var statusRegistry = new ReverseConnectionStatusRegistry();
+        await using var reverseServer = new ReverseHttpServerTransportFactory(statusRegistry);
+        await using var host = new WorkspacesWebHost(
+            statusRegistry,
+            reverseServer,
+            routeStore,
+            profileId);
+        var settings = new RemoteHostingSettings
+        {
+            Enabled = true,
+            ListenUrl = $"http://127.0.0.1:{GetFreePort()}",
+        };
+        await host.StartAsync(settings, fixture.DataAccessLayer, ct);
+
+        await host.SetPublishedEndpointAsync("https://machine.example/tunnel", ct);
+
+        var route = Assert.Single(await routeStore.GetRoutesAsync(profileId, ct));
+        Assert.Equal("https://machine.example/tunnel", route.Descriptor.GetProperty("url").GetString());
+    }
+
+    [Fact]
+    public async Task ReachabilityRouteStore_DirectListenerLeaseInterval_RenewsOwnedSlot()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var profileId = new EntityId("10000000-0000-4000-8000-000000000003");
+        var fixture = await CreateReachabilityFixtureAsync();
+        var routeStore = new RecordingRenewalRouteStore();
+        var statusRegistry = new ReverseConnectionStatusRegistry();
+        var timeProvider = new FakeTimeProvider(
+            new DateTimeOffset(2026, 9, 18, 18, 0, 0, TimeSpan.Zero));
+        await using var reverseServer = new ReverseHttpServerTransportFactory(statusRegistry);
+        await using var host = new WorkspacesWebHost(
+            statusRegistry,
+            reverseServer,
+            routeStore,
+            profileId,
+            timeProvider);
+        var settings = new RemoteHostingSettings
+        {
+            Enabled = true,
+            ListenUrl = $"http://127.0.0.1:{GetFreePort()}",
+        };
+        await host.StartAsync(settings, fixture.DataAccessLayer, ct);
+        var initial = await routeStore.PublishedRoutes.ReadAsync(ct);
+
+        timeProvider.Advance(TimeSpan.FromMinutes(1));
+        var renewed = await routeStore.PublishedRoutes.ReadAsync(ct);
+
+        Assert.Equal(initial.RouteId, renewed.RouteId);
+        Assert.Equal(initial.ExpiresAt.AddMinutes(1), renewed.ExpiresAt);
+    }
+
     private static int GetFreePort()
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);
@@ -228,5 +322,75 @@ public sealed class WorkspacesWebHostTests
         }
 
         return false;
+    }
+
+    private static async Task<ValidatingEntitySeedFixture> CreateReachabilityFixtureAsync()
+    {
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        await fixture.SeedManyValidAsync(
+            [
+                JsonDocument.Parse(
+                    """
+                    {
+                      "entity-id": "10000000-0000-4000-8000-000000000001",
+                      "entity-types": ["entity", "user"],
+                      "names": [["users", "username", "web-host-reachability"]]
+                    }
+                    """).RootElement,
+                JsonDocument.Parse(
+                    """
+                    {
+                      "entity-id": "10000000-0000-4000-8000-000000000002",
+                      "entity-types": ["entity", "computer"],
+                      "names": [["computers", "name", "web-host-reachability"]]
+                    }
+                    """).RootElement,
+                JsonDocument.Parse(
+                    """
+                    {
+                      "entity-id": "10000000-0000-4000-8000-000000000003",
+                      "entity-types": ["entity", "user-computer-profile"],
+                      "computer-reference": ["computers", "name", "web-host-reachability"],
+                      "user-reference": ["users", "username", "web-host-reachability"]
+                    }
+                    """).RootElement,
+            ]);
+        return fixture;
+    }
+
+    private sealed class RecordingRenewalRouteStore : IReachabilityRouteStore
+    {
+        private readonly System.Threading.Channels.Channel<ReachabilityRoute> publishedRoutes =
+            System.Threading.Channels.Channel.CreateUnbounded<ReachabilityRoute>();
+
+        public System.Threading.Channels.ChannelReader<ReachabilityRoute> PublishedRoutes
+            => this.publishedRoutes.Reader;
+
+        public Task<IReadOnlyList<ReachabilityRoute>> GetRoutesAsync(
+            EntityId profileEntityId,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<ReachabilityRoute>>([]);
+
+        public Task UpsertRouteAsync(
+            EntityId profileEntityId,
+            ReachabilityRoute route,
+            CancellationToken cancellationToken = default)
+        {
+            this.publishedRoutes.Writer.TryWrite(route);
+            return Task.CompletedTask;
+        }
+
+        public Task RemoveRouteAsync(
+            EntityId profileEntityId,
+            string routeId,
+            EntityId ownerProfileEntityId,
+            CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        public Task ClearOwnedRoutesAsync(
+            EntityId profileEntityId,
+            EntityId ownerProfileEntityId,
+            CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
     }
 }

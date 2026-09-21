@@ -1,0 +1,32 @@
+{
+  "entity-id": "15930000-0000-4000-8000-000000000002",
+  "entity-types": [
+    "entity",
+    "json-schema",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/reachability-route.json"
+    ],
+    [
+      "entity-types",
+      "reachability-route-json-schema"
+    ]
+  ],
+  "display-name": {
+    "default": "Reachability Route Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "content": {
+        "text": "# Reachability Route Schema\n\nA publisher-owned durable route slot for a user-computer profile."
+      }
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/reachability-route.json"
+  }
+}

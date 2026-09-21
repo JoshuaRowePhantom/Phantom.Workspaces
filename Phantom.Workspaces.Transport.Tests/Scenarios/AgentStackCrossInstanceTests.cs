@@ -24,8 +24,9 @@ namespace Phantom.Workspaces.Transport.Tests.Scenarios;
 /// <see cref="ValidatingEntitySeedFixture"/> through the production validation pipeline.
 /// Instance A opens a <c>{"type":"user-computer-profile","entity-id":&lt;B&gt;}</c> descriptor which
 /// the production <see cref="UserComputerProfileTransportFactory"/> resolves through A's real
-/// <see cref="TransportFactoryRegistry"/>. The runtime connection descriptor supplies the route
-/// metadata; the persisted profile remains schema-valid.</para>
+/// <see cref="TransportFactoryRegistry"/>. These compatibility tests still exercise a trusted
+/// transient route; durable route discovery is covered by
+/// <see cref="AgentStackMultiInstanceReachabilityTests"/>.</para>
 ///
 /// <para><b>Forward-HTTP cells</b> plumb a real <see cref="HttpTransport"/> against a real
 /// <see cref="ServerHttpTransport"/> in-process (via <see cref="PairedWebSocket"/>) and register
@@ -243,7 +244,7 @@ public sealed class AgentStackCrossInstanceTests
         CancellationToken ct)
     {
         var instanceBConnectionDescriptor = ParseJson(
-            $$"""{"type":"{{ForwardHttpInstance.DescriptorType}}","instance":"instance-b"}""");
+            """{"type":"http","url":"https://instance-b.example/"}""");
         var profiles = await SeedTwoInstanceProfilesAsync(ct);
 
         var innerRegistry = new TransportFactoryRegistry();
@@ -257,7 +258,11 @@ public sealed class AgentStackCrossInstanceTests
         };
 
         return new ProfileRouting(
-            new UserComputerProfileTransportFactory(profiles, session, innerRegistry),
+            new UserComputerProfileTransportFactory(
+                profiles,
+                session,
+                innerRegistry,
+                trustedTransientRoutesEnabled: true),
             instanceBConnectionDescriptor);
     }
 
@@ -283,7 +288,11 @@ public sealed class AgentStackCrossInstanceTests
         };
 
         return new ProfileRouting(
-            new UserComputerProfileTransportFactory(profiles, session, innerRegistry),
+            new UserComputerProfileTransportFactory(
+                profiles,
+                session,
+                innerRegistry,
+                trustedTransientRoutesEnabled: true),
             instanceBConnectionDescriptor);
     }
 
@@ -443,7 +452,7 @@ public sealed class AgentStackCrossInstanceTests
     // production ServerHttpTransport, which hosts the executor listeners. Doubles as an
     // ITransportFactory so Instance A's registry can route B's descriptor here without a
     // LocalTransport leaf substitute (the removal of which is asserted in the guard tests).
-    private sealed class ForwardHttpInstance : IAsyncDisposable, ITransportFactory
+    internal sealed class ForwardHttpInstance : IAsyncDisposable, ITransportFactory
     {
         public const string DescriptorType = "in-process-forward-http";
 
@@ -488,7 +497,8 @@ public sealed class AgentStackCrossInstanceTests
         public Task<ITransport?> ConnectToAsync(JsonElement connectionDescriptor, CancellationToken ct = default)
         {
             if (!connectionDescriptor.TryGetProperty("type", out var type)
-                || !string.Equals(type.GetString(), DescriptorType, StringComparison.OrdinalIgnoreCase))
+                || (type.GetString() is not { } descriptorType
+                    || (descriptorType != DescriptorType && descriptorType != "http")))
             {
                 return Task.FromResult<ITransport?>(null);
             }

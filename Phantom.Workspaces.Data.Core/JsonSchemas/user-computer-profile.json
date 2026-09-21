@@ -64,6 +64,28 @@
       "type": "boolean",
       "description": "When true, the scheduled tools host on this profile starts no new runs and stops in-flight runs (persisted Stop all / Pause state)."
     },
+    "reachability": {
+      "description": "Durable, credential-free reachability model.",
+      "type": "object",
+      "properties": {
+        "routes": {
+          "type": "object",
+          "description": "Map of stable route id to a publisher-owned reachability route.",
+          "propertyNames": {
+            "pattern": "^(direct-http|reverse-http:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
+          },
+          "minProperties": 0,
+          "maxProperties": 16,
+          "additionalProperties": {
+            "$ref": "reachability-route.json"
+          }
+        }
+      },
+      "required": [
+        "routes"
+      ],
+      "unevaluatedProperties": false
+    },
     "chat-input": {
       "type": "object",
       "properties": {

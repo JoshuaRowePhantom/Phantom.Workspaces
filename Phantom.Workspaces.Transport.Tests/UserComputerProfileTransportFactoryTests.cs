@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Threading.Channels;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Testing;
+using Phantom.Workspaces.Transport.ReverseHttp;
 
 namespace Phantom.Workspaces.Transport.Tests;
 
@@ -11,7 +12,7 @@ public sealed class UserComputerProfileTransportFactoryTests
     private static readonly EntityId RemoteProfileId = new("22222222-2222-2222-2222-222222222222");
 
     [Fact]
-    public async Task UserComputerProfileTransportFactory_LocalEntity_RoutesToLocalTransport()
+    public async Task UserComputerProfileTransportFactory_LocalTarget_RoutesLocal()
     {
         var dataAccessLayer = await CreateSeededDataAccessLayerAsync(LocalProfileId);
         var registry = new CapturingTransportFactoryRegistry();
@@ -45,7 +46,7 @@ public sealed class UserComputerProfileTransportFactoryTests
         Assert.Same(registry.Transport, transport);
         var descriptor = Assert.Single(registry.Descriptors);
         Assert.Equal("http", descriptor.GetProperty("type").GetString());
-        Assert.Equal("https://remote.example", descriptor.GetProperty("url").GetString());
+        Assert.Equal("https://remote.example/", descriptor.GetProperty("url").GetString());
     }
 
     [Fact]
@@ -108,6 +109,226 @@ public sealed class UserComputerProfileTransportFactoryTests
     }
 
     [Fact]
+    public async Task UserComputerProfileTransportFactory_TargetInLiveInboundRegistry_RoutesThroughLocalRelay()
+    {
+        var dataAccessLayer = await CreateSeededDataAccessLayerAsync(RemoteProfileId);
+        var registry = new CapturingTransportFactoryRegistry();
+        await using var liveRegistry = new ReverseHttpServerTransportFactory();
+        var registration = new TestMessageChannel();
+        using var request = JsonDocument.Parse(
+            $$"""{"type":"reverse-register","entity-id":"{{RemoteProfileId}}"}""");
+        await using var registrationLease = await liveRegistry.OnChannelOpenAsync(request.RootElement, registration);
+        var factory = CreateFactory(dataAccessLayer, registry, liveRegistry: liveRegistry);
+
+        await using var transport = await factory.ConnectToAsync(ProfileDescriptor());
+
+        Assert.NotNull(transport);
+        Assert.Empty(registry.Descriptors);
+        Assert.True(liveRegistry.IsRegistered(RemoteProfileId.ToString()));
+    }
+
+    [Fact]
+    public async Task UserComputerProfileTransportFactory_TargetLiveRegistered_PrefersLiveRelayOverPersistedRoute()
+    {
+        var dataAccessLayer = await CreateSeededDataAccessLayerAsync(
+            RemoteProfileId,
+            Routes(
+                """
+                "direct-http": {
+                  "descriptor": { "type": "http", "url": "https://persisted.example/" },
+                  "owner-profile-entity-id": "22222222-2222-2222-2222-222222222222",
+                  "last-confirmed": "2030-01-01T00:00:00Z",
+                  "expires-at": "2030-01-01T00:02:00Z"
+                }
+                """));
+        var registry = new CapturingTransportFactoryRegistry();
+        await using var liveRegistry = new ReverseHttpServerTransportFactory();
+        var registration = new TestMessageChannel();
+        using var request = JsonDocument.Parse(
+            $$"""{"type":"reverse-register","entity-id":"{{RemoteProfileId}}"}""");
+        await using var registrationLease = await liveRegistry.OnChannelOpenAsync(request.RootElement, registration);
+        var factory = CreateFactory(
+            dataAccessLayer,
+            registry,
+            liveRegistry: liveRegistry,
+            timeProvider: new StaticTimeProvider(new DateTimeOffset(2026, 9, 18, 18, 0, 0, TimeSpan.Zero)));
+
+        await using var transport = await factory.ConnectToAsync(ProfileDescriptor());
+
+        Assert.NotNull(transport);
+        Assert.Empty(registry.Descriptors);
+    }
+
+    [Fact]
+    public async Task UserComputerProfileTransportFactory_MultiplePersistedRoutes_AttemptsByPriorityThenType()
+    {
+        var dataAccessLayer = await CreateSeededDataAccessLayerAsync(
+            RemoteProfileId,
+            Routes(
+                """
+                "reverse-http:33333333-3333-4333-8333-333333333333": {
+                  "descriptor": { "type": "reverse-http", "hub-urls": ["https://hub.example/"], "entity-id": "22222222-2222-2222-2222-222222222222" },
+                  "owner-profile-entity-id": "22222222-2222-2222-2222-222222222222",
+                  "priority": 50,
+                  "last-confirmed": "2026-09-18T18:00:00Z",
+                  "expires-at": "2026-09-18T18:02:00Z"
+                },
+                "direct-http": {
+                  "descriptor": { "type": "http", "url": "https://direct.example/" },
+                  "owner-profile-entity-id": "22222222-2222-2222-2222-222222222222",
+                  "priority": 50,
+                  "last-confirmed": "2026-09-18T18:00:00Z",
+                  "expires-at": "2026-09-18T18:02:00Z"
+                }
+                """));
+        var registry = new FallbackTransportFactoryRegistry("http");
+        var factory = CreateFactory(
+            dataAccessLayer,
+            registry,
+            timeProvider: new StaticTimeProvider(new DateTimeOffset(2026, 9, 18, 18, 1, 0, TimeSpan.Zero)));
+
+        var transport = await factory.ConnectToAsync(ProfileDescriptor());
+
+        Assert.Same(registry.Transport, transport);
+        Assert.Equal(["http", "reverse-http"], registry.Descriptors.Select(item => item.GetProperty("type").GetString()));
+    }
+
+    [Fact]
+    public async Task UserComputerProfileTransportFactory_ExpiredPersistedRoute_IsIgnored()
+    {
+        var dataAccessLayer = await CreateSeededDataAccessLayerAsync(
+            RemoteProfileId,
+            Routes(
+                """
+                "direct-http": {
+                  "descriptor": { "type": "http", "url": "https://expired.example/" },
+                  "owner-profile-entity-id": "22222222-2222-2222-2222-222222222222",
+                  "priority": 1,
+                  "last-confirmed": "2026-09-18T17:00:00Z",
+                  "expires-at": "2026-09-18T17:02:00Z"
+                },
+                "reverse-http:33333333-3333-4333-8333-333333333333": {
+                  "descriptor": { "type": "reverse-http", "hub-urls": ["https://hub.example/"], "entity-id": "22222222-2222-2222-2222-222222222222" },
+                  "owner-profile-entity-id": "22222222-2222-2222-2222-222222222222",
+                  "last-confirmed": "2026-09-18T18:00:00Z",
+                  "expires-at": "2026-09-18T18:02:00Z"
+                }
+                """));
+        var registry = new CapturingTransportFactoryRegistry();
+        var factory = CreateFactory(
+            dataAccessLayer,
+            registry,
+            timeProvider: new StaticTimeProvider(new DateTimeOffset(2026, 9, 18, 18, 1, 0, TimeSpan.Zero)));
+
+        _ = await factory.ConnectToAsync(ProfileDescriptor());
+
+        var descriptor = Assert.Single(registry.Descriptors);
+        Assert.Equal("reverse-http", descriptor.GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public async Task UserComputerProfileTransportFactory_UntrustedTransientDescriptor_DoesNotPreemptAuthoritativeRoutes()
+    {
+        var dataAccessLayer = await CreateSeededDataAccessLayerAsync(
+            RemoteProfileId,
+            Routes(
+                """
+                "direct-http": {
+                  "descriptor": { "type": "http", "url": "https://authoritative.example/" },
+                  "owner-profile-entity-id": "22222222-2222-2222-2222-222222222222",
+                  "last-confirmed": "2026-09-18T18:00:00Z",
+                  "expires-at": "2026-09-18T18:02:00Z"
+                }
+                """));
+        var registry = new CapturingTransportFactoryRegistry();
+        var factory = CreateFactory(
+            dataAccessLayer,
+            registry,
+            timeProvider: new StaticTimeProvider(new DateTimeOffset(2026, 9, 18, 18, 1, 0, TimeSpan.Zero)),
+            trustedTransientRoutesEnabled: false);
+
+        _ = await factory.ConnectToAsync(
+            Parse(
+                $$"""
+                {
+                  "type": "user-computer-profile",
+                  "entity-id": "{{RemoteProfileId}}",
+                  "force-route": { "type": "http", "url": "https://untrusted.example/" }
+                }
+                """));
+
+        Assert.Equal(
+            "https://authoritative.example/",
+            Assert.Single(registry.Descriptors).GetProperty("url").GetString());
+    }
+
+    [Fact]
+    public async Task UserComputerProfileTransportFactory_TrustedForceRouteOverride_PrecedesPersistedButNotLive()
+    {
+        var dataAccessLayer = await CreateSeededDataAccessLayerAsync(
+            RemoteProfileId,
+            Routes(
+                """
+                "direct-http": {
+                  "descriptor": { "type": "http", "url": "https://persisted.example/" },
+                  "owner-profile-entity-id": "22222222-2222-2222-2222-222222222222",
+                  "last-confirmed": "2026-09-18T18:00:00Z",
+                  "expires-at": "2026-09-18T18:02:00Z"
+                }
+                """));
+        var registry = new CapturingTransportFactoryRegistry();
+        var descriptor = Parse(
+            $$"""
+            {
+              "type": "user-computer-profile",
+              "entity-id": "{{RemoteProfileId}}",
+              "force-route": { "type": "http", "url": "https://forced.example/" }
+            }
+            """);
+        var factory = CreateFactory(
+            dataAccessLayer,
+            registry,
+            timeProvider: new StaticTimeProvider(new DateTimeOffset(2026, 9, 18, 18, 1, 0, TimeSpan.Zero)));
+
+        _ = await factory.ConnectToAsync(descriptor);
+
+        Assert.Equal("https://forced.example/", Assert.Single(registry.Descriptors).GetProperty("url").GetString());
+
+        registry.Descriptors.Clear();
+        await using var liveRegistry = new ReverseHttpServerTransportFactory();
+        var registration = new TestMessageChannel();
+        using var registrationRequest = JsonDocument.Parse(
+            $$"""{"type":"reverse-register","entity-id":"{{RemoteProfileId}}"}""");
+        await using var registrationLease = await liveRegistry.OnChannelOpenAsync(registrationRequest.RootElement, registration);
+        var liveFactory = CreateFactory(
+            dataAccessLayer,
+            registry,
+            liveRegistry: liveRegistry,
+            timeProvider: new StaticTimeProvider(new DateTimeOffset(2026, 9, 18, 18, 1, 0, TimeSpan.Zero)));
+
+        await using var liveTransport = await liveFactory.ConnectToAsync(descriptor);
+
+        Assert.NotNull(liveTransport);
+        Assert.Empty(registry.Descriptors);
+    }
+
+    [Fact]
+    public async Task UserComputerProfileTransportFactory_NoLocalNoLiveNoRouteNoOverride_ThrowsNoRoute()
+    {
+        var dataAccessLayer = await CreateSeededDataAccessLayerAsync(RemoteProfileId);
+        var registry = new CapturingTransportFactoryRegistry();
+        var factory = CreateFactory(dataAccessLayer, registry, trustedTransientRoutesEnabled: false);
+
+        var exception = await Assert.ThrowsAsync<TransportException>(
+            () => factory.ConnectToAsync(ProfileDescriptor()));
+
+        Assert.Equal(
+            $"Remote user computer profile descriptor '{RemoteProfileId}' has no transient route and no configured reverse HTTP hub.",
+            exception.Message);
+        Assert.Empty(registry.Descriptors);
+    }
+
+    [Fact]
     public async Task UserComputerProfileTransportFactory_DescriptorMissingEntityId_ThrowsTransportException()
     {
         var dataAccessLayer = await CreateSeededDataAccessLayerAsync();
@@ -124,7 +345,10 @@ public sealed class UserComputerProfileTransportFactoryTests
     private static UserComputerProfileTransportFactory CreateFactory(
         IDataAccessLayer dataAccessLayer,
         ITransportFactoryRegistry registry,
-        IReadOnlyCollection<string>? reverseHttpHubUrls = null)
+        IReadOnlyCollection<string>? reverseHttpHubUrls = null,
+        ReverseHttpServerTransportFactory? liveRegistry = null,
+        TimeProvider? timeProvider = null,
+        bool trustedTransientRoutesEnabled = true)
     {
         var session = new WorkspaceEntitySession
         {
@@ -136,11 +360,16 @@ public sealed class UserComputerProfileTransportFactoryTests
             dataAccessLayer,
             session,
             registry,
-            reverseHttpHubUrls);
+            reverseHttpHubUrls,
+            liveRegistry,
+            null,
+            timeProvider,
+            trustedTransientRoutesEnabled);
     }
 
     private static async Task<IDataAccessLayer> CreateSeededDataAccessLayerAsync(
-        EntityId? profileId = null)
+        EntityId? profileId = null,
+        string? reachability = null)
     {
         var fixture = await ValidatingEntitySeedFixture.CreateAsync();
         if (profileId is null)
@@ -177,6 +406,7 @@ public sealed class UserComputerProfileTransportFactoryTests
                   "entity-types": ["entity", "user-computer-profile"],
                   "computer-reference": ["computers", "name", "{{profileName}}"],
                   "user-reference": ["users", "username", "transport-test"]
+                  {{(reachability is null ? string.Empty : "," + reachability)}}
                 }
                 """),
         };
@@ -186,6 +416,12 @@ public sealed class UserComputerProfileTransportFactoryTests
 
     private static JsonElement Parse(string json)
         => JsonDocument.Parse(json).RootElement.Clone();
+
+    private static JsonElement ProfileDescriptor()
+        => Parse($$"""{"type":"user-computer-profile","entity-id":"{{RemoteProfileId}}"}""");
+
+    private static string Routes(string routes)
+        => $"\"reachability\": {{ \"routes\": {{ {routes} }} }}";
 
     private sealed class CapturingTransportFactoryRegistry : ITransportFactoryRegistry
     {
@@ -201,6 +437,28 @@ public sealed class UserComputerProfileTransportFactoryTests
         {
             this.Descriptors.Add(connectionDescriptor.Clone());
             return Task.FromResult<ITransport>(this.Transport);
+        }
+    }
+
+    private sealed class FallbackTransportFactoryRegistry(string failingType) : ITransportFactoryRegistry
+    {
+        public CapturingTransport Transport { get; } = new();
+
+        public List<JsonElement> Descriptors { get; } = [];
+
+        public void Register(ITransportFactory factory)
+        {
+        }
+
+        public Task<ITransport> ConnectToAsync(JsonElement connectionDescriptor, CancellationToken ct = default)
+        {
+            this.Descriptors.Add(connectionDescriptor.Clone());
+            return string.Equals(
+                connectionDescriptor.GetProperty("type").GetString(),
+                failingType,
+                StringComparison.Ordinal)
+                    ? Task.FromException<ITransport>(new TransportException("Route unavailable."))
+                    : Task.FromResult<ITransport>(this.Transport);
         }
     }
 
@@ -234,4 +492,8 @@ public sealed class UserComputerProfileTransportFactoryTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
+    private sealed class StaticTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
+    }
 }
