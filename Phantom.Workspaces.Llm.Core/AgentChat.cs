@@ -2317,6 +2317,15 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
                 {
                     var runningItem = currentPartialTextResponseItem
                         ?? throw new InvalidOperationException("Running item was unexpectedly null while handling a provider error.");
+
+                    // Preserve every legitimately streamed update before appending the terminal
+                    // provider diagnostic. Without this drain, a transport close/timeout can win
+                    // the race with the conflator and discard the final partial response (#1594).
+                    if (partialResponses is not null)
+                    {
+                        await DrainQuietlyAsync(partialResponses);
+                    }
+
                     var errorItems = runningItem.Items
                         // Snapshot before iterating: same concurrent-modification risk as in
                         // the interrupt path above.

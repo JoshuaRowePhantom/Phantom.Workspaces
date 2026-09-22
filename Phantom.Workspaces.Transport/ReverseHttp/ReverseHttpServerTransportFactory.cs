@@ -374,8 +374,13 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
                 return;
             }
 
+            // Snapshot before cancellation: each relay's linked token stops its input pump, whose
+            // finally block removes the relay from this dictionary. Taking the snapshot afterward
+            // can therefore lose the relay before DisposeAsync sends channel-close to its caller,
+            // leaving a pre-SessionCreated Copilot turn stuck forever (#1594).
+            var relays = this.relays.Values.ToArray();
             await this.shutdown.CancelAsync().ConfigureAwait(false);
-            foreach (var relay in this.relays.Values.ToArray())
+            foreach (var relay in relays)
             {
                 await relay.DisposeAsync().ConfigureAwait(false);
             }

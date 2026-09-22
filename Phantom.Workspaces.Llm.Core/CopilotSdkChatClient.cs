@@ -63,6 +63,9 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private readonly AgentExecutionTrustContext? executionTrustContext;
     private ExecutorBindings? executorBindings;
     private ITransportFactoryRegistry? executorTransportFactoryRegistry;
+    private TimeProvider? remoteSessionTimeProvider;
+    private TimeSpan? remoteSessionStartupTimeout;
+    private TimeSpan? remoteSessionTerminalTimeout;
 
     /// <summary>
     /// The account-upsert service wired in by the factory, or <see langword="null"/> when none was
@@ -259,6 +262,17 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     {
         this.executorBindings = bindings;
         this.executorTransportFactoryRegistry = registry;
+    }
+
+    internal void ConfigureRemoteSessionLifecycleForTest(
+        TimeProvider timeProvider,
+        TimeSpan startupTimeout,
+        TimeSpan terminalTimeout)
+    {
+        this.remoteSessionTimeProvider = timeProvider
+            ?? throw new ArgumentNullException(nameof(timeProvider));
+        this.remoteSessionStartupTimeout = startupTimeout;
+        this.remoteSessionTerminalTimeout = terminalTimeout;
     }
 
     /// <summary>
@@ -924,13 +938,14 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             var turn = await this.GetReadyTurnAsync(beginTurnAsync, cancellationToken).ConfigureAwait(false);
             await using (turn.Subscription)
             {
+                await using var updates = turn.Reader
+                    .ReadAllAsync(cancellationToken)
+                    .GetAsyncEnumerator(cancellationToken);
                 try
                 {
-                    await foreach (var update in turn.Reader
-                        .ReadAllAsync(cancellationToken)
-                        .ConfigureAwait(false))
+                    while (await MoveNextOrInvalidateAsync(updates, turn, cancellationToken).ConfigureAwait(false))
                     {
-                        yield return update;
+                        yield return updates.Current;
                     }
                 }
                 finally
@@ -945,6 +960,25 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         finally
         {
             this.turnLock.Release();
+        }
+    }
+
+    private static async Task<bool> MoveNextOrInvalidateAsync(
+        IAsyncEnumerator<ChatResponseUpdate> updates,
+        StreamingTurnContext turn,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await updates.MoveNextAsync().ConfigureAwait(false);
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            // A terminal transport/session failure makes this SDK session unusable. Drop it before
+            // releasing the turn lock so a queued retry opens a fresh remote channel instead of
+            // reusing the failed session (#1594).
+            await turn.OnPipeBrokenAsync().ConfigureAwait(false);
+            throw;
         }
     }
 
@@ -1568,7 +1602,12 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         var transport = await this.executorTransportFactoryRegistry
             .ConnectToAsync(descriptor, cancellationToken)
             .ConfigureAwait(false);
-        return new CopilotClientOverTransport(transport, reference);
+        return new CopilotClientOverTransport(
+            transport,
+            reference,
+            this.remoteSessionTimeProvider,
+            this.remoteSessionStartupTimeout,
+            this.remoteSessionTerminalTimeout);
     }
 
     private static bool IsLocalDescriptor(JsonElement descriptor)

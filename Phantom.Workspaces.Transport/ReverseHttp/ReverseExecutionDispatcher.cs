@@ -20,6 +20,7 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
     private readonly TransportPeerIdentityProvider? peerIdentities;
     private readonly Func<string, CancellationToken, Task>? registrationInfoHandler;
     private readonly ConcurrentDictionary<string, DispatchedChannel> channels = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, PendingChannelOpen> pendingChannelOpens = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, DispatchedStream> streams = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, IAsyncDisposable> sessions = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource shutdown = new();
@@ -90,6 +91,11 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
             channel.CompleteIncoming();
         }
 
+        foreach (var pending in this.pendingChannelOpens.Values)
+        {
+            pending.Cancel();
+        }
+
         foreach (var stream in this.streams.Values)
         {
             stream.CompleteIncoming();
@@ -107,6 +113,7 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
         }
 
         this.channels.Clear();
+        this.pendingChannelOpens.Clear();
         this.streams.Clear();
         this.sessions.Clear();
     }
@@ -133,7 +140,7 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
                 break;
 
             case "channel-open":
-                await this.HandleChannelOpenAsync(frame).ConfigureAwait(false);
+                this.StartChannelOpen(frame);
                 break;
 
             case "channel-message":
@@ -179,7 +186,7 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
         }
     }
 
-    private async Task HandleChannelOpenAsync(JsonElement frame)
+    private void StartChannelOpen(JsonElement frame)
     {
         if (!TryGetId(frame, "channelId", out var channelId)
             || !frame.TryGetProperty("request", out var request))
@@ -188,20 +195,96 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
         }
 
         var channel = new DispatchedChannel(this.registrationChannel.Writer, channelId);
+        var pending = new PendingChannelOpen(
+            channel,
+            CancellationTokenSource.CreateLinkedTokenSource(this.shutdown.Token));
+        if (!this.pendingChannelOpens.TryAdd(channelId, pending))
+        {
+            pending.Dispose();
+            _ = this.SendChannelOpenErrorAsync(
+                channelId,
+                "duplicate-channel",
+                "A channel with this identifier is already opening.");
+            return;
+        }
+
         this.channels[channelId] = channel;
         if (this.peerIdentities is not null && TryReadAuthenticatedPeer(frame, out var peer))
             this.peerIdentities.SetIdentity(channel, peer);
 
-        var session = await this.registry.OnChannelOpenAsync(request.Clone(), channel, this.shutdown.Token).ConfigureAwait(false);
-        if (session is null)
-        {
-            this.channels.TryRemove(channelId, out _);
-            channel.CompleteIncoming();
-            await this.SendChannelOpenErrorAsync(channelId, "no-listener", "No transport listener accepted the channel open request.").ConfigureAwait(false);
-            return;
-        }
+        _ = this.CompleteChannelOpenAsync(channelId, request.Clone(), pending);
+    }
 
-        this.sessions[channelId] = session;
+    private async Task CompleteChannelOpenAsync(
+        string channelId,
+        JsonElement request,
+        PendingChannelOpen pending)
+    {
+        try
+        {
+            var session = await this.registry
+                .OnChannelOpenAsync(request, pending.Channel, pending.Token)
+                .ConfigureAwait(false);
+            if (session is null)
+            {
+                this.channels.TryRemove(
+                    new KeyValuePair<string, DispatchedChannel>(channelId, pending.Channel));
+                pending.Channel.CompleteIncoming();
+                await this.SendChannelOpenErrorAsync(
+                        channelId,
+                        "no-listener",
+                        "No transport listener accepted the channel open request.")
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            if (pending.Token.IsCancellationRequested
+                || !this.channels.TryGetValue(channelId, out var active)
+                || !ReferenceEquals(active, pending.Channel))
+            {
+                await session.DisposeAsync().ConfigureAwait(false);
+                return;
+            }
+
+            this.sessions[channelId] = session;
+            if (pending.Token.IsCancellationRequested
+                || !this.channels.TryGetValue(channelId, out active)
+                || !ReferenceEquals(active, pending.Channel))
+            {
+                if (this.sessions.TryRemove(
+                        new KeyValuePair<string, IAsyncDisposable>(channelId, session)))
+                {
+                    await session.DisposeAsync().ConfigureAwait(false);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (pending.Token.IsCancellationRequested)
+        {
+            this.channels.TryRemove(
+                new KeyValuePair<string, DispatchedChannel>(channelId, pending.Channel));
+            pending.Channel.CompleteIncoming();
+        }
+        catch (Exception)
+        {
+            this.channels.TryRemove(
+                new KeyValuePair<string, DispatchedChannel>(channelId, pending.Channel));
+            pending.Channel.CompleteIncoming();
+            await this.SendChannelOpenErrorAsync(
+                    channelId,
+                    "listener-error",
+                    "The remote channel listener failed to open the channel.")
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            if (this.pendingChannelOpens.TryGetValue(channelId, out var current)
+                && ReferenceEquals(current, pending))
+            {
+                this.pendingChannelOpens.TryRemove(channelId, out _);
+            }
+
+            pending.Dispose();
+        }
     }
 
     private async Task HandleStreamOpenAsync(JsonElement frame)
@@ -247,6 +330,11 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
 
     private async Task CloseChannelAsync(string channelId)
     {
+        if (this.pendingChannelOpens.TryRemove(channelId, out var pending))
+        {
+            pending.Cancel();
+        }
+
         if (this.channels.TryRemove(channelId, out var channel))
         {
             channel.CompleteIncoming();
@@ -268,12 +356,13 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
     {
         try
         {
-            using var document = JsonDocument.Parse(JsonSerializer.Serialize(new
+            using var document = JsonDocument.Parse(JsonSerializer.Serialize(
+                new Dictionary<string, string>
             {
-                type = "channel-open-error",
-                channelId,
-                errorCode = code,
-                message,
+                ["type"] = "channel-open-error",
+                ["channelId"] = channelId,
+                ["error-code"] = code,
+                ["message"] = message,
             }));
             await this.registrationChannel.Writer.WriteAsync(document.RootElement.Clone()).ConfigureAwait(false);
         }
@@ -318,6 +407,43 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
                 : null,
         };
         return true;
+    }
+
+    private sealed class PendingChannelOpen(
+        DispatchedChannel channel,
+        CancellationTokenSource cancellation) : IDisposable
+    {
+        private readonly object gate = new();
+        private bool disposed;
+
+        public DispatchedChannel Channel { get; } = channel;
+
+        public CancellationToken Token => cancellation.Token;
+
+        public void Cancel()
+        {
+            lock (this.gate)
+            {
+                if (!this.disposed)
+                {
+                    cancellation.Cancel();
+                }
+            }
+        }
+
+        public void Dispose()
+        {
+            lock (this.gate)
+            {
+                if (this.disposed)
+                {
+                    return;
+                }
+
+                this.disposed = true;
+                cancellation.Dispose();
+            }
+        }
     }
 
     private sealed class DispatchedChannel : IMessageChannel

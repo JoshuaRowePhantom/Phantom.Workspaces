@@ -76,7 +76,7 @@ public sealed class ReverseExecutionDispatcherTests
 
         Assert.Equal("channel-open-error", error.GetProperty("type").GetString());
         Assert.Equal("orphan", error.GetProperty("channelId").GetString());
-        Assert.Equal("no-listener", error.GetProperty("errorCode").GetString());
+        Assert.Equal("no-listener", error.GetProperty("error-code").GetString());
     }
 
     [Fact]

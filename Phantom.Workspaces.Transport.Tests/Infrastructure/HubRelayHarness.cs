@@ -49,11 +49,12 @@ internal sealed class HubRelayHarness : IAsyncDisposable
         TransportRegistry executorRegistry,
         CancellationToken ct,
         TransportPeerIdentityProvider? peerIdentities = null,
-        ReverseHttpServerTransportFactory? reverseHttpServer = null)
+        ReverseHttpServerTransportFactory? reverseHttpServer = null,
+        Guid? executorEntityId = null)
     {
         ArgumentNullException.ThrowIfNull(executorRegistry);
         var fixture = new InProcessReverseHubFixture(reverseHttpServer);
-        var harness = new HubRelayHarness(fixture, Guid.NewGuid());
+        var harness = new HubRelayHarness(fixture, executorEntityId ?? Guid.NewGuid());
         harness.ownedAsync.Add(fixture);
 
         await fixture.SimulateClientRegistrationAsync(harness.ExecutorEntityId, ct).ConfigureAwait(false);

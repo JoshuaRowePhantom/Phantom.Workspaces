@@ -159,10 +159,23 @@ public sealed class ReverseHttpTransport : ITransport
                 break;
 
             case "channel-open-error":
-                var code = frame.TryGetProperty("error-code", out var codeProperty) ? codeProperty.GetString() : null;
+                var code = frame.TryGetProperty("error-code", out var codeProperty)
+                    ? codeProperty.GetString()
+                    : frame.TryGetProperty("errorCode", out var legacyCodeProperty)
+                        ? legacyCodeProperty.GetString()
+                        : null;
                 var message = frame.TryGetProperty("message", out var messageProperty) ? messageProperty.GetString() : null;
-                this.relayReady.TrySetResult(new TransportException(
-                    message ?? $"Reverse HTTP relay rejected the connection: {code ?? "unknown"}."));
+                var error = new TransportException(
+                    message ?? $"Reverse HTTP relay rejected the connection: {code ?? "unknown"}.");
+                if (TryGetChannelId(frame, out var rejectedChannelId)
+                    && this.channels.TryRemove(rejectedChannelId, out var rejectedChannel))
+                {
+                    rejectedChannel.CompleteIncoming(error);
+                }
+                else
+                {
+                    this.relayReady.TrySetResult(error);
+                }
                 break;
 
             case "channel-message":
@@ -263,7 +276,7 @@ public sealed class ReverseHttpTransport : ITransport
 
         public void DeliverIncoming(JsonElement payload) => this.incoming.Writer.TryWrite(payload);
 
-        public void CompleteIncoming() => this.incoming.Writer.TryComplete();
+        public void CompleteIncoming(Exception? error = null) => this.incoming.Writer.TryComplete(error);
 
         public async ValueTask DisposeAsync()
         {

@@ -17,14 +17,23 @@ internal sealed class CopilotClientOverTransport : ICopilotClient
 {
     private readonly ITransport transport;
     private readonly Phantom.Workspaces.Llm.Trust.AgentExecutionTrustProfileReference? trustProfileReference;
+    private readonly TimeProvider? timeProvider;
+    private readonly TimeSpan? startupTimeout;
+    private readonly TimeSpan? terminalTimeout;
     private int disposed;
 
     public CopilotClientOverTransport(
         ITransport transport,
-        Phantom.Workspaces.Llm.Trust.AgentExecutionTrustProfileReference? trustProfileReference = null)
+        Phantom.Workspaces.Llm.Trust.AgentExecutionTrustProfileReference? trustProfileReference = null,
+        TimeProvider? timeProvider = null,
+        TimeSpan? startupTimeout = null,
+        TimeSpan? terminalTimeout = null)
     {
         this.transport = transport ?? throw new ArgumentNullException(nameof(transport));
         this.trustProfileReference = trustProfileReference;
+        this.timeProvider = timeProvider;
+        this.startupTimeout = startupTimeout;
+        this.terminalTimeout = terminalTimeout;
     }
 
     public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
@@ -40,7 +49,14 @@ internal sealed class CopilotClientOverTransport : ICopilotClient
                 CopilotSessionTransportFrames.BuildConnectionRequest(this.trustProfileReference),
                 cancellationToken)
             .ConfigureAwait(false);
-        return await CopilotSessionOverTransport.CreateAsync(channel, config, cancellationToken).ConfigureAwait(false);
+        return await CopilotSessionOverTransport.CreateAsync(
+                channel,
+                config,
+                cancellationToken,
+                this.timeProvider,
+                this.startupTimeout,
+                this.terminalTimeout)
+            .ConfigureAwait(false);
     }
 
     public async Task<ICopilotSession> ResumeSessionAsync(string sessionId, ResumeSessionConfig config, CancellationToken cancellationToken)
@@ -52,7 +68,15 @@ internal sealed class CopilotClientOverTransport : ICopilotClient
                 CopilotSessionTransportFrames.BuildConnectionRequest(this.trustProfileReference),
                 cancellationToken)
             .ConfigureAwait(false);
-        return await CopilotSessionOverTransport.ResumeAsync(channel, sessionId, config, cancellationToken).ConfigureAwait(false);
+        return await CopilotSessionOverTransport.ResumeAsync(
+                channel,
+                sessionId,
+                config,
+                cancellationToken,
+                this.timeProvider,
+                this.startupTimeout,
+                this.terminalTimeout)
+            .ConfigureAwait(false);
     }
 
     public async ValueTask DisposeAsync()

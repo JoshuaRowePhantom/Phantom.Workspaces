@@ -1,5 +1,6 @@
 using GitHub.Copilot;
 using Phantom.Workspaces.Llm.Copilot;
+using System.Threading.Channels;
 
 namespace Phantom.Workspaces.Transport.Tests.Infrastructure;
 
@@ -8,12 +9,15 @@ internal sealed class FakeCopilotSession : ICopilotSession
     private readonly Queue<SessionEvent> eventQueue = new();
     private readonly List<Action<SessionEvent>> subscribers = new();
     private readonly object lockObject = new();
+    private readonly Channel<MessageOptions> sentMessages = Channel.CreateUnbounded<MessageOptions>();
 
     public string SessionId { get; set; } = "fake-session-id";
 
     public IReadOnlyList<ModelInfo> Models { get; set; } = Array.Empty<ModelInfo>();
 
     public string? LastResumeSessionId { get; private set; }
+
+    public List<string> SentPrompts { get; } = [];
 
     public void OnCreateSession(SessionConfig config)
     {
@@ -50,6 +54,13 @@ internal sealed class FakeCopilotSession : ICopilotSession
 
     public Task SendAsync(MessageOptions options, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (this.lockObject)
+        {
+            this.SentPrompts.Add(options.Prompt ?? string.Empty);
+        }
+        this.sentMessages.Writer.TryWrite(options);
+
         // Dequeue all events and fire them to subscribers
         List<SessionEvent> eventsToFire;
         List<Action<SessionEvent>> subscribersCopy;
@@ -71,6 +82,9 @@ internal sealed class FakeCopilotSession : ICopilotSession
 
         return Task.CompletedTask;
     }
+
+    public async Task<MessageOptions> ReadSentMessageAsync(CancellationToken cancellationToken = default)
+        => await this.sentMessages.Reader.ReadAsync(cancellationToken);
 
     public Task AbortAsync(CancellationToken cancellationToken)
     {
@@ -104,6 +118,23 @@ internal sealed class FakeCopilotSession : ICopilotSession
         {
             this.eventQueue.Enqueue(sessionEvent);
         }
+    }
+
+    public void EnqueueTextAndIdle(string text)
+    {
+        this.EnqueueEvent(new AssistantMessageDeltaEvent
+        {
+            AgentId = "",
+            Data = new AssistantMessageDeltaData
+            {
+                DeltaContent = text,
+                MessageId = Guid.NewGuid().ToString("N"),
+            },
+        });
+        this.EnqueueEvent(new SessionIdleEvent
+        {
+            Data = new SessionIdleData { Aborted = false },
+        });
     }
 
     private sealed class UnsubscribeToken : IDisposable
