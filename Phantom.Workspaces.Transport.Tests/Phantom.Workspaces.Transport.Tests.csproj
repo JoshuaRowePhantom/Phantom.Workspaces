@@ -22,5 +22,14 @@
     <ProjectReference Include="..\Phantom.Workspaces.Llm.Core\Phantom.Workspaces.Llm.Core.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Llm.Core.Tests\Phantom.Workspaces.Llm.Core.Tests.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Testing\Phantom.Workspaces.Testing.csproj" />
+    <ProjectReference Include="..\Phantom.Workspaces.Transport.TestWorker\Phantom.Workspaces.Transport.TestWorker.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
+  <Target Name="CopyRemoteSplitTestWorker" AfterTargets="Build">
+    <ItemGroup>
+      <RemoteSplitTestWorkerFiles Include="..\Phantom.Workspaces.Transport.TestWorker\bin\$(Configuration)\net10.0\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(RemoteSplitTestWorkerFiles)"
+          DestinationFiles="@(RemoteSplitTestWorkerFiles->'$(OutDir)remote-split-worker\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
 </Project>

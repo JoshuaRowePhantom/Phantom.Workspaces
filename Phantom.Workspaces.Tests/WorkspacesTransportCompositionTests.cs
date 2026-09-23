@@ -179,7 +179,9 @@ public sealed class WorkspacesTransportCompositionTests
         var agentServices = new Phantom.Workspaces.Llm.AgentServices { CopilotClientFactory = factory };
         await using var composition = await CreateCompositionAsync(agentServices);
 
-        var openRequest = Json("""{"type":"copilot-sdk-session"}""");
+        var openRequest =
+            Phantom.Workspaces.Llm.Core.Transport.Chat.CopilotSessionTransportFrames
+                .BuildConnectionRequest();
         var channel = new StubMessageChannel();
         var handle = await composition.LocalListeners.OnChannelOpenAsync(openRequest, channel, Ct());
 

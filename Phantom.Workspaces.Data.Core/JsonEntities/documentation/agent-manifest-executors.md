@@ -229,6 +229,12 @@ Reading it back: the model (bound to `worker`) runs on
 `a1b2c3d4-e5f6-7788-99aa-bbccddeeff00`; `workspace-entity`, `workspace-gui`, and `github` (all unset)
 inherit `executor-bindings.session` = `{"type":"local"}`.
 
+For an `openai` or `azure-openai` BYOK model, also set
+`model.options.additionalProperties.remoteProvider` to an opaque provider reference configured on
+the worker. The split-session envelope carries that reference only; it never carries the BYOK URL,
+key, headers, or full provider config. Missing worker configuration fails closed. See
+`["documentation", "agent-options", "connections"]` § "Remote BYOK provider boundary".
+
 ---
 
 ## 7. Worked example B — trivial all-local baseline ("you don't need executors")

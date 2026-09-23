@@ -43,6 +43,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private readonly string? gitHubToken;
     private readonly ILoggerFactory? loggerFactory;
     private readonly CopilotByokOptions? byokOptions;
+    private readonly string? remoteProviderReference;
     private readonly string? cliPath;
     private readonly ModelOptions? modelOptions;
     private readonly CopilotBuiltinToolPolicy? builtinToolPolicy;
@@ -217,6 +218,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         this.gitHubToken = string.IsNullOrWhiteSpace(gitHubToken) ? null : gitHubToken;
         this.loggerFactory = loggerFactory;
         this.byokOptions = byokOptions;
+        this.remoteProviderReference = GetStringModelOption(modelOptions, "remoteProvider");
         this.modelOptions = modelOptions;
         this.builtinToolPolicy = builtinToolPolicy;
         this.cliPath = string.IsNullOrWhiteSpace(cliPath) ? GetStringModelOption(modelOptions, "cliPath") : cliPath;
@@ -1592,6 +1594,13 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             throw new InvalidOperationException(
                 "Remote Copilot execution requires a configured executor transport registry.");
         }
+        if (this.byokOptions is not null
+            && !CopilotSessionTransportFrames.IsValidProviderReference(
+                this.remoteProviderReference))
+        {
+            throw new InvalidOperationException(
+                "Remote BYOK execution requires a valid worker-local remoteProvider reference.");
+        }
         var reference = this.executionTrustContext?.RemoteReference;
         if (this.executionTrustContext is not null && reference is null)
         {
@@ -1607,7 +1616,9 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             reference,
             this.remoteSessionTimeProvider,
             this.remoteSessionStartupTimeout,
-            this.remoteSessionTerminalTimeout);
+            this.remoteSessionTerminalTimeout,
+            this.byokOptions is null ? null : this.remoteProviderReference,
+            this.loggerFactory);
     }
 
     private static bool IsLocalDescriptor(JsonElement descriptor)

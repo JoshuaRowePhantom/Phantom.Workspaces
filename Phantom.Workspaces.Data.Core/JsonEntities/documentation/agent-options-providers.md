@@ -74,6 +74,9 @@ Split topology source: `Phantom.Workspaces.Llm.Core/Transport/ExecutorTarget.cs`
 - `wireModel` — wire model name when it differs from `model.id`.
 - `headers` — extra request headers (object of string values).
 - `cliPath` — explicit path to the Copilot CLI executable.
+- `remoteProvider` — required when the model executor is non-local; names worker-local provider
+  configuration without transporting endpoint, key, or headers. See
+  `["documentation", "agent-options", "connections"]` § "Remote BYOK provider boundary".
 
 ---
 

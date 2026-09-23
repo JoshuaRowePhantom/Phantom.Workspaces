@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using GitHub.Copilot;
+using Microsoft.Extensions.AI;
 
 namespace Phantom.Workspaces.Llm.Core.Transport.Chat;
 
@@ -14,12 +15,11 @@ namespace Phantom.Workspaces.Llm.Core.Transport.Chat;
 /// <c>AgentChat</c>.
 /// </summary>
 /// <remarks>
-/// <para>Only wire-serialisable scalars cross the boundary. <see cref="SessionConfig"/> carries
-/// non-serialisable state (delegates such as <c>OnPermissionRequest</c> and
-/// <see cref="Microsoft.Extensions.AI.AIFunction"/> tools), so the host rebuilds a fresh
-/// <see cref="SessionConfig"/> from the forwarded scalar fields (model / streaming / working
-/// directory / system message) rather than serialising the source config. Local tool execution
-/// and full manifest wiring are completed by the flagship split-executor commit (#1441).</para>
+/// <para>Only explicitly allowlisted session fields cross the boundary. <see cref="SessionConfig"/>
+/// carries non-serialisable state, so the host rebuilds a fresh config from model / streaming /
+/// working-directory / system-message / reasoning / tool-policy fields. Function declarations cross
+/// without delegates; invocation is proxied back to the tool's owning caller. BYOK provider
+/// configuration never crosses—only an opaque worker-local provider reference does.</para>
 /// <para>Session <b>events</b> round-trip faithfully because the Copilot SDK exposes the public
 /// polymorphic pair <see cref="SessionEvent.ToJson"/> / <see cref="SessionEvent.FromJson(string)"/>;
 /// the host serialises each raised <see cref="SessionEvent"/> and the client rehydrates the concrete
@@ -46,6 +46,9 @@ internal static class CopilotSessionTransportFrames
     public const string SessionErrorType = "session-error";
     public const string SessionEventType = "session-event";
     public const string SendResultType = "send-result";
+    public const string ToolInvokeType = "tool-invoke";
+    public const string ToolResultType = "tool-result";
+    public const string ToolErrorType = "tool-error";
 
     // Shared property names.
     public const string ConfigProperty = "config";
@@ -57,11 +60,26 @@ internal static class CopilotSessionTransportFrames
     public const string OptionsProperty = "options";
     public const string TrustProfileProperty = "trust-profile";
     public const string ExpectedTrustProfileRevisionProperty = "expected-trust-profile-revision";
+    public const string CorrelationIdProperty = "correlation-id";
+    public const string ProviderReferenceProperty = "provider-reference";
+    public const string ErrorCategoryProperty = "error-category";
+    public const string ToolCallIdProperty = "tool-call-id";
+    public const string ToolNameProperty = "tool-name";
+    public const string ArgumentsJsonProperty = "arguments-json";
+    public const string ResultJsonProperty = "result-json";
 
     // Scalar session-config field names.
     public const string ConfigModel = "model";
     public const string ConfigStreaming = "streaming";
     public const string ConfigWorkingDirectory = "working-directory";
+    public const string ConfigTools = "tools";
+    public const string ConfigSystemMessage = "system-message";
+    public const string ConfigReasoningEffort = "reasoning-effort";
+    public const string ConfigAvailableTools = "available-tools";
+    public const string ConfigExcludedTools = "excluded-tools";
+    public const string ToolDescription = "description";
+    public const string ToolJsonSchema = "json-schema";
+    public const string ToolReturnJsonSchema = "return-json-schema";
 
     // Scalar message-options field names.
     public const string MessagePrompt = "prompt";
@@ -70,7 +88,9 @@ internal static class CopilotSessionTransportFrames
 
     /// <summary>Builds the connection-request descriptor that selects the client-only model host.</summary>
     public static JsonElement BuildConnectionRequest(
-        Phantom.Workspaces.Llm.Trust.AgentExecutionTrustProfileReference? trustProfileReference = null)
+        Phantom.Workspaces.Llm.Trust.AgentExecutionTrustProfileReference? trustProfileReference = null,
+        string? providerReference = null,
+        string? correlationId = null)
     {
         var obj = new JsonObject { [TypeProperty] = ConnectionType };
         if (trustProfileReference is not null)
@@ -79,6 +99,20 @@ internal static class CopilotSessionTransportFrames
             obj[ExpectedTrustProfileRevisionProperty] =
                 trustProfileReference.ExpectedRevision;
         }
+        if (providerReference is not null)
+        {
+            ValidateOpaqueReference(providerReference, nameof(providerReference));
+            obj[ProviderReferenceProperty] = providerReference;
+        }
+        correlationId ??= Guid.NewGuid().ToString("N");
+        if (!Guid.TryParseExact(correlationId, "N", out _))
+        {
+            throw new ArgumentException(
+                "Correlation id must be a GUID in N format.",
+                nameof(correlationId));
+        }
+
+        obj[CorrelationIdProperty] = correlationId;
         return JsonSerializer.SerializeToElement(obj);
     }
 
@@ -98,7 +132,7 @@ internal static class CopilotSessionTransportFrames
             : null;
 
     /// <summary>Projects a <see cref="SessionConfig"/> onto the forwarded scalar fields.</summary>
-    public static JsonObject SerializeConfig(SessionConfig config)
+    public static JsonObject SerializeConfig(SessionConfigBase config)
     {
         ArgumentNullException.ThrowIfNull(config);
         var obj = new JsonObject();
@@ -112,6 +146,46 @@ internal static class CopilotSessionTransportFrames
         {
             obj[ConfigWorkingDirectory] = config.WorkingDirectory;
         }
+        if (!string.IsNullOrWhiteSpace(config.SystemMessage?.Content))
+        {
+            obj[ConfigSystemMessage] = config.SystemMessage.Content;
+        }
+        if (!string.IsNullOrWhiteSpace(config.ReasoningEffort))
+        {
+            obj[ConfigReasoningEffort] = config.ReasoningEffort;
+        }
+        if (config.AvailableTools is { Count: > 0 })
+        {
+            obj[ConfigAvailableTools] = new JsonArray(
+                config.AvailableTools
+                    .Select(static item => (JsonNode?)JsonValue.Create(item))
+                    .ToArray());
+        }
+        if (config.ExcludedTools is { Count: > 0 })
+        {
+            obj[ConfigExcludedTools] = new JsonArray(
+                config.ExcludedTools
+                    .Select(static item => (JsonNode?)JsonValue.Create(item))
+                    .ToArray());
+        }
+        if (config.Tools is { Count: > 0 })
+        {
+            var tools = new JsonArray();
+            foreach (var tool in config.Tools)
+            {
+                tools.Add(new JsonObject
+                {
+                    [ToolNameProperty] = tool.Name,
+                    [ToolDescription] = tool.Description,
+                    [ToolJsonSchema] = JsonNode.Parse(tool.JsonSchema.GetRawText()),
+                    [ToolReturnJsonSchema] = tool.ReturnJsonSchema is { } returnSchema
+                        ? JsonNode.Parse(returnSchema.GetRawText())
+                        : null,
+                });
+            }
+
+            obj[ConfigTools] = tools;
+        }
 
         return obj;
     }
@@ -119,7 +193,10 @@ internal static class CopilotSessionTransportFrames
     /// <summary>Rebuilds a fresh <see cref="SessionConfig"/> from the forwarded scalar fields.</summary>
     public static SessionConfig DeserializeSessionConfig(JsonElement configElement)
     {
-        var config = new SessionConfig();
+        var config = new SessionConfig
+        {
+            OnPermissionRequest = PermissionHandler.ApproveAll,
+        };
         ApplyBaseConfig(config, configElement);
         return config;
     }
@@ -127,7 +204,10 @@ internal static class CopilotSessionTransportFrames
     /// <summary>Rebuilds a fresh <see cref="ResumeSessionConfig"/> from the forwarded scalar fields.</summary>
     public static ResumeSessionConfig DeserializeResumeSessionConfig(JsonElement configElement)
     {
-        var config = new ResumeSessionConfig();
+        var config = new ResumeSessionConfig
+        {
+            OnPermissionRequest = PermissionHandler.ApproveAll,
+        };
         ApplyBaseConfig(config, configElement);
         return config;
     }
@@ -179,6 +259,71 @@ internal static class CopilotSessionTransportFrames
            && value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
+
+    public static string GetRequiredCorrelationId(JsonElement request)
+    {
+        var correlationId = GetString(request, CorrelationIdProperty);
+        if (!Guid.TryParseExact(correlationId, "N", out _))
+        {
+            throw new InvalidOperationException(
+                "Remote Copilot connection requires a valid correlation id.");
+        }
+
+        return correlationId;
+    }
+
+    public static string? GetProviderReference(JsonElement request)
+    {
+        var providerReference = GetString(request, ProviderReferenceProperty);
+        if (providerReference is not null)
+        {
+            ValidateOpaqueReference(providerReference, ProviderReferenceProperty);
+        }
+
+        return providerReference;
+    }
+
+    public static ICollection<AIFunctionDeclaration> DeserializeTools(
+        JsonElement configElement,
+        Func<string, string, JsonElement, JsonElement?, AIFunction> createTool)
+    {
+        ArgumentNullException.ThrowIfNull(createTool);
+        if (configElement.ValueKind != JsonValueKind.Object
+            || !configElement.TryGetProperty(ConfigTools, out var tools)
+            || tools.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        var result = new List<AIFunctionDeclaration>();
+        foreach (var tool in tools.EnumerateArray())
+        {
+            var name = GetString(tool, ToolNameProperty);
+            var description = GetString(tool, ToolDescription) ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(name)
+                || !tool.TryGetProperty(ToolJsonSchema, out var schema)
+                || schema.ValueKind != JsonValueKind.Object)
+            {
+                throw new InvalidOperationException(
+                    "Remote Copilot tool declaration is malformed.");
+            }
+
+            JsonElement? returnSchema = null;
+            if (tool.TryGetProperty(ToolReturnJsonSchema, out var returned)
+                && returned.ValueKind == JsonValueKind.Object)
+            {
+                returnSchema = returned.Clone();
+            }
+
+            result.Add(createTool(
+                name,
+                description,
+                schema.Clone(),
+                returnSchema));
+        }
+
+        return result;
+    }
 
     public static bool TryGetTrustProfileReference(
         JsonElement request,
@@ -236,5 +381,66 @@ internal static class CopilotSessionTransportFrames
         {
             config.WorkingDirectory = workingDirectory;
         }
+        if (GetString(configElement, ConfigSystemMessage) is { } systemMessage)
+        {
+            config.SystemMessage = new SystemMessageConfig { Content = systemMessage };
+        }
+        if (GetString(configElement, ConfigReasoningEffort) is { } reasoningEffort)
+        {
+            config.ReasoningEffort = reasoningEffort;
+        }
+
+        config.AvailableTools = ReadStringArray(
+            configElement,
+            ConfigAvailableTools);
+        config.ExcludedTools = ReadStringArray(
+            configElement,
+            ConfigExcludedTools);
     }
+
+    private static IList<string>? ReadStringArray(
+        JsonElement element,
+        string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var array))
+        {
+            return null;
+        }
+        if (array.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidOperationException(
+                $"Remote Copilot config field '{propertyName}' must be an array.");
+        }
+
+        var values = new List<string>();
+        foreach (var item in array.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.String
+                || string.IsNullOrWhiteSpace(item.GetString()))
+            {
+                throw new InvalidOperationException(
+                    $"Remote Copilot config field '{propertyName}' contains an invalid tool name.");
+            }
+            values.Add(item.GetString()!);
+        }
+
+        return values;
+    }
+
+    private static void ValidateOpaqueReference(string value, string parameterName)
+    {
+        if (!IsValidProviderReference(value))
+        {
+            throw new ArgumentException(
+                "Provider reference must contain only letters, digits, '.', '-', or '_'.",
+                parameterName);
+        }
+    }
+
+    internal static bool IsValidProviderReference(string? value)
+        => !string.IsNullOrWhiteSpace(value)
+           && value.Length <= 128
+           && value.All(static character =>
+               char.IsAsciiLetterOrDigit(character)
+               || character is '-' or '_' or '.');
 }

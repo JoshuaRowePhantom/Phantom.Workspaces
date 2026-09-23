@@ -5,6 +5,7 @@ using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Processes;
 using Phantom.Workspaces.Llm.Trust;
+using Phantom.Workspaces.Llm.Core.Transport.Chat;
 using Phantom.Workspaces.Tools;
 using Phantom.Workspaces.ViewModels;
 
@@ -34,6 +35,7 @@ public static class AgentServicesComposition
             McpOAuthOptions = mcpOAuthOptions,
             ProcessExecutor = new ProcessExecutor(),
             TrustProfilePolicyCompiler = new MxcTrustProfilePolicyCompiler(),
+            RemoteCopilotProviderResolver = new EnvironmentRemoteCopilotProviderResolver(),
         };
 
     /// <summary>

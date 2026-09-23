@@ -1,4 +1,5 @@
 using System.Collections.Specialized;
+using System.Diagnostics;
 using System.Text.Json;
 using AgentSchema;
 using GitHub.Copilot;
@@ -13,8 +14,11 @@ using Phantom.Workspaces.Llm.Core.Transport.Chat;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Testing;
 using Phantom.Workspaces.Transport.Chat;
+using Phantom.Workspaces.Transport.Http;
 using Phantom.Workspaces.Transport.ReverseHttp;
 using Phantom.Workspaces.Transport.Tests.Infrastructure;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
 
 namespace Phantom.Workspaces.Transport.Tests.Scenarios;
 
@@ -292,29 +296,80 @@ public sealed class RemoteSplitSessionByokRoundTripTests
         stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "real-byok-reply"));
         stream.Complete();
 
-        var definition = AgentDefinitionLoader.LoadAgentFromJson(ByokDefinitionJson(server.BaseUrl));
-        var executorRegistry = new TransportRegistry();
-        executorRegistry.Register(new ChatClientTransportListener(async (_, cancellationToken) =>
+        var definition = AgentDefinitionLoader.LoadAgentFromJson(AgentDefinitionJson);
+        var providerResolver = new FixedProviderResolver(new ProviderConfig
         {
-            var result = await AgentFactory.CreateChatClientAsync(
-                definition,
-                new AgentServices(),
-                cancellationToken: cancellationToken);
-            if (result.ChatClient is CopilotSdkChatClient copilot)
+            Type = "openai",
+            WireApi = "chat-completions",
+            BaseUrl = server.BaseUrl,
+            ApiKey = "test-key",
+            ModelId = "gpt-test",
+        });
+        var peerIdentities = new TransportPeerIdentityProvider();
+        var authenticatedCaller = Peer(ProfileA);
+        var listener = new CopilotClientTransportListener(new AgentServices
+        {
+            RemoteCopilotProviderResolver = providerResolver,
+        });
+        var identityListener = new IdentityRecordingListener(listener, peerIdentities);
+        var executorRegistry = new TransportRegistry();
+        executorRegistry.Register(identityListener);
+        await using var harness = await HubRelayHarness.CreateAsync(
+            executorRegistry,
+            ct,
+            peerIdentities,
+            executorEntityId: ProfileB.Value);
+        var data = await SeedProfilesAsync(ProfileB, Now, ct);
+        var innerRegistry = new TransportFactoryRegistry();
+        innerRegistry.Register(harness.CreateForwardingFactory(authenticatedCaller));
+        var profileFactory = new UserComputerProfileTransportFactory(
+            data,
+            Session(ProfileA),
+            innerRegistry,
+            reachabilityRouteStore: new DataAccessReachabilityRouteStore(data),
+            timeProvider: new FakeTimeProvider(Now));
+        var routingRegistry = new RecordingTransportFactoryRegistry();
+        routingRegistry.Register(profileFactory);
+        var modelOptions = new ModelOptions
+        {
+            AdditionalProperties = new Dictionary<string, object>
             {
-                copilot.SetSubAgentDependencies(new StubRunningAgentChatFactory(), new StubSubAgentTable());
-            }
-
-            return result.ChatClient;
-        }));
-
-        await using var harness = await HubRelayHarness.CreateAsync(executorRegistry, ct);
-        var machineA = await harness.ConnectMachineBAsync(ct);
-        using var remoteClient = new ChatClientOverTransport(machineA, ChatClientRequest(definition));
+                ["executor"] = "worker",
+                ["remoteProvider"] = "worker-byok",
+            },
+        };
+        await using var remoteClient = new CopilotSdkChatClient(
+            "gpt-test",
+            "real BYOK worker B",
+            gitHubToken: null,
+            loggerFactory: null,
+            byokOptions: new CopilotByokOptions
+            {
+                Provider = "openai",
+                BaseUrl = server.BaseUrl,
+                ApiKey = "caller-test-key",
+            },
+            modelOptions: modelOptions);
+        remoteClient.ConfigureExecutorRouting(
+            new ExecutorBindings
+            {
+                Bindings = new Dictionary<string, JsonElement>
+                {
+                    ["worker"] = ProfileDescriptor(ProfileB),
+                },
+            },
+            routingRegistry);
+        remoteClient.SetSubAgentDependencies(
+            new StubRunningAgentChatFactory(),
+            new StubSubAgentTable());
         var store = new InMemoryAgentPersistenceStore();
         await using var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
         {
             AgentDefinition = definition,
+            AgentServices = new AgentServices
+            {
+                RunningAgentChatFactory = new StubRunningAgentChatFactory(),
+            },
             ConfiguredStore = store,
             ClientOverride = remoteClient,
             OverrideUseProvidedChatClientAsIs = true,
@@ -325,8 +380,361 @@ public sealed class RemoteSplitSessionByokRoundTripTests
         await CompleteTurnAsync(chat, "real-byok-worker-b");
 
         Assert.Empty(chat.RunningItems);
-        Assert.Contains(chat.History, item => item.Contents.OfType<TextContent>().Any(text => text.Text.Contains("real-byok-reply")));
+        var diagnostic = string.Join(
+            Environment.NewLine,
+            chat.History
+                .SelectMany(static item => item.Contents)
+                .Select(static content => content switch
+                {
+                    TextContent text => text.Text,
+                    ErrorContent error => error.Message,
+                    _ => content.ToString() ?? string.Empty,
+                }));
+        Assert.True(
+            chat.History.Any(
+                item => item.Contents.OfType<TextContent>().Any(
+                    text => text.Text.Contains("real-byok-reply", StringComparison.Ordinal))),
+            diagnostic);
+        Assert.Equal("worker-byok", providerResolver.Reference);
+        Assert.Equal(ProfileA.ToString(), identityListener.ObservedIdentity?.UserComputerProfileEntityId);
+        Assert.DoesNotContain(
+            routingRegistry.Descriptors,
+            descriptor => descriptor.TryGetProperty("type", out var type) && type.GetString() == "local");
         Assert.Empty(server.Failures);
+    }
+
+    [Fact]
+    [Trait("Category", "WebView")]
+    public Task RemoteSplitSession_RealByokCli_AtoB_SeparateProcesses_CompletesAndClearsRunningItems()
+        => RunSeparateProcessRoundTripAsync(
+            ProfileA,
+            ProfileB,
+            "worker-b-process",
+            "process-a-to-b",
+            "reply-process-a-to-b",
+            secondTurn: true);
+
+    [Fact]
+    [Trait("Category", "WebView")]
+    public Task RemoteSplitSession_RealByokCli_BtoA_SeparateProcesses_CompletesReciprocalRoundTrip()
+        => RunSeparateProcessRoundTripAsync(
+            ProfileB,
+            ProfileA,
+            "worker-a-process",
+            "process-b-to-a",
+            "reply-process-b-to-a",
+            secondTurn: false);
+
+    [Fact]
+    [Trait("Category", "WebView")]
+    public Task RemoteSplitSession_RealByokCli_CtoAtoB_RelaysWithoutDirectWorkerConnection()
+        // C and the A relay are hosted in the test process; B is an independent worker process.
+        // Assertions below prove C uses A's reverse-hub route and has no direct B transport.
+        => RunSeparateProcessRoundTripAsync(
+            ProfileC,
+            ProfileB,
+            "worker-b-relayed-process",
+            "process-c-via-a-to-b",
+            "reply-process-c-via-a-to-b",
+            secondTurn: false);
+
+    [Fact]
+    [Trait("Category", "WebView")]
+    public async Task RemoteSplitSession_RealByokCli_AtoB_ToolsStayAtTheirOwningLocations()
+    {
+        var ct = TestToken(TimeSpan.FromSeconds(90));
+        await using var server = new ScriptedByokChatServer();
+        var conversation = server.AddConversation(
+            "tool-owner-worker",
+            request => request.AnyMessageContains("user", "run-owned-tools"));
+        var toolTurn = conversation.Client.EnqueueStreamingResponse();
+        toolTurn.EnqueueUpdate(new ChatResponseUpdate(
+            ChatRole.Assistant,
+            [new FunctionCallContent(
+                "call_gui",
+                "workspace_gui",
+                new Dictionary<string, object?> { ["value"] = "from-worker-cli" })]));
+        toolTurn.Complete();
+        EnqueueTextResponse(conversation, "tool-owner-roundtrip-complete");
+        EnqueueTextResponse(conversation, "tool-owner-spare");
+
+        await using var hub = await RealHttpHub.CreateAsync(ct);
+        await using var worker = await RemoteSplitWorkerProcess.StartAsync(
+            new RemoteSplitWorkerConfiguration(
+                hub.Url,
+                ProfileB.ToString(),
+                "tool-owner-worker",
+                "worker-byok",
+                "openai",
+                server.BaseUrl,
+                "worker-test-key",
+                "chat-completions",
+                "gpt-test"),
+            ct);
+        var data = await SeedProfilesAsync(ProfileB, Now, ct, hub.Url);
+        var innerRegistry = new TransportFactoryRegistry();
+        innerRegistry.Register(new ReverseHttpForwardingTransportFactory(
+            new HttpClientTransportFactory(),
+            TimeSpan.FromSeconds(20),
+            Peer(ProfileA)));
+        var profileFactory = new UserComputerProfileTransportFactory(
+            data,
+            Session(ProfileA),
+            innerRegistry,
+            reachabilityRouteStore: new DataAccessReachabilityRouteStore(data),
+            timeProvider: new FakeTimeProvider(Now));
+        var routingRegistry = new RecordingTransportFactoryRegistry();
+        routingRegistry.Register(profileFactory);
+        var modelOptions = new ModelOptions
+        {
+            AdditionalProperties = new Dictionary<string, object>
+            {
+                ["executor"] = "worker",
+                ["remoteProvider"] = "worker-byok",
+            },
+        };
+        var callerLogs = new CapturingLoggerFactory();
+        await using var client = new CopilotSdkChatClient(
+            "gpt-test",
+            "process split tool owner",
+            gitHubToken: null,
+            loggerFactory: callerLogs,
+            byokOptions: new CopilotByokOptions
+            {
+                Provider = "openai",
+                BaseUrl = server.BaseUrl,
+                ApiKey = "caller-test-key",
+            },
+            modelOptions: modelOptions);
+        client.ConfigureExecutorRouting(
+            new ExecutorBindings
+            {
+                Bindings = new Dictionary<string, JsonElement>
+                {
+                    ["worker"] = ProfileDescriptor(ProfileB),
+                },
+            },
+            routingRegistry);
+        client.SetSubAgentDependencies(
+            new StubRunningAgentChatFactory(),
+            new StubSubAgentTable());
+        var callback = new TaskCompletionSource<(int ProcessId, string Value)>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var guiTool = AIFunctionFactory.Create(
+            (string value) =>
+            {
+                callback.TrySetResult((Environment.ProcessId, value));
+                return $"gui-owner:{Environment.ProcessId}:{value}";
+            },
+            "workspace_gui",
+            "Runs on the GUI owner.");
+
+        ChatResponse response;
+        try
+        {
+            response = await client.GetResponseAsync(
+                [new ChatMessage(ChatRole.User, "run-owned-tools")],
+                new ChatOptions { Tools = [guiTool] },
+                ct);
+        }
+        catch (OperationCanceledException)
+        {
+            Assert.Fail(
+                $"Tool callback completed: {callback.Task.IsCompleted}.{Environment.NewLine}"
+                + $"Server requests: {server.RecordedRequests.Count}.{Environment.NewLine}"
+                + $"Server failures: {string.Join(Environment.NewLine, server.Failures)}{Environment.NewLine}"
+                + $"Caller events: {string.Join(Environment.NewLine, callerLogs.Entries.Select(static item => item.Message))}{Environment.NewLine}"
+                + $"Worker events: {string.Join(Environment.NewLine, worker.OutputLines)}");
+            throw;
+        }
+
+        Assert.Contains("tool-owner-roundtrip-complete", response.Text, StringComparison.Ordinal);
+        Assert.True(
+            callback.Task.IsCompletedSuccessfully,
+            "Source callback was not invoked."
+            + Environment.NewLine
+            + string.Join(Environment.NewLine, worker.OutputLines));
+        var invoked = await callback.Task;
+        Assert.Equal(Environment.ProcessId, invoked.ProcessId);
+        Assert.Equal("from-worker-cli", invoked.Value);
+        var followUp = await conversation.GetRequestAsync(1).WaitAsync(ct);
+        Assert.True(
+            followUp.AnyMessageContains(
+                "tool",
+                $"gui-owner:{Environment.ProcessId}:from-worker-cli"));
+        var ready = Assert.Single(
+            worker.Events,
+            item => item.TryGetProperty("type", out var type)
+                && type.GetString() == "ready");
+        Assert.NotEqual(
+            Environment.ProcessId,
+            ready.GetProperty("processId").GetInt32());
+        Assert.DoesNotContain(
+            routingRegistry.Descriptors,
+            descriptor => descriptor.TryGetProperty("type", out var type)
+                && type.GetString() is "local" or "http");
+        Assert.Empty(server.Failures);
+    }
+
+    private static async Task RunSeparateProcessRoundTripAsync(
+        EntityId source,
+        EntityId target,
+        string workerMarker,
+        string prompt,
+        string reply,
+        bool secondTurn)
+    {
+        var ct = TestToken(TimeSpan.FromSeconds(90));
+        await using var server = new ScriptedByokChatServer();
+        var conversation = server.AddConversation(
+            workerMarker,
+            request => request.AnyMessageContains("user", prompt));
+        EnqueueTextResponse(conversation, reply);
+        if (secondTurn)
+        {
+            EnqueueTextResponse(conversation, reply + "-second");
+        }
+
+        await using var hub = await RealHttpHub.CreateAsync(ct);
+        await using var worker = await RemoteSplitWorkerProcess.StartAsync(
+            new RemoteSplitWorkerConfiguration(
+                hub.Url,
+                target.ToString(),
+                workerMarker,
+                "worker-byok",
+                "openai",
+                server.BaseUrl,
+                "worker-test-key",
+                "chat-completions",
+                "gpt-test"),
+            ct);
+
+        var data = await SeedProfilesAsync(target, Now, ct, hub.Url);
+        var innerRegistry = new TransportFactoryRegistry();
+        var forwarding = new ReverseHttpForwardingTransportFactory(
+            new HttpClientTransportFactory(),
+            TimeSpan.FromSeconds(20),
+            Peer(source));
+        innerRegistry.Register(forwarding);
+        var profileFactory = new UserComputerProfileTransportFactory(
+            data,
+            Session(source),
+            innerRegistry,
+            reachabilityRouteStore: new DataAccessReachabilityRouteStore(data),
+            timeProvider: new FakeTimeProvider(Now));
+        var routingRegistry = new RecordingTransportFactoryRegistry();
+        routingRegistry.Register(profileFactory);
+        var callerLogs = new CapturingLoggerFactory();
+        var modelOptions = new ModelOptions
+        {
+            AdditionalProperties = new Dictionary<string, object>
+            {
+                ["executor"] = "worker",
+                ["remoteProvider"] = "worker-byok",
+            },
+        };
+        await using var client = new CopilotSdkChatClient(
+            "gpt-test",
+            "process split BYOK",
+            gitHubToken: null,
+            callerLogs,
+            byokOptions: new CopilotByokOptions
+            {
+                Provider = "openai",
+                BaseUrl = server.BaseUrl,
+                ApiKey = "caller-test-key",
+            },
+            modelOptions: modelOptions);
+        client.ConfigureExecutorRouting(
+            new ExecutorBindings
+            {
+                Bindings = new Dictionary<string, JsonElement>
+                {
+                    ["worker"] = ProfileDescriptor(target),
+                },
+            },
+            routingRegistry);
+        client.SetSubAgentDependencies(
+            new StubRunningAgentChatFactory(),
+            new StubSubAgentTable());
+        var store = new InMemoryAgentPersistenceStore();
+        await using var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(AgentDefinitionJson),
+            AgentServices = new AgentServices
+            {
+                RunningAgentChatFactory = new StubRunningAgentChatFactory(),
+            },
+            ConfiguredStore = store,
+            ClientOverride = client,
+            OverrideUseProvidedChatClientAsIs = true,
+            DisplayNameOverride = workerMarker,
+            CancellationToken = ct,
+        });
+
+        await CompleteTurnAsync(chat, prompt);
+        AssertHistoryText(chat, reply);
+        if (secondTurn)
+        {
+            await CompleteTurnAsync(chat, prompt + "-second");
+            AssertHistoryText(chat, reply + "-second");
+        }
+
+        Assert.Empty(chat.RunningItems);
+        var request = await worker.RequestReceived.WaitAsync(ct);
+        Assert.Equal(workerMarker, request.GetProperty("worker").GetString());
+        Assert.Equal(source.ToString(), request.GetProperty("caller").GetString());
+        Assert.Equal(
+            CopilotSessionTransportFrames.ConnectionType,
+            request.GetProperty("requestType").GetString());
+        Assert.Contains(
+            worker.Events,
+            item => item.TryGetProperty("stage", out var stage)
+                && stage.GetString() == "sdk-created");
+        Assert.Contains(
+            worker.Events,
+            item => item.TryGetProperty("stage", out var stage)
+                && stage.GetString() == "ack-written");
+        Assert.DoesNotContain(
+            routingRegistry.Descriptors,
+            descriptor => descriptor.TryGetProperty("type", out var type)
+                && type.GetString() == "local");
+        Assert.DoesNotContain(
+            routingRegistry.Descriptors,
+            descriptor => descriptor.TryGetProperty("type", out var type)
+                && type.GetString() == "http");
+        Assert.All(worker.OutputLines, line =>
+        {
+            Assert.DoesNotContain(server.BaseUrl, line, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("worker-test-key", line, StringComparison.Ordinal);
+            Assert.DoesNotContain(prompt, line, StringComparison.Ordinal);
+        });
+        var restored = await store.RestoreAsync(
+            new RestoreRequest { AgentSessionId = chat.AgentSessionId },
+            ct);
+        Assert.NotNull(restored);
+        Assert.False(string.IsNullOrWhiteSpace(restored!.Value.CopilotSdkSessionId));
+        Assert.Empty(server.Failures);
+    }
+
+    private static void EnqueueTextResponse(
+        ConversationClient conversation,
+        string reply)
+    {
+        var stream = conversation.Client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, reply));
+        stream.Complete();
+    }
+
+    private static void AssertHistoryText(AgentChat chat, string expected)
+    {
+        var diagnostic = string.Join(
+            Environment.NewLine,
+            chat.History.SelectMany(static item => item.Contents).Select(static item => item.ToString()));
+        Assert.True(
+            chat.History.Any(item => item.Contents.OfType<TextContent>().Any(
+                text => text.Text.Contains(expected, StringComparison.Ordinal))),
+            diagnostic);
     }
 
     private static async Task CompleteTurnAsync(AgentChat chat, string prompt)
@@ -484,6 +892,224 @@ public sealed class RemoteSplitSessionByokRoundTripTests
             ["type"] = "chat-client",
             ["agent-definition"] = definition.ToJson(),
         });
+
+    private sealed class FixedProviderResolver(ProviderConfig provider)
+        : IRemoteCopilotProviderResolver
+    {
+        public string? Reference { get; private set; }
+
+        public Task<ProviderConfig?> ResolveAsync(
+            string providerReference,
+            string modelId,
+            CancellationToken cancellationToken)
+        {
+            this.Reference = providerReference;
+            provider.ModelId = modelId;
+            return Task.FromResult<ProviderConfig?>(provider);
+        }
+    }
+
+    private sealed class RealHttpHub : IAsyncDisposable
+    {
+        private readonly WebApplication application;
+        private readonly HttpServerTransportFactory httpServer;
+        private readonly ReverseHttpServerTransportFactory reverseServer;
+
+        private RealHttpHub(
+            WebApplication application,
+            HttpServerTransportFactory httpServer,
+            ReverseHttpServerTransportFactory reverseServer,
+            string url)
+        {
+            this.application = application;
+            this.httpServer = httpServer;
+            this.reverseServer = reverseServer;
+            this.Url = url;
+        }
+
+        public string Url { get; }
+
+        public static async Task<RealHttpHub> CreateAsync(CancellationToken cancellationToken)
+        {
+            var builder = WebApplication.CreateSlimBuilder();
+            builder.WebHost.UseUrls("http://127.0.0.1:0");
+            var application = builder.Build();
+            application.UseWebSockets();
+            var registry = new TransportRegistry();
+            var reverseServer = new ReverseHttpServerTransportFactory(
+                new ReverseConnectionStatusRegistry());
+            registry.Register(reverseServer);
+            var httpServer = new HttpServerTransportFactory(registry);
+            httpServer.Map(application);
+            await application.StartAsync(cancellationToken);
+            var url = Assert.Single(application.Urls);
+            return new RealHttpHub(application, httpServer, reverseServer, url);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await this.application.StopAsync(cancellation.Token);
+            await this.httpServer.DisposeAsync();
+            await this.reverseServer.DisposeAsync();
+            await this.application.DisposeAsync();
+        }
+    }
+
+    private sealed record RemoteSplitWorkerConfiguration(
+        string HubUrl,
+        string WorkerEntityId,
+        string WorkerMarker,
+        string ProviderReference,
+        string ProviderType,
+        string ProviderBaseUrl,
+        string ProviderApiKey,
+        string WireApi,
+        string ModelId);
+
+    private sealed class RemoteSplitWorkerProcess : IAsyncDisposable
+    {
+        private readonly Process process;
+        private readonly Task outputPump;
+        private readonly Task errorPump;
+        private readonly System.Collections.Concurrent.ConcurrentQueue<string> outputLines = new();
+        private readonly System.Collections.Concurrent.ConcurrentQueue<string> errorLines = new();
+        private readonly System.Collections.Concurrent.ConcurrentQueue<JsonElement> events = new();
+        private readonly TaskCompletionSource ready =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<JsonElement> requestReceived =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        private RemoteSplitWorkerProcess(Process process)
+        {
+            this.process = process;
+            this.outputPump = this.ReadOutputAsync();
+            this.errorPump = this.ReadErrorsAsync();
+        }
+
+        public Task<JsonElement> RequestReceived => this.requestReceived.Task;
+
+        public IReadOnlyList<JsonElement> Events => [.. this.events];
+
+        public IReadOnlyList<string> OutputLines => [.. this.outputLines];
+
+        public static async Task<RemoteSplitWorkerProcess> StartAsync(
+            RemoteSplitWorkerConfiguration configuration,
+            CancellationToken cancellationToken)
+        {
+            var executableName = OperatingSystem.IsWindows()
+                ? "Phantom.Workspaces.Transport.TestWorker.exe"
+                : "Phantom.Workspaces.Transport.TestWorker";
+            var executable = Path.Combine(
+                AppContext.BaseDirectory,
+                "remote-split-worker",
+                executableName);
+            if (!File.Exists(executable))
+            {
+                throw new FileNotFoundException(
+                    "The remote split-session test worker was not copied to the test output.",
+                    executable);
+            }
+
+            var process = Process.Start(new ProcessStartInfo
+            {
+                FileName = executable,
+                WorkingDirectory = Path.GetDirectoryName(executable)!,
+                UseShellExecute = false,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            }) ?? throw new InvalidOperationException("Unable to start the remote split-session test worker.");
+            var worker = new RemoteSplitWorkerProcess(process);
+            await process.StandardInput.WriteLineAsync(
+                JsonSerializer.Serialize(configuration));
+            await process.StandardInput.FlushAsync(cancellationToken);
+
+            var exited = process.WaitForExitAsync(cancellationToken);
+            var completed = await Task.WhenAny(worker.ready.Task, exited);
+            if (completed == exited)
+            {
+                await exited;
+                await worker.outputPump;
+                await worker.errorPump;
+                throw new InvalidOperationException(
+                    "Remote split-session worker exited before registration: "
+                    + string.Join(Environment.NewLine, worker.errorLines));
+            }
+
+            await worker.ready.Task.WaitAsync(cancellationToken);
+            return worker;
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            if (!this.process.HasExited)
+            {
+                try
+                {
+                    await this.process.StandardInput.WriteLineAsync("stop");
+                    await this.process.StandardInput.FlushAsync();
+                    using var cancellation =
+                        new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                    await this.process.WaitForExitAsync(cancellation.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    this.process.Kill(entireProcessTree: true);
+                    await this.process.WaitForExitAsync();
+                }
+                catch (IOException) when (this.process.HasExited)
+                {
+                }
+                catch (InvalidOperationException) when (this.process.HasExited)
+                {
+                }
+            }
+
+            await this.outputPump;
+            await this.errorPump;
+            this.process.Dispose();
+        }
+
+        private async Task ReadOutputAsync()
+        {
+            while (await this.process.StandardOutput.ReadLineAsync() is { } line)
+            {
+                this.outputLines.Enqueue(line);
+                JsonElement item;
+                try
+                {
+                    item = JsonDocument.Parse(line).RootElement.Clone();
+                }
+                catch (JsonException)
+                {
+                    continue;
+                }
+
+                this.events.Enqueue(item);
+                var type = item.TryGetProperty("type", out var typeProperty)
+                    ? typeProperty.GetString()
+                    : null;
+                if (type == "ready")
+                {
+                    this.ready.TrySetResult();
+                }
+                else if (type == "request")
+                {
+                    this.requestReceived.TrySetResult(item);
+                }
+            }
+        }
+
+        private async Task ReadErrorsAsync()
+        {
+            while (await this.process.StandardError.ReadLineAsync() is { } line)
+            {
+                this.errorLines.Enqueue(line);
+            }
+        }
+    }
 
     private sealed class SplitSessionSetup : IAsyncDisposable
     {
@@ -719,7 +1345,8 @@ public sealed class RemoteSplitSessionByokRoundTripTests
     private static async Task<IDataAccessLayer> SeedProfilesAsync(
         EntityId target,
         DateTimeOffset now,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string hubUrl = HubRelayHarness.DefaultHubUrl)
     {
         var fixture = await ValidatingEntitySeedFixture.CreateAsync(cancellationToken);
         var documents = new List<JsonElement>
@@ -749,7 +1376,7 @@ public sealed class RemoteSplitSessionByokRoundTripTests
                       "reverse-http:{{HubProfileId}}": {
                         "descriptor": {
                           "type": "reverse-http",
-                          "hub-urls": ["{{HubRelayHarness.DefaultHubUrl}}"],
+                          "hub-urls": ["{{hubUrl}}"],
                           "entity-id": "{{target}}"
                         },
                         "owner-profile-entity-id": "{{profile}}",

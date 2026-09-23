@@ -50,6 +50,7 @@ public sealed class AgentServicesCompositionTests
         Assert.NotNull(services.AgentPersistenceStoreOverride);
         Assert.NotNull(services.ProcessExecutor);
         Assert.NotNull(services.TrustProfilePolicyCompiler);
+        Assert.NotNull(services.RemoteCopilotProviderResolver);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -64,6 +65,7 @@ public sealed class AgentServicesCompositionTests
         Assert.Same(mcpOAuthOptions, services.McpOAuthOptions);
         Assert.NotNull(services.ProcessExecutor);
         Assert.NotNull(services.TrustProfilePolicyCompiler);
+        Assert.NotNull(services.RemoteCopilotProviderResolver);
         await Task.CompletedTask;
     }
 

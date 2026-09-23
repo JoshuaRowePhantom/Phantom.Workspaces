@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using GitHub.Copilot;
+using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Llm.Copilot;
 using Phantom.Workspaces.Transport;
 
@@ -27,8 +28,11 @@ internal sealed class CopilotSessionOverTransport : ICopilotSession
     private readonly object terminalTimerLock = new();
     private readonly List<Action<SessionEvent>> subscribers = new();
     private readonly ConcurrentDictionary<string, TaskCompletionSource<AssistantMessageEvent?>> pendingSends = new();
+    private readonly IReadOnlyDictionary<string, AIFunction> tools;
+    private readonly CancellationTokenSource shutdown = new();
     private readonly TaskCompletionSource<string> sessionCreated =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly RemoteCopilotLifecycleLog lifecycle;
 
     private Task readPump = Task.CompletedTask;
     private ITimer? terminalTimer;
@@ -41,7 +45,10 @@ internal sealed class CopilotSessionOverTransport : ICopilotSession
         IMessageChannel channel,
         TimeProvider? timeProvider,
         TimeSpan? startupTimeout,
-        TimeSpan? terminalTimeout)
+        TimeSpan? terminalTimeout,
+        string? correlationId = null,
+        RemoteCopilotLifecycleLog? lifecycle = null,
+        IEnumerable<AIFunctionDeclaration>? tools = null)
     {
         this.channel = channel ?? throw new ArgumentNullException(nameof(channel));
         this.timeProvider = timeProvider ?? TimeProvider.System;
@@ -51,6 +58,15 @@ internal sealed class CopilotSessionOverTransport : ICopilotSession
         this.terminalTimeout = ValidateTimeout(
             terminalTimeout ?? DefaultTerminalTimeout,
             nameof(terminalTimeout));
+        correlationId ??= Guid.NewGuid().ToString("N");
+        this.lifecycle = lifecycle ?? new RemoteCopilotLifecycleLog(
+            loggerFactory: null,
+            correlationId,
+            "caller",
+            this.timeProvider);
+        this.tools = (tools ?? [])
+            .OfType<AIFunction>()
+            .ToDictionary(static tool => tool.Name, StringComparer.Ordinal);
     }
 
     public string SessionId => this.sessionId;
@@ -62,13 +78,18 @@ internal sealed class CopilotSessionOverTransport : ICopilotSession
         CancellationToken cancellationToken,
         TimeProvider? timeProvider = null,
         TimeSpan? startupTimeout = null,
-        TimeSpan? terminalTimeout = null)
+        TimeSpan? terminalTimeout = null,
+        string? correlationId = null,
+        RemoteCopilotLifecycleLog? lifecycle = null)
     {
         var session = new CopilotSessionOverTransport(
             channel,
             timeProvider,
             startupTimeout,
-            terminalTimeout);
+            terminalTimeout,
+            correlationId,
+            lifecycle,
+            config.Tools);
         try
         {
             session.StartPump();
@@ -77,7 +98,9 @@ internal sealed class CopilotSessionOverTransport : ICopilotSession
                 [CopilotSessionTransportFrames.TypeProperty] = CopilotSessionTransportFrames.CreateSessionType,
                 [CopilotSessionTransportFrames.ConfigProperty] = CopilotSessionTransportFrames.SerializeConfig(config),
             };
-            await session.WriteAsync(frame, cancellationToken).ConfigureAwait(false);
+            session.lifecycle.Confirm("create-write-start", "started");
+            await session.WriteCreateFrameAsync(frame, cancellationToken).ConfigureAwait(false);
+            session.lifecycle.Confirm("create-written");
             await session.AwaitCreatedAsync(cancellationToken).ConfigureAwait(false);
             return session;
         }
@@ -96,35 +119,31 @@ internal sealed class CopilotSessionOverTransport : ICopilotSession
         CancellationToken cancellationToken,
         TimeProvider? timeProvider = null,
         TimeSpan? startupTimeout = null,
-        TimeSpan? terminalTimeout = null)
+        TimeSpan? terminalTimeout = null,
+        string? correlationId = null,
+        RemoteCopilotLifecycleLog? lifecycle = null)
     {
         var session = new CopilotSessionOverTransport(
             channel,
             timeProvider,
             startupTimeout,
-            terminalTimeout);
+            terminalTimeout,
+            correlationId,
+            lifecycle,
+            config.Tools);
         try
         {
             session.StartPump();
-            var configObject = new JsonObject();
-            if (!string.IsNullOrWhiteSpace(config.Model))
-            {
-                configObject[CopilotSessionTransportFrames.ConfigModel] = config.Model;
-            }
-
-            configObject[CopilotSessionTransportFrames.ConfigStreaming] = config.Streaming;
-            if (!string.IsNullOrWhiteSpace(config.WorkingDirectory))
-            {
-                configObject[CopilotSessionTransportFrames.ConfigWorkingDirectory] = config.WorkingDirectory;
-            }
-
             var frame = new JsonObject
             {
                 [CopilotSessionTransportFrames.TypeProperty] = CopilotSessionTransportFrames.ResumeSessionType,
                 [CopilotSessionTransportFrames.SessionIdProperty] = resumeSessionId,
-                [CopilotSessionTransportFrames.ConfigProperty] = configObject,
+                [CopilotSessionTransportFrames.ConfigProperty] =
+                    CopilotSessionTransportFrames.SerializeConfig(config),
             };
-            await session.WriteAsync(frame, cancellationToken).ConfigureAwait(false);
+            session.lifecycle.Confirm("create-write-start", "started");
+            await session.WriteCreateFrameAsync(frame, cancellationToken).ConfigureAwait(false);
+            session.lifecycle.Confirm("create-written");
             await session.AwaitCreatedAsync(cancellationToken).ConfigureAwait(false);
             return session;
         }
@@ -239,6 +258,7 @@ internal sealed class CopilotSessionOverTransport : ICopilotSession
             return;
         }
 
+        await this.shutdown.CancelAsync().ConfigureAwait(false);
         lock (this.terminalTimerLock)
         {
             this.terminalTimer?.Dispose();
@@ -267,6 +287,7 @@ internal sealed class CopilotSessionOverTransport : ICopilotSession
         {
             // The pump ends when the channel completes; a faulted pump must not mask disposal.
         }
+        this.shutdown.Dispose();
     }
 
     private void StartPump() => this.readPump = Task.Run(this.PumpAsync);
@@ -307,11 +328,16 @@ internal sealed class CopilotSessionOverTransport : ICopilotSession
                 this.sessionId = CopilotSessionTransportFrames.GetString(frame, CopilotSessionTransportFrames.SessionIdProperty)
                     ?? string.Empty;
                 this.sessionCreated.TrySetResult(this.sessionId);
+                this.lifecycle.Confirm("ack-received");
                 break;
 
             case CopilotSessionTransportFrames.SessionErrorType:
                 var error = CopilotSessionTransportFrames.GetString(frame, CopilotSessionTransportFrames.ErrorProperty)
                     ?? "Remote Copilot session failed.";
+                var category = CopilotSessionTransportFrames.GetString(
+                    frame,
+                    CopilotSessionTransportFrames.ErrorCategoryProperty) ?? "remote-error";
+                this.lifecycle.Fail("ack-error", category);
                 this.FailTransport(new InvalidOperationException(error));
                 break;
 
@@ -322,6 +348,90 @@ internal sealed class CopilotSessionOverTransport : ICopilotSession
             case CopilotSessionTransportFrames.SendResultType:
                 this.CompleteSend(frame);
                 break;
+
+            case CopilotSessionTransportFrames.ToolInvokeType:
+                _ = this.HandleToolInvocationAsync(frame);
+                break;
+        }
+    }
+
+    private async Task HandleToolInvocationAsync(JsonElement frame)
+    {
+        this.lifecycle.Confirm("tool-request-received");
+        var toolCallId = CopilotSessionTransportFrames.GetString(
+            frame,
+            CopilotSessionTransportFrames.ToolCallIdProperty);
+        var toolName = CopilotSessionTransportFrames.GetString(
+            frame,
+            CopilotSessionTransportFrames.ToolNameProperty);
+        if (string.IsNullOrWhiteSpace(toolCallId))
+        {
+            this.lifecycle.Fail("tool-request-rejected", "invalid-envelope");
+            this.FailTransport(
+                new TransportException(
+                    "The remote Copilot tool request was malformed."));
+            return;
+        }
+
+        var response = new JsonObject
+        {
+            [CopilotSessionTransportFrames.ToolCallIdProperty] = toolCallId,
+        };
+        try
+        {
+            if (string.IsNullOrWhiteSpace(toolName)
+                || !this.tools.TryGetValue(toolName, out var tool))
+            {
+                throw new InvalidOperationException("Requested tool is unavailable at its owning host.");
+            }
+
+            var argumentsJson = CopilotSessionTransportFrames.GetString(
+                frame,
+                CopilotSessionTransportFrames.ArgumentsJsonProperty) ?? "{}";
+            var serializedArguments = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+                argumentsJson,
+                AIJsonUtilities.DefaultOptions) ?? [];
+            var arguments = new AIFunctionArguments(
+                serializedArguments.ToDictionary(
+                    static pair => pair.Key,
+                    static pair => (object?)pair.Value));
+            var result = await tool.InvokeAsync(arguments, this.shutdown.Token)
+                .ConfigureAwait(false);
+            response[CopilotSessionTransportFrames.TypeProperty] =
+                CopilotSessionTransportFrames.ToolResultType;
+            response[CopilotSessionTransportFrames.ResultJsonProperty] =
+                JsonSerializer.Serialize(result, AIJsonUtilities.DefaultOptions);
+            this.lifecycle.Confirm("tool-result-created");
+        }
+        catch (OperationCanceledException) when (this.shutdown.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _ = exception;
+            response[CopilotSessionTransportFrames.TypeProperty] =
+                CopilotSessionTransportFrames.ToolErrorType;
+            response[CopilotSessionTransportFrames.ErrorProperty] =
+                "Tool execution failed at its owning host.";
+            this.lifecycle.Fail("tool-result-created", "tool-failed");
+        }
+
+        try
+        {
+            await this.WriteAsync(response, this.shutdown.Token).ConfigureAwait(false);
+            this.lifecycle.Confirm("tool-result-written");
+        }
+        catch (OperationCanceledException) when (this.shutdown.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _ = exception;
+            this.lifecycle.Fail("tool-result-write-failed", "transport");
+            this.FailTransport(
+                new TransportException(
+                    "The remote Copilot tool result could not be returned."));
         }
     }
 
@@ -412,9 +522,15 @@ internal sealed class CopilotSessionOverTransport : ICopilotSession
         }
         catch (TimeoutException exception)
         {
+            this.lifecycle.Fail("startup-timeout", "timeout");
             throw new TimeoutException(
-                $"The remote Copilot session did not start within {this.startupTimeout}.",
+                $"The remote Copilot session did not start within {this.startupTimeout}; caller last confirmed '{this.lifecycle.LastConfirmedStage}'.",
                 exception);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            this.lifecycle.Cancel("startup-cancelled");
+            throw;
         }
     }
 
@@ -422,6 +538,28 @@ internal sealed class CopilotSessionOverTransport : ICopilotSession
         => await this.channel.Writer
             .WriteAsync(CopilotSessionTransportFrames.BuildFrame(frame), cancellationToken)
             .ConfigureAwait(false);
+
+    private async Task WriteCreateFrameAsync(
+        JsonObject frame,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await this.WriteAsync(frame, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            this.lifecycle.Cancel("create-write-cancelled");
+            throw;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _ = exception;
+            this.lifecycle.Fail("create-write-failed", "transport");
+            throw new TransportException(
+                "The remote Copilot create request could not be sent.");
+        }
+    }
 
     private void Unsubscribe(Action<SessionEvent> handler)
     {

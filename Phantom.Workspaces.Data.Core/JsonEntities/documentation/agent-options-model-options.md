@@ -29,6 +29,7 @@ All remaining keys in `model.options.additionalProperties` are forwarded verbati
 | `wireApi` | string | `openai`, `azure-openai` | Wire API the BYOK endpoint speaks (default `chat-completions`). Interpreted by `CopilotSdkChatClient.CreateProviderConfig`. |
 | `wireModel` | string | `openai`, `azure-openai` | Wire model name when it differs from `model.id`. Interpreted by `CopilotSdkChatClient.CreateProviderConfig`. |
 | `headers` | object (string values) | `openai`, `azure-openai` | Extra request headers sent to the BYOK endpoint. Interpreted by `CopilotSdkChatClient.CreateProviderConfig`. |
+| `remoteProvider` | string | `openai`, `azure-openai` with a non-local model executor | Opaque worker-local BYOK provider reference. Required for remote BYOK. Only this reference crosses the split-session transport; the worker resolves endpoint and credentials from its own environment. Allowed characters: letters, digits, `.`, `-`, `_`. |
 | `num_ctx` | int | `ollama` | Context window token count. Passed through to Ollama via `ChatOptions.AdditionalProperties`. |
 | `keep_alive` | string | `ollama` | How long Ollama keeps the model loaded between requests (e.g. `"15m"`, `"1h"`, `"-1"` for forever). |
 | `additionalInstructions` | string | all | Extra instructions appended to the system prompt at runtime. Set programmatically from `PromptAgent.additionalInstructions`; do not set manually. |

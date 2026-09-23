@@ -921,6 +921,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             this.entityBroker!.EntityRepository.DataAccessLayer,
             this.entityBroker.EntityRepository.WorkspaceEntitySession,
             hubFactories,
+            Services.AgentServicesComposition.ComposeHostServices(
+                this.applicationServices.SecretProvider,
+                this.applicationServices.McpOAuthOptions) with
+            {
+                LoggerFactory = this.applicationServices.LoggerFactory,
+            },
             registryProvider: this.applicationServices.TransportFactoryRegistryProvider,
             runningAgentChats: this.applicationServices.RunningAgentChats);
         this.transportComposition = composition;

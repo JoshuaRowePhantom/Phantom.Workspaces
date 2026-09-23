@@ -116,3 +116,23 @@ The `CopilotByokOptions` record carries the factory-resolved connection facts fo
 | `ApiKey` | string? | null | API key for the custom endpoint (resolved from the connection `apiKey`). |
 
 Note: `CopilotByokOptions` is not expressed directly in the agent JSON schema — it is derived by `AgentFactory` from the provider string and connection, or supplied programmatically via test infrastructure.
+
+### Remote BYOK provider boundary
+
+When a Copilot model has a non-local `model.options.additionalProperties.executor`, BYOK endpoint,
+key, headers, and provider configuration are never serialized into the split-session transport.
+Set `model.options.additionalProperties.remoteProvider` to an opaque reference such as
+`worker-byok`. The worker resolves that reference from its own process environment:
+
+| Worker variable | Required | Meaning |
+|---|---|---|
+| `PHANTOM_COPILOT_PROVIDER_WORKER_BYOK_TYPE` | yes | `openai` or `azure`. |
+| `PHANTOM_COPILOT_PROVIDER_WORKER_BYOK_BASE_URL` | yes | Absolute worker-local HTTP(S) endpoint. |
+| `PHANTOM_COPILOT_PROVIDER_WORKER_BYOK_API_KEY` | no | Worker-local credential. |
+| `PHANTOM_COPILOT_PROVIDER_WORKER_BYOK_WIRE_API` | no | Wire API; defaults to `chat-completions`. |
+| `PHANTOM_COPILOT_PROVIDER_WORKER_BYOK_WIRE_MODEL` | no | Wire model override. |
+
+The reference is uppercased and `-` / `.` become `_` when constructing variable names. Unknown,
+malformed, or incompletely configured references fail closed. Headers are intentionally not accepted
+through this environment resolver; use a worker-local resolver supplied through
+`AgentServices.RemoteCopilotProviderResolver` when a provider requires them.
