@@ -326,6 +326,9 @@ public sealed class DataAccessAgentSessionRuntimeHostFactoryTests
         Assert.NotNull(running.LastRequest.AgentSessionEntity);
         Assert.Equal("session", running.LastRequest.AgentSessionEntity.Value
             .GetProperty("agent-session-id").GetString());
+        Assert.Equal(
+            @"C:\persisted-working-directory",
+            running.LastRequest.Parameters!["working-directory"]);
         Assert.Single(running.RunningSessions);
         Assert.Equal("interrupted", writes[0].GetProperty("runtime-state").GetString());
         Assert.Equal("33333333-3333-3333-3333-333333333333",
@@ -465,6 +468,10 @@ public sealed class DataAccessAgentSessionRuntimeHostFactoryTests
             ["host-profile-entity-id"] = Owner,
             ["ownership-generation"] = 3,
             ["continue-in-background"] = true,
+            ["parameter-values"] = new Dictionary<string, string>
+            {
+                ["working-directory"] = @"C:\persisted-working-directory",
+            },
             ["definition"] = new Dictionary<string, object?>
             {
                 ["kind"] = "prompt",

@@ -76,6 +76,7 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
                     CurrentSessionContext = sessionContext,
                 },
                 AgentDefinitionResolver = this.definitionResolver,
+                Parameters = ReadStringDictionary(data, "parameter-values"),
                 EntityId = persisted.EntityId.ToString(),
                 EntityName = intent.AgentSessionId,
                 AcquisitionMode = AgentChatAcquisitionMode.Local,
@@ -191,9 +192,15 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
         Usage = chat.Usage,
         InputQueues = chat.InputQueues.Snapshot,
         IsBusy = chat.IsBusy,
-        History = chat.History.Select(item => JsonSerializer.SerializeToElement(item)).ToArray(),
-        RunningItems = chat.RunningItems.Select(item => JsonSerializer.SerializeToElement(item)).ToArray(),
-        Tools = chat.GetToolSnapshot().Select(item => JsonSerializer.SerializeToElement(item)).ToArray(),
+        History = chat.History.Select(item => JsonSerializer.SerializeToElement(
+            item,
+            Microsoft.Extensions.AI.AIJsonUtilities.DefaultOptions)).ToArray(),
+        RunningItems = chat.RunningItems.Select(item => JsonSerializer.SerializeToElement(
+            item,
+            Microsoft.Extensions.AI.AIJsonUtilities.DefaultOptions)).ToArray(),
+        Tools = chat.GetToolSnapshot().Select(item => JsonSerializer.SerializeToElement(
+            item,
+            Microsoft.Extensions.AI.AIJsonUtilities.DefaultOptions)).ToArray(),
         Subagents = chat.SubAgents.Select(RemoteAgentSessionLease.SerializeSubagent).ToArray(),
         Modals = chat.Modals.ToArray(),
         ContinueInBackground = false,
@@ -207,6 +214,28 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
 
     private static long? ReadLong(JsonElement data, string name)
         => data.TryGetProperty(name, out var value) && value.TryGetInt64(out var number) ? number : null;
+
+    private static IReadOnlyDictionary<string, string>? ReadStringDictionary(
+        JsonElement data,
+        string propertyName)
+    {
+        if (!data.TryGetProperty(propertyName, out var value)
+            || value.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var property in value.EnumerateObject())
+        {
+            if (property.Value.ValueKind != JsonValueKind.String)
+            {
+                throw new AgentSessionUnavailableException();
+            }
+            result[property.Name] = property.Value.GetString()!;
+        }
+        return result;
+    }
 
     private static bool TryReadRuntimeEpoch(JsonElement data, out Guid epoch)
     {

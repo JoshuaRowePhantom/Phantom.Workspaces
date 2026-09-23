@@ -395,7 +395,10 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
     }
 
     private static IReadOnlyList<ChatMessage> DeserializeMessages(JsonElement messages)
-        => JsonSerializer.Deserialize<ChatMessage[]>(messages) ?? throw new InvalidOperationException("Messages are required.");
+        => JsonSerializer.Deserialize<ChatMessage[]>(
+            messages,
+            Microsoft.Extensions.AI.AIJsonUtilities.DefaultOptions)
+            ?? throw new InvalidOperationException("Messages are required.");
 }
 
 internal sealed class AgentSessionUnavailableException : Exception;

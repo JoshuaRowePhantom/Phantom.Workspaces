@@ -185,9 +185,11 @@ public sealed class ToolsetFactory : IToolsetFactory
             (tool, agentServices) =>
             {
                 _ = tool;
-                _ = agentServices;
+                var effectiveContext =
+                    agentServices.CurrentSessionContext as CurrentSessionContext
+                    ?? currentSessionContext;
                 return Task.FromResult<AIContextProvider?>(
-                    new CurrentSessionContextProvider(dataAccessLayer, currentSessionContext));
+                    new CurrentSessionContextProvider(dataAccessLayer, effectiveContext));
             },
             underlyingToolsetFactory);
     }

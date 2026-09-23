@@ -399,9 +399,15 @@ public sealed class RemoteAgentChat : IAgentChat
                 if (!this.runningById.Remove(e.RunId, out var completed))
                     throw new RemoteAgentProtocolException("A streaming completion referenced an unknown run.");
                 this.RunningItems.Remove(completed);
-                var completedItem = Deserialize<AgentChatHistoryItem>(e.Item);
-                this.History.Add(completedItem);
-                this.TurnCompleted?.Invoke(this, completedItem);
+                var completedItems = e.Items is { Count: > 0 }
+                    ? e.Items
+                    : [e.Item];
+                foreach (var value in completedItems)
+                {
+                    var completedItem = Deserialize<AgentChatHistoryItem>(value);
+                    this.History.Add(completedItem);
+                    this.TurnCompleted?.Invoke(this, completedItem);
+                }
                 break;
             case BusyChangedEvent e:
                 this.IsBusy = e.IsBusy;

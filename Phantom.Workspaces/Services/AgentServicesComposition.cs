@@ -8,6 +8,7 @@ using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Llm.Core.Transport.Chat;
 using Phantom.Workspaces.Tools;
 using Phantom.Workspaces.ViewModels;
+using Microsoft.Extensions.Logging;
 
 namespace Phantom.Workspaces.Services;
 
@@ -50,6 +51,35 @@ public static class AgentServicesComposition
         string? userComputerProfileOverride = null,
         ObservableLoggerFactory? loggerFactory = null,
         CancellationToken cancellationToken = default)
+        => await ComposeServicesAsync(
+            mainWindowViewModel,
+            agentPersistenceStore,
+            userComputerProfileOverride,
+            loggerFactory,
+            cancellationToken).ConfigureAwait(false);
+
+    /// <summary>
+    /// Composes the complete service bundle used when this process starts a persisted session for
+    /// a remote attachment. The running-chat factory already owns the persistence store, so this
+    /// variant does not replace it.
+    /// </summary>
+    public static async Task<AgentServices> ComposeRuntimeHostServicesAsync(
+        MainWindowViewModel mainWindowViewModel,
+        ILoggerFactory? loggerFactory = null,
+        CancellationToken cancellationToken = default)
+        => await ComposeServicesAsync(
+            mainWindowViewModel,
+            agentPersistenceStore: null,
+            userComputerProfileOverride: null,
+            loggerFactory,
+            cancellationToken).ConfigureAwait(false);
+
+    private static async Task<AgentServices> ComposeServicesAsync(
+        MainWindowViewModel mainWindowViewModel,
+        IAgentPersistenceStore? agentPersistenceStore,
+        string? userComputerProfileOverride,
+        ILoggerFactory? loggerFactory,
+        CancellationToken cancellationToken)
     {
         var dataAccessLayer = mainWindowViewModel.EntityBroker.EntityRepository.DataAccessLayer;
         var executionContext = new CurrentExecutionContextProvider(userComputerProfileOverride);

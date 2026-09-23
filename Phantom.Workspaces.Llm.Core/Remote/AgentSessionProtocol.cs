@@ -239,6 +239,7 @@ internal sealed record StreamingCompletedEvent : AgentSessionServerEvent
     public override string Type => "streaming-completed";
     public required string RunId { get; init; }
     public required JsonElement Item { get; init; }
+    public IReadOnlyList<JsonElement>? Items { get; init; }
 }
 internal sealed record BusyChangedEvent : AgentSessionServerEvent
 {

@@ -8,6 +8,7 @@ using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Secrets;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Phantom.Workspaces.Tests;
 
@@ -67,6 +68,26 @@ public sealed class AgentServicesCompositionTests
         Assert.NotNull(services.TrustProfilePolicyCompiler);
         Assert.NotNull(services.RemoteCopilotProviderResolver);
         await Task.CompletedTask;
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task AgentServicesComposition_ComposeRuntimeHostServices_CarriesRuntimeToolsWithoutReplacingPersistence()
+    {
+        var applicationServices = CreateApplicationServices(new object());
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel(
+            applicationServices: applicationServices);
+        await viewModel.InitializeAsync();
+
+        var services = await AgentServicesComposition.ComposeRuntimeHostServicesAsync(
+            viewModel,
+            NullLoggerFactory.Instance);
+
+        Assert.Null(services.AgentPersistenceStoreOverride);
+        Assert.NotNull(services.ToolsetFactory);
+        Assert.NotNull(services.ToolResourceFactory);
+        Assert.NotNull(services.CurrentSessionContext);
+        Assert.NotNull(services.AccountUpsertService);
+        Assert.Same(NullLoggerFactory.Instance, services.LoggerFactory);
     }
 
     [Fact]

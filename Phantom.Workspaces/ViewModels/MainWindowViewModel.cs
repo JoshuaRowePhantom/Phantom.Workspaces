@@ -917,16 +917,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             this.entityBroker!.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId,
             this.applicationServices.LoggerFactory);
 
+        var runtimeHostServices =
+            await Services.AgentServicesComposition.ComposeRuntimeHostServicesAsync(
+                this,
+                this.applicationServices.LoggerFactory);
         var composition = new Services.WorkspacesTransportComposition(
             this.entityBroker!.EntityRepository.DataAccessLayer,
             this.entityBroker.EntityRepository.WorkspaceEntitySession,
             hubFactories,
-            Services.AgentServicesComposition.ComposeHostServices(
-                this.applicationServices.SecretProvider,
-                this.applicationServices.McpOAuthOptions) with
-            {
-                LoggerFactory = this.applicationServices.LoggerFactory,
-            },
+            runtimeHostServices,
             registryProvider: this.applicationServices.TransportFactoryRegistryProvider,
             runningAgentChats: this.applicationServices.RunningAgentChats);
         this.transportComposition = composition;

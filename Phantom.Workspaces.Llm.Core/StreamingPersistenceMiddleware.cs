@@ -24,6 +24,8 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
     private readonly IAgentPersistenceStore store;
     private AgentSession? currentSession;
 
+    internal event Action<ChatMessage>? MessagePersisted;
+
     public StreamingPersistenceMiddleware(
         IChatClient inner,
         IncrementalPersistenceChatHistoryProvider provider,
@@ -163,5 +165,6 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
                 NewMessages = [message],
             },
             CancellationToken.None).ConfigureAwait(false);
+        this.MessagePersisted?.Invoke(message);
     }
 }

@@ -8,6 +8,7 @@ using Microsoft.Extensions.Time.Testing;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Core.Manifest;
 using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Services;
@@ -516,6 +517,66 @@ public sealed class RemoteAgentSessionScenarioTests
     }
 
     [Fact]
+    public async Task PersistedSession_SourceQueue_AgentResultPublishesToRemoteProjection()
+    {
+        const string prompt = "opening-query-visible";
+        const string answer = "agent-initiated-result";
+        await using var fixture = await ScenarioFixture.CreateAsync(
+            Session("source-agent-result", background: true));
+        var stream = fixture.Model.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(
+            new ChatResponseUpdate(ChatRole.Assistant, answer)
+            {
+                FinishReason = ChatFinishReason.Stop,
+            });
+        stream.Complete();
+        await using var proxy = await fixture.OpenProxyAsync(
+            "source-agent-result",
+            AgentSessionOpenIntent.StartOrAttach);
+        var owner = await fixture.OwnerChatAsync("source-agent-result", 0);
+        var projected = WaitForHistoryTextAsync(proxy.Chat, answer);
+        var persistedAnswer = WaitForPersistedTextAsync(
+            owner);
+
+        var result = await proxy.Chat.InputQueues.EnqueueAsync(
+            Enqueue(
+                proxy.Chat.InputQueues.DefaultQueue.Snapshot.QueueId,
+                prompt,
+                proxy.Chat.InputQueues.Snapshot.Revision),
+            TestContext.Current.CancellationToken);
+        await projected;
+        await persistedAnswer;
+
+        Assert.Equal(AgentInputQueueCommandStatus.Applied, result.Status);
+        Assert.Contains(
+            proxy.Chat.History,
+            item => item.Role == ChatRole.User
+                && item.Contents.OfType<TextContent>().Any(
+                    content => content.Text.Contains(prompt, StringComparison.Ordinal)));
+        Assert.Contains(
+            proxy.Chat.History,
+            item => item.Role == ChatRole.Assistant
+                && item.Contents.OfType<TextContent>().Any(content => content.Text == answer));
+        Assert.Empty(proxy.Chat.RunningItems);
+        Assert.False(proxy.Chat.IsBusy);
+
+        var persisted = await fixture.Persistence.ReadMessagesAsync(
+            new ReadMessagesRequest
+            {
+                AgentSessionId = "source-agent-result",
+            },
+            TestContext.Current.CancellationToken);
+        Assert.Contains(
+            persisted,
+            message => message.Role == ChatRole.User
+                && message.Contents.OfType<TextContent>().Any(content => content.Text == prompt));
+        Assert.Contains(
+            persisted,
+            message => message.Role == ChatRole.Assistant
+                && message.Contents.OfType<TextContent>().Any(content => content.Text == answer));
+    }
+
+    [Fact]
     public async Task Disposal_ClientChannelLost_ReconnectWithinGrace_RuntimeAndChildrenSurvive()
     {
         await using var fixture = await ScenarioFixture.CreateAsync(Session("grace"));
@@ -895,7 +956,55 @@ public sealed class RemoteAgentSessionScenarioTests
             if (chat.History.Count >= count)
                 changed.TrySetResult();
         }
+
         void Remove() => ((INotifyCollectionChanged)chat.History).CollectionChanged -= OnChanged;
+    }
+
+    private static Task WaitForHistoryTextAsync(IAgentChat chat, string expected)
+    {
+        if (Contains())
+            return Task.CompletedTask;
+        var completion = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        ((INotifyCollectionChanged)chat.History).CollectionChanged += OnChanged;
+        if (Contains())
+            Complete();
+        return completion.Task;
+
+        bool Contains() => chat.History.Any(
+            item => item.Contents.OfType<TextContent>().Any(
+                content => content.Text == expected));
+
+        void OnChanged(object? sender, NotifyCollectionChangedEventArgs args)
+        {
+            if (Contains())
+                Complete();
+        }
+
+        void Complete()
+        {
+            ((INotifyCollectionChanged)chat.History).CollectionChanged -= OnChanged;
+            completion.TrySetResult();
+        }
+
+    }
+
+    private static Task WaitForPersistedTextAsync(
+        AgentChat chat)
+    {
+        var middleware = Assert.IsType<StreamingPersistenceMiddleware>(
+            chat.GetService(typeof(StreamingPersistenceMiddleware)));
+        var completion = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        middleware.MessagePersisted += OnPersisted;
+        return completion.Task;
+
+        void OnPersisted(ChatMessage message)
+        {
+            _ = message;
+            middleware.MessagePersisted -= OnPersisted;
+            completion.TrySetResult();
+        }
     }
 
     private static Task WaitForModalCountAsync(RemoteAgentChat chat, int count)
@@ -1076,8 +1185,9 @@ public sealed class RemoteAgentSessionScenarioTests
         private ScenarioFixture()
         {
             this.data = new InMemoryDataAccessLayer(timeProvider: this.Time);
+            this.Persistence = new InMemoryAgentPersistenceStore(this.Time);
             this.chatFactory = new AgentChatFactory(
-                new InMemoryAgentPersistenceStore(Time),
+                this.Persistence,
                 new AgentServices { ChatClientOverride = this.Model },
                 TaskScheduler.Default);
             this.runningChats = new RunningAgentChatTable(this.chatFactory);
@@ -1102,6 +1212,7 @@ public sealed class RemoteAgentSessionScenarioTests
         internal FakeTimeProvider Time { get; } =
             new(DateTimeOffset.Parse("2026-09-14T00:00:00Z"));
         internal DeterministicTestChatClient Model { get; } = new();
+        internal InMemoryAgentPersistenceStore Persistence { get; }
         internal ObservableTransportListener Listener { get; }
 
         internal static async Task<ScenarioFixture> CreateAsync(params ScenarioSession[] sessions)
