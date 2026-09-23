@@ -47,7 +47,11 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
         timeout.CancelAfter(TimeSpan.FromSeconds(80));
         var ct = timeout.Token;
         await using var server = new ScriptedByokChatServer();
-        var conversation = server.AddConversation("daemon-to-shade", _ => true);
+        var conversation = server.AddConversation(
+            "daemon-to-shade",
+            request => request.AnyMessageContains(
+                "user",
+                "opening-query"));
         EnqueueSessionToolCall(conversation, "session-tool-first");
         EnqueueTextResponse(conversation, "daemon-shade-first-result");
         EnqueueSessionToolCall(conversation, "session-tool-restored");
