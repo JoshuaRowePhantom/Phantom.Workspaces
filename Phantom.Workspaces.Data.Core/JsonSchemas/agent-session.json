@@ -26,11 +26,36 @@
       "format": "uuid",
       "description": "Entity ID of the user-computer-profile hosting this agent session."
     },
+    "owning-profile-entity-id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Current authoritative runtime owner. Set when ownership is acquired or transferred; host-profile-entity-id remains the legacy fallback."
+    },
     "ownership-generation": {
       "type": "integer",
       "minimum": 0,
       "default": 0,
       "description": "Monotonic generation of the profile ownership lease."
+    },
+    "runtime-state": {
+      "type": "string",
+      "enum": ["running", "stopped", "interrupted"],
+      "description": "Persisted state of the owner runtime."
+    },
+    "runtime-epoch": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique epoch of the currently running owner runtime."
+    },
+    "runtime-lease-expiry": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Authoritative expiry of the current runtime ownership lease."
+    },
+    "last-stopped-runtime-epoch": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Epoch most recently stopped or recovered as interrupted."
     },
     "trust-profile-reference": {
       "type": "string",
@@ -115,7 +140,9 @@
   },
   "dependentRequired": {
     "trust-profile-reference": ["expected-trust-profile-revision"],
-    "expected-trust-profile-revision": ["trust-profile-reference"]
+    "expected-trust-profile-revision": ["trust-profile-reference"],
+    "runtime-epoch": ["runtime-lease-expiry"],
+    "runtime-lease-expiry": ["runtime-epoch"]
   },
   "required": [
     "entity-types",

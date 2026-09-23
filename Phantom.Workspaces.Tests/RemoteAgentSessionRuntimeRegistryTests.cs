@@ -32,6 +32,26 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
     }
 
     [Fact]
+    public async Task GetOrStartAsync_HistoryUnavailable_AllowsLifecycleCleanup()
+    {
+        var registry = new RemoteAgentSessionRuntimeRegistry(TimeProvider.System);
+        var chat = Chat();
+        Assert.Null(chat.Object.History);
+        var lease = Lease(background: true, chat: chat.Object);
+
+        Assert.Same(
+            lease,
+            await registry.GetOrStartAsync(
+                Intent(),
+                _ => Task.FromResult(lease),
+                TestContext.Current.CancellationToken));
+        await registry.DisposeAsync();
+
+        Assert.True(lease.IsFenced);
+        chat.Verify(value => value.DisposeAsync(), Times.Once);
+    }
+
+    [Fact]
     public async Task GetOrStartAsync_CancelledFactory_RemovesFailedEntry()
     {
         await using var registry = new RemoteAgentSessionRuntimeRegistry(TimeProvider.System);

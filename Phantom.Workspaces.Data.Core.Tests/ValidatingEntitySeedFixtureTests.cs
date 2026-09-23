@@ -128,6 +128,62 @@ public sealed class ValidatingEntitySeedFixtureTests
     }
 
     [Fact]
+    public async Task ValidatingEntitySeedFixture_AgentSessionRuntimeFields_ValidateOnReplace()
+    {
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var sessionId = new EntityId("10000000-0000-4000-8000-000000000006");
+        await fixture.SeedValidEntityAsync(
+            JsonDocument.Parse(
+                $$"""
+                {
+                  "entity-id": "{{sessionId}}",
+                  "entity-types": ["entity", "agent-session"],
+                  "agent-session-id": "runtime-fields"
+                }
+                """).RootElement);
+        var snapshot = Assert.Single(
+            Assert.Single(
+                (await fixture.DataAccessLayer.GetAsync(
+                    new GetRequest
+                    {
+                        Entities = [new GetEntityRequest { EntityId = sessionId }],
+                        Timestamps = [null],
+                    })).Batches).Entities);
+        var values = snapshot.Data!.Value.EnumerateObject().ToDictionary(
+            property => property.Name,
+            property => (object?)property.Value.Clone(),
+            StringComparer.Ordinal);
+        values["owning-profile-entity-id"] =
+            "20000000-0000-4000-8000-000000000001";
+        values["runtime-state"] = "running";
+        values["runtime-epoch"] =
+            "30000000-0000-4000-8000-000000000001";
+        values["runtime-lease-expiry"] =
+            "2026-09-23T12:00:00.0000000+00:00";
+
+        var result = await fixture.DataAccessLayer.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown { Text = "Persist runtime lease fields." },
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = sessionId,
+                        ConcurrencyTag = snapshot.ConcurrencyTag,
+                        Data = JsonSerializer.SerializeToElement(values),
+                        EntityChangeMode = EntityChangeMode.Replace,
+                    },
+                ],
+            });
+
+        Assert.Empty(Assert.Single(result.EntityResults).Errors);
+    }
+
+    [Fact]
     public async Task CanonicalFixtures_AllSeededEntityTypes_ValidateThroughProductionPipeline()
     {
         var fixture = await ValidatingEntitySeedFixture.CreateAsync();

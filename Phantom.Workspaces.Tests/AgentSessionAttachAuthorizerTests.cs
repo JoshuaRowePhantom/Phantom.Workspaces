@@ -23,6 +23,23 @@ public sealed class AgentSessionAttachAuthorizerTests
     }
 
     [Fact]
+    public async Task AuthorizeAsync_ValidatedProfileUserReference_ReturnsAllow()
+    {
+        var layer = Layer(ResultWithUserReference());
+
+        var decision = await new AgentSessionAttachAuthorizer(layer.Object)
+            .AuthorizeAsync(
+                Peer(UserId) with
+                {
+                    UserComputerProfileEntityId = NewOwnerId,
+                },
+                Request(),
+                TestContext.Current.CancellationToken);
+
+        Assert.True(decision.IsAllowed);
+    }
+
+    [Fact]
     public async Task AuthorizeAsync_UnrelatedPeerDenied_ReturnsIndistinguishableDenial()
     {
         var layer = Layer(Result(UserId, UserId));
@@ -112,6 +129,33 @@ public sealed class AgentSessionAttachAuthorizerTests
                             """),
                         Entity(OwnerId, $$"""{"user-entity-id":"{{ownerUserId}}"}"""),
                         Entity(NewOwnerId, $$"""{"user-entity-id":"{{newOwnerUserId}}"}"""),
+                    ],
+                },
+            ],
+        };
+
+    private static QueryResult ResultWithUserReference()
+        => new()
+        {
+            Batches =
+            [
+                new TimestampedQueryBatch
+                {
+                    Timestamp = new Timestamp(DateTimeOffset.UnixEpoch, "change"),
+                    Entities =
+                    [
+                        Entity(Guid.NewGuid().ToString(), $$"""
+                            {"agent-session-id":"{{SessionId}}","owning-profile-entity-id":"{{OwnerId}}","ownership-generation":1}
+                            """),
+                        Entity(OwnerId, """
+                            {"user-reference":["users","username","validated"]}
+                            """),
+                        Entity(NewOwnerId, """
+                            {"user-reference":["users","username","validated"]}
+                            """),
+                        Entity(UserId, """
+                            {"names":[["users","username","validated"]]}
+                            """),
                     ],
                 },
             ],

@@ -50,6 +50,11 @@ internal sealed class AgentSessionAttachAuthorizer : IAgentSessionAttachAuthoriz
                     ClauseIdentifier = new QueryClauseIdentifier("profiles"),
                     Clause = new EntityTypeQueryClause { EntityTypeNames = new EntityTypeNameSet(["user-computer-profile"]) },
                 },
+                new TopLevelQueryClause
+                {
+                    ClauseIdentifier = new QueryClauseIdentifier("users"),
+                    Clause = new EntityTypeQueryClause { EntityTypeNames = new EntityTypeNameSet(["user"]) },
+                },
             ],
             Timestamps = [null],
         }, ct).ConfigureAwait(false);
@@ -68,7 +73,7 @@ internal sealed class AgentSessionAttachAuthorizer : IAgentSessionAttachAuthoriz
         var ownerProfile = entities.FirstOrDefault(entity =>
             string.Equals(entity.EntityId.ToString(), owner, StringComparison.OrdinalIgnoreCase));
         if (ownerProfile?.Data is not JsonElement ownerData
-            || !string.Equals(ReadString(ownerData, "user-entity-id"), peer.UserEntityId, StringComparison.OrdinalIgnoreCase))
+            || !ProfileBelongsToUser(ownerData, peer.UserEntityId, entities))
             return Denied;
 
         if (peer.UserComputerProfileEntityId is { } peerProfileId)
@@ -76,7 +81,7 @@ internal sealed class AgentSessionAttachAuthorizer : IAgentSessionAttachAuthoriz
             var peerProfile = entities.FirstOrDefault(entity =>
                 string.Equals(entity.EntityId.ToString(), peerProfileId, StringComparison.OrdinalIgnoreCase));
             if (peerProfile?.Data is not JsonElement peerData
-                || !string.Equals(ReadString(peerData, "user-entity-id"), peer.UserEntityId, StringComparison.OrdinalIgnoreCase))
+                || !ProfileBelongsToUser(peerData, peer.UserEntityId, entities))
                 return Denied;
         }
 
@@ -87,10 +92,7 @@ internal sealed class AgentSessionAttachAuthorizer : IAgentSessionAttachAuthoriz
             var newOwner = entities.FirstOrDefault(entity =>
                 string.Equals(entity.EntityId.ToString(), newOwnerId, StringComparison.OrdinalIgnoreCase));
             if (newOwner?.Data is not JsonElement newOwnerData
-                || !string.Equals(
-                    ReadString(newOwnerData, "user-entity-id"),
-                    peer.UserEntityId,
-                    StringComparison.OrdinalIgnoreCase))
+                || !ProfileBelongsToUser(newOwnerData, peer.UserEntityId, entities))
                 return Denied;
         }
 
@@ -107,6 +109,57 @@ internal sealed class AgentSessionAttachAuthorizer : IAgentSessionAttachAuthoriz
     }
 
     private static AgentSessionAuthorizationDecision Denied => new() { IsAllowed = false };
+
+    private static bool ProfileBelongsToUser(
+        JsonElement profile,
+        string userEntityId,
+        IReadOnlyCollection<QueryEntitySnapshot> entities)
+    {
+        if (string.Equals(
+                ReadString(profile, "user-entity-id"),
+                userEntityId,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (!profile.TryGetProperty("user-reference", out var reference)
+            || reference.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+        var components = reference.EnumerateArray()
+            .Select(static value =>
+                value.ValueKind == JsonValueKind.String
+                    ? value.GetString()
+                    : null)
+            .ToArray();
+        if (components.Length == 0 || components.Any(static value => value is null))
+        {
+            return false;
+        }
+
+        return entities.Any(entity =>
+            string.Equals(
+                entity.EntityId.ToString(),
+                userEntityId,
+                StringComparison.OrdinalIgnoreCase)
+            && entity.Data is JsonElement user
+            && HasEntityName(user, components!));
+    }
+
+    private static bool HasEntityName(
+        JsonElement entity,
+        IReadOnlyList<string?> expected)
+        => entity.TryGetProperty("names", out var names)
+            && names.ValueKind == JsonValueKind.Array
+            && names.EnumerateArray().Any(name =>
+                name.ValueKind == JsonValueKind.Array
+                && name.GetArrayLength() == expected.Count
+                && name.EnumerateArray()
+                    .Select(static value => value.GetString())
+                    .SequenceEqual(expected, StringComparer.Ordinal));
+
     private static string? ReadString(JsonElement data, string name)
         => data.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
     private static long? ReadInt64(JsonElement data, string name)

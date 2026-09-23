@@ -21,6 +21,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     private readonly HashSet<AgentChatHistoryItem> runningHistoryItems =
         new(ReferenceEqualityComparer.Instance);
     private readonly TimeProvider timeProvider;
+    private readonly AgentChatHistoryCollection? history;
     private readonly Func<bool, CancellationToken, ValueTask> persistRetentionAsync;
     private readonly Func<CancellationToken, ValueTask> persistTerminalAsync;
     private readonly Func<AgentSessionSnapshot> snapshotFactory;
@@ -62,6 +63,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         this.runtimeLifetime = runtimeLifetime;
         this.publisherLifetimeHooks = publisherLifetimeHooks;
         this.SessionContext = sessionContext;
+        this.history = this.Chat.History;
         this.Replay = new AgentSessionReplayBuffer(epoch, this.timeProvider);
         var initialQueues = this.Chat.InputQueues.Snapshot.Queues;
         this.queueIds = initialQueues.IsDefault
@@ -70,7 +72,8 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         this.Chat.InformationChanged += this.OnInformationChanged;
         this.Chat.UsageChanged += this.OnUsageChanged;
         this.Chat.ToolsChanged += this.OnToolsChanged;
-        ((INotifyCollectionChanged)this.Chat.History).CollectionChanged += this.OnHistoryChanged;
+        if (this.history is not null)
+            ((INotifyCollectionChanged)this.history).CollectionChanged += this.OnHistoryChanged;
         this.Chat.InputQueues.Changed += this.OnQueuesChanged;
         ((INotifyCollectionChanged)this.Chat.RunningItems).CollectionChanged += this.OnRunningItemsChanged;
         foreach (var item in this.Chat.RunningItems)
@@ -586,7 +589,8 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         this.Chat.InformationChanged -= this.OnInformationChanged;
         this.Chat.UsageChanged -= this.OnUsageChanged;
         this.Chat.ToolsChanged -= this.OnToolsChanged;
-        ((INotifyCollectionChanged)this.Chat.History).CollectionChanged -= this.OnHistoryChanged;
+        if (this.history is not null)
+            ((INotifyCollectionChanged)this.history).CollectionChanged -= this.OnHistoryChanged;
         this.Chat.InputQueues.Changed -= this.OnQueuesChanged;
         ((INotifyCollectionChanged)this.Chat.RunningItems).CollectionChanged -= this.OnRunningItemsChanged;
         lock (this.gate)
@@ -1082,7 +1086,8 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
                 {
                     if (!entry.Key.Items.Any(item => ReferenceEquals(item, oldItem))
                         && this.runningHistoryItems.Remove(oldItem)
-                        && this.Chat.History.Any(item => ReferenceEquals(item, oldItem)))
+                        && this.history is not null
+                        && this.history.Any(item => ReferenceEquals(item, oldItem)))
                     {
                         this.PublishHistoryItemUnderLock(oldItem);
                     }

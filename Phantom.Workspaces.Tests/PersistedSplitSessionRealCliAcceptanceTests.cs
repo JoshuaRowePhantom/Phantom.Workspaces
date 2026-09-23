@@ -6,7 +6,6 @@ using GitHub.Copilot;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Data;
-using Phantom.Workspaces.Data.Offline;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Core.Manifest;
 using Phantom.Workspaces.Llm.Core.Tests;
@@ -15,6 +14,7 @@ using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.AgentSessions;
+using Phantom.Workspaces.Testing;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.ReverseHttp;
 using Phantom.Workspaces.Transport.Tests.Infrastructure;
@@ -473,9 +473,11 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
                 shadeIdentities,
                 executorEntityId: ShadeProfile.Value);
 
-            var data = new InMemoryDataAccessLayer();
+            var seedFixture = await ValidatingEntitySeedFixture.CreateAsync(
+                cancellationToken);
+            var data = seedFixture.DataAccessLayer;
             var sessionEntity = await SeedAsync(
-                data,
+                seedFixture,
                 providerBaseUrl,
                 HubRelayHarness.DefaultHubUrl,
                 DateTimeOffset.UtcNow,
@@ -620,7 +622,7 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
         }
 
         private static async Task<JsonElement> SeedAsync(
-            InMemoryDataAccessLayer data,
+            ValidatingEntitySeedFixture fixture,
             string providerBaseUrl,
             string hubUrl,
             DateTimeOffset now,
@@ -706,51 +708,39 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
                   }
                 }
                 """);
-            var changes = new List<EntityChange>
+            var documents = new List<JsonElement>
             {
-                Change(UserEntity()),
-                Change(Profile(SourceProfile, "SOURCE", hubUrl, now)),
-                Change(Profile(DaemonProfile, "DAEMON", hubUrl, now)),
-                Change(Profile(ShadeProfile, "SHADE", hubUrl, now)),
-                Change(manifest),
-                new()
-                {
-                    EntityId = new EntityId(sessionData.GetProperty("entity-id").GetString()!),
-                    Data = sessionData,
-                    EntityChangeMode = EntityChangeMode.Replace,
-                },
+                UserEntity(),
+                ComputerEntity(SourceProfile, "SOURCE"),
+                ComputerEntity(DaemonProfile, "DAEMON"),
+                ComputerEntity(ShadeProfile, "SHADE"),
+                Profile(SourceProfile, "SOURCE", hubUrl, now),
+                Profile(DaemonProfile, "DAEMON", hubUrl, now),
+                Profile(ShadeProfile, "SHADE", hubUrl, now),
+                manifest,
+                sessionData,
             };
-            var result = await data.UpdateAsync(
-                new UpdateRequest
-                {
-                    UpdateMetadata = new UpdateMetadata
-                    {
-                        Comment = new Markdown
-                        {
-                            Text = "Seed persisted split-session acceptance",
-                        },
-                    },
-                    Changes = changes,
-                },
-                cancellationToken);
-            Assert.All(result.EntityResults, entity => Assert.Empty(entity.Errors));
+            await fixture.SeedManyValidAsync(documents, cancellationToken);
             return sessionData;
         }
-
-        private static EntityChange Change(JsonElement data)
-            => new()
-            {
-                EntityId = new EntityId(data.GetProperty("entity-id").GetString()!),
-                Data = data,
-                EntityChangeMode = EntityChangeMode.Replace,
-            };
 
         private static JsonElement UserEntity()
             => Json($$"""
                 {
                   "entity-id": "{{UserId}}",
                   "entity-types": ["entity", "user"],
-                  "names": [["users", "acceptance"]]
+                  "names": [["users", "username", "acceptance"]]
+                }
+                """);
+
+        private static JsonElement ComputerEntity(
+            EntityId profile,
+            string computerName)
+            => Json($$"""
+                {
+                  "entity-id": "{{ComputerId(profile)}}",
+                  "entity-types": ["entity", "computer"],
+                  "names": [["computers", "hostname", "{{computerName}}"]]
                 }
                 """);
 
@@ -764,7 +754,8 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
                   "entity-id": "{{id}}",
                   "entity-types": ["entity", "user-computer-profile"],
                   "names": [["profiles", "{{computerName}}"]],
-                  "user-entity-id": "{{UserId}}",
+                  "computer-reference": ["computers", "hostname", "{{computerName}}"],
+                  "user-reference": ["users", "username", "acceptance"],
                   "display-name": {"default": "{{computerName}}"},
                   "reachability": {
                     "routes": {
