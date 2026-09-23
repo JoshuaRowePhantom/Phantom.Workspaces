@@ -1,4 +1,6 @@
 using System.Collections.ObjectModel;
+using System.Collections.Immutable;
+using System.Collections.Specialized;
 using System.Text.Json;
 using AgentSchema;
 using Microsoft.Extensions.AI;
@@ -44,6 +46,23 @@ public interface IAgentChat : IAsyncDisposable, IServiceProvider
 
     Task InterruptAsync(CancellationToken ct = default);
 }
+
+internal interface IAgentChatRunningItemsSnapshotProvider
+{
+    void SubscribeAndCaptureRunningItems(
+        NotifyCollectionChangedEventHandler runningItemsChanged,
+        NotifyCollectionChangedEventHandler runningItemChanged,
+        Action<ImmutableArray<AgentChatRunningItemSnapshot>> initialize);
+
+    void UnsubscribeRunningItems(
+        NotifyCollectionChangedEventHandler runningItemsChanged,
+        NotifyCollectionChangedEventHandler runningItemChanged,
+        IReadOnlyList<AgentChatRunningItem> subscribedItems);
+}
+
+internal readonly record struct AgentChatRunningItemSnapshot(
+    AgentChatRunningItem Item,
+    ImmutableArray<AgentChatHistoryItem> Items);
 
 /// <summary>
 /// Immutable snapshot of session-level LLM token/cost usage.

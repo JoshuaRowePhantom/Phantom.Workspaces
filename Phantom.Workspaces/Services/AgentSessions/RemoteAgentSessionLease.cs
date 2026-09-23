@@ -2,6 +2,7 @@ using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Transport;
 using ProtocolReplayCursor = Phantom.Workspaces.Llm.Remote.ReplayCursor;
+using System.Collections.Immutable;
 using System.Collections.Specialized;
 using System.Text.Json;
 using System.Threading.Channels;
@@ -18,6 +19,9 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     private readonly Dictionary<Guid, CommandCacheEntry> commands = [];
     private readonly Dictionary<AgentChatRunningItem, string> runningItemIds =
         new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<AgentChatRunningItem, ImmutableArray<AgentChatHistoryItem>> runningItemSnapshots =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly List<AgentChatRunningItem> runningItemOrder = [];
     private readonly HashSet<AgentChatHistoryItem> runningHistoryItems =
         new(ReferenceEqualityComparer.Instance);
     private readonly TimeProvider timeProvider;
@@ -28,6 +32,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     private readonly AgentSessionOwnershipLease? ownershipLease;
     private readonly IAsyncDisposable? runtimeLifetime;
     private readonly AttachmentPublisherLifetimeHooks? publisherLifetimeHooks;
+    private readonly IAgentChatRunningItemsSnapshotProvider? runningItemsSnapshotProvider;
     private HashSet<string> queueIds;
     private Task? termination;
     private string terminalReason = "runtime-stopped";
@@ -62,6 +67,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         this.ownershipLease = ownershipLease;
         this.runtimeLifetime = runtimeLifetime;
         this.publisherLifetimeHooks = publisherLifetimeHooks;
+        this.runningItemsSnapshotProvider = chat as IAgentChatRunningItemsSnapshotProvider;
         this.SessionContext = sessionContext;
         this.history = this.Chat.History;
         this.Replay = new AgentSessionReplayBuffer(epoch, this.timeProvider);
@@ -69,20 +75,41 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         this.queueIds = initialQueues.IsDefault
             ? []
             : initialQueues.Select(queue => queue.QueueId).ToHashSet(StringComparer.Ordinal);
+        if (this.runningItemsSnapshotProvider is not null)
+        {
+            this.runningItemsSnapshotProvider.SubscribeAndCaptureRunningItems(
+                this.OnRunningItemsChanged,
+                this.OnRunningItemUpdated,
+                snapshots =>
+                {
+                    foreach (var snapshot in snapshots)
+                    {
+                        this.runningItemOrder.Add(snapshot.Item);
+                        this.runningItemSnapshots.Add(snapshot.Item, snapshot.Items);
+                        _ = this.GetOrCreateRunningItemIdUnderLock(snapshot.Item);
+                        foreach (var historyItem in snapshot.Items)
+                            this.runningHistoryItems.Add(historyItem);
+                    }
+                });
+        }
+        else
+        {
+            ((INotifyCollectionChanged)this.Chat.RunningItems).CollectionChanged +=
+                this.OnRunningItemsChanged;
+            if (this.Chat.RunningItems.Count != 0)
+            {
+                ((INotifyCollectionChanged)this.Chat.RunningItems).CollectionChanged -=
+                    this.OnRunningItemsChanged;
+                throw new InvalidOperationException(
+                    "Chats with active running items must provide synchronized snapshots.");
+            }
+        }
         this.Chat.InformationChanged += this.OnInformationChanged;
         this.Chat.UsageChanged += this.OnUsageChanged;
         this.Chat.ToolsChanged += this.OnToolsChanged;
         if (this.history is not null)
             ((INotifyCollectionChanged)this.history).CollectionChanged += this.OnHistoryChanged;
         this.Chat.InputQueues.Changed += this.OnQueuesChanged;
-        ((INotifyCollectionChanged)this.Chat.RunningItems).CollectionChanged += this.OnRunningItemsChanged;
-        foreach (var item in this.Chat.RunningItems)
-        {
-            _ = this.GetOrCreateRunningItemIdUnderLock(item);
-            foreach (var historyItem in item.Items)
-                this.runningHistoryItems.Add(historyItem);
-            item.Items.CollectionChanged += this.OnRunningItemUpdated;
-        }
         ((INotifyCollectionChanged)this.Chat.SubAgents).CollectionChanged += this.OnSubagentsChanged;
         ((INotifyCollectionChanged)this.Chat.Modals).CollectionChanged += this.OnModalsChanged;
     }
@@ -592,12 +619,29 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         if (this.history is not null)
             ((INotifyCollectionChanged)this.history).CollectionChanged -= this.OnHistoryChanged;
         this.Chat.InputQueues.Changed -= this.OnQueuesChanged;
-        ((INotifyCollectionChanged)this.Chat.RunningItems).CollectionChanged -= this.OnRunningItemsChanged;
+        AgentChatRunningItem[] subscribedItems;
+        lock (this.gate)
+            subscribedItems = this.runningItemIds.Keys.ToArray();
+        if (this.runningItemsSnapshotProvider is not null)
+        {
+            this.runningItemsSnapshotProvider.UnsubscribeRunningItems(
+                this.OnRunningItemsChanged,
+                this.OnRunningItemUpdated,
+                subscribedItems);
+        }
+        else
+        {
+            ((INotifyCollectionChanged)this.Chat.RunningItems).CollectionChanged -=
+                this.OnRunningItemsChanged;
+            foreach (var item in subscribedItems)
+                item.Items.CollectionChanged -= this.OnRunningItemUpdated;
+        }
         lock (this.gate)
         {
-            foreach (var item in this.runningItemIds.Keys)
-                item.Items.CollectionChanged -= this.OnRunningItemUpdated;
             this.runningItemIds.Clear();
+            this.runningItemSnapshots.Clear();
+            this.runningItemOrder.Clear();
+            this.runningHistoryItems.Clear();
         }
         ((INotifyCollectionChanged)this.Chat.SubAgents).CollectionChanged -= this.OnSubagentsChanged;
         ((INotifyCollectionChanged)this.Chat.Modals).CollectionChanged -= this.OnModalsChanged;
@@ -1017,9 +1061,14 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
                 foreach (AgentChatRunningItem item in args.OldItems)
                 {
                     item.Items.CollectionChanged -= this.OnRunningItemUpdated;
+                    this.runningItemOrder.Remove(item);
+                    if (!this.runningItemSnapshots.Remove(item, out var completedItems)
+                        || completedItems.IsDefault)
+                    {
+                        completedItems = ImmutableArray<AgentChatHistoryItem>.Empty;
+                    }
                     if (this.runningItemIds.Remove(item, out var runId))
                     {
-                        var completedItems = item.Items.ToArray();
                         var terminalItem = completedItems.LastOrDefault()
                             ?? new AgentChatHistoryItem
                             {
@@ -1046,13 +1095,26 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             }
             if (args.NewItems is not null)
             {
+                var insertionIndex = args.NewStartingIndex >= 0
+                    ? args.NewStartingIndex
+                    : this.runningItemOrder.Count;
                 foreach (AgentChatRunningItem item in args.NewItems)
                 {
                     var runId = this.GetOrCreateRunningItemIdUnderLock(item);
-                    foreach (var historyItem in item.Items)
+                    // AgentChat raises this notification while holding its running-item writer gate.
+                    var currentItems = item.Items.ToImmutableArray();
+                    if (!this.runningItemSnapshots.ContainsKey(item))
+                    {
+                        this.runningItemOrder.Insert(
+                            Math.Min(insertionIndex, this.runningItemOrder.Count),
+                            item);
+                        insertionIndex++;
+                    }
+                    this.runningItemSnapshots[item] = currentItems;
+                    foreach (var historyItem in currentItems)
                         this.runningHistoryItems.Add(historyItem);
                     item.Items.CollectionChanged += this.OnRunningItemUpdated;
-                    var initialItem = item.Items.FirstOrDefault()
+                    var initialItem = currentItems.FirstOrDefault()
                         ?? new AgentChatHistoryItem
                         {
                             Role = AgentChatHistoryItem.DiagnosticChatRole,
@@ -1080,11 +1142,14 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             if (this.fenced) return;
             var entry = this.runningItemIds.FirstOrDefault(pair => ReferenceEquals(pair.Key.Items, items));
             if (entry.Key is null) return;
+            // AgentChat raises this notification while holding its running-item writer gate.
+            var currentItems = entry.Key.Items.ToImmutableArray();
+            this.runningItemSnapshots[entry.Key] = currentItems;
             if (args.OldItems is not null)
             {
                 foreach (AgentChatHistoryItem oldItem in args.OldItems)
                 {
-                    if (!entry.Key.Items.Any(item => ReferenceEquals(item, oldItem))
+                    if (!currentItems.Any(item => ReferenceEquals(item, oldItem))
                         && this.runningHistoryItems.Remove(oldItem)
                         && this.history is not null
                         && this.history.Any(item => ReferenceEquals(item, oldItem)))
@@ -1093,13 +1158,13 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
                     }
                 }
             }
-            foreach (var historyItem in entry.Key.Items)
+            foreach (var historyItem in currentItems)
                 this.runningHistoryItems.Add(historyItem);
             this.PublishFromOwner(new StreamingUpdatedEvent
             {
                 RunId = entry.Value,
                 Update = JsonSerializer.SerializeToElement(
-                    entry.Key.Items.ToArray(),
+                    currentItems,
                     Microsoft.Extensions.AI.AIJsonUtilities.DefaultOptions),
             });
         }
@@ -1119,12 +1184,12 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         var snapshot = this.snapshotFactory();
         return snapshot with
         {
-            RunningItems = this.Chat.RunningItems
+            RunningItems = this.runningItemOrder
                 .Select(item => JsonSerializer.SerializeToElement(
                     new
                     {
                         RunId = this.GetOrCreateRunningItemIdUnderLock(item),
-                        Items = item.Items.ToArray(),
+                        Items = this.runningItemSnapshots[item],
                     },
                     Microsoft.Extensions.AI.AIJsonUtilities.DefaultOptions))
                 .ToArray(),

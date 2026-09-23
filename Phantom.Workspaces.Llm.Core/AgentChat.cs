@@ -32,7 +32,7 @@ namespace Phantom.Workspaces.Llm;
 /// otherwise a dedicated exclusive scheduler that serializes foreground work so the
 /// running-item collections are never mutated concurrently off the UI thread.
 /// </summary>
-public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAgent, ISubAgentTable
+public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvider, ISubAgentChatRegistry, IRunningSubAgent, ISubAgentTable
 {
     internal static TimeSpan DisposeDrainTimeout { get; } = TimeSpan.FromSeconds(2);
 
@@ -628,6 +628,24 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
             this.cts.Token,
             TaskCreationOptions.DenyChildAttach,
             this.foregroundScheduler).Unwrap();
+
+    void IAgentChatRunningItemsSnapshotProvider.SubscribeAndCaptureRunningItems(
+        System.Collections.Specialized.NotifyCollectionChangedEventHandler runningItemsChanged,
+        System.Collections.Specialized.NotifyCollectionChangedEventHandler runningItemChanged,
+        Action<System.Collections.Immutable.ImmutableArray<AgentChatRunningItemSnapshot>> initialize)
+        => this.runningItemOperations.SubscribeAndCapture(
+            runningItemsChanged,
+            runningItemChanged,
+            initialize);
+
+    void IAgentChatRunningItemsSnapshotProvider.UnsubscribeRunningItems(
+        System.Collections.Specialized.NotifyCollectionChangedEventHandler runningItemsChanged,
+        System.Collections.Specialized.NotifyCollectionChangedEventHandler runningItemChanged,
+        IReadOnlyList<AgentChatRunningItem> subscribedItems)
+        => this.runningItemOperations.Unsubscribe(
+            runningItemsChanged,
+            runningItemChanged,
+            subscribedItems);
 
     /// <summary>
     /// Fired when the active streaming turn finishes.
@@ -1225,10 +1243,7 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
 
         if (writeToHistory)
         {
-            // Snapshot before iterating: the foreground scheduler may concurrently modify
-            // item.Items via SyncItems, so enumeration without a snapshot can throw
-            // "Collection was modified; enumeration operation may not execute."
-            foreach (var historyItem in item.Items.ToArray())
+            foreach (var historyItem in this.runningItemOperations.CaptureItems(item))
             {
                 this.AddHistoryItem(historyItem);
                 this.TurnCompleted?.Invoke(this, historyItem);

@@ -1,5 +1,7 @@
 #pragma warning disable xUnit1051
+using System.Collections.Immutable;
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.Text.Json;
 using System.Threading.Channels;
 using AgentSchema;
@@ -8,7 +10,9 @@ using Microsoft.Extensions.Time.Testing;
 using Moq;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Core.Manifest;
+using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Remote;
+using Phantom.Workspaces.Llm.SlashCommands;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.AgentSessions;
 using Phantom.Workspaces.Transport;
@@ -1107,6 +1111,42 @@ public sealed partial class RemoteAgentSessionHostTests
         Assert.Equal(firstRunId, secondRunId);
     }
 
+    [Fact]
+    public async Task Construction_OuterMutationDuringSynchronizedCapture_PreservesOrderAndContent()
+    {
+        await using var runtime = RuntimeWithCaptureMutation(
+            (operations, _) => operations.Create(RunningText("outer-added")));
+
+        var first = runtime.CaptureSnapshot();
+        var second = runtime.CaptureSnapshot();
+
+        Assert.Equal(
+            ["initial", "outer-added"],
+            first.RunningItems.Select(item => Assert.Single(RunningTexts(item))));
+        Assert.Equal(
+            first.RunningItems.Select(RunId),
+            second.RunningItems.Select(RunId));
+    }
+
+    [Fact]
+    public async Task Construction_InnerMutationDuringSynchronizedCapture_PreservesOrderAndContent()
+    {
+        await using var runtime = RuntimeWithCaptureMutation(
+            (operations, initial) => operations.Update(
+                initial,
+                [RunningText("initial"), RunningText("inner-added")]));
+
+        var first = runtime.CaptureSnapshot();
+        var second = runtime.CaptureSnapshot();
+
+        Assert.Equal(
+            ["initial", "inner-added"],
+            RunningTexts(Assert.Single(first.RunningItems)));
+        Assert.Equal(
+            RunId(Assert.Single(first.RunningItems)),
+            RunId(Assert.Single(second.RunningItems)));
+    }
+
     private static async Task AssertQueueResultAsync(string code, bool changed)
     {
         await using var fixture = new HostFixture();
@@ -1211,6 +1251,137 @@ public sealed partial class RemoteAgentSessionHostTests
                 Information = Snapshot().Information with { AgentSessionId = sessionId },
             }),
             persistTerminalAsync: persistTerminalAsync, timeProvider: time);
+    }
+
+    private static RemoteAgentSessionLease RuntimeWithCaptureMutation(
+        Action<AgentRunningItems, AgentChatRunningItem> mutateDuringCapture)
+    {
+        var queues = new Mock<IAgentInputQueues>();
+        queues.SetupGet(value => value.Snapshot).Returns(
+            new AgentInputQueuesSnapshot { Revision = 0, Queues = [] });
+        var runningItems = new AgentChatRunningItemCollection();
+        var operations = new AgentRunningItems(runningItems);
+        var initial = operations.Create(RunningText("initial"));
+        var chat = new SnapshotMutationChat(
+            Chat(queues, runningItems).Object,
+            operations,
+            initial,
+            mutateDuringCapture);
+
+        return new RemoteAgentSessionLease(
+            "session",
+            1,
+            new RuntimeEpoch { Value = Guid.NewGuid() },
+            chat,
+            continueInBackground: true,
+            Snapshot);
+    }
+
+    private static AgentChatHistoryItem RunningText(string text) => new()
+    {
+        Role = ChatRole.Assistant,
+        Contents = [new TextContent(text)],
+    };
+
+    private static string RunId(JsonElement runningItem)
+        => runningItem.GetProperty("runId").GetString()
+            ?? throw new InvalidOperationException("Running item id was missing.");
+
+    private static string[] RunningTexts(JsonElement runningItem)
+        => (runningItem.GetProperty("items").Deserialize<AgentChatHistoryItem[]>(
+                Microsoft.Extensions.AI.AIJsonUtilities.DefaultOptions)
+            ?? throw new InvalidOperationException("Running items were missing."))
+            .SelectMany(item => item.Contents.OfType<TextContent>())
+            .Select(content => content.Text)
+            .ToArray();
+
+    private sealed class SnapshotMutationChat(
+        IAgentChat inner,
+        AgentRunningItems operations,
+        AgentChatRunningItem initial,
+        Action<AgentRunningItems, AgentChatRunningItem> mutateDuringCapture)
+        : IAgentChat, IAgentChatRunningItemsSnapshotProvider
+    {
+        public AgentInformation Information => inner.Information;
+        public Usage Usage => inner.Usage;
+        public bool IsBusy => inner.IsBusy;
+        public AgentChatHistoryCollection History => inner.History;
+        public Task HistoryPopulated => inner.HistoryPopulated;
+        public AgentChatRunningItemCollection RunningItems => inner.RunningItems;
+        public IAgentInputQueues InputQueues => inner.InputQueues;
+        public ReadOnlyObservableCollection<IRunningSubAgent> SubAgents => inner.SubAgents;
+        public ReadOnlyObservableCollection<AgentChatModal> Modals => inner.Modals;
+        public ISlashCommandRegistry SlashCommands => inner.SlashCommands;
+
+        public event EventHandler? InformationChanged
+        {
+            add => inner.InformationChanged += value;
+            remove => inner.InformationChanged -= value;
+        }
+
+        public event EventHandler? ToolsChanged
+        {
+            add => inner.ToolsChanged += value;
+            remove => inner.ToolsChanged -= value;
+        }
+
+        public event EventHandler? UsageChanged
+        {
+            add => inner.UsageChanged += value;
+            remove => inner.UsageChanged -= value;
+        }
+
+        public event EventHandler<AgentChatHistoryItem>? TurnCompleted
+        {
+            add => inner.TurnCompleted += value;
+            remove => inner.TurnCompleted -= value;
+        }
+
+        public IReadOnlyList<AgentChatToolItem> GetToolSnapshot()
+            => inner.GetToolSnapshot();
+
+        public Task SetToolEnabledAsync(
+            string toolId,
+            bool enabled,
+            CancellationToken ct = default)
+            => inner.SetToolEnabledAsync(toolId, enabled, ct);
+
+        public Task RespondToModalAsync(
+            string modalId,
+            JsonElement response,
+            CancellationToken ct = default)
+            => inner.RespondToModalAsync(modalId, response, ct);
+
+        public void EnqueueSystemNote(string text) => inner.EnqueueSystemNote(text);
+        public void EnqueueHelpNote(string text) => inner.EnqueueHelpNote(text);
+        public void EnqueueTransientDiagnostic(string text)
+            => inner.EnqueueTransientDiagnostic(text);
+        public Task InterruptAsync(CancellationToken ct = default)
+            => inner.InterruptAsync(ct);
+        public object? GetService(Type serviceType) => inner.GetService(serviceType);
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
+
+        void IAgentChatRunningItemsSnapshotProvider.SubscribeAndCaptureRunningItems(
+            NotifyCollectionChangedEventHandler runningItemsChanged,
+            NotifyCollectionChangedEventHandler runningItemChanged,
+            Action<ImmutableArray<AgentChatRunningItemSnapshot>> initialize)
+            => operations.SubscribeAndCapture(
+                runningItemsChanged,
+                runningItemChanged,
+                snapshots =>
+                {
+                    initialize(snapshots);
+                    mutateDuringCapture(operations, initial);
+                });
+
+        void IAgentChatRunningItemsSnapshotProvider.UnsubscribeRunningItems(
+            NotifyCollectionChangedEventHandler runningItemsChanged,
+            NotifyCollectionChangedEventHandler runningItemChanged,
+            IReadOnlyList<AgentChatRunningItem> subscribedItems)
+            => operations.Unsubscribe(
+                runningItemsChanged,
+                runningItemChanged,
+                subscribedItems);
     }
 
     private static Mock<IAgentChat> Chat(

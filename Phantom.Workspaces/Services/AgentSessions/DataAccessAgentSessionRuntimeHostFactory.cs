@@ -195,9 +195,8 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
         History = chat.History.Select(item => JsonSerializer.SerializeToElement(
             item,
             Microsoft.Extensions.AI.AIJsonUtilities.DefaultOptions)).ToArray(),
-        RunningItems = chat.RunningItems.Select(item => JsonSerializer.SerializeToElement(
-            item,
-            Microsoft.Extensions.AI.AIJsonUtilities.DefaultOptions)).ToArray(),
+        // RemoteAgentSessionLease overlays its writer-synchronized immutable mirror.
+        RunningItems = [],
         Tools = chat.GetToolSnapshot().Select(item => JsonSerializer.SerializeToElement(
             item,
             Microsoft.Extensions.AI.AIJsonUtilities.DefaultOptions)).ToArray(),
