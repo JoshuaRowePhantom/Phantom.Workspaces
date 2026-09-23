@@ -537,6 +537,7 @@ public sealed class RemoteAgentSessionScenarioTests
         var projected = WaitForHistoryTextAsync(proxy.Chat, answer);
         var persistedAnswer = WaitForPersistedTextAsync(
             owner);
+        var running = WaitForRunningItemsAsync(proxy.Chat, 1);
 
         var result = await proxy.Chat.InputQueues.EnqueueAsync(
             Enqueue(
@@ -544,17 +545,23 @@ public sealed class RemoteAgentSessionScenarioTests
                 prompt,
                 proxy.Chat.InputQueues.Snapshot.Revision),
             TestContext.Current.CancellationToken);
+        await running;
+        var idle = WaitForRunningItemsAsync(proxy.Chat, 0);
+        var notBusy = WaitForBusyStateAsync(proxy.Chat, isBusy: false);
         await projected;
         await persistedAnswer;
+        await idle;
+        await notBusy;
 
         Assert.Equal(AgentInputQueueCommandStatus.Applied, result.Status);
+        var history = proxy.Chat.History.ToArray();
         Assert.Contains(
-            proxy.Chat.History,
+            history,
             item => item.Role == ChatRole.User
                 && item.Contents.OfType<TextContent>().Any(
                     content => content.Text.Contains(prompt, StringComparison.Ordinal)));
         Assert.Contains(
-            proxy.Chat.History,
+            history,
             item => item.Role == ChatRole.Assistant
                 && item.Contents.OfType<TextContent>().Any(content => content.Text == answer));
         Assert.Empty(proxy.Chat.RunningItems);
