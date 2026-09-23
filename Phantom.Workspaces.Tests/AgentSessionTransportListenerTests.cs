@@ -36,7 +36,9 @@ public sealed class AgentSessionTransportListenerTests
     [Fact]
     public async Task OnChannelOpenAsync_MalformedRequest_WritesSanitizedTerminalError()
     {
-        await using var listener = Listener(out _, out _);
+        await using var listener = Listener(out _, out _, authenticated: true);
+        AgentSessionAttachFailure? failure = null;
+        listener.AttachFailed += value => failure = value;
         await using var channel = new TestChannel();
         await listener.OnChannelOpenAsync(
             JsonSerializer.SerializeToElement(new { type = "attach-agent-session", secret = "local-path" }),
@@ -45,6 +47,10 @@ public sealed class AgentSessionTransportListenerTests
         var error = await channel.Output.ReadAsync(TestContext.Current.CancellationToken);
         Assert.DoesNotContain("local-path", error.GetRawText(), StringComparison.Ordinal);
         Assert.Contains("invalid-request", error.GetRawText(), StringComparison.Ordinal);
+        Assert.NotNull(failure);
+        Assert.Equal("deserialize-open", failure.Stage);
+        Assert.Equal("invalid-protocol", failure.Category);
+        Assert.IsType<RemoteAgentProtocolException>(failure.Error);
     }
 
     [Fact]
@@ -62,6 +68,8 @@ public sealed class AgentSessionTransportListenerTests
         await using var listener = new AgentSessionTransportListener(
             new RemoteAgentSessionHost(authorizer.Object, registry.Object, Mock.Of<IAgentSessionRuntimeHostFactory>()),
             provider.Object);
+        var failed = false;
+        listener.AttachFailed += _ => failed = true;
         await using var channel = new TestChannel();
         var lease = await listener.OnChannelOpenAsync(
             AgentSessionProtocolCodec.SerializeOpen(Open()), channel, TestContext.Current.CancellationToken);
@@ -69,6 +77,7 @@ public sealed class AgentSessionTransportListenerTests
         Assert.Contains("session-snapshot", (await channel.Output.ReadAsync(
             TestContext.Current.CancellationToken)).GetRawText(), StringComparison.Ordinal);
         await lease.DisposeAsync();
+        Assert.False(failed);
         Assert.Equal(0, runtime.ViewerCount);
         Assert.False(runtime.IsFenced);
     }
@@ -224,14 +233,19 @@ public sealed class AgentSessionTransportListenerTests
 
     private static AgentSessionTransportListener Listener(
         out Mock<IRemoteAgentSessionRuntimeRegistry> registry,
-        out Mock<IAgentSessionRuntimeHostFactory> factory)
+        out Mock<IAgentSessionRuntimeHostFactory> factory,
+        bool authenticated = false)
     {
         var authorizer = new Mock<IAgentSessionAttachAuthorizer>();
         registry = new Mock<IRemoteAgentSessionRuntimeRegistry>();
         factory = new Mock<IAgentSessionRuntimeHostFactory>();
         var provider = new Mock<ITransportPeerIdentityProvider>();
-        provider.Setup(value => value.GetRequiredIdentity(It.IsAny<IMessageChannel>()))
-            .Throws(new UnauthorizedAccessException());
+        var identity = provider.Setup(
+            value => value.GetRequiredIdentity(It.IsAny<IMessageChannel>()));
+        if (authenticated)
+            identity.Returns(Peer());
+        else
+            identity.Throws(new UnauthorizedAccessException());
         return new AgentSessionTransportListener(
             new RemoteAgentSessionHost(authorizer.Object, registry.Object, factory.Object), provider.Object);
     }
@@ -273,6 +287,7 @@ public sealed class AgentSessionTransportListenerTests
         });
         var chat = new Mock<IAgentChat>();
         chat.SetupGet(value => value.InputQueues).Returns(queues.Object);
+        chat.SetupGet(value => value.History).Returns(new AgentChatHistoryCollection());
         chat.SetupGet(value => value.RunningItems).Returns(new AgentChatRunningItemCollection());
         chat.SetupGet(value => value.SubAgents).Returns(
             new ReadOnlyObservableCollection<IRunningSubAgent>(new ObservableCollection<IRunningSubAgent>()));

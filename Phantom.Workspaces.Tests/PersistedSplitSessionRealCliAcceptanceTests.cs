@@ -14,6 +14,7 @@ using Phantom.Workspaces.Llm.Core.Transport.Chat;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Services.AgentSessions;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.ReverseHttp;
 using Phantom.Workspaces.Transport.Tests.Infrastructure;
@@ -393,6 +394,7 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
 
     private sealed class PersistedSplitFixture : IAsyncDisposable
     {
+        private readonly TaskCompletionSource<AgentSessionAttachFailure> attachFailure;
         private readonly AgentChatFactory sourceFactory;
         private readonly AgentChatFactory ownerFactory;
         private readonly WorkspacesTransportComposition daemonComposition;
@@ -411,6 +413,7 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
             ReverseExecutionDispatcher daemonDispatcher,
             HubRelayHarness hub,
             IdentityRecordingListener shadeListener,
+            TaskCompletionSource<AgentSessionAttachFailure> attachFailure,
             TrackingTransport sourceTransport,
             JsonElement sessionEntity)
         {
@@ -425,6 +428,7 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
             this.daemonDispatcher = daemonDispatcher;
             this.hub = hub;
             this.shadeListener = shadeListener;
+            this.attachFailure = attachFailure;
             this.SourceTransport = sourceTransport;
             this.SessionEntity = sessionEntity;
         }
@@ -502,12 +506,16 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
             var ownerTable = new RunningAgentChatTable(
                 ownerFactory,
                 new AgentSessionRuntimeContextFactory(daemonRouting));
+            var attachFailure = new TaskCompletionSource<AgentSessionAttachFailure>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
             var daemonComposition = new WorkspacesTransportComposition(
                 data,
                 WorkspaceSession(DaemonProfile),
                 agentServices: hostServices,
                 registryProvider: new TransportFactoryRegistryProvider(daemonRouting),
                 runningAgentChats: ownerTable);
+            daemonComposition.AgentSessionListener!.AttachFailed +=
+                failure => attachFailure.TrySetResult(failure);
             daemonRouting.Inner = CreateProfileRegistry(
                 data,
                 WorkspaceSession(DaemonProfile),
@@ -548,13 +556,17 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
                 daemonDispatcher,
                 hub,
                 shadeListener,
+                attachFailure,
                 sourceTransport,
                 sessionEntity);
         }
 
-        internal Task<RunningAgentChatLease> AttachFromSourceAsync(
+        internal async Task<RunningAgentChatLease> AttachFromSourceAsync(
             CancellationToken cancellationToken)
-            => this.SourceTable.AcquireAsync(
+        {
+            try
+            {
+                return await this.SourceTable.AcquireAsync(
                 new AcquireAgentChatRequest
                 {
                     AgentSessionId = new AgentSessionId(SessionId),
@@ -567,6 +579,19 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
                     OwningProfileTransport = this.SourceTransport,
                 },
                 cancellationToken);
+            }
+            catch (RemoteAgentSessionException exception)
+                when (this.attachFailure.Task.IsCompletedSuccessfully)
+            {
+                var failure = await this.attachFailure.Task;
+                throw new InvalidOperationException(
+                    $"Attach failed at '{failure.Stage}' "
+                    + $"({failure.Category}, {failure.Error.GetType().Name})."
+                    + Environment.NewLine
+                    + failure.Error,
+                    exception);
+            }
+        }
 
         public async ValueTask DisposeAsync()
         {

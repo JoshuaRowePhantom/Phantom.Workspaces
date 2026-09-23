@@ -1072,6 +1072,41 @@ public sealed partial class RemoteAgentSessionHostTests
         Assert.Contains("streaming-completed", types);
     }
 
+    [Fact]
+    public async Task CaptureSnapshot_RunningItemRegistrationLag_AssignsStableRunId()
+    {
+        await using var fixture = new HostFixture();
+        var running = new AgentChatRunningItem();
+        running.Items.Add(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new TextContent("initializing")],
+        });
+        fixture.RunningItems.Add(running);
+        var registrationsField = typeof(RemoteAgentSessionLease).GetField(
+            "runningItemIds",
+            System.Reflection.BindingFlags.Instance
+                | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException(
+                "Remote running-item registration field was not found.");
+        var registrations =
+            Assert.IsAssignableFrom<IDictionary<AgentChatRunningItem, string>>(
+                registrationsField.GetValue(fixture.Runtime));
+        registrations.Clear();
+
+        var first = fixture.Runtime.CaptureSnapshot();
+        var second = fixture.Runtime.CaptureSnapshot();
+        var firstRunId = Assert.Single(first.RunningItems)
+            .GetProperty("runId")
+            .GetString();
+        var secondRunId = Assert.Single(second.RunningItems)
+            .GetProperty("runId")
+            .GetString();
+
+        Assert.False(string.IsNullOrWhiteSpace(firstRunId));
+        Assert.Equal(firstRunId, secondRunId);
+    }
+
     private static async Task AssertQueueResultAsync(string code, bool changed)
     {
         await using var fixture = new HostFixture();
@@ -1191,6 +1226,7 @@ public sealed partial class RemoteAgentSessionHostTests
     {
         var chat = new Mock<IAgentChat>();
         chat.SetupGet(value => value.InputQueues).Returns(queues);
+        chat.SetupGet(value => value.History).Returns(new AgentChatHistoryCollection());
         chat.SetupGet(value => value.RunningItems).Returns(runningItems ?? new AgentChatRunningItemCollection());
         chat.SetupGet(value => value.SubAgents).Returns(
             new ReadOnlyObservableCollection<IRunningSubAgent>(

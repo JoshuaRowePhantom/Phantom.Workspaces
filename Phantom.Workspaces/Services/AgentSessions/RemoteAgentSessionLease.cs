@@ -75,7 +75,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         ((INotifyCollectionChanged)this.Chat.RunningItems).CollectionChanged += this.OnRunningItemsChanged;
         foreach (var item in this.Chat.RunningItems)
         {
-            this.runningItemIds[item] = Guid.NewGuid().ToString("N");
+            _ = this.GetOrCreateRunningItemIdUnderLock(item);
             foreach (var historyItem in item.Items)
                 this.runningHistoryItems.Add(historyItem);
             item.Items.CollectionChanged += this.OnRunningItemUpdated;
@@ -1044,8 +1044,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             {
                 foreach (AgentChatRunningItem item in args.NewItems)
                 {
-                    var runId = Guid.NewGuid().ToString("N");
-                    this.runningItemIds[item] = runId;
+                    var runId = this.GetOrCreateRunningItemIdUnderLock(item);
                     foreach (var historyItem in item.Items)
                         this.runningHistoryItems.Add(historyItem);
                     item.Items.CollectionChanged += this.OnRunningItemUpdated;
@@ -1119,12 +1118,25 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
                 .Select(item => JsonSerializer.SerializeToElement(
                     new
                     {
-                        RunId = this.runningItemIds[item],
+                        RunId = this.GetOrCreateRunningItemIdUnderLock(item),
                         Items = item.Items.ToArray(),
                     },
                     Microsoft.Extensions.AI.AIJsonUtilities.DefaultOptions))
                 .ToArray(),
         };
+    }
+
+    private string GetOrCreateRunningItemIdUnderLock(AgentChatRunningItem item)
+    {
+        // ObservableCollection exposes the new item before its synchronous CollectionChanged
+        // handler can acquire this lease's gate. An attach snapshot holding the gate can therefore
+        // observe the item first; assign its stable id lazily instead of indexing a lagging mirror.
+        if (!this.runningItemIds.TryGetValue(item, out var runId))
+        {
+            runId = Guid.NewGuid().ToString("N");
+            this.runningItemIds.Add(item, runId);
+        }
+        return runId;
     }
 
     private void OnSubagentsChanged(object? sender, NotifyCollectionChangedEventArgs args)

@@ -1,6 +1,8 @@
 using System.Text.Json;
 using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Transport;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Phantom.Workspaces.Services.AgentSessions;
 
@@ -8,16 +10,22 @@ public sealed class AgentSessionTransportListener : ITransportListener
 {
     private readonly RemoteAgentSessionHost host;
     private readonly ITransportPeerIdentityProvider peerIdentityProvider;
+    private readonly ILogger<AgentSessionTransportListener> logger;
     private readonly object gate = new();
     private readonly HashSet<IAsyncDisposable> active = [];
     private bool disposed;
 
     internal AgentSessionTransportListener(
-        RemoteAgentSessionHost host, ITransportPeerIdentityProvider peerIdentityProvider)
+        RemoteAgentSessionHost host,
+        ITransportPeerIdentityProvider peerIdentityProvider,
+        ILogger<AgentSessionTransportListener>? logger = null)
     {
         this.host = host;
         this.peerIdentityProvider = peerIdentityProvider;
+        this.logger = logger ?? NullLogger<AgentSessionTransportListener>.Instance;
     }
+
+    internal event Action<AgentSessionAttachFailure>? AttachFailed;
 
     public async Task<IAsyncDisposable?> OnChannelOpenAsync(
         JsonElement request, IMessageChannel channel, CancellationToken ct = default)
@@ -28,12 +36,15 @@ public sealed class AgentSessionTransportListener : ITransportListener
             || type.GetString() is not ("attach-agent-session" or "take-over-agent-session"))
             return null;
         lock (this.gate) ObjectDisposedException.ThrowIf(this.disposed, this);
+        var stage = "validate-request";
         try
         {
             var peer = this.peerIdentityProvider.GetRequiredIdentity(channel);
             if (type.GetString() == "take-over-agent-session")
             {
+                stage = "deserialize-takeover";
                 var takeover = AgentSessionProtocolCodec.DeserializeTakeover(request);
+                stage = "takeover";
                 await this.host.TakeOverAsync(peer, takeover, ct).ConfigureAwait(false);
                 var frame = AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.CreateFrame(
                     new RuntimeEpoch { Value = Guid.NewGuid() },
@@ -49,9 +60,11 @@ public sealed class AgentSessionTransportListener : ITransportListener
                 return null;
             }
 
+            stage = "deserialize-open";
             var open = AgentSessionProtocolCodec.DeserializeOpen(request);
             if (open.OpenIntent == AgentSessionOpenIntent.Status)
             {
+                stage = "status";
                 var status = await this.host.GetStatusAsync(peer, open, ct).ConfigureAwait(false);
                 var epoch = open.ReplayCursor?.Epoch ?? new RuntimeEpoch { Value = Guid.NewGuid() };
                 var frame = AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.CreateFrame(
@@ -59,6 +72,7 @@ public sealed class AgentSessionTransportListener : ITransportListener
                 await channel.Writer.WriteAsync(AgentSessionProtocolCodec.SerializeFrame(frame), ct).ConfigureAwait(false);
                 return null;
             }
+            stage = "host-open";
             var attachment = await this.host.OpenAsync(new OpenAgentSessionHostRequest
             {
                 Peer = peer,
@@ -72,10 +86,19 @@ public sealed class AgentSessionTransportListener : ITransportListener
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception error)
         {
+            var category = Categorize(error);
+            this.logger.LogError(
+                "Remote agent-session attach failed at {Stage} with category {ErrorCategory} and type {ErrorType}.",
+                stage,
+                category,
+                error.GetType().Name);
+            this.AttachFailed?.Invoke(
+                new AgentSessionAttachFailure(stage, category, error));
             await WriteSanitizedErrorAsync(channel, error, ct).ConfigureAwait(false);
             await channel.DisposeAsync().ConfigureAwait(false);
             return null;
         }
+
     }
 
     public Task<IAsyncDisposable?> OnStreamOpenAsync(
@@ -125,6 +148,16 @@ public sealed class AgentSessionTransportListener : ITransportListener
         await channel.Writer.WriteAsync(AgentSessionProtocolCodec.SerializeFrame(frame), ct).ConfigureAwait(false);
     }
 
+    private static string Categorize(Exception error) => error switch
+    {
+        AgentSessionUnavailableException => "unavailable",
+        AgentSessionTakeoverBlockedException => "takeover-blocked",
+        RemoteAgentProtocolException => "invalid-protocol",
+        InvalidOperationException => "invalid-operation",
+        ArgumentException => "invalid-request",
+        _ => "internal-error",
+    };
+
     private void RemoveActive(IAsyncDisposable handle)
     {
         lock (this.gate) this.active.Remove(handle);
@@ -149,4 +182,10 @@ public sealed class AgentSessionTransportListener : ITransportListener
             await attachment.DisposeAsync().ConfigureAwait(false);
         }
     }
+
 }
+
+internal sealed record AgentSessionAttachFailure(
+    string Stage,
+    string Category,
+    Exception Error);

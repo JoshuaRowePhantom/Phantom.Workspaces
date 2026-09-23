@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Core;
@@ -114,7 +115,12 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
                 TimeProvider.System,
                 remoteHostServices);
             var host = new RemoteAgentSessionHost(authorizer, runtimeRegistry, runtimeFactory);
-            agentSessionTransportListener = new AgentSessionTransportListener(host, peerIdentities);
+            var listener = new AgentSessionTransportListener(
+                host,
+                peerIdentities,
+                remoteHostServices.LoggerFactory?.CreateLogger<AgentSessionTransportListener>());
+            agentSessionTransportListener = listener;
+            this.AgentSessionListener = listener;
             this.AgentSessionPeerIdentities = peerIdentities;
         }
         if (agentSessionTransportListener is not null)
@@ -199,6 +205,8 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
     public IReadOnlyList<ReverseHttpClientTransportFactory> HubFactories { get; }
 
     internal TransportPeerIdentityProvider? AgentSessionPeerIdentities { get; }
+
+    internal AgentSessionTransportListener? AgentSessionListener { get; }
 
     /// <summary>Starts the GUI-side transport host (hub registration + dispatcher hosting).</summary>
     public Task StartAsync(CancellationToken cancellationToken = default)
