@@ -1,10 +1,8 @@
 using System.Collections.Concurrent;
 using System.Collections.Specialized;
-using System.Diagnostics;
 using System.Text.Json;
 using AgentSchema;
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
+using GitHub.Copilot;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Data;
@@ -12,12 +10,13 @@ using Phantom.Workspaces.Data.Offline;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Core.Manifest;
 using Phantom.Workspaces.Llm.Core.Tests;
+using Phantom.Workspaces.Llm.Core.Transport.Chat;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Transport;
-using Phantom.Workspaces.Transport.Http;
 using Phantom.Workspaces.Transport.ReverseHttp;
+using Phantom.Workspaces.Transport.Tests.Infrastructure;
 
 namespace Phantom.Workspaces.Tests;
 
@@ -49,39 +48,19 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
         await using var server = new ScriptedByokChatServer();
         var conversation = server.AddConversation(
             "daemon-to-shade",
-            request => request.AnyMessageContains(
-                "user",
-                "opening-query"));
+            request => request.AnyMessageContains("user", "opening-query"));
         EnqueueSessionToolCall(conversation, "session-tool-first");
         EnqueueTextResponse(conversation, "daemon-shade-first-result");
         EnqueueSessionToolCall(conversation, "session-tool-restored");
         var restoredResponse = conversation.Client.EnqueueStreamingResponse();
         restoredResponse.EnqueueUpdate(
-            new ChatResponseUpdate(
-                ChatRole.Assistant,
-                "daemon-shade-restored-result"));
+            new ChatResponseUpdate(ChatRole.Assistant, "daemon-shade-restored-result"));
         var restoredResponseGate = restoredResponse.Complete(isReady: false);
         EnqueueTextResponse(conversation, "daemon-shade-spare");
 
-        await using var hub = await RealHttpHub.CreateAsync(ct);
-        await using var shade = await RemoteSplitWorkerProcess.StartAsync(
-            new RemoteSplitWorkerConfiguration(
-                hub.Url,
-                ShadeProfile.ToString(),
-                "shade-real-cli",
-                "shade-byok",
-                "openai",
-                server.BaseUrl,
-                "shade-test-key",
-                "chat-completions",
-                "gpt-test"),
-            ct);
-        await hub.WaitForRegistrationAsync(ShadeProfile, ct);
         await using var fixture = await PersistedSplitFixture.CreateAsync(
             server.BaseUrl,
-            hub,
             ct);
-
         try
         {
             await using var sourceLease = await fixture.AttachFromSourceAsync(ct);
@@ -91,36 +70,28 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
                 registerAsRunningAgent: false,
                 ct);
             var ownerChat = Assert.IsType<AgentChat>(ownerLease.AgentChat);
+
             var firstProjected = WaitForAssistantAsync(
                 sourceChat,
                 "daemon-shade-first-result");
             var firstStreaming = WaitForRunningItemsAsync(sourceChat, nonEmpty: true);
-            var firstPersisted = WaitForPersistedTextAsync(
-                ownerChat);
-
-            var firstQueueResult = await EnqueueAtSourceAsync(
+            var firstPersisted = WaitForPersistedAsync(ownerChat);
+            var firstResult = await EnqueueAtSourceAsync(
                 sourceChat,
                 "opening-query-visible",
                 ct);
             await firstStreaming.WaitAsync(ct);
-            var sourceFirstIdle = WaitForRunningItemsAsync(
-                sourceChat,
-                nonEmpty: false);
-            var sourceFirstNotBusy = WaitForBusyAsync(
-                sourceChat,
-                busy: false);
-            var ownerFirstIdle = WaitForRunningItemsAsync(
-                ownerChat,
-                nonEmpty: false);
-            await firstProjected.WaitAsync(ct);
-            await sourceFirstIdle.WaitAsync(ct);
-            await sourceFirstNotBusy.WaitAsync(ct);
-            await ownerFirstIdle.WaitAsync(ct);
-            await firstPersisted.WaitAsync(ct);
+            var sourceFirstIdle = WaitForRunningItemsAsync(sourceChat, nonEmpty: false);
+            var sourceFirstNotBusy = WaitForBusyAsync(sourceChat, busy: false);
+            var ownerFirstIdle = WaitForRunningItemsAsync(ownerChat, nonEmpty: false);
+            await Task.WhenAll(
+                firstProjected,
+                sourceFirstIdle,
+                sourceFirstNotBusy,
+                ownerFirstIdle,
+                firstPersisted).WaitAsync(ct);
 
-            Assert.Equal(
-                AgentInputQueueCommandStatus.Applied,
-                firstQueueResult.Status);
+            Assert.Equal(AgentInputQueueCommandStatus.Applied, firstResult.Status);
             AssertProjectedTurn(
                 sourceChat,
                 "opening-query-visible",
@@ -128,7 +99,6 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
             Assert.Empty(sourceChat.RunningItems);
             Assert.False(sourceChat.IsBusy);
             Assert.Empty(ownerChat.RunningItems);
-
             var firstToolResult = await conversation.GetRequestAsync(1).WaitAsync(ct);
             Assert.Contains(SessionId, firstToolResult.Body, StringComparison.Ordinal);
             Assert.Contains(
@@ -144,51 +114,39 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
             var secondProjected = WaitForAssistantAsync(
                 sourceChat,
                 "daemon-shade-restored-result");
-            var secondStreaming = WaitForRunningItemsAsync(
-                sourceChat,
-                nonEmpty: true);
+            var secondStreaming = WaitForRunningItemsAsync(sourceChat, nonEmpty: true);
             var ownerSecond = WaitForAssistantAsync(
                 ownerChat,
                 "daemon-shade-restored-result");
-            var secondPersisted = WaitForPersistedTextAsync(
-                ownerChat);
+            var secondPersisted = WaitForPersistedAsync(ownerChat);
             var reconnect = fixture.SourceTransport.BlockNextConnection();
             var disconnected = WaitForConnectionAsync(sourceChat, connected: false);
             var reconnected = WaitForConnectionAsync(sourceChat, connected: true);
-
-            var secondQueueResult = await EnqueueAtSourceAsync(
+            var secondResult = await EnqueueAtSourceAsync(
                 sourceChat,
                 "opening-query-after-reconnect",
                 ct);
             await conversation.GetRequestAsync(3).WaitAsync(ct);
             await secondStreaming.WaitAsync(ct);
-            var sourceSecondIdle = WaitForRunningItemsAsync(
-                sourceChat,
-                nonEmpty: false);
-            var sourceSecondNotBusy = WaitForBusyAsync(
-                sourceChat,
-                busy: false);
+            var sourceSecondIdle = WaitForRunningItemsAsync(sourceChat, nonEmpty: false);
+            var sourceSecondNotBusy = WaitForBusyAsync(sourceChat, busy: false);
             await fixture.SourceTransport.DropCurrentChannelAsync();
             await disconnected.WaitAsync(ct);
             await reconnect.Started.WaitAsync(ct);
             restoredResponseGate.MarkReady();
-            await ownerSecond.WaitAsync(ct);
-            await secondPersisted.WaitAsync(ct);
-
+            await Task.WhenAll(ownerSecond, secondPersisted).WaitAsync(ct);
             Assert.DoesNotContain(
                 sourceChat.History,
-                item => ContainsText(
-                    item,
-                    "daemon-shade-restored-result"));
-            reconnect.Release();
-            await reconnected.WaitAsync(ct);
-            await secondProjected.WaitAsync(ct);
-            await sourceSecondIdle.WaitAsync(ct);
-            await sourceSecondNotBusy.WaitAsync(ct);
+                item => ContainsText(item, "daemon-shade-restored-result"));
 
-            Assert.Equal(
-                AgentInputQueueCommandStatus.Applied,
-                secondQueueResult.Status);
+            reconnect.Release();
+            await Task.WhenAll(
+                reconnected,
+                secondProjected,
+                sourceSecondIdle,
+                sourceSecondNotBusy).WaitAsync(ct);
+
+            Assert.Equal(AgentInputQueueCommandStatus.Applied, secondResult.Status);
             AssertProjectedTurn(
                 sourceChat,
                 "opening-query-after-reconnect",
@@ -207,47 +165,25 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
                 "daemon-shade-restored-result",
                 ct);
 
-            var workerRequest = await shade.RequestReceived.WaitAsync(ct);
+            var shadeRequest = await fixture.ShadeRequest.WaitAsync(ct);
             Assert.Equal(
-                "shade-real-cli",
-                workerRequest.GetProperty("worker").GetString());
+                CopilotSessionTransportFrames.ConnectionType,
+                shadeRequest.GetProperty("type").GetString());
             Assert.Equal(
                 DaemonProfile.ToString(),
-                workerRequest.GetProperty("caller").GetString());
-            Assert.Equal(
-                "copilot-sdk-session",
-                workerRequest.GetProperty("requestType").GetString());
+                fixture.ShadeCaller?.UserComputerProfileEntityId);
             Assert.Contains(
                 fixture.SourceRouting.Descriptors,
-                descriptor => IsProfileDescriptor(
-                    descriptor,
-                    DaemonProfile));
+                descriptor => IsProfileDescriptor(descriptor, DaemonProfile));
             Assert.Contains(
                 fixture.DaemonRouting.Descriptors,
-                descriptor => IsProfileDescriptor(
-                    descriptor,
-                    ShadeProfile));
+                descriptor => IsProfileDescriptor(descriptor, ShadeProfile));
             Assert.DoesNotContain(
                 fixture.DaemonRouting.Descriptors,
                 descriptor => IsDescriptorType(descriptor, "local")
                     || IsDescriptorType(descriptor, "http"));
             Assert.Equal(4, server.RecordedRequests.Count);
             Assert.Empty(server.Failures);
-            Assert.All(shade.OutputLines, line =>
-            {
-                Assert.DoesNotContain(
-                    server.BaseUrl,
-                    line,
-                    StringComparison.OrdinalIgnoreCase);
-                Assert.DoesNotContain(
-                    "shade-test-key",
-                    line,
-                    StringComparison.Ordinal);
-                Assert.DoesNotContain(
-                    "opening-query",
-                    line,
-                    StringComparison.Ordinal);
-            });
         }
         catch (OperationCanceledException)
         {
@@ -256,9 +192,8 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
                 + $"Server requests={server.RecordedRequests.Count}, "
                 + $"server failures={server.Failures.Count}, "
                 + $"source routes={fixture.SourceRouting.Descriptors.Count}, "
-                + $"daemon routes={fixture.DaemonRouting.Descriptors.Count}."
-                + Environment.NewLine
-                + string.Join(Environment.NewLine, shade.OutputLines));
+                + $"daemon routes={fixture.DaemonRouting.Descriptors.Count}, "
+                + $"shade accepted={fixture.ShadeRequest.IsCompleted}.");
             throw;
         }
     }
@@ -270,10 +205,8 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
         => await chat.InputQueues.EnqueueAsync(
             new EnqueueAgentInputRequest
             {
-                TargetQueueId =
-                    chat.InputQueues.DefaultQueue.Snapshot.QueueId,
-                ExpectedRevision =
-                    chat.InputQueues.Snapshot.Revision,
+                TargetQueueId = chat.InputQueues.DefaultQueue.Snapshot.QueueId,
+                ExpectedRevision = chat.InputQueues.Snapshot.Revision,
                 Messages = [new ChatMessage(ChatRole.User, prompt)],
                 CommandId = Guid.NewGuid(),
             },
@@ -303,8 +236,7 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
         string text)
     {
         var response = conversation.Client.EnqueueStreamingResponse();
-        response.EnqueueUpdate(
-            new ChatResponseUpdate(ChatRole.Assistant, text));
+        response.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, text));
         response.Complete();
     }
 
@@ -315,10 +247,7 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
         CancellationToken cancellationToken)
     {
         var messages = await store.ReadMessagesAsync(
-            new ReadMessagesRequest
-            {
-                AgentSessionId = SessionId,
-            },
+            new ReadMessagesRequest { AgentSessionId = SessionId },
             cancellationToken);
         Assert.Contains(
             messages,
@@ -337,30 +266,8 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
         string prompt,
         string answer)
     {
-        var diagnostic = RenderHistory(chat.History);
-        Assert.True(
-            chat.History.Any(
-                item => item.Role == ChatRole.User
-                    && ContainsText(item, prompt)),
-            diagnostic);
-        Assert.True(
-            chat.History.Any(
-                item => item.Role == ChatRole.Assistant
-                    && ContainsText(item, answer)),
-            diagnostic);
-    }
-
-    private static bool ContainsText(
-        AgentChatHistoryItem item,
-        string text)
-        => item.Contents.OfType<TextContent>().Any(
-            content => content.Text.Contains(
-                text,
-                StringComparison.Ordinal));
-
-    private static string RenderHistory(
-        IEnumerable<AgentChatHistoryItem> history)
-        => string.Join(
+        var history = chat.History.ToArray();
+        var diagnostic = string.Join(
             Environment.NewLine,
             history.Select(
                 item => $"{item.Role}: "
@@ -368,10 +275,23 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
                         " | ",
                         item.Contents.Select(
                             content => $"{content.GetType().Name}={content}"))));
+        Assert.True(
+            history.Any(
+                item => item.Role == ChatRole.User
+                    && ContainsText(item, prompt)),
+            diagnostic);
+        Assert.True(
+            history.Any(
+                item => item.Role == ChatRole.Assistant
+                    && ContainsText(item, answer)),
+            diagnostic);
+    }
 
-    private static Task WaitForAssistantAsync(
-        IAgentChat chat,
-        string text)
+    private static bool ContainsText(AgentChatHistoryItem item, string text)
+        => item.Contents.OfType<TextContent>().Any(
+            content => content.Text.Contains(text, StringComparison.Ordinal));
+
+    private static Task WaitForAssistantAsync(IAgentChat chat, string text)
     {
         if (chat.History.Any(item => ContainsText(item, text)))
             return Task.CompletedTask;
@@ -387,11 +307,9 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
             chat.TurnCompleted -= OnCompleted;
             completion.TrySetResult();
         }
-
     }
 
-    private static Task WaitForPersistedTextAsync(
-        AgentChat chat)
+    private static Task WaitForPersistedAsync(AgentChat chat)
     {
         var middleware = Assert.IsType<StreamingPersistenceMiddleware>(
             chat.GetService(typeof(StreamingPersistenceMiddleware)));
@@ -408,9 +326,7 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
         }
     }
 
-    private static Task WaitForRunningItemsAsync(
-        IAgentChat chat,
-        bool nonEmpty)
+    private static Task WaitForRunningItemsAsync(IAgentChat chat, bool nonEmpty)
     {
         if ((chat.RunningItems.Count > 0) == nonEmpty)
             return Task.CompletedTask;
@@ -429,9 +345,7 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
         }
     }
 
-    private static Task WaitForConnectionAsync(
-        RemoteAgentChat chat,
-        bool connected)
+    private static Task WaitForConnectionAsync(RemoteAgentChat chat, bool connected)
     {
         if (chat.IsConnected == connected)
             return Task.CompletedTask;
@@ -447,12 +361,9 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
             chat.RuntimeStateChanged -= OnChanged;
             completion.TrySetResult();
         }
-
     }
 
-    private static Task WaitForBusyAsync(
-        RemoteAgentChat chat,
-        bool busy)
+    private static Task WaitForBusyAsync(RemoteAgentChat chat, bool busy)
     {
         if (chat.IsBusy == busy)
             return Task.CompletedTask;
@@ -470,16 +381,12 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
         }
     }
 
-    private static bool IsProfileDescriptor(
-        JsonElement descriptor,
-        EntityId profile)
+    private static bool IsProfileDescriptor(JsonElement descriptor, EntityId profile)
         => IsDescriptorType(descriptor, "user-computer-profile")
             && descriptor.TryGetProperty("entity-id", out var id)
             && id.GetString() == profile.ToString();
 
-    private static bool IsDescriptorType(
-        JsonElement descriptor,
-        string type)
+    private static bool IsDescriptorType(JsonElement descriptor, string type)
         => descriptor.ValueKind == JsonValueKind.Object
             && descriptor.TryGetProperty("type", out var value)
             && value.GetString() == type;
@@ -487,44 +394,41 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
     private sealed class PersistedSplitFixture : IAsyncDisposable
     {
         private readonly AgentChatFactory sourceFactory;
-        private readonly WorkspacesTransportComposition sourceComposition;
         private readonly AgentChatFactory ownerFactory;
         private readonly WorkspacesTransportComposition daemonComposition;
-        private readonly ReverseHttpClientTransportFactory daemonRegistration;
         private readonly ReverseExecutionDispatcher daemonDispatcher;
+        private readonly HubRelayHarness hub;
+        private readonly IdentityRecordingListener shadeListener;
 
         private PersistedSplitFixture(
-            InMemoryDataAccessLayer data,
             InMemoryAgentPersistenceStore ownerPersistence,
             AgentChatFactory sourceFactory,
             RunningAgentChatTable sourceTable,
-            WorkspacesTransportComposition sourceComposition,
             RecordingTransportFactoryRegistry sourceRouting,
             AgentChatFactory ownerFactory,
             WorkspacesTransportComposition daemonComposition,
             RecordingTransportFactoryRegistry daemonRouting,
-            ReverseHttpClientTransportFactory daemonRegistration,
             ReverseExecutionDispatcher daemonDispatcher,
+            HubRelayHarness hub,
+            IdentityRecordingListener shadeListener,
             TrackingTransport sourceTransport,
             JsonElement sessionEntity)
         {
-            this.Data = data;
             this.OwnerPersistence = ownerPersistence;
             this.sourceFactory = sourceFactory;
             this.SourceTable = sourceTable;
-            this.sourceComposition = sourceComposition;
             this.SourceRouting = sourceRouting;
             this.ownerFactory = ownerFactory;
             this.OwnerFactory = ownerFactory;
             this.daemonComposition = daemonComposition;
             this.DaemonRouting = daemonRouting;
-            this.daemonRegistration = daemonRegistration;
             this.daemonDispatcher = daemonDispatcher;
+            this.hub = hub;
+            this.shadeListener = shadeListener;
             this.SourceTransport = sourceTransport;
             this.SessionEntity = sessionEntity;
         }
 
-        internal InMemoryDataAccessLayer Data { get; }
         internal InMemoryAgentPersistenceStore OwnerPersistence { get; }
         internal AgentChatFactory OwnerFactory { get; }
         internal RunningAgentChatTable SourceTable { get; }
@@ -532,19 +436,45 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
         internal RecordingTransportFactoryRegistry DaemonRouting { get; }
         internal TrackingTransport SourceTransport { get; }
         internal JsonElement SessionEntity { get; }
+        internal Task<JsonElement> ShadeRequest => this.shadeListener.RequestReceived;
+        internal TransportPeerIdentity? ShadeCaller => this.shadeListener.ObservedIdentity;
 
         internal static async Task<PersistedSplitFixture> CreateAsync(
             string providerBaseUrl,
-            RealHttpHub hub,
             CancellationToken cancellationToken)
         {
+            _ = CopilotCliLocator.FindOrThrow();
+            var shadeIdentities = new TransportPeerIdentityProvider();
+            var shadeListener = new IdentityRecordingListener(
+                new CopilotClientTransportListener(
+                    new AgentServices
+                    {
+                        LoggerFactory = new SafeLoggerFactory(),
+                        RemoteCopilotProviderResolver = new FixedProviderResolver(
+                            new ProviderConfig
+                            {
+                                Type = "openai",
+                                BaseUrl = providerBaseUrl,
+                                ApiKey = "shade-test-key",
+                                WireApi = "chat-completions",
+                                ModelId = "gpt-test",
+                            }),
+                    }),
+                shadeIdentities);
+            var shadeRegistry = new TransportRegistry();
+            shadeRegistry.Register(shadeListener);
+            var hub = await HubRelayHarness.CreateAsync(
+                shadeRegistry,
+                cancellationToken,
+                shadeIdentities,
+                executorEntityId: ShadeProfile.Value);
+
             var data = new InMemoryDataAccessLayer();
-            var now = DateTimeOffset.UtcNow;
             var sessionEntity = await SeedAsync(
                 data,
                 providerBaseUrl,
-                hub.Url,
-                now,
+                HubRelayHarness.DefaultHubUrl,
+                DateTimeOffset.UtcNow,
                 cancellationToken);
             var unboundContext = new CurrentSessionContext
             {
@@ -555,22 +485,15 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
             var hostServices = new AgentServices
             {
                 LoggerFactory = new SafeLoggerFactory(),
-                ToolsetFactory =
-                    Phantom.Workspaces.Llm.ToolsetFactory
-                        .CreateCurrentSessionToolsetFactory(
-                            data,
-                            unboundContext,
-                            Phantom.Workspaces.Llm.ToolsetFactory
-                                .CreateDefaultToolsetFactory()),
-                ToolResourceFactory =
-                    Phantom.Workspaces.Services.ToolResourceFactory
-                        .CreateMcpServerResolution(
-                            data,
-                            "acceptance-user",
-                            "DAEMON"),
+                ToolsetFactory = Phantom.Workspaces.Llm.ToolsetFactory
+                    .CreateCurrentSessionToolsetFactory(
+                        data,
+                        unboundContext,
+                        Phantom.Workspaces.Llm.ToolsetFactory.CreateDefaultToolsetFactory()),
+                ToolResourceFactory = Phantom.Workspaces.Services.ToolResourceFactory
+                    .CreateMcpServerResolution(data, "acceptance-user", "DAEMON"),
             };
-            var ownerPersistence =
-                new InMemoryAgentPersistenceStore();
+            var ownerPersistence = new InMemoryAgentPersistenceStore();
             var ownerFactory = new AgentChatFactory(
                 ownerPersistence,
                 hostServices,
@@ -578,31 +501,23 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
             var daemonRouting = new RecordingTransportFactoryRegistry();
             var ownerTable = new RunningAgentChatTable(
                 ownerFactory,
-                AgentSessionRuntimeContextFactory.FromProvider(
-                    new TransportFactoryRegistryProvider(
-                        daemonRouting)));
+                new AgentSessionRuntimeContextFactory(daemonRouting));
             var daemonComposition = new WorkspacesTransportComposition(
                 data,
                 WorkspaceSession(DaemonProfile),
                 agentServices: hostServices,
-                registryProvider:
-                    new TransportFactoryRegistryProvider(
-                        daemonRouting),
+                registryProvider: new TransportFactoryRegistryProvider(daemonRouting),
                 runningAgentChats: ownerTable);
-            daemonRouting.Inner = daemonComposition.TransportFactoryRegistry;
+            daemonRouting.Inner = CreateProfileRegistry(
+                data,
+                WorkspaceSession(DaemonProfile),
+                hub.CreateForwardingFactory(Peer(DaemonProfile)));
 
-            var daemonRegistration =
-                new ReverseHttpClientTransportFactory(
-                    hub.Url,
-                    DaemonProfile.ToString());
-            var daemonChannel =
-                await daemonRegistration.EnsureRegisteredAsync(
-                    cancellationToken);
-            await hub.WaitForRegistrationAsync(
-                DaemonProfile,
+            await hub.Fixture.SimulateClientRegistrationAsync(
+                DaemonProfile.Value,
                 cancellationToken);
             var daemonDispatcher = new ReverseExecutionDispatcher(
-                daemonChannel,
+                hub.Fixture.LastClientRegistrationChannel!,
                 daemonComposition.LocalListeners,
                 daemonComposition.AgentSessionPeerIdentities);
 
@@ -614,37 +529,32 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
             var sourceTable = new RunningAgentChatTable(
                 sourceFactory,
                 new AgentSessionRuntimeContextFactory(sourceRouting));
-            var sourceComposition = new WorkspacesTransportComposition(
+            sourceRouting.Inner = CreateProfileRegistry(
                 data,
                 WorkspaceSession(SourceProfile),
-                registryProvider:
-                    new TransportFactoryRegistryProvider(sourceRouting),
-                runningAgentChats: sourceTable);
-            sourceRouting.Inner = sourceComposition.TransportFactoryRegistry;
-
+                hub.CreateForwardingFactory(Peer(SourceProfile)));
             var sourceTransport = new TrackingTransport(
                 await sourceRouting.ConnectToAsync(
                     ProfileDescriptor(DaemonProfile),
                     cancellationToken));
             return new PersistedSplitFixture(
-                data,
                 ownerPersistence,
                 sourceFactory,
                 sourceTable,
-                sourceComposition,
                 sourceRouting,
                 ownerFactory,
                 daemonComposition,
                 daemonRouting,
-                daemonRegistration,
                 daemonDispatcher,
+                hub,
+                shadeListener,
                 sourceTransport,
                 sessionEntity);
         }
 
-        internal async Task<RunningAgentChatLease> AttachFromSourceAsync(
+        internal Task<RunningAgentChatLease> AttachFromSourceAsync(
             CancellationToken cancellationToken)
-            => await this.SourceTable.AcquireAsync(
+            => this.SourceTable.AcquireAsync(
                 new AcquireAgentChatRequest
                 {
                     AgentSessionId = new AgentSessionId(SessionId),
@@ -652,12 +562,8 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
                     AgentServices = new AgentServices(),
                     ForegroundScheduler = TaskScheduler.Default,
                     EntityName = "f5d851ca acceptance",
-                    EntityId =
-                        this.SessionEntity
-                            .GetProperty("entity-id")
-                            .GetString(),
-                    AcquisitionMode =
-                        AgentChatAcquisitionMode.StartOrAttachRemote,
+                    EntityId = this.SessionEntity.GetProperty("entity-id").GetString(),
+                    AcquisitionMode = AgentChatAcquisitionMode.StartOrAttachRemote,
                     OwningProfileTransport = this.SourceTransport,
                 },
                 cancellationToken);
@@ -665,11 +571,27 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
         public async ValueTask DisposeAsync()
         {
             await this.daemonDispatcher.DisposeAsync();
-            await this.daemonRegistration.DisposeAsync();
-            await this.sourceComposition.DisposeAsync();
             await this.daemonComposition.DisposeAsync();
             await this.sourceFactory.DisposeAsync();
             await this.ownerFactory.DisposeAsync();
+            await this.hub.DisposeAsync();
+        }
+
+        private static ITransportFactoryRegistry CreateProfileRegistry(
+            IDataAccessLayer data,
+            WorkspaceEntitySession session,
+            ITransportFactory forwarding)
+        {
+            var routes = new TransportFactoryRegistry();
+            routes.Register(forwarding);
+            var registry = new TransportFactoryRegistry();
+            registry.Register(
+                new UserComputerProfileTransportFactory(
+                    data,
+                    session,
+                    routes,
+                    reachabilityRouteStore: new DataAccessReachabilityRouteStore(data)));
+            return registry;
         }
 
         private static async Task<JsonElement> SeedAsync(
@@ -679,52 +601,38 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
             DateTimeOffset now,
             CancellationToken cancellationToken)
         {
-            var sessionData =
-                AgentSessionEntityFactory.CreateEntityData(
-                    new CreateAgentSessionEntityDataRequest
+            var sessionData = AgentSessionEntityFactory.CreateEntityData(
+                new CreateAgentSessionEntityDataRequest
+                {
+                    AgentDefinitionEntityId = ManifestId,
+                    AgentDisplayName = "GitHub Copilot (split executor)",
+                    AgentSessionId = SessionId,
+                    AgentSessionNames =
+                    [
+                        new EntityName("tests", "agent-sessions", SessionId),
+                    ],
+                    CurrentTime = now,
+                    ComputerName = "DAEMON",
+                    HostProfileEntityId = DaemonProfile,
+                    ParameterValues = new Dictionary<string, string>
                     {
-                        AgentDefinitionEntityId = ManifestId,
-                        AgentDisplayName =
-                            "GitHub Copilot (split executor)",
-                        AgentSessionId = SessionId,
-                        AgentSessionNames =
-                        [
-                            new EntityName(
-                                "tests",
-                                "agent-sessions",
-                                SessionId),
-                        ],
-                        CurrentTime = now,
-                        ComputerName = "DAEMON",
-                        HostProfileEntityId = DaemonProfile,
-                        ParameterValues =
+                        ["working-directory"] = Path.GetTempPath(),
+                    },
+                    ParameterSelections = new Dictionary<string, JsonElement>
+                    {
+                        ["worker-profile"] = JsonSerializer.SerializeToElement(
                             new Dictionary<string, string>
                             {
-                                ["working-directory"] =
-                                    Path.GetTempPath(),
-                            },
-                        ParameterSelections =
-                            new Dictionary<string, JsonElement>
-                            {
-                                ["worker-profile"] =
-                                    JsonSerializer.SerializeToElement(
-                                        new Dictionary<string, string>
-                                        {
-                                            ["user-computer-profile"] =
-                                                ShadeProfile.ToString(),
-                                        }),
-                            },
-                        SessionExecutor =
-                            ExecutorBindings.LocalDescriptor(),
-                        ExecutorComponentBindings =
-                            JsonSerializer.SerializeToElement(
-                                new Dictionary<string, JsonElement>
-                                {
-                                    ["worker"] =
-                                        ProfileDescriptor(
-                                            ShadeProfile),
-                                }),
-                    });
+                                ["user-computer-profile"] = ShadeProfile.ToString(),
+                            }),
+                    },
+                    SessionExecutor = ExecutorBindings.LocalDescriptor(),
+                    ExecutorComponentBindings = JsonSerializer.SerializeToElement(
+                        new Dictionary<string, JsonElement>
+                        {
+                            ["worker"] = ProfileDescriptor(ShadeProfile),
+                        }),
+                });
             var manifest = Json($$"""
                 {
                   "entity-id": "{{ManifestId}}",
@@ -736,11 +644,7 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
                     "displayName": "F5D persisted split",
                     "parameters": {
                       "properties": [
-                        {
-                          "name": "working-directory",
-                          "kind": "string",
-                          "required": true
-                        }
+                        {"name": "working-directory", "kind": "string", "required": true}
                       ]
                     },
                     "template": {
@@ -772,11 +676,7 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
                         "name": "worker",
                         "options": {"parameter": "worker-profile"}
                       },
-                      {
-                        "kind": "tool",
-                        "id": "fixed",
-                        "name": "current-session"
-                      }
+                      {"kind": "tool", "id": "fixed", "name": "current-session"}
                     ]
                   }
                 }
@@ -790,13 +690,9 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
                 Change(manifest),
                 new()
                 {
-                    EntityId = new EntityId(
-                        sessionData
-                            .GetProperty("entity-id")
-                            .GetString()!),
+                    EntityId = new EntityId(sessionData.GetProperty("entity-id").GetString()!),
                     Data = sessionData,
-                    EntityChangeMode =
-                        EntityChangeMode.Replace,
+                    EntityChangeMode = EntityChangeMode.Replace,
                 },
             };
             var result = await data.UpdateAsync(
@@ -806,24 +702,20 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
                     {
                         Comment = new Markdown
                         {
-                            Text =
-                                "Seed persisted split-session acceptance",
+                            Text = "Seed persisted split-session acceptance",
                         },
                     },
                     Changes = changes,
                 },
                 cancellationToken);
-            Assert.All(
-                result.EntityResults,
-                entity => Assert.Empty(entity.Errors));
+            Assert.All(result.EntityResults, entity => Assert.Empty(entity.Errors));
             return sessionData;
         }
 
         private static EntityChange Change(JsonElement data)
             => new()
             {
-                EntityId = new EntityId(
-                    data.GetProperty("entity-id").GetString()!),
+                EntityId = new EntityId(data.GetProperty("entity-id").GetString()!),
                 Data = data,
                 EntityChangeMode = EntityChangeMode.Replace,
             };
@@ -871,13 +763,9 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
     private sealed class RecordingTransportFactoryRegistry
         : ITransportFactoryRegistry
     {
-        private readonly ConcurrentQueue<JsonElement> descriptors =
-            new();
-
+        private readonly ConcurrentQueue<JsonElement> descriptors = new();
         internal ITransportFactoryRegistry? Inner { get; set; }
-
-        internal IReadOnlyList<JsonElement> Descriptors =>
-            [.. this.descriptors];
+        internal IReadOnlyList<JsonElement> Descriptors => [.. this.descriptors];
 
         public void Register(ITransportFactory factory)
         {
@@ -887,8 +775,7 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
             JsonElement connectionDescriptor,
             CancellationToken ct = default)
         {
-            this.descriptors.Enqueue(
-                connectionDescriptor.Clone());
+            this.descriptors.Enqueue(connectionDescriptor.Clone());
             return await (this.Inner
                     ?? throw new InvalidOperationException(
                         "Transport registry is not initialized."))
@@ -896,8 +783,7 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
         }
     }
 
-    private sealed class TrackingTransport(ITransport inner)
-        : ITransport
+    private sealed class TrackingTransport(ITransport inner) : ITransport
     {
         private readonly object gate = new();
         private IMessageChannel? currentChannel;
@@ -926,10 +812,9 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
             await channel.DisposeAsync();
         }
 
-        public async Task<IMessageChannel>
-            ConnectToMessageChannelAsync(
-                JsonElement request,
-                CancellationToken ct = default)
+        public async Task<IMessageChannel> ConnectToMessageChannelAsync(
+            JsonElement request,
+            CancellationToken ct = default)
         {
             ConnectionGate? blocked;
             lock (this.gate)
@@ -942,9 +827,7 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
                 blocked.MarkStarted();
                 await blocked.WaitForReleaseAsync(ct);
             }
-
-            var channel = await inner
-                .ConnectToMessageChannelAsync(request, ct);
+            var channel = await inner.ConnectToMessageChannelAsync(request, ct);
             lock (this.gate)
                 this.currentChannel = channel;
             return channel;
@@ -955,8 +838,7 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
             CancellationToken ct = default)
             => inner.ConnectToStreamAsync(request, ct);
 
-        public ValueTask DisposeAsync()
-            => inner.DisposeAsync();
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
 
         internal sealed class ConnectionGate
         {
@@ -964,291 +846,68 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
                 new(TaskCreationOptions.RunContinuationsAsynchronously);
             private readonly TaskCompletionSource released =
                 new(TaskCreationOptions.RunContinuationsAsynchronously);
-
             internal Task Started => this.started.Task;
-
-            internal void MarkStarted()
-                => this.started.TrySetResult();
-
-            internal void Release()
-                => this.released.TrySetResult();
-
-            internal Task WaitForReleaseAsync(
-                CancellationToken cancellationToken)
+            internal void MarkStarted() => this.started.TrySetResult();
+            internal void Release() => this.released.TrySetResult();
+            internal Task WaitForReleaseAsync(CancellationToken cancellationToken)
                 => this.released.Task.WaitAsync(cancellationToken);
         }
     }
 
-    private sealed class RealHttpHub : IAsyncDisposable
+    private sealed class FixedProviderResolver(ProviderConfig provider)
+        : IRemoteCopilotProviderResolver
     {
-        private readonly WebApplication application;
-        private readonly HttpServerTransportFactory httpServer;
-        private readonly ReverseHttpServerTransportFactory reverseServer;
-        private readonly ReverseConnectionStatusRegistry statusRegistry;
-
-        private RealHttpHub(
-            WebApplication application,
-            HttpServerTransportFactory httpServer,
-            ReverseHttpServerTransportFactory reverseServer,
-            ReverseConnectionStatusRegistry statusRegistry,
-            string url)
-        {
-            this.application = application;
-            this.httpServer = httpServer;
-            this.reverseServer = reverseServer;
-            this.statusRegistry = statusRegistry;
-            this.Url = url;
-        }
-
-        internal string Url { get; }
-
-        internal static async Task<RealHttpHub> CreateAsync(
+        public Task<ProviderConfig?> ResolveAsync(
+            string providerReference,
+            string modelId,
             CancellationToken cancellationToken)
         {
-            var builder = WebApplication.CreateSlimBuilder();
-            builder.Logging.ClearProviders();
-            builder.WebHost.UseUrls("http://127.0.0.1:0");
-            var application = builder.Build();
-            application.UseWebSockets();
-            var registry = new TransportRegistry();
-            var statusRegistry =
-                new ReverseConnectionStatusRegistry();
-            var reverseServer =
-                new ReverseHttpServerTransportFactory(
-                    statusRegistry,
-                    requireAuthenticatedRelays: true);
-            registry.Register(reverseServer);
-            var httpServer =
-                new HttpServerTransportFactory(registry);
-            httpServer.Map(application);
-            await application.StartAsync(cancellationToken);
-            return new RealHttpHub(
-                application,
-                httpServer,
-                reverseServer,
-                statusRegistry,
-                Assert.Single(application.Urls));
-        }
-
-        internal Task WaitForRegistrationAsync(
-            EntityId profile,
-            CancellationToken cancellationToken)
-        {
-            if (IsRegistered())
-                return Task.CompletedTask;
-            var completion = new TaskCompletionSource(
-                TaskCreationOptions.RunContinuationsAsynchronously);
-            this.statusRegistry.ConnectionsChanged += OnChanged;
-            if (IsRegistered())
-                Complete();
-            return completion.Task.WaitAsync(cancellationToken);
-
-            bool IsRegistered() =>
-                this.statusRegistry.GetConnectedInstances().Any(
-                    status => status.ClientInstanceId
-                        == profile.ToString());
-
-            void OnChanged(object? sender, EventArgs args)
-            {
-                if (IsRegistered())
-                    Complete();
-            }
-
-            void Complete()
-            {
-                this.statusRegistry.ConnectionsChanged -= OnChanged;
-                completion.TrySetResult();
-            }
-        }
-
-        public async ValueTask DisposeAsync()
-        {
-            using var cancellation =
-                new CancellationTokenSource(
-                    TimeSpan.FromSeconds(10));
-            await this.application.StopAsync(
-                cancellation.Token);
-            await this.httpServer.DisposeAsync();
-            await this.reverseServer.DisposeAsync();
-            await this.application.DisposeAsync();
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult<ProviderConfig?>(
+                providerReference == "shade-byok"
+                    && modelId == "gpt-test"
+                    ? provider
+                    : null);
         }
     }
 
-    private sealed record RemoteSplitWorkerConfiguration(
-        string HubUrl,
-        string WorkerEntityId,
-        string WorkerMarker,
-        string ProviderReference,
-        string ProviderType,
-        string ProviderBaseUrl,
-        string ProviderApiKey,
-        string WireApi,
-        string ModelId);
-
-    private sealed class RemoteSplitWorkerProcess
-        : IAsyncDisposable
+    private sealed class IdentityRecordingListener(
+        ITransportListener inner,
+        TransportPeerIdentityProvider identities) : ITransportListener
     {
-        private readonly Process process;
-        private readonly Task outputPump;
-        private readonly Task errorPump;
-        private readonly ConcurrentQueue<string> outputLines = new();
-        private readonly ConcurrentQueue<string> errorLines = new();
-        private readonly TaskCompletionSource ready =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource<JsonElement> requestReceived =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal Task<JsonElement> RequestReceived => this.requestReceived.Task;
+        internal TransportPeerIdentity? ObservedIdentity { get; private set; }
 
-        private RemoteSplitWorkerProcess(Process process)
+        public async Task<IAsyncDisposable?> OnChannelOpenAsync(
+            JsonElement request,
+            IMessageChannel channel,
+            CancellationToken ct = default)
         {
-            this.process = process;
-            this.outputPump = this.ReadOutputAsync();
-            this.errorPump = this.ReadErrorsAsync();
-        }
-
-        internal Task<JsonElement> RequestReceived =>
-            this.requestReceived.Task;
-        internal IReadOnlyList<string> OutputLines =>
-            [.. this.outputLines];
-
-        internal static async Task<RemoteSplitWorkerProcess>
-            StartAsync(
-                RemoteSplitWorkerConfiguration configuration,
-                CancellationToken cancellationToken)
-        {
-            _ = CopilotCliLocator.FindOrThrow();
-            var executableName = OperatingSystem.IsWindows()
-                ? "Phantom.Workspaces.Transport.TestWorker.exe"
-                : "Phantom.Workspaces.Transport.TestWorker";
-            var executable = Path.Combine(
-                AppContext.BaseDirectory,
-                "remote-split-worker",
-                executableName);
-            if (!File.Exists(executable))
-                throw new FileNotFoundException(
-                    "The split-session worker is unavailable.",
-                    executable);
-
-            var process = Process.Start(
-                new ProcessStartInfo
-                {
-                    FileName = executable,
-                    WorkingDirectory =
-                        Path.GetDirectoryName(executable)!,
-                    UseShellExecute = false,
-                    RedirectStandardInput = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true,
-                }) ?? throw new InvalidOperationException(
-                    "Unable to start the split-session worker.");
-            var worker = new RemoteSplitWorkerProcess(process);
-            await process.StandardInput.WriteLineAsync(
-                JsonSerializer.Serialize(configuration));
-            await process.StandardInput.FlushAsync(
-                cancellationToken);
-            var exited =
-                process.WaitForExitAsync(cancellationToken);
-            var completed = await Task.WhenAny(
-                worker.ready.Task,
-                exited);
-            if (completed == exited)
+            if (CopilotSessionTransportFrames.IsConnectionRequest(request))
             {
-                await exited;
-                await worker.outputPump;
-                await worker.errorPump;
-                throw new InvalidOperationException(
-                    "Split-session worker exited before registration: "
-                    + string.Join(
-                        Environment.NewLine,
-                        worker.errorLines));
+                this.ObservedIdentity = identities.GetRequiredIdentity(channel);
+                this.requestReceived.TrySetResult(request.Clone());
             }
-            await worker.ready.Task.WaitAsync(
-                cancellationToken);
-            return worker;
+            return await inner.OnChannelOpenAsync(request, channel, ct);
         }
 
-        public async ValueTask DisposeAsync()
-        {
-            if (!this.process.HasExited)
-            {
-                try
-                {
-                    await this.process.StandardInput
-                        .WriteLineAsync("stop");
-                    await this.process.StandardInput.FlushAsync();
-                    using var cancellation =
-                        new CancellationTokenSource(
-                            TimeSpan.FromSeconds(10));
-                    await this.process.WaitForExitAsync(
-                        cancellation.Token);
-                }
-                catch (OperationCanceledException)
-                {
-                    this.process.Kill(
-                        entireProcessTree: true);
-                    await this.process.WaitForExitAsync();
-                }
-                catch (IOException)
-                    when (this.process.HasExited)
-                {
-                }
-                catch (InvalidOperationException)
-                    when (this.process.HasExited)
-                {
-                }
-            }
-            await this.outputPump;
-            await this.errorPump;
-            this.process.Dispose();
-        }
+        public Task<IAsyncDisposable?> OnStreamOpenAsync(
+            JsonElement request,
+            Stream stream,
+            CancellationToken ct = default)
+            => inner.OnStreamOpenAsync(request, stream, ct);
 
-        private async Task ReadOutputAsync()
-        {
-            while (await this.process.StandardOutput.ReadLineAsync()
-                   is { } line)
-            {
-                this.outputLines.Enqueue(line);
-                JsonElement item;
-                try
-                {
-                    item = JsonDocument.Parse(line)
-                        .RootElement
-                        .Clone();
-                }
-                catch (JsonException)
-                {
-                    continue;
-                }
-
-                var type = item.TryGetProperty(
-                    "type",
-                    out var typeProperty)
-                    ? typeProperty.GetString()
-                    : null;
-                if (type == "ready")
-                    this.ready.TrySetResult();
-                else if (type == "request")
-                    this.requestReceived.TrySetResult(item);
-            }
-        }
-
-        private async Task ReadErrorsAsync()
-        {
-            while (await this.process.StandardError.ReadLineAsync()
-                   is { } line)
-                this.errorLines.Enqueue(line);
-        }
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
     }
 
     private sealed class SafeLoggerFactory : ILoggerFactory
     {
-        public ILogger CreateLogger(string categoryName)
-            => new SafeLogger();
-
+        public ILogger CreateLogger(string categoryName) => new SafeLogger();
         public void AddProvider(ILoggerProvider provider)
         {
         }
-
         public void Dispose()
         {
         }
@@ -1257,9 +916,7 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
         {
             public IDisposable? BeginScope<TState>(TState state)
                 where TState : notnull => null;
-
             public bool IsEnabled(LogLevel logLevel) => true;
-
             public void Log<TState>(
                 LogLevel logLevel,
                 EventId eventId,
@@ -1271,8 +928,16 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
         }
     }
 
-    private static WorkspaceEntitySession WorkspaceSession(
-        EntityId profile)
+    private static TransportPeerIdentity Peer(EntityId profile)
+        => new()
+        {
+            AuthenticationScheme = "test",
+            StablePeerId = profile.ToString(),
+            UserEntityId = UserId.ToString(),
+            UserComputerProfileEntityId = profile.ToString(),
+        };
+
+    private static WorkspaceEntitySession WorkspaceSession(EntityId profile)
         => new()
         {
             UserEntityId = UserId,

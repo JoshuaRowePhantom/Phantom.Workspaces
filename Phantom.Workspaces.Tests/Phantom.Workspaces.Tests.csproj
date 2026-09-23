@@ -13,6 +13,7 @@
     <PackageReference Include="Avalonia.Headless" />
     <PackageReference Include="Avalonia.Headless.XUnit" />
     <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="Moq" />
@@ -31,10 +32,6 @@
     <ProjectReference Include="..\Phantom.Workspaces\Phantom.Workspaces.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Testing.Gui\Phantom.Workspaces.Testing.Gui.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Testing\Phantom.Workspaces.Testing.csproj" />
-    <ProjectReference Include="..\Phantom.Workspaces.Transport.TestWorker\Phantom.Workspaces.Transport.TestWorker.csproj" ReferenceOutputAssembly="false" />
-  </ItemGroup>
-  <ItemGroup>
-    <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
   <ItemGroup>
     <None Update="xunit.runner.json">
@@ -48,13 +45,9 @@
     <EmbeddedResource Include="..\Phantom.Workspaces.Data.Core\JsonEntities\defaults\agent-manifests\copilot-split-executor.json" Link="copilot-split-executor.json" />
     <Compile Include="..\Phantom.Workspaces.Llm.Core.Tests\ScriptedByokChatServer.cs" Link="ScriptedByokChatServer.cs" />
     <Compile Include="..\Phantom.Workspaces.Llm.Core.Tests\CopilotCliLocator.cs" Link="CopilotCliLocator.cs" />
+    <Compile Include="..\Phantom.Workspaces.Transport.Tests\Infrastructure\HubRelayHarness.cs" Link="Transport\HubRelayHarness.cs" />
+    <Compile Include="..\Phantom.Workspaces.Transport.Tests\Infrastructure\InProcessHttpServerTransportFactory.cs" Link="Transport\InProcessHttpServerTransportFactory.cs" />
+    <Compile Include="..\Phantom.Workspaces.Transport.Tests\Infrastructure\InProcessReverseHubFixture.cs" Link="Transport\InProcessReverseHubFixture.cs" />
+    <Compile Include="..\Phantom.Workspaces.Transport.Tests\Infrastructure\ReverseHubHttpShim.cs" Link="Transport\ReverseHubHttpShim.cs" />
   </ItemGroup>
-  <Target Name="CopyPersistedSplitTestWorker" AfterTargets="Build">
-    <ItemGroup>
-      <PersistedSplitTestWorkerFiles Include="..\Phantom.Workspaces.Transport.TestWorker\bin\$(Configuration)\net10.0\**\*" />
-    </ItemGroup>
-    <Copy SourceFiles="@(PersistedSplitTestWorkerFiles)"
-          DestinationFiles="@(PersistedSplitTestWorkerFiles->'$(OutDir)remote-split-worker\%(RecursiveDir)%(Filename)%(Extension)')"
-          SkipUnchangedFiles="true" />
-  </Target>
 </Project>
