@@ -52,7 +52,7 @@ internal sealed class CopilotClientOverTransport : ICopilotClient
     {
         ArgumentNullException.ThrowIfNull(config);
         var (channel, correlationId, lifecycle) =
-            await this.OpenChannelAsync(cancellationToken).ConfigureAwait(false);
+            await this.OpenChannelAsync(cancellationToken, RemoteCopilotOperation.Create).ConfigureAwait(false);
         return await CopilotSessionOverTransport.CreateAsync(
             channel,
             config,
@@ -70,7 +70,7 @@ internal sealed class CopilotClientOverTransport : ICopilotClient
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentNullException.ThrowIfNull(config);
         var (channel, correlationId, lifecycle) =
-            await this.OpenChannelAsync(cancellationToken).ConfigureAwait(false);
+            await this.OpenChannelAsync(cancellationToken, RemoteCopilotOperation.Resume).ConfigureAwait(false);
         return await CopilotSessionOverTransport.ResumeAsync(
                 channel,
                 sessionId,
@@ -85,14 +85,15 @@ internal sealed class CopilotClientOverTransport : ICopilotClient
     }
 
     private async Task<(IMessageChannel Channel, string CorrelationId, RemoteCopilotLifecycleLog Lifecycle)>
-        OpenChannelAsync(CancellationToken cancellationToken)
+        OpenChannelAsync(CancellationToken cancellationToken, RemoteCopilotOperation operation)
     {
         var correlationId = Guid.NewGuid().ToString("N");
         var lifecycle = new RemoteCopilotLifecycleLog(
             this.loggerFactory,
             correlationId,
             "caller",
-            this.timeProvider);
+            this.timeProvider,
+            operation);
         lifecycle.Confirm("open-start", "started");
         try
         {
@@ -111,6 +112,11 @@ internal sealed class CopilotClientOverTransport : ICopilotClient
         {
             lifecycle.Cancel("open-cancelled");
             throw;
+        }
+        catch (OperationCanceledException)
+        {
+            lifecycle.Fail("open-failed", "transport-cancelled");
+            throw new TransportException("The remote Copilot channel could not be opened.");
         }
         catch (TimeoutException)
         {

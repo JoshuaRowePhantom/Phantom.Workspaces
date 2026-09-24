@@ -439,6 +439,7 @@ public sealed class CopilotClientTransportListener : ITransportListener
 
         private async Task CreateSessionAsync(JsonElement frame, CancellationToken token)
         {
+            this.lifecycle.SetOperation(RemoteCopilotOperation.Create);
             this.lifecycle.Confirm("create-received");
             try
             {
@@ -466,6 +467,11 @@ public sealed class CopilotClientTransportListener : ITransportListener
                     "provider-unavailable",
                     token).ConfigureAwait(false);
             }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                this.lifecycle.Cancel("sdk-create-cancelled");
+                throw;
+            }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
                 _ = exception;
@@ -479,6 +485,7 @@ public sealed class CopilotClientTransportListener : ITransportListener
 
         private async Task ResumeSessionAsync(JsonElement frame, CancellationToken token)
         {
+            this.lifecycle.SetOperation(RemoteCopilotOperation.Resume);
             this.lifecycle.Confirm("create-received");
             try
             {
@@ -507,6 +514,11 @@ public sealed class CopilotClientTransportListener : ITransportListener
                     "The remote Copilot provider is unavailable.",
                     "provider-unavailable",
                     token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                this.lifecycle.Cancel("sdk-create-cancelled");
+                throw;
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {

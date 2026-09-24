@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using GitHub.Copilot;
 using Microsoft.Extensions.Logging;
@@ -15,6 +16,399 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 public sealed class RemoteCopilotLifecycleTests
 {
     private static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(30);
+
+    [Fact]
+    public async Task RemoteCopilotLifecycle_Create_EmitsOrderedCallerAndWorkerInfoToInjectedLoggers()
+    {
+        using var caller = new LifecycleLoggerFactory();
+        using var worker = new LifecycleLoggerFactory();
+        var sdk = new ExecutorRoutingTestHarness.RecordingClientFactory();
+        var listeners = new TransportRegistry();
+        listeners.Register(new CopilotClientTransportListener(new AgentServices
+        {
+            CopilotClientFactory = sdk,
+            LoggerFactory = worker,
+        }));
+        await using var transport = new LocalTransport(listeners);
+        await using var client = new CopilotClientOverTransport(transport, loggerFactory: caller);
+
+        await using var session = await client.CreateSessionAsync(
+            new SessionConfig { Model = "safe-model" }, TestToken());
+
+        AssertLifecycleOrder(caller, "open-start", "open-complete", "create-write-start",
+            "create-written", "ack-received");
+        AssertLifecycleOrder(worker, "request-received", "listener-entered", "cli-start-started",
+            "cli-start-succeeded", "create-received", "sdk-create-started", "sdk-created",
+            "ack-write-started", "ack-written");
+        AssertSeparateInfoAttempts(caller, worker, "create");
+        Assert.Equal("create-written",
+            Assert.Single(caller.Entries, entry => entry.Stage == "create-written").LastConfirmedStage);
+        Assert.DoesNotContain(caller.Entries, entry => entry.Stage == "request-received");
+        Assert.DoesNotContain(worker.Entries, entry => entry.Stage == "ack-received");
+    }
+
+    [Fact]
+    public async Task RemoteCopilotLifecycle_Resume_EmitsOrderedCallerAndWorkerInfoToInjectedLoggers()
+    {
+        using var caller = new LifecycleLoggerFactory();
+        using var worker = new LifecycleLoggerFactory();
+        var sdk = new ToolCapturingClientFactory();
+        var listeners = new TransportRegistry();
+        listeners.Register(new CopilotClientTransportListener(new AgentServices
+        {
+            CopilotClientFactory = sdk,
+            LoggerFactory = worker,
+        }));
+        await using var transport = new LocalTransport(listeners);
+        await using var client = new CopilotClientOverTransport(transport, loggerFactory: caller);
+
+        await using var session = await client.ResumeSessionAsync(
+            "private-resume-session-id",
+            new ResumeSessionConfig { Model = "safe-model" }, TestToken());
+
+        AssertLifecycleOrder(caller, "open-start", "open-complete", "create-write-start",
+            "create-written", "ack-received");
+        AssertLifecycleOrder(worker, "request-received", "listener-entered", "cli-start-started",
+            "cli-start-succeeded", "create-received", "sdk-create-started", "sdk-created",
+            "ack-write-started", "ack-written");
+        AssertSeparateInfoAttempts(caller, worker, "resume");
+        Assert.All(caller.Entries, entry => Assert.Equal("resume", entry.Operation));
+        Assert.All(worker.Entries.Where(entry => entry.Stage is "create-received" or "sdk-create-started"
+            or "sdk-created" or "ack-written"), entry => Assert.Equal("resume", entry.Operation));
+        AssertSanitized(caller, "private-resume-session-id");
+        AssertSanitized(worker, "private-resume-session-id");
+    }
+
+    [Fact]
+    public async Task RemoteCopilotLifecycle_TimeoutBeforeWorkerReceipt_EmitsCallerInfoOnly()
+    {
+        var clock = new FakeTimeProvider(
+            new DateTimeOffset(2026, 9, 24, 0, 0, 0, TimeSpan.Zero));
+        using var caller = new LifecycleLoggerFactory();
+        using var worker = new LifecycleLoggerFactory();
+        var transport = new BlackHoleTransport();
+        await using var client = new CopilotClientOverTransport(
+            transport, timeProvider: clock, startupTimeout: StartupTimeout, loggerFactory: caller);
+        var create = client.CreateSessionAsync(new SessionConfig { Model = "safe-model" }, TestToken());
+
+        _ = await transport.Channel.Outbound.Reader.ReadAsync(TestToken());
+        clock.Advance(StartupTimeout);
+        await Assert.ThrowsAsync<TimeoutException>(() => create);
+
+        var timeout = Assert.Single(caller.Entries, entry => entry.Stage == "startup-timeout");
+        Assert.Equal(LogLevel.Information, timeout.Level);
+        Assert.Equal("create-written", timeout.LastConfirmedStage);
+        Assert.Equal("timeout", timeout.ErrorCategory);
+        Assert.Empty(worker.Entries);
+        Assert.DoesNotContain(caller.Entries, entry => entry.Stage == "request-received");
+    }
+
+    [Fact]
+    public async Task RemoteCopilotLifecycle_ChannelClosesBeforeAck_EmitsOnlyReachedInfoStages()
+    {
+        using var caller = new LifecycleLoggerFactory();
+        var transport = new BlackHoleTransport();
+        await using var client = new CopilotClientOverTransport(transport, loggerFactory: caller);
+        var create = client.CreateSessionAsync(new SessionConfig { Model = "safe-model" }, TestToken());
+
+        _ = await transport.Channel.Outbound.Reader.ReadAsync(TestToken());
+        transport.Channel.Inbound.Writer.TryComplete();
+        await Assert.ThrowsAsync<TransportException>(() => create);
+
+        var closed = Assert.Single(caller.Entries,
+            entry => entry.Stage == "startup-channel-closed");
+        Assert.Equal(LogLevel.Information, closed.Level);
+        Assert.Equal("create-written", closed.LastConfirmedStage);
+        Assert.DoesNotContain(caller.Entries, entry => entry.Stage == "ack-received");
+    }
+
+    [Fact]
+    public async Task RemoteCopilotLifecycle_WorkerCreateCancelledAfterReceipt_EmitsSafeInfoBoundary()
+    {
+        using var worker = new LifecycleLoggerFactory();
+        var factory = new BlockingSessionClientFactory();
+        var listener = new CopilotClientTransportListener(new AgentServices
+        {
+            CopilotClientFactory = factory, LoggerFactory = worker,
+        });
+        await using var channel = new SplitMessageChannel();
+        var host = await listener.OnChannelOpenAsync(
+            CopilotSessionTransportFrames.BuildConnectionRequest(
+                correlationId: Guid.NewGuid().ToString("N")),
+            channel, TestToken());
+        Assert.NotNull(host);
+        using var request = JsonDocument.Parse(
+            """{"type":"create-session","config":{"model":"safe-model"}}""");
+        await channel.Inbound.Writer.WriteAsync(request.RootElement.Clone(), TestToken());
+        await factory.Client.CreateEntered.Task.WaitAsync(TestToken());
+
+        await host.DisposeAsync();
+
+        var cancelled = Assert.Single(worker.Entries,
+            entry => entry.Stage == "sdk-create-cancelled");
+        Assert.Equal(LogLevel.Information, cancelled.Level);
+        Assert.Equal("sdk-create-started", cancelled.LastConfirmedStage);
+        Assert.DoesNotContain(worker.Entries, entry => entry.Stage == "sdk-created");
+    }
+
+    [Fact]
+    public async Task RemoteCopilotLifecycle_TerminalTimeoutAfterAck_EmitsInfoWithoutRawPayload()
+    {
+        var clock = new FakeTimeProvider(
+            new DateTimeOffset(2026, 9, 24, 0, 0, 0, TimeSpan.Zero));
+        using var caller = new LifecycleLoggerFactory();
+        var transport = new BlackHoleTransport();
+        await using var client = new CopilotClientOverTransport(
+            transport, timeProvider: clock,
+            terminalTimeout: TimeSpan.FromSeconds(10), loggerFactory: caller);
+        var creating = client.CreateSessionAsync(new SessionConfig { Model = "safe-model" }, TestToken());
+        _ = await transport.Channel.Outbound.Reader.ReadAsync(TestToken());
+        using var ack = JsonDocument.Parse("""{"type":"session-created","session-id":"private-session-id"}""");
+        await transport.Channel.Inbound.Writer.WriteAsync(ack.RootElement.Clone(), TestToken());
+        await using var session = await creating;
+        var terminal = new TaskCompletionSource<SessionErrorEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var subscription = session.Subscribe(e =>
+        {
+            if (e is SessionErrorEvent error)
+                terminal.TrySetResult(error);
+        });
+
+        await session.SendAsync(new MessageOptions { Prompt = "private-prompt" }, TestToken());
+        _ = await transport.Channel.Outbound.Reader.ReadAsync(TestToken());
+        clock.Advance(TimeSpan.FromSeconds(10));
+        var failed = await terminal.Task.WaitAsync(TestToken());
+
+        Assert.Equal("transport-timeout", failed.Data?.ErrorType);
+        var timeout = Assert.Single(caller.Entries, entry => entry.Stage == "terminal-timeout");
+        Assert.Equal("ack-received", timeout.LastConfirmedStage);
+        Assert.Equal("timeout", timeout.ErrorCategory);
+        AssertSanitized(caller, "private-session-id", "private-prompt");
+    }
+
+    [Fact]
+    public async Task RemoteCopilotLifecycle_RejectedOrFailedWorkerRequest_EmitsSafeInfoBoundaries()
+    {
+        using var rejectedLogs = new LifecycleLoggerFactory();
+        var sdk = new ExecutorRoutingTestHarness.RecordingClientFactory();
+        var listener = new CopilotClientTransportListener(new AgentServices
+        {
+            CopilotClientFactory = sdk, LoggerFactory = rejectedLogs,
+        });
+        await using var channel = new SplitMessageChannel();
+        using var malformed = JsonDocument.Parse(
+            """{"type":"copilot-sdk-session","correlation-id":"private-invalid-id"}""");
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => listener.OnChannelOpenAsync(malformed.RootElement, channel, TestToken()));
+        Assert.Equal(0, sdk.CreateCount);
+        Assert.Contains(rejectedLogs.Entries, entry => entry.Stage == "request-received");
+        Assert.Contains(rejectedLogs.Entries, entry => entry.Stage == "request-rejected"
+            && entry.ErrorCategory == "invalid-envelope");
+        Assert.DoesNotContain(rejectedLogs.Entries, entry => entry.Stage == "cli-start-succeeded");
+        AssertSanitized(rejectedLogs, "private-invalid-id");
+
+        using var failedLogs = new LifecycleLoggerFactory();
+        var failingSdk = new ExecutorRoutingTestHarness.RecordingClientFactory();
+        failingSdk.Client.StartException = new InvalidOperationException("private-cli-error");
+        var failingListener = new CopilotClientTransportListener(new AgentServices
+        {
+            CopilotClientFactory = failingSdk, LoggerFactory = failedLogs,
+        });
+        await Assert.ThrowsAsync<InvalidOperationException>(() => failingListener.OnChannelOpenAsync(
+            CopilotSessionTransportFrames.BuildConnectionRequest(
+                correlationId: Guid.NewGuid().ToString("N")),
+            channel, TestToken()));
+        Assert.Contains(failedLogs.Entries, entry =>
+            entry.Stage == "cli-start-failed" && entry.ErrorCategory == "launch-denied");
+        Assert.DoesNotContain(failedLogs.Entries, entry => entry.Stage == "sdk-created");
+        AssertSanitized(failedLogs, "private-cli-error");
+
+        using var sdkLogs = new LifecycleLoggerFactory();
+        var sdkListeners = new TransportRegistry();
+        sdkListeners.Register(new CopilotClientTransportListener(new AgentServices
+        {
+            CopilotClientFactory = new FaultingSessionClientFactory(),
+            LoggerFactory = sdkLogs,
+        }));
+        await using var sdkTransport = new LocalTransport(sdkListeners);
+        await using var sdkCaller = new CopilotClientOverTransport(sdkTransport, loggerFactory: sdkLogs);
+        var sdkFailure = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sdkCaller.CreateSessionAsync(new SessionConfig { Model = "safe-model" }, TestToken()));
+        Assert.DoesNotContain("private-sdk-error", sdkFailure.Message, StringComparison.Ordinal);
+        Assert.Contains(sdkLogs.Entries, entry => entry.Stage == "sdk-create-started");
+        Assert.Contains(sdkLogs.Entries, entry => entry.Stage == "sdk-create-failed"
+            && entry.ErrorCategory == "sdk-create");
+        Assert.DoesNotContain(sdkLogs.Entries, entry => entry.Stage == "sdk-created");
+        AssertSanitized(sdkLogs, "private-sdk-error");
+    }
+
+    [Fact]
+    public async Task RemoteCopilotLifecycle_CancelledOrFailedCallerOpen_EmitsSafeInfoBoundary()
+    {
+        using var openLogs = new LifecycleLoggerFactory();
+        await using var failingClient = new CopilotClientOverTransport(
+            new ThrowingTransport(new TransportException("private-open-url")),
+            loggerFactory: openLogs);
+        await Assert.ThrowsAsync<TransportException>(
+            () => failingClient.CreateSessionAsync(new SessionConfig { Model = "safe-model" }, TestToken()));
+        Assert.Contains(openLogs.Entries, entry => entry.Stage == "open-failed"
+            && entry.LastConfirmedStage == "open-start"
+            && entry.Level == LogLevel.Information);
+        Assert.DoesNotContain(openLogs.Entries, entry => entry.Stage == "create-written");
+        AssertSanitized(openLogs, "private-open-url");
+
+        using var writeLogs = new LifecycleLoggerFactory();
+        var transport = new BlackHoleTransport();
+        transport.Channel.Outbound.Writer.TryComplete(
+            new InvalidOperationException("private-write-error"));
+        await using var writeClient = new CopilotClientOverTransport(transport, loggerFactory: writeLogs);
+        await Assert.ThrowsAsync<TransportException>(
+            () => writeClient.CreateSessionAsync(new SessionConfig { Model = "safe-model" }, TestToken()));
+        Assert.Contains(writeLogs.Entries, entry => entry.Stage == "create-write-failed"
+            && entry.LastConfirmedStage == "create-write-start"
+            && entry.Level == LogLevel.Information);
+        Assert.DoesNotContain(writeLogs.Entries, entry => entry.Stage == "create-written");
+        AssertSanitized(writeLogs, "private-write-error");
+
+        using var cancelledLogs = new LifecycleLoggerFactory();
+        var blocked = new BlockingOpenTransport();
+        await using var cancelledClient = new CopilotClientOverTransport(
+            blocked, loggerFactory: cancelledLogs);
+        using var cancellation = new CancellationTokenSource();
+        var cancelled = cancelledClient.CreateSessionAsync(
+            new SessionConfig { Model = "safe-model" }, cancellation.Token);
+        await blocked.Opened.Task.WaitAsync(TestToken());
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelled);
+        Assert.Contains(cancelledLogs.Entries, entry => entry.Stage == "open-cancelled"
+            && entry.LastConfirmedStage == "open-start"
+            && entry.Level == LogLevel.Information);
+
+        using var transportCancelledLogs = new LifecycleLoggerFactory();
+        await using var transportCancelled = new CopilotClientOverTransport(
+            new ThrowingTransport(new OperationCanceledException("private-transport-cancel")),
+            loggerFactory: transportCancelledLogs);
+        await Assert.ThrowsAsync<TransportException>(
+            () => transportCancelled.CreateSessionAsync(
+                new SessionConfig { Model = "safe-model" }, TestToken()));
+        Assert.Contains(transportCancelledLogs.Entries, entry => entry.Stage == "open-failed"
+            && entry.ErrorCategory == "transport-cancelled"
+            && entry.LastConfirmedStage == "open-start");
+        AssertSanitized(transportCancelledLogs, "private-transport-cancel");
+    }
+
+    [Fact]
+    public async Task RemoteCopilotLifecycle_PrivateInputs_DoNotAppearInInjectedLoggerCapture()
+    {
+        const string endpoint = "https://private-host.invalid/secret";
+        const string credential = "private-api-credential";
+        using var caller = new LifecycleLoggerFactory();
+        using var worker = new LifecycleLoggerFactory();
+        var sdk = new ExecutorRoutingTestHarness.RecordingClientFactory();
+        var listeners = new TransportRegistry();
+        listeners.Register(new CopilotClientTransportListener(new AgentServices
+        {
+            CopilotClientFactory = sdk, LoggerFactory = worker,
+        }));
+        await using var transport = new LocalTransport(listeners);
+        await using var client = new CopilotClientOverTransport(transport, loggerFactory: caller);
+        await using var session = await client.CreateSessionAsync(
+            new SessionConfig
+            {
+                Model = "safe-model",
+                Provider = new ProviderConfig { Type = "openai", BaseUrl = endpoint, ApiKey = credential },
+                SystemMessage = new SystemMessageConfig { Content = "private-system-prompt" },
+            }, TestToken());
+
+        AssertSanitized(caller, endpoint, credential, "private-system-prompt", "private-host");
+        AssertSanitized(worker, endpoint, credential, "private-system-prompt", "private-host");
+        AssertSeparateInfoAttempts(caller, worker, "create");
+    }
+
+    [Fact]
+    public async Task RemoteCopilotLifecycle_UntrustedWireError_UsesOnlySafeCategoryAndMessage()
+    {
+        using var caller = new LifecycleLoggerFactory();
+        var transport = new BlackHoleTransport();
+        await using var client = new CopilotClientOverTransport(transport, loggerFactory: caller);
+        var creating = client.CreateSessionAsync(
+            new SessionConfig { Model = "safe-model" }, TestToken());
+        _ = await transport.Channel.Outbound.Reader.ReadAsync(TestToken());
+        using var errorFrame = JsonDocument.Parse(
+            """{"type":"session-error","error":"private-exception","error-category":"private-category"}""");
+        await transport.Channel.Inbound.Writer.WriteAsync(errorFrame.RootElement.Clone(), TestToken());
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => creating);
+        Assert.DoesNotContain("private", error.Message, StringComparison.Ordinal);
+        var failure = Assert.Single(caller.Entries, entry => entry.Stage == "ack-error");
+        Assert.Equal("other", failure.ErrorCategory);
+        Assert.Equal("create-written", failure.LastConfirmedStage);
+        AssertSanitized(caller, "private-exception", "private-category");
+    }
+
+    [Fact]
+    public async Task RemoteCopilotLifecycle_WorkerSessionError_EmitsSafeTerminalInfo()
+    {
+        using var caller = new LifecycleLoggerFactory();
+        var transport = new BlackHoleTransport();
+        await using var client = new CopilotClientOverTransport(transport, loggerFactory: caller);
+        var creating = client.CreateSessionAsync(
+            new SessionConfig { Model = "safe-model" }, TestToken());
+        _ = await transport.Channel.Outbound.Reader.ReadAsync(TestToken());
+        using var ack = JsonDocument.Parse("""{"type":"session-created","session-id":"private-sdk-session-id"}""");
+        await transport.Channel.Inbound.Writer.WriteAsync(ack.RootElement.Clone(), TestToken());
+        await using var session = await creating;
+        var terminal = new TaskCompletionSource<SessionErrorEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var subscription = session.Subscribe(e =>
+        {
+            if (e is SessionErrorEvent error)
+                terminal.TrySetResult(error);
+        });
+        var sdkError = new SessionErrorEvent
+        {
+            Data = new SessionErrorData
+            {
+                ErrorType = "private-sdk-kind",
+                Message = "private-sdk-message",
+            },
+        };
+        var frame = new JsonObject
+        {
+            [CopilotSessionTransportFrames.TypeProperty] = CopilotSessionTransportFrames.SessionEventType,
+            [CopilotSessionTransportFrames.EventJsonProperty] = sdkError.ToJson(),
+        };
+        await transport.Channel.Inbound.Writer.WriteAsync(
+            CopilotSessionTransportFrames.BuildFrame(frame), TestToken());
+
+        var received = await terminal.Task.WaitAsync(TestToken());
+
+        Assert.Equal("Remote Copilot session failed.", received.Data?.Message);
+        Assert.Equal("remote-error", received.Data?.ErrorType);
+        var failure = Assert.Single(caller.Entries, entry => entry.Stage == "terminal-error");
+        Assert.Equal("remote-error", failure.ErrorCategory);
+        Assert.Equal("ack-received", failure.LastConfirmedStage);
+        AssertSanitized(caller, "private-sdk-session-id", "private-sdk-kind", "private-sdk-message");
+    }
+
+    [Fact]
+    public void RemoteCopilotLifecycle_UntrustedDirectFields_AreNotRendered()
+    {
+        using var logs = new LifecycleLoggerFactory();
+        var lifecycle = new RemoteCopilotLifecycleLog(
+            logs, "private-correlation", "private-role");
+
+        lifecycle.Confirm("open-start", "private-outcome");
+        lifecycle.Fail("open-failed", "private-error");
+
+        Assert.All(logs.Entries, entry =>
+        {
+            Assert.Equal("unknown", entry.Role);
+            Assert.Equal(LogLevel.Information, entry.Level);
+            Assert.True(Guid.TryParseExact(entry.CorrelationId, "N", out _));
+        });
+        Assert.Equal("other", logs.Entries[0].Outcome);
+        Assert.Equal("other", logs.Entries[1].ErrorCategory);
+        AssertSanitized(logs, "private-correlation", "private-role", "private-outcome", "private-error");
+    }
 
     [Fact]
     public async Task RemoteSplitSession_ProviderReference_ResolvesOnlyOnWorker()
@@ -733,11 +1127,38 @@ public sealed class RemoteCopilotLifecycleTests
         Assert.True(Guid.TryParseExact(ids[0], "N", out _));
     }
 
+    private static void AssertSeparateInfoAttempts(
+        LifecycleLoggerFactory caller, LifecycleLoggerFactory worker, string operation)
+    {
+        var callerId = Assert.Single(caller.Entries.Select(entry => entry.CorrelationId)
+            .Distinct(StringComparer.Ordinal));
+        var workerId = Assert.Single(worker.Entries.Select(entry => entry.CorrelationId)
+            .Distinct(StringComparer.Ordinal));
+        Assert.Equal(callerId, workerId);
+        Assert.True(Guid.TryParseExact(callerId, "N", out _));
+        Assert.All(caller.Entries.Concat(worker.Entries), entry =>
+        {
+            Assert.Equal(LogLevel.Information, entry.Level);
+            Assert.False(entry.HasException);
+            Assert.True(long.TryParse(entry.ElapsedMilliseconds, out var elapsed) && elapsed >= 0);
+            Assert.False(string.IsNullOrWhiteSpace(entry.Outcome));
+        });
+        Assert.All(caller.Entries, entry =>
+        {
+            Assert.Equal("caller", entry.Role);
+            Assert.Equal(operation, entry.Operation);
+        });
+        Assert.All(worker.Entries, entry => Assert.Equal("worker", entry.Role));
+    }
+
     private static void AssertSanitized(
         LifecycleLoggerFactory logs,
         params string[] forbidden)
     {
-        var rendered = string.Join(Environment.NewLine, logs.Entries.Select(static entry => entry.Message));
+        var rendered = string.Join(Environment.NewLine,
+            logs.Entries.Select(static entry => string.Join(" ", entry.Message,
+                entry.CorrelationId, entry.Role, entry.Stage, entry.LastConfirmedStage,
+                entry.ErrorCategory, entry.Operation, entry.Outcome)));
         foreach (var value in forbidden)
         {
             Assert.DoesNotContain(value, rendered, StringComparison.OrdinalIgnoreCase);
@@ -791,6 +1212,56 @@ public sealed class RemoteCopilotLifecycleTests
 
         public Phantom.Workspaces.Llm.Copilot.ICopilotClient Create(CopilotClientOptions options)
             => this.Client;
+    }
+
+    private sealed class FaultingSessionClientFactory : Phantom.Workspaces.Llm.Copilot.ICopilotClientFactory
+    {
+        public Phantom.Workspaces.Llm.Copilot.ICopilotClient Create(CopilotClientOptions options)
+            => new FaultingSessionClient();
+
+        private sealed class FaultingSessionClient : Phantom.Workspaces.Llm.Copilot.ICopilotClient
+        {
+            public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+            public Task<IReadOnlyList<ModelInfo>> ListModelsAsync(CancellationToken cancellationToken)
+                => Task.FromResult<IReadOnlyList<ModelInfo>>([]);
+            public Task<Phantom.Workspaces.Llm.Copilot.ICopilotSession> CreateSessionAsync(
+                SessionConfig config, CancellationToken cancellationToken)
+                => Task.FromException<Phantom.Workspaces.Llm.Copilot.ICopilotSession>(
+                    new InvalidOperationException("private-sdk-error"));
+            public Task<Phantom.Workspaces.Llm.Copilot.ICopilotSession> ResumeSessionAsync(
+                string sessionId, ResumeSessionConfig config, CancellationToken cancellationToken)
+                => Task.FromException<Phantom.Workspaces.Llm.Copilot.ICopilotSession>(
+                    new InvalidOperationException("private-sdk-error"));
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class BlockingSessionClientFactory : Phantom.Workspaces.Llm.Copilot.ICopilotClientFactory
+    {
+        public BlockingSessionClient Client { get; } = new();
+        public Phantom.Workspaces.Llm.Copilot.ICopilotClient Create(CopilotClientOptions options)
+            => this.Client;
+
+        public sealed class BlockingSessionClient : Phantom.Workspaces.Llm.Copilot.ICopilotClient
+        {
+            private readonly TaskCompletionSource<Phantom.Workspaces.Llm.Copilot.ICopilotSession> pending =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            public TaskCompletionSource CreateEntered { get; } =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+            public Task<IReadOnlyList<ModelInfo>> ListModelsAsync(CancellationToken cancellationToken)
+                => Task.FromResult<IReadOnlyList<ModelInfo>>([]);
+            public async Task<Phantom.Workspaces.Llm.Copilot.ICopilotSession> CreateSessionAsync(
+                SessionConfig config, CancellationToken cancellationToken)
+            {
+                this.CreateEntered.TrySetResult();
+                return await this.pending.Task.WaitAsync(cancellationToken);
+            }
+            public Task<Phantom.Workspaces.Llm.Copilot.ICopilotSession> ResumeSessionAsync(
+                string sessionId, ResumeSessionConfig config, CancellationToken cancellationToken)
+                => throw new NotSupportedException();
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
     }
 
     private sealed class ToolDuringSendClientFactory : Phantom.Workspaces.Llm.Copilot.ICopilotClientFactory
@@ -929,6 +1400,25 @@ public sealed class RemoteCopilotLifecycleTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
+    private sealed class BlockingOpenTransport : ITransport
+    {
+        private readonly TaskCompletionSource<IMessageChannel> pending =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Opened { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<IMessageChannel> ConnectToMessageChannelAsync(
+            JsonElement request, CancellationToken ct = default)
+        {
+            this.Opened.TrySetResult();
+            return await this.pending.Task.WaitAsync(ct);
+        }
+
+        public Task<Stream> ConnectToStreamAsync(JsonElement request, CancellationToken ct = default)
+            => throw new NotSupportedException();
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
     private sealed class ThrowingTransport(Exception exception) : ITransport
     {
         public Task<IMessageChannel> ConnectToMessageChannelAsync(
@@ -970,6 +1460,8 @@ public sealed class RemoteCopilotLifecycleTests
 
         public Channel<JsonElement> Outbound => this.outbound;
 
+        public Channel<JsonElement> Inbound => this.inbound;
+
         public ChannelWriter<JsonElement> Writer => this.outbound.Writer;
 
         public ChannelReader<JsonElement> Reader => this.inbound.Reader;
@@ -988,7 +1480,12 @@ public sealed class RemoteCopilotLifecycleTests
         string? Role,
         string? Stage,
         string? LastConfirmedStage,
-        string? ErrorCategory);
+        string? ErrorCategory,
+        string? Operation,
+        string? Outcome,
+        string? ElapsedMilliseconds,
+        LogLevel Level,
+        bool HasException);
 
     private sealed class LifecycleLoggerFactory : ILoggerFactory
     {
@@ -1019,7 +1516,8 @@ public sealed class RemoteCopilotLifecycleTests
             public IDisposable? BeginScope<TState>(TState state)
                 where TState : notnull => null;
 
-            public bool IsEnabled(LogLevel logLevel) => true;
+            public bool IsEnabled(LogLevel logLevel)
+                => logLevel >= LogLevel.Information && logLevel < LogLevel.None;
 
             public void Log<TState>(
                 LogLevel logLevel,
@@ -1028,6 +1526,8 @@ public sealed class RemoteCopilotLifecycleTests
                 Exception? exception,
                 Func<TState, Exception?, string> formatter)
             {
+                if (!this.IsEnabled(logLevel))
+                    return;
                 var values = state as IEnumerable<KeyValuePair<string, object?>>;
                 entries.Enqueue(new LifecycleLogEntry(
                     formatter(state, exception),
@@ -1035,7 +1535,12 @@ public sealed class RemoteCopilotLifecycleTests
                     Value("Role"),
                     Value("Stage"),
                     Value("LastConfirmedStage"),
-                    Value("ErrorCategory")));
+                    Value("ErrorCategory"),
+                    Value("Operation"),
+                    Value("Outcome"),
+                    Value("ElapsedMilliseconds"),
+                    logLevel,
+                    exception is not null));
 
                 string? Value(string name) => values?
                     .FirstOrDefault(pair => string.Equals(pair.Key, name, StringComparison.Ordinal))

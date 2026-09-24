@@ -141,6 +141,7 @@ internal sealed class CopilotSessionOverTransport : ICopilotSession
                 [CopilotSessionTransportFrames.ConfigProperty] =
                     CopilotSessionTransportFrames.SerializeConfig(config),
             };
+            // Retain the existing stage keys; the structured operation now distinguishes Resume.
             session.lifecycle.Confirm("create-write-start", "started");
             await session.WriteCreateFrameAsync(frame, cancellationToken).ConfigureAwait(false);
             session.lifecycle.Confirm("create-written");
@@ -315,7 +316,9 @@ internal sealed class CopilotSessionOverTransport : ICopilotSession
             {
                 this.FailTransport(
                     failure ?? new TransportException(
-                        "The remote Copilot session channel closed before the turn reached a terminal event."));
+                        "The remote Copilot session channel closed before the turn reached a terminal event."),
+                    lifecycleStage: this.sessionCreated.Task.IsCompleted
+                        ? "terminal-channel-closed" : "startup-channel-closed");
             }
         }
     }
@@ -332,13 +335,15 @@ internal sealed class CopilotSessionOverTransport : ICopilotSession
                 break;
 
             case CopilotSessionTransportFrames.SessionErrorType:
-                var error = CopilotSessionTransportFrames.GetString(frame, CopilotSessionTransportFrames.ErrorProperty)
-                    ?? "Remote Copilot session failed.";
                 var category = CopilotSessionTransportFrames.GetString(
                     frame,
                     CopilotSessionTransportFrames.ErrorCategoryProperty) ?? "remote-error";
                 this.lifecycle.Fail("ack-error", category);
-                this.FailTransport(new InvalidOperationException(error));
+                this.FailTransport(new InvalidOperationException(category == "provider-unavailable"
+                    ? "The remote Copilot provider is unavailable."
+                    : "The remote Copilot session could not be created or resumed."),
+                    errorCategory: category is "provider-unavailable" or "sdk-create" or "sdk-operation"
+                        ? category : "remote-error");
                 break;
 
             case CopilotSessionTransportFrames.SessionEventType:
@@ -449,12 +454,12 @@ internal sealed class CopilotSessionOverTransport : ICopilotSession
             return;
         }
 
-        if (sessionEvent is SessionErrorEvent sessionError)
+        if (sessionEvent is SessionErrorEvent)
         {
             this.FailTransport(
-                new InvalidOperationException(
-                    sessionError.Data?.Message ?? "Remote Copilot session failed."),
-                sessionError);
+                new InvalidOperationException("Remote Copilot session failed."),
+                lifecycleStage: "terminal-error",
+                errorCategory: "remote-error");
             return;
         }
 
@@ -607,28 +612,44 @@ internal sealed class CopilotSessionOverTransport : ICopilotSession
 
         this.FailTransport(
             new TimeoutException(
-                $"The remote Copilot session did not produce a terminal event within {this.terminalTimeout}."));
+                $"The remote Copilot session did not produce a terminal event within {this.terminalTimeout}."),
+            lifecycleStage: "terminal-timeout",
+            errorCategory: "timeout");
     }
 
-    private void FailTransport(Exception exception, SessionEvent? terminalEvent = null)
+    private void FailTransport(
+        Exception exception, string? lifecycleStage = null, string errorCategory = "transport")
     {
         if (Interlocked.Exchange(ref this.terminalFailureSignaled, 1) != 0)
         {
             return;
         }
 
+        if (lifecycleStage is not null)
+            this.lifecycle.Fail(lifecycleStage, errorCategory);
         this.DisarmTerminalTimeout();
         this.sessionCreated.TrySetException(exception);
         this.FaultPending(exception);
-        this.DispatchToSubscribers(
-            terminalEvent ?? new SessionErrorEvent
+        this.DispatchToSubscribers(new SessionErrorEvent
+        {
+            Data = new SessionErrorData
             {
-                Data = new SessionErrorData
+                ErrorType = errorCategory switch
                 {
-                    ErrorType = exception is TimeoutException ? "transport-timeout" : "transport-closed",
-                    Message = exception.Message,
+                    "timeout" => "transport-timeout",
+                    "provider-unavailable" or "sdk-create" or "sdk-operation" or "remote-error" => errorCategory,
+                    _ => "transport-closed",
                 },
-            });
+                Message = errorCategory switch
+                {
+                    "timeout" => "The remote Copilot session timed out.",
+                    "provider-unavailable" => "The remote Copilot provider is unavailable.",
+                    "sdk-create" => "The remote Copilot session could not be created or resumed.",
+                    "remote-error" => "Remote Copilot session failed.",
+                    _ => "The remote Copilot session channel closed.",
+                },
+            },
+        });
     }
 
     private static TimeSpan ValidateTimeout(TimeSpan timeout, string parameterName)
