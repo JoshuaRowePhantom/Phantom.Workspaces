@@ -310,6 +310,27 @@ public sealed class McpOAuthRedirectHandlerTests
         Assert.DoesNotContain(logger.Entries, entry => entry.Message.Contains(redirectUri.ToString(), StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task McpOAuthRedirectHandler_PrivateServerAndUntrustedError_LogOnlySafeOutcome()
+    {
+        var browser = new FakeSystemBrowserLauncher();
+        var logger = new CapturingLogger<McpOAuthRedirectHandler>();
+        using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider(), logger);
+        var redirectUri = handler.EnsureListenerBound();
+        browser.OnOpen = _ => SendCallbackAsync(
+            redirectUri, "error=private-error-token&state=xyz");
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => handler.HandleAsync("private-server-name", AuthUri("xyz"), redirectUri, CancellationToken.None));
+        await browser.LastCallbackTask!;
+
+        Assert.Contains(logger.Entries, entry =>
+            entry.Level == LogLevel.Error && entry.Message.Contains("category other", StringComparison.Ordinal));
+        Assert.DoesNotContain(logger.Entries, entry =>
+            entry.Message.Contains("private-server-name", StringComparison.Ordinal)
+            || entry.Message.Contains("private-error-token", StringComparison.Ordinal));
+    }
+
     // ---- Issue #1425: shared listener + state demultiplexing ----
 
     [Fact]
@@ -475,7 +496,7 @@ public sealed class McpOAuthRedirectHandlerTests
     }
 
     [Fact]
-    public async Task RedirectHandler_SuccessfulSignIn_LogsServerAndOutcome()
+    public async Task RedirectHandler_SuccessfulSignIn_LogsOnlySafeOutcome()
     {
         var browser = new FakeSystemBrowserLauncher();
         var logger = new CapturingLogger<McpOAuthRedirectHandler>();
@@ -488,8 +509,9 @@ public sealed class McpOAuthRedirectHandlerTests
 
         Assert.Contains(logger.Entries, entry =>
             entry.Level == LogLevel.Information
-            && entry.Message.Contains("server-a", StringComparison.Ordinal)
-            && entry.Message.Contains("completed successfully", StringComparison.OrdinalIgnoreCase));
+            && entry.Message.Contains("outcome completed", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(logger.Entries, entry =>
+            entry.Message.Contains("server-a", StringComparison.Ordinal));
     }
 
     [Fact]

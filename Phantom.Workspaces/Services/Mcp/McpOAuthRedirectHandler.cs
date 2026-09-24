@@ -149,10 +149,7 @@ public sealed class McpOAuthRedirectHandler : IDisposable
 
         await this.EnsureConsentAsync(serverName, cancellationToken).ConfigureAwait(false);
 
-        // Redaction (#1446/#1408): only the server name is logged for the sign-in request — never the
-        // authorization URI (which can carry client id/scope) or any code/state value.
-        this.logger.LogInformation(
-            "Starting interactive MCP OAuth sign-in for server '{ServerName}'.", serverName);
+        this.logger.LogInformation("MCP OAuth sign-in; outcome started.");
 
         // Reuse the single shared listener — never a second Start(). The first sign-in in the process
         // binds it; every subsequent server (concurrent or overlapping) demultiplexes on the same prefix.
@@ -201,13 +198,13 @@ public sealed class McpOAuthRedirectHandler : IDisposable
                 if (cancellationToken.IsCancellationRequested)
                 {
                     this.logger.LogWarning(
-                        "MCP OAuth sign-in for server '{ServerName}' was cancelled.", serverName);
+                        "MCP OAuth sign-in; outcome cancelled.");
                     throw new OperationCanceledException(
                         $"MCP OAuth sign-in for server '{serverName}' was cancelled.", cancellationToken);
                 }
 
                 this.logger.LogWarning(
-                    "Timed out waiting for the OAuth redirect from MCP server '{ServerName}'.", serverName);
+                    "MCP OAuth sign-in; outcome timeout.");
                 throw new TimeoutException(
                     $"Timed out waiting for the OAuth redirect from MCP server '{serverName}'.");
             }
@@ -392,12 +389,10 @@ public sealed class McpOAuthRedirectHandler : IDisposable
             {
                 var errorDescription = GetQueryValue(requestUri, "error_description");
 
-                // Log ONLY the OAuth error/error_description codes. The full redirect URI must never be
-                // logged: its query carries the authorization `code`/`state` (issue #1408).
+                // OAuth error values and server names are untrusted; only allowlisted categories are logged.
                 this.logger.LogError(
-                    "MCP OAuth redirect for '{ServerName}' returned error {Error}.",
-                    authorization.ServerName,
-                    error);
+                    "MCP OAuth redirect failed; category {ErrorCategory}.",
+                    SafeOAuthError(error));
 
                 // Carry the decoded error/error_description into the thrown exception (via Data) so the
                 // AgentChat catch can surface them as diagnostic detail items without re-parsing URIs.
@@ -413,11 +408,7 @@ public sealed class McpOAuthRedirectHandler : IDisposable
             }
             else
             {
-                // Redaction (#1446/#1408): log only the server name and outcome — never the captured
-                // redirect URI, which carries the authorization code/state.
-                this.logger.LogInformation(
-                    "MCP OAuth sign-in for server '{ServerName}' completed successfully.",
-                    authorization.ServerName);
+                this.logger.LogInformation("MCP OAuth sign-in; outcome completed.");
                 authorization.Completion.TrySetResult(requestUri);
             }
         }
@@ -464,8 +455,7 @@ public sealed class McpOAuthRedirectHandler : IDisposable
 
         if (result is null)
         {
-            this.logger.LogWarning(
-                "User declined MCP OAuth sign-in for server '{ServerName}'.", serverName);
+            this.logger.LogWarning("MCP OAuth sign-in; outcome declined.");
             throw new OperationCanceledException("User declined MCP OAuth sign-in.");
         }
 
@@ -533,6 +523,13 @@ public sealed class McpOAuthRedirectHandler : IDisposable
             .Replace('+', '-')
             .Replace('/', '_');
     }
+
+    private static string SafeOAuthError(string error) => error switch
+    {
+        "access_denied" or "invalid_request" or "server_error"
+            or "temporarily_unavailable" => error,
+        _ => "other",
+    };
 
     /// <summary>
     /// Returns <paramref name="uri"/> with an additional <c>key=value</c> query parameter appended,
