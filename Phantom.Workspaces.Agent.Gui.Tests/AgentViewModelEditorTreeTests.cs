@@ -2,6 +2,7 @@ using AgentSchema;
 using System.Collections.Specialized;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
+using Microsoft.Extensions.Logging;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
@@ -230,7 +231,7 @@ public sealed class AgentViewModelEditorTreeTests
     }
 
     [Fact]
-    public async Task EditorItems_RootChildren_AreChatDetailsToolsSubAgents()
+    public async Task EditorItems_RootChildren_AreChatDetailsToolsSubAgentsLogs()
     {
         // Issue #1030: The root nav item's children are exactly Chat details, Tools, Sub-agents.
         var chat = await CreateChatAsync();
@@ -239,8 +240,48 @@ public sealed class AgentViewModelEditorTreeTests
 
         var root = Assert.Single(viewModel.EditorItems);
         Assert.Equal(
-            new[] { "chat-details", "chat-tools", "chat-sub-agents" },
+            new[] { "chat-details", "chat-tools", "chat-sub-agents", "chat-logs" },
             root.Children.Select(c => c.Id).ToArray());
+    }
+
+    [Fact]
+    public async Task AllDetailContents_LogsNavItem_HasCachedDocument()
+    {
+        var chat = await CreateChatAsync();
+        using var factory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", factory, TaskScheduler.Default);
+        var root = Assert.Single(viewModel.EditorItems);
+        var logs = root.Children.Single(child => child.Id == "chat-logs");
+        var logsItem = Assert.Single(viewModel.AllDetailContents,
+            item => ReferenceEquals(item.Content, logs.DetailContent));
+        var document = viewModel.DetailDockFactory.GetDocument(logsItem);
+
+        viewModel.SelectedEditorItem = logs;
+        Assert.Same(document, viewModel.DetailDockFactory.ActiveDocument);
+        viewModel.SelectedEditorItem = root;
+        viewModel.SelectedEditorItem = logs;
+        Assert.Same(document, viewModel.DetailDockFactory.ActiveDocument);
+    }
+
+    [Fact]
+    public async Task AgentViewModel_LogsDetail_ConcurrentParentAndChild_IsolatesOwningSession()
+    {
+        var chat = await CreateChatAsync();
+        using var parentMemory = new ObservableLoggerFactory();
+        await using var parent = new AgentViewModel(chat, "parent", "", parentMemory, TaskScheduler.Default);
+        await AddSubAgentAsync(chat, "child-log", "Child");
+        var child = parent.SubAgentsContainer.Slots.Single().SubAgentViewModel;
+
+        parentMemory.CreateLogger("SafeLifecycle").LogInformation("parent-safe-event");
+        child.LoggerFactory.CreateLogger("SafeLifecycle").LogInformation("child-safe-event");
+        await AgentChatLogsDetailViewModelTests.ObserveEntryAsync(parent.LogsDetail, "parent-safe-event");
+        await AgentChatLogsDetailViewModelTests.ObserveEntryAsync(child.LogsDetail, "child-safe-event");
+
+        Assert.NotSame(parent.LogsDetail, child.LogsDetail);
+        Assert.Contains(parent.LogsDetail.Entries, entry => entry.Contains("parent-safe-event", StringComparison.Ordinal));
+        Assert.DoesNotContain(parent.LogsDetail.Entries, entry => entry.Contains("child-safe-event", StringComparison.Ordinal));
+        Assert.Contains(child.LogsDetail.Entries, entry => entry.Contains("child-safe-event", StringComparison.Ordinal));
+        Assert.DoesNotContain(child.LogsDetail.Entries, entry => entry.Contains("parent-safe-event", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -354,8 +395,8 @@ public sealed class AgentViewModelEditorTreeTests
         var subAgentSubAgentsNav = subAgentNav.Children.First(c => c.Id == "chat-sub-agents");
 
         var grandchildNav = Assert.Single(subAgentSubAgentsNav.Children);
-        // Issue #819 removed Diagnostics; issue #1030 removed Background tasks. Count is now 3.
-        Assert.Equal(3, grandchildNav.Children.Count);
+        // Logs is the fourth fixed child, including in nested editors.
+        Assert.Equal(4, grandchildNav.Children.Count);
     }
 
     [Fact]
@@ -366,8 +407,8 @@ public sealed class AgentViewModelEditorTreeTests
         await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         // Issue #1035: the flat detail-content collection carries one item per fixed nav node
-        // (conversation, chat-details, chat-tools, chat-sub-agents). Count is 4.
-        Assert.Equal(4, viewModel.AllDetailContents.Count);
+        // (conversation, chat-details, chat-tools, chat-sub-agents, chat-logs). Count is 5.
+        Assert.Equal(5, viewModel.AllDetailContents.Count);
     }
 
     [Fact]

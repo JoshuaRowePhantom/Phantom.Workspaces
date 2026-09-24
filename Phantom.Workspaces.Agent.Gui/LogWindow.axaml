@@ -32,20 +32,22 @@
                   Classes="agent-option-toggle"/>
 
         <Border Classes="agent-surface">
-            <ScrollViewer x:Name="LogScrollViewer"
-                          AllowAutoHide="False"
-                          HorizontalScrollBarVisibility="{Binding LogHorizontalScrollBarVisibility}"
-                          VerticalScrollBarVisibility="Auto">
-                <ItemsControl x:Name="LogItems">
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate>
-                            <sharedControls:SafeSelectableTextBlock Text="{Binding}"
-                                                 TextWrapping="{Binding LogTextWrapping, ElementName=Root}"
-                                                 Classes="terminal-mono terminal-detail agent-log-line"/>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-            </ScrollViewer>
+            <ListBox x:Name="LogItems"
+                     ScrollViewer.HorizontalScrollBarVisibility="{Binding LogHorizontalScrollBarVisibility}"
+                     ScrollViewer.VerticalScrollBarVisibility="Auto">
+                <ListBox.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <VirtualizingStackPanel/>
+                    </ItemsPanelTemplate>
+                </ListBox.ItemsPanel>
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <sharedControls:SafeSelectableTextBlock Text="{Binding}"
+                                             TextWrapping="{Binding LogTextWrapping, ElementName=Root}"
+                                             Classes="terminal-mono terminal-detail agent-log-line"/>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
         </Border>
     </DockPanel>
 </Window>

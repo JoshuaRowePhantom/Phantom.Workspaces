@@ -1,6 +1,7 @@
 using System;
 using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Agent.Gui;
+using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Services.Logging;
 
@@ -10,8 +11,13 @@ namespace Phantom.Workspaces.Services.Logging;
 /// </summary>
 public sealed class SessionTeeLoggerFactory(
     ILoggerFactory processFactory,
-    ObservableLoggerFactory sessionMemoryFactory) : ILoggerFactory
+    ObservableLoggerFactory sessionMemoryFactory) : ISessionScopedLoggerFactory
 {
+    public ILoggerFactory SessionMemoryFactory => sessionMemoryFactory;
+
+    public ILoggerFactory CreateChildSessionFactory()
+        => new SessionTeeLoggerFactory(processFactory, new ObservableLoggerFactory());
+
     public ILogger CreateLogger(string categoryName)
         => new TeeLogger(
             processFactory.CreateLogger(categoryName),

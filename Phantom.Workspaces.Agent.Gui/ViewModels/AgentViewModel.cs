@@ -25,6 +25,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private readonly AgentChatConversationDetailViewModel conversationDetail;
     private readonly AgentChatDetailsViewModel chatDetailsDetail;
     private readonly AgentChatToolsDetailViewModel toolsDetail;
+    private readonly AgentChatLogsDetailViewModel logsDetail;
     private readonly SubAgentBrowserViewModel subAgentsBrowserDetail;
     private readonly SubAgentsContainerViewModel subAgentsContainerDetail;
     private readonly List<AgentViewModel> subAgentViewModels = [];
@@ -38,6 +39,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private readonly AgentEditorNavigationItemViewModel chatDetailsNavItem;
     private readonly AgentEditorNavigationItemViewModel toolsNavItem;
     private readonly AgentEditorNavigationItemViewModel subAgentsNavItem;
+    private readonly AgentEditorNavigationItemViewModel logsNavItem;
     private readonly ToolsCollectionTransformer toolsTransformer;
     private readonly SubAgentsCollectionTransformer subAgentsTransformer;
     private readonly TaskScheduler foregroundScheduler;
@@ -106,6 +108,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.conversationDetail = new AgentChatConversationDetailViewModel(this);
         this.chatDetailsDetail = new AgentChatDetailsViewModel(this);
         this.toolsDetail = new AgentChatToolsDetailViewModel();
+        this.logsDetail = new AgentChatLogsDetailViewModel(loggerFactory, foregroundScheduler);
         this.subAgentsBrowserDetail = new SubAgentBrowserViewModel(agentChat.SubAgents);
         this.subAgentsContainerDetail = new SubAgentsContainerViewModel(this.subAgentsBrowserDetail);
         this.SubAgentDisplays = new ReadOnlyObservableCollection<IRunningSubAgentDisplay>(this.subAgentDisplayItems);
@@ -152,6 +155,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.allDetailContents.Add(new AgentDetailDocumentItem($"{this.detailKeyPrefix}/chat-details", "Chat details", this.chatDetailsDetail));
         this.allDetailContents.Add(new AgentDetailDocumentItem($"{this.detailKeyPrefix}/chat-tools", "Tools", this.toolsDetail));
         this.allDetailContents.Add(new AgentDetailDocumentItem($"{this.detailKeyPrefix}/chat-sub-agents", "Sub-agents", this.subAgentsContainerDetail));
+        this.allDetailContents.Add(new AgentDetailDocumentItem($"{this.detailKeyPrefix}/chat-logs", "Logs", this.logsDetail));
         this.AllDetailContents = new ReadOnlyObservableCollection<AgentDetailDocumentItem>(this.allDetailContents);
         this.detailDockFactory = new AgentDetailDockFactory(this.allDetailContents);
 
@@ -186,6 +190,15 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             isExpanded: true,
             showHideCompletedToggle: true);
 
+        this.logsNavItem = new AgentEditorNavigationItemViewModel(
+            "chat-logs",
+            "Logs",
+            null,
+            "Recent session log entries",
+            null,
+            this.logsDetail,
+            []);
+
         var root = new AgentEditorNavigationItemViewModel(
             "chat",
             this.DisplayName,
@@ -193,7 +206,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             null,
             null,
             this.conversationDetail,
-            [this.chatDetailsNavItem, this.toolsNavItem, this.subAgentsNavItem],
+            [this.chatDetailsNavItem, this.toolsNavItem, this.subAgentsNavItem, this.logsNavItem],
             isExpanded: false);
 
         this.EditorItems.Add(root);
@@ -235,6 +248,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     public string Name => this.agentChat.Information.Name;
 
     public AgentChatConversationDetailViewModel ConversationDetail => this.conversationDetail;
+
+    public AgentChatLogsDetailViewModel LogsDetail => this.logsDetail;
 
     public ObservableLoggerFactory LoggerFactory => this.loggerFactory;
 
@@ -759,6 +774,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.subAgentModalSubscriptions.Clear();
         this.InputQueue?.Dispose();
         this.conversationDetail.Dispose();
+        this.logsDetail.Dispose();
         this.subAgentsBrowserDetail.Dispose();
         ((INotifyCollectionChanged)this.agentChat.SubAgents).CollectionChanged -= this.OnSubAgentsCollectionChanged;
         ((INotifyCollectionChanged)this.agentChat.Modals).CollectionChanged -= this.OnLocalModalsChanged;
@@ -866,12 +882,16 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     {
         var display = new RunningSubAgentDisplay(subAgentChat);
         this.subAgentDisplayItems.Add(display);
+        var childMemory = subAgentChat.SessionLoggerFactory is ISessionScopedLoggerFactory scoped
+            && scoped.SessionMemoryFactory is ObservableLoggerFactory scopedMemory
+            ? scopedMemory
+            : new ObservableLoggerFactory();
         var subAgentViewModel = new AgentViewModel(new AgentViewModelOptions
         {
             AgentChat = subAgentChat,
             DisplayName = subAgent.DisplayName,
             Description = subAgent.Description,
-            LoggerFactory = this.loggerFactory,
+            LoggerFactory = childMemory,
             ForegroundScheduler = this.foregroundScheduler,
             ParentAgentViewModel = this,
         });

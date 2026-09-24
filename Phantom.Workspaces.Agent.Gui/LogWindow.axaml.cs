@@ -1,7 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
-using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Interactivity;
@@ -12,28 +11,33 @@ namespace Phantom.Workspaces.Agent.Gui;
 
 public partial class LogWindow : Window, INotifyPropertyChanged
 {
-    private readonly ObservableLoggerFactory factory;
     private readonly ObservableCollection<string> entries = [];
+    private readonly IDisposable subscription;
+    private long lastSequence;
+    private bool closed;
     private bool isWordWrapEnabled = true;
 
     public LogWindow() : this(new ObservableLoggerFactory()) { }
 
     public LogWindow(ObservableLoggerFactory factory)
     {
-        this.factory = factory;
         this.InitializeComponent();
         this.DataContext = this;
         this.LogItems.ItemsSource = this.entries;
 
-        factory.EntryAdded += this.OnEntryAdded;
-        this.Closed += (_, _) => factory.EntryAdded -= this.OnEntryAdded;
+        this.subscription = factory.Subscribe(
+            entry => Dispatcher.UIThread.Post(() => this.Append(entry)),
+            out var snapshot);
+        this.Closed += (_, _) =>
+        {
+            this.closed = true;
+            this.subscription.Dispose();
+        };
 
         this.entries.CollectionChanged += this.OnEntriesChanged;
 
-        foreach (var entry in factory.Entries)
-        {
-            this.entries.Add(entry);
-        }
+        foreach (var entry in snapshot)
+            this.Append(entry);
     }
 
     public new event PropertyChangedEventHandler? PropertyChanged;
@@ -60,9 +64,14 @@ public partial class LogWindow : Window, INotifyPropertyChanged
     public ScrollBarVisibility LogHorizontalScrollBarVisibility
         => this.IsWordWrapEnabled ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
 
-    private void OnEntryAdded(object? sender, string entry)
+    private void Append(ObservableLogEntry entry)
     {
-        Dispatcher.UIThread.Post(() => this.entries.Add(entry));
+        if (this.closed || entry.Sequence <= this.lastSequence)
+            return;
+        this.lastSequence = entry.Sequence;
+        this.entries.Add(entry.Text);
+        if (this.entries.Count > ObservableLoggerFactory.RecentEntryLimit)
+            this.entries.RemoveAt(0);
     }
 
     private void OnEntriesChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -70,7 +79,7 @@ public partial class LogWindow : Window, INotifyPropertyChanged
         if (e.Action == NotifyCollectionChangedAction.Add)
         {
             Dispatcher.UIThread.Post(
-                () => this.LogScrollViewer.Offset = new Vector(this.LogScrollViewer.Offset.X, double.MaxValue),
+                () => this.LogItems.ScrollIntoView(this.entries[^1]),
                 DispatcherPriority.Background);
         }
     }

@@ -2,11 +2,33 @@ using AgentSchema;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
+using Microsoft.Extensions.Logging;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
 public sealed class AgentViewModelNavigationTests
 {
+    [Fact]
+    public async Task SelectedEditorItem_LogsThenChat_ActivatesCorrectDocuments()
+    {
+        var chat = await CreateChatAsync();
+        using var memory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "owner", "", memory, TaskScheduler.Default);
+        var root = Assert.Single(viewModel.EditorItems);
+        var conversation = viewModel.DetailDockFactory.ActiveDocument;
+        var logsNode = root.Children.Single(node => node.Id == "chat-logs");
+
+        viewModel.SelectedEditorItem = logsNode;
+        Assert.Same(viewModel.LogsDetail, viewModel.SelectedDetailDocument!.DetailContent);
+        memory.CreateLogger("SafeLifecycle").LogInformation("owner-safe-event");
+        await AgentChatLogsDetailViewModelTests.ObserveEntryAsync(viewModel.LogsDetail, "owner-safe-event");
+        Assert.Contains(viewModel.LogsDetail.Entries, entry => entry.Contains("owner-safe-event", StringComparison.Ordinal));
+
+        viewModel.SelectedEditorItem = root;
+        Assert.Same(conversation, viewModel.DetailDockFactory.ActiveDocument);
+        Assert.Same(viewModel.ConversationDetail, viewModel.SelectedDetailDocument!.DetailContent);
+    }
+
     [Fact]
     public async Task EditorTree_RootNode_IsCollapsedByDefault()
     {

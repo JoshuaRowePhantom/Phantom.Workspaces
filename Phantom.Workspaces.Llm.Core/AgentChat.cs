@@ -158,6 +158,8 @@ public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvid
     // paths (issue #913).
     internal TaskScheduler ForegroundSchedulerForTesting => this.foregroundScheduler;
 
+    public ILoggerFactory? SessionLoggerFactory => this.request.AgentServices?.LoggerFactory;
+
     // Creation-failure tests inspect these exact owner tasks instead of relying on the
     // process-global UnobservedTaskException event and finalizer timing.
     internal Task CreationDriverForTesting => this.creationDriver;
@@ -1491,6 +1493,15 @@ public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvid
         }
 
         var chatClient = new SubAgentChatClient(agentId, subAgentDefinition.Name ?? agentId, subAgentDefinition.Description ?? string.Empty, this.timeProvider);
+        var parentLoggerFactory = this.request.AgentServices?.LoggerFactory;
+        var childServices = parentLoggerFactory is null
+            ? null
+            : new AgentServices
+            {
+                LoggerFactory = parentLoggerFactory is ISessionScopedLoggerFactory scopedFactory
+                    ? scopedFactory.CreateChildSessionFactory()
+                    : parentLoggerFactory,
+            };
 
         // Fix for issue #913: without ForegroundScheduler the child chat falls back to its own
         // ConcurrentExclusiveSchedulerPair, so every "foreground" mutation (UpdateRunningItem,
@@ -1504,6 +1515,7 @@ public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvid
             () => AgentChat.CreateAsync(new InternalCreateAgentChatRequest
             {
                 AgentDefinition = subAgentDefinition,
+                AgentServices = childServices,
                 ConfiguredStore = this.request.ConfiguredStore,
                 ClientOverride = chatClient,
                 DisplayNameOverride = subAgentDefinition.Name ?? agentId,

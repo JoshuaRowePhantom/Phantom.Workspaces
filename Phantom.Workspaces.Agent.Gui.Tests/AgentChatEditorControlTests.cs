@@ -17,6 +17,7 @@ using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.Controls;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
+using Microsoft.Extensions.Logging;
 
 using Phantom.Workspaces.Testing.Gui;
 
@@ -24,6 +25,51 @@ namespace Phantom.Workspaces.Agent.Gui.Tests;
 
 public sealed class AgentChatEditorControlTests
 {
+    [Fact]
+    public void AgentChatEditorControl_LogsNode_UsesVirtualizedList()
+    {
+        var axaml = ReadAxaml("AgentChatEditorControl.axaml");
+        Assert.Contains("DataType=\"vm:AgentChatLogsDetailViewModel\"", axaml, StringComparison.Ordinal);
+        Assert.Contains("VirtualizingStackPanel", axaml, StringComparison.Ordinal);
+        Assert.Contains("ItemsSource=\"{Binding Entries}\"", axaml, StringComparison.Ordinal);
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task AgentChatEditorControl_LogsNode_RendersLiveVirtualizedEntries()
+    {
+        var chat = await CreateAgentChatAsync();
+        using var factory = new ObservableLoggerFactory();
+        var logger = factory.CreateLogger("SafeLifecycle");
+        for (var i = 0; i < ObservableLoggerFactory.RecentEntryLimit + 100; i++)
+            logger.LogInformation("safe-entry-{Number:D4}", i);
+        await using var viewModel = new AgentViewModel(
+            chat, "owner", "", factory, TaskScheduler.FromCurrentSynchronizationContext());
+        viewModel.SelectedEditorItem = viewModel.EditorItems.Single().Children.Single(node => node.Id == "chat-logs");
+        var control = new AgentChatEditorControl { DataContext = viewModel };
+        var window = new Window { Width = 1000, Height = 700, Content = control };
+        var realized = new TaskCompletionSource<ListBox>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnLayout(object? _, EventArgs __)
+        {
+            var list = control.GetVisualDescendants().OfType<ListBox>()
+                .FirstOrDefault(item => item.ItemsSource == viewModel.LogsDetail.Entries);
+            if (list is not null)
+                realized.TrySetResult(list);
+        }
+        window.LayoutUpdated += OnLayout;
+        window.Show();
+        OnLayout(null, EventArgs.Empty);
+        var logs = await realized.Task.WaitAsync(TestContext.Current.CancellationToken);
+        window.LayoutUpdated -= OnLayout;
+        Assert.Equal(ObservableLoggerFactory.RecentEntryLimit, viewModel.LogsDetail.Entries.Count);
+        Assert.True(logs.GetVisualDescendants().OfType<ListBoxItem>().Count()
+            < ObservableLoggerFactory.RecentEntryLimit);
+        var live = AgentChatLogsDetailViewModelTests.ObserveEntryAsync(viewModel.LogsDetail, "safe-live");
+        logger.LogInformation("safe-live");
+        await live;
+        Assert.Contains(viewModel.LogsDetail.Entries, entry => entry.Contains("safe-live", StringComparison.Ordinal));
+        window.Close();
+    }
+
     [Fact]
     public void AgentChatEditorControl_AutoScrollCheckbox_HasToolTipMentioningScrollLockKey()
     {

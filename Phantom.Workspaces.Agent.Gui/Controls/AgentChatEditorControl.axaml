@@ -159,6 +159,30 @@
         <DataTemplate DataType="vm:AgentChatToolsDetailViewModel">
             <controls:AgentChatToolsDetailControl/>
         </DataTemplate>
+        <DataTemplate DataType="vm:AgentChatLogsDetailViewModel">
+            <DockPanel Margin="12">
+                <TextBlock DockPanel.Dock="Top"
+                           Text="Logs"
+                           Classes="agent-section-title"
+                           Margin="0,0,0,8"/>
+                <ListBox ItemsSource="{Binding Entries}"
+                         SelectionMode="Single"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ListBox.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <VirtualizingStackPanel/>
+                        </ItemsPanelTemplate>
+                    </ListBox.ItemsPanel>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding}"
+                                       TextWrapping="Wrap"
+                                       FontFamily="Consolas"/>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+        </DataTemplate>
         <DataTemplate DataType="vm:AgentChatToolViewModel">
             <StackPanel Spacing="10">
                 <ContentControl Content="{Binding}"

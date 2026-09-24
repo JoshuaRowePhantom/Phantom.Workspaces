@@ -5,8 +5,12 @@ namespace Phantom.Workspaces.Agent.Gui;
 
 public sealed class ObservableLoggerFactory : ILoggerFactory
 {
+    public const int RecentEntryLimit = 2000;
+
     private readonly object lockObj = new();
-    private readonly List<string> entries = [];
+    private readonly Queue<ObservableLogEntry> entries = new();
+    private readonly List<Action<ObservableLogEntry>> subscribers = [];
+    private long nextSequence;
     private readonly bool verboseMetadataEnabled;
 
     public ObservableLoggerFactory(bool? verboseMetadataEnabled = null)
@@ -23,7 +27,7 @@ public sealed class ObservableLoggerFactory : ILoggerFactory
         {
             lock (this.lockObj)
             {
-                return this.entries.ToArray();
+                return this.entries.Select(static entry => entry.Text).ToArray();
             }
         }
     }
@@ -36,16 +40,48 @@ public sealed class ObservableLoggerFactory : ILoggerFactory
 
     public void Dispose() { }
 
+    public IDisposable Subscribe(
+        Action<ObservableLogEntry> onEntry, out IReadOnlyList<ObservableLogEntry> snapshot)
+    {
+        lock (this.lockObj)
+        {
+            snapshot = this.entries.ToArray();
+            this.subscribers.Add(onEntry);
+        }
+        return new Subscription(this, onEntry);
+    }
+
     internal void AddEntry(string entry)
     {
         lock (this.lockObj)
         {
-            this.entries.Add(entry);
+            var item = new ObservableLogEntry(++this.nextSequence, entry);
+            this.entries.Enqueue(item);
+            if (this.entries.Count > RecentEntryLimit)
+                this.entries.Dequeue();
+            foreach (var subscriber in this.subscribers.ToArray())
+                subscriber(item);
         }
 
         this.EntryAdded?.Invoke(this, entry);
     }
+
+    private sealed class Subscription(
+        ObservableLoggerFactory factory, Action<ObservableLogEntry> handler) : IDisposable
+    {
+        private int disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref this.disposed, 1) != 0)
+                return;
+            lock (factory.lockObj)
+                factory.subscribers.Remove(handler);
+        }
+    }
 }
+
+public readonly record struct ObservableLogEntry(long Sequence, string Text);
 
 internal sealed class ObservableLogger(ObservableLoggerFactory factory, string category) : ILogger
 {

@@ -452,6 +452,25 @@ public sealed class OpenAgentSessionShortcutHandlerTests
             Assert.Single(memory.Entries, entry => entry.Contains("resume-stage-safe", StringComparison.Ordinal));
             Assert.Equal(1, ProcessLogTestFile.ReadAll(directory)
                 .Split("resume-stage-safe", StringSplitOptions.None).Length - 1);
+            var attachedView = new AgentViewModel(new Phantom.Workspaces.Agent.Gui.ViewModels.AgentViewModelOptions
+            {
+                AgentChat = lease.AgentChat,
+                DisplayName = "restored",
+                Description = "",
+                LoggerFactory = memory,
+                ForegroundScheduler = foregroundScheduler,
+            });
+            try
+            {
+                attachedView.SelectedEditorItem = attachedView.EditorItems.Single().Children
+                    .Single(item => item.Id == "chat-logs");
+                Assert.Single(attachedView.LogsDetail.Entries, entry =>
+                    entry.Contains("resume-stage-safe", StringComparison.Ordinal));
+            }
+            finally
+            {
+                await attachedView.DisposeViewResourcesAsync();
+            }
         }
         finally
         {
