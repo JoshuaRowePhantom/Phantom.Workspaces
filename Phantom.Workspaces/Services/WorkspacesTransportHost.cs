@@ -1,6 +1,8 @@
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.ReverseHttp;
+using Phantom.Workspaces.Transport.Logging;
+using Microsoft.Extensions.Logging;
 
 namespace Phantom.Workspaces.Services;
 
@@ -20,6 +22,9 @@ public sealed class WorkspacesTransportHost : IAsyncDisposable
     private readonly TransportPeerIdentityProvider? peerIdentities;
     private readonly IReachabilityRouteStore? reachabilityRouteStore;
     private readonly EntityId? localProfileEntityId;
+    private readonly ILoggerFactory loggerFactory;
+    private readonly ILogger logger;
+    private readonly TransportMetadataLoggingOptions metadataLogging;
     private readonly CancellationTokenSource shutdown = new();
     private readonly List<Task> hubLoops = [];
     private readonly SemaphoreSlim startGate = new(1, 1);
@@ -29,12 +34,17 @@ public sealed class WorkspacesTransportHost : IAsyncDisposable
     public WorkspacesTransportHost(
         TransportRegistry localListeners,
         IReadOnlyList<ReverseHttpClientTransportFactory> hubFactories,
+        ILoggerFactory loggerFactory,
         TransportPeerIdentityProvider? peerIdentities = null,
         IReachabilityRouteStore? reachabilityRouteStore = null,
-        EntityId? localProfileEntityId = null)
+        EntityId? localProfileEntityId = null,
+        TransportMetadataLoggingOptions? metadataLogging = null)
     {
         this.localListeners = localListeners ?? throw new ArgumentNullException(nameof(localListeners));
         this.hubFactories = hubFactories ?? throw new ArgumentNullException(nameof(hubFactories));
+        this.loggerFactory = loggerFactory;
+        this.logger = loggerFactory.CreateLogger<WorkspacesTransportHost>();
+        this.metadataLogging = metadataLogging ?? TransportMetadataLoggingOptions.FromEnvironment();
         this.peerIdentities = peerIdentities;
         this.reachabilityRouteStore = reachabilityRouteStore;
         this.localProfileEntityId = localProfileEntityId;
@@ -77,6 +87,7 @@ public sealed class WorkspacesTransportHost : IAsyncDisposable
             foreach (var factory in this.hubFactories)
             {
                 var channel = await factory.EnsureRegisteredAsync(cancellationToken).ConfigureAwait(false);
+                this.logger.LogInformation("Reverse worker registration; outcome connected.");
                 this.hubLoops.Add(this.RunHubAsync(factory, channel));
                 this.OnConnectionStateChanged();
             }
@@ -127,7 +138,9 @@ public sealed class WorkspacesTransportHost : IAsyncDisposable
                 current,
                 this.localListeners,
                 this.peerIdentities,
-                factory.ApplyHubProfileEntityIdAsync);
+                factory.ApplyHubProfileEntityIdAsync,
+                this.loggerFactory,
+                this.metadataLogging);
             try
             {
                 await current.Reader.Completion.WaitAsync(token).ConfigureAwait(false);
@@ -142,6 +155,7 @@ public sealed class WorkspacesTransportHost : IAsyncDisposable
                 // The registration channel faulted; fall through to reconnect below.
             }
 
+            this.logger.LogInformation("Reverse worker registration; outcome disconnected.");
             await dispatcher.DisposeAsync().ConfigureAwait(false);
 
             if (token.IsCancellationRequested)
@@ -152,6 +166,7 @@ public sealed class WorkspacesTransportHost : IAsyncDisposable
             try
             {
                 current = await factory.ReconnectAsync(token).ConfigureAwait(false);
+                this.logger.LogInformation("Reverse worker registration; outcome reconnected.");
             }
             catch (OperationCanceledException)
             {
@@ -160,6 +175,7 @@ public sealed class WorkspacesTransportHost : IAsyncDisposable
             catch (Exception)
             {
                 // Unable to re-establish the registration channel; stop servicing this hub.
+                this.logger.LogWarning("Reverse worker registration; outcome reconnect-failed.");
                 this.OnConnectionStateChanged();
                 return;
             }

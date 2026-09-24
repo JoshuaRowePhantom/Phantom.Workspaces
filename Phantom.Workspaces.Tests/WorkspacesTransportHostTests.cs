@@ -21,7 +21,7 @@ public sealed class WorkspacesTransportHostTests
         var factoryB = new ReverseHttpClientTransportFactory(httpB, "https://hub-b.example", "machine-a");
         var registry = new TransportRegistry();
 
-        await using var host = new WorkspacesTransportHost(registry, [factoryA, factoryB]);
+        await using var host = new WorkspacesTransportHost(registry, [factoryA, factoryB], Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
         await host.StartAsync(Ct());
 
         Assert.Equal(["https://hub-a.example"], factoryA.HubUrls);
@@ -39,7 +39,7 @@ public sealed class WorkspacesTransportHostTests
         var registry = new TransportRegistry();
         registry.Register(new ChatClientTransportListener(new EchoChatClient()));
 
-        await using var host = new WorkspacesTransportHost(registry, [factory]);
+        await using var host = new WorkspacesTransportHost(registry, [factory], Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
         await host.StartAsync(Ct());
 
         var channel = http.Channels.Single();
@@ -68,7 +68,7 @@ public sealed class WorkspacesTransportHostTests
         var streamRequest = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
         registry.Register(new RecordingShellStreamListener(request => streamRequest.TrySetResult(request)));
 
-        await using var host = new WorkspacesTransportHost(registry, [factory]);
+        await using var host = new WorkspacesTransportHost(registry, [factory], Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
         await host.StartAsync(Ct());
 
         var channel = http.Channels.Single();
@@ -89,7 +89,7 @@ public sealed class WorkspacesTransportHostTests
         var reconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var stateChanges = 0;
 
-        await using var host = new WorkspacesTransportHost(registry, [factory]);
+        await using var host = new WorkspacesTransportHost(registry, [factory], Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
         host.ConnectionStateChanged += (_, _) =>
         {
             if (Interlocked.Increment(ref stateChanges) >= 2)
@@ -125,7 +125,7 @@ public sealed class WorkspacesTransportHostTests
             profileId.ToString(),
             store,
             hubProfileEntityId: null);
-        await using var host = new WorkspacesTransportHost(new TransportRegistry(), [factory]);
+        await using var host = new WorkspacesTransportHost(new TransportRegistry(), [factory], Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
         var ct = Ct();
         await host.StartAsync(ct);
 

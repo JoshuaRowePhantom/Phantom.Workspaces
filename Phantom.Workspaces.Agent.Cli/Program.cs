@@ -2,8 +2,10 @@ using Phantom.Workspaces.Llm;
 using AgentSchema;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.DependencyInjection;
 using Phantom.Workspaces.Containers;
 using Phantom.Workspaces.Services.Logging;
+using Phantom.Workspaces.Transport.Logging;
 using System.CommandLine;
 
 var definitionParser = new AgentDefinitionCommandLineParser();
@@ -11,7 +13,9 @@ var definitionParser = new AgentDefinitionCommandLineParser();
 // #1093: register global uncaught/unobserved exception logging at CLI startup, backed by a
 // config-less file logger factory (#1095), so faults leave a diagnosable record on disk.
 var hostLoggerFactory =
-    HostFileLoggerFactory.Create(HostLogDirectoryResolver.Resolve(AppContext.BaseDirectory));
+    HostFileLoggerFactory.Create(
+        HostLogDirectoryResolver.Resolve(AppContext.BaseDirectory),
+        verboseTransportMetadataLogging: TransportMetadataLoggingOptions.FromEnvironment().Enabled);
 GlobalExceptionLogging.Register(hostLoggerFactory);
 
 // #1373: install the process-wide ambient docker logger factory so the production
@@ -175,12 +179,18 @@ public sealed class AgentCliApp : IDisposable
         var logDirectory = HostLogDirectoryResolver.Resolve(AppContext.BaseDirectory);
         return LoggerFactory.Create(builder =>
         {
-            builder.SetMinimumLevel(LogLevel.Trace);
-            builder.AddFilter("Microsoft.Extensions.AI", LogLevel.Trace);
-            builder.AddFilter("Phantom.Workspaces.Llm", LogLevel.Trace);
+            builder.SetMinimumLevel(LogLevel.Information);
+            if (TransportMetadataLoggingOptions.FromEnvironment().Enabled)
+            {
+                builder.AddFilter("Phantom.Workspaces.Transport.Logging", LogLevel.Debug);
+                builder.AddFilter("Phantom.Workspaces.Transport.ReverseHttp", LogLevel.Debug);
+                builder.AddFilter("Phantom.Workspaces.Llm.HttpRequestLoggingHandler", LogLevel.Debug);
+                builder.AddFilter("Phantom.Workspaces.Llm.Mcp.ProcessExecutorBackedClientTransport", LogLevel.Debug);
+            }
             builder.ClearProviders();
             builder.AddProvider(new InteractiveConsoleLoggerProvider(onLogLine));
-            builder.AddProvider(new RollingFileLoggerProvider(logDirectory, HostFileLoggerFactory.DefaultRetention));
+            builder.Services.AddSingleton<ILoggerProvider>(
+                _ => new RollingFileLoggerProvider(logDirectory, HostFileLoggerFactory.DefaultRetention));
         });
     }
 

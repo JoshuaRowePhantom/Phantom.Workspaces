@@ -5,6 +5,7 @@ using AgentSchema;
 using GitHub.Copilot;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Time.Testing;
+using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Copilot;
@@ -16,6 +17,8 @@ using Phantom.Workspaces.Testing;
 using Phantom.Workspaces.Transport.Chat;
 using Phantom.Workspaces.Transport.Http;
 using Phantom.Workspaces.Transport.ReverseHttp;
+using Phantom.Workspaces.Transport.Logging;
+using Phantom.Workspaces.Services.Logging;
 using Phantom.Workspaces.Transport.Tests.Infrastructure;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -93,6 +96,59 @@ public sealed class RemoteSplitSessionByokRoundTripTests
             status => status.ClientInstanceId == setup.Harness.ExecutorEntityId.ToString()
                 && status.InFlightCount > 0);
         await AssertPersistedAsync(setup, chat, "B-to-A-to-C");
+    }
+
+    [Fact]
+    public async Task RemoteSplitSession_Byok_CtoAtoB_EmitsCorrelatedSafeHopEvents()
+    {
+        var directory = Path.Combine(AppContext.BaseDirectory, "split-metadata-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var source = HostFileLoggerFactory.Create(Path.Combine(directory, "SOURCE"));
+            using var hub = HostFileLoggerFactory.Create(Path.Combine(directory, "DAEMON"));
+            using var worker = HostFileLoggerFactory.Create(Path.Combine(directory, "SHADE"));
+            await using var setup = await SplitSessionSetup.CreateWithDiagnosticsAsync(
+                ProfileC, ProfileB, source, hub, worker);
+            setup.Session.EnqueueTextAndIdle("private-worker-reply");
+            await using var chat = await setup.CreateChatAsync();
+
+            await CompleteTurnAsync(chat, "private-source-prompt");
+
+            Assert.Empty(chat.RunningItems);
+            var sourceLog = ReadLog(Path.Combine(directory, "SOURCE"));
+            var hubLog = ReadLog(Path.Combine(directory, "DAEMON"));
+            var workerLog = ReadLog(Path.Combine(directory, "SHADE"));
+            var token = System.Text.RegularExpressions.Regex.Match(
+                sourceLog, @"Remote Copilot lifecycle ([0-9a-f]{32}) caller").Groups[1].Value;
+            Assert.Equal(32, token.Length);
+            Assert.Contains($"attempt {token}", sourceLog, StringComparison.Ordinal);
+            Assert.Contains($"attempt {token}", hubLog, StringComparison.Ordinal);
+            Assert.Contains($"attempt {token}", workerLog, StringComparison.Ordinal);
+            Assert.Contains("caller-to-worker", hubLog, StringComparison.Ordinal);
+            Assert.Contains("Reverse worker dispatch", workerLog, StringComparison.Ordinal);
+            Assert.Contains("request-received", workerLog, StringComparison.Ordinal);
+            Assert.Contains("ack-received", sourceLog, StringComparison.Ordinal);
+            foreach (var log in new[] { sourceLog, hubLog, workerLog })
+                foreach (var secret in new[]
+                {
+                    "private-source-prompt", "private-worker-reply", "private-worker-key",
+                    "private-worker.invalid", ProfileC.ToString(), ProfileB.ToString()
+                })
+                    Assert.DoesNotContain(secret, log, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static string ReadLog(string directory)
+    {
+        var file = Assert.Single(Directory.GetFiles(directory, "phantom-workspaces-*.log"));
+        using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
     }
 
     [Fact]
@@ -232,6 +288,49 @@ public sealed class RemoteSplitSessionByokRoundTripTests
         Assert.Empty(chat.RunningItems);
         Assert.Contains(chat.History, item => item.Contents.OfType<TextContent>().Any(text => text.Text.Contains("partial-from-worker-b")));
         AssertProviderError(chat, "closed");
+    }
+
+    [Fact]
+    public async Task RemoteSplitSession_Byok_TargetDisconnectsMidTurn_LogsTerminalHopAndOutcome()
+    {
+        var directory = Path.Combine(AppContext.BaseDirectory, "split-metadata-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var source = HostFileLoggerFactory.Create(Path.Combine(directory, "SOURCE"));
+            using var hub = HostFileLoggerFactory.Create(Path.Combine(directory, "DAEMON"));
+            using var worker = HostFileLoggerFactory.Create(Path.Combine(directory, "SHADE"));
+            await using var setup = await SplitSessionSetup.CreateWithDiagnosticsAsync(
+                ProfileC, ProfileB, source, hub, worker);
+            setup.Session.EnqueueEvent(new AssistantMessageDeltaEvent
+            {
+                AgentId = "",
+                Data = new AssistantMessageDeltaData
+                {
+                    DeltaContent = "private-partial-reply",
+                    MessageId = "partial",
+                },
+            });
+            await using var chat = await setup.CreateChatAsync();
+
+            var completion = chat.EnqueueUserMessageWithCompletion("private-interrupted-prompt");
+            await setup.Session.ReadSentMessageAsync(TestToken());
+            await WaitForRunningTextAsync(chat, "private-partial-reply");
+            await setup.Harness.CrashExecutorAsync();
+            await completion.Settlement.WaitAsync(TestToken());
+
+            Assert.Empty(chat.RunningItems);
+            Assert.Contains("Reverse relay closed", ReadLog(Path.Combine(directory, "DAEMON")), StringComparison.Ordinal);
+            var sourceLog = ReadLog(Path.Combine(directory, "SOURCE"));
+            Assert.Contains("Transport receiver terminal", sourceLog, StringComparison.Ordinal);
+            Assert.DoesNotContain("private-interrupted-prompt", sourceLog, StringComparison.Ordinal);
+            Assert.DoesNotContain("private-partial-reply", sourceLog, StringComparison.Ordinal);
+            Assert.DoesNotContain("private-partial-reply", ReadLog(Path.Combine(directory, "SHADE")), StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
     }
 
     [Fact]
@@ -1113,10 +1212,13 @@ public sealed class RemoteSplitSessionByokRoundTripTests
 
     private sealed class SplitSessionSetup : IAsyncDisposable
     {
+        private sealed record SplitTraceFactories(ILoggerFactory Caller, ILoggerFactory Hub, ILoggerFactory Worker);
+
         private readonly AgentDefinition definition;
         private readonly CopilotSdkChatClient client;
         private readonly CancellationToken cancellationToken;
         private readonly RecordingTransportFactoryRegistry routingRegistry;
+        private readonly ILoggerFactory? callerLoggerFactory;
         private readonly StubRunningAgentChatFactory runningAgentChatFactory = new();
 
         private SplitSessionSetup(
@@ -1132,7 +1234,8 @@ public sealed class RemoteSplitSessionByokRoundTripTests
             RecordingTransportFactoryRegistry routingRegistry,
             IdentityRecordingListener identityListener,
             Task channelAccepted,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            ILoggerFactory? callerLoggerFactory)
         {
             this.Harness = harness;
             this.StatusRegistry = statusRegistry;
@@ -1147,6 +1250,7 @@ public sealed class RemoteSplitSessionByokRoundTripTests
             this.IdentityListener = identityListener;
             this.ChannelAccepted = channelAccepted;
             this.cancellationToken = cancellationToken;
+            this.callerLoggerFactory = callerLoggerFactory;
         }
 
         public HubRelayHarness Harness { get; }
@@ -1201,22 +1305,48 @@ public sealed class RemoteSplitSessionByokRoundTripTests
                 new FakeCopilotSession { SessionId = target == ProfileA ? "worker-a" : "worker-b" },
                 cancellationToken);
 
+        public static Task<SplitSessionSetup> CreateWithDiagnosticsAsync(
+            EntityId source, EntityId target,
+            ILoggerFactory caller, ILoggerFactory hub, ILoggerFactory worker)
+        {
+            var session = new FakeCopilotSession { SessionId = "worker-b" };
+            var recoverySession = new FakeCopilotSession { SessionId = "worker-b" };
+            var sdkClient = new SequencedFakeCopilotClient([session, recoverySession]);
+            return CreateWithClientAsync(source, target, sdkClient, session, recoverySession,
+                TestToken(), new SplitTraceFactories(caller, hub, worker));
+        }
+
         private static async Task<SplitSessionSetup> CreateWithClientAsync(
             EntityId source,
             EntityId target,
             ICopilotClient remoteClient,
             FakeCopilotSession session,
             FakeCopilotSession recoverySession,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            SplitTraceFactories? diagnostics = null)
         {
-            var listener = new CopilotClientTransportListener(new FakeCopilotClientFactory(remoteClient));
+            var listener = diagnostics is null
+                ? new CopilotClientTransportListener(new FakeCopilotClientFactory(remoteClient))
+                : new CopilotClientTransportListener(new AgentServices
+                {
+                    CopilotClientFactory = new FakeCopilotClientFactory(remoteClient),
+                    LoggerFactory = diagnostics.Worker,
+                    RemoteCopilotProviderResolver = new FixedProviderResolver(new ProviderConfig
+                    {
+                        Type = "openai",
+                        ModelId = "gpt-5",
+                        BaseUrl = "http://private-worker.invalid",
+                        ApiKey = "private-worker-key",
+                    }),
+                });
             return await CreateCoreAsync(
                 source,
                 target,
                 listener,
                 session,
                 recoverySession,
-                cancellationToken);
+                cancellationToken,
+                diagnostics);
         }
 
         public static Task<SplitSessionSetup> CreateWithListenerAsync(
@@ -1238,7 +1368,8 @@ public sealed class RemoteSplitSessionByokRoundTripTests
             ITransportListener listener,
             FakeCopilotSession session,
             FakeCopilotSession recoverySession,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            SplitTraceFactories? diagnostics = null)
         {
             var effectiveCancellation = cancellationToken.CanBeCanceled
                 ? cancellationToken
@@ -1246,10 +1377,14 @@ public sealed class RemoteSplitSessionByokRoundTripTests
             var statusRegistry = new ReverseConnectionStatusRegistry();
             var reverseServer = new ReverseHttpServerTransportFactory(
                 statusRegistry,
-                hubProfileEntityId: HubProfileId);
+                hubProfileEntityId: HubProfileId,
+                loggerFactory: diagnostics?.Hub,
+                metadataLogging: new TransportMetadataLoggingOptions(true));
             var peerIdentities = new TransportPeerIdentityProvider();
             var authenticatedCaller = Peer(source);
-            var identityListener = new IdentityRecordingListener(listener, peerIdentities);
+            var identityListener = new IdentityRecordingListener(
+                diagnostics is null ? listener : listener.WithLogging(diagnostics.Worker),
+                peerIdentities);
             var executorRegistry = new TransportRegistry();
             executorRegistry.Register(identityListener);
             var harness = await HubRelayHarness.CreateAsync(
@@ -1257,7 +1392,8 @@ public sealed class RemoteSplitSessionByokRoundTripTests
                 effectiveCancellation,
                 peerIdentities,
                 reverseServer,
-                target.Value);
+                target.Value,
+                dispatcherLoggerFactory: diagnostics?.Worker);
             var timeProvider = new FakeTimeProvider(Now);
             var data = await SeedProfilesAsync(
                 target,
@@ -1265,7 +1401,10 @@ public sealed class RemoteSplitSessionByokRoundTripTests
                 effectiveCancellation);
 
             var innerRegistry = new TransportFactoryRegistry();
-            innerRegistry.Register(harness.CreateForwardingFactory(authenticatedCaller));
+            var forwarding = harness.CreateForwardingFactory(authenticatedCaller);
+            innerRegistry.Register(diagnostics is null
+                ? forwarding
+                : forwarding.WithLogging(diagnostics.Caller));
             var profileFactory = new UserComputerProfileTransportFactory(
                 data,
                 Session(source),
@@ -1275,18 +1414,18 @@ public sealed class RemoteSplitSessionByokRoundTripTests
             var routingRegistry = new RecordingTransportFactoryRegistry();
             routingRegistry.Register(profileFactory);
 
+            var properties = new Dictionary<string, object> { ["executor"] = "worker" };
+            if (diagnostics is not null)
+                properties["remoteProvider"] = "worker-byok";
             var options = new ModelOptions
             {
-                AdditionalProperties = new Dictionary<string, object>
-                {
-                    ["executor"] = "worker",
-                },
+                AdditionalProperties = properties,
             };
             var sdkClient = new CopilotSdkChatClient(
                 "gpt-5",
                 "remote split session",
                 null,
-                null,
+                diagnostics?.Caller,
                 modelOptions: options);
             sdkClient.ConfigureExecutorRouting(
                 new ExecutorBindings
@@ -1316,7 +1455,8 @@ public sealed class RemoteSplitSessionByokRoundTripTests
                 routingRegistry,
                 identityListener,
                 identityListener.Accepted.Task,
-                effectiveCancellation);
+                effectiveCancellation,
+                diagnostics?.Caller);
         }
 
         public Task<AgentChat> CreateChatAsync()
@@ -1326,6 +1466,7 @@ public sealed class RemoteSplitSessionByokRoundTripTests
                 AgentServices = new AgentServices
                 {
                     RunningAgentChatFactory = this.runningAgentChatFactory,
+                    LoggerFactory = this.callerLoggerFactory,
                 },
                 ConfiguredStore = this.Store,
                 ClientOverride = this.client,

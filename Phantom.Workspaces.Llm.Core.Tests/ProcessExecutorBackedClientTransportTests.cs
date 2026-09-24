@@ -4,6 +4,7 @@ using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using Phantom.Workspaces.Llm.Mcp;
 using Phantom.Workspaces.Llm.Processes;
+using Phantom.Workspaces.Services.Logging;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
@@ -16,6 +17,41 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 /// </summary>
 public sealed class ProcessExecutorBackedClientTransportTests
 {
+    [Fact]
+    public async Task ProcessExecutorBackedClientTransport_StderrContainsSecret_DoesNotLogOrThrowSecret()
+    {
+        const string secret = "private-stderr-token-and-prompt";
+        var directory = Path.Combine(AppContext.BaseDirectory, "mcp-trace-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var process = HostFileLoggerFactory.Create(directory);
+            var executor = new StubProcessExecutor();
+            var transport = new ProcessExecutorBackedClientTransport(
+                "private-server-name", new ProcessExecutionRequest("some.exe"), executor, process);
+            var inner = await transport.ConnectAsync();
+            executor.LastHandle!.Exit(23, secret);
+
+            var failure = await Assert.ThrowsAsync<IOException>(
+                async () => await inner.MessageReader.Completion);
+            Assert.Contains("code 23", failure.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain(secret, failure.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("private-server-name", failure.Message, StringComparison.Ordinal);
+            await inner.DisposeAsync();
+            var path = Assert.Single(Directory.GetFiles(directory, "phantom-workspaces-*.log"));
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(stream);
+            var content = reader.ReadToEnd();
+            Assert.Contains("stderr drained", content, StringComparison.Ordinal);
+            Assert.DoesNotContain(secret, content, StringComparison.Ordinal);
+            Assert.DoesNotContain("private-server-name", content, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [Fact]
     public void Name_ConstructedTransport_ReturnsConfiguredName()
     {
@@ -375,12 +411,13 @@ public sealed class ProcessExecutorBackedClientTransportTests
             thrown);
         Assert.Equal(1, handle.DisposeCount);
         var failureCount = (innerFails ? 1 : 0) + (handleFails ? 1 : 0) + (drainerFails ? 1 : 0);
-        if (failureCount == 1 && innerFails)
-            Assert.Contains(loggerFactory.Entries, entry => entry.Message.Contains(nameof(InvalidOperationException)));
-        if (failureCount == 1 && handleFails)
-            Assert.Contains(loggerFactory.Entries, entry => entry.Message.Contains(nameof(IOException)));
-        if (failureCount == 1 && drainerFails)
-            Assert.Contains(loggerFactory.Entries, entry => entry.Message.Contains(nameof(NotSupportedException)));
+        if (failureCount == 1)
+            Assert.Contains(loggerFactory.Entries, entry =>
+                entry.Message.Contains("category failure", StringComparison.Ordinal));
+        Assert.DoesNotContain(loggerFactory.Entries, entry =>
+            entry.Message.Contains("inner cleanup", StringComparison.Ordinal)
+            || entry.Message.Contains("handle cleanup", StringComparison.Ordinal)
+            || entry.Message.Contains("drainer cleanup", StringComparison.Ordinal));
         if (failureCount > 1)
             Assert.True(loggerFactory.Entries.Count >= 2);
     }

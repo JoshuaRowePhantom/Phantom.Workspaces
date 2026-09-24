@@ -49,4 +49,28 @@ public sealed class TransportLoggingFactoryTests
             factory.Entries,
             e => e.Message.Contains("message received", StringComparison.OrdinalIgnoreCase));
     }
+
+    [Fact]
+    public async Task LoggingTransportListenerFactory_SensitiveOpen_AutoWrapsWithoutLeakingRequest()
+    {
+        using var factory = new CapturingLoggerFactory();
+        var listener = new FakeListenerFactory().WithLogging(factory).CreateListener();
+        await using var channel = new FakeMessageChannel();
+        await channel.Writer.WriteAsync(Json("""{"type":"channel-message","payload":"private-inbound"}"""));
+
+        await listener.OnChannelOpenAsync(
+            Json("""{"type":"copilot-sdk-session","correlation-id":"59a8d519d47b4eb1a95d458e015d17ab","api-key":"private-open"}"""),
+            channel);
+
+        Assert.Contains(factory.Entries, entry =>
+            entry.Message.Contains("channel open", StringComparison.Ordinal));
+        Assert.Contains(factory.Entries, entry =>
+            entry.Message.Contains("message received", StringComparison.Ordinal));
+        Assert.All(factory.Entries, entry =>
+        {
+            Assert.DoesNotContain("private-open", entry.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("private-inbound", entry.Message, StringComparison.Ordinal);
+            Assert.Null(entry.Exception);
+        });
+    }
 }

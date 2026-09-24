@@ -62,7 +62,8 @@ public sealed class TransportLoggingTests
 
         Assert.Contains(
             factory.Entries,
-            e => (e.Level == LogLevel.Error || e.Level == LogLevel.Warning) && e.Exception is InvalidOperationException);
+            e => (e.Level == LogLevel.Error || e.Level == LogLevel.Warning)
+                 && e.Exception is null && !e.Message.Contains("boom", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -118,5 +119,105 @@ public sealed class TransportLoggingTests
         Assert.Contains(factory.Entries, e => e.Message.Contains("message sent", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(factory.Entries, e => e.Message.Contains("message received", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(factory.Entries, e => e.Message.Contains("closing", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task WithLogging_SensitiveMessage_LogsOnlyBoundedMetadata()
+    {
+        using var factory = new CapturingLoggerFactory();
+        await using var inner = new FakeMessageChannel();
+        await using var wrapped = inner.WithLogging(factory);
+        const string secret = "private-prompt-and-token-abcdef";
+        var frame = Json(
+            """{"type":"channel-message","method":"tools/call","channelId":"private-session-id","payload":"private-prompt-and-token-abcdef"}""");
+
+        await wrapped.Writer.WriteAsync(frame);
+        var received = await wrapped.Reader.ReadAsync();
+
+        Assert.Equal(frame.GetRawText(), received.GetRawText());
+        var writes = factory.Entries.Where(e => e.Message.Contains("message sent", StringComparison.Ordinal));
+        var reads = factory.Entries.Where(e => e.Message.Contains("message received", StringComparison.Ordinal));
+        Assert.Single(writes);
+        Assert.Single(reads);
+        Assert.All(writes.Concat(reads), entry =>
+        {
+            Assert.Equal(LogLevel.Debug, entry.Level);
+            Assert.Contains("channel-message", entry.Message, StringComparison.Ordinal);
+            Assert.Contains("elapsed ", entry.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain(secret, entry.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("private-session-id", entry.Message, StringComparison.Ordinal);
+            Assert.Contains("tools/call", entry.Message, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public async Task WithLogging_FailedWriteAndCancelledRead_ReportsSafeOutcomes()
+    {
+        using var factory = new CapturingLoggerFactory();
+        await using var inner = new FakeMessageChannel();
+        await using var wrapped = inner.WithLogging(factory);
+        await using var readChannel = new FakeMessageChannel();
+        await using var wrappedRead = readChannel.WithLogging(factory);
+        inner.Writer.TryComplete(new InvalidOperationException("private-error-text"));
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+
+        await Assert.ThrowsAnyAsync<Exception>(async () =>
+            await wrapped.Writer.WriteAsync(Json("""{"type":"channel-message","payload":"private-prompt"}""")));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            await wrappedRead.Reader.ReadAsync(cancelled.Token));
+
+        Assert.Contains(factory.Entries, entry =>
+            entry.Level == LogLevel.Debug && entry.Message.Contains("outcome closed", StringComparison.Ordinal));
+        Assert.Contains(factory.Entries, entry =>
+            entry.Level == LogLevel.Debug && entry.Message.Contains("cancelled", StringComparison.Ordinal));
+        Assert.All(factory.Entries, entry =>
+        {
+            Assert.Null(entry.Exception);
+            Assert.DoesNotContain("private-error-text", entry.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("private-prompt", entry.Message, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public async Task WithLogging_SensitiveStream_LogsByteCountsWithoutContent()
+    {
+        using var factory = new CapturingLoggerFactory();
+        using var inner = new MemoryStream();
+        await using var wrapped = inner.WithLogging(factory);
+        var secret = System.Text.Encoding.UTF8.GetBytes("private-stream-payload");
+
+        await wrapped.WriteAsync(secret);
+        wrapped.Position = 0;
+        var received = new byte[secret.Length];
+        Assert.Equal(secret.Length, await wrapped.ReadAsync(received));
+        Assert.Equal(secret, received);
+
+        Assert.Contains(factory.Entries, entry =>
+            entry.Level == LogLevel.Debug && entry.Message.Contains("stream written", StringComparison.Ordinal));
+        Assert.Contains(factory.Entries, entry =>
+            entry.Level == LogLevel.Debug && entry.Message.Contains("stream read", StringComparison.Ordinal));
+        Assert.DoesNotContain(factory.Entries, entry =>
+            entry.Message.Contains("private-stream-payload", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task WithLogging_JsonRpcFrame_ReportsOnlyAllowlistedMethod()
+    {
+        using var factory = new CapturingLoggerFactory();
+        await using var inner = new FakeMessageChannel();
+        await using var wrapped = inner.WithLogging(factory);
+
+        await wrapped.Writer.WriteAsync(Json(
+            """{"type":"channel-message","payload":{"jsonrpc":"2.0","method":"tools/list","params":{"token":"private-secret"}}}"""));
+        await wrapped.Writer.WriteAsync(Json(
+            """{"type":"channel-message","payload":{"method":"private-secret"}}"""));
+
+        Assert.Contains(factory.Entries, entry =>
+            entry.Message.Contains("method tools/list", StringComparison.Ordinal));
+        Assert.Contains(factory.Entries, entry =>
+            entry.Message.Contains("method other", StringComparison.Ordinal));
+        Assert.DoesNotContain(factory.Entries, entry =>
+            entry.Message.Contains("private-secret", StringComparison.Ordinal));
     }
 }

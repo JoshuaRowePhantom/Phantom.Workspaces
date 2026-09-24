@@ -1,5 +1,3 @@
-using System.Net.Http.Headers;
-using System.Text;
 using Microsoft.Extensions.Logging;
 
 namespace Phantom.Workspaces.Llm;
@@ -8,46 +6,32 @@ internal sealed class HttpRequestLoggingHandler(ILogger logger) : DelegatingHand
 {
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
-        var requestBody = await ReadContentAsync(request.Content, cancellationToken);
-        logger.LogTrace(
-            "HTTP request: {Method} {RequestUri}\nRequest headers:\n{RequestHeaders}\nRequest body:\n{RequestBody}",
-            request.Method,
-            request.RequestUri,
-            FormatHeaders(request.Headers, request.Content?.Headers),
-            requestBody);
-
-        var response = await base.SendAsync(request, cancellationToken);
-        logger.LogTrace(
-            "HTTP response: {StatusCode} {ReasonPhrase}\nResponse headers:\n{ResponseHeaders}",
-            (int)response.StatusCode,
-            response.ReasonPhrase ?? string.Empty,
-            FormatHeaders(response.Headers, response.Content?.Headers));
-
-        await EnableResponseStreamingLogsAsync(response, cancellationToken);
-
-        return response;
-    }
-
-    private static async Task<string> ReadContentAsync(HttpContent? content, CancellationToken cancellationToken)
-    {
-        if (content is null)
+        var method = request.Method.Method switch
         {
-            return "(none)";
-        }
+            "GET" or "POST" or "PUT" or "PATCH" or "DELETE" or "HEAD" => request.Method.Method,
+            _ => "OTHER",
+        };
+        logger.LogDebug("HTTP request: {Method}; request-bytes {Bytes}; outcome started.",
+            method, Math.Clamp(request.Content?.Headers.ContentLength ?? 0, 0, 1_048_576));
 
-        var body = await content.ReadAsStringAsync(cancellationToken);
-        return string.IsNullOrWhiteSpace(body) ? "(empty)" : body;
-    }
-
-    private static string FormatHeaders(HttpHeaders headers, HttpContentHeaders? contentHeaders)
-    {
-        var lines = headers.Select(header => $"{header.Key}: {string.Join(", ", header.Value)}").ToList();
-        if (contentHeaders is not null)
+        try
         {
-            lines.AddRange(contentHeaders.Select(header => $"{header.Key}: {string.Join(", ", header.Value)}"));
+            var response = await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            logger.LogDebug("HTTP response: {StatusCode}; method {Method}; outcome received.",
+                (int)response.StatusCode, method);
+            await EnableResponseStreamingLogsAsync(response, cancellationToken).ConfigureAwait(false);
+            return response;
         }
-
-        return lines.Count == 0 ? "(none)" : string.Join(Environment.NewLine, lines);
+        catch (OperationCanceledException)
+        {
+            logger.LogDebug("HTTP request: {Method}; outcome cancelled.", method);
+            throw;
+        }
+        catch (HttpRequestException)
+        {
+            logger.LogDebug("HTTP request: {Method}; outcome transport-failure.", method);
+            throw;
+        }
     }
 
     private async Task EnableResponseStreamingLogsAsync(HttpResponseMessage response, CancellationToken cancellationToken)
@@ -57,14 +41,9 @@ internal sealed class HttpRequestLoggingHandler(ILogger logger) : DelegatingHand
             return;
         }
 
-        if (!IsLikelyTextContent(response.Content.Headers.ContentType?.MediaType))
-        {
-            return;
-        }
-
         var originalContent = response.Content;
         var stream = await originalContent.ReadAsStreamAsync(cancellationToken);
-        var loggingStream = new HttpResponseLoggingStream(stream, logger);
+        var loggingStream = new HttpResponseLoggingStream(stream, logger, originalContent);
         var wrappedContent = new StreamContent(loggingStream);
 
         foreach (var header in originalContent.Headers)
@@ -75,21 +54,9 @@ internal sealed class HttpRequestLoggingHandler(ILogger logger) : DelegatingHand
         response.Content = wrappedContent;
     }
 
-    private static bool IsLikelyTextContent(string? mediaType)
+    private sealed class HttpResponseLoggingStream(Stream innerStream, ILogger logger, HttpContent originalContent) : Stream
     {
-        if (string.IsNullOrWhiteSpace(mediaType))
-        {
-            return true;
-        }
-
-        return mediaType.StartsWith("text/", StringComparison.OrdinalIgnoreCase)
-            || mediaType.Contains("json", StringComparison.OrdinalIgnoreCase)
-            || mediaType.Contains("xml", StringComparison.OrdinalIgnoreCase)
-            || mediaType.Contains("event-stream", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private sealed class HttpResponseLoggingStream(Stream innerStream, ILogger logger) : Stream
-    {
+        private int disposed;
         public override bool CanRead => innerStream.CanRead;
         public override bool CanSeek => innerStream.CanSeek;
         public override bool CanWrite => innerStream.CanWrite;
@@ -105,18 +72,14 @@ internal sealed class HttpRequestLoggingHandler(ILogger logger) : DelegatingHand
         public override int Read(byte[] buffer, int offset, int count)
         {
             var read = innerStream.Read(buffer, offset, count);
-            LogChunk(buffer, offset, read);
+            LogChunk(read);
             return read;
         }
 
         public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
             var read = await innerStream.ReadAsync(buffer, cancellationToken);
-            if (read > 0)
-            {
-                var segment = buffer.Span[..read];
-                logger.LogTrace("HTTP response stream chunk:\n{ResponseChunk}", Encoding.UTF8.GetString(segment));
-            }
+            LogChunk(read);
 
             return read;
         }
@@ -130,9 +93,10 @@ internal sealed class HttpRequestLoggingHandler(ILogger logger) : DelegatingHand
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing)
+            if (disposing && Interlocked.Exchange(ref disposed, 1) == 0)
             {
                 innerStream.Dispose();
+                originalContent.Dispose();
             }
 
             base.Dispose(disposing);
@@ -140,20 +104,22 @@ internal sealed class HttpRequestLoggingHandler(ILogger logger) : DelegatingHand
 
         public override async ValueTask DisposeAsync()
         {
-            await innerStream.DisposeAsync();
+            if (Interlocked.Exchange(ref disposed, 1) == 0)
+            {
+                await innerStream.DisposeAsync();
+                originalContent.Dispose();
+            }
             await base.DisposeAsync();
         }
 
-        private void LogChunk(byte[] buffer, int offset, int read)
+        private void LogChunk(int read)
         {
             if (read <= 0)
             {
                 return;
             }
 
-            logger.LogTrace(
-                "HTTP response stream chunk:\n{ResponseChunk}",
-                Encoding.UTF8.GetString(buffer, offset, read));
+            logger.LogDebug("HTTP response stream chunk; bytes {Bytes}; outcome read.", read);
         }
     }
 }

@@ -19,6 +19,7 @@ using Phantom.Workspaces.Services.Logging;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.Http;
 using Phantom.Workspaces.Transport.ReverseHttp;
+using Phantom.Workspaces.Transport.Logging;
 using Phantom.Workspaces.Web.Server;
 
 namespace Phantom.Workspaces.Services;
@@ -143,7 +144,9 @@ public sealed class WorkspacesWebHost : IAsyncDisposable
         // server factory so `reverse-register` and `reverse-http` channel-opens dispatch through
         // the same status registry. Mirrors Phantom.Workspaces.Web.Server/Program.cs.
         var transportRegistry = new TransportRegistry();
-        transportRegistry.Register(this.reverseHttpServerTransportFactory);
+        transportRegistry.Register(TransportMetadataLoggingOptions.FromEnvironment().Enabled
+            ? this.reverseHttpServerTransportFactory.WithLogging(this.processLoggerFactory)
+            : this.reverseHttpServerTransportFactory);
         this.httpServerTransportFactory = new HttpServerTransportFactory(transportRegistry);
         this.httpServerTransportFactory.Map(this.application);
         this.httpServerTransportFactoryDisposed = false;

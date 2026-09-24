@@ -20,13 +20,24 @@ public static class HostFileLoggerFactory
     /// Creates an <see cref="ILoggerFactory"/> that writes through a
     /// <see cref="RollingFileLoggerProvider"/> rooted at <paramref name="logDirectory"/>.
     /// </summary>
-    public static ILoggerFactory Create(string logDirectory, TimeSpan? retention = null)
+    public static ILoggerFactory Create(
+        string logDirectory, TimeSpan? retention = null, bool verboseTransportMetadataLogging = true)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(logDirectory);
 
         var effectiveRetention = retention ?? DefaultRetention;
         return LoggerFactory.Create(builder =>
+        {
+            builder.SetMinimumLevel(LogLevel.Information);
+            if (verboseTransportMetadataLogging)
+            {
+                builder.AddFilter("Phantom.Workspaces.Transport.Logging", LogLevel.Debug);
+                builder.AddFilter("Phantom.Workspaces.Transport.ReverseHttp", LogLevel.Debug);
+                builder.AddFilter("Phantom.Workspaces.Llm.HttpRequestLoggingHandler", LogLevel.Debug);
+                builder.AddFilter("Phantom.Workspaces.Llm.Mcp.ProcessExecutorBackedClientTransport", LogLevel.Debug);
+            }
             builder.Services.AddSingleton<ILoggerProvider>(
-                _ => new RollingFileLoggerProvider(logDirectory, effectiveRetention)));
+                _ => new RollingFileLoggerProvider(logDirectory, effectiveRetention));
+        });
     }
 }

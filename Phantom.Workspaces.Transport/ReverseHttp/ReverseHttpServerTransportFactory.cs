@@ -1,6 +1,10 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Phantom.Workspaces.Transport.Logging;
+using System.Diagnostics;
 using System.Threading.Channels;
 using Phantom.Workspaces.Data;
 
@@ -15,6 +19,8 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
     private readonly ReverseConnectionStatusRegistry? statusRegistry;
     private readonly bool requireAuthenticatedRelays;
     private readonly EntityId? hubProfileEntityId;
+    private readonly ILogger logger;
+    private readonly bool traceMetadata;
 
     public ReverseHttpServerTransportFactory()
         : this(null)
@@ -24,11 +30,16 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
     public ReverseHttpServerTransportFactory(
         ReverseConnectionStatusRegistry? statusRegistry,
         bool requireAuthenticatedRelays = false,
-        EntityId? hubProfileEntityId = null)
+        EntityId? hubProfileEntityId = null,
+        ILoggerFactory? loggerFactory = null,
+        TransportMetadataLoggingOptions? metadataLogging = null)
     {
         this.statusRegistry = statusRegistry;
         this.requireAuthenticatedRelays = requireAuthenticatedRelays;
         this.hubProfileEntityId = hubProfileEntityId;
+        this.logger = loggerFactory?.CreateLogger<ReverseHttpServerTransportFactory>()
+            ?? NullLogger<ReverseHttpServerTransportFactory>.Instance;
+        this.traceMetadata = (metadataLogging ?? TransportMetadataLoggingOptions.FromEnvironment()).Enabled;
     }
 
     public int RegistrationCount => this.registrations.Count;
@@ -78,7 +89,7 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
         if (string.Equals(type, "reverse-register", StringComparison.OrdinalIgnoreCase))
         {
             var entityId = ReadEntityId(request);
-            var registration = new RegisteredClient(channel);
+            var registration = new RegisteredClient(channel, this.logger, this.traceMetadata);
             if (this.registrations.TryGetValue(entityId, out var previous))
             {
                 this.registrations[entityId] = registration;
@@ -93,6 +104,7 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
 
             this.inFlightCounts[entityId] = 0;
             this.statusRegistry?.OnRegistered(entityId, DateTimeOffset.UtcNow, ReadAnnouncedEndpoint(request));
+            this.logger.LogInformation("Reverse registration accepted; outcome registered.");
             if (this.hubProfileEntityId is { } hubId)
             {
                 using var registrationInfo = JsonDocument.Parse(
@@ -127,6 +139,7 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
                     ? await registration.AttachAsync(channel, authenticatedPeer, ct).ConfigureAwait(false)
                     : await registration.AttachLegacyAsync(channel, ct).ConfigureAwait(false);
                 this.OnRelayOpened(entityId);
+                this.logger.LogInformation("Reverse relay accepted; outcome attached.");
                 return relay is RegisteredClient.AttachedRelay attached
                     ? new RelayLease(this, entityId, attached)
                     : new LegacyRelayLease(this, entityId, (RelaySession)relay);
@@ -181,6 +194,7 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
         {
             this.inFlightCounts.TryRemove(entityId, out _);
             this.statusRegistry?.OnUnregistered(entityId);
+            this.logger.LogInformation("Reverse registration closed; outcome disconnected.");
         }
 
         await registration.DisposeAsync().ConfigureAwait(false);
@@ -321,15 +335,19 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
     private sealed class RegisteredClient : IAsyncDisposable
     {
         private readonly IMessageChannel registrationChannel;
+        private readonly ILogger logger;
+        private readonly bool traceMetadata;
         private readonly ConcurrentDictionary<string, AttachedRelay> relays = new(StringComparer.Ordinal);
         private readonly CancellationTokenSource shutdown = new();
         private readonly object readLoopGate = new();
         private Task? readLoop;
         private int disposed;
 
-        public RegisteredClient(IMessageChannel registrationChannel)
+        public RegisteredClient(IMessageChannel registrationChannel, ILogger logger, bool traceMetadata)
         {
             this.registrationChannel = registrationChannel;
+            this.logger = logger;
+            this.traceMetadata = traceMetadata;
         }
 
         public async Task<IAsyncDisposable> AttachLegacyAsync(
@@ -338,7 +356,8 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
         {
             using var ackDocument = JsonDocument.Parse("""{"type":"channel-open-ack"}""");
             await relayChannel.Writer.WriteAsync(ackDocument.RootElement.Clone(), cancellationToken).ConfigureAwait(false);
-            return new RelaySession(relayChannel, this.registrationChannel, cancellationToken);
+            return new RelaySession(relayChannel, this.registrationChannel, cancellationToken,
+                this.logger, this.traceMetadata);
         }
 
         public async Task<AttachedRelay> AttachAsync(
@@ -348,7 +367,7 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
         {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref this.disposed) != 0, this);
             this.EnsureReadLoopStarted();
-            var relay = new AttachedRelay(this, relayChannel, authenticatedPeer);
+            var relay = new AttachedRelay(this, relayChannel, authenticatedPeer, this.logger, this.traceMetadata);
             if (!this.relays.TryAdd(relay.Prefix, relay))
             {
                 throw new TransportException("Could not allocate a reverse HTTP relay.");
@@ -409,13 +428,19 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
                 {
                     if (TryFindRelay(frame, out var prefix, out var relay))
                     {
-                        await relay.WriteResponseAsync(RewriteCorrelationId(frame, prefix, addPrefix: false), this.shutdown.Token)
+                        var response = RewriteCorrelationId(frame, prefix, addPrefix: false);
+                        var started = Stopwatch.GetTimestamp();
+                        await relay.WriteResponseAsync(response, this.shutdown.Token)
                             .ConfigureAwait(false);
+                        relay.TraceResponse(response, started);
                     }
                     else if (this.relays.Count == 1)
                     {
-                        await this.relays.Values.Single().WriteResponseAsync(frame.Clone(), this.shutdown.Token)
+                        var onlyRelay = this.relays.Values.Single();
+                        var started = Stopwatch.GetTimestamp();
+                        await onlyRelay.WriteResponseAsync(frame.Clone(), this.shutdown.Token)
                             .ConfigureAwait(false);
+                        onlyRelay.TraceResponse(frame, started);
                     }
                 }
             }
@@ -473,17 +498,24 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
             private readonly CancellationTokenSource shutdown;
             private readonly ConcurrentDictionary<string, byte> channelIds = new(StringComparer.Ordinal);
             private readonly ConcurrentDictionary<string, byte> streamIds = new(StringComparer.Ordinal);
+            private readonly ConcurrentDictionary<string, string> attempts = new(StringComparer.Ordinal);
+            private readonly ILogger logger;
+            private readonly bool traceMetadata;
             private Task? pump;
             private int disposed;
 
             public AttachedRelay(
                 RegisteredClient owner,
                 IMessageChannel channel,
-                TransportPeerIdentity? authenticatedPeer)
+                TransportPeerIdentity? authenticatedPeer,
+                ILogger logger,
+                bool traceMetadata)
             {
                 this.owner = owner;
                 this.channel = channel;
                 this.authenticatedPeer = authenticatedPeer;
+                this.logger = logger;
+                this.traceMetadata = traceMetadata;
                 this.Prefix = Guid.NewGuid().ToString("N");
                 this.shutdown = CancellationTokenSource.CreateLinkedTokenSource(owner.shutdown.Token);
             }
@@ -509,6 +541,7 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
                     return;
                 }
 
+                this.logger.LogInformation("Reverse relay closed; outcome disconnected.");
                 this.owner.Remove(this.Prefix);
                 await this.shutdown.CancelAsync().ConfigureAwait(false);
                 if (this.pump is not null)
@@ -528,8 +561,11 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
                     await foreach (var frame in this.channel.Reader.ReadAllAsync(this.shutdown.Token).ConfigureAwait(false))
                     {
                         this.TrackCorrelationId(frame);
+                        var marker = this.MarkerFor(frame);
                         var routed = RewriteCorrelationId(frame, this.Prefix, addPrefix: true, this.authenticatedPeer);
+                        var started = Stopwatch.GetTimestamp();
                         await this.owner.WriteToRegistrationAsync(routed, this.shutdown.Token).ConfigureAwait(false);
+                        this.TraceHop("caller-to-worker", marker, frame, started);
                     }
                 }
                 catch (OperationCanceledException) when (this.shutdown.IsCancellationRequested)
@@ -577,6 +613,37 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
                         this.streamIds[streamId] = 0;
                     }
                 }
+            }
+
+            public void TraceResponse(JsonElement frame, long started)
+                => this.TraceHop("worker-to-caller", this.MarkerFor(frame), frame, started);
+
+            private string MarkerFor(JsonElement frame)
+            {
+                if (frame.ValueKind == JsonValueKind.Object
+                    && frame.TryGetProperty("channelId", out var channelId)
+                    && channelId.ValueKind == JsonValueKind.String
+                    && channelId.GetString() is { } id)
+                {
+                    if (TransportMetadataTrace.FrameType(frame) == "channel-open")
+                        return this.attempts.GetOrAdd(id, _ => TransportMetadataTrace.MarkerForRequest(frame));
+                    if (TransportMetadataTrace.FrameType(frame) == "channel-close"
+                        && this.attempts.TryRemove(id, out var closedMarker))
+                        return closedMarker;
+                    if (this.attempts.TryGetValue(id, out var marker))
+                        return marker;
+                }
+                return TransportMetadataTrace.NewMarker();
+            }
+
+            private void TraceHop(string direction, string marker, JsonElement frame, long started)
+            {
+                if (this.traceMetadata && this.logger.IsEnabled(LogLevel.Debug))
+                    this.logger.LogDebug(
+                        "Reverse relay hop {Direction}; attempt {Attempt}; frame {FrameType}; bytes {Bytes}; outcome written-to-hop; elapsed {ElapsedMilliseconds}ms.",
+                        direction, marker, TransportMetadataTrace.FrameType(frame),
+                        TransportMetadataTrace.ByteCount(frame),
+                        Math.Clamp((long)Stopwatch.GetElapsedTime(started).TotalMilliseconds, 0, int.MaxValue));
             }
 
             private async Task CloseLogicalConnectionsAsync()

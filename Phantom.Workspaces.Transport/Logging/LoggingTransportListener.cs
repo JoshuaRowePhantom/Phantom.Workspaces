@@ -29,16 +29,23 @@ internal sealed class LoggingTransportListener : ITransportListener
         IMessageChannel channel,
         CancellationToken ct = default)
     {
-        this.logger.LogInformation("Transport channel open: {Request}", request.GetRawText());
+        var marker = TransportMetadataTrace.MarkerForRequest(request);
+        this.logger.LogInformation("Transport channel open; attempt {Attempt}; frame {FrameType}; outcome started.",
+            marker, TransportMetadataTrace.FrameType(request));
         try
         {
-            return await this.inner
-                .OnChannelOpenAsync(request, channel.WithLogging(this.loggerFactory), ct)
+            var session = await this.inner
+                .OnChannelOpenAsync(request, channel.WithLogging(this.loggerFactory, marker), ct)
                 .ConfigureAwait(false);
+            this.logger.LogInformation("Transport channel open; attempt {Attempt}; outcome {Outcome}.",
+                marker, session is null ? "no-lease" : "accepted");
+            return session;
         }
-        catch (Exception ex)
+        catch (Exception error) when (error is OperationCanceledException or InvalidOperationException
+            or IOException or TransportException or TimeoutException)
         {
-            this.logger.LogError(ex, "Transport channel open failed.");
+            this.logger.LogWarning("Transport channel open failed; attempt {Attempt}; outcome {Outcome}.",
+                marker, error is OperationCanceledException ? "cancelled" : error is TimeoutException ? "timeout" : "failure");
             throw;
         }
     }
@@ -48,14 +55,19 @@ internal sealed class LoggingTransportListener : ITransportListener
         Stream stream,
         CancellationToken ct = default)
     {
-        this.logger.LogInformation("Transport stream open: {Request}", request.GetRawText());
+        var marker = TransportMetadataTrace.MarkerForRequest(request);
+        this.logger.LogInformation("Transport stream open; attempt {Attempt}; frame {FrameType}.",
+            marker, TransportMetadataTrace.FrameType(request));
         try
         {
-            return await this.inner.OnStreamOpenAsync(request, stream, ct).ConfigureAwait(false);
+            return await this.inner.OnStreamOpenAsync(
+                request, stream.WithLogging(this.loggerFactory, marker), ct).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception error) when (error is OperationCanceledException or InvalidOperationException
+            or IOException or TransportException or TimeoutException)
         {
-            this.logger.LogError(ex, "Transport stream open failed.");
+            this.logger.LogWarning("Transport stream open failed; attempt {Attempt}; outcome {Outcome}.",
+                marker, error is OperationCanceledException ? "cancelled" : "failure");
             throw;
         }
     }
@@ -67,9 +79,9 @@ internal sealed class LoggingTransportListener : ITransportListener
         {
             await this.inner.DisposeAsync().ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception error) when (error is IOException or InvalidOperationException)
         {
-            this.logger.LogWarning(ex, "Transport listener close faulted.");
+            this.logger.LogWarning("Transport listener close faulted.");
             throw;
         }
     }

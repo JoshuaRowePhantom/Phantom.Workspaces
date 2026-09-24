@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Phantom.Workspaces.Transport.Logging;
 
 namespace Phantom.Workspaces.Transport;
 
@@ -20,7 +21,11 @@ public sealed class TransportPeerIdentityProvider : ITransportPeerIdentityProvid
     }
 
     public TransportPeerIdentity GetRequiredIdentity(IMessageChannel channel)
-        => this.identities.TryGetValue(channel, out var identity)
+    {
+        while (channel is LoggingMessageChannel loggingChannel)
+            channel = loggingChannel.Inner;
+        return this.identities.TryGetValue(channel, out var identity)
             ? identity
             : throw new UnauthorizedAccessException("The transport peer is not authenticated.");
+    }
 }

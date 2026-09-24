@@ -1,6 +1,9 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Threading.Channels;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Phantom.Workspaces.Transport.Logging;
 
 namespace Phantom.Workspaces.Transport.ReverseHttp;
 
@@ -19,6 +22,9 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
     private readonly TransportRegistry registry;
     private readonly TransportPeerIdentityProvider? peerIdentities;
     private readonly Func<string, CancellationToken, Task>? registrationInfoHandler;
+    private readonly ILogger logger;
+    private readonly bool traceMetadata;
+    private readonly ConcurrentDictionary<string, string> attempts = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, DispatchedChannel> channels = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, PendingChannelOpen> pendingChannelOpens = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, DispatchedStream> streams = new(StringComparer.Ordinal);
@@ -31,12 +37,17 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
         IMessageChannel registrationChannel,
         TransportRegistry registry,
         TransportPeerIdentityProvider? peerIdentities = null,
-        Func<string, CancellationToken, Task>? registrationInfoHandler = null)
+        Func<string, CancellationToken, Task>? registrationInfoHandler = null,
+        ILoggerFactory? loggerFactory = null,
+        TransportMetadataLoggingOptions? metadataLogging = null)
     {
         this.registrationChannel = registrationChannel ?? throw new ArgumentNullException(nameof(registrationChannel));
         this.registry = registry ?? throw new ArgumentNullException(nameof(registry));
         this.peerIdentities = peerIdentities;
         this.registrationInfoHandler = registrationInfoHandler;
+        this.logger = loggerFactory?.CreateLogger<ReverseExecutionDispatcher>()
+            ?? NullLogger<ReverseExecutionDispatcher>.Instance;
+        this.traceMetadata = (metadataLogging ?? TransportMetadataLoggingOptions.FromEnvironment()).Enabled;
         this.readLoop = this.RunAsync();
     }
 
@@ -86,6 +97,7 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
             return;
         }
 
+        this.logger.LogInformation("Reverse worker dispatch closed; outcome disconnected.");
         foreach (var channel in this.channels.Values)
         {
             channel.CompleteIncoming();
@@ -116,6 +128,7 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
         this.pendingChannelOpens.Clear();
         this.streams.Clear();
         this.sessions.Clear();
+        this.attempts.Clear();
     }
 
     private async Task DispatchAsync(JsonElement frame)
@@ -125,6 +138,14 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
             || typeProperty.GetString() is not { } type)
         {
             return;
+        }
+
+        if (this.traceMetadata && this.logger.IsEnabled(LogLevel.Debug))
+        {
+            this.logger.LogDebug(
+                "Reverse worker dispatch; attempt {Attempt}; frame {FrameType}; bytes {Bytes}; outcome received-at-worker.",
+                this.MarkerFor(frame), TransportMetadataTrace.FrameType(frame),
+                TransportMetadataTrace.ByteCount(frame));
         }
 
         switch (type)
@@ -184,6 +205,23 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
 
                 break;
         }
+    }
+
+    private string MarkerFor(JsonElement frame)
+    {
+        if (frame.TryGetProperty("channelId", out var property)
+            && property.ValueKind == JsonValueKind.String
+            && property.GetString() is { } id)
+        {
+            if (TransportMetadataTrace.FrameType(frame) == "channel-open")
+                return this.attempts.GetOrAdd(id, _ => TransportMetadataTrace.MarkerForRequest(frame));
+            if (TransportMetadataTrace.FrameType(frame) == "channel-close"
+                && this.attempts.TryRemove(id, out var closedMarker))
+                return closedMarker;
+            if (this.attempts.TryGetValue(id, out var marker))
+                return marker;
+        }
+        return TransportMetadataTrace.NewMarker();
     }
 
     private void StartChannelOpen(JsonElement frame)

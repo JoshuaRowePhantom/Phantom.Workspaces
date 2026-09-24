@@ -412,7 +412,7 @@ public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvid
                resolvedClient);
        if (this.request.AgentServices?.LogChat == true)
        {
-           resolvedClient = resolvedClient.AsBuilder().UseLogging(this.request.AgentServices.LoggerFactory).Build();
+           this.logger.LogDebug("Agent chat diagnostics enabled; message contents are not logged.");
        }
 
        this.client = resolvedClient;

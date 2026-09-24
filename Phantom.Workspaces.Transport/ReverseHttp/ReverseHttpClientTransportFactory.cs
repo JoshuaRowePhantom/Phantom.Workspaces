@@ -128,11 +128,34 @@ public sealed class ReverseHttpClientTransportFactory : ITransportFactory
             return this.registrationChannel;
         }
 
-        using var hubDescriptor = JsonDocument.Parse($$"""{"type":"http","url":"{{this.hubUrl}}"}""");
-        this.hubTransport = await this.httpClientTransportFactory.ConnectToAsync(hubDescriptor.RootElement, ct).ConfigureAwait(false)
-            ?? throw new TransportException("HTTP client transport factory did not handle the hub descriptor.");
-        using var registerDescriptor = JsonDocument.Parse($$"""{"type":"reverse-register","entity-id":"{{this.entityId}}"}""");
-        this.registrationChannel = await this.hubTransport.ConnectToMessageChannelAsync(registerDescriptor.RootElement, ct).ConfigureAwait(false);
+        try
+        {
+            var hubDescriptor = JsonSerializer.SerializeToElement(new { type = "http", url = this.hubUrl });
+            this.hubTransport = await this.httpClientTransportFactory.ConnectToAsync(hubDescriptor, ct).ConfigureAwait(false)
+                ?? throw new TransportException("HTTP client transport factory did not handle the hub descriptor.");
+            var registerDescriptor = JsonSerializer.SerializeToElement(
+                new Dictionary<string, string> { ["type"] = "reverse-register", ["entity-id"] = this.entityId });
+            this.registrationChannel = await this.hubTransport.ConnectToMessageChannelAsync(registerDescriptor, ct)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            this.logger.LogInformation("Reverse registration client; outcome cancelled.");
+            throw;
+        }
+        catch (Exception error) when (error is TransportException or HttpRequestException
+            or IOException or TimeoutException)
+        {
+            this.logger.LogWarning("Reverse registration client; outcome {Outcome}.",
+                error is TimeoutException ? "timeout" : "transport-failure");
+            if (this.hubTransport is not null)
+            {
+                await this.hubTransport.DisposeAsync().ConfigureAwait(false);
+                this.hubTransport = null;
+            }
+            throw new TransportException("Reverse registration could not be established.");
+        }
+        this.logger.LogInformation("Reverse registration client; outcome connected.");
         this.UpsertHubUrl();
         await this.StartReachabilityLeaseAsync(ct).ConfigureAwait(false);
         return this.registrationChannel;
@@ -140,6 +163,7 @@ public sealed class ReverseHttpClientTransportFactory : ITransportFactory
 
     public async Task<IMessageChannel> ReconnectAsync(CancellationToken ct = default)
     {
+        this.logger.LogInformation("Reverse registration client; outcome reconnecting.");
         if (this.registrationChannel is not null)
         {
             await this.registrationChannel.DisposeAsync().ConfigureAwait(false);
@@ -230,10 +254,7 @@ public sealed class ReverseHttpClientTransportFactory : ITransportFactory
         this.LastReachabilityPublicationError = exception;
         if (exception is not null)
         {
-            this.logger.LogError(
-                exception,
-                "Reverse HTTP registration for profile {ProfileEntityId} is live, but its route could not be persisted.",
-                this.entityId);
+            this.logger.LogError("Reverse HTTP registration is live, but its route could not be persisted.");
         }
     }
 

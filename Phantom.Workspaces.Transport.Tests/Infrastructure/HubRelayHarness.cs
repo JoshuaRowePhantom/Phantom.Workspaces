@@ -2,6 +2,8 @@ using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Transport.Chat;
 using Phantom.Workspaces.Transport.ReverseHttp;
+using Microsoft.Extensions.Logging;
+using Phantom.Workspaces.Transport.Logging;
 
 namespace Phantom.Workspaces.Transport.Tests.Infrastructure;
 
@@ -50,7 +52,8 @@ internal sealed class HubRelayHarness : IAsyncDisposable
         CancellationToken ct,
         TransportPeerIdentityProvider? peerIdentities = null,
         ReverseHttpServerTransportFactory? reverseHttpServer = null,
-        Guid? executorEntityId = null)
+        Guid? executorEntityId = null,
+        ILoggerFactory? dispatcherLoggerFactory = null)
     {
         ArgumentNullException.ThrowIfNull(executorRegistry);
         var fixture = new InProcessReverseHubFixture(reverseHttpServer);
@@ -63,7 +66,9 @@ internal sealed class HubRelayHarness : IAsyncDisposable
         var dispatcher = new ReverseExecutionDispatcher(
             harness.ExecutorRegistrationChannel,
             executorRegistry,
-            peerIdentities);
+            peerIdentities,
+            loggerFactory: dispatcherLoggerFactory,
+            metadataLogging: new TransportMetadataLoggingOptions(true));
         harness.ownedAsync.Insert(0, dispatcher);
         return harness;
     }

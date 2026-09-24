@@ -14,6 +14,7 @@ using Phantom.Workspaces.Transport.Http;
 using Phantom.Workspaces.Transport.Local;
 using Phantom.Workspaces.Transport.ReverseHttp;
 using Phantom.Workspaces.Services.AgentSessions;
+using Phantom.Workspaces.Transport.Logging;
 using Microsoft.Extensions.Logging;
 
 namespace Phantom.Workspaces.Services;
@@ -45,10 +46,13 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
         AgentServices? agentServices = null,
         TransportFactoryRegistryProvider? registryProvider = null,
         ITransportListener? agentSessionTransportListener = null,
-        IRunningAgentChatTable? runningAgentChats = null)
+        IRunningAgentChatTable? runningAgentChats = null,
+        TransportMetadataLoggingOptions? metadataLogging = null)
     {
         ArgumentNullException.ThrowIfNull(dataAccessLayer);
         ArgumentNullException.ThrowIfNull(workspaceEntitySession);
+        var traceOptions = metadataLogging ?? TransportMetadataLoggingOptions.FromEnvironment();
+        var traceMetadata = traceOptions.Enabled;
 
         var effectiveRegistryProvider = registryProvider ?? new TransportFactoryRegistryProvider();
         var localPeer = new TransportPeerIdentity
@@ -60,7 +64,7 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
         };
         this.ConnectionStatusRegistry = new ReverseConnectionStatusRegistry();
         this.ReachabilityRouteStore = new DataAccessReachabilityRouteStore(dataAccessLayer);
-        this.LocalListeners = new TransportRegistry();
+        this.LocalListeners = new TransportRegistry(traceMetadata ? loggerFactory : null);
 
         // Issue #1314: register the server-side chat-client transport listener in the production
         // composition so that an incoming `chat-client` channel carrying an `agent-definition`
@@ -133,7 +137,9 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
         this.ReverseHttpServerTransportFactory = new ReverseHttpServerTransportFactory(
             this.ConnectionStatusRegistry,
             requireAuthenticatedRelays: this.AgentSessionPeerIdentities is not null,
-            hubProfileEntityId: workspaceEntitySession.UserComputerProfileEntityId);
+            hubProfileEntityId: workspaceEntitySession.UserComputerProfileEntityId,
+            loggerFactory: loggerFactory,
+            metadataLogging: traceOptions);
         foreach (var hubFactory in hubFactories ?? [])
         {
             hubFactory.ConfigureReachability(
@@ -161,10 +167,10 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
             new HttpClientTransportFactory(),
             authenticatedPeer: this.AgentSessionPeerIdentities is not null ? localPeer : null);
 
-        registry.Register(this.localTransportFactory);
-        registry.Register(this.userComputerProfileTransportFactory);
-        registry.Register(this.httpClientTransportFactory);
-        registry.Register(this.reverseHttpForwardingTransportFactory);
+        registry.Register(traceMetadata ? this.localTransportFactory.WithLogging(loggerFactory) : this.localTransportFactory);
+        registry.Register(traceMetadata ? this.userComputerProfileTransportFactory.WithLogging(loggerFactory) : this.userComputerProfileTransportFactory);
+        registry.Register(traceMetadata ? this.httpClientTransportFactory.WithLogging(loggerFactory) : this.httpClientTransportFactory);
+        registry.Register(traceMetadata ? this.reverseHttpForwardingTransportFactory.WithLogging(loggerFactory) : this.reverseHttpForwardingTransportFactory);
         this.TransportFactoryRegistry = registry;
         effectiveRegistryProvider.Publish(registry);
 
@@ -174,9 +180,12 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
         this.TransportHost = new WorkspacesTransportHost(
             this.LocalListeners,
             this.HubFactories,
+            loggerFactory,
             this.AgentSessionPeerIdentities,
             this.ReachabilityRouteStore,
-            workspaceEntitySession.UserComputerProfileEntityId);
+            workspaceEntitySession.UserComputerProfileEntityId,
+            traceOptions);
+
     }
 
     /// <summary>The resolved registry that builds transports for every registered descriptor type.</summary>

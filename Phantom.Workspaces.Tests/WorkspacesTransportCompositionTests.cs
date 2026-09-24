@@ -1,4 +1,5 @@
 using System.Linq;
+using AgentSchema;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -12,12 +13,104 @@ using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.Chat;
 using Microsoft.Extensions.Logging.Abstractions;
 using Phantom.Workspaces.Services.Logging;
+using Phantom.Workspaces.Agent.Gui;
+using Phantom.Workspaces.Transport.Logging;
+using Microsoft.Extensions.Logging;
 
 namespace Phantom.Workspaces.Tests;
 
 public sealed class WorkspacesTransportCompositionTests
 {
     private static readonly EntityId LocalProfileId = new("11111111-1111-1111-1111-111111111111");
+
+    [Fact]
+    public async Task Composition_DefaultVerboseOn_EmitsMetadataToProductionSinks()
+    {
+        var directory = Path.Combine(AppContext.BaseDirectory, "composition-trace-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var process = HostFileLoggerFactory.Create(directory);
+            using var memory = new ObservableLoggerFactory();
+            using var tee = new SessionTeeLoggerFactory(process, memory);
+            await using var composition = await CreateCompositionAsync(
+                null, processFactory: tee, metadataLogging: new TransportMetadataLoggingOptions(true));
+            await using var channel = new StubMessageChannel();
+            using var request = CreateEchoChatRequest("private-host");
+            await using var session = await composition.LocalListeners.OnChannelOpenAsync(
+                request.RootElement, channel, Ct());
+            Assert.NotNull(session);
+            var observed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            void OnEntry(object? _, string entry)
+            {
+                if (entry.Contains("Transport message received", StringComparison.Ordinal))
+                    observed.TrySetResult();
+            }
+            memory.EntryAdded += OnEntry;
+            try
+            {
+                using var frame = JsonDocument.Parse(
+                    """{"type":"steering","content":{"role":"user","text":"private-prompt"},"credential":"private-key"}""");
+                await channel.SendIncomingAsync(frame.RootElement);
+                await observed.Task.WaitAsync(Ct());
+            }
+            finally
+            {
+                memory.EntryAdded -= OnEntry;
+            }
+
+            var file = ProcessLogTestFile.ReadAll(directory);
+            Assert.Contains("Transport message received", file, StringComparison.Ordinal);
+            Assert.Contains(memory.Entries, entry => entry.Contains("Transport message received", StringComparison.Ordinal));
+            Assert.Equal(2, file.Split("Transport worker channel open; attempt", StringSplitOptions.None).Length - 1);
+            foreach (var value in new[] { "private-host", "private-prompt", "private-key" })
+            {
+                Assert.DoesNotContain(value, file, StringComparison.Ordinal);
+                Assert.DoesNotContain(memory.Entries, entry => entry.Contains(value, StringComparison.Ordinal));
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Composition_VerboseOff_SuppressesFramesButPreservesLifecycle()
+    {
+        var directory = Path.Combine(AppContext.BaseDirectory, "composition-trace-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var process = HostFileLoggerFactory.Create(directory, verboseTransportMetadataLogging: false);
+            using var memory = new ObservableLoggerFactory();
+            using var tee = new SessionTeeLoggerFactory(process, memory);
+            await using var composition = await CreateCompositionAsync(
+                null, processFactory: tee, metadataLogging: new TransportMetadataLoggingOptions(false));
+            await using var channel = new StubMessageChannel();
+            using var request = CreateEchoChatRequest("private-host");
+            await using var session = await composition.LocalListeners.OnChannelOpenAsync(
+                request.RootElement, channel, Ct());
+            Assert.NotNull(session);
+            using var frame = JsonDocument.Parse("""{"type":"steering","content":{"role":"user","text":"private-prompt"}}""");
+            await channel.SendIncomingAsync(frame.RootElement);
+            using var registrationRequest = JsonDocument.Parse(
+                """{"type":"reverse-register","entity-id":"private-profile-id"}""");
+            await using var registrationChannel = new StubMessageChannel();
+            await using var registration = await composition.ReverseHttpServerTransportFactory.OnChannelOpenAsync(
+                registrationRequest.RootElement, registrationChannel, Ct());
+
+            var file = ProcessLogTestFile.ReadAll(directory);
+            Assert.Contains("Reverse registration accepted", file, StringComparison.Ordinal);
+            Assert.DoesNotContain("Transport message", file, StringComparison.Ordinal);
+            Assert.DoesNotContain(memory.Entries, entry => entry.Contains("Transport message", StringComparison.Ordinal));
+            Assert.DoesNotContain("private-profile-id", file, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
 
     [Fact]
     public async Task Composition_RuntimeHostListener_EmitsRepresentativeEventToProcessFile()
@@ -266,12 +359,34 @@ public sealed class WorkspacesTransportCompositionTests
 
         public System.Threading.Channels.ChannelWriter<JsonElement> Writer => this.writer.Writer;
 
+        public ValueTask SendIncomingAsync(JsonElement frame) => this.reader.Writer.WriteAsync(frame);
+
+        public ValueTask<JsonElement> ReadOutgoingAsync(CancellationToken ct)
+            => this.writer.Reader.ReadAsync(ct);
+
         public ValueTask DisposeAsync()
         {
             this.reader.Writer.TryComplete();
             this.writer.Writer.TryComplete();
             return ValueTask.CompletedTask;
         }
+
+    }
+
+    private static JsonDocument CreateEchoChatRequest(string privateMarker)
+    {
+        var definition = new AgentSchema.PromptAgent
+        {
+            Name = "safe-echo",
+            Instructions = "",
+            Model = new AgentSchema.Model { Provider = "echo", Id = "echo-model" },
+        };
+        return JsonSerializer.SerializeToDocument(new Dictionary<string, object>
+        {
+            ["type"] = "chat-client",
+            ["agent-definition"] = definition.ToJson(),
+            ["private"] = privateMarker,
+        });
     }
 
     [Fact]
@@ -338,7 +453,9 @@ public sealed class WorkspacesTransportCompositionTests
 
     private static async Task<WorkspacesTransportComposition> CreateCompositionAsync(
         Phantom.Workspaces.Llm.AgentServices? agentServices,
-        TransportFactoryRegistryProvider? registryProvider = null)
+        TransportFactoryRegistryProvider? registryProvider = null,
+        ILoggerFactory? processFactory = null,
+        TransportMetadataLoggingOptions? metadataLogging = null)
     {
         var dataAccessLayer = await CreateSeededDataAccessLayerAsync();
         var session = new WorkspaceEntitySession
@@ -350,10 +467,11 @@ public sealed class WorkspacesTransportCompositionTests
         return new WorkspacesTransportComposition(
             dataAccessLayer,
             session,
-            NullLoggerFactory.Instance,
+            processFactory ?? NullLoggerFactory.Instance,
             hubFactories: null,
             agentServices: agentServices,
-            registryProvider: registryProvider);
+            registryProvider: registryProvider,
+            metadataLogging: metadataLogging);
     }
 
     private static async Task<IDataAccessLayer> CreateSeededDataAccessLayerAsync(bool includeRemoteProfile = false)

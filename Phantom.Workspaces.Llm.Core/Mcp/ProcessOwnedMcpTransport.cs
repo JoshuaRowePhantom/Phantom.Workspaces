@@ -21,7 +21,6 @@ internal sealed class ProcessOwnedMcpTransport : ITransport
     private readonly ProcessExecutorBackedClientTransport.StderrDrainer stderrDrainer;
     private readonly CancellationTokenSource drainCts;
     private readonly Task<ProcessExitResult> exitTask;
-    private readonly string name;
     private readonly ILogger logger;
     private readonly Channel<JsonRpcMessage> messages = Channel.CreateUnbounded<JsonRpcMessage>(
         new UnboundedChannelOptions { SingleReader = false, SingleWriter = true });
@@ -49,7 +48,6 @@ internal sealed class ProcessOwnedMcpTransport : ITransport
         this.stderrDrainer = stderrDrainer;
         this.drainCts = drainCts;
         this.exitTask = exitTask;
-        this.name = name;
         this.logger = logger ?? NullLogger.Instance;
         this.messagePump = this.PumpMessagesAsync();
     }
@@ -105,7 +103,7 @@ internal sealed class ProcessOwnedMcpTransport : ITransport
             if (messageReady.IsCanceled)
             {
                 readerFailure = new OperationCanceledException(
-                    $"MCP stdio server '{name}' message reader was cancelled.");
+                    "MCP stdio message reader was cancelled.");
                 break;
             }
             if (messageReady.IsFaulted)
@@ -153,7 +151,7 @@ internal sealed class ProcessOwnedMcpTransport : ITransport
         if (failure is null && exitTask.IsCanceled)
         {
             failure = new OperationCanceledException(
-                $"MCP stdio server '{name}' exit monitoring was cancelled.");
+                "MCP stdio exit monitoring was cancelled.");
         }
         else if (failure is null && exitTask.IsFaulted)
         {
@@ -161,10 +159,8 @@ internal sealed class ProcessOwnedMcpTransport : ITransport
         }
         else if (failure is null && !stdoutEof && exitResult is { ExitCode: not 0 } result)
         {
-            var diagnostic = stderrDrainer.SnapshotRolling();
-            var suffix = string.IsNullOrWhiteSpace(diagnostic) ? string.Empty : $" Stderr: {diagnostic}";
             failure = new IOException(
-                $"MCP stdio server '{name}' exited prematurely with code {result.ExitCode}.{suffix}");
+                $"MCP stdio server exited prematurely with code {result.ExitCode}; stderr lines {stderrDrainer.LineCount}.");
         }
 
         messages.Writer.TryComplete(failure);
@@ -193,7 +189,7 @@ internal sealed class ProcessOwnedMcpTransport : ITransport
             if (messageReady.IsCanceled)
             {
                 return new OperationCanceledException(
-                    $"MCP stdio server '{name}' message reader was cancelled.");
+                    "MCP stdio message reader was cancelled.");
             }
             if (messageReady.IsFaulted)
             {
@@ -228,13 +224,11 @@ internal sealed class ProcessOwnedMcpTransport : ITransport
         var result = completedExitResult;
         if (result is { ExitCode: not 0 })
         {
-            var diagnostic = stderrDrainer.SnapshotRolling();
-            var suffix = string.IsNullOrWhiteSpace(diagnostic) ? string.Empty : $" Stderr: {diagnostic}";
             throw new IOException(
-                $"MCP stdio server '{name}' exited prematurely with code {result.ExitCode}.{suffix}");
+                $"MCP stdio server exited prematurely with code {result.ExitCode}; stderr lines {stderrDrainer.LineCount}.");
         }
 
-        throw new IOException($"MCP stdio server '{name}' transport is closed.");
+        throw new IOException("MCP stdio server transport is closed.");
     }
 
     private async Task SendInnerAsync(
@@ -340,10 +334,8 @@ internal sealed class ProcessOwnedMcpTransport : ITransport
         }
 
         logger.LogWarning(
-            "Secondary cleanup failure while {Operation} for MCP stdio server '{Name}': {FailureType}.",
-            operation,
-            name,
-            failure.GetType().Name);
+            "Secondary cleanup failure during MCP stdio operation {Operation}; category failure.",
+            operation);
         return failure;
     }
 

@@ -11,6 +11,7 @@ using Phantom.Workspaces.Llm.Copilot;
 using Phantom.Workspaces.Llm.Echo;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Secrets;
+using Phantom.Workspaces.Transport.Logging;
 using System.Collections;
 using System.Collections.Generic;
 using System.ClientModel;
@@ -743,9 +744,10 @@ public static class AgentFactory
         try
         {
             IChatClient client;
-            if (services?.LogHttpRequests == true)
+            if (services?.LoggerFactory is { } factory
+                && TransportMetadataLoggingOptions.FromEnvironment().Enabled)
             {
-                var logger = services.LoggerFactory!.CreateLogger<HttpRequestLoggingHandler>();
+                var logger = factory.CreateLogger<HttpRequestLoggingHandler>();
                 var handler = new HttpRequestLoggingHandler(logger)
                 {
                     InnerHandler = new HttpClientHandler(),
@@ -765,10 +767,10 @@ public static class AgentFactory
             var displayName = $"Ollama ({modelId} at {endpoint})";
             return (client, displayName);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             throw new InvalidOperationException(
-                $"Failed to create Ollama client for model '{modelId}' at '{endpoint}': {ex.Message}", ex);
+                "Failed to create the Ollama client.");
         }
     }
 
@@ -806,11 +808,10 @@ public static class AgentFactory
                     var displayName = $"GitHub Models ({modelId} at {endpoint})";
                     return (client, displayName);
                 }
-                catch (Exception ex)
+                catch (Exception)
                 {
                     throw new InvalidOperationException(
-                        $"Failed to create GitHub Models client for model '{modelId}' at '{endpoint}': {ex.Message}",
-                        ex);
+                        "Failed to create the GitHub Models client.");
                 }
             }).ConfigureAwait(false);
     }

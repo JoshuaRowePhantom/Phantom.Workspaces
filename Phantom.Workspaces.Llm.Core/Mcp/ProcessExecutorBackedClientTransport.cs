@@ -1,5 +1,4 @@
 using System.Text;
-using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using ModelContextProtocol.Client;
@@ -13,14 +12,12 @@ namespace Phantom.Workspaces.Llm.Mcp;
 /// #1474 <see cref="IProcessExecutor"/> and speaks MCP JSON-RPC over the child's stdin/stdout via
 /// the SDK's <c>StreamClientTransport</c> (issue #1477). A null <see cref="ProcessExecutionRequest.MxcPolicy"/>
 /// selects the ordinary-process branch; a compiled policy selects MXC. Stderr is drained
-/// separately from the protocol stream and forwarded to the logger and a bounded rolling
-/// diagnostic buffer. A nonzero premature exit faults the transport and disposal always kills the
+/// separately from the protocol stream. Only counts are logged, never stderr content.
+/// A nonzero premature exit faults the transport and disposal always kills the
 /// process tree.
 /// </summary>
 public sealed class ProcessExecutorBackedClientTransport : IClientTransport, IAsyncDisposable
 {
-    private const int StderrRollingCapacity = 8 * 1024;
-
     private readonly ProcessExecutionRequest request;
     private readonly IProcessExecutor executor;
     private readonly ILoggerFactory loggerFactory;
@@ -76,7 +73,7 @@ public sealed class ProcessExecutorBackedClientTransport : IClientTransport, IAs
             if (connectionTask is not null)
             {
                 throw new InvalidOperationException(
-                    $"ProcessExecutorBackedClientTransport '{Name}' has already been connected.");
+                    "The MCP process transport has already been connected.");
             }
 
             connectionTask = ConnectCoreAsync(cancellationToken);
@@ -241,13 +238,11 @@ public sealed class ProcessExecutorBackedClientTransport : IClientTransport, IAs
         catch (OperationCanceledException) when (cancellationIsExpected)
         {
         }
-        catch (Exception failure)
+        catch (Exception)
         {
             logger.LogWarning(
-                "Secondary cleanup failure while {Operation} for MCP stdio server '{Name}': {FailureType}.",
-                operation,
-                Name,
-                failure.GetType().Name);
+                "Secondary cleanup failure during MCP stdio operation {Operation}; category failure.",
+                operation);
         }
     }
 
@@ -273,36 +268,25 @@ public sealed class ProcessExecutorBackedClientTransport : IClientTransport, IAs
         return streamTransport.ConnectAsync(cancellationToken);
     }
 
-    /// <summary>Drains child stderr into the logger and a bounded rolling diagnostic buffer.</summary>
+    /// <summary>Drains child stderr without retaining or logging untrusted text.</summary>
     internal sealed class StderrDrainer
     {
         private readonly Stream source;
         private readonly ILogger logger;
-        private readonly string name;
-        private readonly Channel<string> lines = Channel.CreateBounded<string>(
-            new BoundedChannelOptions(64) { FullMode = BoundedChannelFullMode.DropOldest });
         private readonly Task pumpTask;
-        private readonly StringBuilder rolling = new(StderrRollingCapacity);
-        private readonly object rollingLock = new();
+        private int lineCount;
 
         public StderrDrainer(Stream source, ILogger logger, string name, CancellationToken cancellationToken)
         {
             this.source = source;
             this.logger = logger;
-            this.name = name;
             // Enter the first asynchronous read before startup can fail and begin cleanup.
             pumpTask = PumpAsync(cancellationToken);
         }
 
         public Task PumpTask => pumpTask;
 
-        public string SnapshotRolling()
-        {
-            lock (rollingLock)
-            {
-                return rolling.ToString();
-            }
-        }
+        public int LineCount => Volatile.Read(ref this.lineCount);
 
         private async Task PumpAsync(CancellationToken cancellationToken)
         {
@@ -322,9 +306,7 @@ public sealed class ProcessExecutorBackedClientTransport : IClientTransport, IAs
                         break;
 
                     // Never route stderr through the JSON-RPC message channel.
-                    logger.LogInformation("MCP stdio server '{Name}' stderr: {Line}", name, line);
-                    AppendRolling(line);
-                    lines.Writer.TryWrite(line);
+                    Interlocked.Increment(ref this.lineCount);
                 }
             }
             catch (OperationCanceledException)
@@ -338,32 +320,8 @@ public sealed class ProcessExecutorBackedClientTransport : IClientTransport, IAs
             }
             finally
             {
-                lines.Writer.TryComplete();
-            }
-        }
-
-        private void AppendRolling(string line)
-        {
-            var sanitized = new string(
-                line.Select(static character => char.IsControl(character) && character != '\t' ? ' ' : character)
-                    .ToArray());
-            if (sanitized.Length >= StderrRollingCapacity)
-                sanitized = sanitized[^StderrRollingCapacity..];
-
-            lock (rollingLock)
-            {
-                var separatorLength = rolling.Length > 0 ? 1 : 0;
-                var overflow = rolling.Length + separatorLength + sanitized.Length - StderrRollingCapacity;
-                if (overflow > 0)
-                {
-                    rolling.Remove(0, Math.Min(rolling.Length, overflow));
-                }
-                if (rolling.Length > 0)
-                    rolling.Append('\n');
-                rolling.Append(sanitized);
-
-                if (rolling.Length > StderrRollingCapacity)
-                    rolling.Remove(0, rolling.Length - StderrRollingCapacity);
+                logger.LogDebug("MCP stdio stderr drained; lines {LineCount}; outcome terminal.",
+                    this.LineCount);
             }
         }
     }
