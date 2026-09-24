@@ -14,6 +14,7 @@ using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Web.Server;
+using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Services.Logging;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.Http;
@@ -34,6 +35,7 @@ public sealed class WorkspacesWebHost : IAsyncDisposable
     private readonly IReachabilityRouteStore? reachabilityRouteStore;
     private readonly EntityId? localProfileEntityId;
     private readonly TimeProvider timeProvider;
+    private readonly ILoggerFactory processLoggerFactory;
     private readonly ILogger<WorkspacesWebHost> logger;
     private readonly bool ownsReverseHttpServerTransportFactory;
     private readonly SemaphoreSlim directRouteGate = new(1, 1);
@@ -44,18 +46,13 @@ public sealed class WorkspacesWebHost : IAsyncDisposable
     private ReachabilityRouteLease? directRouteLease;
     private bool httpServerTransportFactoryDisposed;
 
-    public WorkspacesWebHost(ReverseConnectionStatusRegistry statusRegistry)
-        : this(statusRegistry, null, null, null)
-    {
-    }
-
     public WorkspacesWebHost(
         ReverseConnectionStatusRegistry statusRegistry,
-        ReverseHttpServerTransportFactory? reverseHttpServerTransportFactory,
-        IReachabilityRouteStore? reachabilityRouteStore,
-        EntityId? localProfileEntityId,
-        TimeProvider? timeProvider = null,
-        ILogger<WorkspacesWebHost>? logger = null)
+        ILoggerFactory processLoggerFactory,
+        ReverseHttpServerTransportFactory? reverseHttpServerTransportFactory = null,
+        IReachabilityRouteStore? reachabilityRouteStore = null,
+        EntityId? localProfileEntityId = null,
+        TimeProvider? timeProvider = null)
     {
         this.statusRegistry = statusRegistry ?? throw new ArgumentNullException(nameof(statusRegistry));
         this.reverseHttpServerTransportFactory =
@@ -64,7 +61,8 @@ public sealed class WorkspacesWebHost : IAsyncDisposable
         this.reachabilityRouteStore = reachabilityRouteStore;
         this.localProfileEntityId = localProfileEntityId;
         this.timeProvider = timeProvider ?? TimeProvider.System;
-        this.logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<WorkspacesWebHost>.Instance;
+        this.processLoggerFactory = processLoggerFactory;
+        this.logger = processLoggerFactory.CreateLogger<WorkspacesWebHost>();
     }
 
     /// <summary>The transport-layer connection-status registry fed by inbound reverse registrations.</summary>
@@ -112,19 +110,6 @@ public sealed class WorkspacesWebHost : IAsyncDisposable
         RemoteHostingSettings remoteHostingSettings,
         IDataAccessLayer dataAccessLayer,
         CancellationToken cancellationToken = default)
-        => await this.StartAsync(remoteHostingSettings, dataAccessLayer, logDirectoryProvider: null, cancellationToken).ConfigureAwait(false);
-
-    /// <summary>
-    /// Starts the web server using the supplied configuration and data-access layer, registering the
-    /// #1086 rolling file logging provider against the single <paramref name="logDirectoryProvider"/>
-    /// directory (handed in from the config-resolved path — the host never computes its own). Does
-    /// nothing if hosting is not enabled or the server is already running.
-    /// </summary>
-    public async Task StartAsync(
-        RemoteHostingSettings remoteHostingSettings,
-        IDataAccessLayer dataAccessLayer,
-        ILogDirectoryProvider? logDirectoryProvider,
-        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(remoteHostingSettings);
         ArgumentNullException.ThrowIfNull(dataAccessLayer);
@@ -137,14 +122,15 @@ public sealed class WorkspacesWebHost : IAsyncDisposable
         this.cancellationTokenSource = new CancellationTokenSource();
         var builder = WebApplication.CreateBuilder();
 
-        if (logDirectoryProvider is not null)
-        {
-            builder.Logging.AddProvider(new RollingFileLoggerProvider(
-                logDirectoryProvider.LogDirectory,
-                LoggingBootstrap.DefaultRetention));
-        }
+        builder.Logging.ClearProviders();
+        builder.Logging.AddProvider(new ForwardingLoggerProvider(this.processLoggerFactory));
+        builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
 
         builder.Services.AddSingleton(dataAccessLayer);
+        builder.Services.AddSingleton(sp => new AgentChatSessionCache(new Phantom.Workspaces.Llm.AgentServices
+        {
+            LoggerFactory = this.processLoggerFactory,
+        }));
         builder.WebHost.UseUrls(remoteHostingSettings.ListenUrls.ToArray());
 
         this.application = builder.Build();
@@ -309,7 +295,6 @@ public sealed class WorkspacesWebHost : IAsyncDisposable
         if (exception is not null)
         {
             this.logger.LogError(
-                exception,
                 "The direct HTTP listener is ready, but its reachability route could not be persisted.");
         }
     }

@@ -12,6 +12,7 @@ using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Services.Logging;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -216,7 +217,11 @@ public sealed class StartAgentSessionOnProfileViewModel : WorkspaceTabViewModel
         }
 
         var agentDefinition = PhantomAgentSchema.AgentDefinitionFromJson(definitionElement.GetRawText());
-        var agentServices = await this.agentSessionShortcutContext.CreateAgentServicesAsync(this.mainWindowViewModel);
+        var sessionMemoryFactory = new ObservableLoggerFactory();
+        var agentServices = await this.agentSessionShortcutContext.CreateAgentServicesAsync(
+            this.mainWindowViewModel,
+            new SessionTeeLoggerFactory(this.mainWindowViewModel.ApplicationServices.LoggerFactory,
+                sessionMemoryFactory));
 
         // #1309: Route through IRunningAgentChatTable → AgentChatFactory.GetOrCreateAsync so
         // the newly-created root chat is registered in _entries[sessionId] and
@@ -263,6 +268,8 @@ public sealed class StartAgentSessionOnProfileViewModel : WorkspaceTabViewModel
                 AcquisitionMode = acquisition.Mode,
                 OwningProfileTransport = acquisition.Transport,
             });
+        this.openAgentSessionShortcutHandler.RegisterSessionLogger(
+            lease.AgentChat.Information.AgentSessionId, sessionMemoryFactory);
 
         var agentSessionTab = await this.openAgentSessionShortcutHandler.CreateAgentSessionTabWithRemoteProfileAsync(
             new CreateAgentSessionTabRequest
@@ -271,7 +278,8 @@ public sealed class StartAgentSessionOnProfileViewModel : WorkspaceTabViewModel
                 AgentSessionEntity = createdAgentSessionEntity,
                 AgentChat = lease.AgentChat,
             },
-            acquisition.RemoteProfileDisplayName);
+            acquisition.RemoteProfileDisplayName,
+            sessionMemoryFactory);
         agentSessionTab.SetLease(lease);
 
         await this.tabService.ReplaceTabAsync(this, agentSessionTab);

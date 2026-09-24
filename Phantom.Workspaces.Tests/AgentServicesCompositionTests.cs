@@ -9,6 +9,7 @@ using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Secrets;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging;
 
 namespace Phantom.Workspaces.Tests;
 
@@ -21,6 +22,7 @@ public sealed class AgentServicesCompositionTests
         => new(
             MainWindowIntegrationTests.CreateTestRunningAgentChatTable(),
             new AgentPersistenceStoreCache(),
+            NullLoggerFactory.Instance,
             credentialPicker: new NullCredentialPicker(),
             allowedSecretsStore: new AllowedSecretsStore(new AllowedSecretsStoreConfiguration()),
             platformSecretStore: new NullPlatformSecretStore(),
@@ -37,7 +39,8 @@ public sealed class AgentServicesCompositionTests
 
         var services = await AgentServicesComposition.ComposeSessionServicesAsync(
             viewModel,
-            AgentPersistenceStoreFactory.CreateInMemory());
+            AgentPersistenceStoreFactory.CreateInMemory(),
+            NullLoggerFactory.Instance);
 
         // Every service the launch paths depend on is present in the one bundle.
         Assert.NotNull(services.SecretProvider);
@@ -60,7 +63,7 @@ public sealed class AgentServicesCompositionTests
         var secretProvider = new object();
         var mcpOAuthOptions = new object();
 
-        var services = AgentServicesComposition.ComposeHostServices(secretProvider, mcpOAuthOptions);
+        var services = AgentServicesComposition.ComposeHostServices(secretProvider, mcpOAuthOptions, NullLoggerFactory.Instance);
 
         Assert.Same(secretProvider, services.SecretProvider);
         Assert.Same(mcpOAuthOptions, services.McpOAuthOptions);
@@ -68,6 +71,43 @@ public sealed class AgentServicesCompositionTests
         Assert.NotNull(services.TrustProfilePolicyCompiler);
         Assert.NotNull(services.RemoteCopilotProviderResolver);
         await Task.CompletedTask;
+    }
+
+    [Fact]
+    public void AgentServicesComposition_ComposeHostServices_CarriesProcessLoggerFactory()
+    {
+        using var process = LoggerFactory.Create(builder => builder.AddProvider(new TestLoggerProvider()));
+        var services = AgentServicesComposition.ComposeHostServices(new object(), new object(), process);
+        Assert.Same(process, services.LoggerFactory);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task AgentServicesComposition_ComposeRuntimeHostServices_CarriesProcessLoggerFactory()
+    {
+        using var process = LoggerFactory.Create(builder => builder.AddProvider(new TestLoggerProvider()));
+        var applicationServices = CreateApplicationServices(new object());
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel(
+            applicationServices: applicationServices);
+        await viewModel.InitializeAsync();
+        var services = await AgentServicesComposition.ComposeRuntimeHostServicesAsync(viewModel, process);
+        Assert.Same(process, services.LoggerFactory);
+    }
+
+    private sealed class TestLoggerProvider : ILoggerProvider
+    {
+        public ILogger CreateLogger(string categoryName) => new TestLogger();
+        public void Dispose() { }
+    }
+
+    private sealed class TestLogger : ILogger
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => logLevel != LogLevel.None;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            _ = formatter(state, exception);
+        }
     }
 
     [AvaloniaFact(Timeout = 15_000)]

@@ -4,7 +4,8 @@ using System.Net.Http;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using InstallCommandLineOptions = Phantom.Workspaces.Install.CommandLineOptions;
-using Microsoft.Extensions.Logging.Abstractions;
+using Phantom.Workspaces.Services.Logging;
+using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Install;
 using Phantom.Workspaces.Services.Updates;
 
@@ -51,10 +52,12 @@ internal static class ManagementModeDispatcher
         var layout = new InstallLayout(fileSystem, installRoot);
         var clock = new SystemClock();
         var processLauncher = new RealProcessLauncher();
+        using var processLoggerFactory = HostFileLoggerFactory.Create(
+            HostLogDirectoryResolver.Resolve(AppContext.BaseDirectory));
 #pragma warning disable CA1416 // RealScheduledTasks/RegistryStartupRegistration are Windows-only; this path is only reached on Windows
         var startupTaskService = new StartupTaskService(
             new RegistryStartupRegistration(),
-            new RealScheduledTasks(NullLogger<RealScheduledTasks>.Instance),
+            new RealScheduledTasks(processLoggerFactory.CreateLogger<RealScheduledTasks>()),
             layout.CurrentExecutablePath);
 #pragma warning restore CA1416
         var healthGate = new HealthGate(fileSystem, layout);

@@ -12,6 +12,7 @@ using Phantom.Workspaces.Llm.Core.Manifest;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Services.Logging;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -119,7 +120,8 @@ internal static class AgentManifestSessionLauncher
                 {
                     var loggerFactory = new ObservableLoggerFactory();
                     var agentServices = await agentSessionShortcutContext
-                        .CreateAgentServicesAsync(mainWindowViewModel, loggerFactory);
+                        .CreateAgentServicesAsync(mainWindowViewModel,
+                            new SessionTeeLoggerFactory(mainWindowViewModel.ApplicationServices.LoggerFactory, loggerFactory));
                     var agentManifest = AgentManifestLoader.LoadManifestFromJson(manifestJson);
                     // Populate the manifest's stable identity from the source entity so the
                     // ManifestIdentity consent scope works for real manifest entities (issue #1401).
@@ -155,6 +157,8 @@ internal static class AgentManifestSessionLauncher
                             OwningProfileTransport = acquisition.Transport,
                         }, ct);
                     loadingTab.SetLease(lease);
+                    openAgentSessionShortcutHandler.RegisterSessionLogger(
+                        lease.AgentChat.Information.AgentSessionId, loggerFactory);
                     return (lease.AgentChat, loggerFactory);
                 }, createdAgentSessionEntity, loadingTab, foregroundScheduler));
         }
@@ -168,7 +172,8 @@ internal static class AgentManifestSessionLauncher
                 {
                     var loggerFactory = new ObservableLoggerFactory();
                     var agentServices = await agentSessionShortcutContext
-                        .CreateAgentServicesAsync(mainWindowViewModel, loggerFactory);
+                        .CreateAgentServicesAsync(mainWindowViewModel,
+                            new SessionTeeLoggerFactory(mainWindowViewModel.ApplicationServices.LoggerFactory, loggerFactory));
                     var agentDefinition = PhantomAgentSchema.AgentDefinitionFromJson(definitionJson);
                     var persistedEntity = createdAgentSessionEntity.Data is JsonElement value
                         ? value
@@ -195,6 +200,8 @@ internal static class AgentManifestSessionLauncher
                             OwningProfileTransport = acquisition.Transport,
                         }, ct);
                     loadingTab.SetLease(lease);
+                    openAgentSessionShortcutHandler.RegisterSessionLogger(
+                        lease.AgentChat.Information.AgentSessionId, loggerFactory);
                     return (lease.AgentChat, loggerFactory);
                 }, createdAgentSessionEntity, loadingTab, foregroundScheduler));
         }

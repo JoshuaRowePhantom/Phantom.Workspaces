@@ -14,7 +14,8 @@ public sealed class MainWindowReverseHttpRegistrationTests
     {
         var hubFactories = MainWindowViewModel.BuildReverseHttpHubFactories(
             new WebRepositorySource("http://localhost:5282"),
-            LocalProfileId);
+            LocalProfileId,
+            Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
 
         var factory = Assert.Single(hubFactories);
         Assert.Equal("http://localhost:5282", factory.HubUrl);
@@ -26,7 +27,8 @@ public sealed class MainWindowReverseHttpRegistrationTests
     {
         var hubFactories = MainWindowViewModel.BuildReverseHttpHubFactories(
             new MongoDbRepositorySource("container", "root"),
-            LocalProfileId);
+            LocalProfileId,
+            Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
 
         Assert.Empty(hubFactories);
     }
@@ -36,7 +38,8 @@ public sealed class MainWindowReverseHttpRegistrationTests
     {
         var hubFactories = MainWindowViewModel.BuildReverseHttpHubFactories(
             new UnknownRepositorySource(),
-            LocalProfileId);
+            LocalProfileId,
+            Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
 
         Assert.Empty(hubFactories);
     }
@@ -48,7 +51,8 @@ public sealed class MainWindowReverseHttpRegistrationTests
 
         var factory = Assert.Single(MainWindowViewModel.BuildReverseHttpHubFactories(
             new WebRepositorySource("http://localhost:5282"),
-            localProfile));
+            localProfile,
+            Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance));
 
         // The client registers itself under its own local profile id, which is what the host records
         // in its Inbound Connections registry.

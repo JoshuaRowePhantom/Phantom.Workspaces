@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Core;
@@ -15,6 +14,7 @@ using Phantom.Workspaces.Transport.Http;
 using Phantom.Workspaces.Transport.Local;
 using Phantom.Workspaces.Transport.ReverseHttp;
 using Phantom.Workspaces.Services.AgentSessions;
+using Microsoft.Extensions.Logging;
 
 namespace Phantom.Workspaces.Services;
 
@@ -40,6 +40,7 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
     public WorkspacesTransportComposition(
         IDataAccessLayer dataAccessLayer,
         WorkspaceEntitySession workspaceEntitySession,
+        ILoggerFactory loggerFactory,
         IReadOnlyList<ReverseHttpClientTransportFactory>? hubFactories = null,
         AgentServices? agentServices = null,
         TransportFactoryRegistryProvider? registryProvider = null,
@@ -71,7 +72,7 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
             {
                 var result = await AgentFactory.CreateChatClientAsync(
                     definition,
-                    agentServices,
+                    agentServices is null ? new AgentServices { LoggerFactory = loggerFactory } : agentServices with { LoggerFactory = loggerFactory },
                     queueManager: null,
                     cancellationToken: ct).ConfigureAwait(false);
                 return result.ChatClient;
@@ -84,6 +85,7 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
         // return null so the listener declines them.
         var remoteHostServices = (agentServices ?? new AgentServices()) with
         {
+            LoggerFactory = loggerFactory,
             ProcessExecutor = agentServices?.ProcessExecutor ?? new ProcessExecutor(),
             TrustProfilePolicyCompiler =
                 agentServices?.TrustProfilePolicyCompiler ?? new MxcTrustProfilePolicyCompiler(),
@@ -99,7 +101,7 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
         // model-bound CopilotSdkChatClient on another machine — is served by building a LOCAL
         // ICopilotClient here and bridging only its SDK session back over the channel. This is
         // distinct from ChatClientTransportListener above, which remotes the whole AgentChat.
-        this.LocalListeners.Register(new Phantom.Workspaces.Llm.Core.Transport.Chat.CopilotClientTransportListener(agentServices));
+        this.LocalListeners.Register(new Phantom.Workspaces.Llm.Core.Transport.Chat.CopilotClientTransportListener(remoteHostServices));
         if (runningAgentChats is RunningAgentChatTable runningTable)
             runningTable.ConfigureLocalRuntimeRegistry(
                 new LocalAgentSessionRuntimeRegistry(dataAccessLayer));
@@ -118,7 +120,7 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
             var listener = new AgentSessionTransportListener(
                 host,
                 peerIdentities,
-                remoteHostServices.LoggerFactory?.CreateLogger<AgentSessionTransportListener>());
+                loggerFactory.CreateLogger<AgentSessionTransportListener>());
             agentSessionTransportListener = listener;
             this.AgentSessionListener = listener;
             this.AgentSessionPeerIdentities = peerIdentities;

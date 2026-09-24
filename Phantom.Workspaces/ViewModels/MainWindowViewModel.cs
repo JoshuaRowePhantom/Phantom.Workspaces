@@ -91,6 +91,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private Services.UsageMetricsService? usageMetricsService;
     private readonly Services.ApplicationServices applicationServices;
     private readonly Microsoft.Extensions.Logging.ILoggerFactory loggerFactory;
+    private readonly bool ownsLoggerFactory;
     private readonly Services.Logging.ILogDirectoryProvider? logDirectoryProvider;
     private readonly global::Phantom.Workspaces.Configuration.ConfigurationPersistenceService? configurationPersistence;
 
@@ -117,8 +118,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     {
         var services = applicationServices ?? CreateDefaultApplicationServices();
         this.applicationServices = services;
-        this.loggerFactory = services.LoggerFactory
-            ?? Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance;
+        this.ownsLoggerFactory = applicationServices is null;
+        this.loggerFactory = services.LoggerFactory;
         this.logDirectoryProvider = services.LogDirectoryProvider;
         this.configurationPersistence = services.ConfigurationPersistence;
         this.RepositorySource = repositorySource;
@@ -209,11 +210,17 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     {
         var agentPersistenceStoreCache = new AgentPersistenceStoreCache();
         var agentPersistenceStore = AgentPersistenceStoreFactory.CreateInMemory();
-        var agentChatFactory = new AgentChatFactory(agentPersistenceStore, new AgentServices(), TaskScheduler.Current);
+        var loggerFactory = Services.Logging.HostFileLoggerFactory.Create(
+            Services.Logging.HostLogDirectoryResolver.Resolve(AppContext.BaseDirectory));
+        var agentChatFactory = new AgentChatFactory(
+            agentPersistenceStore,
+            new AgentServices { LoggerFactory = loggerFactory },
+            TaskScheduler.Current);
         var registryProvider = new TransportFactoryRegistryProvider();
         return new ApplicationServices(
             new RunningAgentChatTable(agentChatFactory, AgentSessionRuntimeContextFactory.FromProvider(registryProvider)),
             agentPersistenceStoreCache,
+            loggerFactory,
             transportFactoryRegistryProvider: registryProvider);
     }
 
@@ -888,7 +895,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     internal static IReadOnlyList<ReverseHttpClientTransportFactory> BuildReverseHttpHubFactories(
         RepositorySource repositorySource,
         EntityId localProfileEntityId,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory loggerFactory)
     {
         if (repositorySource is WebRepositorySource web
             && !string.IsNullOrWhiteSpace(web.Endpoint))
@@ -898,7 +905,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 new ReverseHttpClientTransportFactory(
                     web.Endpoint,
                     localProfileEntityId.ToString(),
-                    loggerFactory?.CreateLogger<ReverseHttpClientTransportFactory>()),
+                    loggerFactory.CreateLogger<ReverseHttpClientTransportFactory>()),
             ];
         }
 
@@ -924,6 +931,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var composition = new Services.WorkspacesTransportComposition(
             this.entityBroker!.EntityRepository.DataAccessLayer,
             this.entityBroker.EntityRepository.WorkspaceEntitySession,
+            this.applicationServices.LoggerFactory,
             hubFactories,
             runtimeHostServices,
             registryProvider: this.applicationServices.TransportFactoryRegistryProvider,
@@ -933,10 +941,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         await composition.StartAsync();
         this.webHost = new WorkspacesWebHost(
             composition.ConnectionStatusRegistry,
+            this.applicationServices.LoggerFactory,
             composition.ReverseHttpServerTransportFactory,
             composition.ReachabilityRouteStore,
-            this.entityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId,
-            logger: this.applicationServices.LoggerFactory?.CreateLogger<WorkspacesWebHost>());
+            this.entityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId);
         this.ConnectionStatus = new ConnectionStatusViewModel(
             composition.ConnectionStatusRegistry,
             action => Dispatcher.UIThread.Post(action));
@@ -945,8 +953,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         {
             await this.webHost.StartAsync(
                 this.configuration.RemoteHosting,
-                this.entityBroker.EntityRepository.DataAccessLayer,
-                this.logDirectoryProvider);
+                this.entityBroker.EntityRepository.DataAccessLayer);
             this.ConnectionStatus.SetLocalAccessPoint(this.webHost.ListenUrl);
             this.StartDevTunnelHostIfConfigured(this.webHost.ListenUrl);
         }
@@ -983,8 +990,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         {
             await this.webHost.StartAsync(
                 newSettings,
-                this.entityBroker.EntityRepository.DataAccessLayer,
-                this.logDirectoryProvider).ConfigureAwait(false);
+                this.entityBroker.EntityRepository.DataAccessLayer).ConfigureAwait(false);
             this.ConnectionStatus?.SetLocalAccessPoint(this.webHost.ListenUrl);
             this.StartDevTunnelHostIfConfigured(this.webHost.ListenUrl);
         }
@@ -4736,5 +4742,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         await base.DisposeAsync();
+        if (this.ownsLoggerFactory)
+            this.loggerFactory.Dispose();
     }
 }

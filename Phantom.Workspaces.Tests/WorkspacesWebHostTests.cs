@@ -15,17 +15,41 @@ using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.Http;
 using Phantom.Workspaces.Transport.ReverseHttp;
 using Xunit;
+using Microsoft.Extensions.Logging.Abstractions;
+using Phantom.Workspaces.Services.Logging;
 
 namespace Phantom.Workspaces.Tests;
 
 public sealed class WorkspacesWebHostTests
 {
     [Fact]
+    public async Task WorkspacesWebHost_ProductionComposition_UsesExplicitLoggerWithoutDuplicateFileLines()
+    {
+        var directory = Path.Combine(AppContext.BaseDirectory, "web-host-logging-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var process = HostFileLoggerFactory.Create(directory);
+            await using var host = new WorkspacesWebHost(new ReverseConnectionStatusRegistry(), process);
+
+            host.ReportPublicationError(new InvalidOperationException("private-exception-sentinel"));
+
+            var contents = ProcessLogTestFile.ReadAll(directory);
+            Assert.Equal(1, contents.Split("reachability route could not be persisted", StringSplitOptions.None).Length - 1);
+            Assert.DoesNotContain("private-exception-sentinel", contents, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Constructor_ExposesTransportConnectionStatusRegistry()
     {
         var statusRegistry = new ReverseConnectionStatusRegistry();
 
-        await using var host = new WorkspacesWebHost(statusRegistry);
+        await using var host = new WorkspacesWebHost(statusRegistry, NullLoggerFactory.Instance);
 
         // The host now sources its reverse hub from the transport connection-status registry rather
         // than a ReverseExecutionRegistry, and exposes the same instance it maps into the server.
@@ -38,7 +62,7 @@ public sealed class WorkspacesWebHostTests
     public async Task StartAsync_MapsTransportConnectEndpoint()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var host = new WorkspacesWebHost(new ReverseConnectionStatusRegistry());
+        await using var host = new WorkspacesWebHost(new ReverseConnectionStatusRegistry(), NullLoggerFactory.Instance);
         var settings = new RemoteHostingSettings { Enabled = true, ListenUrl = $"http://127.0.0.1:{GetFreePort()}" };
         var dal = new InMemoryDataAccessLayer();
 
@@ -58,7 +82,7 @@ public sealed class WorkspacesWebHostTests
     public async Task StartAsync_MapsTransportReverseEndpoint()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var host = new WorkspacesWebHost(new ReverseConnectionStatusRegistry());
+        await using var host = new WorkspacesWebHost(new ReverseConnectionStatusRegistry(), NullLoggerFactory.Instance);
         var settings = new RemoteHostingSettings { Enabled = true, ListenUrl = $"http://127.0.0.1:{GetFreePort()}" };
         var dal = new InMemoryDataAccessLayer();
 
@@ -79,7 +103,7 @@ public sealed class WorkspacesWebHostTests
     {
         var ct = TestContext.Current.CancellationToken;
         var statusRegistry = new ReverseConnectionStatusRegistry();
-        await using var host = new WorkspacesWebHost(statusRegistry);
+        await using var host = new WorkspacesWebHost(statusRegistry, NullLoggerFactory.Instance);
         var port = GetFreePort();
         var listenUrl = $"http://127.0.0.1:{port}";
         var settings = new RemoteHostingSettings { Enabled = true, ListenUrl = listenUrl };
@@ -112,7 +136,7 @@ public sealed class WorkspacesWebHostTests
     public async Task StopAsync_DisposesHttpServerTransportFactory()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var host = new WorkspacesWebHost(new ReverseConnectionStatusRegistry());
+        await using var host = new WorkspacesWebHost(new ReverseConnectionStatusRegistry(), NullLoggerFactory.Instance);
         var settings = new RemoteHostingSettings { Enabled = true, ListenUrl = $"http://127.0.0.1:{GetFreePort()}" };
         var dal = new InMemoryDataAccessLayer();
 
@@ -130,7 +154,7 @@ public sealed class WorkspacesWebHostTests
     public async Task WorkspacesWebHost_NonLoopbackListenUrl_BindsRequestedAddress()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var host = new WorkspacesWebHost(new ReverseConnectionStatusRegistry());
+        await using var host = new WorkspacesWebHost(new ReverseConnectionStatusRegistry(), NullLoggerFactory.Instance);
         var port = GetFreePort();
         var settings = new RemoteHostingSettings { Enabled = true, ListenUrls = [$"http://0.0.0.0:{port}"] };
         var dal = new InMemoryDataAccessLayer();
@@ -151,7 +175,7 @@ public sealed class WorkspacesWebHostTests
     public async Task WorkspacesWebHost_MultipleListenUrls_BindsAllRequestedAddresses()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var host = new WorkspacesWebHost(new ReverseConnectionStatusRegistry());
+        await using var host = new WorkspacesWebHost(new ReverseConnectionStatusRegistry(), NullLoggerFactory.Instance);
         var port1 = GetFreePort();
         var port2 = GetFreePort();
         var url1 = $"http://127.0.0.1:{port1}";
@@ -184,6 +208,7 @@ public sealed class WorkspacesWebHostTests
         await using var reverseServer = new ReverseHttpServerTransportFactory(statusRegistry);
         await using var host = new WorkspacesWebHost(
             statusRegistry,
+            NullLoggerFactory.Instance,
             reverseServer,
             routeStore,
             profileId);
@@ -215,6 +240,7 @@ public sealed class WorkspacesWebHostTests
         await using var reverseServer = new ReverseHttpServerTransportFactory(statusRegistry);
         await using var host = new WorkspacesWebHost(
             statusRegistry,
+            NullLoggerFactory.Instance,
             reverseServer,
             routeStore,
             profileId);
@@ -244,6 +270,7 @@ public sealed class WorkspacesWebHostTests
         await using var reverseServer = new ReverseHttpServerTransportFactory(statusRegistry);
         await using var host = new WorkspacesWebHost(
             statusRegistry,
+            NullLoggerFactory.Instance,
             reverseServer,
             routeStore,
             profileId,

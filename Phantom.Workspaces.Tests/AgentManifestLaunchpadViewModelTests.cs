@@ -12,6 +12,8 @@ using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Core.Manifest;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Services.Logging;
+using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.ViewModels;
 
@@ -28,6 +30,37 @@ namespace Phantom.Workspaces.Tests;
 /// </summary>
 public sealed class AgentManifestLaunchpadViewModelTests
 {
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task AgentManifestSessionLauncher_NewSession_LogsToSessionMemoryAndProcessFile()
+    {
+        var directory = Path.Combine(AppContext.BaseDirectory, "launch-logging-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var process = HostFileLoggerFactory.Create(directory);
+            var (viewModel, _, _) = await OpenLaunchpadForAsync(
+                new EntityId("b1180002-0000-4000-8000-000000000002"),
+                DefinitionEntityJson,
+                process);
+            await using (viewModel)
+            {
+                var tab = await MainWindowIntegrationTests.WaitForSelectedTabAsync<AgentSessionWorkspaceTabViewModel>(
+                    viewModel.SelectedWorkspacePane);
+                await MainWindowIntegrationTests.WaitForAgentReadyAsync(tab);
+                var services = GetRequestServices(tab.Lease!.LocalAgentChat);
+                services.LoggerFactory!.CreateLogger("SafeLifecycle").LogInformation("launch-stage-safe");
+
+                Assert.Single(tab.LoggerFactory!.Entries, entry => entry.Contains("launch-stage-safe", StringComparison.Ordinal));
+                Assert.Equal(1, ProcessLogTestFile.ReadAll(directory)
+                    .Split("launch-stage-safe", StringSplitOptions.None).Length - 1);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private const string ManifestEntityJson =
         """
         {
@@ -133,9 +166,13 @@ public sealed class AgentManifestLaunchpadViewModelTests
 
     private static async Task<(MainWindowViewModel ViewModel, AgentManifestLaunchpadViewModel Launchpad, SpyRunningAgentChatTable Spy)> OpenLaunchpadForAsync(
         EntityId entityId,
-        string entityJson)
+        string entityJson,
+        ILoggerFactory? processFactory = null)
     {
-        var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        var applicationServices = processFactory is null ? null : new ApplicationServices(
+            CreateTestRunningAgentChatTable(), new AgentPersistenceStoreCache(), processFactory);
+        var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel(
+            applicationServices: applicationServices);
         await viewModel.InitializeAsync();
 
         var broker = MainWindowIntegrationTests.GetEntityBroker(viewModel);

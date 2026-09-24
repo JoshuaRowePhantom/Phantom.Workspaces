@@ -11,6 +11,7 @@ using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Tools;
 using Phantom.Workspaces.Llm.Trust;
+using Microsoft.Extensions.Logging;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -42,14 +43,14 @@ public sealed class AgentSessionShortcutContext
 
     public async Task<AgentServices> CreateAgentServicesAsync(
         MainWindowViewModel mainWindowViewModel,
-        ObservableLoggerFactory? loggerFactory = null)
+        ILoggerFactory loggerFactory)
     {
         var agentPersistenceStore = await this.GetAgentPersistenceStoreAsync(mainWindowViewModel);
         return await AgentServicesComposition.ComposeSessionServicesAsync(
             mainWindowViewModel,
             agentPersistenceStore,
-            this.userComputerProfileOverride,
-            loggerFactory);
+            loggerFactory,
+            this.userComputerProfileOverride);
     }
 
     public async Task<SubscribedEntityViewModel?> CreateAgentSessionEntityAsync(

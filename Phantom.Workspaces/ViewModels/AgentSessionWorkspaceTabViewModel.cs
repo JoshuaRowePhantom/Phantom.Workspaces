@@ -55,7 +55,8 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
 
     private void OnLeaseDisposeError(Exception ex)
         => this.loggerFactory?.CreateLogger<AgentSessionWorkspaceTabViewModel>()
-            .LogError(ex, "Error disposing agent session lease.");
+            .LogError("Error disposing agent session lease; category {ErrorCategory}.",
+                ex is OperationCanceledException ? "cancelled" : "failure");
 
     public AgentTabState State
     {

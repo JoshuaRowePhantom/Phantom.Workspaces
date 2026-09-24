@@ -2,7 +2,7 @@ using System;
 using System.Net.Http;
 using System.Reflection;
 using System.Runtime.InteropServices;
-using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Install;
 
@@ -26,6 +26,7 @@ public static class UpdateControllerFactory
     public static UpdateController? TryCreate(
         WorkspacesConfiguration configuration,
         Action requestShutdown,
+        ILoggerFactory loggerFactory,
         string? installRootOverride = null,
         HttpClient? httpClient = null)
     {
@@ -59,7 +60,7 @@ public static class UpdateControllerFactory
 #pragma warning disable CA1416 // RealScheduledTasks/RegistryStartupRegistration are Windows-only; this path is only reached on Windows
         var startupTaskService = new StartupTaskService(
             new RegistryStartupRegistration(),
-            new RealScheduledTasks(NullLogger<RealScheduledTasks>.Instance),
+            new RealScheduledTasks(loggerFactory.CreateLogger<RealScheduledTasks>()),
             layout.CurrentExecutablePath);
 #pragma warning restore CA1416
         var processLauncher = new RealProcessLauncher();

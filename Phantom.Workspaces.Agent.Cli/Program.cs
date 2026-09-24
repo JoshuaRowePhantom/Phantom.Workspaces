@@ -25,7 +25,7 @@ definitionParser.AddOptions(rootCommand);
 rootCommand.SetAction(async (parseResult, ct) =>
 {
     var cliParseResult = definitionParser.Parse(parseResult);
-    using var app = new AgentCliApp(cliParseResult);
+    using var app = new AgentCliApp(cliParseResult, hostLoggerFactory);
     await app.RunAsync();
 });
 
@@ -38,7 +38,8 @@ public sealed class AgentCliApp : IDisposable
     private readonly CancellationTokenSource appCts = new();
     private readonly bool supportsInteractiveRendering;
     private readonly string clientDisplayName;
-    private readonly ILoggerFactory? loggerFactory;
+    private readonly ILoggerFactory loggerFactory;
+    private readonly bool ownsLoggerFactory;
 
     // Console layout state — all accessed under consoleLock
     // Layout (when assistant is active):
@@ -69,13 +70,14 @@ public sealed class AgentCliApp : IDisposable
         ? $"  assistant {SpinnerFrames[this.spinnerFrame]}:"
         : "  assistant:";
 
-    public AgentCliApp(AgentDefinitionParseResult parseResult)
+    public AgentCliApp(AgentDefinitionParseResult parseResult, ILoggerFactory processLoggerFactory)
     {
         this.supportsInteractiveRendering = !Console.IsOutputRedirected && !Console.IsInputRedirected;
 
-        this.loggerFactory = (parseResult.LogChat || parseResult.LogHttpRequests)
+        this.ownsLoggerFactory = parseResult.LogChat || parseResult.LogHttpRequests;
+        this.loggerFactory = this.ownsLoggerFactory
             ? CreateConsoleLoggerFactory(this.WriteLogLine)
-            : null;
+            : processLoggerFactory;
         var services = new AgentServices
         {
             LogChat = parseResult.LogChat,
@@ -160,7 +162,8 @@ public sealed class AgentCliApp : IDisposable
     public void Dispose()
     {
         this.appCts.Dispose();
-        this.loggerFactory?.Dispose();
+        if (this.ownsLoggerFactory)
+            this.loggerFactory.Dispose();
     }
 
     private ILoggerFactory CreateConsoleLoggerFactory(Action<string> onLogLine)

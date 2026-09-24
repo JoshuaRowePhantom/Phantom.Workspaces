@@ -10,12 +10,47 @@ using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Testing;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.Chat;
+using Microsoft.Extensions.Logging.Abstractions;
+using Phantom.Workspaces.Services.Logging;
 
 namespace Phantom.Workspaces.Tests;
 
 public sealed class WorkspacesTransportCompositionTests
 {
     private static readonly EntityId LocalProfileId = new("11111111-1111-1111-1111-111111111111");
+
+    [Fact]
+    public async Task Composition_RuntimeHostListener_EmitsRepresentativeEventToProcessFile()
+    {
+        var directory = Path.Combine(AppContext.BaseDirectory, "composition-logging-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var process = HostFileLoggerFactory.Create(directory);
+            var data = await CreateSeededDataAccessLayerAsync();
+            var session = new WorkspaceEntitySession
+            {
+                UserEntityId = new EntityId("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+                ComputerEntityId = new EntityId("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+                UserComputerProfileEntityId = LocalProfileId,
+            };
+            await using var composition = new WorkspacesTransportComposition(
+                data, session, process, runningAgentChats: Mock.Of<IRunningAgentChatTable>());
+            await using var channel = new StubMessageChannel();
+            using var request = JsonDocument.Parse(
+                """{"type":"attach-agent-session","prompt":"private-sentinel"}""");
+
+            await composition.LocalListeners.OnChannelOpenAsync(request.RootElement, channel, Ct());
+
+            var contents = ProcessLogTestFile.ReadAll(directory);
+            Assert.Equal(1, contents.Split("Remote agent-session attach failed", StringSplitOptions.None).Length - 1);
+            Assert.DoesNotContain("private-sentinel", contents, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
 
     [Fact]
     public async Task Composition_TransportFactoryRegistry_BuildsLocalTransportFactory()
@@ -145,6 +180,7 @@ public sealed class WorkspacesTransportCompositionTests
         await using var composition = new WorkspacesTransportComposition(
             dataAccessLayer,
             session,
+            NullLoggerFactory.Instance,
             runningAgentChats: Mock.Of<IRunningAgentChatTable>());
         using var localDescriptor = JsonDocument.Parse("""{"type":"local"}""");
         await using var transport = await composition.TransportFactoryRegistry.ConnectToAsync(
@@ -252,7 +288,7 @@ public sealed class WorkspacesTransportCompositionTests
             "http://localhost:5282",
             LocalProfileId.ToString());
 
-        await using var composition = new WorkspacesTransportComposition(dataAccessLayer, session, [hubFactory]);
+        await using var composition = new WorkspacesTransportComposition(dataAccessLayer, session, NullLoggerFactory.Instance, [hubFactory]);
 
         var exposed = Assert.Single(composition.HubFactories);
         Assert.Same(hubFactory, exposed);
@@ -269,7 +305,7 @@ public sealed class WorkspacesTransportCompositionTests
             ComputerEntityId = new EntityId("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
             UserComputerProfileEntityId = LocalProfileId,
         };
-        await using var composition = new WorkspacesTransportComposition(dataAccessLayer, session);
+        await using var composition = new WorkspacesTransportComposition(dataAccessLayer, session, NullLoggerFactory.Instance);
         var registrationChannel = new StubMessageChannel();
         using var registrationRequest = JsonDocument.Parse(
             """{"type":"reverse-register","entity-id":"22222222-2222-4222-8222-222222222222"}""");
@@ -314,6 +350,7 @@ public sealed class WorkspacesTransportCompositionTests
         return new WorkspacesTransportComposition(
             dataAccessLayer,
             session,
+            NullLoggerFactory.Instance,
             hubFactories: null,
             agentServices: agentServices,
             registryProvider: registryProvider);

@@ -17,7 +17,8 @@ var builder = WebApplication.CreateBuilder(args);
 // directory (content root / PHANTOM_WORKSPACES_LOG_DIRECTORY override) and registers the shared
 // #1086 rolling file provider against it — independent of the main .exe's single-resolution path.
 var logDirectory = HostLogDirectoryResolver.Resolve(builder.Environment.ContentRootPath);
-builder.Logging.AddProvider(new RollingFileLoggerProvider(logDirectory, HostFileLoggerFactory.DefaultRetention));
+builder.Logging.Services.AddSingleton<Microsoft.Extensions.Logging.ILoggerProvider>(
+    _ => new RollingFileLoggerProvider(logDirectory, HostFileLoggerFactory.DefaultRetention));
 
 var dataAccessLayer = await WebServerDataAccessLayerFactory.CreateDefaultAsync();
 builder.Services.AddSingleton<IDataAccessLayer>(dataAccessLayer);
@@ -36,7 +37,11 @@ transportFactoryRegistry.Register(new ReverseHttpForwardingTransportFactory());
 builder.Services.AddSingleton<ITransportFactoryRegistry>(transportFactoryRegistry);
 builder.Services.AddSingleton<HttpServerTransportFactory>();
 
-builder.Services.AddSingleton<AgentChatSessionCache>();
+builder.Services.AddSingleton(sp => new AgentChatSessionCache(new AgentServices
+{
+    LoggerFactory = sp.GetRequiredService<ILoggerFactory>(),
+    AgentPersistenceStoreOverride = sp.GetRequiredService<IAgentPersistenceStore>(),
+}));
 
 var localTrustedExecutor = new LocalTrustedExecutor();
 builder.Services.AddSingleton(localTrustedExecutor);

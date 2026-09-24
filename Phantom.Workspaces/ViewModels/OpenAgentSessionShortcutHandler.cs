@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Collections.Concurrent;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
@@ -19,6 +20,7 @@ using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Llm.SlashCommands;
 using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Services.Logging;
 using Phantom.Workspaces.Services.Navigation;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Utilities;
@@ -34,6 +36,14 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
     private readonly IAgentSessionOwnerDecisionProvider ownerDecisionProvider;
     private readonly ITransportFactoryRegistry? transportFactoryRegistry;
     private readonly Func<Action, Task> invokeOnUiThreadAsync;
+    private readonly ConcurrentDictionary<string, ObservableLoggerFactory> sessionLoggers =
+        new(StringComparer.Ordinal);
+
+    internal ObservableLoggerFactory GetSessionLogger(string sessionId)
+        => this.sessionLoggers.GetOrAdd(sessionId, static _ => new ObservableLoggerFactory());
+
+    internal void RegisterSessionLogger(string sessionId, ObservableLoggerFactory memoryFactory)
+        => this.sessionLoggers.TryAdd(sessionId, memoryFactory);
 
     /// <summary>
     /// The running-agent-chat table used by this handler. Exposed so co-located view models that
@@ -337,7 +347,10 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             ? ReadStringDictionary(pvElement)
             : null;
 
-        var agentServices = await this.agentSessionShortcutContext.CreateAgentServicesAsync(mainWindowViewModel);
+        var memoryFactory = this.GetSessionLogger(agentSessionId!);
+        var agentServices = await this.agentSessionShortcutContext.CreateAgentServicesAsync(
+            mainWindowViewModel,
+            new SessionTeeLoggerFactory(mainWindowViewModel.ApplicationServices.LoggerFactory, memoryFactory));
         var acquisition = await this.OpenPersistedSessionAsync(
             mainWindowViewModel,
             agentSessionEntityData,
@@ -398,28 +411,31 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
 
     internal async Task<AgentSessionWorkspaceTabViewModel> CreateAgentSessionTabWithRemoteProfileAsync(
         CreateAgentSessionTabRequest request,
-        string? remoteProfileDisplayName)
+        string? remoteProfileDisplayName,
+        ObservableLoggerFactory sessionMemoryFactory)
     {
         ArgumentNullException.ThrowIfNull(request);
         return await this.CreateAgentSessionTabAsync(
             request.MainWindowViewModel,
             request.AgentSessionEntity,
             request.AgentChat,
-            remoteProfileDisplayName);
+            remoteProfileDisplayName,
+            sessionMemoryFactory);
     }
 
     private async Task<AgentSessionWorkspaceTabViewModel> CreateAgentSessionTabAsync(
         MainWindowViewModel mainWindowViewModel,
         SubscribedEntityViewModel agentSessionEntity,
         IAgentChat agentChat,
-        string? remoteProfileDisplayName)
+        string? remoteProfileDisplayName,
+        ObservableLoggerFactory? sessionMemoryFactory = null)
     {
         // #1122: Capture the UI-thread scheduler synchronously before any awaits so it truly
         // reflects the calling thread's SynchronizationContext, then thread it through to
         // AgentViewModel so its sub-agent restore continuation mutates UI-bound state on the
         // UI thread.
         var foregroundScheduler = SynchronizationContextTaskScheduler.FromCurrent();
-        var loggerFactory = new ObservableLoggerFactory();
+        var loggerFactory = sessionMemoryFactory ?? this.GetSessionLogger(agentChat.Information.AgentSessionId);
         var tab = new AgentSessionWorkspaceTabViewModel
         {
             Id = agentSessionEntity.EntityId.ToString(),
@@ -466,8 +482,10 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             ? ReadStringDictionary(pvElement)
             : null;
 
-        var loggerFactory = new ObservableLoggerFactory();
-        var agentServices = await this.agentSessionShortcutContext.CreateAgentServicesAsync(mainWindowViewModel, loggerFactory);
+        var loggerFactory = this.GetSessionLogger(agentSessionId!);
+        var agentServices = await this.agentSessionShortcutContext.CreateAgentServicesAsync(
+            mainWindowViewModel,
+            new SessionTeeLoggerFactory(mainWindowViewModel.ApplicationServices.LoggerFactory, loggerFactory));
 
         // Extract display-name and description from entity data to populate AgentChat properties
         string? entityDisplayName = null;

@@ -513,6 +513,7 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
             var daemonComposition = new WorkspacesTransportComposition(
                 data,
                 WorkspaceSession(DaemonProfile),
+                hostServices.LoggerFactory!,
                 agentServices: hostServices,
                 registryProvider: new TransportFactoryRegistryProvider(daemonRouting),
                 runningAgentChats: ownerTable);

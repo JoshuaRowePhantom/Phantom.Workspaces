@@ -1,5 +1,6 @@
 using System;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Phantom.Workspaces.Services.Logging;
 
@@ -25,6 +26,7 @@ public static class HostFileLoggerFactory
 
         var effectiveRetention = retention ?? DefaultRetention;
         return LoggerFactory.Create(builder =>
-            builder.AddProvider(new RollingFileLoggerProvider(logDirectory, effectiveRetention)));
+            builder.Services.AddSingleton<ILoggerProvider>(
+                _ => new RollingFileLoggerProvider(logDirectory, effectiveRetention)));
     }
 }

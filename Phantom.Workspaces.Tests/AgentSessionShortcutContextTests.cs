@@ -41,7 +41,7 @@ public sealed class AgentSessionShortcutContextTests
 
         var shortcutContext = new AgentSessionShortcutContext();
 
-        var services = await shortcutContext.CreateAgentServicesAsync(viewModel);
+        var services = await shortcutContext.CreateAgentServicesAsync(viewModel, Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
 
         // The GUI path stashes the resolved host context on the returned AgentServices (issue #1236).
         var actual = Assert.IsType<CurrentSessionContext>(services.CurrentSessionContext);
@@ -144,7 +144,7 @@ public sealed class AgentSessionShortcutContextTests
         Assert.DoesNotContain(updateResult.EntityResults, static result => result.UpdateState == UpdateState.Failed);
 
         var shortcutContext = new AgentSessionShortcutContext();
-        var services = await shortcutContext.CreateAgentServicesAsync(viewModel);
+        var services = await shortcutContext.CreateAgentServicesAsync(viewModel, Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
         Assert.NotNull(services.ToolResourceFactory);
 
         var tool = await services.ToolResourceFactory!.ResolveToolResourceAsync(
@@ -309,6 +309,7 @@ public sealed class AgentSessionShortcutContextTests
         => new(
             MainWindowIntegrationTests.CreateTestRunningAgentChatTable(),
             new AgentPersistenceStoreCache(),
+            Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
             credentialPicker: new NullCredentialPicker(),
             allowedSecretsStore: new AllowedSecretsStore(new AllowedSecretsStoreConfiguration()),
             platformSecretStore: new NullPlatformSecretStore(),
@@ -334,7 +335,7 @@ public sealed class AgentSessionShortcutContextTests
         await viewModel.InitializeAsync();
 
         var shortcutContext = new AgentSessionShortcutContext();
-        var services = await shortcutContext.CreateAgentServicesAsync(viewModel);
+        var services = await shortcutContext.CreateAgentServicesAsync(viewModel, Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
 
         Assert.NotNull(services.McpOAuthOptions);
         Assert.Same(sentinel, services.McpOAuthOptions);
@@ -350,7 +351,7 @@ public sealed class AgentSessionShortcutContextTests
         await viewModel.InitializeAsync();
 
         var shortcutContext = new AgentSessionShortcutContext();
-        var services = await shortcutContext.CreateAgentServicesAsync(viewModel);
+        var services = await shortcutContext.CreateAgentServicesAsync(viewModel, Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
 
         // Same process-wide instances as the app-level path (both flow through
         // AgentServicesComposition.ComposeHostServices), not a hand-assembled bundle.

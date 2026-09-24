@@ -127,7 +127,8 @@ public partial class App : Application
     private void WireTrayAndUpdates(
         IClassicDesktopStyleApplicationLifetime desktop,
         Window mainWindow,
-        WorkspacesConfiguration configuration)
+        WorkspacesConfiguration configuration,
+        Microsoft.Extensions.Logging.ILoggerFactory loggerFactory)
     {
         void RequestShutdown() => Dispatcher.UIThread.Post(() =>
         {
@@ -135,7 +136,7 @@ public partial class App : Application
             desktop.Shutdown();
         });
 
-        this.updateController = UpdateControllerFactory.TryCreate(configuration, RequestShutdown);
+        this.updateController = UpdateControllerFactory.TryCreate(configuration, RequestShutdown, loggerFactory);
         if (this.updateController is null)
         {
             return;
@@ -308,7 +309,7 @@ public partial class App : Application
             var mcpOAuthOptions = Services.Mcp.McpOAuthComposition.CreateOptions(secretProvider, platformStore, loggerFactory);
             var agentChatFactory = new AgentChatFactory(
                 agentPersistenceStore,
-                Services.AgentServicesComposition.ComposeHostServices(secretProvider, mcpOAuthOptions),
+                Services.AgentServicesComposition.ComposeHostServices(secretProvider, mcpOAuthOptions, loggerFactory),
                 foregroundScheduler);
             var transportFactoryRegistryProvider = new Services.TransportFactoryRegistryProvider();
             var applicationServices = new ApplicationServices(
@@ -317,7 +318,7 @@ public partial class App : Application
                     Services.AgentSessionRuntimeContextFactory.FromProvider(transportFactoryRegistryProvider),
                     loggerFactory.CreateLogger<RunningAgentChatTable>()),
                 agentPersistenceStoreCache,
-                loggerFactory: loggerFactory,
+                loggerFactory,
                 logDirectoryProvider: logDirectoryProvider,
                 configurationPersistence: persistenceService,
                 secretProvider: secretProvider,
@@ -358,7 +359,7 @@ public partial class App : Application
                     mainWindow.Icon = TrayIconImageFactory.Create(updateAvailable: false);
                     desktop.MainWindow = mainWindow;
                     mainWindow.Show();
-                    this.WireTrayAndUpdates(desktop, mainWindow, configuration ?? new WorkspacesConfiguration());
+                    this.WireTrayAndUpdates(desktop, mainWindow, configuration ?? new WorkspacesConfiguration(), loggerFactory);
                 },
                 closeSplash: () => loadingWindow.Close());
 

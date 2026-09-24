@@ -29,11 +29,13 @@ public static class AgentServicesComposition
     /// <c>App.axaml.cs</c> for the app-level <c>AgentChatFactory</c> seed and reused by
     /// <see cref="ComposeSessionServicesAsync"/> so the session path shares the same instances.
     /// </summary>
-    public static AgentServices ComposeHostServices(object? secretProvider, object? mcpOAuthOptions)
+    public static AgentServices ComposeHostServices(
+        object? secretProvider, object? mcpOAuthOptions, ILoggerFactory loggerFactory)
         => new()
         {
             SecretProvider = secretProvider,
             McpOAuthOptions = mcpOAuthOptions,
+            LoggerFactory = loggerFactory,
             ProcessExecutor = new ProcessExecutor(),
             TrustProfilePolicyCompiler = new MxcTrustProfilePolicyCompiler(),
             RemoteCopilotProviderResolver = new EnvironmentRemoteCopilotProviderResolver(),
@@ -48,8 +50,8 @@ public static class AgentServicesComposition
     public static async Task<AgentServices> ComposeSessionServicesAsync(
         MainWindowViewModel mainWindowViewModel,
         IAgentPersistenceStore agentPersistenceStore,
+        ILoggerFactory loggerFactory,
         string? userComputerProfileOverride = null,
-        ObservableLoggerFactory? loggerFactory = null,
         CancellationToken cancellationToken = default)
         => await ComposeServicesAsync(
             mainWindowViewModel,
@@ -65,7 +67,7 @@ public static class AgentServicesComposition
     /// </summary>
     public static async Task<AgentServices> ComposeRuntimeHostServicesAsync(
         MainWindowViewModel mainWindowViewModel,
-        ILoggerFactory? loggerFactory = null,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken = default)
         => await ComposeServicesAsync(
             mainWindowViewModel,
@@ -78,7 +80,7 @@ public static class AgentServicesComposition
         MainWindowViewModel mainWindowViewModel,
         IAgentPersistenceStore? agentPersistenceStore,
         string? userComputerProfileOverride,
-        ILoggerFactory? loggerFactory,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
         var dataAccessLayer = mainWindowViewModel.EntityBroker.EntityRepository.DataAccessLayer;
@@ -136,10 +138,10 @@ public static class AgentServicesComposition
         // path does.
         return ComposeHostServices(
             applicationServices.SecretProvider,
-            applicationServices.McpOAuthOptions) with
+            applicationServices.McpOAuthOptions,
+            loggerFactory) with
         {
             AgentPersistenceStoreOverride = agentPersistenceStore,
-            LoggerFactory = loggerFactory,
             ToolsetFactory = toolsetFactory,
             ToolResourceFactory = toolResourceFactory,
             AccountUpsertService = accountUpsertService,

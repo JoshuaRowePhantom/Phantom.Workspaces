@@ -14,6 +14,8 @@ using Phantom.Workspaces.Llm.Core.Manifest;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Services.Logging;
+using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.ViewModels;
 using Xunit;
@@ -275,7 +277,7 @@ public sealed class OpenAgentSessionShortcutHandlerTests
             new AgentServices(),
             SynchronizationContextTaskScheduler.FromCurrent());
         var table = new RunningAgentChatTable(runningChatFactory, spyRuntimeFactory);
-        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache(), Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
         await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
 
@@ -352,6 +354,8 @@ public sealed class OpenAgentSessionShortcutHandlerTests
             Assert.Equal("user-computer-profile", workerBinding.GetProperty("type").GetString());
             Assert.Equal(WorkerProfileEntityId, workerBinding.GetProperty("entity-id").GetString());
             Assert.Same(registry, lastContext.TransportFactoryRegistry);
+            Assert.Same(result.Value.loggerFactory,
+                handler.GetSessionLogger(result.Value.agent.AgentSessionId));
         }
         finally
         {
@@ -370,6 +374,8 @@ public sealed class OpenAgentSessionShortcutHandlerTests
     [AvaloniaFact(Timeout = 30_000)]
     public async Task AutoResume_UsesPersistedSplitBindings()
     {
+        var directory = Path.Combine(AppContext.BaseDirectory, "resume-logging-tests", Guid.NewGuid().ToString("N"));
+        using var process = HostFileLoggerFactory.Create(directory);
         // Regression pin for #1481 — the auto-resume path must go through the same hydrator, so a
         // persisted split-executor session that auto-resumes reconstructs the same runtime context
         // as first-open.
@@ -383,7 +389,7 @@ public sealed class OpenAgentSessionShortcutHandlerTests
             new AgentServices(),
             SynchronizationContextTaskScheduler.FromCurrent());
         var table = new RunningAgentChatTable(runningChatFactory, spyRuntimeFactory);
-        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache(), process);
         await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
 
@@ -436,6 +442,16 @@ public sealed class OpenAgentSessionShortcutHandlerTests
             Assert.Equal("user-computer-profile", workerBinding.GetProperty("type").GetString());
             Assert.Equal(WorkerProfileEntityId, workerBinding.GetProperty("entity-id").GetString());
             Assert.Same(registry, lastContext.TransportFactoryRegistry);
+            var memory = handler.GetSessionLogger(lease.AgentChat.Information.AgentSessionId);
+            var request = typeof(AgentChat)
+                .GetField("request", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .GetValue(lease.LocalAgentChat!)!;
+            var services = (AgentServices)request.GetType().GetProperty("AgentServices")!.GetValue(request)!;
+            Assert.IsType<SessionTeeLoggerFactory>(services.LoggerFactory);
+            services.LoggerFactory!.CreateLogger("SafeLifecycle").LogInformation("resume-stage-safe");
+            Assert.Single(memory.Entries, entry => entry.Contains("resume-stage-safe", StringComparison.Ordinal));
+            Assert.Equal(1, ProcessLogTestFile.ReadAll(directory)
+                .Split("resume-stage-safe", StringSplitOptions.None).Length - 1);
         }
         finally
         {
@@ -443,6 +459,9 @@ public sealed class OpenAgentSessionShortcutHandlerTests
             {
                 await lease.DisposeAsync();
             }
+            process.Dispose();
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
         }
     }
 

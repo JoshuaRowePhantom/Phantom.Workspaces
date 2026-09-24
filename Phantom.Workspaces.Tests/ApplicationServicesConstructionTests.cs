@@ -1,6 +1,7 @@
 using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Secrets;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Phantom.Workspaces.Tests;
 
@@ -11,7 +12,8 @@ public sealed class ApplicationServicesConstructionTests
     {
         var services = new ApplicationServices(
             null!,
-            new AgentPersistenceStoreCache());
+            new AgentPersistenceStoreCache(),
+            NullLoggerFactory.Instance);
 
         Assert.NotNull(services.SecretProvider);
         Assert.NotNull(services.CredentialPicker);
@@ -32,6 +34,7 @@ public sealed class ApplicationServicesConstructionTests
         var services = new ApplicationServices(
             null!,
             new AgentPersistenceStoreCache(),
+            NullLoggerFactory.Instance,
             secretProvider: secretProvider,
             credentialPicker: credentialPicker,
             allowedSecretsStore: allowedSecretsStore,

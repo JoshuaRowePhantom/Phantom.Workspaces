@@ -44,6 +44,7 @@ public sealed class ConfigurationPersistenceServiceTests
             var applicationServices = new ApplicationServices(
                 MainWindowIntegrationTests.CreateTestRunningAgentChatTable(),
                 new AgentPersistenceStoreCache(),
+                Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
                 configurationPersistence: service);
             Assert.Same(service, applicationServices.ConfigurationStore);
         }

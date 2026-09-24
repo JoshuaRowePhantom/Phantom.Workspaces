@@ -12,8 +12,8 @@ public sealed class ApplicationServices
     public ApplicationServices(
         IRunningAgentChatTable runningAgentChats,
         IAgentPersistenceStoreCache agentPersistenceStoreCache,
+        ILoggerFactory loggerFactory,
         IUpdateController? updateController = null,
-        ILoggerFactory? loggerFactory = null,
         ILogDirectoryProvider? logDirectoryProvider = null,
         ConfigurationPersistenceService? configurationPersistence = null,
         ISecretProvider? secretProvider = null,
@@ -83,11 +83,9 @@ public sealed class ApplicationServices
     public IUpdateController? UpdateController { get; }
 
     /// <summary>
-    /// The process logger factory backed by the #1086 rolling file provider, or <c>null</c> when no
-    /// file logging has been wired (for example in tests), in which case consumers fall back to a
-    /// null logger.
+    /// The process logger factory backed by the rolling file provider.
     /// </summary>
-    public ILoggerFactory? LoggerFactory { get; }
+    public ILoggerFactory LoggerFactory { get; }
 
     /// <summary>The single log-directory resolver for this process, or <c>null</c> when unwired.</summary>
     public ILogDirectoryProvider? LogDirectoryProvider { get; }

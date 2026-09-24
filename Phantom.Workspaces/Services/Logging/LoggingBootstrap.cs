@@ -1,5 +1,6 @@
 using System;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Phantom.Workspaces.Services.Logging;
 
@@ -25,6 +26,7 @@ public static class LoggingBootstrap
 
         var directory = logDirectoryProvider.LogDirectory;
         return LoggerFactory.Create(builder =>
-            builder.AddProvider(new RollingFileLoggerProvider(directory, DefaultRetention)));
+            builder.Services.AddSingleton<ILoggerProvider>(
+                _ => new RollingFileLoggerProvider(directory, DefaultRetention)));
     }
 }
