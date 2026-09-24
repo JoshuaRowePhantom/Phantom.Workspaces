@@ -139,9 +139,7 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
                 {
                     this.initializationFailed = true;
                     logger?.LogError(
-                        initialization.Exception?.GetBaseException(),
-                        "Failed to open MCP server {ServerName}.",
-                        serverName ?? "(mcp server)");
+                        "Failed to open MCP server; category open-failed.");
                 }
 
                 this.cachedTools = await initialization.ConfigureAwait(false);

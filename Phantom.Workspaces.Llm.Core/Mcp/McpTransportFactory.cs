@@ -224,13 +224,9 @@ internal static class McpTransportFactory
 
         var oauthOptions = ResolveOAuthOptions(services);
 
-        // Log the OAuth wiring endpoint only. Never log client id/secret, tokens, scopes values, or
-        // the redirect URI (issue #1408): only the transport endpoint host/path is safe.
+        // An endpoint host/path and the server's display name are private, even without credentials.
         var logger = loggerFactory?.CreateLogger("Phantom.Workspaces.Llm.Mcp.McpTransportFactory");
-        logger?.LogInformation(
-            "Wiring interactive OAuth transport for MCP server '{ServerName}' at endpoint {Endpoint}.",
-            displayName,
-            endpointUri.GetLeftPart(UriPartial.Path));
+        logger?.LogInformation("MCP OAuth transport configured; mode interactive.");
 
         string? clientId;
         string? clientSecret;
@@ -361,10 +357,7 @@ internal static class McpTransportFactory
         }
 
         var logger = loggerFactory?.CreateLogger("Phantom.Workspaces.Llm.Mcp.McpTransportFactory");
-        logger?.LogInformation(
-            "Wiring host-pinned Entra OAuth transport for MCP server '{ServerName}' at endpoint {Endpoint}.",
-            displayName,
-            endpointUri.GetLeftPart(UriPartial.Path));
+        logger?.LogInformation("MCP OAuth transport configured; mode host-pinned.");
 
         var clientId = await AgentFactory.ResolveOptionalSecretOrEnvAsync(
             oauth.ClientId, services, serverName, cancellationToken).ConfigureAwait(false);
@@ -431,31 +424,24 @@ internal static class McpTransportFactory
         ArgumentNullException.ThrowIfNull(tool);
         ArgumentNullException.ThrowIfNull(connectAsync);
 
-        var serverLabel = serverName ?? "(mcp server)";
-
         try
         {
             // Log the DCR-first attempt and its outcome so an operator can see which client-id strategy
-            // won. Only the server name is logged — never a client id/secret or token (#1446/#1408).
-            logger?.LogInformation(
-                "Connecting to MCP server {ServerName} using dynamic client registration.", serverLabel);
+            // won without retaining any server name, endpoint, client id, or token.
+            logger?.LogInformation("MCP dynamic client registration; outcome started.");
             var client = await connectAsync(null, cancellationToken).ConfigureAwait(false);
-            logger?.LogInformation(
-                "Connected to MCP server {ServerName} via dynamic client registration.", serverLabel);
+            logger?.LogInformation("MCP dynamic client registration; outcome connected.");
             return client;
         }
         catch (Exception ex) when (ShouldFallBackToStaticClientId(tool, ex))
         {
             logger?.LogWarning(
-                "Dynamic client registration was rejected for MCP server {ServerName}; retrying once with the default public client id.",
-                serverLabel);
+                "MCP dynamic client registration; outcome rejected; retrying with the default public client id.");
 
             // Single retry with the static public client id. No further fallback is attempted, so a
             // second failure propagates unchanged.
             var client = await connectAsync(DefaultDynamicRegistrationFallbackClientId, cancellationToken).ConfigureAwait(false);
-            logger?.LogInformation(
-                "Connected to MCP server {ServerName} using the default public client id (dynamic client registration fallback).",
-                serverLabel);
+            logger?.LogInformation("MCP dynamic client registration; outcome connected-with-public-client.");
             return client;
         }
     }

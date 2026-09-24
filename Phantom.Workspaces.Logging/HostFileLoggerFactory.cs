@@ -28,14 +28,7 @@ public static class HostFileLoggerFactory
         var effectiveRetention = retention ?? DefaultRetention;
         return LoggerFactory.Create(builder =>
         {
-            builder.SetMinimumLevel(LogLevel.Information);
-            if (verboseTransportMetadataLogging)
-            {
-                builder.AddFilter("Phantom.Workspaces.Transport.Logging", LogLevel.Debug);
-                builder.AddFilter("Phantom.Workspaces.Transport.ReverseHttp", LogLevel.Debug);
-                builder.AddFilter("Phantom.Workspaces.Llm.HttpRequestLoggingHandler", LogLevel.Debug);
-                builder.AddFilter("Phantom.Workspaces.Llm.Mcp.ProcessExecutorBackedClientTransport", LogLevel.Debug);
-            }
+            SafeLoggingFilters.Configure(builder, verboseTransportMetadataLogging);
             builder.Services.AddSingleton<ILoggerProvider>(
                 _ => new RollingFileLoggerProvider(logDirectory, effectiveRetention));
         });

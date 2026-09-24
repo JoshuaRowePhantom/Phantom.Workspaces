@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Transport.Logging;
+using Phantom.Workspaces.Services.Logging;
 
 namespace Phantom.Workspaces.Agent.Gui;
 
@@ -87,7 +88,8 @@ internal sealed class ObservableLogger(ObservableLoggerFactory factory, string c
 {
     public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 
-    public bool IsEnabled(LogLevel logLevel) => logLevel switch
+    public bool IsEnabled(LogLevel logLevel) => SafeLoggingFilters.IsUntrustedSdkCategory(category)
+        ? false : logLevel switch
     {
         >= LogLevel.Information and < LogLevel.None => true,
         LogLevel.Debug => factory.VerboseMetadataEnabled && (

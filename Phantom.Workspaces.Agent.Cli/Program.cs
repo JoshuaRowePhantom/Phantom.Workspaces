@@ -120,9 +120,9 @@ public sealed class AgentCliApp : IDisposable
             catch (OperationCanceledException) when (this.appCts.IsCancellationRequested)
             {
             }
-            catch (Exception error)
+            catch (Exception)
             {
-                this.WriteLogLine($"Unable to interrupt agent: {error.Message}");
+                this.WriteLogLine("Unable to interrupt agent; category failure.");
             }
         };
         Console.CancelKeyPress += cancelHandler;
@@ -179,14 +179,7 @@ public sealed class AgentCliApp : IDisposable
         var logDirectory = HostLogDirectoryResolver.Resolve(AppContext.BaseDirectory);
         return LoggerFactory.Create(builder =>
         {
-            builder.SetMinimumLevel(LogLevel.Information);
-            if (TransportMetadataLoggingOptions.FromEnvironment().Enabled)
-            {
-                builder.AddFilter("Phantom.Workspaces.Transport.Logging", LogLevel.Debug);
-                builder.AddFilter("Phantom.Workspaces.Transport.ReverseHttp", LogLevel.Debug);
-                builder.AddFilter("Phantom.Workspaces.Llm.HttpRequestLoggingHandler", LogLevel.Debug);
-                builder.AddFilter("Phantom.Workspaces.Llm.Mcp.ProcessExecutorBackedClientTransport", LogLevel.Debug);
-            }
+            SafeLoggingFilters.Configure(builder, TransportMetadataLoggingOptions.FromEnvironment().Enabled);
             builder.ClearProviders();
             builder.AddProvider(new InteractiveConsoleLoggerProvider(onLogLine));
             builder.Services.AddSingleton<ILoggerProvider>(

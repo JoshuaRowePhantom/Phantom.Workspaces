@@ -17,12 +17,19 @@ public sealed class ObservableLoggerFactoryTests
         trace.LogInformation("lifecycle-info");
         unrelated.LogDebug("unapproved-debug-secret");
         unrelated.LogTrace("unapproved-trace-secret");
+        factory.CreateLogger("ModelContextProtocol.Client.McpClient")
+            .LogInformation("private-sdk-server");
+        factory.CreateLogger("GitHub.Copilot.CopilotClient")
+            .LogInformation("private-sdk-prompt");
+        factory.CreateLogger("Microsoft.Extensions.AI.LoggingChatClient")
+            .LogInformation("private-sdk-credential");
 
         Assert.Equal(enabled, factory.Entries.Any(entry =>
             entry.Contains("safe-metadata", StringComparison.Ordinal)));
         Assert.Contains(factory.Entries, entry =>
             entry.Contains("lifecycle-info", StringComparison.Ordinal));
         Assert.DoesNotContain(factory.Entries, entry =>
-            entry.Contains("unapproved", StringComparison.Ordinal));
+            entry.Contains("unapproved", StringComparison.Ordinal)
+            || entry.Contains("private-sdk", StringComparison.Ordinal));
     }
 }

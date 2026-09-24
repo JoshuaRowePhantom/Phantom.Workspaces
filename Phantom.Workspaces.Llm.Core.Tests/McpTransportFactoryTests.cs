@@ -13,6 +13,7 @@ using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Auth;
 using Phantom.Workspaces.Llm.Mcp;
 using Phantom.Workspaces.Llm.Secrets;
+using Phantom.Workspaces.Services.Logging;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
@@ -24,6 +25,33 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 /// </summary>
 public sealed class McpTransportFactoryTests
 {
+    [Fact]
+    public async Task CreateMcpTransport_PrivateOAuthEndpoint_LogsNoHostPathOrServerName()
+    {
+        var directory = Path.Combine(AppContext.BaseDirectory, "mcp-oauth-log-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var process = HostFileLoggerFactory.Create(directory);
+            _ = await McpTransportFactory.CreateMcpTransportAsync(
+                OAuthTool(endpoint: "https://private-oauth-host.invalid/private-path",
+                    serverName: "private-server-name", clientId: "public-client"),
+                null, process, CancellationToken.None);
+            var file = Assert.Single(Directory.GetFiles(directory, "phantom-workspaces-*.log"));
+            using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(stream);
+            var contents = reader.ReadToEnd();
+            Assert.Contains("MCP OAuth transport configured", contents, StringComparison.Ordinal);
+            Assert.DoesNotContain("private-oauth-host", contents, StringComparison.Ordinal);
+            Assert.DoesNotContain("private-path", contents, StringComparison.Ordinal);
+            Assert.DoesNotContain("private-server-name", contents, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private const string HttpEndpoint = "https://example.test/mcp";
 
     private static Task<IClientTransport> CreateAsync(McpTool tool, AgentServices? services = null)
@@ -511,19 +539,20 @@ public sealed class McpTransportFactoryTests
         Assert.Contains(logger.Entries, e =>
             e.Level == LogLevel.Information
             && e.Message.Contains("dynamic client registration", StringComparison.OrdinalIgnoreCase)
-            && e.Message.Contains("oauth-server", StringComparison.Ordinal));
+            && e.Message.Contains("outcome started", StringComparison.Ordinal));
+        Assert.DoesNotContain(logger.Entries, e =>
+            e.Message.Contains("oauth-server", StringComparison.Ordinal));
         Assert.Contains(logger.Entries, e =>
             e.Level == LogLevel.Warning && e.Message.Contains("rejected", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(logger.Entries, e =>
             e.Level == LogLevel.Information
-            && e.Message.Contains("default public client id", StringComparison.OrdinalIgnoreCase));
+            && e.Message.Contains("connected-with-public-client", StringComparison.Ordinal));
     }
 
     [Fact]
     public async Task CreateOAuthTransport_Logs_OmitClientSecretAndTokens()
     {
-        // #1446/#1408: wiring an interactive OAuth transport logs the endpoint but never the configured
-        // client secret or client id.
+        // OAuth configuration logs only the safe mode, not its endpoint or server name.
         var loggerFactory = new CapturingLoggerFactory();
         var tool = OAuthTool(clientId: "client-xyz-value", clientSecret: "super-secret-value");
 
@@ -534,6 +563,9 @@ public sealed class McpTransportFactoryTests
             e.Message.Contains("super-secret-value", StringComparison.Ordinal));
         Assert.DoesNotContain(loggerFactory.Entries, e =>
             e.Message.Contains("client-xyz-value", StringComparison.Ordinal));
+        Assert.DoesNotContain(loggerFactory.Entries, e =>
+            e.Message.Contains(HttpEndpoint, StringComparison.Ordinal)
+            || e.Message.Contains("oauth-server", StringComparison.Ordinal));
     }
 
     [Fact]

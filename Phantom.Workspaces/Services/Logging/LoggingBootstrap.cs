@@ -31,14 +31,7 @@ public static class LoggingBootstrap
         var enabled = (metadataLogging ?? TransportMetadataLoggingOptions.FromEnvironment()).Enabled;
         return LoggerFactory.Create(builder =>
         {
-            builder.SetMinimumLevel(LogLevel.Information);
-            if (enabled)
-            {
-                builder.AddFilter("Phantom.Workspaces.Transport.Logging", LogLevel.Debug);
-                builder.AddFilter("Phantom.Workspaces.Transport.ReverseHttp", LogLevel.Debug);
-                builder.AddFilter("Phantom.Workspaces.Llm.HttpRequestLoggingHandler", LogLevel.Debug);
-                builder.AddFilter("Phantom.Workspaces.Llm.Mcp.ProcessExecutorBackedClientTransport", LogLevel.Debug);
-            }
+            SafeLoggingFilters.Configure(builder, enabled);
             builder.Services.AddSingleton<ILoggerProvider>(
                 _ => new RollingFileLoggerProvider(directory, DefaultRetention));
         });

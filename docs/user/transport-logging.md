@@ -12,6 +12,8 @@ another process received or executed the request. Worker `request-received` is l
 after the worker listener is entered. HTTP traces report only method, status and stream byte
 counts. Neither verbose mode nor the legacy CLI `--log-chat` / `--log-http-requests` flags
 enable request bodies, prompts, headers, URLs, stderr text or exception rendering.
+Untrusted SDK logging categories are suppressed at the file and session-memory sinks;
+the product-owned safe lifecycle and metadata categories remain enabled.
 
 The process rolling file keeps up to seven days of safe records; an in-editor session view
 keeps only recent entries, not the complete archive. Default-on tracing increases file

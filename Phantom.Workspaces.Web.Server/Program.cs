@@ -20,14 +20,8 @@ var builder = WebApplication.CreateBuilder(args);
 var logDirectory = HostLogDirectoryResolver.Resolve(builder.Environment.ContentRootPath);
 builder.Logging.Services.AddSingleton<Microsoft.Extensions.Logging.ILoggerProvider>(
     _ => new RollingFileLoggerProvider(logDirectory, HostFileLoggerFactory.DefaultRetention));
-builder.Logging.SetMinimumLevel(LogLevel.Information);
+SafeLoggingFilters.Configure(builder.Logging, TransportMetadataLoggingOptions.FromEnvironment().Enabled);
 builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
-if (TransportMetadataLoggingOptions.FromEnvironment().Enabled)
-{
-    builder.Logging.AddFilter("Phantom.Workspaces.Transport.Logging", LogLevel.Debug);
-    builder.Logging.AddFilter("Phantom.Workspaces.Transport.ReverseHttp", LogLevel.Debug);
-    builder.Logging.AddFilter("Phantom.Workspaces.Llm.HttpRequestLoggingHandler", LogLevel.Debug);
-}
 
 var dataAccessLayer = await WebServerDataAccessLayerFactory.CreateDefaultAsync();
 builder.Services.AddSingleton<IDataAccessLayer>(dataAccessLayer);

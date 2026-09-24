@@ -10,6 +10,50 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class AgentChatLogsIntegrationTests
 {
+    [Fact]
+    public async Task AgentChat_McpFailure_LogsOnlySafeCategoryToMemoryAndRollingFile()
+    {
+        var directory = Path.Combine(AppContext.BaseDirectory, "chat-log-view-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var process = HostFileLoggerFactory.Create(directory);
+            using var memory = new ObservableLoggerFactory();
+            using var tee = new SessionTeeLoggerFactory(process, memory);
+            var definition = AgentDefinitionLoader.LoadAgentFromJson(
+                """
+                {
+                  "kind":"prompt","name":"safe-mcp",
+                  "model":{"id":"echo","provider":"echo","apiType":"Echo"},
+                  "tools":[{"kind":"mcp","name":"private-server-name",
+                    "serverName":"private-server-name",
+                    "connection":{"kind":"Anonymous","endpoint":"http://127.0.0.1:1"}}]
+                }
+                """);
+            await using var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+            {
+                AgentDefinition = definition,
+                AgentServices = new AgentServices { LoggerFactory = tee },
+            });
+
+            await chat.Initialization;
+
+            var file = ProcessLogTestFile.ReadAll(directory);
+            Assert.Contains("Failed to open MCP server", file, StringComparison.Ordinal);
+            Assert.DoesNotContain("private-server-name", file, StringComparison.Ordinal);
+            Assert.DoesNotContain("127.0.0.1:1", file, StringComparison.Ordinal);
+            Assert.DoesNotContain("ModelContextProtocol.Client.McpClient", file, StringComparison.Ordinal);
+            Assert.Contains(memory.Entries, entry =>
+                entry.Contains("Failed to open MCP server", StringComparison.Ordinal));
+            Assert.DoesNotContain(memory.Entries, entry =>
+                entry.Contains("private-server-name", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [AvaloniaFact(Timeout = 30_000)]
     public async Task AgentChatEditorControl_SafeSessionEvent_AppearsOnceInUiAndRollingFile()
     {

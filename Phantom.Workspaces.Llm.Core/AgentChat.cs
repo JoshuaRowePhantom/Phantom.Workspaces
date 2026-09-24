@@ -3370,7 +3370,9 @@ public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvid
         }
         catch (Exception ex)
         {
-            this.logger.LogError(ex, "Failed to open MCP server {ServerName}.", displayName);
+            this.logger.LogError(
+                "Failed to open MCP server; category {ErrorCategory}.",
+                ex is OperationCanceledException ? "cancelled" : "open-failed");
 
             var shortReason = ShortReason(ex);
             var errorMessage = BuildMcpFailureDiagnostic(displayName, ex);
