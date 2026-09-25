@@ -179,6 +179,11 @@ public sealed class RemoteCopilotLifecycleTests
         var failed = await terminal.Task.WaitAsync(TestToken());
 
         Assert.Equal("transport-timeout", failed.Data?.ErrorType);
+        Assert.Equal(
+            "The remote Copilot session timed out before a terminal event.",
+            failed.Data?.Message);
+        Assert.DoesNotContain("private-prompt", failed.Data?.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("private-session-id", failed.Data?.Message, StringComparison.Ordinal);
         var timeout = Assert.Single(caller.Entries, entry => entry.Stage == "terminal-timeout");
         Assert.Equal("ack-received", timeout.LastConfirmedStage);
         Assert.Equal("timeout", timeout.ErrorCategory);

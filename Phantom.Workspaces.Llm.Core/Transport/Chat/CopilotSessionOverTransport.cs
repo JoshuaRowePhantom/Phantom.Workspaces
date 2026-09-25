@@ -642,7 +642,7 @@ internal sealed class CopilotSessionOverTransport : ICopilotSession
                 },
                 Message = errorCategory switch
                 {
-                    "timeout" => "The remote Copilot session timed out.",
+                    "timeout" => "The remote Copilot session timed out before a terminal event.",
                     "provider-unavailable" => "The remote Copilot provider is unavailable.",
                     "sdk-create" => "The remote Copilot session could not be created or resumed.",
                     "remote-error" => "Remote Copilot session failed.",
