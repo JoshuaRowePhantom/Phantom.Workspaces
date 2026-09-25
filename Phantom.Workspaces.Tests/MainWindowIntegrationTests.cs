@@ -85,7 +85,8 @@ public sealed class MainWindowIntegrationTests
             CreateTestRunningAgentChatTable(),
             new AgentPersistenceStoreCache(),
             Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
-            configurationPersistence: store);
+            configurationPersistence: store,
+            updateUnavailableReason: "Installed update layout is broken; reinstall.");
 
         try
         {
@@ -94,6 +95,10 @@ public sealed class MainWindowIntegrationTests
                 configuration: new WorkspacesConfiguration());
 
             var settingsViewModel = await viewModel.CreateSettingsDialogViewModelAsync();
+            Assert.Same(settingsViewModel.Updates, Assert.Single(settingsViewModel.Sections,
+                section => section.Title == "Updates").Content);
+            Assert.False(settingsViewModel.Updates!.CheckForUpdatesNowCommand.CanExecute(null));
+            Assert.Contains("reinstall", settingsViewModel.Updates.StatusText, StringComparison.Ordinal);
             settingsViewModel.RemoteAccess.HostingEnabled = true;
             settingsViewModel.RemoteAccess.ListenUrl = "http://localhost:6012";
             await settingsViewModel.SaveAsync(path: null);

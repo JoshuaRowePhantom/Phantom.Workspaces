@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Net.Http;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -19,11 +20,12 @@ public static class UpdateControllerFactory
     /// <summary>
     /// Creates a controller for the running, installed application. <paramref name="requestShutdown"/>
     /// is invoked after an update is staged and the relaunch process is started, so the running
-    /// process can exit and release the single-instance lock for the swap. Returns <c>null</c> when
-    /// the process is not running from an install layout (e.g. a development <c>dotnet run</c>),
-    /// where self-update does not apply.
+    /// process can exit and release the single-instance lock for the swap. Returns a result with
+    /// no controller when the process is not running from an install layout (e.g. a development
+    /// <c>dotnet run</c>), where self-update does not apply. The returned reason distinguishes this
+    /// from a damaged installed layout.
     /// </summary>
-    public static UpdateController? TryCreate(
+    public static UpdateControllerCreationResult TryCreate(
         WorkspacesConfiguration configuration,
         Action requestShutdown,
         ILoggerFactory loggerFactory,
@@ -37,11 +39,42 @@ public static class UpdateControllerFactory
         var installRoot = InstallRootResolver.Resolve(installRootOverride);
         var layout = new InstallLayout(fileSystem, installRoot);
 
-        // Self-update only makes sense when running from the versioned install layout; a development
-        // run from a build output directory has no 'current' junction to repoint.
-        if (!IsRunningFromInstallLayout(layout))
+        var executablePath = Environment.ProcessPath ?? string.Empty;
+        if (!IsManagedExecutable(layout, executablePath))
         {
-            return null;
+            return new UpdateControllerCreationResult(null, GetUnavailableReason(layout, executablePath, currentVersion: null));
+        }
+
+        string? currentVersion;
+        try
+        {
+            currentVersion = layout.ResolveCurrentVersion();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            loggerFactory.CreateLogger(typeof(UpdateControllerFactory).FullName!).LogError(
+                exception, "Unable to inspect the installed update layout at {InstallRoot}", installRoot);
+            return new UpdateControllerCreationResult(null, InstalledLayoutError);
+        }
+
+        var unavailableReason = GetUnavailableReason(layout, executablePath, currentVersion);
+        if (unavailableReason is not null)
+        {
+            loggerFactory.CreateLogger(typeof(UpdateControllerFactory).FullName!).LogError(
+                "The running executable is in an installed layout but the current version link is missing at {InstallRoot}", installRoot);
+            return new UpdateControllerCreationResult(null, unavailableReason);
+        }
+
+        string assetMoniker;
+        try
+        {
+            assetMoniker = ResolveAssetMoniker(RuntimeInformation.ProcessArchitecture);
+        }
+        catch (PlatformNotSupportedException exception)
+        {
+            loggerFactory.CreateLogger(typeof(UpdateControllerFactory).FullName!).LogError(
+                exception, "Updates are not supported on this architecture");
+            return new UpdateControllerCreationResult(null, $"Updates unavailable: {exception.Message}");
         }
 
         var client = httpClient ?? new HttpClient();
@@ -56,7 +89,7 @@ public static class UpdateControllerFactory
             fileSystem,
             layout,
             runningVersion,
-            ResolveAssetMoniker(RuntimeInformation.ProcessArchitecture));
+            assetMoniker);
 #pragma warning disable CA1416 // RealScheduledTasks/RegistryStartupRegistration are Windows-only; this path is only reached on Windows
         var startupTaskService = new StartupTaskService(
             new RegistryStartupRegistration(),
@@ -65,7 +98,7 @@ public static class UpdateControllerFactory
 #pragma warning restore CA1416
         var processLauncher = new RealProcessLauncher();
 
-        return new UpdateController(
+        return new UpdateControllerCreationResult(new UpdateController(
             updateService,
             startupTaskService,
             layout,
@@ -73,20 +106,22 @@ public static class UpdateControllerFactory
             runningVersion,
             configuration.Update.Mode,
             installRootOverride,
-            requestShutdown);
+            requestShutdown), null);
     }
 
-    private static bool IsRunningFromInstallLayout(InstallLayout layout)
-    {
-        try
-        {
-            return layout.ResolveCurrentVersion() is not null;
-        }
-        catch (Exception)
-        {
-            return false;
-        }
-    }
+    private const string InstalledLayoutError =
+        "Updates unavailable: the installed update layout is missing or cannot be read. Reinstall Phantom Workspaces to repair it.";
+
+    internal static string? GetUnavailableReason(InstallLayout layout, string executablePath, string? currentVersion)
+        => !IsManagedExecutable(layout, executablePath)
+            ? "Updates not available in this run/build. Install Phantom Workspaces to enable checks and installation."
+            : currentVersion is null ? InstalledLayoutError : null;
+
+    private static bool IsManagedExecutable(InstallLayout layout, string executablePath)
+        => !string.IsNullOrWhiteSpace(executablePath)
+            && string.Equals(Path.GetFileName(executablePath), InstallLayout.ApplicationExecutableName, StringComparison.OrdinalIgnoreCase)
+            && (string.Equals(Path.GetFullPath(executablePath), Path.GetFullPath(layout.CurrentExecutablePath), StringComparison.OrdinalIgnoreCase)
+                || layout.IsManagedExecutable(executablePath));
 
     internal static string ResolveAssetMoniker(Architecture architecture)
         => architecture == Architecture.Arm64
@@ -107,3 +142,6 @@ public static class UpdateControllerFactory
         return plusIndex >= 0 ? informationalVersion[..plusIndex] : informationalVersion;
     }
 }
+
+/// <summary>The controller and explicit capability result of probing the running installation.</summary>
+public sealed record UpdateControllerCreationResult(UpdateController? Controller, string? UnavailableReason);

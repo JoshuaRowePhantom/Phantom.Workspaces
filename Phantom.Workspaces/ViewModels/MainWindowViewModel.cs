@@ -556,7 +556,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             this.applicationServices.UpdateController,
             action => Avalonia.Threading.Dispatcher.UIThread.Post(action),
             this.LogDirectoryProvider,
-            new Phantom.Workspaces.Install.RealProcessLauncher());
+            new Phantom.Workspaces.Install.RealProcessLauncher(),
+            runningSettings: true,
+            updateUnavailableReason: this.applicationServices.UpdateUnavailableReason);
     }
 
     /// <summary>

@@ -21,11 +21,13 @@ public sealed class ApplicationServices
         IAllowedSecretsStore? allowedSecretsStore = null,
         IPlatformSecretStore? platformSecretStore = null,
         object? mcpOAuthOptions = null,
-        TransportFactoryRegistryProvider? transportFactoryRegistryProvider = null)
+        TransportFactoryRegistryProvider? transportFactoryRegistryProvider = null,
+        string? updateUnavailableReason = null)
     {
         this.RunningAgentChats = runningAgentChats;
         this.AgentPersistenceStoreCache = agentPersistenceStoreCache;
         this.UpdateController = updateController;
+        this.UpdateUnavailableReason = updateUnavailableReason;
         this.LoggerFactory = loggerFactory;
         this.LogDirectoryProvider = logDirectoryProvider;
         this.ConfigurationPersistence = configurationPersistence;
@@ -80,7 +82,16 @@ public sealed class ApplicationServices
 
     public IAgentPersistenceStoreCache AgentPersistenceStoreCache { get; }
 
-    public IUpdateController? UpdateController { get; }
+    public IUpdateController? UpdateController { get; private set; }
+
+    /// <summary>Reason provided by startup when this run cannot use the update controller.</summary>
+    public string? UpdateUnavailableReason { get; private set; }
+
+    internal void SetUpdateCapability(IUpdateController? controller, string? unavailableReason)
+    {
+        this.UpdateController = controller;
+        this.UpdateUnavailableReason = unavailableReason;
+    }
 
     /// <summary>
     /// The process logger factory backed by the rolling file provider.

@@ -27,8 +27,8 @@ public partial class App : Application
     private bool isExiting;
 
     /// <summary>
-    /// The live update controller for the running, installed application, or <c>null</c> when the
-    /// process is not running from an install layout. Shared by the tray icon and the Updates
+    /// The live update controller for the running, installed application, or <c>null</c> when
+    /// self-update is unavailable. Shared by the tray icon and the Updates
     /// settings section so both reflect the same state.
     /// </summary>
     public IUpdateController? UpdateController => this.updateController;
@@ -128,7 +128,8 @@ public partial class App : Application
         IClassicDesktopStyleApplicationLifetime desktop,
         Window mainWindow,
         WorkspacesConfiguration configuration,
-        Microsoft.Extensions.Logging.ILoggerFactory loggerFactory)
+        Microsoft.Extensions.Logging.ILoggerFactory loggerFactory,
+        ApplicationServices applicationServices)
     {
         void RequestShutdown() => Dispatcher.UIThread.Post(() =>
         {
@@ -136,7 +137,9 @@ public partial class App : Application
             desktop.Shutdown();
         });
 
-        this.updateController = UpdateControllerFactory.TryCreate(configuration, RequestShutdown, loggerFactory);
+        var updateCapability = UpdateControllerFactory.TryCreate(configuration, RequestShutdown, loggerFactory);
+        this.updateController = updateCapability.Controller;
+        applicationServices.SetUpdateCapability(this.updateController, updateCapability.UnavailableReason);
         if (this.updateController is null)
         {
             return;
@@ -359,7 +362,7 @@ public partial class App : Application
                     mainWindow.Icon = TrayIconImageFactory.Create(updateAvailable: false);
                     desktop.MainWindow = mainWindow;
                     mainWindow.Show();
-                    this.WireTrayAndUpdates(desktop, mainWindow, configuration ?? new WorkspacesConfiguration(), loggerFactory);
+                    this.WireTrayAndUpdates(desktop, mainWindow, configuration ?? new WorkspacesConfiguration(), loggerFactory, applicationServices);
                 },
                 closeSplash: () => loadingWindow.Close());
 

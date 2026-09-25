@@ -35,7 +35,9 @@ public sealed class WorkspacesSettingsViewModel : ViewModelBase
         Services.Updates.IUpdateController? updateController = null,
         Action<Action>? updateDispatch = null,
         Services.Logging.ILogDirectoryProvider? logDirectoryProvider = null,
-        Phantom.Workspaces.Install.IProcessLauncher? processLauncher = null)
+        Phantom.Workspaces.Install.IProcessLauncher? processLauncher = null,
+        bool runningSettings = false,
+        string? updateUnavailableReason = null)
     {
         ArgumentNullException.ThrowIfNull(persistenceService);
         ArgumentNullException.ThrowIfNull(configuration);
@@ -64,11 +66,11 @@ public sealed class WorkspacesSettingsViewModel : ViewModelBase
             sections.Add(new SettingsSectionViewModel("Profile", this.ProfileAppearance));
         }
 
-        // The Updates section is likewise only meaningful for a running, installed application that
-        // has a live update controller; the installation wizard has nothing to update.
-        if (updateController is not null)
+        // The installation wizard has no running application to update; the running dialog
+        // always exposes persisted preferences, even when this process cannot self-update.
+        if (runningSettings || updateController is not null)
         {
-            this.Updates = new UpdateSettingsViewModel(updateController, configuration.Update, updateDispatch);
+            this.Updates = new UpdateSettingsViewModel(updateController, configuration.Update, updateDispatch, updateUnavailableReason);
             sections.Add(new SettingsSectionViewModel("Updates", this.Updates));
         }
 
@@ -97,8 +99,8 @@ public sealed class WorkspacesSettingsViewModel : ViewModelBase
     public ProfileAppearanceSettingsViewModel? ProfileAppearance { get; }
 
     /// <summary>
-    /// Application updates section, present only when the dialog is opened from the running, installed
-    /// application (the installation wizard has nothing to update).
+    /// Application updates section, present in running-app settings (the installation wizard
+    /// has nothing to update), even when this process cannot self-update.
     /// </summary>
     public UpdateSettingsViewModel? Updates { get; }
 

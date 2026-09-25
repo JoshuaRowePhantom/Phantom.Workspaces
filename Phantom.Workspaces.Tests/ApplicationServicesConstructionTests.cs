@@ -46,6 +46,18 @@ public sealed class ApplicationServicesConstructionTests
         Assert.Same(platformSecretStore, services.PlatformSecretStore);
     }
 
+    [Fact]
+    public void ApplicationServices_StartupUpdateCapability_PropagatesUnavailableReason()
+    {
+        var services = new ApplicationServices(
+            null!, new AgentPersistenceStoreCache(), NullLoggerFactory.Instance);
+
+        services.SetUpdateCapability(null, "Installed update layout is broken; reinstall.");
+
+        Assert.Null(services.UpdateController);
+        Assert.Contains("reinstall", services.UpdateUnavailableReason, StringComparison.Ordinal);
+    }
+
     private sealed class FakeSecretProvider : ISecretProvider
     {
         public Task<RequestSecretsResult?> RequestSecretsAsync(

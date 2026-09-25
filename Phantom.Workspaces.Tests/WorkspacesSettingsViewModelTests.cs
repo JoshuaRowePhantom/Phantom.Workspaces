@@ -318,6 +318,50 @@ public sealed class WorkspacesSettingsViewModelTests
     }
 
     [AvaloniaFact]
+    public void Settings_RunningWithoutUpdateController_ShowsUpdatesSection()
+    {
+        var settings = new WorkspacesSettingsViewModel(
+            new ConfigurationPersistenceService(CreateTempConfigPath()),
+            new WorkspacesConfiguration(),
+            runningSettings: true,
+            updateUnavailableReason: "Updates not available in this run/build.");
+
+        Assert.Same(settings.Updates, Assert.Single(settings.Sections, section => section.Title == "Updates").Content);
+        Assert.Contains("run/build", settings.Updates!.StatusText, StringComparison.Ordinal);
+        Assert.DoesNotContain(new WorkspacesSettingsViewModel(new ConfigurationPersistenceService(CreateTempConfigPath())).Sections,
+            section => section.Title == "Updates");
+    }
+
+    [AvaloniaFact]
+    public async Task Settings_WithoutUpdateController_ModeRoundTripsThroughSaveAndLoad()
+    {
+        var path = CreateTempConfigPath();
+        var service = new ConfigurationPersistenceService(path);
+        var configuration = new WorkspacesConfiguration
+        {
+            Update = new UpdateSettings { Mode = AutomaticUpdateMode.Off, RunAtStartup = true, CloseToTray = false },
+        };
+        try
+        {
+            var settings = new WorkspacesSettingsViewModel(service, configuration, runningSettings: true);
+            settings.Updates!.SelectedMode = settings.Updates.Modes.Single(mode => mode.Mode == AutomaticUpdateMode.NotifyOnly);
+            var saved = await settings.SaveAsync();
+            var reloaded = await service.LoadAsync();
+            var reopened = new WorkspacesSettingsViewModel(service, reloaded, runningSettings: true);
+
+            Assert.Equal(AutomaticUpdateMode.NotifyOnly, saved.Update.Mode);
+            Assert.Equal(AutomaticUpdateMode.NotifyOnly, reopened.Updates!.SelectedMode.Mode);
+            Assert.True(reopened.Updates.RunAtStartup);
+            Assert.False(reloaded.Update.CloseToTray);
+            Assert.False(reopened.Updates.IsRunAtStartupAvailable);
+        }
+        finally
+        {
+            DeleteTempConfig(path);
+        }
+    }
+
+    [AvaloniaFact]
     public void Settings_SelectedSection_IgnoresNullSelection()
     {
         var service = new ConfigurationPersistenceService(CreateTempConfigPath());

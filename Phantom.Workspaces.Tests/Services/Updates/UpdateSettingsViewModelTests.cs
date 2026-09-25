@@ -24,6 +24,50 @@ public sealed class UpdateSettingsViewModelTests
     }
 
     [Fact]
+    public void UpdateSettingsViewModel_UnavailableLayout_DisablesUpdateAndStartupActions()
+    {
+        var settings = new UpdateSettings { Mode = AutomaticUpdateMode.NotifyOnly, RunAtStartup = true };
+        using var viewModel = new UpdateSettingsViewModel(null, settings, unavailableReason: "Installed update layout is broken; reinstall.");
+
+        Assert.Contains("reinstall", viewModel.StatusText, StringComparison.Ordinal);
+        Assert.Equal("Unavailable", viewModel.RunningVersion);
+        Assert.False(viewModel.CheckForUpdatesNowCommand.CanExecute(null));
+        Assert.False(viewModel.InstallUpdateNowCommand.CanExecute(null));
+        var unavailableStatus = viewModel.StatusText;
+        viewModel.CheckForUpdatesNowCommand.Execute(null);
+        viewModel.InstallUpdateNowCommand.Execute(null);
+        Assert.Equal(unavailableStatus, viewModel.StatusText);
+        Assert.False(viewModel.IsRunAtStartupAvailable);
+        viewModel.RunAtStartup = false;
+        Assert.True(viewModel.RunAtStartup);
+        viewModel.SelectedMode = viewModel.Modes.Single(mode => mode.Mode == AutomaticUpdateMode.Off);
+        Assert.Equal(AutomaticUpdateMode.Off, viewModel.ToSettings(settings).Mode);
+        Assert.True(viewModel.ToSettings(settings).RunAtStartup);
+        Assert.All(viewModel.Modes, mode => Assert.False(string.IsNullOrWhiteSpace(mode.Description)));
+        viewModel.ApplyToController();
+    }
+
+    [Fact]
+    public async Task UpdateSettingsViewModel_InstalledLayout_KeepsLiveCommandsAndStartup()
+    {
+        var controller = new FakeUpdateController { NextAvailability = new UpdateAvailability(true, "1.2.0") };
+        using var viewModel = new UpdateSettingsViewModel(controller, new UpdateSettings());
+
+        Assert.True(viewModel.IsRunAtStartupAvailable);
+        Assert.True(viewModel.CheckForUpdatesNowCommand.CanExecute(null));
+        viewModel.RunAtStartup = true;
+        viewModel.SelectedMode = viewModel.Modes.Single(mode => mode.Mode == AutomaticUpdateMode.DownloadAndInstall);
+        viewModel.CheckForUpdatesNowCommand.Execute(null);
+        await controller.WaitForCheckAsync();
+
+        Assert.True(controller.RunAtStartup);
+        Assert.Equal(AutomaticUpdateMode.DownloadAndInstall, controller.Mode);
+        Assert.True(viewModel.InstallUpdateNowCommand.CanExecute(null));
+        viewModel.InstallUpdateNowCommand.Execute(null);
+        Assert.Equal(1, controller.InstallCalls);
+    }
+
+    [Fact]
     public void ChangingMode_FlowsToControllerAndToSettings()
     {
         var controller = new FakeUpdateController();
@@ -147,6 +191,8 @@ public sealed class UpdateSettingsViewModelTests
 
         public bool RunAtStartup { get; set; }
 
+        public int InstallCalls { get; private set; }
+
         public bool IsRunAtStartupEnabled => this.RunAtStartup;
 
         public Exception? SetRunAtStartupError { get; set; }
@@ -164,7 +210,10 @@ public sealed class UpdateSettingsViewModelTests
         }
 
         public Task DownloadInstallAndRelaunchAsync(CancellationToken cancellationToken = default)
-            => Task.CompletedTask;
+        {
+            this.InstallCalls++;
+            return Task.CompletedTask;
+        }
 
         public void SetRunAtStartup(bool enabled)
         {

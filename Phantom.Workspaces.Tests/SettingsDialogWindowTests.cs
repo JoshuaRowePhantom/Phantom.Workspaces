@@ -3,8 +3,10 @@ namespace Phantom.Workspaces.Tests;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
+using Avalonia.VisualTree;
 using Phantom.Workspaces;
 using Phantom.Workspaces.Configuration;
+using Phantom.Workspaces.Services.Updates;
 using Phantom.Workspaces.ViewModels.Configuration;
 
 public sealed class SettingsDialogWindowTests
@@ -39,6 +41,81 @@ public sealed class SettingsDialogWindowTests
         {
             File.Delete(tempFile);
         }
+    }
+
+    [AvaloniaFact]
+    public void SettingsDialogWindow_UpdateSection_RendersUnavailableMessageAndMode()
+    {
+        var settings = new WorkspacesSettingsViewModel(
+            new ConfigurationPersistenceService("settings-test.json"),
+            new WorkspacesConfiguration { Update = new UpdateSettings { Mode = AutomaticUpdateMode.NotifyOnly } },
+            runningSettings: true,
+            updateUnavailableReason: "Updates not available in this run/build.");
+        settings.SelectedSection = settings.Sections.Single(section => section.Title == "Updates");
+        var window = new SettingsDialogWindow(settings);
+        try
+        {
+            window.Show();
+            window.UpdateLayout();
+
+            Assert.Contains(window.GetVisualDescendants().OfType<TextBlock>(),
+                block => block.IsEffectivelyVisible && block.Text?.Contains("run/build", StringComparison.Ordinal) == true);
+            var modeSelector = Assert.Single(window.GetVisualDescendants().OfType<ComboBox>());
+            Assert.Equal(AutomaticUpdateMode.NotifyOnly, ((UpdateModeOption)modeSelector.SelectedItem!).Mode);
+            Assert.True(modeSelector.IsEffectivelyEnabled);
+            Assert.Contains(window.GetVisualDescendants().OfType<TextBlock>(),
+                block => block.IsEffectivelyVisible && block.Text == "Check for new releases and notify me.");
+            Assert.False(Assert.Single(window.GetVisualDescendants().OfType<CheckBox>()).IsEffectivelyEnabled);
+            Assert.False(Assert.Single(window.GetVisualDescendants().OfType<Button>(),
+                button => Equals(button.Content, "Check for updates")).IsEffectivelyEnabled);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public void SettingsDialogWindow_InstalledUpdateSection_RendersLiveActions()
+    {
+        var settings = new WorkspacesSettingsViewModel(
+            new ConfigurationPersistenceService("settings-test.json"),
+            new WorkspacesConfiguration(),
+            updateController: new LiveController(),
+            runningSettings: true);
+        settings.SelectedSection = settings.Sections.Single(section => section.Title == "Updates");
+        var window = new SettingsDialogWindow(settings);
+        try
+        {
+            window.Show();
+            window.UpdateLayout();
+
+            Assert.True(Assert.Single(window.GetVisualDescendants().OfType<CheckBox>()).IsEffectivelyEnabled);
+            Assert.True(Assert.Single(window.GetVisualDescendants().OfType<Button>(),
+                button => Equals(button.Content, "Check for updates")).IsEffectivelyEnabled);
+            Assert.Contains(window.GetVisualDescendants().OfType<TextBlock>(),
+                block => block.IsEffectivelyVisible && block.Text == "1.0.0");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    private sealed class LiveController : IUpdateController
+    {
+        public string RunningVersion => "1.0.0";
+        public AutomaticUpdateMode Mode { get; set; }
+        public string? LatestAvailableVersion => null;
+        public bool IsRunAtStartupEnabled => false;
+        public event EventHandler<UpdateAvailability>? UpdateAvailabilityChanged;
+        public Task<UpdateAvailability> CheckForUpdatesAsync(CancellationToken cancellationToken = default)
+        {
+            _ = this.UpdateAvailabilityChanged;
+            return Task.FromResult(UpdateAvailability.None);
+        }
+        public Task DownloadInstallAndRelaunchAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public void SetRunAtStartup(bool enabled) { }
     }
 
     [Fact]

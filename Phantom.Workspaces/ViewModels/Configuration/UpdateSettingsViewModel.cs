@@ -15,7 +15,7 @@ namespace Phantom.Workspaces.ViewModels.Configuration;
 /// </summary>
 public sealed class UpdateSettingsViewModel : ViewModelBase, IDisposable
 {
-    private readonly IUpdateController controller;
+    private readonly IUpdateController? controller;
     private readonly Action<Action> dispatch;
     private readonly RelayCommand checkForUpdatesNowCommand;
     private readonly RelayCommand installUpdateNowCommand;
@@ -28,33 +28,43 @@ public sealed class UpdateSettingsViewModel : ViewModelBase, IDisposable
     private bool disposed;
 
     /// <summary>Creates the view model over <paramref name="controller"/> and persisted settings.</summary>
-    public UpdateSettingsViewModel(IUpdateController controller, UpdateSettings settings, Action<Action>? dispatch = null)
+    public UpdateSettingsViewModel(
+        IUpdateController? controller,
+        UpdateSettings settings,
+        Action<Action>? dispatch = null,
+        string? unavailableReason = null)
     {
-        ArgumentNullException.ThrowIfNull(controller);
         ArgumentNullException.ThrowIfNull(settings);
 
         this.controller = controller;
+        this.UnavailableReason = controller is null
+            ? unavailableReason ?? "Updates unavailable: the update controller could not be initialized. Check the installation."
+            : null;
         this.dispatch = dispatch ?? (action => action());
 
         this.Modes =
         [
-            new UpdateModeOption(AutomaticUpdateMode.Off, "Off"),
-            new UpdateModeOption(AutomaticUpdateMode.NotifyOnly, "Notify only"),
-            new UpdateModeOption(AutomaticUpdateMode.DownloadAndInstall, "Download and install automatically"),
+            new UpdateModeOption(AutomaticUpdateMode.Off, "Off", "Do not automatically check for updates."),
+            new UpdateModeOption(AutomaticUpdateMode.NotifyOnly, "Notify only", "Check for new releases and notify me."),
+            new UpdateModeOption(AutomaticUpdateMode.DownloadAndInstall, "Download and install automatically",
+                "Check for new releases and install them automatically."),
         ];
         this.selectedMode = this.Modes.First(option => option.Mode == settings.Mode);
         this.runAtStartup = settings.RunAtStartup;
-        this.latestVersion = controller.LatestAvailableVersion;
-        this.isUpdateAvailable = controller.LatestAvailableVersion is not null;
+        this.latestVersion = controller?.LatestAvailableVersion;
+        this.isUpdateAvailable = controller?.LatestAvailableVersion is not null;
 
         this.checkForUpdatesNowCommand = new RelayCommand(
             _ => _ = this.CheckForUpdatesAsync(),
-            _ => !this.isBusy);
+            _ => this.controller is not null && !this.isBusy);
         this.installUpdateNowCommand = new RelayCommand(
             _ => _ = this.InstallUpdateAsync(),
-            _ => this.isUpdateAvailable && !this.isBusy);
+            _ => this.controller is not null && this.isUpdateAvailable && !this.isBusy);
 
-        this.controller.UpdateAvailabilityChanged += this.OnUpdateAvailabilityChanged;
+        if (this.controller is not null)
+        {
+            this.controller.UpdateAvailabilityChanged += this.OnUpdateAvailabilityChanged;
+        }
         this.UpdateStatusText();
     }
 
@@ -62,7 +72,13 @@ public sealed class UpdateSettingsViewModel : ViewModelBase, IDisposable
     public IReadOnlyList<UpdateModeOption> Modes { get; }
 
     /// <summary>The running application version.</summary>
-    public string RunningVersion => this.controller.RunningVersion;
+    public string RunningVersion => this.controller?.RunningVersion ?? "Unavailable";
+
+    /// <summary>Why self-update operations are disabled in this run, or null when enabled.</summary>
+    public string? UnavailableReason { get; }
+
+    /// <summary>Whether the running executable can be registered to start at sign-in.</summary>
+    public bool IsRunAtStartupAvailable => this.controller is not null;
 
     /// <summary>The currently selected automatic-update mode option.</summary>
     public UpdateModeOption SelectedMode
@@ -75,7 +91,10 @@ public sealed class UpdateSettingsViewModel : ViewModelBase, IDisposable
                 return;
             }
 
-            this.controller.Mode = value.Mode;
+            if (this.controller is not null)
+            {
+                this.controller.Mode = value.Mode;
+            }
         }
     }
 
@@ -85,6 +104,11 @@ public sealed class UpdateSettingsViewModel : ViewModelBase, IDisposable
         get => this.runAtStartup;
         set
         {
+            if (this.controller is null)
+            {
+                return;
+            }
+
             if (!this.SetProperty(ref this.runAtStartup, value))
             {
                 return;
@@ -115,6 +139,11 @@ public sealed class UpdateSettingsViewModel : ViewModelBase, IDisposable
     /// </summary>
     public void ApplyToController()
     {
+        if (this.controller is null)
+        {
+            return;
+        }
+
         try
         {
             this.controller.SetRunAtStartup(this.runAtStartup);
@@ -194,12 +223,15 @@ public sealed class UpdateSettingsViewModel : ViewModelBase, IDisposable
         }
 
         this.disposed = true;
-        this.controller.UpdateAvailabilityChanged -= this.OnUpdateAvailabilityChanged;
+        if (this.controller is not null)
+        {
+            this.controller.UpdateAvailabilityChanged -= this.OnUpdateAvailabilityChanged;
+        }
     }
 
     private async Task CheckForUpdatesAsync()
     {
-        if (this.IsBusy)
+        if (this.IsBusy || this.controller is null)
         {
             return;
         }
@@ -223,7 +255,7 @@ public sealed class UpdateSettingsViewModel : ViewModelBase, IDisposable
 
     private async Task InstallUpdateAsync()
     {
-        if (this.IsBusy || !this.IsUpdateAvailable)
+        if (this.IsBusy || !this.IsUpdateAvailable || this.controller is null)
         {
             return;
         }
@@ -255,10 +287,10 @@ public sealed class UpdateSettingsViewModel : ViewModelBase, IDisposable
     }
 
     private void UpdateStatusText()
-        => this.StatusText = this.isUpdateAvailable
+        => this.StatusText = this.UnavailableReason ?? (this.isUpdateAvailable
             ? $"Update available: {this.latestVersion}"
-            : $"You are up to date (version {this.controller.RunningVersion}).";
+            : $"You are up to date (version {this.controller!.RunningVersion}).");
 }
 
 /// <summary>An automatic-update mode paired with a display label for selection in the UI.</summary>
-public sealed record UpdateModeOption(AutomaticUpdateMode Mode, string Display);
+public sealed record UpdateModeOption(AutomaticUpdateMode Mode, string Display, string Description);
