@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using AgentSchema;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Llm.Trust;
 
 namespace Phantom.Workspaces.Llm;
@@ -73,12 +74,15 @@ public sealed class AgentChatSessionCache : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         var services = this.defaultServices;
-        return await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+        var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
         {
             AgentDefinition = PhantomAgentSchema.AgentDefinitionFromJson(request.AgentDefinitionJson),
             AgentSessionId = request.AgentSessionId,
             AgentServices = services,
         }).ConfigureAwait(false);
+        services?.LoggerFactory?.CreateLogger<AgentChatSessionCache>()
+            .LogInformation("Web agent session created; outcome success.");
+        return chat;
     }
 
     /// <inheritdoc />

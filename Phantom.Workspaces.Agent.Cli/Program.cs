@@ -12,9 +12,10 @@ var definitionParser = new AgentDefinitionCommandLineParser();
 
 // #1093: register global uncaught/unobserved exception logging at CLI startup, backed by a
 // config-less file logger factory (#1095), so faults leave a diagnosable record on disk.
+var logDirectory = HostLogDirectoryResolver.Resolve(AppContext.BaseDirectory);
 var hostLoggerFactory =
     HostFileLoggerFactory.Create(
-        HostLogDirectoryResolver.Resolve(AppContext.BaseDirectory),
+        logDirectory,
         verboseTransportMetadataLogging: TransportMetadataLoggingOptions.FromEnvironment().Enabled);
 GlobalExceptionLogging.Register(hostLoggerFactory);
 
@@ -29,7 +30,7 @@ definitionParser.AddOptions(rootCommand);
 rootCommand.SetAction(async (parseResult, ct) =>
 {
     var cliParseResult = definitionParser.Parse(parseResult);
-    using var app = new AgentCliApp(cliParseResult, hostLoggerFactory);
+    using var app = new AgentCliApp(cliParseResult, hostLoggerFactory, logDirectory);
     await app.RunAsync();
 });
 
@@ -74,13 +75,16 @@ public sealed class AgentCliApp : IDisposable
         ? $"  assistant {SpinnerFrames[this.spinnerFrame]}:"
         : "  assistant:";
 
-    public AgentCliApp(AgentDefinitionParseResult parseResult, ILoggerFactory processLoggerFactory)
+    public AgentCliApp(
+        AgentDefinitionParseResult parseResult,
+        ILoggerFactory processLoggerFactory,
+        string logDirectory)
     {
         this.supportsInteractiveRendering = !Console.IsOutputRedirected && !Console.IsInputRedirected;
 
         this.ownsLoggerFactory = parseResult.LogChat || parseResult.LogHttpRequests;
         this.loggerFactory = this.ownsLoggerFactory
-            ? CreateConsoleLoggerFactory(this.WriteLogLine)
+            ? CreateConsoleLoggerFactory(this.WriteLogLine, logDirectory)
             : processLoggerFactory;
         var services = new AgentServices
         {
@@ -96,6 +100,8 @@ public sealed class AgentCliApp : IDisposable
                 AgentDefinition = parseResult.AgentDefinition,
                 AgentServices = services,
             }).GetAwaiter().GetResult();
+        this.loggerFactory.CreateLogger<AgentCliApp>()
+            .LogInformation("CLI agent session initialized; outcome success.");
         this.clientDisplayName = this.agentChat.DisplayName;
 
         if (!string.IsNullOrEmpty(parseResult.AgentSchemaPath))
@@ -170,13 +176,12 @@ public sealed class AgentCliApp : IDisposable
             this.loggerFactory.Dispose();
     }
 
-    private ILoggerFactory CreateConsoleLoggerFactory(Action<string> onLogLine)
+    private ILoggerFactory CreateConsoleLoggerFactory(Action<string> onLogLine, string logDirectory)
     {
         // #1095: this console app is outside the main WorkspacesConfiguration path, so it resolves
         // its own log directory (executable base dir / PHANTOM_WORKSPACES_LOG_DIRECTORY override) and
         // adds the shared #1086 rolling file provider alongside the interactive console provider, so
         // a retained on-disk log exists whenever chat/http logging is requested.
-        var logDirectory = HostLogDirectoryResolver.Resolve(AppContext.BaseDirectory);
         return LoggerFactory.Create(builder =>
         {
             SafeLoggingFilters.Configure(builder, TransportMetadataLoggingOptions.FromEnvironment().Enabled);

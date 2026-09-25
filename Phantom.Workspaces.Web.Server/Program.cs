@@ -18,20 +18,13 @@ var builder = WebApplication.CreateBuilder(args);
 // directory (content root / PHANTOM_WORKSPACES_LOG_DIRECTORY override) and registers the shared
 // #1086 rolling file provider against it — independent of the main .exe's single-resolution path.
 var logDirectory = HostLogDirectoryResolver.Resolve(builder.Environment.ContentRootPath);
-builder.Logging.Services.AddSingleton<Microsoft.Extensions.Logging.ILoggerProvider>(
-    _ => new RollingFileLoggerProvider(logDirectory, HostFileLoggerFactory.DefaultRetention));
-SafeLoggingFilters.Configure(builder.Logging, TransportMetadataLoggingOptions.FromEnvironment().Enabled);
-builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
+var reverseConnectionStatusRegistry = new ReverseConnectionStatusRegistry();
+StandaloneWebServerLoggingComposition.Configure(builder, logDirectory, reverseConnectionStatusRegistry);
 
 var dataAccessLayer = await WebServerDataAccessLayerFactory.CreateDefaultAsync();
 builder.Services.AddSingleton<IDataAccessLayer>(dataAccessLayer);
 
 var transportRegistry = new TransportRegistry();
-var reverseConnectionStatusRegistry = new ReverseConnectionStatusRegistry();
-builder.Services.AddSingleton(reverseConnectionStatusRegistry);
-builder.Services.AddSingleton(sp => new ReverseHttpServerTransportFactory(
-    reverseConnectionStatusRegistry,
-    loggerFactory: sp.GetRequiredService<ILoggerFactory>()));
 builder.Services.AddSingleton(transportRegistry);
 var transportFactoryRegistry = new TransportFactoryRegistry();
 transportFactoryRegistry.Register(new LocalTransportFactory(transportRegistry));
@@ -39,12 +32,6 @@ transportFactoryRegistry.Register(new HttpClientTransportFactory());
 transportFactoryRegistry.Register(new ReverseHttpForwardingTransportFactory());
 builder.Services.AddSingleton<ITransportFactoryRegistry>(transportFactoryRegistry);
 builder.Services.AddSingleton<HttpServerTransportFactory>();
-
-builder.Services.AddSingleton(sp => new AgentChatSessionCache(new AgentServices
-{
-    LoggerFactory = sp.GetRequiredService<ILoggerFactory>(),
-    AgentPersistenceStoreOverride = sp.GetRequiredService<IAgentPersistenceStore>(),
-}));
 
 var localTrustedExecutor = new LocalTrustedExecutor();
 builder.Services.AddSingleton(localTrustedExecutor);

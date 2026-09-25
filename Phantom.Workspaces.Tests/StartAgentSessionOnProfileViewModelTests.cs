@@ -1,5 +1,6 @@
 using System;
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.Threading;
 using System.Threading.Tasks;
 using AgentSchema;
@@ -9,6 +10,8 @@ using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Services.Logging;
+using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.ViewModels;
 using IRunningAgentChatFactory = Phantom.Workspaces.Llm.IRunningAgentChatFactory;
@@ -28,6 +31,47 @@ namespace Phantom.Workspaces.Tests;
 /// </summary>
 public sealed class StartAgentSessionOnProfileViewModelTests
 {
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task StartAgentSessionOnProfileViewModel_ProductionSession_ReceivesExplicitLogger()
+    {
+        var directory = Path.Combine(AppContext.BaseDirectory, "profile-session-logging-tests",
+            Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var process = HostFileLoggerFactory.Create(directory);
+            var (viewModel, vm, spy, _, _, handler) = await OpenProfileTabAsync(
+                remoteOwner: true, processLoggerFactory: process);
+            await using (viewModel)
+            await using (handler)
+            {
+                var definition = await WaitForAgentSourceAsync(
+                    vm, new EntityId("b1309002-0000-4000-8000-000000000002"));
+                vm.SelectedAgentSource = definition;
+                vm.CreateSessionCommand.Execute(null);
+
+                var tab = await MainWindowIntegrationTests.WaitForSelectedTabAsync<AgentSessionWorkspaceTabViewModel>(
+                    viewModel.SelectedWorkspacePane);
+                await MainWindowIntegrationTests.WaitForAgentReadyAsync(tab);
+
+                var services = Assert.IsType<AgentServices>(spy.LastRequest?.AgentServices);
+                var tee = Assert.IsType<SessionTeeLoggerFactory>(services.LoggerFactory);
+                Assert.Same(tab.LoggerFactory, tee.SessionMemoryFactory);
+                const string eventText = "Agent session profile launch; outcome acquired.";
+                Assert.Single(tab.LoggerFactory!.Entries, entry =>
+                    entry.Contains(eventText, StringComparison.Ordinal));
+                var file = ProcessLogTestFile.ReadAll(directory);
+                Assert.Equal(1, file.Split(eventText, StringSplitOptions.None).Length - 1);
+                Assert.DoesNotContain(tab.AgentSessionId!, file, StringComparison.Ordinal);
+                Assert.DoesNotContain("b1309001-0000-4000-8000-000000000001", file, StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private const string ProfileEntityJson =
         """
         {
@@ -156,9 +200,14 @@ public sealed class StartAgentSessionOnProfileViewModelTests
         RunningAgentChatTable Inner,
         MainWindowIntegrationTests.OwnerPipelineTransport? Transport,
         OpenAgentSessionShortcutHandler Handler)> OpenProfileTabAsync(
-        bool remoteOwner = false)
+        bool remoteOwner = false,
+        ILoggerFactory? processLoggerFactory = null)
     {
-        var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        var applicationServices = processLoggerFactory is null ? null : new ApplicationServices(
+            MainWindowIntegrationTests.CreateTestRunningAgentChatTable(),
+            new AgentPersistenceStoreCache(), processLoggerFactory);
+        var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel(
+            applicationServices: applicationServices);
         await viewModel.InitializeAsync();
 
         var broker = MainWindowIntegrationTests.GetEntityBroker(viewModel);
@@ -225,19 +274,29 @@ public sealed class StartAgentSessionOnProfileViewModelTests
         StartAgentSessionOnProfileViewModel vm,
         EntityId entityId)
     {
-        var start = DateTimeOffset.UtcNow;
-        while (DateTimeOffset.UtcNow - start < TimeSpan.FromSeconds(10))
+        var ready = vm.AgentSources.FirstOrDefault(item => item.Entity.EntityId == entityId);
+        if (ready is not null)
+            return ready;
+
+        var completion = new TaskCompletionSource<StartAgentSessionOnProfileViewModel.AgentSourceItem>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnChanged(object? _, NotifyCollectionChangedEventArgs __)
         {
-            foreach (var item in vm.AgentSources)
-            {
-                if (item.Entity.EntityId == entityId)
-                {
-                    return item;
-                }
-            }
-            await Task.Yield();
+            var matched = vm.AgentSources.FirstOrDefault(item => item.Entity.EntityId == entityId);
+            if (matched is not null)
+                completion.TrySetResult(matched);
         }
-        throw new TimeoutException($"Agent source for {entityId} did not appear.");
+
+        vm.AgentSources.CollectionChanged += OnChanged;
+        try
+        {
+            OnChanged(null, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
+            return await completion.Task.WaitAsync(TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            vm.AgentSources.CollectionChanged -= OnChanged;
+        }
     }
 
     private sealed class SpyRunningAgentChatTable : IRunningAgentChatTable

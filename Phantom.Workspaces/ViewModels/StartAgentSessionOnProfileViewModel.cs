@@ -13,6 +13,7 @@ using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Logging;
+using Microsoft.Extensions.Logging;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -218,10 +219,10 @@ public sealed class StartAgentSessionOnProfileViewModel : WorkspaceTabViewModel
 
         var agentDefinition = PhantomAgentSchema.AgentDefinitionFromJson(definitionElement.GetRawText());
         var sessionMemoryFactory = new ObservableLoggerFactory();
+        var sessionLoggerFactory = new SessionTeeLoggerFactory(
+            this.mainWindowViewModel.ApplicationServices.LoggerFactory, sessionMemoryFactory);
         var agentServices = await this.agentSessionShortcutContext.CreateAgentServicesAsync(
-            this.mainWindowViewModel,
-            new SessionTeeLoggerFactory(this.mainWindowViewModel.ApplicationServices.LoggerFactory,
-                sessionMemoryFactory));
+            this.mainWindowViewModel, sessionLoggerFactory);
 
         // #1309: Route through IRunningAgentChatTable → AgentChatFactory.GetOrCreateAsync so
         // the newly-created root chat is registered in _entries[sessionId] and
@@ -268,6 +269,8 @@ public sealed class StartAgentSessionOnProfileViewModel : WorkspaceTabViewModel
                 AcquisitionMode = acquisition.Mode,
                 OwningProfileTransport = acquisition.Transport,
             });
+        sessionLoggerFactory.CreateLogger<StartAgentSessionOnProfileViewModel>()
+            .LogInformation("Agent session profile launch; outcome acquired.");
         this.openAgentSessionShortcutHandler.RegisterSessionLogger(
             lease.AgentChat.Information.AgentSessionId, sessionMemoryFactory);
 
