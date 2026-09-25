@@ -77,6 +77,46 @@ public sealed class GitWorktreeReviewViewRenderingTests
     }
 
     [AvaloniaFact]
+    public async Task GitWorktreeReviewView_ResizePaneAfterModeChange_KeepsLineSelectedAndScrollable()
+    {
+        var (window, viewModel, rows) = await OpenAsync(sideBySide: false, width: 850);
+        await using (viewModel)
+        {
+            try
+            {
+                rows.SelectedIndex = 2;
+                Assert.IsType<GitDiffUnifiedLineRow>(viewModel.SelectedDiffRow);
+
+                var review = Assert.IsType<GitWorktreeReviewView>(window.Content);
+                review.Width = 425;
+                review.HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left;
+                window.UpdateLayout();
+                AssertLineLayout(rows, sideBySide: false);
+                var scroll = Assert.Single(rows.GetVisualDescendants().OfType<ScrollViewer>());
+                Assert.True(scroll.Extent.Width > scroll.Viewport.Width);
+                var narrowViewport = scroll.Viewport.Width;
+
+                viewModel.ApplyDiffs([CreateDiff(sideBySide: true)]);
+                window.UpdateLayout();
+                AssertLineLayout(rows, sideBySide: true);
+                Assert.IsType<GitDiffSideBySideLineRow>(viewModel.SelectedDiffRow);
+                Assert.Same(viewModel.SelectedDiffRow, rows.SelectedItem);
+
+                review.Width = 800;
+                window.UpdateLayout();
+                AssertLineLayout(rows, sideBySide: true);
+                Assert.True(scroll.Viewport.Width > narrowViewport);
+                Assert.True(scroll.Extent.Width > scroll.Viewport.Width);
+                Assert.Same(viewModel.SelectedDiffRow, rows.SelectedItem);
+            }
+            finally
+            {
+                window.Close();
+            }
+        }
+    }
+
+    [AvaloniaFact]
     public async Task GitWorktreeReviewView_LargeDiff_RealizesOnlyVisibleRowContainers()
     {
         var (window, viewModel, rows) = await OpenAsync(sideBySide: false, width: 650, lineCount: 5000);
