@@ -147,6 +147,141 @@ public sealed class ReverseExecutionDispatcherTests
         Assert.Equal(outbound, Convert.FromBase64String(data.GetProperty("data").GetString()!));
     }
 
+    [Fact]
+    public async Task ExecutorDispatcher_RegistrationInfoHandlerThrowsInvalidOperation_ReportsFailureAndCleansSessions()
+    {
+        await using var underlying = new UnderlyingChannel();
+        var opened = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var disposed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var logs = new CapturingLoggerFactory();
+        var registry = new TransportRegistry();
+        registry.Register(new RecordingChannelListener(() => disposed.TrySetResult(), () => opened.TrySetResult()));
+        await using var dispatcher = new ReverseExecutionDispatcher(
+            underlying, registry, registrationInfoHandler: (_, _) => throw new InvalidOperationException("private details"),
+            loggerFactory: logs);
+
+        await underlying.DeliverInbound(Json("""{"type":"channel-open","channelId":"old","request":{"type":"recording"}}"""));
+        await opened.Task.WaitAsync(Ct());
+        await underlying.DeliverInbound(Json("""{"type":"reverse-registration-info","hub-profile-entity-id":"hub"}"""));
+
+        var result = await dispatcher.Completion.WaitAsync(Ct());
+        await disposed.Task.WaitAsync(Ct());
+
+        Assert.Equal(ReverseDispatchStopReason.DispatchFailed, result.Reason);
+        Assert.Equal(nameof(InvalidOperationException), result.ExceptionType);
+        Assert.False(underlying.Reader.Completion.IsCompleted);
+        Assert.Contains(logs.Entries, entry =>
+            entry.Message.Contains("DispatchFailed", StringComparison.Ordinal)
+            && entry.Message.Contains(nameof(InvalidOperationException), StringComparison.Ordinal));
+        Assert.DoesNotContain(logs.Entries, entry => entry.Exception is not null
+            || entry.Message.Contains("private details", StringComparison.Ordinal)
+            || entry.Message.Contains("hub-profile-entity-id", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ExecutorDispatcher_RegistrationChannelCompletes_ReportsChannelClosure()
+    {
+        await using var underlying = new UnderlyingChannel();
+        await using var dispatcher = new ReverseExecutionDispatcher(underlying, new TransportRegistry());
+
+        underlying.CompleteInbound();
+
+        var result = await dispatcher.Completion.WaitAsync(Ct());
+        Assert.Equal(ReverseDispatchStopReason.ChannelClosed, result.Reason);
+        Assert.Null(result.ExceptionType);
+    }
+
+    [Fact]
+    public async Task ExecutorDispatcher_RegistrationChannelFaults_ReportsChannelClosure()
+    {
+        await using var underlying = new UnderlyingChannel();
+        await using var dispatcher = new ReverseExecutionDispatcher(underlying, new TransportRegistry());
+
+        underlying.CompleteInbound(new IOException("private detail"));
+
+        var result = await dispatcher.Completion.WaitAsync(Ct());
+        Assert.Equal(ReverseDispatchStopReason.ChannelClosed, result.Reason);
+        Assert.Equal(nameof(IOException), result.ExceptionType);
+    }
+
+    [Fact]
+    public async Task ExecutorDispatcher_ReaderThrowsWhileOpen_ReportsDispatchFailure()
+    {
+        await using var underlying = new ReaderFailureChannel();
+        await using var dispatcher = new ReverseExecutionDispatcher(underlying, new TransportRegistry());
+
+        var result = await dispatcher.Completion.WaitAsync(Ct());
+
+        Assert.Equal(ReverseDispatchStopReason.DispatchFailed, result.Reason);
+        Assert.Equal(nameof(IOException), result.ExceptionType);
+        Assert.False(underlying.Reader.Completion.IsCompleted);
+    }
+
+    [Fact]
+    public async Task ExecutorDispatcher_HostDisposes_ReportsIntentionalStop()
+    {
+        await using var underlying = new UnderlyingChannel();
+        await using var dispatcher = new ReverseExecutionDispatcher(underlying, new TransportRegistry());
+
+        await dispatcher.DisposeAsync();
+
+        var result = await dispatcher.Completion.WaitAsync(Ct());
+        Assert.Equal(ReverseDispatchStopReason.Stopped, result.Reason);
+        Assert.Null(result.ExceptionType);
+        Assert.False(underlying.Reader.Completion.IsCompleted);
+    }
+
+    [Fact]
+    public async Task ExecutorDispatcher_HostDisposesDuringHandler_ReportsIntentionalStop()
+    {
+        await using var underlying = new UnderlyingChannel();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var continueHandler = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var dispatcher = new ReverseExecutionDispatcher(
+            underlying, new TransportRegistry(),
+            registrationInfoHandler: async (_, ct) =>
+            {
+                started.TrySetResult();
+                await continueHandler.Task.WaitAsync(ct);
+            });
+
+        await underlying.DeliverInbound(Json("""{"type":"reverse-registration-info","hub-profile-entity-id":"hub"}"""));
+        await started.Task.WaitAsync(Ct());
+        await dispatcher.DisposeAsync().AsTask().WaitAsync(Ct());
+
+        Assert.Equal(ReverseDispatchStopReason.Stopped, (await dispatcher.Completion).Reason);
+        Assert.False(underlying.Reader.Completion.IsCompleted);
+    }
+
+    [Fact]
+    public async Task ExecutorDispatcher_UnexpectedCancellationWithOpenChannel_ReportsFailure()
+    {
+        await using var underlying = new UnderlyingChannel();
+        await using var dispatcher = new ReverseExecutionDispatcher(
+            underlying, new TransportRegistry(), registrationInfoHandler: (_, _) => throw new OperationCanceledException());
+
+        await underlying.DeliverInbound(Json("""{"type":"reverse-registration-info","hub-profile-entity-id":"hub"}"""));
+
+        var result = await dispatcher.Completion.WaitAsync(Ct());
+        Assert.Equal(ReverseDispatchStopReason.DispatchFailed, result.Reason);
+        Assert.Equal(nameof(OperationCanceledException), result.ExceptionType);
+    }
+
+    [Fact]
+    public async Task ExecutorDispatcher_HandlerChannelClosedWithOpenReader_ReportsFailure()
+    {
+        await using var underlying = new UnderlyingChannel();
+        await using var dispatcher = new ReverseExecutionDispatcher(
+            underlying, new TransportRegistry(), registrationInfoHandler: (_, _) => throw new ChannelClosedException());
+
+        await underlying.DeliverInbound(Json("""{"type":"reverse-registration-info","hub-profile-entity-id":"hub"}"""));
+
+        var result = await dispatcher.Completion.WaitAsync(Ct());
+        Assert.Equal(ReverseDispatchStopReason.DispatchFailed, result.Reason);
+        Assert.Equal(nameof(ChannelClosedException), result.ExceptionType);
+        Assert.False(underlying.Reader.Completion.IsCompleted);
+    }
+
     private static CancellationToken Ct() => new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token;
 
     private static JsonElement StreamData(string streamId, byte[] data)
@@ -172,11 +307,44 @@ public sealed class ReverseExecutionDispatcherTests
 
         public ValueTask DeliverInbound(JsonElement frame) => this.inbound.Writer.WriteAsync(frame);
 
+        public void CompleteInbound(Exception? error = null) => this.inbound.Writer.TryComplete(error);
+
         public ValueTask DisposeAsync()
         {
             this.inbound.Writer.TryComplete();
             this.outbound.Writer.TryComplete();
             return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class ReaderFailureChannel : IMessageChannel
+    {
+        private readonly Channel<JsonElement> outgoing = Channel.CreateUnbounded<JsonElement>();
+
+        public ChannelWriter<JsonElement> Writer => this.outgoing.Writer;
+
+        public ChannelReader<JsonElement> Reader { get; } = new FailingReader();
+
+        public ValueTask DisposeAsync()
+        {
+            this.outgoing.Writer.TryComplete();
+            return ValueTask.CompletedTask;
+        }
+
+        private sealed class FailingReader : ChannelReader<JsonElement>
+        {
+            private readonly TaskCompletionSource completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            public override Task Completion => this.completion.Task;
+
+            public override bool TryRead(out JsonElement item)
+            {
+                item = default;
+                return false;
+            }
+
+            public override ValueTask<bool> WaitToReadAsync(CancellationToken cancellationToken = default)
+                => ValueTask.FromException<bool>(new IOException("private detail"));
         }
     }
 
@@ -223,10 +391,13 @@ public sealed class ReverseExecutionDispatcherTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private sealed class RecordingChannelListener(Action onDispose) : ITransportListener
+    private sealed class RecordingChannelListener(Action onDispose, Action? onOpen = null) : ITransportListener
     {
         public Task<IAsyncDisposable?> OnChannelOpenAsync(JsonElement request, IMessageChannel channel, CancellationToken ct = default)
-            => Task.FromResult<IAsyncDisposable?>(new DisposeCallback(onDispose));
+        {
+            onOpen?.Invoke();
+            return Task.FromResult<IAsyncDisposable?>(new DisposeCallback(onDispose));
+        }
 
         public Task<IAsyncDisposable?> OnStreamOpenAsync(JsonElement request, Stream stream, CancellationToken ct = default)
             => Task.FromResult<IAsyncDisposable?>(null);
