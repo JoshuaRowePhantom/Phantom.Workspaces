@@ -7,6 +7,15 @@ using Phantom.Workspaces.Transport.Logging;
 
 namespace Phantom.Workspaces.Transport.ReverseHttp;
 
+public enum ReverseDispatchStopReason
+{
+    Stopped,
+    ChannelClosed,
+    DispatchFailed,
+}
+
+public readonly record struct ReverseDispatchOutcome(ReverseDispatchStopReason Reason, string? ExceptionType = null);
+
 /// <summary>
 /// Executor-side host that services a reverse-HTTP registration channel. It reads relayed
 /// <c>channel-open</c> / <c>stream-open</c> frames (forwarded by the hub from a remote forwarding
@@ -30,8 +39,9 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
     private readonly ConcurrentDictionary<string, DispatchedStream> streams = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, IAsyncDisposable> sessions = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource shutdown = new();
-    private readonly Task readLoop;
+    private readonly Task<ReverseDispatchOutcome> readLoop;
     private int sessionsClosed;
+    private int disposed;
 
     public ReverseExecutionDispatcher(
         IMessageChannel registrationChannel,
@@ -51,43 +61,66 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
         this.readLoop = this.RunAsync();
     }
 
+    public Task<ReverseDispatchOutcome> Completion => this.readLoop;
+
     public async ValueTask DisposeAsync()
     {
-        await this.shutdown.CancelAsync().ConfigureAwait(false);
-        try
+        if (Interlocked.Exchange(ref this.disposed, 1) != 0)
         {
-            await this.readLoop.ConfigureAwait(false);
-        }
-        catch
-        {
+            return;
         }
 
-        await this.CloseHostedSessionsAsync().ConfigureAwait(false);
+        await this.shutdown.CancelAsync().ConfigureAwait(false);
+        await this.readLoop.ConfigureAwait(false);
         this.shutdown.Dispose();
     }
 
-    private async Task RunAsync()
+    private async Task<ReverseDispatchOutcome> RunAsync()
     {
+        var outcome = new ReverseDispatchOutcome(ReverseDispatchStopReason.ChannelClosed);
         try
         {
             await foreach (var frame in this.registrationChannel.Reader.ReadAllAsync(this.shutdown.Token).ConfigureAwait(false))
             {
-                await this.DispatchAsync(frame).ConfigureAwait(false);
+                try
+                {
+                    await this.DispatchAsync(frame).ConfigureAwait(false);
+                }
+                catch (Exception error)
+                {
+                    outcome = this.shutdown.IsCancellationRequested
+                        ? new ReverseDispatchOutcome(ReverseDispatchStopReason.Stopped)
+                        : new ReverseDispatchOutcome(ReverseDispatchStopReason.DispatchFailed, error.GetType().Name);
+                    break;
+                }
+            }
+
+            if (this.shutdown.IsCancellationRequested)
+            {
+                outcome = new ReverseDispatchOutcome(ReverseDispatchStopReason.Stopped);
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (this.shutdown.IsCancellationRequested)
         {
+            outcome = new ReverseDispatchOutcome(ReverseDispatchStopReason.Stopped);
         }
-        catch (ChannelClosedException)
+        catch (Exception error) when (this.registrationChannel.Reader.Completion.IsCompleted)
         {
+            outcome = new ReverseDispatchOutcome(ReverseDispatchStopReason.ChannelClosed, error.GetType().Name);
         }
-        catch (InvalidOperationException)
+        catch (Exception error)
         {
+            outcome = new ReverseDispatchOutcome(ReverseDispatchStopReason.DispatchFailed, error.GetType().Name);
         }
         finally
         {
             await this.CloseHostedSessionsAsync().ConfigureAwait(false);
+            this.logger.LogInformation(
+                "Reverse worker dispatch closed; outcome {Outcome}; exception-type {ExceptionType}.",
+                outcome.Reason, outcome.ExceptionType ?? "none");
         }
+
+        return outcome;
     }
 
     private async Task CloseHostedSessionsAsync()
@@ -97,7 +130,6 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
             return;
         }
 
-        this.logger.LogInformation("Reverse worker dispatch closed; outcome disconnected.");
         foreach (var channel in this.channels.Values)
         {
             channel.CompleteIncoming();

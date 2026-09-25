@@ -72,6 +72,8 @@ public sealed class ReverseHttpClientTransportFactory : ITransportFactory
 
     public IReadOnlyList<string> HubUrls => this.hubUrls;
 
+    public bool IsRegistered => this.registrationChannel is not null;
+
     public Exception? LastReachabilityPublicationError { get; private set; }
 
     public void ConfigureReachability(
@@ -128,6 +130,7 @@ public sealed class ReverseHttpClientTransportFactory : ITransportFactory
             return this.registrationChannel;
         }
 
+        var registered = false;
         try
         {
             var hubDescriptor = JsonSerializer.SerializeToElement(new { type = "http", url = this.hubUrl });
@@ -137,6 +140,11 @@ public sealed class ReverseHttpClientTransportFactory : ITransportFactory
                 new Dictionary<string, string> { ["type"] = "reverse-register", ["entity-id"] = this.entityId });
             this.registrationChannel = await this.hubTransport.ConnectToMessageChannelAsync(registerDescriptor, ct)
                 .ConfigureAwait(false);
+            this.logger.LogInformation("Reverse registration client; outcome connected.");
+            this.UpsertHubUrl();
+            await this.StartReachabilityLeaseAsync(ct).ConfigureAwait(false);
+            registered = true;
+            return this.registrationChannel;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -148,63 +156,70 @@ public sealed class ReverseHttpClientTransportFactory : ITransportFactory
         {
             this.logger.LogWarning("Reverse registration client; outcome {Outcome}.",
                 error is TimeoutException ? "timeout" : "transport-failure");
-            if (this.hubTransport is not null)
-            {
-                await this.hubTransport.DisposeAsync().ConfigureAwait(false);
-                this.hubTransport = null;
-            }
             throw new TransportException("Reverse registration could not be established.");
         }
-        this.logger.LogInformation("Reverse registration client; outcome connected.");
-        this.UpsertHubUrl();
-        await this.StartReachabilityLeaseAsync(ct).ConfigureAwait(false);
-        return this.registrationChannel;
+        finally
+        {
+            if (!registered)
+            {
+                await this.DisconnectAsync().ConfigureAwait(false);
+            }
+        }
     }
 
     public async Task<IMessageChannel> ReconnectAsync(CancellationToken ct = default)
     {
         this.logger.LogInformation("Reverse registration client; outcome reconnecting.");
-        if (this.registrationChannel is not null)
-        {
-            await this.registrationChannel.DisposeAsync().ConfigureAwait(false);
-            this.registrationChannel = null;
-        }
-
-        if (this.hubTransport is not null)
-        {
-            await this.hubTransport.DisposeAsync().ConfigureAwait(false);
-            this.hubTransport = null;
-        }
-
-        if (this.reachabilityLease is not null)
-        {
-            await this.reachabilityLease.DisposeAsync().ConfigureAwait(false);
-            this.reachabilityLease = null;
-        }
-
+        await this.DisconnectAsync().ConfigureAwait(false);
         return await this.EnsureRegisteredAsync(ct).ConfigureAwait(false);
+    }
+
+    public async Task DisconnectAsync()
+    {
+        var channel = this.registrationChannel;
+        var transport = this.hubTransport;
+        var lease = this.reachabilityLease;
+        this.registrationChannel = null;
+        this.hubTransport = null;
+        this.reachabilityLease = null;
+        this.hubUrls.Clear();
+
+        try
+        {
+            if (channel is not null)
+            {
+                await channel.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            try
+            {
+                if (transport is not null)
+                {
+                    await transport.DisposeAsync().ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                if (lease is not null)
+                {
+                    await lease.DisposeAsync().ConfigureAwait(false);
+                }
+            }
+        }
     }
 
     public async ValueTask DisposeAsync()
     {
-        if (this.registrationChannel is not null)
+        try
         {
-            await this.registrationChannel.DisposeAsync().ConfigureAwait(false);
+            await this.DisconnectAsync().ConfigureAwait(false);
         }
-
-        if (this.hubTransport is not null)
+        finally
         {
-            await this.hubTransport.DisposeAsync().ConfigureAwait(false);
+            await this.httpClientTransportFactory.DisposeAsync().ConfigureAwait(false);
         }
-
-        if (this.reachabilityLease is not null)
-        {
-            await this.reachabilityLease.DisposeAsync().ConfigureAwait(false);
-            this.reachabilityLease = null;
-        }
-
-        this.hubUrls.Clear();
-        await this.httpClientTransportFactory.DisposeAsync().ConfigureAwait(false);
     }
 
     private void UpsertHubUrl()

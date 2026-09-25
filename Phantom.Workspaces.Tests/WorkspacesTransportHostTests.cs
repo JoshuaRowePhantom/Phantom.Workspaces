@@ -86,19 +86,13 @@ public sealed class WorkspacesTransportHostTests
         var factory = new ReverseHttpClientTransportFactory(http, "https://hub.example", "machine-a");
         var registry = new TransportRegistry();
 
-        var reconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var stateChanges = 0;
+        var states = Channel.CreateUnbounded<bool>();
 
         await using var host = new WorkspacesTransportHost(registry, [factory], Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
-        host.ConnectionStateChanged += (_, _) =>
-        {
-            if (Interlocked.Increment(ref stateChanges) >= 2)
-            {
-                reconnected.TrySetResult();
-            }
-        };
+        host.ConnectionStateChanged += (_, _) => states.Writer.TryWrite(host.IsConnected);
 
         await host.StartAsync(Ct());
+        Assert.True(await states.Reader.ReadAsync(Ct()));
 
         var firstChannel = http.Channels.Single();
 
@@ -106,10 +100,237 @@ public sealed class WorkspacesTransportHostTests
         // which opens a fresh registration channel through the (fake) HTTP transport factory.
         firstChannel.CompleteInbound();
 
-        await reconnected.Task.WaitAsync(Ct());
+        Assert.False(await states.Reader.ReadAsync(Ct()));
+        Assert.True(await states.Reader.ReadAsync(Ct()));
 
         Assert.Equal(2, http.Channels.Count);
         Assert.NotSame(firstChannel, http.Channels[^1]);
+    }
+
+    [Fact]
+    public async Task RegistrationChannelFaults_ReconnectsAndDisposesOldRegistration()
+    {
+        var http = new FakeHubHttpTransportFactory();
+        var factory = new ReverseHttpClientTransportFactory(http, "https://hub.example", "machine-a");
+        var states = Channel.CreateUnbounded<bool>();
+        await using var host = new WorkspacesTransportHost(
+            new TransportRegistry(), [factory], Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
+        host.ConnectionStateChanged += (_, _) => states.Writer.TryWrite(host.IsConnected);
+        await host.StartAsync(Ct());
+        Assert.True(await states.Reader.ReadAsync(Ct()));
+        var first = Assert.Single(http.Channels);
+
+        first.CompleteInbound(new IOException("private detail"));
+
+        Assert.False(await states.Reader.ReadAsync(Ct()));
+        Assert.True(await states.Reader.ReadAsync(Ct()));
+        Assert.Equal(2, http.Channels.Count);
+        Assert.True(first.Disposed);
+        Assert.True(host.IsConnected);
+    }
+
+    [Fact]
+    public async Task RegistrationInfoHandlerFailsWithOpenChannel_ReconnectsAndDispatchesRelayedChannelOpen()
+    {
+        var profile = new EntityId("11111111-1111-4111-8111-111111111111");
+        var oldHub = new EntityId("22222222-2222-4222-8222-222222222222");
+        var newHub = new EntityId("33333333-3333-4333-8333-333333333333");
+        var store = new RecordingRouteStore();
+        var http = new FakeHubHttpTransportFactory();
+        var factory = new ReverseHttpClientTransportFactory(
+            http, "https://hub.example", profile.ToString(), store, oldHub);
+        var identities = new TransportPeerIdentityProvider();
+        var opened = Channel.CreateUnbounded<string>();
+        var disposed = Channel.CreateUnbounded<string>();
+        var registry = new TransportRegistry();
+        registry.Register(new RecordingIdentityChannelListener(
+            identities, id => opened.Writer.TryWrite(id), id => disposed.Writer.TryWrite(id)));
+        var states = Channel.CreateUnbounded<bool>();
+        await using var host = new WorkspacesTransportHost(
+            registry, [factory], Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance, identities);
+        host.ConnectionStateChanged += (_, _) => states.Writer.TryWrite(host.IsConnected);
+        await host.StartAsync(Ct());
+        Assert.True(await states.Reader.ReadAsync(Ct()));
+        Assert.Equal($"upsert:reverse-http:{oldHub}", await store.Operations.ReadAsync(Ct()));
+
+        var first = Assert.Single(http.Channels);
+        await first.DeliverInbound(Json("""
+            {"type":"channel-open","channelId":"old","authenticatedPeer":{"authenticationScheme":"test","stablePeerId":"old-peer"},
+             "request":{"type":"identity"}}
+            """));
+        Assert.Equal("old-peer", await opened.Reader.ReadAsync(Ct()));
+
+        store.FailNextUpsert();
+        await first.DeliverInbound(Json($$"""
+            {"type":"reverse-registration-info","hub-profile-entity-id":"{{newHub}}"}
+            """));
+
+        Assert.False(await states.Reader.ReadAsync(Ct()));
+        Assert.True(first.Disposed);
+        Assert.True(first.Reader.Completion.IsCompleted);
+        Assert.False(first.CanDeliverInbound(Json("""{"type":"channel-open","channelId":"stale","request":{"type":"identity"}}""")));
+        Assert.Equal("old-peer", await disposed.Reader.ReadAsync(Ct()));
+        Assert.Equal($"remove:reverse-http:{oldHub}", await store.Operations.ReadAsync(Ct()));
+        Assert.Equal($"failed-upsert:reverse-http:{newHub}", await store.Operations.ReadAsync(Ct()));
+        Assert.Equal($"remove:reverse-http:{newHub}", await store.Operations.ReadAsync(Ct()));
+
+        Assert.True(await states.Reader.ReadAsync(Ct()));
+        var second = Assert.Single(http.Channels.Skip(1));
+        Assert.NotSame(first, second);
+        Assert.Equal($"upsert:reverse-http:{newHub}", await store.Operations.ReadAsync(Ct()));
+        await second.DeliverInbound(Json("""
+            {"type":"channel-open","channelId":"new","authenticatedPeer":{"authenticationScheme":"test","stablePeerId":"new-peer"},
+             "request":{"type":"identity"}}
+            """));
+        Assert.Equal("new-peer", await opened.Reader.ReadAsync(Ct()));
+        Assert.False(disposed.Reader.TryRead(out _));
+        Assert.Null(host.LastRegistrationFailureType);
+    }
+
+    [Fact]
+    public async Task DispatcherAndRegistrationChannelEndTogether_ReconnectsOnceAndDisposesSessions()
+    {
+        var http = new FakeHubHttpTransportFactory();
+        var factory = new ReverseHttpClientTransportFactory(http, "https://hub.example", "machine-a");
+        var opened = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var disposed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var registry = new TransportRegistry();
+        registry.Register(new RecordingChannelListener(() => opened.TrySetResult(), () => disposed.TrySetResult()));
+        var states = Channel.CreateUnbounded<bool>();
+        await using var host = new WorkspacesTransportHost(registry, [factory], Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
+        host.ConnectionStateChanged += (_, _) => states.Writer.TryWrite(host.IsConnected);
+        await host.StartAsync(Ct());
+        Assert.True(await states.Reader.ReadAsync(Ct()));
+        var first = Assert.Single(http.Channels);
+        await first.DeliverInbound(Json("""{"type":"channel-open","channelId":"old","request":{"type":"recording"}}"""));
+        await opened.Task.WaitAsync(Ct());
+
+        first.CompleteInbound();
+        Assert.False(await states.Reader.ReadAsync(Ct()));
+        await disposed.Task.WaitAsync(Ct());
+        Assert.True(await states.Reader.ReadAsync(Ct()));
+        Assert.Equal(2, http.Channels.Count);
+        Assert.Equal(1, first.DisposeCount);
+        Assert.False(states.Reader.TryRead(out _));
+    }
+
+    [Fact]
+    public async Task DispatcherExit_RevokesHubRegistrationAndStatusBeforeReconnect()
+    {
+        var profile = new EntityId("11111111-1111-4111-8111-111111111111");
+        var oldHub = new EntityId("22222222-2222-4222-8222-222222222222");
+        var newHub = new EntityId("33333333-3333-4333-8333-333333333333");
+        var store = new RecordingRouteStore();
+        var statuses = new ReverseConnectionStatusRegistry();
+        await using var server = new ReverseHttpServerTransportFactory(statuses);
+        var http = new FakeHubHttpTransportFactory(server);
+        var factory = new ReverseHttpClientTransportFactory(
+            http, "https://hub.example", profile.ToString(), store, oldHub);
+        var states = Channel.CreateUnbounded<(bool ClientConnected, bool HubRegistered, int StatusCount)>();
+        await using var host = new WorkspacesTransportHost(
+            new TransportRegistry(), [factory], Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
+        host.ConnectionStateChanged += (_, _) => states.Writer.TryWrite((
+            host.IsConnected, server.IsRegistered(profile.ToString()), statuses.GetConnectedInstances().Count));
+        await host.StartAsync(Ct());
+        Assert.Equal((true, true, 1), await states.Reader.ReadAsync(Ct()));
+        Assert.Equal($"upsert:reverse-http:{oldHub}", await store.Operations.ReadAsync(Ct()));
+
+        var first = Assert.Single(http.Channels);
+        store.FailNextUpsert();
+        await first.DeliverInbound(Json($$"""
+            {"type":"reverse-registration-info","hub-profile-entity-id":"{{newHub}}"}
+            """));
+
+        Assert.Equal((false, false, 0), await states.Reader.ReadAsync(Ct()));
+        Assert.Equal((true, true, 1), await states.Reader.ReadAsync(Ct()));
+        Assert.True(first.Disposed);
+        Assert.Equal(2, http.Channels.Count);
+        Assert.Single(statuses.GetConnectedInstances());
+    }
+
+    [Fact]
+    public async Task DispatcherStopsAndReconnectFails_ReportsDisconnectedState()
+    {
+        var profile = new EntityId("11111111-1111-4111-8111-111111111111");
+        var hubId = new EntityId("22222222-2222-4222-8222-222222222222");
+        var store = new RecordingRouteStore();
+        var http = new FakeHubHttpTransportFactory();
+        var factory = new ReverseHttpClientTransportFactory(
+            http, "https://hub.example", profile.ToString(), store, hubId);
+        var states = Channel.CreateUnbounded<bool>();
+        await using var host = new WorkspacesTransportHost(
+            new TransportRegistry(), [factory], Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
+        host.ConnectionStateChanged += (_, _) => states.Writer.TryWrite(host.IsConnected);
+        await host.StartAsync(Ct());
+        Assert.True(await states.Reader.ReadAsync(Ct()));
+        Assert.Equal($"upsert:reverse-http:{hubId}", await store.Operations.ReadAsync(Ct()));
+
+        http.FailNextConnection = true;
+        var first = Assert.Single(http.Channels);
+        first.CompleteInbound();
+
+        Assert.False(await states.Reader.ReadAsync(Ct()));
+        Assert.False(await states.Reader.ReadAsync(Ct()));
+        Assert.True(first.Disposed);
+        Assert.False(host.IsConnected);
+        Assert.Empty(factory.HubUrls);
+        Assert.Equal(nameof(TransportException), host.LastRegistrationFailureType);
+        Assert.Equal($"remove:reverse-http:{hubId}", await store.Operations.ReadAsync(Ct()));
+        Assert.Single(http.Channels);
+        Assert.False(states.Reader.TryRead(out _));
+    }
+
+    [Fact]
+    public async Task HostShutdown_CancelsDispatcherWithoutReconnecting()
+    {
+        var http = new FakeHubHttpTransportFactory();
+        var factory = new ReverseHttpClientTransportFactory(http, "https://hub.example", "machine-a");
+        var states = Channel.CreateUnbounded<bool>();
+        var host = new WorkspacesTransportHost(
+            new TransportRegistry(), [factory], Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
+        host.ConnectionStateChanged += (_, _) => states.Writer.TryWrite(host.IsConnected);
+        await host.StartAsync(Ct());
+        Assert.True(await states.Reader.ReadAsync(Ct()));
+        var first = Assert.Single(http.Channels);
+
+        await host.DisposeAsync();
+
+        Assert.False(host.IsConnected);
+        Assert.True(first.Disposed);
+        Assert.Single(http.Channels);
+        Assert.False(states.Reader.TryRead(out _));
+        Assert.Null(host.LastRegistrationFailureType);
+    }
+
+    [Fact]
+    public async Task HostShutdown_DuringReconnect_CancelsAttemptAndKeepsRegistrationRevoked()
+    {
+        var http = new FakeHubHttpTransportFactory();
+        var factory = new ReverseHttpClientTransportFactory(http, "https://hub.example", "machine-a");
+        var reconnectStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var neverConnect = new TaskCompletionSource<ITransport?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var states = Channel.CreateUnbounded<bool>();
+        var host = new WorkspacesTransportHost(
+            new TransportRegistry(), [factory], Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
+        host.ConnectionStateChanged += (_, _) => states.Writer.TryWrite(host.IsConnected);
+        await host.StartAsync(Ct());
+        Assert.True(await states.Reader.ReadAsync(Ct()));
+        http.ConnectOverride = ct =>
+        {
+            reconnectStarted.TrySetResult();
+            return neverConnect.Task.WaitAsync(ct);
+        };
+        var first = Assert.Single(http.Channels);
+
+        first.CompleteInbound();
+        Assert.False(await states.Reader.ReadAsync(Ct()));
+        await reconnectStarted.Task.WaitAsync(Ct());
+        await host.DisposeAsync().AsTask().WaitAsync(Ct());
+
+        Assert.False(host.IsConnected);
+        Assert.True(first.Disposed);
+        Assert.Single(http.Channels);
+        Assert.False(states.Reader.TryRead(out _));
     }
 
     [Fact]
@@ -147,54 +368,145 @@ public sealed class WorkspacesTransportHostTests
 
     private static JsonElement Json(string json) => JsonDocument.Parse(json).RootElement.Clone();
 
-    private sealed class FakeHubHttpTransportFactory : ITransportFactory
+    private sealed class FakeHubHttpTransportFactory(ReverseHttpServerTransportFactory? server = null) : ITransportFactory
     {
         private readonly List<FakeRegistrationChannel> channels = [];
 
         public IReadOnlyList<FakeRegistrationChannel> Channels => this.channels;
 
+        public bool FailNextConnection { get; set; }
+
+        public Func<CancellationToken, Task<ITransport?>>? ConnectOverride { get; set; }
+
         public Task<ITransport?> ConnectToAsync(JsonElement connectionDescriptor, CancellationToken ct = default)
-            => Task.FromResult<ITransport?>(new FakeHubTransport(this.channels));
+        {
+            if (this.ConnectOverride is not null)
+            {
+                return this.ConnectOverride(ct);
+            }
+
+            if (this.FailNextConnection)
+            {
+                this.FailNextConnection = false;
+                throw new IOException("Hub unavailable.");
+            }
+
+            return Task.FromResult<ITransport?>(new FakeHubTransport(this.channels, server));
+        }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private sealed class FakeHubTransport(List<FakeRegistrationChannel> channels) : ITransport
+    private sealed class FakeHubTransport(
+        List<FakeRegistrationChannel> channels, ReverseHttpServerTransportFactory? server) : ITransport
     {
-        public Task<IMessageChannel> ConnectToMessageChannelAsync(JsonElement request, CancellationToken ct = default)
+        public async Task<IMessageChannel> ConnectToMessageChannelAsync(JsonElement request, CancellationToken ct = default)
         {
             var channel = new FakeRegistrationChannel(request.Clone());
+            if (server is not null)
+            {
+                channel.SetServerLease(await server.OnChannelOpenAsync(request, new ServerSideChannel(channel), ct));
+            }
+
             channels.Add(channel);
-            return Task.FromResult<IMessageChannel>(channel);
+            return channel;
         }
 
         public Task<Stream> ConnectToStreamAsync(JsonElement request, CancellationToken ct = default)
             => Task.FromResult<Stream>(new MemoryStream());
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        private sealed class ServerSideChannel(FakeRegistrationChannel channel) : IMessageChannel
+        {
+            public ChannelWriter<JsonElement> Writer => channel.inbound.Writer;
+
+            public ChannelReader<JsonElement> Reader => channel.outbound.Reader;
+
+            public ValueTask DisposeAsync()
+            {
+                channel.inbound.Writer.TryComplete();
+                channel.outbound.Writer.TryComplete();
+                return ValueTask.CompletedTask;
+            }
+        }
     }
 
     private sealed class FakeRegistrationChannel(JsonElement registerRequest) : IMessageChannel
     {
-        private readonly Channel<JsonElement> inbound = System.Threading.Channels.Channel.CreateUnbounded<JsonElement>();
-        private readonly Channel<JsonElement> outbound = System.Threading.Channels.Channel.CreateUnbounded<JsonElement>();
+        internal readonly Channel<JsonElement> inbound = System.Threading.Channels.Channel.CreateUnbounded<JsonElement>();
+        internal readonly Channel<JsonElement> outbound = System.Threading.Channels.Channel.CreateUnbounded<JsonElement>();
+        private IAsyncDisposable? serverLease;
 
         public JsonElement RegisterRequest { get; } = registerRequest;
+
+        public int DisposeCount { get; private set; }
+
+        public bool Disposed => this.DisposeCount > 0;
 
         public ChannelWriter<JsonElement> Writer => this.outbound.Writer;
 
         public ChannelReader<JsonElement> Reader => this.inbound.Reader;
 
+        public void SetServerLease(IAsyncDisposable? lease) => this.serverLease = lease;
+
         public ValueTask DeliverInbound(JsonElement frame) => this.inbound.Writer.WriteAsync(frame);
 
-        public void CompleteInbound() => this.inbound.Writer.TryComplete();
+        public void CompleteInbound(Exception? error = null) => this.inbound.Writer.TryComplete(error);
+
+        public bool CanDeliverInbound(JsonElement frame) => this.inbound.Writer.TryWrite(frame);
 
         public ValueTask<JsonElement> ReadOutbound(CancellationToken ct) => this.outbound.Reader.ReadAsync(ct);
 
-        public ValueTask DisposeAsync()
+        public async ValueTask DisposeAsync()
         {
+            this.DisposeCount++;
             this.inbound.Writer.TryComplete();
             this.outbound.Writer.TryComplete();
+            if (this.serverLease is not null)
+            {
+                await this.serverLease.DisposeAsync();
+            }
+        }
+    }
+
+    private sealed class RecordingIdentityChannelListener(
+        TransportPeerIdentityProvider identities, Action<string> onOpen, Action<string> onDispose) : ITransportListener
+    {
+        public Task<IAsyncDisposable?> OnChannelOpenAsync(JsonElement request, IMessageChannel channel, CancellationToken ct = default)
+        {
+            if (!request.TryGetProperty("type", out var type) || type.GetString() != "identity")
+                return Task.FromResult<IAsyncDisposable?>(null);
+            var peer = identities.GetRequiredIdentity(channel).StablePeerId;
+            onOpen(peer);
+            return Task.FromResult<IAsyncDisposable?>(new DisposeCallback(() => onDispose(peer)));
+        }
+
+        public Task<IAsyncDisposable?> OnStreamOpenAsync(JsonElement request, Stream stream, CancellationToken ct = default)
+            => Task.FromResult<IAsyncDisposable?>(null);
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class RecordingChannelListener(Action onOpen, Action onDispose) : ITransportListener
+    {
+        public Task<IAsyncDisposable?> OnChannelOpenAsync(JsonElement request, IMessageChannel channel, CancellationToken ct = default)
+        {
+            onOpen();
+            return Task.FromResult<IAsyncDisposable?>(new DisposeCallback(onDispose));
+        }
+
+        public Task<IAsyncDisposable?> OnStreamOpenAsync(JsonElement request, Stream stream, CancellationToken ct = default)
+            => Task.FromResult<IAsyncDisposable?>(null);
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class DisposeCallback(Action callback) : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync()
+        {
+            callback();
             return ValueTask.CompletedTask;
         }
     }
@@ -228,8 +540,11 @@ public sealed class WorkspacesTransportHostTests
     private sealed class RecordingRouteStore : IReachabilityRouteStore
     {
         private readonly Channel<string> operations = Channel.CreateUnbounded<string>();
+        private int failNextUpsert;
 
         public ChannelReader<string> Operations => this.operations.Reader;
+
+        public void FailNextUpsert() => Interlocked.Exchange(ref this.failNextUpsert, 1);
 
         public Task<IReadOnlyList<ReachabilityRoute>> GetRoutesAsync(
             EntityId profileEntityId,
@@ -241,6 +556,12 @@ public sealed class WorkspacesTransportHostTests
             ReachabilityRoute route,
             CancellationToken cancellationToken = default)
         {
+            if (Interlocked.Exchange(ref this.failNextUpsert, 0) == 1)
+            {
+                this.operations.Writer.TryWrite($"failed-upsert:{route.RouteId}");
+                throw new IOException("Unanticipated route store failure.");
+            }
+
             this.operations.Writer.TryWrite($"upsert:{route.RouteId}");
             return Task.CompletedTask;
         }

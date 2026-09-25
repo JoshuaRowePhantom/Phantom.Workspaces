@@ -10,9 +10,9 @@ namespace Phantom.Workspaces.Services;
 /// GUI-side transport host that registers this machine with each configured reverse-HTTP hub and
 /// services the returned registration channel with a <see cref="ReverseExecutionDispatcher"/>, so
 /// relayed <c>channel-open</c> / <c>stream-open</c> frames reach the local
-/// <see cref="TransportRegistry"/> of chat/mcp/shell listeners. On loss of a registration channel it
-/// reconnects via <see cref="ReverseHttpClientTransportFactory.ReconnectAsync"/> and re-hosts the
-/// dispatcher on the fresh channel. Replaces the <c>ReverseExecutionClientHost</c> /
+/// <see cref="TransportRegistry"/> of chat/mcp/shell listeners. On loss of the dispatcher or its
+/// registration channel it fences the old registration, reconnects and re-hosts the dispatcher
+/// on the fresh channel. Replaces the <c>ReverseExecutionClientHost</c> /
 /// <c>ReverseConnectionAcceptor</c> / <c>LocalReverseExecutionHandler</c> role.
 /// </summary>
 public sealed class WorkspacesTransportHost : IAsyncDisposable
@@ -53,6 +53,10 @@ public sealed class WorkspacesTransportHost : IAsyncDisposable
     public event EventHandler? ConnectionStateChanged;
 
     public IReadOnlyList<ReverseHttpClientTransportFactory> HubFactories => this.hubFactories;
+
+    public bool IsConnected => this.hubFactories.Any(static factory => factory.IsRegistered);
+
+    public string? LastRegistrationFailureType { get; private set; }
 
     public Exception? LastReachabilityPublicationError { get; private set; }
 
@@ -114,17 +118,16 @@ public sealed class WorkspacesTransportHost : IAsyncDisposable
         {
             await Task.WhenAll(this.hubLoops).ConfigureAwait(false);
         }
-        catch
+        finally
         {
-        }
+            foreach (var factory in this.hubFactories)
+            {
+                await factory.DisposeAsync().ConfigureAwait(false);
+            }
 
-        foreach (var factory in this.hubFactories)
-        {
-            await factory.DisposeAsync().ConfigureAwait(false);
+            this.startGate.Dispose();
+            this.shutdown.Dispose();
         }
-
-        this.startGate.Dispose();
-        this.shutdown.Dispose();
     }
 
     private async Task RunHubAsync(ReverseHttpClientTransportFactory factory, IMessageChannel channel)
@@ -134,6 +137,13 @@ public sealed class WorkspacesTransportHost : IAsyncDisposable
 
         while (!token.IsCancellationRequested)
         {
+            var channelCompletion = current.Reader.Completion;
+            // The dispatcher may finish first; still observe a channel fault during teardown.
+            _ = channelCompletion.ContinueWith(
+                static completed => _ = completed.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
             var dispatcher = new ReverseExecutionDispatcher(
                 current,
                 this.localListeners,
@@ -143,19 +153,15 @@ public sealed class WorkspacesTransportHost : IAsyncDisposable
                 this.metadataLogging);
             try
             {
-                await current.Reader.Completion.WaitAsync(token).ConfigureAwait(false);
+                await Task.WhenAny(dispatcher.Completion, channelCompletion)
+                    .WaitAsync(token).ConfigureAwait(false);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
                 await dispatcher.DisposeAsync().ConfigureAwait(false);
                 return;
             }
-            catch (Exception)
-            {
-                // The registration channel faulted; fall through to reconnect below.
-            }
 
-            this.logger.LogInformation("Reverse worker registration; outcome disconnected.");
             await dispatcher.DisposeAsync().ConfigureAwait(false);
 
             if (token.IsCancellationRequested)
@@ -163,19 +169,32 @@ public sealed class WorkspacesTransportHost : IAsyncDisposable
                 return;
             }
 
+            var outcome = await dispatcher.Completion.ConfigureAwait(false);
+            this.logger.LogInformation("Reverse worker registration; outcome disconnected; dispatcher {Reason}.",
+                outcome.Reason);
             try
             {
+                await factory.DisconnectAsync().ConfigureAwait(false);
+                this.LastRegistrationFailureType = outcome.ExceptionType;
+                this.OnConnectionStateChanged();
+                if (token.IsCancellationRequested)
+                {
+                    return;
+                }
+
                 current = await factory.ReconnectAsync(token).ConfigureAwait(false);
+                this.LastRegistrationFailureType = null;
                 this.logger.LogInformation("Reverse worker registration; outcome reconnected.");
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
                 return;
             }
-            catch (Exception)
+            catch (Exception error)
             {
-                // Unable to re-establish the registration channel; stop servicing this hub.
-                this.logger.LogWarning("Reverse worker registration; outcome reconnect-failed.");
+                this.LastRegistrationFailureType = error.GetType().Name;
+                this.logger.LogWarning("Reverse worker registration; outcome reconnect-failed; exception-type {ExceptionType}.",
+                    this.LastRegistrationFailureType);
                 this.OnConnectionStateChanged();
                 return;
             }
