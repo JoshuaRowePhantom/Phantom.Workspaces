@@ -66,6 +66,21 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         };
     }
 
+    private static void SignalNextDiffSwap(
+        GitWorktreeReviewWorkspaceTabViewModel vm, TaskCompletionSource<bool> completion)
+    {
+        void OnChanged(object? sender, PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == nameof(vm.FileDiffs))
+            {
+                vm.PropertyChanged -= OnChanged;
+                completion.TrySetResult(true);
+            }
+        }
+
+        vm.PropertyChanged += OnChanged;
+    }
+
     [AvaloniaFact(Timeout = 10_000)]
     public async Task GitWorktreeReviewWorkspaceTabViewModel_ReadsCorrectRepositoryPathField()
     {
@@ -296,7 +311,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
             await vm.CurrentRefresh!;
 
             var diffRebuildCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            vm.FileDiffs.CollectionChanged += (_, _) => diffRebuildCompleted.TrySetResult(true);
+            SignalNextDiffSwap(vm, diffRebuildCompleted);
 
             var file1 = vm.FileList.Files.FirstOrDefault(f => f.RelativePath.Contains("file1"));
             Assert.NotNull(file1);
@@ -397,14 +412,14 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
             Assert.NotNull(file1);
 
             var diffRebuildCompleted1 = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            vm.FileDiffs.CollectionChanged += (_, _) => diffRebuildCompleted1.TrySetResult(true);
+            SignalNextDiffSwap(vm, diffRebuildCompleted1);
             vm.FileList.SelectedFiles.Add(file1);
             await diffRebuildCompleted1.Task.WaitAsync(TimeSpan.FromSeconds(8));
 
             Assert.Single(vm.FileDiffs);
 
             var diffRebuildCompleted2 = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            vm.FileDiffs.CollectionChanged += (_, _) => diffRebuildCompleted2.TrySetResult(true);
+            SignalNextDiffSwap(vm, diffRebuildCompleted2);
             vm.FileList.SelectedFiles.Clear();
             await diffRebuildCompleted2.Task.WaitAsync(TimeSpan.FromSeconds(8));
 
@@ -614,7 +629,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
             Assert.NotNull(commit);
 
             var diffViewUpdatedCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            vm.FileDiffs.CollectionChanged += (_, _) => diffViewUpdatedCompleted.TrySetResult(true);
+            SignalNextDiffSwap(vm, diffViewUpdatedCompleted);
 
             vm.CommitList.SelectedCommits.Add(commit);
 
@@ -820,7 +835,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
             Assert.NotNull(deleteCommit);
 
             var diffViewUpdatedCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            vm.FileDiffs.CollectionChanged += (_, _) => diffViewUpdatedCompleted.TrySetResult(true);
+            SignalNextDiffSwap(vm, diffViewUpdatedCompleted);
 
             vm.CommitList.SelectedCommits.Add(deleteCommit);
 
@@ -920,7 +935,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
             Assert.NotNull(secondCommit);
 
             var diffViewUpdatedCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            vm.FileDiffs.CollectionChanged += (_, _) => diffViewUpdatedCompleted.TrySetResult(true);
+            SignalNextDiffSwap(vm, diffViewUpdatedCompleted);
 
             vm.CommitList.SelectedCommits.Add(secondCommit);
 
@@ -1216,7 +1231,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
             var initialDiffCount = vm.FileDiffs.Count;
 
             var diffRebuildCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            vm.FileDiffs.CollectionChanged += (_, _) => diffRebuildCompleted.TrySetResult(true);
+            SignalNextDiffSwap(vm, diffRebuildCompleted);
 
             vm.FullFile = true;
 
@@ -1263,17 +1278,9 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
 
         await using (vm)
         {
-            vm.ContextLines = 3;
             await vm.CurrentRefresh!;
-
-            vm.FullFile = true;
-            await Dispatcher.UIThread.InvokeAsync(() => { });
-            
-            while (vm.FileDiffs.Count == 0 && vm.CurrentRefresh != null)
-            {
-                await vm.CurrentRefresh;
-                await Dispatcher.UIThread.InvokeAsync(() => { });
-            }
+            await AwaitRefreshTriggeredByAsync(vm, () => vm.ContextLines = 3);
+            await AwaitRefreshTriggeredByAsync(vm, () => vm.FullFile = true);
 
             var diff = vm.FileDiffs.FirstOrDefault();
             Assert.NotNull(diff);
@@ -1385,7 +1392,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
             }
 
             var diffRebuildCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            vm.FileDiffs.CollectionChanged += (_, _) => diffRebuildCompleted.TrySetResult(true);
+            SignalNextDiffSwap(vm, diffRebuildCompleted);
 
             vm.ContextLines = 5;
 
@@ -1437,7 +1444,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
             await vm.CurrentRefresh!;
 
             var diffRebuildCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            vm.FileDiffs.CollectionChanged += (_, _) => diffRebuildCompleted.TrySetResult(true);
+            SignalNextDiffSwap(vm, diffRebuildCompleted);
 
             vm.ContextLines = 0;
 
@@ -1498,7 +1505,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
             }
 
             var diffRebuildCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            vm.FileDiffs.CollectionChanged += (_, _) => diffRebuildCompleted.TrySetResult(true);
+            SignalNextDiffSwap(vm, diffRebuildCompleted);
 
             vm.ContextLines = 15;
 
@@ -1553,7 +1560,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
             Assert.All(vm.FileDiffs, diff => Assert.False(diff.SideBySide));
 
             var diffRebuildCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            vm.FileDiffs.CollectionChanged += (_, _) => diffRebuildCompleted.TrySetResult(true);
+            SignalNextDiffSwap(vm, diffRebuildCompleted);
 
             vm.SideBySide = true;
 
@@ -1610,7 +1617,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
             Assert.False(initialDiff.SideBySide);
 
             var diffRebuildCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            vm.FileDiffs.CollectionChanged += (_, _) => diffRebuildCompleted.TrySetResult(true);
+            SignalNextDiffSwap(vm, diffRebuildCompleted);
 
             vm.SideBySide = true;
 
@@ -1653,6 +1660,195 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
             Title = "Test",
             Entity = entity,
         };
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task GitWorktreeReviewWorkspaceTabViewModel_RebuildFileDiffsAsync_SwapsFileDiffsAtomically_NotClearThenAddPerItem()
+    {
+        this.InitRepoWithBranch("main");
+        using (var repo = new Repository(this.repoDir))
+        {
+            var signature = new Signature("tester", "tester@example.com", DateTimeOffset.UtcNow);
+            var branch = repo.CreateBranch("feature", repo.Head.Tip);
+            Commands.Checkout(repo, branch);
+            foreach (var name in new[] { "one.txt", "two.txt", "three.txt" })
+            {
+                File.WriteAllText(Path.Combine(this.repoDir, name), "before\n");
+                Commands.Stage(repo, name);
+            }
+            repo.Commit("Files", signature, signature);
+        }
+
+        var vm = CreateViewModel($$"""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": {{JsonSerializer.Serialize(this.repoDir)}},
+                "target-branch": "main"
+            }
+            """);
+        await using (vm)
+        {
+            await vm.CurrentRefresh!;
+            var oldDiffs = vm.FileDiffs;
+            var oldRows = vm.DiffRows;
+            Assert.Equal(3, oldDiffs.Count);
+            var notifications = new List<string?>();
+            oldDiffs.CollectionChanged += (_, _) => notifications.Add("old collection mutated");
+            vm.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(vm.FileDiffs) || e.PropertyName == nameof(vm.DiffRows))
+                {
+                    notifications.Add(e.PropertyName);
+                }
+            };
+
+            vm.SideBySide = true;
+            await vm.CurrentRefresh!;
+
+            Assert.NotSame(oldDiffs, vm.FileDiffs);
+            Assert.NotSame(oldRows, vm.DiffRows);
+            Assert.Equal(3, oldDiffs.Count);
+            Assert.Equal(3, vm.FileDiffs.Count);
+            Assert.Equal(new[] { nameof(vm.FileDiffs), nameof(vm.DiffRows) }, notifications);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task GitWorktreeReviewWorkspaceTabViewModel_RebuildFileDiffsAsync_ConcurrentToggles_ProduceLatestRequestWinsResult()
+    {
+        this.InitRepoWithBranch("main");
+        using (var repo = new Repository(this.repoDir))
+        {
+            var signature = new Signature("tester", "tester@example.com", DateTimeOffset.UtcNow);
+            var branch = repo.CreateBranch("feature", repo.Head.Tip);
+            Commands.Checkout(repo, branch);
+            File.WriteAllText(Path.Combine(this.repoDir, "lines.txt"), "before\n");
+            Commands.Stage(repo, "lines.txt");
+            repo.Commit("Before", signature, signature);
+            File.WriteAllText(Path.Combine(this.repoDir, "lines.txt"), "after\n");
+            Commands.Stage(repo, "lines.txt");
+            repo.Commit("After", signature, signature);
+        }
+
+        var vm = CreateViewModel($$"""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": {{JsonSerializer.Serialize(this.repoDir)}},
+                "target-branch": "main"
+            }
+            """);
+        await using (vm)
+        {
+            await vm.CurrentRefresh!;
+            var applied = 0;
+            vm.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(vm.FileDiffs))
+                {
+                    applied++;
+                }
+            };
+
+            vm.SideBySide = true;
+            var superseded = vm.CurrentRefresh!;
+            vm.FullFile = true;
+            vm.ContextLines = 0;
+            vm.FullFile = false;
+            await vm.CurrentRefresh!;
+
+            Assert.True(superseded.IsCanceled);
+            Assert.Equal(1, applied);
+            Assert.All(vm.FileDiffs, diff => Assert.True(diff.SideBySide));
+            Assert.All(vm.DiffRows.OfType<GitDiffLineRow>(), row =>
+                Assert.IsType<GitDiffSideBySideLineRow>(row));
+            Assert.All(vm.FileDiffs.SelectMany(diff => diff.Hunks).SelectMany(hunk => hunk.Lines),
+                line => Assert.NotEqual(GitDiffLineKind.Context, line.Kind));
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task GitWorktreeReviewWorkspaceTabViewModel_RebuildFileDiffsAsync_CancelsPreviousInFlightRebuildOnRapidToggle()
+    {
+        this.InitRepoWithBranch("main");
+        var vm = CreateViewModel($$"""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": {{JsonSerializer.Serialize(this.repoDir)}},
+                "target-branch": "main"
+            }
+            """);
+        await using (vm)
+        {
+            await vm.CurrentRefresh!;
+            var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            vm.BeforeDiffBuildAsync = token =>
+            {
+                entered.TrySetResult();
+                return release.Task.WaitAsync(token);
+            };
+
+            vm.SideBySide = true;
+            var stale = vm.CurrentRefresh!;
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            vm.BeforeDiffBuildAsync = null;
+            vm.FullFile = true;
+            await vm.CurrentRefresh!;
+
+            Assert.True(stale.IsCanceled);
+            Assert.All(vm.FileDiffs, diff => Assert.True(diff.SideBySide));
+            release.TrySetResult();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task GitWorktreeReviewWorkspaceTabViewModel_DiffRows_PreservesSelectionByLocationOrClearsMissingRow()
+    {
+        var vm = CreateViewModel("""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "target-branch": "main"
+            }
+            """);
+        await using (vm)
+        {
+            await vm.CurrentRefresh!;
+
+            static GitDiffViewModel Diff(string path, bool sideBySide) => new()
+            {
+                RelativePath = path,
+                LinesAdded = 1,
+                LinesRemoved = 0,
+                SideBySide = sideBySide,
+                Hunks = [new GitDiffHunk
+                {
+                    OldStart = 5,
+                    NewStart = 6,
+                    Lines = [new GitDiffLine { Kind = GitDiffLineKind.Added, NewLineNumber = 6, Content = "value" }],
+                }],
+            };
+
+            vm.ApplyDiffs([Diff("one.cs", sideBySide: false)]);
+            vm.SelectedDiffRow = vm.DiffRows[2];
+            vm.ApplyDiffs([Diff("one.cs", sideBySide: true)]);
+            Assert.IsType<GitDiffSideBySideLineRow>(vm.SelectedDiffRow);
+            Assert.Same(vm.DiffRows[2], vm.SelectedDiffRow);
+
+            vm.ApplyDiffs([Diff("two.cs", sideBySide: true)]);
+            Assert.Null(vm.SelectedDiffRow);
+        }
     }
 
     [Fact]
@@ -1951,5 +2147,3 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 }
-
-

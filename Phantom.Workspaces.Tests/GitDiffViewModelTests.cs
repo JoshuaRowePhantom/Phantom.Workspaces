@@ -90,4 +90,41 @@ public sealed class GitDiffViewModelTests
             Assert.Equal(oldNumbers[i - 1] + 1, oldNumbers[i]);
         }
     }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void GitDiffRowViewModel_FlattenFileDiffs_ProducesOneRowPerFileHunkAndLine(bool sideBySide)
+    {
+        var lines = new[]
+        {
+            new GitDiffLine { Kind = GitDiffLineKind.Context, OldLineNumber = 4, NewLineNumber = 5, Content = "first" },
+            new GitDiffLine { Kind = GitDiffLineKind.Added, NewLineNumber = 6, Content = "second" },
+        };
+        var diff = new GitDiffViewModel
+        {
+            RelativePath = "code.cs",
+            LinesAdded = 1,
+            LinesRemoved = 0,
+            SideBySide = sideBySide,
+            Hunks =
+            [
+                new GitDiffHunk { OldStart = 4, NewStart = 5, Lines = lines },
+                new GitDiffHunk { OldStart = 12, NewStart = 14, Lines = lines },
+            ],
+        };
+
+        var rows = GitDiffRow.Flatten([diff]);
+
+        Assert.Equal(7, rows.Count);
+        Assert.Equal("code.cs", Assert.IsType<GitDiffFileRow>(rows[0]).RelativePath);
+        Assert.Equal(4, Assert.IsType<GitDiffHunkRow>(rows[1]).OldStart);
+        Assert.Equal(12, Assert.IsType<GitDiffHunkRow>(rows[4]).OldStart);
+        Assert.Equal(
+            sideBySide ? typeof(GitDiffSideBySideLineRow) : typeof(GitDiffUnifiedLineRow),
+            rows[2].GetType());
+        Assert.All(rows.Where(row => row is GitDiffLineRow), row =>
+            Assert.Equal("code.cs", ((GitDiffLineRow)row).RelativePath));
+        Assert.Same(lines[1], ((GitDiffLineRow)rows[3]).Line);
+    }
 }

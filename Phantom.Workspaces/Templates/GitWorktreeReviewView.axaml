@@ -181,100 +181,79 @@
                 </Border>
 
                 <!-- Diff content -->
-                <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto">
-                    <ItemsControl ItemsSource="{Binding FileDiffs}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="vm:GitDiffViewModel">
-                                <Border Margin="0,4" BorderThickness="1" BorderBrush="#33888888">
-                                    <!-- File header -->
-                                    <StackPanel>
-                                        <Border Background="#22888888" Padding="8,4">
-                                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                                <TextBlock Text="{Binding RelativePath}" FontWeight="Bold" FontFamily="Consolas,Monospace" />
-                                                <TextBlock Foreground="Green">
-                                                    <TextBlock.Text>
-                                                        <MultiBinding StringFormat="+{0}">
-                                                            <Binding Path="LinesAdded" />
-                                                        </MultiBinding>
-                                                    </TextBlock.Text>
-                                                </TextBlock>
-                                                <TextBlock Foreground="Red">
-                                                    <TextBlock.Text>
-                                                        <MultiBinding StringFormat="-{0}">
-                                                            <Binding Path="LinesRemoved" />
-                                                        </MultiBinding>
-                                                    </TextBlock.Text>
-                                                </TextBlock>
-                                            </StackPanel>
-                                        </Border>
-                                        <!-- Hunks -->
-                                        <ItemsControl ItemsSource="{Binding Hunks}" FontFamily="Consolas,Monospace" FontSize="12">
-                                            <ItemsControl.ItemTemplate>
-                                                <DataTemplate x:DataType="vm:GitDiffHunk">
-                                                    <ItemsControl ItemsSource="{Binding Lines}">
-                                                        <ItemsControl.ItemTemplate>
-                                                            <DataTemplate x:DataType="vm:GitDiffLine">
-                                                                <!-- Use binding path to access parent GitDiffViewModel -->
-                                                                <Panel>
-                                                                    <!-- Unified mode layout (when SideBySide is false) -->
-                                                                    <Grid ColumnDefinitions="40,40,*" IsVisible="{Binding !$parent[ItemsControl;2].((vm:GitDiffViewModel)DataContext).SideBySide}">
-                                                                        <TextBlock Grid.Column="0"
-                                                                                   Text="{Binding OldLineNumber}"
-                                                                                   Foreground="#888888"
-                                                                                   TextAlignment="Right"
-                                                                                   Padding="0,0,4,0" />
-                                                                        <TextBlock Grid.Column="1"
-                                                                                   Text="{Binding NewLineNumber}"
-                                                                                   Foreground="#888888"
-                                                                                   TextAlignment="Right"
-                                                                                   Padding="0,0,4,0" />
-                                                                        <TextBlock Grid.Column="2"
-                                                                                   Text="{Binding Content}"
-                                                                                   TextWrapping="NoWrap" />
-                                                                    </Grid>
-
-                                                                    <!-- Side-by-side mode layout (when SideBySide is true) -->
-                                                                    <Grid ColumnDefinitions="40,*,4,40,*" IsVisible="{Binding $parent[ItemsControl;2].((vm:GitDiffViewModel)DataContext).SideBySide}">
-                                                                        <!-- Left side (old content) - show for Context and Removed lines -->
-                                                                        <TextBlock Grid.Column="0"
-                                                                                   Text="{Binding OldLineNumber}"
-                                                                                   Foreground="#888888"
-                                                                                   TextAlignment="Right"
-                                                                                   Padding="0,0,4,0"
-                                                                                   IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.NotEqual}, ConverterParameter={x:Static vm:GitDiffLineKind.Added}}" />
-                                                                        <TextBlock Grid.Column="1"
-                                                                                   Text="{Binding Content}"
-                                                                                   TextWrapping="NoWrap"
-                                                                                   IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.NotEqual}, ConverterParameter={x:Static vm:GitDiffLineKind.Added}}" />
-
-                                                                        <!-- Separator -->
-                                                                        <Border Grid.Column="2" Background="#22888888" />
-
-                                                                        <!-- Right side (new content) - show for Context and Added lines -->
-                                                                        <TextBlock Grid.Column="3"
-                                                                                   Text="{Binding NewLineNumber}"
-                                                                                   Foreground="#888888"
-                                                                                   TextAlignment="Right"
-                                                                                   Padding="0,0,4,0"
-                                                                                   IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.NotEqual}, ConverterParameter={x:Static vm:GitDiffLineKind.Removed}}" />
-                                                                        <TextBlock Grid.Column="4"
-                                                                                   Text="{Binding Content}"
-                                                                                   TextWrapping="NoWrap"
-                                                                                   IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.NotEqual}, ConverterParameter={x:Static vm:GitDiffLineKind.Removed}}" />
-                                                                    </Grid>
-                                                                </Panel>
-                                                            </DataTemplate>
-                                                        </ItemsControl.ItemTemplate>
-                                                    </ItemsControl>
-                                                </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
-                                    </StackPanel>
-                                </Border>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                </ScrollViewer>
+                <ListBox x:Name="DiffRowsList"
+                         Grid.Row="1"
+                         ItemsSource="{Binding DiffRows}"
+                         SelectedItem="{Binding SelectedDiffRow}"
+                         ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                         FontFamily="Consolas,Monospace"
+                         FontSize="12">
+                    <ListBox.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <VirtualizingStackPanel />
+                        </ItemsPanelTemplate>
+                    </ListBox.ItemsPanel>
+                    <ListBox.DataTemplates>
+                        <DataTemplate DataType="vm:GitDiffFileRow" x:DataType="vm:GitDiffFileRow">
+                            <Border Margin="0,4" Background="#22888888" Padding="8,4"
+                                    BorderThickness="1" BorderBrush="#33888888"
+                                    AutomationProperties.Name="{Binding RelativePath}">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <TextBlock Text="{Binding RelativePath}" FontWeight="Bold" />
+                                    <TextBlock Foreground="Green">
+                                        <TextBlock.Text>
+                                            <MultiBinding StringFormat="+{0}">
+                                                <Binding Path="LinesAdded" />
+                                            </MultiBinding>
+                                        </TextBlock.Text>
+                                    </TextBlock>
+                                    <TextBlock Foreground="Red">
+                                        <TextBlock.Text>
+                                            <MultiBinding StringFormat="-{0}">
+                                                <Binding Path="LinesRemoved" />
+                                            </MultiBinding>
+                                        </TextBlock.Text>
+                                    </TextBlock>
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                        <DataTemplate DataType="vm:GitDiffHunkRow" x:DataType="vm:GitDiffHunkRow">
+                            <Border Background="#11888888" Padding="8,2">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <TextBlock Text="Hunk" />
+                                    <TextBlock Text="{Binding OldStart}" />
+                                    <TextBlock Text="{Binding NewStart}" />
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                        <DataTemplate DataType="vm:GitDiffUnifiedLineRow" x:DataType="vm:GitDiffUnifiedLineRow">
+                            <Grid x:Name="UnifiedLineLayout" ColumnDefinitions="40,40,Auto"
+                                  AutomationProperties.Name="{Binding Line.Content}">
+                                <TextBlock Grid.Column="0" Text="{Binding Line.OldLineNumber}" Foreground="#888888"
+                                           TextAlignment="Right" Padding="0,0,4,0" />
+                                <TextBlock Grid.Column="1" Text="{Binding Line.NewLineNumber}" Foreground="#888888"
+                                           TextAlignment="Right" Padding="0,0,4,0" />
+                                <TextBlock Grid.Column="2" Text="{Binding Line.Content}" TextWrapping="NoWrap" />
+                            </Grid>
+                        </DataTemplate>
+                        <DataTemplate DataType="vm:GitDiffSideBySideLineRow" x:DataType="vm:GitDiffSideBySideLineRow">
+                            <Grid x:Name="SideBySideLineLayout" ColumnDefinitions="40,Auto,4,40,Auto"
+                                  AutomationProperties.Name="{Binding Line.Content}">
+                                <TextBlock Grid.Column="0" Text="{Binding Line.OldLineNumber}" Foreground="#888888"
+                                           TextAlignment="Right" Padding="0,0,4,0"
+                                           IsVisible="{Binding Line.Kind, Converter={x:Static ObjectConverters.NotEqual}, ConverterParameter={x:Static vm:GitDiffLineKind.Added}}" />
+                                <TextBlock Grid.Column="1" Text="{Binding Line.Content}" TextWrapping="NoWrap"
+                                           IsVisible="{Binding Line.Kind, Converter={x:Static ObjectConverters.NotEqual}, ConverterParameter={x:Static vm:GitDiffLineKind.Added}}" />
+                                <Border Grid.Column="2" Background="#22888888" />
+                                <TextBlock Grid.Column="3" Text="{Binding Line.NewLineNumber}" Foreground="#888888"
+                                           TextAlignment="Right" Padding="0,0,4,0"
+                                           IsVisible="{Binding Line.Kind, Converter={x:Static ObjectConverters.NotEqual}, ConverterParameter={x:Static vm:GitDiffLineKind.Removed}}" />
+                                <TextBlock Grid.Column="4" Text="{Binding Line.Content}" TextWrapping="NoWrap"
+                                           IsVisible="{Binding Line.Kind, Converter={x:Static ObjectConverters.NotEqual}, ConverterParameter={x:Static vm:GitDiffLineKind.Removed}}" />
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.DataTemplates>
+                </ListBox>
             </Grid>
         </Grid>
     </Grid>

@@ -17,18 +17,28 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
     private int contextLines = 10;
     private bool isRefreshing;
     private CancellationTokenSource? refreshCts;
+    private CancellationTokenSource? fileDiffsCts;
+    private CancellationTokenSource? selectedCommitsCts;
+    private long diffRequestGeneration;
+    private long selectedCommitsGeneration;
+    private int pendingFileListRefreshes;
+    private readonly object diffRequestGate = new();
+    private readonly object selectedCommitsGate = new();
     private Task? currentRefresh;
     private readonly GitWorktreeWatcher? watcher;
     private readonly TaskScheduler foregroundScheduler;
     private GitWorktreeCommitListViewModel commitList;
     private GitWorktreeFileListViewModel fileList;
     private ObservableCollection<GitDiffViewModel> fileDiffs;
+    private IReadOnlyList<GitDiffRow> diffRows = Array.Empty<GitDiffRow>();
+    private GitDiffRow? selectedDiffRow;
 
     internal static Func<string?, string> DefaultBranchProbeForTests { get; set; } = ProbeRepositoryForDefaultBranch;
+    internal Func<CancellationToken, Task>? BeforeDiffBuildAsync { get; set; }
 
     // #1210: `foregroundScheduler` is a required constructor parameter (mirrors AgentViewModel /
-    // #1122). Heavy LibGit2Sharp work runs on the thread pool and only the final observable-collection
-    // mutations marshal back via ContinueWith(..., foregroundScheduler). No blocking git probe runs
+    // #1122). Heavy LibGit2Sharp work runs on the thread pool and only the final snapshot
+    // swap marshals back via foregroundScheduler. No blocking git probe runs
     // in the constructor.
     public GitWorktreeReviewWorkspaceTabViewModel(
         SubscribedEntityViewModel entityViewModel,
@@ -113,11 +123,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
         {
             if (this.SetProperty(ref this.sideBySide, value))
             {
-                var selectedCommits = this.CommitList.SelectedCommits.Count > 0
-                    ? (IReadOnlyList<GitCommitModel>)this.CommitList.SelectedCommits
-                    : (IReadOnlyList<GitCommitModel>)this.CommitList.Commits;
-
-                Lifetime.Run(ct => this.RebuildFileDiffsAsync(selectedCommits, ct));
+                this.RequestFileDiffRebuild();
             }
         }
     }
@@ -129,11 +135,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
         {
             if (this.SetProperty(ref this.fullFile, value))
             {
-                var selectedCommits = this.CommitList.SelectedCommits.Count > 0
-                    ? (IReadOnlyList<GitCommitModel>)this.CommitList.SelectedCommits
-                    : (IReadOnlyList<GitCommitModel>)this.CommitList.Commits;
-
-                Lifetime.Run(ct => this.RebuildFileDiffsAsync(selectedCommits, ct));
+                this.RequestFileDiffRebuild();
             }
         }
     }
@@ -145,11 +147,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
         {
             if (this.SetProperty(ref this.contextLines, value))
             {
-                var selectedCommits = this.CommitList.SelectedCommits.Count > 0
-                    ? (IReadOnlyList<GitCommitModel>)this.CommitList.SelectedCommits
-                    : (IReadOnlyList<GitCommitModel>)this.CommitList.Commits;
-
-                Lifetime.Run(ct => this.RebuildFileDiffsAsync(selectedCommits, ct));
+                this.RequestFileDiffRebuild();
             }
         }
     }
@@ -179,6 +177,21 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
         get => this.fileDiffs;
         private set => this.SetProperty(ref this.fileDiffs, value);
     }
+
+    public IReadOnlyList<GitDiffRow> DiffRows
+    {
+        get => this.diffRows;
+        private set => this.SetProperty(ref this.diffRows, value);
+    }
+
+    public GitDiffRow? SelectedDiffRow
+    {
+        get => this.selectedDiffRow;
+        set => this.SetProperty(ref this.selectedDiffRow, value);
+    }
+
+    /// <summary>Raised before an atomic row replacement, allowing the view to retain its scroll offset.</summary>
+    public event EventHandler? DiffRowsReplacing;
 
     public ObservableCollection<string> BranchNames { get; }
 
@@ -230,6 +243,8 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
 
     private async Task RefreshCoreAsync(CancellationToken ct = default)
     {
+        var requestGeneration = this.CancelFileDiffRebuild();
+        this.CancelSelectedCommitRefresh();
         this.refreshCts?.Cancel();
         this.refreshCts?.Dispose();
         this.refreshCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -257,7 +272,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
 
             PreserveFileSelection(this.FileList, newFileList);
 
-            var newDiffs = await this.BuildFileDiffsAsync(newFileList, selectedCommits, token)
+            var newDiffs = await this.BuildFileDiffsAsync(newFileList, selectedCommits, this.CurrentDiffOptions, token)
                 .ConfigureAwait(false);
 
             token.ThrowIfCancellationRequested();
@@ -268,7 +283,14 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
                 {
                     this.AttachCommitList(newCommitList);
                     this.AttachFileList(newFileList);
-                    this.FileDiffs = newDiffs;
+                    if (requestGeneration == Interlocked.Read(ref this.diffRequestGeneration))
+                    {
+                        this.ApplyDiffs(newDiffs);
+                    }
+                    else
+                    {
+                        this.RequestFileDiffRebuild();
+                    }
                 },
                 token,
                 TaskCreationOptions.None,
@@ -345,22 +367,35 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
         }
     }
 
-    private Task<ObservableCollection<GitDiffViewModel>> BuildFileDiffsAsync(
+    private readonly record struct DiffBuildOptions(bool SideBySide, bool FullFile, int ContextLines);
+
+    private sealed record DiffBuildResult(
+        ObservableCollection<GitDiffViewModel> FileDiffs, IReadOnlyList<GitDiffRow> Rows);
+
+    private DiffBuildOptions CurrentDiffOptions => new(this.sideBySide, this.fullFile, this.contextLines);
+
+    private Task<DiffBuildResult> BuildFileDiffsAsync(
         GitWorktreeFileListViewModel fileListVm,
         IReadOnlyList<GitCommitModel> selectedCommits,
+        DiffBuildOptions options,
         CancellationToken ct)
     {
-        return Task.Run(() =>
+        var selectedFiles = (fileListVm.SelectedFiles.Count > 0
+            ? fileListVm.SelectedFiles
+            : fileListVm.Files).ToArray();
+        var commits = selectedCommits.ToArray();
+        return Task.Run(async () =>
         {
-            ct.ThrowIfCancellationRequested();
+            if (this.BeforeDiffBuildAsync is { } beforeBuild)
+            {
+                await beforeBuild(ct).ConfigureAwait(false);
+            }
 
-            var selectedFiles = fileListVm.SelectedFiles.Count > 0
-                ? (IReadOnlyList<GitWorktreeFileEntryViewModel>)fileListVm.SelectedFiles
-                : (IReadOnlyList<GitWorktreeFileEntryViewModel>)fileListVm.Files;
+            ct.ThrowIfCancellationRequested();
 
             var newDiffs = new List<GitDiffViewModel>();
 
-            var effectiveContextLines = this.fullFile ? int.MaxValue / 2 : this.contextLines;
+            var effectiveContextLines = options.FullFile ? int.MaxValue / 2 : options.ContextLines;
 
             try
             {
@@ -370,8 +405,9 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
                 {
                     ct.ThrowIfCancellationRequested();
 
-                    foreach (var commit in selectedCommits)
+                    foreach (var commit in commits)
                     {
+                        ct.ThrowIfCancellationRequested();
                         Patch? patch = null;
 
                         if (commit.IsUnstaged)
@@ -410,7 +446,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
                         {
                             foreach (var entry in patch)
                             {
-                                newDiffs.Add(GitDiffViewModel.FromPatchEntry(entry, effectiveContextLines, this.sideBySide));
+                                newDiffs.Add(GitDiffViewModel.FromPatchEntry(entry, effectiveContextLines, options.SideBySide));
                             }
                         }
                     }
@@ -426,40 +462,112 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
             {
             }
 
-            var result = new ObservableCollection<GitDiffViewModel>();
-            foreach (var diff in newDiffs)
-            {
-                result.Add(diff);
-            }
-
-            return result;
+            ct.ThrowIfCancellationRequested();
+            return new DiffBuildResult(new ObservableCollection<GitDiffViewModel>(newDiffs), GitDiffRow.Flatten(newDiffs));
         }, ct);
     }
 
-    private Task RebuildFileDiffsAsync(IReadOnlyList<GitCommitModel> selectedCommits, CancellationToken ct)
+    private long CancelFileDiffRebuild()
     {
-        // #1210: heavy diff construction runs on the thread pool inside BuildFileDiffsAsync's
-        // Task.Run; only the FileDiffs mutations marshal back to the foreground scheduler.
-        var buildTask = this.BuildFileDiffsAsync(this.FileList, selectedCommits, ct);
-        var rebuildTask = buildTask.ContinueWith(
-            t =>
-            {
-                var newDiffs = t.GetAwaiter().GetResult();
-                ct.ThrowIfCancellationRequested();
+        lock (this.diffRequestGate)
+        {
+            this.fileDiffsCts?.Cancel();
+            this.fileDiffsCts?.Dispose();
+            this.fileDiffsCts = null;
+            return Interlocked.Increment(ref this.diffRequestGeneration);
+        }
+    }
 
-                this.FileDiffs.Clear();
-                foreach (var diff in newDiffs)
+    private void CancelSelectedCommitRefresh()
+    {
+        lock (this.selectedCommitsGate)
+        {
+            this.selectedCommitsCts?.Cancel();
+            this.selectedCommitsCts?.Dispose();
+            this.selectedCommitsCts = null;
+            Interlocked.Increment(ref this.selectedCommitsGeneration);
+        }
+    }
+
+    private void RequestFileDiffRebuild()
+    {
+        long generation;
+        CancellationTokenSource cts;
+        lock (this.diffRequestGate)
+        {
+            this.fileDiffsCts?.Cancel();
+            this.fileDiffsCts?.Dispose();
+            cts = CancellationTokenSource.CreateLinkedTokenSource(Lifetime.Token);
+            this.fileDiffsCts = cts;
+            generation = Interlocked.Increment(ref this.diffRequestGeneration);
+        }
+        var selectedCommits = this.CommitList.SelectedCommits.Count > 0
+            ? this.CommitList.SelectedCommits.ToArray()
+            : this.CommitList.Commits.ToArray();
+        var rebuildTask = this.RebuildFileDiffsAsync(this.FileList, selectedCommits, this.CurrentDiffOptions, generation, cts.Token);
+        this.currentRefresh = rebuildTask;
+        this.RaisePropertyChanged(nameof(this.CurrentRefresh));
+        Lifetime.Run(_ => rebuildTask);
+    }
+
+    private async Task RebuildFileDiffsAsync(
+        GitWorktreeFileListViewModel fileList,
+        IReadOnlyList<GitCommitModel> selectedCommits,
+        DiffBuildOptions options,
+        long generation,
+        CancellationToken ct)
+    {
+        var newDiffs = await this.BuildFileDiffsAsync(fileList, selectedCommits, options, ct).ConfigureAwait(false);
+        ct.ThrowIfCancellationRequested();
+        await Task.Factory.StartNew(
+            () =>
+            {
+                ct.ThrowIfCancellationRequested();
+                if (generation == Interlocked.Read(ref this.diffRequestGeneration))
                 {
-                    this.FileDiffs.Add(diff);
+                    this.ApplyDiffs(newDiffs);
                 }
             },
             ct,
-            TaskContinuationOptions.OnlyOnRanToCompletion,
-            this.foregroundScheduler);
+            TaskCreationOptions.None,
+            this.foregroundScheduler).ConfigureAwait(false);
+    }
 
-        this.currentRefresh = rebuildTask;
-        this.RaisePropertyChanged(nameof(this.CurrentRefresh));
-        return rebuildTask;
+    internal void ApplyDiffs(IReadOnlyList<GitDiffViewModel> diffs)
+        => this.ApplyDiffs(new DiffBuildResult(
+            new ObservableCollection<GitDiffViewModel>(diffs), GitDiffRow.Flatten(diffs)));
+
+    private void ApplyDiffs(DiffBuildResult result)
+    {
+        var selected = this.SelectedDiffRow;
+        this.DiffRowsReplacing?.Invoke(this, EventArgs.Empty);
+        this.FileDiffs = result.FileDiffs;
+        this.DiffRows = result.Rows;
+        if (selected is not null)
+        {
+            this.SelectedDiffRow = result.Rows.FirstOrDefault(row => SameLocation(row, selected));
+        }
+    }
+
+    private static bool SameLocation(GitDiffRow row, GitDiffRow selected)
+    {
+        if (!string.Equals(row.RelativePath, selected.RelativePath, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return (row, selected) switch
+        {
+            (GitDiffFileRow, GitDiffFileRow) => true,
+            (GitDiffHunkRow hunk, GitDiffHunkRow previous) =>
+                hunk.OldStart == previous.OldStart && hunk.NewStart == previous.NewStart,
+            (GitDiffLineRow line, GitDiffLineRow previous) =>
+                line.OldStart == previous.OldStart && line.NewStart == previous.NewStart
+                && line.Line.Kind == previous.Line.Kind
+                && line.Line.OldLineNumber == previous.Line.OldLineNumber
+                && line.Line.NewLineNumber == previous.Line.NewLineNumber,
+            _ => false,
+        };
     }
 
     private void OnWatcherChanged(object? sender, EventArgs e)
@@ -469,26 +577,56 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
 
     private void OnSelectedFilesChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
     {
-        var selectedCommits = this.CommitList.SelectedCommits.Count > 0
-            ? (IReadOnlyList<GitCommitModel>)this.CommitList.SelectedCommits
-            : (IReadOnlyList<GitCommitModel>)this.CommitList.Commits;
-
-        Lifetime.Run(ct => this.RebuildFileDiffsAsync(selectedCommits, ct));
+        if (Volatile.Read(ref this.pendingFileListRefreshes) == 0)
+        {
+            this.RequestFileDiffRebuild();
+        }
     }
 
     private void OnSelectedCommitsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
     {
         this.RaisePropertyChanged(nameof(this.FileListHeader));
 
-        var selectedCommits = this.CommitList.SelectedCommits.Count > 0
-            ? (IReadOnlyList<GitCommitModel>)this.CommitList.SelectedCommits
-            : (IReadOnlyList<GitCommitModel>)this.CommitList.Commits;
-
-        Lifetime.Run(async ct =>
+        this.CancelFileDiffRebuild();
+        CancellationTokenSource cts;
+        long generation;
+        lock (this.selectedCommitsGate)
         {
-            await this.FileList.RefreshAsync(this.RepositoryPath, selectedCommits, this.foregroundScheduler, ct)
-                .ConfigureAwait(false);
-            await this.RebuildFileDiffsAsync(selectedCommits, ct).ConfigureAwait(false);
+            this.selectedCommitsCts?.Cancel();
+            this.selectedCommitsCts?.Dispose();
+            cts = this.selectedCommitsCts = CancellationTokenSource.CreateLinkedTokenSource(Lifetime.Token);
+            generation = Interlocked.Increment(ref this.selectedCommitsGeneration);
+        }
+        var selectedCommits = this.CommitList.SelectedCommits.Count > 0
+            ? this.CommitList.SelectedCommits.ToArray()
+            : this.CommitList.Commits.ToArray();
+        var fileList = this.FileList;
+        Interlocked.Increment(ref this.pendingFileListRefreshes);
+
+        Lifetime.Run(async _ =>
+        {
+            try
+            {
+                await fileList.RefreshAsync(this.RepositoryPath, selectedCommits, this.foregroundScheduler, cts.Token)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                await Task.Factory.StartNew(
+                    () =>
+                    {
+                        Interlocked.Decrement(ref this.pendingFileListRefreshes);
+                        if (!cts.IsCancellationRequested
+                            && generation == Interlocked.Read(ref this.selectedCommitsGeneration)
+                            && ReferenceEquals(this.FileList, fileList))
+                        {
+                            this.RequestFileDiffRebuild();
+                        }
+                    },
+                    CancellationToken.None,
+                    TaskCreationOptions.None,
+                    this.foregroundScheduler).ConfigureAwait(false);
+            }
         });
     }
 
@@ -500,6 +638,8 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
         this.refreshCts?.Cancel();
         this.refreshCts?.Dispose();
         this.refreshCts = null;
+        this.CancelSelectedCommitRefresh();
+        this.CancelFileDiffRebuild();
 
         if (this.watcher is not null)
         {
