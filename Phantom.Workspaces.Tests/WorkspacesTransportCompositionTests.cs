@@ -359,7 +359,7 @@ public sealed class WorkspacesTransportCompositionTests
 
         public System.Threading.Channels.ChannelWriter<JsonElement> Writer => this.writer.Writer;
 
-        public ValueTask SendIncomingAsync(JsonElement frame) => this.reader.Writer.WriteAsync(frame);
+        public ValueTask SendIncomingAsync(JsonElement frame) => this.reader.Writer.WriteAsync(frame.Clone());
 
         public ValueTask<JsonElement> ReadOutgoingAsync(CancellationToken ct)
             => this.writer.Reader.ReadAsync(ct);
