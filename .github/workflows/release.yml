@@ -67,7 +67,8 @@ jobs:
 
       - name: Run test suite (release gate)
         shell: pwsh
-        run: .\scripts\run-tests.ps1 -Mode fast
+        # The source-build integration test can be output-quiet for longer than the default 90s on hosted runners.
+        run: .\scripts\run-tests.ps1 -Mode fast -PerTestHangTimeout 10m
 
       - name: Upload test results log
         if: always()
