@@ -406,8 +406,12 @@ public sealed class AgentViewModelRetryTests
             });
         await using var vm = this.CreateViewModel(chat, loggerFactory);
         var command = Assert.IsType<AsyncRelayCommand>(vm.InterruptCommand);
-        var availabilityChanges = new List<bool>();
-        command.CanExecuteChanged += (_, _) => availabilityChanges.Add(command.CanExecute(null));
+        var pendingCleared = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        vm.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(AgentViewModel.IsInterruptPending) && !vm.IsInterruptPending)
+                pendingCleared.TrySetResult();
+        };
 
         command.Execute(null);
         var firstExecution = command.LastExecutionTask;
@@ -415,16 +419,17 @@ public sealed class AgentViewModelRetryTests
 
         Assert.Equal(1, Volatile.Read(ref calls));
         Assert.Same(firstExecution, command.LastExecutionTask);
+        Assert.True(vm.IsInterruptPending);
         Assert.True(command.IsExecuting);
         Assert.False(command.CanExecute(null));
-        Assert.Equal([false], availabilityChanges);
 
         firstCompletion.SetResult();
         await firstExecution!;
+        await pendingCleared.Task;
 
+        Assert.False(vm.IsInterruptPending);
         Assert.False(command.IsExecuting);
         Assert.True(command.CanExecute(null));
-        Assert.Equal([false, true], availabilityChanges);
 
         command.Execute(null);
         await command.LastExecutionTask!;
