@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
+using Moq;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Models;
 using Phantom.Workspaces.Services;
@@ -474,19 +475,23 @@ public sealed class UsageMetricsServiceTests
         Assert.Single(account.Metrics);
     }
 
-    [Fact]
-    public async Task UsageMetricsService_ProviderThrows_LogsWarningAndContinues()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UsageMetricsService_ProviderThrows_LogsWarningAndContinues(bool successfulProviderFirst)
     {
         var providerUri1 = new Uri("https://example1.com");
         var providerUri2 = new Uri("https://example2.com");
 
         var provider1Completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var provider2Completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var callOrder = new System.Collections.Concurrent.ConcurrentQueue<string>();
 
         var provider1 = new FakeUsageProvider(
             providerUri1,
             (_, _) =>
             {
+                callOrder.Enqueue("user1");
                 provider1Completed.TrySetResult();
                 throw new InvalidOperationException("Provider 1 error");
             });
@@ -495,6 +500,7 @@ public sealed class UsageMetricsServiceTests
             providerUri2,
             (_, _) =>
             {
+                callOrder.Enqueue("user2");
                 provider2Completed.TrySetResult();
                 return Task.FromResult<IReadOnlyList<UsageMetric>>(
                 [
@@ -502,10 +508,38 @@ public sealed class UsageMetricsServiceTests
                 ]);
             });
 
-        var dal = await CreateDataAccessLayerAsync([
+        var seededDal = await CreateDataAccessLayerAsync([
             CreateUserAccountEntity("https://example1.com", "user1"),
             CreateUserAccountEntity("https://example2.com", "user2"),
         ]);
+        var query = await seededDal.QueryAsync(new QueryRequest
+        {
+            Clauses =
+            [
+                new TopLevelQueryClause
+                {
+                    ClauseIdentifier = new QueryClauseIdentifier("user-accounts"),
+                    Clause = new EntityTypeQueryClause
+                    {
+                        EntityTypeNames = new EntityTypeNameSet(["user-account"])
+                    }
+                }
+            ]
+        }, TestContext.Current.CancellationToken);
+        var orderedEntities = query.Batches.SelectMany(batch => batch.Entities)
+            .OrderBy(entity => entity.Data!.Value.GetProperty("user-name").GetString(),
+                successfulProviderFirst
+                    ? Comparer<string?>.Create((left, right) => string.CompareOrdinal(right, left))
+                    : StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(2, orderedEntities.Length);
+        var orderedQuery = query with
+        {
+            Batches = [new TimestampedQueryBatch { Entities = orderedEntities }]
+        };
+        var dal = new Mock<IDataAccessLayer>();
+        dal.Setup(layer => layer.QueryAsync(It.IsAny<QueryRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(orderedQuery);
 
         var mutationCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var mutationScheduler = new ActionBlockScheduler(task =>
@@ -515,22 +549,32 @@ public sealed class UsageMetricsServiceTests
         });
         var usageMetrics = new UsageMetrics(mutationScheduler);
         var timeProvider = new FakeTimeProvider();
+        var logger = new SignalingLogger<UsageMetricsService>();
 
         await using var service = new UsageMetricsService(
-            dal,
+            dal.Object,
             usageMetrics,
             new[] { provider1, provider2 },
             timeProvider,
-            NullLogger<UsageMetricsService>.Instance);
+            logger);
 
         await service.StartAsync(TestContext.Current.CancellationToken);
+        await Task.WhenAll(provider1Completed.Task, provider2Completed.Task);
         await mutationCompleted.Task;
+        await logger.WaitForAsync(entry => entry.Level == LogLevel.Warning
+            && entry.Message.Contains("Failed to refresh usage metrics", StringComparison.Ordinal)
+            && entry.Message.Contains("example1.com", StringComparison.Ordinal));
 
-        // Despite provider1 throwing, provider2 was still called and added
+        Assert.Equal(successfulProviderFirst ? ["user2", "user1"] : ["user1", "user2"], callOrder);
         Assert.Equal(1, provider1.CallCount);
         Assert.Equal(1, provider2.CallCount);
         var account = Assert.Single(usageMetrics.Accounts);
         Assert.Equal("user2", account.UserName);
+        Assert.Equal("API Calls", Assert.Single(account.Metrics).Title);
+        var warning = Assert.Single(logger.Entries, entry => entry.Level == LogLevel.Warning
+            && entry.Message.Contains("Failed to refresh usage metrics", StringComparison.Ordinal));
+        Assert.Contains("user1", warning.Message, StringComparison.Ordinal);
+        Assert.Contains("example1.com", warning.Message, StringComparison.Ordinal);
     }
 
     [Fact]
