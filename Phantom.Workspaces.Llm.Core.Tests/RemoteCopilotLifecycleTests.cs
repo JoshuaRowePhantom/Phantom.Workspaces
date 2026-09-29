@@ -675,12 +675,24 @@ public sealed class RemoteCopilotLifecycleTests
         Assert.Equal(2, attempts.Length);
         Assert.Equal(2, attempts.Distinct(StringComparer.Ordinal).Count());
         var successCorrelation = attempts[1]!;
-        Assert.True(
-            logs.IndexOf(successCorrelation, "ack-write-started")
-            < logs.IndexOf(successCorrelation, "ack-written"));
-        Assert.True(
-            logs.IndexOf(successCorrelation, "ack-written")
-            < logs.IndexOf(successCorrelation, "ack-received"));
+        await Task.WhenAll(
+            logs.WaitForAsync(successCorrelation, "ack-written"),
+            logs.WaitForAsync(successCorrelation, "ack-received")).WaitAsync(TestToken());
+        var snapshot = logs.Entries;
+        void AssertOrdered(string role, params string[] stages)
+        {
+            var indexes = stages.Select(stage => snapshot.ToList().FindIndex(entry =>
+                entry.CorrelationId == successCorrelation && entry.Role == role && entry.Stage == stage)).ToArray();
+            Assert.All(indexes, index => Assert.True(index >= 0));
+            Assert.True(indexes.SequenceEqual(indexes.Order()));
+        }
+        AssertOrdered("caller", "open-start", "open-complete", "create-write-start",
+            "create-written", "ack-received");
+        AssertOrdered("worker", "request-received", "listener-entered", "cli-start-started",
+            "cli-start-succeeded", "create-received", "sdk-create-started", "sdk-created",
+            "ack-write-started", "ack-written");
+        Assert.Contains(snapshot, entry => entry.CorrelationId == attempts[0]
+            && entry.Role == "caller" && entry.Stage == "open-start");
         AssertSanitized(
             logs,
             secret,
@@ -689,6 +701,65 @@ public sealed class RemoteCopilotLifecycleTests
             "prompt-secret",
             "worker-only.invalid",
             "worker-only-key");
+    }
+
+    [Fact]
+    public async Task RemoteSplitSession_AcknowledgementReceivedBeforeWorkerWriteLog_IsAccepted()
+    {
+        const string secret = "worker-only-key";
+        var enteredWorkerLog = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseWorkerLog = new ManualResetEventSlim();
+        using var logs = new LifecycleLoggerFactory(entry =>
+        {
+            if (entry.Role != "worker" || entry.Stage != "ack-written")
+                return;
+            enteredWorkerLog.TrySetResult();
+            if (!releaseWorkerLog.Wait(TimeSpan.FromSeconds(30)))
+                throw new TimeoutException("Worker acknowledgement logger was not released.");
+        });
+        var listeners = new TransportRegistry();
+        listeners.Register(new CopilotClientTransportListener(new AgentServices
+        {
+            CopilotClientFactory = new ExecutorRoutingTestHarness.RecordingClientFactory(),
+            RemoteCopilotProviderResolver = new StaticProviderResolver(new ProviderConfig
+            {
+                Type = "openai",
+                BaseUrl = "http://worker-only.invalid",
+                ApiKey = secret,
+                ModelId = "gpt-test",
+            }),
+            LoggerFactory = logs,
+        }));
+        await using var transport = new LocalTransport(listeners);
+        await using var client = new CopilotClientOverTransport(
+            transport, providerReference: "worker-byok", loggerFactory: logs);
+        Phantom.Workspaces.Llm.Copilot.ICopilotSession? session = null;
+        try
+        {
+            session = await client.CreateSessionAsync(
+                new SessionConfig { Model = "gpt-test" }, TestToken());
+            await enteredWorkerLog.Task.WaitAsync(TestToken());
+            var correlation = Assert.Single(logs.Entries, entry => entry.Stage == "open-start")
+                .CorrelationId!;
+            await logs.WaitForAsync(correlation, "ack-received").WaitAsync(TestToken());
+            Assert.DoesNotContain(logs.Entries, entry => entry.CorrelationId == correlation
+                && entry.Role == "worker" && entry.Stage == "ack-written");
+        }
+        finally
+        {
+            releaseWorkerLog.Set();
+        }
+
+        await using var completedSession = session!;
+        var snapshot = logs.Entries;
+        var id = Assert.Single(snapshot, entry => entry.Stage == "open-start").CorrelationId!;
+        await logs.WaitForAsync(id, "ack-written").WaitAsync(TestToken());
+        snapshot = logs.Entries;
+        Assert.Contains(snapshot, entry => entry.CorrelationId == id
+            && entry.Role == "worker" && entry.Stage == "ack-written");
+        Assert.Contains(snapshot, entry => entry.CorrelationId == id
+            && entry.Role == "caller" && entry.Stage == "ack-received");
+        AssertSanitized(logs, secret, "worker-only.invalid");
     }
 
     [Fact]
@@ -1196,6 +1267,16 @@ public sealed class RemoteCopilotLifecycleTests
         }
     }
 
+    private sealed class StaticProviderResolver(ProviderConfig provider)
+        : IRemoteCopilotProviderResolver
+    {
+        public Task<ProviderConfig?> ResolveAsync(
+            string providerReference,
+            string modelId,
+            CancellationToken cancellationToken)
+            => Task.FromResult<ProviderConfig?>(provider);
+    }
+
     private sealed class SequencedProviderResolver(
         Exception firstFailure,
         ProviderConfig provider) : IRemoteCopilotProviderResolver
@@ -1495,10 +1576,28 @@ public sealed class RemoteCopilotLifecycleTests
     private sealed class LifecycleLoggerFactory : ILoggerFactory
     {
         private readonly ConcurrentQueue<LifecycleLogEntry> entries = new();
+        private readonly object gate = new();
+        private readonly List<(string Correlation, string Stage, TaskCompletionSource Signal)> waiters = new();
+        private readonly Action<LifecycleLogEntry>? beforeEnqueue;
+
+        public LifecycleLoggerFactory(Action<LifecycleLogEntry>? beforeEnqueue = null)
+            => this.beforeEnqueue = beforeEnqueue;
 
         public IReadOnlyList<LifecycleLogEntry> Entries => [.. this.entries];
 
-        public ILogger CreateLogger(string categoryName) => new Logger(this.entries);
+        public ILogger CreateLogger(string categoryName) => new Logger(this);
+
+        public Task WaitForAsync(string correlation, string stage)
+        {
+            lock (this.gate)
+            {
+                if (this.entries.Any(entry => entry.CorrelationId == correlation && entry.Stage == stage))
+                    return Task.CompletedTask;
+                var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                this.waiters.Add((correlation, stage, signal));
+                return signal.Task;
+            }
+        }
 
         public int IndexOf(string stage)
             => Array.FindIndex([.. this.entries], entry => entry.Stage == stage);
@@ -1516,7 +1615,7 @@ public sealed class RemoteCopilotLifecycleTests
         {
         }
 
-        private sealed class Logger(ConcurrentQueue<LifecycleLogEntry> entries) : ILogger
+        private sealed class Logger(LifecycleLoggerFactory owner) : ILogger
         {
             public IDisposable? BeginScope<TState>(TState state)
                 where TState : notnull => null;
@@ -1534,7 +1633,7 @@ public sealed class RemoteCopilotLifecycleTests
                 if (!this.IsEnabled(logLevel))
                     return;
                 var values = state as IEnumerable<KeyValuePair<string, object?>>;
-                entries.Enqueue(new LifecycleLogEntry(
+                var entry = new LifecycleLogEntry(
                     formatter(state, exception),
                     Value("CorrelationId"),
                     Value("Role"),
@@ -1545,7 +1644,20 @@ public sealed class RemoteCopilotLifecycleTests
                     Value("Outcome"),
                     Value("ElapsedMilliseconds"),
                     logLevel,
-                    exception is not null));
+                    exception is not null);
+                owner.beforeEnqueue?.Invoke(entry);
+                lock (owner.gate)
+                {
+                    owner.entries.Enqueue(entry);
+                    for (var i = owner.waiters.Count - 1; i >= 0; i--)
+                    {
+                        var waiter = owner.waiters[i];
+                        if (waiter.Correlation != entry.CorrelationId || waiter.Stage != entry.Stage)
+                            continue;
+                        owner.waiters.RemoveAt(i);
+                        waiter.Signal.TrySetResult();
+                    }
+                }
 
                 string? Value(string name) => values?
                     .FirstOrDefault(pair => string.Equals(pair.Key, name, StringComparison.Ordinal))
