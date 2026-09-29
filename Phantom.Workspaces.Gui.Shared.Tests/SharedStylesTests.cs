@@ -1281,7 +1281,8 @@ public sealed class SharedStylesTests
               </controls:EntityCardHeaderPanel>
             </Window>
             """;
-        var window = (Window)AvaloniaRuntimeXamlLoader.Load(xaml);
+        var window = (Window)AvaloniaRuntimeXamlLoader.Load(
+            xaml, localAssembly: typeof(EntityCardHeaderPanel).Assembly);
         window.SizeToContent = SizeToContent.Manual;
         window.Width = width;
         window.Height = height;
@@ -1409,7 +1410,8 @@ public sealed class SharedStylesTests
               </StackPanel>
             </Window>
             """;
-        var window = (Window)AvaloniaRuntimeXamlLoader.Load(xaml);
+        var window = (Window)AvaloniaRuntimeXamlLoader.Load(
+            xaml, localAssembly: typeof(EntityCardHeaderPanel).Assembly);
         window.SizeToContent = SizeToContent.Manual;
         window.Width = 800;
         window.Height = 400;
