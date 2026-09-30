@@ -16,6 +16,7 @@ using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Logging;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Time.Testing;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.ViewModels;
 using Xunit;
@@ -25,6 +26,67 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class OpenAgentSessionShortcutHandlerTests
 {
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task Handle_InitializationPublicationStalls_ShowsBoundedFailureAndNoLateReady()
+    {
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var broker = MainWindowIntegrationTests.GetEntityBroker(viewModel);
+        var definition = await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(
+            broker,
+            new EntityId("bbbb1611-0000-4000-8000-000000000001"),
+            """
+            {
+              "entity-id": "bbbb1611-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "loading-deadline"]],
+              "display-name": { "default": "Loading Deadline" },
+              "definition": {
+                "kind": "prompt",
+                "name": "loading-deadline",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+        var session = await new AgentSessionShortcutContext()
+            .CreateAgentSessionEntityAsync(viewModel, definition, "loading-deadline");
+        Assert.NotNull(session);
+        var clock = new FakeTimeProvider();
+        var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var failed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var handler = new OpenAgentSessionShortcutHandler(
+            new AgentSessionShortcutContext(),
+            MainWindowIntegrationTests.CreateLocalTrustedExecutorSelector(),
+            MainWindowIntegrationTests.CreateTestRunningAgentChatTable(),
+            new AgentSessionOwnerDecisionProvider(), null,
+            async callback =>
+            {
+                if (!waiting.Task.IsCompleted)
+                {
+                    waiting.TrySetResult();
+                    await release.Task;
+                }
+                callback();
+                if (viewModel.WorkspacePanes.SelectMany(pane => pane.Tabs)
+                    .OfType<AgentSessionWorkspaceTabViewModel>()
+                    .Any(tab => tab.State == AgentTabState.Failed))
+                    failed.TrySetResult();
+            },
+            TimeSpan.FromSeconds(5), clock);
+        Assert.True(await handler.Handle(viewModel, Shortcut.Open, session!));
+        await waiting.Task;
+        clock.Advance(TimeSpan.FromSeconds(5));
+        release.TrySetResult();
+        await failed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var tab = Assert.Single(viewModel.WorkspacePanes.SelectMany(pane => pane.Tabs)
+            .OfType<AgentSessionWorkspaceTabViewModel>());
+        Assert.Equal(AgentTabState.Failed, tab.State);
+        Assert.Contains("timed out at", tab.LoadError);
+        Assert.Null(tab.Agent);
+    }
+
     [Fact]
     public void CreateAgentSessionTabRequest_PublicContract_HasExactlySpecifiedProperties()
     {

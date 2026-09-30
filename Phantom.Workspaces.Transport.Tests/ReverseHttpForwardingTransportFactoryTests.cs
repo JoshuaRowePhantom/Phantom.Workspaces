@@ -1,12 +1,38 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Threading.Channels;
+using Microsoft.Extensions.Time.Testing;
 using Phantom.Workspaces.Transport.ReverseHttp;
 
 namespace Phantom.Workspaces.Transport.Tests;
 
 public sealed class ReverseHttpForwardingTransportFactoryTests
 {
+    [Fact]
+    public async Task ForwardingFactory_RelayNeverAcknowledged_BoundsEstablishmentAndDisposesHub()
+    {
+        var clock = new FakeTimeProvider();
+        var httpFactory = new ControllableHttpTransportFactory();
+        var relayStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var factory = new ReverseHttpForwardingTransportFactory(
+            httpFactory, timeProvider: clock, relayEstablishmentTimeout: TimeSpan.FromSeconds(5),
+            reportStage: stage =>
+            {
+                if (stage == "relay-establishment") relayStarted.TrySetResult();
+            });
+        using var descriptor = JsonDocument.Parse(
+            """{"type":"reverse-http","hub-urls":["https://hub.example"],"entity-id":"machine-c"}""");
+        var connecting = factory.ConnectToAsync(descriptor.RootElement);
+        var attempt = await httpFactory.WaitForAttemptAsync("https://hub.example");
+        var hub = new FakeTransport(FakeMessageChannel.Kind.Stalled);
+        attempt.Succeed(hub);
+        await relayStarted.Task;
+        clock.Advance(TimeSpan.FromSeconds(5));
+        var error = await Assert.ThrowsAsync<TimeoutException>(() => connecting);
+        Assert.DoesNotContain("hub.example", error.Message);
+        Assert.True(hub.Disposed);
+    }
+
     [Fact]
     public async Task ForwardingFactory_SingleHub_ConnectsAndOpensRelayChannel()
     {
@@ -243,6 +269,7 @@ public sealed class ReverseHttpForwardingTransportFactoryTests
         {
             RelayEstablished,
             NotRegisteredError,
+            Stalled,
         }
 
         public ChannelWriter<JsonElement> Writer => this.channel.Writer;

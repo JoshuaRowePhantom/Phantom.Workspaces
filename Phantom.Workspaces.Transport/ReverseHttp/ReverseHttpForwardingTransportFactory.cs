@@ -8,6 +8,9 @@ public sealed class ReverseHttpForwardingTransportFactory : ITransportFactory
     private static readonly TimeSpan DefaultHubConnectionTimeout = TimeSpan.FromSeconds(10);
     private readonly ITransportFactory httpClientTransportFactory;
     private readonly TimeSpan hubConnectionTimeout;
+    private readonly TimeSpan relayEstablishmentTimeout;
+    private readonly TimeProvider timeProvider;
+    private readonly Action<string>? reportStage;
     private readonly TransportPeerIdentity? authenticatedPeer;
 
     public ReverseHttpForwardingTransportFactory()
@@ -18,11 +21,19 @@ public sealed class ReverseHttpForwardingTransportFactory : ITransportFactory
     public ReverseHttpForwardingTransportFactory(
         ITransportFactory httpClientTransportFactory,
         TimeSpan? hubConnectionTimeout = null,
-        TransportPeerIdentity? authenticatedPeer = null)
+        TransportPeerIdentity? authenticatedPeer = null,
+        TimeSpan? relayEstablishmentTimeout = null,
+        TimeProvider? timeProvider = null,
+        Action<string>? reportStage = null)
     {
         this.httpClientTransportFactory = httpClientTransportFactory ?? throw new ArgumentNullException(nameof(httpClientTransportFactory));
         this.hubConnectionTimeout = hubConnectionTimeout ?? DefaultHubConnectionTimeout;
         this.authenticatedPeer = authenticatedPeer;
+        this.relayEstablishmentTimeout = relayEstablishmentTimeout ?? TimeSpan.FromSeconds(15);
+        if (this.relayEstablishmentTimeout <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(relayEstablishmentTimeout));
+        this.timeProvider = timeProvider ?? TimeProvider.System;
+        this.reportStage = reportStage;
     }
 
     public async Task<ITransport?> ConnectToAsync(JsonElement connectionDescriptor, CancellationToken ct = default)
@@ -56,6 +67,7 @@ public sealed class ReverseHttpForwardingTransportFactory : ITransportFactory
         }
 
         using var raceCancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        this.reportStage?.Invoke("hub-connection");
         var pending = hubUrls.Select(url => this.ConnectToHubAsync(url, raceCancellation.Token)).ToList();
         var failures = new List<Exception>();
 
@@ -99,14 +111,25 @@ public sealed class ReverseHttpForwardingTransportFactory : ITransportFactory
                 }
 
                 using var relayRequest = JsonDocument.Parse(JsonSerializer.Serialize(relayRequestData));
-                var relayChannel = await winner.Transport.ConnectToMessageChannelAsync(relayRequest.RootElement, ct).ConfigureAwait(false);
+                using var relayTimer = new CancellationTokenSource(this.relayEstablishmentTimeout, this.timeProvider);
+                using var relayCancellation = CancellationTokenSource.CreateLinkedTokenSource(ct, relayTimer.Token);
+                this.reportStage?.Invoke("relay-acceptance");
+                var relayChannel = await winner.Transport.ConnectToMessageChannelAsync(
+                    relayRequest.RootElement, relayCancellation.Token).ConfigureAwait(false);
                 var transport = new ReverseHttpTransport(relayChannel, this.authenticatedPeer);
                 try
                 {
                     // Surface hub-side relay rejections (e.g. channel-open-error {"error-code":"not-registered"})
                     // as a TransportException before returning, rather than handing back a transport whose
                     // round-trips would silently hang.
-                    await transport.WaitForRelayEstablishedAsync(ct).ConfigureAwait(false);
+                    this.reportStage?.Invoke("relay-establishment");
+                    await transport.WaitForRelayEstablishedAsync(relayCancellation.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested
+                    && relayTimer.IsCancellationRequested)
+                {
+                    await transport.DisposeAsync().ConfigureAwait(false);
+                    throw new TimeoutException("Reverse HTTP relay establishment timed out.");
                 }
                 catch
                 {

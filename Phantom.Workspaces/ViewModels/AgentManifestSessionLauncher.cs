@@ -116,12 +116,13 @@ internal static class AgentManifestSessionLauncher
             lifetime.Run(ct => InitializeSessionTabAsync(
                 openAgentSessionShortcutHandler,
                 mainWindowViewModel,
-                async () =>
+                async deadlineToken =>
                 {
                     var loggerFactory = new ObservableLoggerFactory();
                     var agentServices = await agentSessionShortcutContext
                         .CreateAgentServicesAsync(mainWindowViewModel,
-                            new SessionTeeLoggerFactory(mainWindowViewModel.ApplicationServices.LoggerFactory, loggerFactory));
+                            new SessionTeeLoggerFactory(mainWindowViewModel.ApplicationServices.LoggerFactory, loggerFactory))
+                        .WaitAsync(deadlineToken);
                     var agentManifest = AgentManifestLoader.LoadManifestFromJson(manifestJson);
                     // Populate the manifest's stable identity from the source entity so the
                     // ManifestIdentity consent scope works for real manifest entities (issue #1401).
@@ -138,7 +139,7 @@ internal static class AgentManifestSessionLauncher
                         mainWindowViewModel,
                         persistedEntity,
                         AgentSessionOpenIntent.StartOrAttach,
-                        ct);
+                        deadlineToken);
                     loadingTab.SetRemoteProfileDisplayName(acquisition.RemoteProfileDisplayName);
                     var lease = await openAgentSessionShortcutHandler.RunningAgentChatTable.AcquireAsync(
                         new AcquireAgentChatRequest
@@ -155,12 +156,11 @@ internal static class AgentManifestSessionLauncher
                             WorkspaceId = loadingTab.WorkspacePaneId,
                             AcquisitionMode = acquisition.Mode,
                             OwningProfileTransport = acquisition.Transport,
-                        }, ct);
-                    loadingTab.SetLease(lease);
+                        }, deadlineToken);
                     openAgentSessionShortcutHandler.RegisterSessionLogger(
                         lease.AgentChat.Information.AgentSessionId, loggerFactory);
-                    return (lease.AgentChat, loggerFactory);
-                }, createdAgentSessionEntity, loadingTab, foregroundScheduler));
+                    return (lease, loggerFactory);
+                }, createdAgentSessionEntity, loadingTab, foregroundScheduler, ct));
         }
         else if (data.TryGetProperty("definition", out var definitionElement))
         {
@@ -168,12 +168,13 @@ internal static class AgentManifestSessionLauncher
             lifetime.Run(ct => InitializeSessionTabAsync(
                 openAgentSessionShortcutHandler,
                 mainWindowViewModel,
-                async () =>
+                async deadlineToken =>
                 {
                     var loggerFactory = new ObservableLoggerFactory();
                     var agentServices = await agentSessionShortcutContext
                         .CreateAgentServicesAsync(mainWindowViewModel,
-                            new SessionTeeLoggerFactory(mainWindowViewModel.ApplicationServices.LoggerFactory, loggerFactory));
+                            new SessionTeeLoggerFactory(mainWindowViewModel.ApplicationServices.LoggerFactory, loggerFactory))
+                        .WaitAsync(deadlineToken);
                     var agentDefinition = PhantomAgentSchema.AgentDefinitionFromJson(definitionJson);
                     var persistedEntity = createdAgentSessionEntity.Data is JsonElement value
                         ? value
@@ -182,7 +183,7 @@ internal static class AgentManifestSessionLauncher
                         mainWindowViewModel,
                         persistedEntity,
                         AgentSessionOpenIntent.StartOrAttach,
-                        ct);
+                        deadlineToken);
                     loadingTab.SetRemoteProfileDisplayName(acquisition.RemoteProfileDisplayName);
                     var lease = await openAgentSessionShortcutHandler.RunningAgentChatTable.AcquireAsync(
                         new AcquireAgentChatRequest
@@ -198,12 +199,11 @@ internal static class AgentManifestSessionLauncher
                             WorkspaceId = loadingTab.WorkspacePaneId,
                             AcquisitionMode = acquisition.Mode,
                             OwningProfileTransport = acquisition.Transport,
-                        }, ct);
-                    loadingTab.SetLease(lease);
+                        }, deadlineToken);
                     openAgentSessionShortcutHandler.RegisterSessionLogger(
                         lease.AgentChat.Information.AgentSessionId, loggerFactory);
-                    return (lease.AgentChat, loggerFactory);
-                }, createdAgentSessionEntity, loadingTab, foregroundScheduler));
+                    return (lease, loggerFactory);
+                }, createdAgentSessionEntity, loadingTab, foregroundScheduler, ct));
         }
 
         return createdAgentSessionEntity;
@@ -246,30 +246,52 @@ internal static class AgentManifestSessionLauncher
     private static async Task InitializeSessionTabAsync(
         OpenAgentSessionShortcutHandler openAgentSessionShortcutHandler,
         MainWindowViewModel mainWindowViewModel,
-        Func<Task<(IAgentChat AgentChat, ObservableLoggerFactory LoggerFactory)>> createChatAsync,
+        Func<CancellationToken, Task<(RunningAgentChatLease Lease, ObservableLoggerFactory LoggerFactory)>> createChatAsync,
         SubscribedEntityViewModel createdAgentSessionEntity,
         AgentSessionWorkspaceTabViewModel loadingTab,
-        TaskScheduler foregroundScheduler)
+        TaskScheduler foregroundScheduler,
+        CancellationToken lifetimeToken)
     {
+        using var timer = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(lifetimeToken, timer.Token);
+        RunningAgentChatLease? lease = null;
+        var transferred = false;
         try
         {
-            var (agentChat, loggerFactory) = await createChatAsync();
+            var (createdLease, loggerFactory) = await createChatAsync(deadline.Token);
+            lease = createdLease;
+            deadline.Token.ThrowIfCancellationRequested();
             // #1429: materialize through the single composition seam so slash commands are always wired.
             var agent = openAgentSessionShortcutHandler.ComposeSessionAgentViewModel(
                 new ComposeSessionAgentViewModelOptions
                 {
                     MainWindowViewModel = mainWindowViewModel,
                     LoggerFactory = loggerFactory,
-                    AgentChat = agentChat,
+                    AgentChat = lease.AgentChat,
                     AgentSessionEntity = createdAgentSessionEntity,
                     Tab = loadingTab,
                     ForegroundScheduler = foregroundScheduler,
                 });
+            deadline.Token.ThrowIfCancellationRequested();
+            loadingTab.SetLease(lease);
             loadingTab.SetReady(agent, loggerFactory);
+            transferred = true;
         }
-        catch (Exception ex)
+        catch (OperationCanceledException) when (lifetimeToken.IsCancellationRequested)
         {
-            loadingTab.SetFailed(ex.Message);
+        }
+        catch (OperationCanceledException) when (timer.IsCancellationRequested)
+        {
+            loadingTab.SetFailed("Session loading timed out. Check remote reachability and retry opening the session.");
+        }
+        catch (Exception)
+        {
+            loadingTab.SetFailed("Session loading failed. Check remote reachability and retry opening the session.");
+        }
+        finally
+        {
+            if (!transferred && lease is not null)
+                await lease.DisposeAsync();
         }
     }
 }

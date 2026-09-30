@@ -281,6 +281,15 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
         this.State = AgentTabState.Failed;
     }
 
+    internal void ResetFailedLoading()
+    {
+        if (this.disposed || this.State != AgentTabState.Failed)
+            throw new InvalidOperationException("Only a failed open tab can be retried.");
+        this.LoadError = null;
+        this.remoteProfileDisplayName = null;
+        this.State = AgentTabState.Loading;
+    }
+
     private void OnAgentPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (this.disposed)

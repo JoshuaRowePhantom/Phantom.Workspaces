@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 using AgentSchema;
 using Avalonia.Threading;
 using Phantom.Workspaces.Agent.Gui;
@@ -36,6 +37,8 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
     private readonly IAgentSessionOwnerDecisionProvider ownerDecisionProvider;
     private readonly ITransportFactoryRegistry? transportFactoryRegistry;
     private readonly Func<Action, Task> invokeOnUiThreadAsync;
+    private readonly TimeProvider timeProvider;
+    private readonly TimeSpan loadingDeadline;
     private readonly ConcurrentDictionary<string, ObservableLoggerFactory> sessionLoggers =
         new(StringComparer.Ordinal);
 
@@ -73,7 +76,9 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         IRunningAgentChatTable runningAgentChatTable,
         IAgentSessionOwnerDecisionProvider ownerDecisionProvider,
         ITransportFactoryRegistry? transportFactoryRegistry = null,
-        Func<Action, Task>? invokeOnUiThreadAsync = null)
+        Func<Action, Task>? invokeOnUiThreadAsync = null,
+        TimeSpan? loadingDeadline = null,
+        TimeProvider? timeProvider = null)
     {
         this.agentSessionShortcutContext = agentSessionShortcutContext;
         this.trustedExecutorSelector = trustedExecutorSelector;
@@ -82,6 +87,10 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             ?? throw new ArgumentNullException(nameof(ownerDecisionProvider));
         this.transportFactoryRegistry = transportFactoryRegistry;
         this.invokeOnUiThreadAsync = invokeOnUiThreadAsync ?? InvokeOnUiThreadAsync;
+        this.loadingDeadline = loadingDeadline ?? TimeSpan.FromSeconds(90);
+        if (this.loadingDeadline <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(loadingDeadline));
+        this.timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public ValueTask DisposeAsync() => lifetime.DisposeAsync();
@@ -105,6 +114,14 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             .FirstOrDefault(item => item.Tab.Entity?.EntityId == entityViewModel.EntityId);
         if (existingTab.Tab is not null)
         {
+            if (existingTab.Tab is AgentSessionWorkspaceTabViewModel failedTab
+                && failedTab.State == AgentTabState.Failed)
+            {
+                failedTab.ResetFailedLoading();
+                var scheduler = SynchronizationContextTaskScheduler.FromCurrent();
+                lifetime.Run(ct => InitializeTabInBackgroundAsync(
+                    mainWindowViewModel, entityViewModel, failedTab, scheduler, ct));
+            }
             return await mainWindowViewModel.NavigateToTabAsync(
                 new UiPath(existingTab.Pane.Id, existingTab.Tab.Id),
                 openEntityIfNoTab: true);
@@ -153,21 +170,37 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
     {
         (AgentViewModel agent, ObservableLoggerFactory loggerFactory, RunningAgentChatLease? lease)? result = null;
         var published = false;
+        using var timer = new CancellationTokenSource(this.loadingDeadline, this.timeProvider);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct, timer.Token);
+        var stage = "service-initialization";
+        var correlation = Guid.NewGuid().ToString("N")[..8];
+        var started = this.timeProvider.GetTimestamp();
+        var logger = mainWindowViewModel.ApplicationServices.LoggerFactory
+            .CreateLogger<OpenAgentSessionShortcutHandler>();
+        void ReportStage(string next)
+        {
+            logger.LogInformation(
+                "Session loading; attempt {Attempt}; stage {Stage}; elapsed-ms {ElapsedMs}; outcome started.",
+                correlation, next, this.timeProvider.GetElapsedTime(started).TotalMilliseconds);
+            stage = next;
+        }
         try
         {
+            ReportStage(stage);
             result = await this.TryBuildAgentAsync(
-                mainWindowViewModel, agentSessionEntity, tab, foregroundScheduler, ct);
-            ct.ThrowIfCancellationRequested();
+                mainWindowViewModel, agentSessionEntity, tab, foregroundScheduler,
+                deadline.Token, ReportStage);
+            deadline.Token.ThrowIfCancellationRequested();
             await this.invokeOnUiThreadAsync(() =>
             {
-                ct.ThrowIfCancellationRequested();
+                deadline.Token.ThrowIfCancellationRequested();
                 if (result is var (agent, loggerFactory, lease))
                 {
                     if (lease is not null)
                     {
                         tab.SetLease(lease);
                     }
-                    ct.ThrowIfCancellationRequested();
+                    deadline.Token.ThrowIfCancellationRequested();
                     tab.SetReady(agent, loggerFactory);
                     published = true;
                 }
@@ -180,11 +213,29 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
                 mainWindowViewModel.NotifyAgentTabStateChanged();
             });
         }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested && timer.IsCancellationRequested)
+        {
+            logger.LogWarning(
+                "Session loading; attempt {Attempt}; stage {Stage}; elapsed-ms {ElapsedMs}; reason session-load-timeout.",
+                correlation, stage, this.timeProvider.GetElapsedTime(started).TotalMilliseconds);
+            await this.invokeOnUiThreadAsync(() =>
+            {
+                if (!ct.IsCancellationRequested && tab.State == AgentTabState.Loading)
+                {
+                    tab.SetFailed($"Session loading timed out at {stage}. Check remote reachability and retry opening the session.");
+                    mainWindowViewModel.NotifyAgentTabStateChanged();
+                }
+            });
+        }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
         }
         catch (Exception ex)
         {
+            logger.LogWarning(
+                "Session loading; attempt {Attempt}; stage {Stage}; elapsed-ms {ElapsedMs}; reason {Reason}.",
+                correlation, stage, this.timeProvider.GetElapsedTime(started).TotalMilliseconds,
+                ex is RemoteAgentStatusTimeoutException ? "status-timeout" : "session-load-failure");
             await this.invokeOnUiThreadAsync(() =>
             {
                 if (ct.IsCancellationRequested)
@@ -192,7 +243,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
                     return;
                 }
 
-                tab.SetFailed(ex.Message);
+                tab.SetFailed($"Session loading failed at {stage}. Check remote reachability and retry opening the session.");
                 mainWindowViewModel.NotifyAgentTabStateChanged();
             });
         }
@@ -467,7 +518,8 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         SubscribedEntityViewModel agentSessionEntity,
         AgentSessionWorkspaceTabViewModel tab,
         TaskScheduler foregroundScheduler,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        Action<string>? reportStage = null)
     {
         if (agentSessionEntity.Data is not JsonElement agentSessionEntityData
             || !agentSessionEntityData.TryGetProperty("agent-session-id", out var agentSessionIdElement)
@@ -483,9 +535,11 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             : null;
 
         var loggerFactory = this.GetSessionLogger(agentSessionId!);
+        reportStage?.Invoke("service-initialization");
         var agentServices = await this.agentSessionShortcutContext.CreateAgentServicesAsync(
             mainWindowViewModel,
-            new SessionTeeLoggerFactory(mainWindowViewModel.ApplicationServices.LoggerFactory, loggerFactory));
+            new SessionTeeLoggerFactory(mainWindowViewModel.ApplicationServices.LoggerFactory, loggerFactory))
+            .WaitAsync(ct);
 
         // Extract display-name and description from entity data to populate AgentChat properties
         string? entityDisplayName = null;
@@ -507,9 +561,10 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             mainWindowViewModel,
             agentSessionEntityData,
             AgentSessionOpenIntent.StartOrAttach,
-            ct);
+            ct, reportStage);
         tab.SetRemoteProfileDisplayName(acquisition.RemoteProfileDisplayName);
 
+        reportStage?.Invoke("remote-flight-chat-acquisition");
         var lease = await this.runningAgentChatTable.AcquireAsync(
             new AcquireAgentChatRequest
             {
@@ -582,7 +637,8 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         MainWindowViewModel mainWindowViewModel,
         JsonElement agentSessionEntity,
         AgentSessionOpenIntent openIntent,
-        CancellationToken ct)
+        CancellationToken ct,
+        Action<string>? reportStage = null)
     {
         if (!agentSessionEntity.TryGetProperty("ownership-generation", out _)
             || !agentSessionEntity.TryGetProperty("host-profile-entity-id", out var ownerElement)
@@ -599,7 +655,9 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             return (AgentChatAcquisitionMode.Local, null, agentSessionEntity, null);
         }
 
-        var ownerProfiles = await mainWindowViewModel.EntityBroker.GetEntitiesAsync([new EntityId(owner)]);
+        reportStage?.Invoke("owner-profile-lookup");
+        var ownerProfiles = await mainWindowViewModel.EntityBroker.GetEntitiesAsync([new EntityId(owner)])
+            .WaitAsync(ct);
         var remoteProfileDisplayName = ownerProfiles.FirstOrDefault()?.DisplayName;
         var registry = this.transportFactoryRegistry
             ?? mainWindowViewModel.TransportComposition?.TransportFactoryRegistry
@@ -607,11 +665,12 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
                 "The persisted agent session is owned by another profile, but remote transport is unavailable.");
         using var descriptor = JsonDocument.Parse(
             $$"""{"type":"user-computer-profile","entity-id":"{{owner:D}}"}""");
+        reportStage?.Invoke("transport-choice");
         var transport = await registry.ConnectToAsync(
             descriptor.RootElement,
             ct);
         var acquisition = await this.ResolveRemoteOwnerAsync(
-            agentSessionEntity, owner, localOwner.Value, transport, openIntent, ct);
+            agentSessionEntity, owner, localOwner.Value, transport, openIntent, ct, reportStage);
         return (
             acquisition.Mode,
             acquisition.Transport,
@@ -645,7 +704,8 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         Guid localOwner,
         Phantom.Workspaces.Transport.ITransport transport,
         AgentSessionOpenIntent openIntent,
-        CancellationToken ct)
+        CancellationToken ct,
+        Action<string>? reportStage = null)
     {
         var transferTransport = false;
         try
@@ -668,7 +728,8 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
                     Transport = transport,
                     OpenRequest = statusRequest,
                 },
-                ct);
+                ct, reportStage: reportStage);
+            reportStage?.Invoke("owner-decision");
             var decision = await this.ownerDecisionProvider.ChooseAsync(
                 new AgentSessionOwnerDecisionContext(status, owner.ToString("D")), ct);
             if (decision == AgentSessionOwnerDecision.ConnectOnOwner)

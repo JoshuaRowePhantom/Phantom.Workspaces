@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Threading.Channels;
+using Microsoft.Extensions.Time.Testing;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Transport;
@@ -8,6 +9,35 @@ namespace Phantom.Workspaces.Llm.Tests;
 
 public sealed partial class RemoteAgentSessionClientTests
 {
+    [Fact]
+    public async Task RemoteAgentSessionClient_StatusFirstFrameStalls_ReportsBoundedStageFailure()
+    {
+        var clock = new FakeTimeProvider();
+        var transport = new TestTransport();
+        var stages = new List<string>();
+        var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var request = new AgentSessionStatusRequest
+        {
+            Transport = transport,
+            OpenRequest = AgentSessionProtocolCodecTests.Open() with
+            {
+                OpenIntent = AgentSessionOpenIntent.Status,
+            },
+        };
+        var status = RemoteAgentSessionClient.GetStatusAsync(request, CancellationToken.None,
+            TimeSpan.FromSeconds(5), clock, stage =>
+            {
+                stages.Add(stage);
+                if (stage == "status-first-frame") waiting.TrySetResult();
+            });
+        await waiting.Task;
+        clock.Advance(TimeSpan.FromSeconds(5));
+        var error = await Assert.ThrowsAsync<RemoteAgentStatusTimeoutException>(() => status);
+        Assert.Equal("status-first-frame", error.Stage);
+        Assert.Equal(["status-channel-open", "status-first-frame"], stages);
+        Assert.DoesNotContain("http", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public void Constructor_NullTransport_ThrowsArgumentNullException()
         => Assert.Throws<ArgumentNullException>(() => new RemoteAgentSessionClient(null!));

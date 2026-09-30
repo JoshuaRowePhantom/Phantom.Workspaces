@@ -44,7 +44,9 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
     public ReplayCursor? LastAppliedCursor { get; private set; }
 
     public static async Task<AgentSessionRemoteStatus> GetStatusAsync(
-        AgentSessionStatusRequest request, CancellationToken ct = default)
+        AgentSessionStatusRequest request, CancellationToken ct = default,
+        TimeSpan? stageDeadline = null, TimeProvider? timeProvider = null,
+        Action<string>? reportStage = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.Transport);
@@ -53,11 +55,22 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
             throw new ArgumentException("Status requests require the Status open intent.", nameof(request));
 
         IMessageChannel? channel = null;
+        var stage = "status-channel-open";
         try
         {
-            channel = await request.Transport.ConnectToMessageChannelAsync(
-                AgentSessionProtocolCodec.SerializeOpen(request.OpenRequest), ct).ConfigureAwait(false);
-            var raw = await channel.Reader.ReadAsync(ct).ConfigureAwait(false);
+            reportStage?.Invoke(stage);
+            using (var stageTimer = new CancellationTokenSource(
+                stageDeadline ?? TimeSpan.FromSeconds(15), timeProvider ?? TimeProvider.System))
+            using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct, stageTimer.Token))
+                channel = await request.Transport.ConnectToMessageChannelAsync(
+                    AgentSessionProtocolCodec.SerializeOpen(request.OpenRequest), deadline.Token).ConfigureAwait(false);
+            stage = "status-first-frame";
+            reportStage?.Invoke(stage);
+            JsonElement raw;
+            using (var stageTimer = new CancellationTokenSource(
+                stageDeadline ?? TimeSpan.FromSeconds(15), timeProvider ?? TimeProvider.System))
+            using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct, stageTimer.Token))
+                raw = await channel.Reader.ReadAsync(deadline.Token).ConfigureAwait(false);
             var frame = AgentSessionProtocolCodec.DeserializeFrame(raw);
             return AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(frame) is SessionStatusEvent status
                 ? status.Status
@@ -67,6 +80,10 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             throw;
+        }
+        catch (OperationCanceledException)
+        {
+            throw new RemoteAgentStatusTimeoutException(stage);
         }
         catch
         {
