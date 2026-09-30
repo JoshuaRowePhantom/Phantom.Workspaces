@@ -58,23 +58,39 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
         var stage = "status-channel-open";
         try
         {
-            reportStage?.Invoke(stage);
             using (var stageTimer = new CancellationTokenSource(
                 stageDeadline ?? TimeSpan.FromSeconds(15), timeProvider ?? TimeProvider.System))
             using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct, stageTimer.Token))
-                channel = await request.Transport.ConnectToMessageChannelAsync(
-                    AgentSessionProtocolCodec.SerializeOpen(request.OpenRequest), deadline.Token).ConfigureAwait(false);
+            {
+                reportStage?.Invoke(stage);
+                var opening = request.Transport.ConnectToMessageChannelAsync(
+                    AgentSessionProtocolCodec.SerializeOpen(request.OpenRequest), deadline.Token);
+                try
+                {
+                    channel = await opening.WaitAsync(deadline.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+                {
+                    _ = DisposeLateStatusChannelAsync(opening);
+                    throw;
+                }
+            }
             stage = "status-first-frame";
-            reportStage?.Invoke(stage);
             JsonElement raw;
             using (var stageTimer = new CancellationTokenSource(
                 stageDeadline ?? TimeSpan.FromSeconds(15), timeProvider ?? TimeProvider.System))
             using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct, stageTimer.Token))
+            {
+                reportStage?.Invoke(stage);
                 raw = await channel.Reader.ReadAsync(deadline.Token).ConfigureAwait(false);
+            }
             var frame = AgentSessionProtocolCodec.DeserializeFrame(raw);
-            return AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(frame) is SessionStatusEvent status
-                ? status.Status
-                : AgentSessionRemoteStatus.Unavailable;
+            var response = AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(frame);
+            if (response is SessionStatusEvent status)
+                return status.Status;
+            if (response is OperationErrorEvent { Error.Code: "unauthorized" or "not-found" })
+                return AgentSessionRemoteStatus.Unavailable;
+            throw new RemoteAgentStatusException(stage, "status-unexpected-frame");
         }
 
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -85,14 +101,39 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
         {
             throw new RemoteAgentStatusTimeoutException(stage);
         }
-        catch
+        catch (Exception error) when (error is TransportException or HttpRequestException
+            or IOException or ChannelClosedException or TimeoutException)
         {
-            return AgentSessionRemoteStatus.Unavailable;
+            throw new RemoteAgentStatusException(stage, "status-transport-failure");
+        }
+        catch (JsonException)
+        {
+            throw new RemoteAgentStatusException(stage, "status-protocol-failure");
+        }
+        catch (RemoteAgentProtocolException)
+        {
+            throw new RemoteAgentStatusException(stage, "status-protocol-failure");
         }
         finally
         {
             if (channel is not null)
                 await channel.DisposeAsync().ConfigureAwait(false);
+        }
+
+    }
+
+    private static async Task DisposeLateStatusChannelAsync(Task<IMessageChannel> opening)
+    {
+        try
+        {
+            await (await opening.ConfigureAwait(false)).DisposeAsync().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception)
+        {
+            System.Diagnostics.Trace.TraceWarning("Remote session status late channel cleanup failed.");
         }
     }
 

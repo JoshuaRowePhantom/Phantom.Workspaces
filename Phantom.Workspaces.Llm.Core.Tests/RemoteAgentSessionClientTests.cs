@@ -39,6 +39,103 @@ public sealed partial class RemoteAgentSessionClientTests
     }
 
     [Fact]
+    public async Task RemoteAgentSessionClient_StatusChannelOpenStalls_ReportsBoundedStageFailure()
+    {
+        var clock = new FakeTimeProvider();
+        var opened = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var transport = new PendingStatusTransport(() => opened.TrySetResult());
+        var status = RemoteAgentSessionClient.GetStatusAsync(StatusRequest(transport),
+            stageDeadline: TimeSpan.FromSeconds(5), timeProvider: clock);
+        await opened.Task;
+        clock.Advance(TimeSpan.FromSeconds(5));
+        var error = await Assert.ThrowsAsync<RemoteAgentStatusTimeoutException>(() => status);
+        Assert.Equal("status-channel-open", error.Stage);
+    }
+
+    [Fact]
+    public async Task RemoteAgentSessionClient_StatusTransportFailure_ReportsSafeStageNotUnavailable()
+    {
+        var transport = new PendingStatusTransport(
+            () => throw new HttpRequestException("private-address-and-credential"));
+        var error = await Assert.ThrowsAsync<RemoteAgentStatusException>(() =>
+            RemoteAgentSessionClient.GetStatusAsync(StatusRequest(transport)));
+        Assert.Equal("status-channel-open", error.Stage);
+        Assert.Equal("status-transport-failure", error.ReasonCode);
+        Assert.DoesNotContain("private-address", error.Message);
+    }
+
+    [Fact]
+    public async Task RemoteAgentSessionClient_StatusChannelOpensAfterDeadline_DisposesLateChannel()
+    {
+        var clock = new FakeTimeProvider();
+        var stageEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var transport = new LateStatusTransport();
+        var status = RemoteAgentSessionClient.GetStatusAsync(StatusRequest(transport),
+            stageDeadline: TimeSpan.FromSeconds(5), timeProvider: clock,
+            reportStage: stage =>
+            {
+                if (stage == "status-channel-open") stageEntered.TrySetResult();
+            });
+        await stageEntered.Task;
+        clock.Advance(TimeSpan.FromSeconds(5));
+        var error = await Assert.ThrowsAsync<RemoteAgentStatusTimeoutException>(() => status);
+        Assert.Equal("status-channel-open", error.Stage);
+        var channel = new LateStatusChannel();
+        transport.Complete(channel);
+        await channel.Disposed.Task.WaitAsync(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+    }
+
+    private sealed class LateStatusTransport : ITransport
+    {
+        private readonly TaskCompletionSource<IMessageChannel> pending =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task<IMessageChannel> ConnectToMessageChannelAsync(JsonElement request, CancellationToken ct = default)
+            => this.pending.Task;
+        public Task<Stream> ConnectToStreamAsync(JsonElement request, CancellationToken ct = default)
+            => throw new NotSupportedException();
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public void Complete(IMessageChannel channel) => this.pending.TrySetResult(channel);
+    }
+
+    private sealed class LateStatusChannel : IMessageChannel
+    {
+        private readonly Channel<JsonElement> channel = Channel.CreateUnbounded<JsonElement>();
+        public TaskCompletionSource Disposed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public ChannelReader<JsonElement> Reader => this.channel.Reader;
+        public ChannelWriter<JsonElement> Writer => this.channel.Writer;
+        public ValueTask DisposeAsync()
+        {
+            this.channel.Writer.TryComplete();
+            this.Disposed.TrySetResult();
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private static AgentSessionStatusRequest StatusRequest(ITransport transport) => new()
+    {
+        Transport = transport,
+        OpenRequest = AgentSessionProtocolCodecTests.Open() with
+        {
+            OpenIntent = AgentSessionOpenIntent.Status,
+        },
+    };
+
+    private sealed class PendingStatusTransport(Action onConnect) : ITransport
+    {
+        public Task<IMessageChannel> ConnectToMessageChannelAsync(JsonElement request, CancellationToken ct = default)
+        {
+            onConnect();
+            return new TaskCompletionSource<IMessageChannel>(TaskCreationOptions.RunContinuationsAsynchronously)
+                .Task.WaitAsync(ct);
+        }
+
+        public Task<Stream> ConnectToStreamAsync(JsonElement request, CancellationToken ct = default)
+            => throw new NotSupportedException();
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    [Fact]
     public void Constructor_NullTransport_ThrowsArgumentNullException()
         => Assert.Throws<ArgumentNullException>(() => new RemoteAgentSessionClient(null!));
 

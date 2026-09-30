@@ -173,8 +173,8 @@ public sealed class UserComputerProfileTransportFactory : ITransportFactory
 
     private void ReportRoute(string route, string outcome)
         => this.logger.LogInformation(
-            "Remote profile transport; stage transport-choice; route {Route}; outcome {Outcome}.",
-            route, outcome);
+            "Remote profile transport; attempt {Attempt}; stage transport-choice; route {Route}; outcome {Outcome}.",
+            SessionAttachDiagnosticScope.CurrentAttempt ?? "none", route, outcome);
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 

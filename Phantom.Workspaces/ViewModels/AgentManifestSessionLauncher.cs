@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 using AgentSchema;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Data;
@@ -116,13 +117,15 @@ internal static class AgentManifestSessionLauncher
             lifetime.Run(ct => InitializeSessionTabAsync(
                 openAgentSessionShortcutHandler,
                 mainWindowViewModel,
-                async deadlineToken =>
+                async (deadlineToken, reportStage) =>
                 {
+                    reportStage("service-initialization");
                     var loggerFactory = new ObservableLoggerFactory();
-                    var agentServices = await agentSessionShortcutContext
-                        .CreateAgentServicesAsync(mainWindowViewModel,
-                            new SessionTeeLoggerFactory(mainWindowViewModel.ApplicationServices.LoggerFactory, loggerFactory))
-                        .WaitAsync(deadlineToken);
+                    var agentServices = await openAgentSessionShortcutHandler.AwaitLoadingStageAsync(
+                        _ => agentSessionShortcutContext.CreateAgentServicesAsync(
+                            mainWindowViewModel,
+                            new SessionTeeLoggerFactory(mainWindowViewModel.ApplicationServices.LoggerFactory, loggerFactory)),
+                        deadlineToken, "service-initialization");
                     var agentManifest = AgentManifestLoader.LoadManifestFromJson(manifestJson);
                     // Populate the manifest's stable identity from the source entity so the
                     // ManifestIdentity consent scope works for real manifest entities (issue #1401).
@@ -139,9 +142,11 @@ internal static class AgentManifestSessionLauncher
                         mainWindowViewModel,
                         persistedEntity,
                         AgentSessionOpenIntent.StartOrAttach,
-                        deadlineToken);
+                        deadlineToken, reportStage);
                     loadingTab.SetRemoteProfileDisplayName(acquisition.RemoteProfileDisplayName);
-                    var lease = await openAgentSessionShortcutHandler.RunningAgentChatTable.AcquireAsync(
+                    reportStage("remote-flight-chat-acquisition");
+                    var lease = await openAgentSessionShortcutHandler.AwaitLoadingStageAsync(
+                        stageToken => openAgentSessionShortcutHandler.RunningAgentChatTable.AcquireAsync(
                         new AcquireAgentChatRequest
                         {
                             AgentSessionId = new AgentSessionId(agentSessionId),
@@ -156,7 +161,8 @@ internal static class AgentManifestSessionLauncher
                             WorkspaceId = loadingTab.WorkspacePaneId,
                             AcquisitionMode = acquisition.Mode,
                             OwningProfileTransport = acquisition.Transport,
-                        }, deadlineToken);
+                        }, stageToken), deadlineToken, "remote-flight-chat-acquisition",
+                        late => late.DisposeAsync().AsTask(), reportStage);
                     openAgentSessionShortcutHandler.RegisterSessionLogger(
                         lease.AgentChat.Information.AgentSessionId, loggerFactory);
                     return (lease, loggerFactory);
@@ -168,13 +174,15 @@ internal static class AgentManifestSessionLauncher
             lifetime.Run(ct => InitializeSessionTabAsync(
                 openAgentSessionShortcutHandler,
                 mainWindowViewModel,
-                async deadlineToken =>
+                async (deadlineToken, reportStage) =>
                 {
+                    reportStage("service-initialization");
                     var loggerFactory = new ObservableLoggerFactory();
-                    var agentServices = await agentSessionShortcutContext
-                        .CreateAgentServicesAsync(mainWindowViewModel,
-                            new SessionTeeLoggerFactory(mainWindowViewModel.ApplicationServices.LoggerFactory, loggerFactory))
-                        .WaitAsync(deadlineToken);
+                    var agentServices = await openAgentSessionShortcutHandler.AwaitLoadingStageAsync(
+                        _ => agentSessionShortcutContext.CreateAgentServicesAsync(
+                            mainWindowViewModel,
+                            new SessionTeeLoggerFactory(mainWindowViewModel.ApplicationServices.LoggerFactory, loggerFactory)),
+                        deadlineToken, "service-initialization");
                     var agentDefinition = PhantomAgentSchema.AgentDefinitionFromJson(definitionJson);
                     var persistedEntity = createdAgentSessionEntity.Data is JsonElement value
                         ? value
@@ -183,9 +191,11 @@ internal static class AgentManifestSessionLauncher
                         mainWindowViewModel,
                         persistedEntity,
                         AgentSessionOpenIntent.StartOrAttach,
-                        deadlineToken);
+                        deadlineToken, reportStage);
                     loadingTab.SetRemoteProfileDisplayName(acquisition.RemoteProfileDisplayName);
-                    var lease = await openAgentSessionShortcutHandler.RunningAgentChatTable.AcquireAsync(
+                    reportStage("remote-flight-chat-acquisition");
+                    var lease = await openAgentSessionShortcutHandler.AwaitLoadingStageAsync(
+                        stageToken => openAgentSessionShortcutHandler.RunningAgentChatTable.AcquireAsync(
                         new AcquireAgentChatRequest
                         {
                             AgentSessionId = new AgentSessionId(agentSessionId),
@@ -199,7 +209,8 @@ internal static class AgentManifestSessionLauncher
                             WorkspaceId = loadingTab.WorkspacePaneId,
                             AcquisitionMode = acquisition.Mode,
                             OwningProfileTransport = acquisition.Transport,
-                        }, deadlineToken);
+                        }, stageToken), deadlineToken, "remote-flight-chat-acquisition",
+                        late => late.DisposeAsync().AsTask(), reportStage);
                     openAgentSessionShortcutHandler.RegisterSessionLogger(
                         lease.AgentChat.Information.AgentSessionId, loggerFactory);
                     return (lease, loggerFactory);
@@ -243,24 +254,52 @@ internal static class AgentManifestSessionLauncher
         string Reference,
         string Revision);
 
-    private static async Task InitializeSessionTabAsync(
+    internal static async Task InitializeSessionTabAsync(
         OpenAgentSessionShortcutHandler openAgentSessionShortcutHandler,
         MainWindowViewModel mainWindowViewModel,
-        Func<CancellationToken, Task<(RunningAgentChatLease Lease, ObservableLoggerFactory LoggerFactory)>> createChatAsync,
+        Func<CancellationToken, Action<string>, Task<(RunningAgentChatLease Lease, ObservableLoggerFactory LoggerFactory)>> createChatAsync,
         SubscribedEntityViewModel createdAgentSessionEntity,
         AgentSessionWorkspaceTabViewModel loadingTab,
         TaskScheduler foregroundScheduler,
-        CancellationToken lifetimeToken)
+        CancellationToken lifetimeToken,
+        TimeSpan? loadingDeadline = null,
+        TimeProvider? timeProvider = null)
     {
-        using var timer = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+        var clock = timeProvider ?? TimeProvider.System;
+        using var timer = new CancellationTokenSource(loadingDeadline ?? TimeSpan.FromSeconds(90), clock);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(lifetimeToken, timer.Token);
+        using var scope = Phantom.Workspaces.Transport.SessionAttachDiagnosticScope.Begin();
+        var attempt = Phantom.Workspaces.Transport.SessionAttachDiagnosticScope.CurrentAttempt!;
+        var started = clock.GetTimestamp();
+        var stage = "service-initialization";
+        var logger = mainWindowViewModel.ApplicationServices.LoggerFactory
+            .CreateLogger(typeof(AgentManifestSessionLauncher).FullName!);
+        void ReportStage(string value)
+        {
+            stage = value;
+            logger.LogInformation(
+                "Session loading; attempt {Attempt}; stage {Stage}; elapsed-ms {ElapsedMs}; outcome started.",
+                attempt, stage, clock.GetElapsedTime(started).TotalMilliseconds);
+        }
         RunningAgentChatLease? lease = null;
         var transferred = false;
         try
         {
-            var (createdLease, loggerFactory) = await createChatAsync(deadline.Token);
+            var createTask = createChatAsync(deadline.Token, ReportStage);
+            (RunningAgentChatLease createdLease, ObservableLoggerFactory loggerFactory) created;
+            try
+            {
+                created = await createTask.WaitAsync(deadline.Token);
+            }
+            catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+            {
+                _ = DisposeLateLeaseAsync(createTask, logger);
+                throw;
+            }
+            var (createdLease, loggerFactory) = created;
             lease = createdLease;
             deadline.Token.ThrowIfCancellationRequested();
+            ReportStage("ready-publication");
             // #1429: materialize through the single composition seam so slash commands are always wired.
             var agent = openAgentSessionShortcutHandler.ComposeSessionAgentViewModel(
                 new ComposeSessionAgentViewModelOptions
@@ -282,16 +321,60 @@ internal static class AgentManifestSessionLauncher
         }
         catch (OperationCanceledException) when (timer.IsCancellationRequested)
         {
-            loadingTab.SetFailed("Session loading timed out. Check remote reachability and retry opening the session.");
+            logger.LogWarning(
+                "Session loading; attempt {Attempt}; stage {Stage}; elapsed-ms {ElapsedMs}; reason session-load-timeout.",
+                attempt, stage, clock.GetElapsedTime(started).TotalMilliseconds);
+            if (loadingTab.State == AgentTabState.Loading)
+                loadingTab.SetFailed($"Session loading timed out at {stage}. Check remote reachability and retry opening the session.");
         }
-        catch (Exception)
+        catch (TimeoutException)
         {
-            loadingTab.SetFailed("Session loading failed. Check remote reachability and retry opening the session.");
+            logger.LogWarning(
+                "Session loading; attempt {Attempt}; stage {Stage}; elapsed-ms {ElapsedMs}; reason stage-timeout.",
+                attempt, stage, clock.GetElapsedTime(started).TotalMilliseconds);
+            if (loadingTab.State == AgentTabState.Loading)
+                loadingTab.SetFailed($"Session loading timed out at {stage}. Check remote reachability and retry opening the session.");
+        }
+        catch (Exception error)
+        {
+            logger.LogWarning(
+                "Session loading; attempt {Attempt}; stage {Stage}; reason {Reason}.",
+                attempt, stage, error is RemoteAgentStatusException status ? status.ReasonCode : "session-load-failure");
+            if (loadingTab.State == AgentTabState.Loading)
+                loadingTab.SetFailed($"Session loading failed at {stage}. Check remote reachability and retry opening the session.");
         }
         finally
         {
             if (!transferred && lease is not null)
-                await lease.DisposeAsync();
+                await openAgentSessionShortcutHandler.AwaitLoadingCleanupAsync(lease.DisposeAsync().AsTask(), logger);
+        }
+    }
+
+    private static async Task DisposeLateLeaseAsync(
+        Task<(RunningAgentChatLease Lease, ObservableLoggerFactory LoggerFactory)> task,
+        ILogger logger)
+    {
+        try
+        {
+            var (lease, loggerFactory) = await task.ConfigureAwait(false);
+            try
+            {
+                await lease.DisposeAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                loggerFactory.Dispose();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (TimeoutException)
+        {
+        }
+        catch (Exception)
+        {
+            logger.LogWarning("Session loading; stage late-acquisition-cleanup; outcome failed.");
         }
     }
 }

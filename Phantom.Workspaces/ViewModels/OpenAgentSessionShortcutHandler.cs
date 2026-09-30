@@ -39,6 +39,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
     private readonly Func<Action, Task> invokeOnUiThreadAsync;
     private readonly TimeProvider timeProvider;
     private readonly TimeSpan loadingDeadline;
+    private readonly TimeSpan stageDeadline;
     private readonly ConcurrentDictionary<string, ObservableLoggerFactory> sessionLoggers =
         new(StringComparer.Ordinal);
 
@@ -78,7 +79,8 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         ITransportFactoryRegistry? transportFactoryRegistry = null,
         Func<Action, Task>? invokeOnUiThreadAsync = null,
         TimeSpan? loadingDeadline = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        TimeSpan? stageDeadline = null)
     {
         this.agentSessionShortcutContext = agentSessionShortcutContext;
         this.trustedExecutorSelector = trustedExecutorSelector;
@@ -91,6 +93,9 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         if (this.loadingDeadline <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(loadingDeadline));
         this.timeProvider = timeProvider ?? TimeProvider.System;
+        this.stageDeadline = stageDeadline ?? TimeSpan.FromSeconds(15);
+        if (this.stageDeadline <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(stageDeadline));
     }
 
     public ValueTask DisposeAsync() => lifetime.DisposeAsync();
@@ -172,8 +177,9 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         var published = false;
         using var timer = new CancellationTokenSource(this.loadingDeadline, this.timeProvider);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct, timer.Token);
+        using var diagnosticScope = SessionAttachDiagnosticScope.Begin();
         var stage = "service-initialization";
-        var correlation = Guid.NewGuid().ToString("N")[..8];
+        var correlation = SessionAttachDiagnosticScope.CurrentAttempt!;
         var started = this.timeProvider.GetTimestamp();
         var logger = mainWindowViewModel.ApplicationServices.LoggerFactory
             .CreateLogger<OpenAgentSessionShortcutHandler>();
@@ -191,7 +197,8 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
                 mainWindowViewModel, agentSessionEntity, tab, foregroundScheduler,
                 deadline.Token, ReportStage);
             deadline.Token.ThrowIfCancellationRequested();
-            await this.invokeOnUiThreadAsync(() =>
+            ReportStage("ready-publication");
+            await this.AwaitStageAsync(_ => this.invokeOnUiThreadAsync(() =>
             {
                 deadline.Token.ThrowIfCancellationRequested();
                 if (result is var (agent, loggerFactory, lease))
@@ -211,32 +218,47 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
                 }
 
                 mainWindowViewModel.NotifyAgentTabStateChanged();
-            });
+            }), deadline.Token, "ready-publication");
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested && timer.IsCancellationRequested)
         {
             logger.LogWarning(
                 "Session loading; attempt {Attempt}; stage {Stage}; elapsed-ms {ElapsedMs}; reason session-load-timeout.",
                 correlation, stage, this.timeProvider.GetElapsedTime(started).TotalMilliseconds);
-            await this.invokeOnUiThreadAsync(() =>
+            await this.PublishLoadingFailureAsync(() =>
             {
                 if (!ct.IsCancellationRequested && tab.State == AgentTabState.Loading)
                 {
                     tab.SetFailed($"Session loading timed out at {stage}. Check remote reachability and retry opening the session.");
                     mainWindowViewModel.NotifyAgentTabStateChanged();
                 }
-            });
+            }, logger);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
+        }
+        catch (SessionLoadingStageTimeoutException error)
+        {
+            logger.LogWarning(
+                "Session loading; attempt {Attempt}; stage {Stage}; elapsed-ms {ElapsedMs}; reason stage-timeout.",
+                correlation, error.Stage, this.timeProvider.GetElapsedTime(started).TotalMilliseconds);
+            await this.PublishLoadingFailureAsync(() =>
+            {
+                if (!ct.IsCancellationRequested && tab.State == AgentTabState.Loading)
+                {
+                    tab.SetFailed($"Session loading timed out at {error.Stage}. Check remote reachability and retry opening the session.");
+                    mainWindowViewModel.NotifyAgentTabStateChanged();
+                }
+            }, logger);
         }
         catch (Exception ex)
         {
             logger.LogWarning(
                 "Session loading; attempt {Attempt}; stage {Stage}; elapsed-ms {ElapsedMs}; reason {Reason}.",
                 correlation, stage, this.timeProvider.GetElapsedTime(started).TotalMilliseconds,
-                ex is RemoteAgentStatusTimeoutException ? "status-timeout" : "session-load-failure");
-            await this.invokeOnUiThreadAsync(() =>
+                ex is RemoteAgentStatusTimeoutException ? "status-timeout"
+                    : ex is RemoteAgentStatusException status ? status.ReasonCode : "session-load-failure");
+            await this.PublishLoadingFailureAsync(() =>
             {
                 if (ct.IsCancellationRequested)
                 {
@@ -245,19 +267,130 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
 
                 tab.SetFailed($"Session loading failed at {stage}. Check remote reachability and retry opening the session.");
                 mainWindowViewModel.NotifyAgentTabStateChanged();
-            });
+            }, logger);
         }
         finally
         {
             if (!published && result is { } unpublished)
             {
-                await DisposeUnpublishedResultAsync(unpublished);
+                await this.AwaitLoadingCleanupAsync(DisposeUnpublishedResultAsync(unpublished), logger);
             }
         }
     }
 
     private static async Task InvokeOnUiThreadAsync(Action action)
         => await Dispatcher.UIThread.InvokeAsync(action);
+
+    private async Task PublishLoadingFailureAsync(Action action, ILogger logger)
+    {
+        using var timer = new CancellationTokenSource(this.stageDeadline, this.timeProvider);
+        try
+        {
+            var publication = this.invokeOnUiThreadAsync(() =>
+            {
+                if (!timer.IsCancellationRequested)
+                    action();
+            });
+            await publication.WaitAsync(timer.Token);
+        }
+        catch (OperationCanceledException) when (timer.IsCancellationRequested)
+        {
+            logger.LogWarning("Session loading; stage failure-publication; reason stage-timeout.");
+        }
+    }
+
+    internal async Task AwaitLoadingCleanupAsync(Task cleanup, ILogger? logger = null)
+    {
+        using var timer = new CancellationTokenSource(this.stageDeadline, this.timeProvider);
+        try
+        {
+            await cleanup.WaitAsync(timer.Token);
+        }
+        catch (OperationCanceledException) when (timer.IsCancellationRequested)
+        {
+            if (logger is not null)
+                logger.LogWarning("Session loading; stage resource-cleanup; reason stage-timeout.");
+            else
+                System.Diagnostics.Trace.TraceWarning("Session loading resource cleanup timed out.");
+        }
+    }
+
+    internal async Task<T> AwaitLoadingStageAsync<T>(
+        Func<CancellationToken, Task<T>> operation,
+        CancellationToken ct,
+        string stage,
+        Func<T, Task>? disposeLate = null,
+        Action<string>? reportStage = null)
+        => await this.AwaitStageAsync(operation, ct, stage, disposeLate, reportStage);
+
+    private async Task<T> AwaitStageAsync<T>(
+        Func<CancellationToken, Task<T>> operation,
+        CancellationToken ct,
+        string stage,
+        Func<T, Task>? disposeLate = null,
+        Action<string>? reportStage = null)
+    {
+        using var timer = new CancellationTokenSource(this.stageDeadline, this.timeProvider);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timer.Token);
+        var task = operation(linked.Token);
+        T result;
+        try
+        {
+            result = await task.WaitAsync(linked.Token);
+        }
+        catch (OperationCanceledException) when (timer.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            if (disposeLate is not null)
+                _ = this.DisposeLateStageAsync(task, disposeLate, stage, reportStage);
+            throw new SessionLoadingStageTimeoutException(stage);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            if (disposeLate is not null)
+                _ = this.DisposeLateStageAsync(task, disposeLate, stage, reportStage);
+            throw;
+        }
+        if (ct.IsCancellationRequested || timer.IsCancellationRequested)
+        {
+            if (disposeLate is not null)
+                await this.AwaitLoadingCleanupAsync(disposeLate(result));
+            ct.ThrowIfCancellationRequested();
+            throw new SessionLoadingStageTimeoutException(stage);
+        }
+        return result;
+    }
+
+    private async Task AwaitStageAsync(
+        Func<CancellationToken, Task> operation, CancellationToken ct, string stage)
+        => await this.AwaitStageAsync(async token =>
+        {
+            await operation(token);
+            return true;
+        }, ct, stage);
+
+    private async Task DisposeLateStageAsync<T>(
+        Task<T> task, Func<T, Task> dispose, string stage, Action<string>? reportStage)
+    {
+        try
+        {
+            await dispose(await task.ConfigureAwait(false)).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception)
+        {
+            reportStage?.Invoke("late-stage-cleanup-failed");
+            System.Diagnostics.Trace.TraceWarning(
+                "Session loading late-stage cleanup failed at {0}.", stage);
+        }
+    }
+
+    private sealed class SessionLoadingStageTimeoutException(string stage)
+        : TimeoutException("Session loading stage timed out.")
+    {
+        public string Stage { get; } = stage;
+    }
 
     private static async Task DisposeUnpublishedResultAsync(
         (AgentViewModel agent, ObservableLoggerFactory loggerFactory, RunningAgentChatLease? lease) result)
@@ -536,10 +669,11 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
 
         var loggerFactory = this.GetSessionLogger(agentSessionId!);
         reportStage?.Invoke("service-initialization");
-        var agentServices = await this.agentSessionShortcutContext.CreateAgentServicesAsync(
-            mainWindowViewModel,
-            new SessionTeeLoggerFactory(mainWindowViewModel.ApplicationServices.LoggerFactory, loggerFactory))
-            .WaitAsync(ct);
+        var agentServices = await this.AwaitStageAsync(_ =>
+            this.agentSessionShortcutContext.CreateAgentServicesAsync(
+                mainWindowViewModel,
+                new SessionTeeLoggerFactory(mainWindowViewModel.ApplicationServices.LoggerFactory, loggerFactory)),
+            ct, "service-initialization");
 
         // Extract display-name and description from entity data to populate AgentChat properties
         string? entityDisplayName = null;
@@ -565,7 +699,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         tab.SetRemoteProfileDisplayName(acquisition.RemoteProfileDisplayName);
 
         reportStage?.Invoke("remote-flight-chat-acquisition");
-        var lease = await this.runningAgentChatTable.AcquireAsync(
+        var lease = await this.AwaitStageAsync(stageToken => this.runningAgentChatTable.AcquireAsync(
             new AcquireAgentChatRequest
             {
                 AgentSessionId = new AgentSessionId(agentSessionId!),
@@ -585,26 +719,31 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
                 AcquisitionMode = acquisition.Mode,
                 OwningProfileTransport = acquisition.Transport,
             },
-            ct);
-        var agentChat = lease.AgentChat;
-
-        // #1429: build + wire slash commands through the single GUI session-composition seam so this
-        // path can never diverge from the other launch paths.
-        var agent = this.ComposeSessionAgentViewModel(
-            new ComposeSessionAgentViewModelOptions
-            {
-                MainWindowViewModel = mainWindowViewModel,
-                LoggerFactory = loggerFactory,
-                AgentChat = agentChat,
-                AgentSessionEntity = agentSessionEntity,
-                Tab = tab,
-                ForegroundScheduler = foregroundScheduler,
-            });
-
-        var profileEntityId = mainWindowViewModel.EntityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
-        if (profileEntityId != default)
+            stageToken), ct, "remote-flight-chat-acquisition",
+            async late => await late.DisposeAsync(), reportStage);
+        AgentViewModel? agent = null;
+        try
         {
-            var profileEntities = await mainWindowViewModel.EntityBroker.GetEntitiesAsync([profileEntityId]);
+            ct.ThrowIfCancellationRequested();
+            // #1429: build + wire slash commands through the single GUI session-composition seam.
+            agent = this.ComposeSessionAgentViewModel(
+                new ComposeSessionAgentViewModelOptions
+                {
+                    MainWindowViewModel = mainWindowViewModel,
+                    LoggerFactory = loggerFactory,
+                    AgentChat = lease.AgentChat,
+                    AgentSessionEntity = agentSessionEntity,
+                    Tab = tab,
+                    ForegroundScheduler = foregroundScheduler,
+                });
+
+            var profileEntityId = mainWindowViewModel.EntityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
+            if (profileEntityId != default)
+            {
+                reportStage?.Invoke("local-profile-preferences");
+                var profileEntities = await this.AwaitStageAsync(
+                    _ => mainWindowViewModel.EntityBroker.GetEntitiesAsync([profileEntityId]),
+                    ct, "local-profile-preferences");
             var profileEntity = profileEntities.FirstOrDefault();
             if (profileEntity?.Data is JsonElement profileData)
             {
@@ -616,17 +755,26 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
                 }
             }
 
-            agent.PropertyChanged += (sender, e) =>
-            {
-                if (e.PropertyName == nameof(AgentViewModel.ShowChatInputHelpText)
-                    && sender is AgentViewModel vm)
+                agent.PropertyChanged += (sender, e) =>
                 {
-                    _ = SaveChatInputHelpTextAsync(mainWindowViewModel, profileEntityId, vm.ShowChatInputHelpText);
-                }
-            };
-        }
+                    if (e.PropertyName == nameof(AgentViewModel.ShowChatInputHelpText)
+                        && sender is AgentViewModel vm)
+                    {
+                        _ = SaveChatInputHelpTextAsync(mainWindowViewModel, profileEntityId, vm.ShowChatInputHelpText);
+                    }
+                };
+            }
 
-        return (agent, loggerFactory, lease);
+            ct.ThrowIfCancellationRequested();
+            return (agent, loggerFactory, lease);
+        }
+        catch
+        {
+            if (agent is not null)
+                await this.AwaitLoadingCleanupAsync(agent.DisposeViewResourcesAsync().AsTask());
+            await this.AwaitLoadingCleanupAsync(lease.DisposeAsync().AsTask());
+            throw;
+        }
     }
 
     internal async Task<(
@@ -656,8 +804,9 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         }
 
         reportStage?.Invoke("owner-profile-lookup");
-        var ownerProfiles = await mainWindowViewModel.EntityBroker.GetEntitiesAsync([new EntityId(owner)])
-            .WaitAsync(ct);
+        var ownerProfiles = await this.AwaitStageAsync(
+            _ => mainWindowViewModel.EntityBroker.GetEntitiesAsync([new EntityId(owner)]),
+            ct, "owner-profile-lookup");
         var remoteProfileDisplayName = ownerProfiles.FirstOrDefault()?.DisplayName;
         var registry = this.transportFactoryRegistry
             ?? mainWindowViewModel.TransportComposition?.TransportFactoryRegistry
@@ -666,9 +815,9 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         using var descriptor = JsonDocument.Parse(
             $$"""{"type":"user-computer-profile","entity-id":"{{owner:D}}"}""");
         reportStage?.Invoke("transport-choice");
-        var transport = await registry.ConnectToAsync(
-            descriptor.RootElement,
-            ct);
+        var transport = await this.AwaitStageAsync(
+            stageToken => registry.ConnectToAsync(descriptor.RootElement, stageToken),
+            ct, "transport-choice", async late => await late.DisposeAsync(), reportStage);
         var acquisition = await this.ResolveRemoteOwnerAsync(
             agentSessionEntity, owner, localOwner.Value, transport, openIntent, ct, reportStage);
         return (
@@ -686,14 +835,15 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         Guid owner,
         Guid localOwner,
         Phantom.Workspaces.Transport.ITransport transport,
-        CancellationToken ct)
+        CancellationToken ct,
+        Action<string>? reportStage = null)
         => await this.ResolveRemoteOwnerAsync(
             agentSessionEntity,
             owner,
             localOwner,
             transport,
             AgentSessionOpenIntent.StartOrAttach,
-            ct);
+            ct, reportStage);
 
     private async Task<(
         AgentChatAcquisitionMode Mode,
@@ -728,10 +878,11 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
                     Transport = transport,
                     OpenRequest = statusRequest,
                 },
-                ct, reportStage: reportStage);
+                ct, this.stageDeadline, this.timeProvider, reportStage);
             reportStage?.Invoke("owner-decision");
-            var decision = await this.ownerDecisionProvider.ChooseAsync(
-                new AgentSessionOwnerDecisionContext(status, owner.ToString("D")), ct);
+            var decision = await this.AwaitStageAsync(stageToken => this.ownerDecisionProvider.ChooseAsync(
+                new AgentSessionOwnerDecisionContext(status, owner.ToString("D")), stageToken),
+                ct, "owner-decision");
             if (decision == AgentSessionOwnerDecision.ConnectOnOwner)
             {
                 transferTransport = true;
@@ -743,8 +894,9 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
                     agentSessionEntity);
             }
 
-            await RemoteAgentSessionClient.TakeOverAsync(
-                transport, statusRequest, localOwner.ToString(), ct);
+            reportStage?.Invoke("owner-takeover");
+            await this.AwaitStageAsync(stageToken => RemoteAgentSessionClient.TakeOverAsync(
+                transport, statusRequest, localOwner.ToString(), stageToken), ct, "owner-takeover");
             return (
                 AgentChatAcquisitionMode.Local,
                 null,
@@ -753,7 +905,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         finally
         {
             if (!transferTransport)
-                await transport.DisposeAsync();
+                await this.AwaitLoadingCleanupAsync(transport.DisposeAsync().AsTask());
         }
     }
 

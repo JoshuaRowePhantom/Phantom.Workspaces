@@ -123,9 +123,13 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
         if (string.Equals(type, "reverse-http", StringComparison.OrdinalIgnoreCase))
         {
             var entityId = ReadEntityId(request);
+            var diagnosticAttempt = SessionAttachDiagnosticScope.ReadValidated(request);
             var authenticatedPeer = TryReadAuthenticatedPeer(request);
             if (this.requireAuthenticatedRelays && authenticatedPeer is null)
             {
+                this.logger.LogWarning(
+                    "Reverse relay; attempt {Attempt}; stage relay-acceptance; outcome unauthorized.",
+                    diagnosticAttempt ?? "none");
                 return await ErrorLease.CreateAsync(
                     channel,
                     "unauthorized",
@@ -136,15 +140,20 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
             if (this.registrations.TryGetValue(entityId, out var registration))
             {
                 IAsyncDisposable relay = authenticatedPeer is not null
-                    ? await registration.AttachAsync(channel, authenticatedPeer, ct).ConfigureAwait(false)
+                    ? await registration.AttachAsync(channel, authenticatedPeer, ct, diagnosticAttempt).ConfigureAwait(false)
                     : await registration.AttachLegacyAsync(channel, ct).ConfigureAwait(false);
                 this.OnRelayOpened(entityId);
-                this.logger.LogInformation("Reverse relay accepted; outcome attached.");
+                this.logger.LogInformation(
+                    "Reverse relay; attempt {Attempt}; stage relay-acceptance; outcome attached.",
+                    diagnosticAttempt ?? "none");
                 return relay is RegisteredClient.AttachedRelay attached
                     ? new RelayLease(this, entityId, attached)
                     : new LegacyRelayLease(this, entityId, (RelaySession)relay);
             }
 
+            this.logger.LogWarning(
+                "Reverse relay; attempt {Attempt}; stage relay-acceptance; outcome not-registered.",
+                diagnosticAttempt ?? "none");
             return await ErrorLease.CreateAsync(
                 channel,
                 "not-registered",
@@ -363,11 +372,13 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
         public async Task<AttachedRelay> AttachAsync(
             IMessageChannel relayChannel,
             TransportPeerIdentity? authenticatedPeer,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            string? diagnosticAttempt = null)
         {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref this.disposed) != 0, this);
             this.EnsureReadLoopStarted();
-            var relay = new AttachedRelay(this, relayChannel, authenticatedPeer, this.logger, this.traceMetadata);
+            var relay = new AttachedRelay(
+                this, relayChannel, authenticatedPeer, this.logger, this.traceMetadata, diagnosticAttempt);
             if (!this.relays.TryAdd(relay.Prefix, relay))
             {
                 throw new TransportException("Could not allocate a reverse HTTP relay.");
@@ -501,6 +512,7 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
             private readonly ConcurrentDictionary<string, string> attempts = new(StringComparer.Ordinal);
             private readonly ILogger logger;
             private readonly bool traceMetadata;
+            private readonly string? diagnosticAttempt;
             private Task? pump;
             private int disposed;
 
@@ -509,13 +521,15 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
                 IMessageChannel channel,
                 TransportPeerIdentity? authenticatedPeer,
                 ILogger logger,
-                bool traceMetadata)
+                bool traceMetadata,
+                string? diagnosticAttempt)
             {
                 this.owner = owner;
                 this.channel = channel;
                 this.authenticatedPeer = authenticatedPeer;
                 this.logger = logger;
                 this.traceMetadata = traceMetadata;
+                this.diagnosticAttempt = diagnosticAttempt;
                 this.Prefix = Guid.NewGuid().ToString("N");
                 this.shutdown = CancellationTokenSource.CreateLinkedTokenSource(owner.shutdown.Token);
             }
@@ -562,7 +576,8 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
                     {
                         this.TrackCorrelationId(frame);
                         var marker = this.MarkerFor(frame);
-                        var routed = RewriteCorrelationId(frame, this.Prefix, addPrefix: true, this.authenticatedPeer);
+                        var routed = RewriteCorrelationId(frame, this.Prefix, addPrefix: true,
+                            this.authenticatedPeer, this.diagnosticAttempt);
                         var started = Stopwatch.GetTimestamp();
                         await this.owner.WriteToRegistrationAsync(routed, this.shutdown.Token).ConfigureAwait(false);
                         this.TraceHop("caller-to-worker", marker, frame, started);
@@ -728,7 +743,8 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
         JsonElement frame,
         string prefix,
         bool addPrefix,
-        TransportPeerIdentity? authenticatedPeer = null)
+        TransportPeerIdentity? authenticatedPeer = null,
+        string? diagnosticAttempt = null)
     {
         var node = JsonNode.Parse(frame.GetRawText())?.AsObject()
             ?? throw new TransportException("Reverse HTTP relay frames must be JSON objects.");
@@ -759,6 +775,10 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
                     userComputerProfileEntityId = authenticatedPeer.UserComputerProfileEntityId,
                 });
         }
+
+        if (addPrefix && diagnosticAttempt is not null
+            && string.Equals(node["type"]?.GetValue<string>(), "channel-open", StringComparison.Ordinal))
+            node["diagnostic-attempt"] = diagnosticAttempt;
 
         return JsonSerializer.SerializeToElement(node);
     }

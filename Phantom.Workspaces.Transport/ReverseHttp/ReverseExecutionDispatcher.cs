@@ -265,6 +265,10 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
         {
             return;
         }
+        var diagnosticAttempt = SessionAttachDiagnosticScope.ReadValidated(frame);
+        this.logger.LogInformation(
+            "Reverse worker; attempt {Attempt}; stage worker-channel-open; outcome received.",
+            diagnosticAttempt ?? "none");
 
         var channel = new DispatchedChannel(this.registrationChannel.Writer, channelId);
         var pending = new PendingChannelOpen(
@@ -284,13 +288,14 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
         if (this.peerIdentities is not null && TryReadAuthenticatedPeer(frame, out var peer))
             this.peerIdentities.SetIdentity(channel, peer);
 
-        _ = this.CompleteChannelOpenAsync(channelId, request.Clone(), pending);
+        _ = this.CompleteChannelOpenAsync(channelId, request.Clone(), pending, diagnosticAttempt);
     }
 
     private async Task CompleteChannelOpenAsync(
         string channelId,
         JsonElement request,
-        PendingChannelOpen pending)
+        PendingChannelOpen pending,
+        string? diagnosticAttempt)
     {
         try
         {
@@ -299,6 +304,9 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
                 .ConfigureAwait(false);
             if (session is null)
             {
+                this.logger.LogWarning(
+                    "Reverse worker; attempt {Attempt}; stage worker-listener; outcome no-listener.",
+                    diagnosticAttempt ?? "none");
                 this.channels.TryRemove(
                     new KeyValuePair<string, DispatchedChannel>(channelId, pending.Channel));
                 pending.Channel.CompleteIncoming();
@@ -319,6 +327,9 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
             }
 
             this.sessions[channelId] = session;
+            this.logger.LogInformation(
+                "Reverse worker; attempt {Attempt}; stage worker-listener; outcome accepted.",
+                diagnosticAttempt ?? "none");
             if (pending.Token.IsCancellationRequested
                 || !this.channels.TryGetValue(channelId, out active)
                 || !ReferenceEquals(active, pending.Channel))
@@ -332,12 +343,18 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
         }
         catch (OperationCanceledException) when (pending.Token.IsCancellationRequested)
         {
+            this.logger.LogInformation(
+                "Reverse worker; attempt {Attempt}; stage worker-listener; outcome cancelled.",
+                diagnosticAttempt ?? "none");
             this.channels.TryRemove(
                 new KeyValuePair<string, DispatchedChannel>(channelId, pending.Channel));
             pending.Channel.CompleteIncoming();
         }
         catch (Exception)
         {
+            this.logger.LogWarning(
+                "Reverse worker; attempt {Attempt}; stage worker-listener; outcome failed.",
+                diagnosticAttempt ?? "none");
             this.channels.TryRemove(
                 new KeyValuePair<string, DispatchedChannel>(channelId, pending.Channel));
             pending.Channel.CompleteIncoming();

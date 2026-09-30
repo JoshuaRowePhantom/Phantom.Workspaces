@@ -9,6 +9,83 @@ namespace Phantom.Workspaces.Transport.Tests;
 public sealed class ReverseHttpForwardingTransportFactoryTests
 {
     [Fact]
+    public async Task ForwardingFactory_RelayChannelOpenIgnoresCancellation_ExpiresAndDisposesLateChannel()
+    {
+        var clock = new FakeTimeProvider();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var http = new ControllableHttpTransportFactory();
+        await using var factory = new ReverseHttpForwardingTransportFactory(
+            http, relayEstablishmentTimeout: TimeSpan.FromSeconds(5), timeProvider: clock,
+            reportStage: stage =>
+            {
+                if (stage == "relay-acceptance") started.TrySetResult();
+            });
+        using var descriptor = JsonDocument.Parse(
+            """{"type":"reverse-http","hub-urls":["https://hub.example"],"entity-id":"machine-c"}""");
+        var connecting = factory.ConnectToAsync(descriptor.RootElement);
+        var attempt = await http.WaitForAttemptAsync("https://hub.example");
+        var hub = new PendingRelayTransport();
+        attempt.Succeed(hub);
+        await started.Task;
+        clock.Advance(TimeSpan.FromSeconds(5));
+        var error = await Assert.ThrowsAsync<TimeoutException>(() => connecting);
+        Assert.DoesNotContain("hub.example", error.Message);
+        Assert.True(hub.Disposed);
+        var late = new LateRelayChannel();
+        hub.Complete(late);
+        await late.Disposed.Task.WaitAsync(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+    }
+
+    private sealed class PendingRelayTransport : ITransport
+    {
+        private readonly TaskCompletionSource<IMessageChannel> pending =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool Disposed { get; private set; }
+        public Task<IMessageChannel> ConnectToMessageChannelAsync(JsonElement request, CancellationToken ct = default)
+            => this.pending.Task;
+        public Task<Stream> ConnectToStreamAsync(JsonElement request, CancellationToken ct = default)
+            => throw new NotSupportedException();
+        public ValueTask DisposeAsync()
+        {
+            this.Disposed = true;
+            return ValueTask.CompletedTask;
+        }
+        public void Complete(IMessageChannel channel) => this.pending.TrySetResult(channel);
+    }
+
+    private sealed class LateRelayChannel : IMessageChannel
+    {
+        private readonly Channel<JsonElement> channel = Channel.CreateUnbounded<JsonElement>();
+        public TaskCompletionSource Disposed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public ChannelReader<JsonElement> Reader => this.channel.Reader;
+        public ChannelWriter<JsonElement> Writer => this.channel.Writer;
+        public ValueTask DisposeAsync()
+        {
+            this.channel.Writer.TryComplete();
+            this.Disposed.TrySetResult();
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public async Task ForwardingFactory_SessionAttempt_PropagatesOnlyOpaqueDiagnosticMarker()
+    {
+        var http = new ControllableHttpTransportFactory();
+        await using var factory = new ReverseHttpForwardingTransportFactory(http);
+        using var scope = SessionAttachDiagnosticScope.Begin();
+        var marker = SessionAttachDiagnosticScope.CurrentAttempt;
+        using var descriptor = JsonDocument.Parse(
+            """{"type":"reverse-http","hub-urls":["https://hub.example"],"entity-id":"machine-c"}""");
+        var connecting = factory.ConnectToAsync(descriptor.RootElement);
+        var attempt = await http.WaitForAttemptAsync("https://hub.example");
+        var hub = new FakeTransport();
+        attempt.Succeed(hub);
+        await using var transport = await connecting;
+        Assert.Equal(marker, hub.ChannelRequests.Single().GetProperty("diagnostic-attempt").GetString());
+        Assert.True(Guid.TryParseExact(marker, "N", out _));
+    }
+
+    [Fact]
     public async Task ForwardingFactory_RelayNeverAcknowledged_BoundsEstablishmentAndDisposesHub()
     {
         var clock = new FakeTimeProvider();

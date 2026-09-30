@@ -167,7 +167,8 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
         this.httpClientTransportFactory = new HttpClientTransportFactory();
         this.reverseHttpForwardingTransportFactory = new ReverseHttpForwardingTransportFactory(
             new HttpClientTransportFactory(),
-            authenticatedPeer: this.AgentSessionPeerIdentities is not null ? localPeer : null);
+            authenticatedPeer: this.AgentSessionPeerIdentities is not null ? localPeer : null,
+            logger: loggerFactory.CreateLogger<ReverseHttpForwardingTransportFactory>());
 
         registry.Register(traceMetadata ? this.localTransportFactory.WithLogging(loggerFactory) : this.localTransportFactory);
         registry.Register(traceMetadata ? this.userComputerProfileTransportFactory.WithLogging(loggerFactory) : this.userComputerProfileTransportFactory);

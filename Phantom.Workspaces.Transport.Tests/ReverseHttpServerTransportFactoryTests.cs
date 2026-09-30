@@ -6,6 +6,34 @@ namespace Phantom.Workspaces.Transport.Tests;
 
 public sealed class ReverseHttpServerTransportFactoryTests
 {
+    [Theory]
+    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", true)]
+    [InlineData("untrusted-address-or-credential", false)]
+    public async Task ReverseHttpServerTransportFactory_RelayAttempt_ReachesWorkerOnlyWhenValidated(
+        string attemptedId, bool valid)
+    {
+        using var logs = new CapturingLoggerFactory();
+        await using var hub = new ReverseHttpServerTransportFactory(null, loggerFactory: logs);
+        var worker = new RelayTestMessageChannel();
+        var caller = new RelayTestMessageChannel();
+        using var registrationRequest = JsonDocument.Parse(
+            """{"type":"reverse-register","entity-id":"machine-c"}""");
+        await using var registration = await hub.OnChannelOpenAsync(registrationRequest.RootElement, worker);
+        using var relayRequest = JsonDocument.Parse(
+            """{"type":"reverse-http","entity-id":"machine-c","diagnostic-attempt":"marker","authenticated-peer":{"authentication-scheme":"test","stable-peer-id":"caller"}}"""
+                .Replace("marker", attemptedId, StringComparison.Ordinal));
+        await using var relay = await hub.OnChannelOpenAsync(relayRequest.RootElement, caller);
+        _ = await caller.Sent.ReadAsync();
+        using var channelOpen = JsonDocument.Parse(
+            """{"type":"channel-open","channelId":"test-channel","request":{"type":"agent-session"}}""");
+        await caller.DeliverAsync(channelOpen.RootElement);
+        var forwarded = await worker.Sent.ReadAsync();
+        Assert.Equal(valid, forwarded.TryGetProperty("diagnostic-attempt", out _));
+        Assert.Contains(logs.Entries, entry => entry.Message.Contains(
+            $"attempt {(valid ? attemptedId : "none")}; stage relay-acceptance"));
+        Assert.DoesNotContain(logs.Entries, entry => entry.Message.Contains("untrusted-address"));
+    }
+
     [Fact]
     public async Task ReverseHttpServerTransportFactory_Registration_StoresChannel()
     {

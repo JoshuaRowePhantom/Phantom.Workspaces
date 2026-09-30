@@ -26,6 +26,133 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class OpenAgentSessionShortcutHandlerTests
 {
+    [Fact]
+    public async Task ResolveRemoteOwner_StatusFirstFrameStalls_ReportsStageAndDisposesTransport()
+    {
+        var clock = new FakeTimeProvider();
+        var stages = new List<string>();
+        var firstFrame = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var choices = new RecordingOwnerDecisionProvider(AgentSessionOwnerDecision.ConnectOnOwner);
+        var handler = new OpenAgentSessionShortcutHandler(
+            new AgentSessionShortcutContext(),
+            MainWindowIntegrationTests.CreateLocalTrustedExecutorSelector(),
+            Moq.Mock.Of<IRunningAgentChatTable>(), choices,
+            timeProvider: clock, stageDeadline: TimeSpan.FromSeconds(5));
+        var transport = new StalledStatusTransport();
+        var opening = handler.ResolveRemoteOwnerAsync(
+            RemoteEntity(),
+            Guid.Parse("11111111-1111-1111-1111-111111111111"),
+            Guid.Parse("22222222-2222-2222-2222-222222222222"),
+            transport, CancellationToken.None, stage =>
+            {
+                stages.Add(stage);
+                if (stage == "status-first-frame") firstFrame.TrySetResult();
+            });
+        await firstFrame.Task;
+        clock.Advance(TimeSpan.FromSeconds(5));
+        var error = await Assert.ThrowsAsync<RemoteAgentStatusTimeoutException>(() => opening);
+        Assert.Equal("status-first-frame", error.Stage);
+        Assert.True(transport.IsDisposed);
+        Assert.Null(choices.Status);
+        Assert.Contains("status-channel-open", stages);
+        Assert.DoesNotContain("owner-decision", stages);
+        Assert.False(transport.Channel.Writer.TryWrite(
+            JsonDocument.Parse("""{"type":"late-status"}""").RootElement.Clone()));
+    }
+
+    private sealed class StalledStatusTransport : ITransport
+    {
+        internal Channel<JsonElement> Channel { get; } =
+            System.Threading.Channels.Channel.CreateUnbounded<JsonElement>();
+        internal bool IsDisposed { get; private set; }
+        public Task<IMessageChannel> ConnectToMessageChannelAsync(
+            JsonElement request, CancellationToken ct = default)
+            => Task.FromResult<IMessageChannel>(new StalledStatusChannel(this.Channel));
+        public Task<Stream> ConnectToStreamAsync(JsonElement request, CancellationToken ct = default)
+            => throw new NotSupportedException();
+        public ValueTask DisposeAsync()
+        {
+            this.IsDisposed = true;
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class StalledStatusChannel(Channel<JsonElement> channel) : IMessageChannel
+    {
+        public ChannelReader<JsonElement> Reader => channel.Reader;
+        public ChannelWriter<JsonElement> Writer => channel.Writer;
+        public ValueTask DisposeAsync()
+        {
+            channel.Writer.TryComplete();
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task AgentManifestSessionLauncher_RemoteAcquisitionStalls_ReportsStageAndDisposesLateLease()
+    {
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var broker = MainWindowIntegrationTests.GetEntityBroker(viewModel);
+        var definition = await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(
+            broker, new EntityId("bbbb1611-0000-4000-8000-000000000002"),
+            """
+            {
+              "entity-id": "bbbb1611-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "launcher-deadline"]],
+              "display-name": { "default": "Launcher Deadline" },
+              "definition": {
+                "kind": "prompt",
+                "name": "launcher-deadline",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+        var session = await new AgentSessionShortcutContext()
+            .CreateAgentSessionEntityAsync(viewModel, definition, "launcher-deadline");
+        Assert.NotNull(session);
+        var tab = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = session.EntityId.ToString(),
+            Title = session.DisplayName,
+            Entity = session,
+        };
+        var clock = new FakeTimeProvider();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completed = new TaskCompletionSource<(RunningAgentChatLease, ObservableLoggerFactory)>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var disposed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var handler = new OpenAgentSessionShortcutHandler(
+            new AgentSessionShortcutContext(),
+            MainWindowIntegrationTests.CreateLocalTrustedExecutorSelector(),
+            MainWindowIntegrationTests.CreateTestRunningAgentChatTable());
+        var initialize = AgentManifestSessionLauncher.InitializeSessionTabAsync(
+            handler, viewModel, (_, stage) =>
+            {
+                stage("remote-flight-chat-acquisition");
+                entered.TrySetResult();
+                return completed.Task;
+            }, session!, tab, TaskScheduler.Default, CancellationToken.None,
+            TimeSpan.FromSeconds(5), clock);
+        await entered.Task;
+        clock.Advance(TimeSpan.FromSeconds(5));
+        await initialize;
+        Assert.Equal(AgentTabState.Failed, tab.State);
+        Assert.Contains("remote-flight-chat-acquisition", tab.LoadError);
+        var lease = new RunningAgentChatLease(
+            new AgentSessionId("late-lease"), null!, () =>
+            {
+                disposed.TrySetResult();
+                return ValueTask.CompletedTask;
+            });
+        completed.TrySetResult((lease, new ObservableLoggerFactory()));
+        await disposed.Task.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(AgentTabState.Failed, tab.State);
+        Assert.Null(tab.Lease);
+    }
+
     [AvaloniaFact(Timeout = 30_000)]
     public async Task Handle_InitializationPublicationStalls_ShowsBoundedFailureAndNoLateReady()
     {
@@ -56,6 +183,7 @@ public sealed class OpenAgentSessionShortcutHandlerTests
         var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var failed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var handler = new OpenAgentSessionShortcutHandler(
             new AgentSessionShortcutContext(),
             MainWindowIntegrationTests.CreateLocalTrustedExecutorSelector(),
@@ -73,18 +201,27 @@ public sealed class OpenAgentSessionShortcutHandlerTests
                     .OfType<AgentSessionWorkspaceTabViewModel>()
                     .Any(tab => tab.State == AgentTabState.Failed))
                     failed.TrySetResult();
+                if (viewModel.WorkspacePanes.SelectMany(pane => pane.Tabs)
+                    .OfType<AgentSessionWorkspaceTabViewModel>()
+                    .Any(tab => tab.State == AgentTabState.Ready))
+                    ready.TrySetResult();
             },
             TimeSpan.FromSeconds(5), clock);
         Assert.True(await handler.Handle(viewModel, Shortcut.Open, session!));
         await waiting.Task;
         clock.Advance(TimeSpan.FromSeconds(5));
-        release.TrySetResult();
         await failed.Task.WaitAsync(TimeSpan.FromSeconds(10));
         var tab = Assert.Single(viewModel.WorkspacePanes.SelectMany(pane => pane.Tabs)
             .OfType<AgentSessionWorkspaceTabViewModel>());
         Assert.Equal(AgentTabState.Failed, tab.State);
         Assert.Contains("timed out at", tab.LoadError);
         Assert.Null(tab.Agent);
+        release.TrySetResult();
+        Assert.Equal(AgentTabState.Failed, tab.State);
+        Assert.Null(tab.Lease);
+        Assert.True(await handler.Handle(viewModel, Shortcut.Open, session!));
+        await ready.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(AgentTabState.Ready, tab.State);
     }
 
     [Fact]

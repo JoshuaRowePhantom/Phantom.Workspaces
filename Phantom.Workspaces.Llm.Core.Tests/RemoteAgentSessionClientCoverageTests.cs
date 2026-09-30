@@ -11,7 +11,7 @@ namespace Phantom.Workspaces.Llm.Tests;
 public sealed partial class RemoteAgentSessionClientTests
 {
     [Fact]
-    public async Task GetStatusAsync_UnauthorizedOrMissing_ReturnsUnavailableWithoutMetadata()
+    public async Task GetStatusAsync_UnauthorizedReturnsUnavailable_ButUnexpectedFrameAndMissingStatusFailSafely()
     {
         static AgentSessionStatusRequest Request(ITransport transport) => new()
         {
@@ -38,14 +38,16 @@ public sealed partial class RemoteAgentSessionClientTests
         {
             Snapshot = AgentSessionProtocolCodecTests.Snapshot(),
         }));
-        Assert.Equal(AgentSessionRemoteStatus.Unavailable,
-            await RemoteAgentSessionClient.GetStatusAsync(Request(metadataBearingDenial)));
+        var unexpected = await Assert.ThrowsAsync<RemoteAgentStatusException>(
+            () => RemoteAgentSessionClient.GetStatusAsync(Request(metadataBearingDenial)));
+        Assert.Equal("status-unexpected-frame", unexpected.ReasonCode);
         Assert.True(metadataBearingDenial.ChannelDisposed);
 
         var missing = new TestTransport();
         missing.CompleteServer();
-        Assert.Equal(AgentSessionRemoteStatus.Unavailable,
-            await RemoteAgentSessionClient.GetStatusAsync(Request(missing)));
+        var missingError = await Assert.ThrowsAsync<RemoteAgentStatusException>(
+            () => RemoteAgentSessionClient.GetStatusAsync(Request(missing)));
+        Assert.Equal("status-transport-failure", missingError.ReasonCode);
         Assert.True(missing.ChannelDisposed);
     }
 
