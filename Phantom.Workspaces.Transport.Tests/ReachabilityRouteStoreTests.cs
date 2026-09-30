@@ -175,6 +175,52 @@ public sealed class ReachabilityRouteStoreTests
         Assert.Empty(await store.GetRoutesAsync(ProfileId));
     }
 
+    [Theory]
+    [InlineData(null, """{"type":"http","url":"https://machine.example/"}""", 100, "route-id.missing", "route-id")]
+    [InlineData(" ", """{"type":"http","url":"https://machine.example/"}""", 100, "route-id.missing", "route-id")]
+    [InlineData("direct-http", """{"type":"http","url":"https://machine.example/"}""", -1, "route.priority.out-of-range", "route.priority")]
+    [InlineData("direct-http", """{"type":"http","url":"https://machine.example/"}""", 1001, "route.priority.out-of-range", "route.priority")]
+    [InlineData("direct-http", "[]", 100, "descriptor.shape.invalid", "descriptor")]
+    [InlineData("direct-http", "{}", 100, "descriptor.type.missing", "descriptor.type")]
+    [InlineData("direct-http", """{"type":42}""", 100, "descriptor.type.missing", "descriptor.type")]
+    [InlineData("direct-http", """{"type":"private-unsupported"}""", 100, "descriptor.type.unsupported", "descriptor.type")]
+    [InlineData("direct-http", """{"type":"reverse-http"}""", 100, "descriptor.type.route-mismatch", "descriptor.type")]
+    [InlineData("reverse-http:20000000-0000-4000-8000-000000000001", """{"type":"http","url":"https://machine.example/"}""", 100, "descriptor.type.route-mismatch", "descriptor.type")]
+    [InlineData("direct-http", """{"type":"http"}""", 100, "endpoint.missing", "descriptor.url")]
+    [InlineData("reverse-http:20000000-0000-4000-8000-000000000001", """{"type":"reverse-http","hub-urls":["https://hub.example/"]}""", 100, "descriptor.entity-id.missing-or-invalid", "descriptor.entity-id")]
+    [InlineData("reverse-http:20000000-0000-4000-8000-000000000001", """{"type":"reverse-http","entity-id":"private-invalid","hub-urls":["https://hub.example/"]}""", 100, "descriptor.entity-id.missing-or-invalid", "descriptor.entity-id")]
+    [InlineData("reverse-http:20000000-0000-4000-8000-000000000001", """{"type":"reverse-http","entity-id":"10000000-0000-4000-8000-000000000003"}""", 100, "descriptor.hub-urls.invalid-count", "descriptor.hub-urls")]
+    [InlineData("reverse-http:20000000-0000-4000-8000-000000000001", """{"type":"reverse-http","entity-id":"10000000-0000-4000-8000-000000000003","hub-urls":[]}""", 100, "descriptor.hub-urls.invalid-count", "descriptor.hub-urls")]
+    [InlineData("reverse-http:20000000-0000-4000-8000-000000000001", """{"type":"reverse-http","entity-id":"10000000-0000-4000-8000-000000000003","hub-urls":[""]}""", 100, "descriptor.hub-urls.invalid-count", "descriptor.hub-urls")]
+    public async Task ReachabilityRouteStore_EachRejectedRule_ReturnsSafeReasonAndFieldWithoutPersisting(
+        string? routeId, string descriptorJson, int priority, string reason, string field)
+    {
+        var (store, _) = await CreateStoreAsync();
+        var route = CreateRoute(routeId!, Parse(descriptorJson), ProfileId) with { Priority = priority };
+        var exception = await Assert.ThrowsAsync<RouteValidationException>(() => store.UpsertRouteAsync(ProfileId, route));
+        Assert.Equal(reason, exception.ReasonCode);
+        Assert.Equal(field, exception.Field);
+        Assert.DoesNotContain("private-", exception.ToString());
+        Assert.Empty(await store.GetRoutesAsync(ProfileId));
+    }
+
+    [Fact]
+    public async Task ReachabilityRouteStore_TooManyHubUrls_ReturnsSafeCountWithoutPersisting()
+    {
+        var (store, _) = await CreateStoreAsync();
+        var descriptor = JsonSerializer.SerializeToElement(new Dictionary<string, object>
+        {
+            ["type"] = "reverse-http",
+            ["entity-id"] = ProfileId.ToString(),
+            ["hub-urls"] = Enumerable.Range(1, 9).Select(index => $"https://hub-{index}.example/").ToArray(),
+        });
+        var exception = await Assert.ThrowsAsync<RouteValidationException>(() =>
+            store.UpsertRouteAsync(ProfileId, CreateRoute($"reverse-http:{HubId}", descriptor, ProfileId)));
+        Assert.Equal("descriptor.hub-urls.invalid-count", exception.ReasonCode);
+        Assert.Equal("descriptor.hub-urls", exception.Field);
+        Assert.Empty(await store.GetRoutesAsync(ProfileId));
+    }
+
     [Fact]
     public async Task ReachabilityRouteStore_ExistingForeignOwnedSlot_CannotBeOverwrittenOrRemoved()
     {
@@ -212,7 +258,9 @@ public sealed class ReachabilityRouteStoreTests
             ProfileId,
             expiresAt: Now.AddSeconds(secondsAfter));
 
-        await Assert.ThrowsAnyAsync<ArgumentException>(() => store.UpsertRouteAsync(ProfileId, route));
+        var exception = await Assert.ThrowsAsync<RouteValidationException>(() => store.UpsertRouteAsync(ProfileId, route));
+        Assert.Equal("route.expiry.not-after-confirmation", exception.ReasonCode);
+        Assert.Equal("route.expires-at", exception.Field);
         Assert.Empty(await store.GetRoutesAsync(ProfileId));
     }
 

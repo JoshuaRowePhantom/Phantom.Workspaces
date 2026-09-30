@@ -333,23 +333,43 @@ public sealed class ReverseHttpClientTransportFactory : ITransportFactory
         {
             return;
         }
-        if (!Guid.TryParse(hubProfileEntityId, out var parsedHubProfileEntityId))
-            throw new UnauthorizedAccessException("Invalid hub profile identity.");
 
-        var hubId = new EntityId(parsedHubProfileEntityId);
-        if (this.hubProfileEntityId == hubId)
+        try
         {
-            return;
-        }
+            if (!Guid.TryParse(hubProfileEntityId, out var parsedHubProfileEntityId))
+                throw new RouteValidationException("descriptor.entity-id.missing-or-invalid", "descriptor.entity-id");
 
-        if (this.reachabilityLease is not null)
+            var hubId = new EntityId(parsedHubProfileEntityId);
+            if (this.hubProfileEntityId == hubId)
+            {
+                return;
+            }
+
+            if (this.reachabilityLease is not null)
+            {
+                await this.reachabilityLease.DisposeAsync().ConfigureAwait(false);
+                this.reachabilityLease = null;
+            }
+
+            this.hubProfileEntityId = hubId;
+            await this.StartReachabilityLeaseAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (RouteValidationException error) when (error.IsIdentityFailure)
         {
-            await this.reachabilityLease.DisposeAsync().ConfigureAwait(false);
-            this.reachabilityLease = null;
+            this.logger.LogWarning(
+                "Reverse registration-info-failed; stage {Stage}; category {Category}; reason {Reason}; field {Field}; exception-type {ExceptionType}; registration-active {RegistrationActive}; dispatch-active {DispatchActive}.",
+                "registration-info", "registration.identity", error.ReasonCode, error.Field,
+                nameof(RouteValidationException), this.IsRegistered, true);
+            throw;
         }
-
-        this.hubProfileEntityId = hubId;
-        await this.StartReachabilityLeaseAsync(cancellationToken).ConfigureAwait(false);
+        catch (UnauthorizedAccessException)
+        {
+            this.logger.LogWarning(
+                "Reverse registration-info-failed; stage {Stage}; category {Category}; reason {Reason}; field {Field}; exception-type {ExceptionType}; registration-active {RegistrationActive}; dispatch-active {DispatchActive}.",
+                "registration-info", "registration.authorization", "registration.authorization-unknown", "identity",
+                nameof(UnauthorizedAccessException), this.IsRegistered, true);
+            throw;
+        }
     }
 }
 

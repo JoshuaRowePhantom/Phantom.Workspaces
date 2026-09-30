@@ -8,6 +8,7 @@ using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.Chat;
 using Phantom.Workspaces.Transport.ReverseHttp;
+using Phantom.Workspaces.Transport.Tests.Infrastructure;
 
 namespace Phantom.Workspaces.Tests;
 
@@ -372,36 +373,54 @@ public sealed class WorkspacesTransportHostTests
         var hub = new EntityId("22222222-2222-4222-8222-222222222222");
         var store = new RecordingRouteStore();
         store.FailNextValidationUpsert();
-        var http = new FakeHubHttpTransportFactory();
-        var factory = new ReverseHttpClientTransportFactory(http, "https://hub.example/", profile.ToString(), store, null);
+        await using var fixture = new InProcessReverseHubFixture(
+            new ReverseHttpServerTransportFactory(null, hubProfileEntityId: hub));
+        const string hubUrl = "https://hub.example/";
+        var factory = new ReverseHttpClientTransportFactory(
+            new InProcessHubHttpTransportFactory(fixture, hubUrl), hubUrl, profile.ToString(), store, null);
+        var sessionsClosed = Channel.CreateUnbounded<bool>();
         var registry = new TransportRegistry();
-        registry.Register(new ChatClientTransportListener(new EchoChatClient()));
+        registry.Register(new TrackingChatListener(
+            new ChatClientTransportListener(new EchoChatClient()), () => sessionsClosed.Writer.TryWrite(true)));
         await using var host = new WorkspacesTransportHost(registry, [factory],
             Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
         await host.StartAsync(Ct());
-        var channel = Assert.Single(http.Channels);
-        await channel.DeliverInbound(Json($$"""{"type":"reverse-registration-info","hub-profile-entity-id":"{{hub}}"}"""));
         Assert.Equal($"failed-validation:reverse-http:{hub}", await store.Operations.ReadAsync(Ct()));
         Assert.Equal($"remove:reverse-http:{hub}", await store.Operations.ReadAsync(Ct()));
-        await channel.DeliverInbound(Json("""{"type":"channel-open","channelId":"new","request":{"type":"chat-client"}}"""));
-        await channel.DeliverInbound(Json("""{"type":"channel-message","channelId":"new","payload":{"type":"process-streaming","content":{"role":"user","text":"hello"}}}"""));
-        var response = await channel.ReadOutbound(Ct());
-        Assert.Equal("new", response.GetProperty("channelId").GetString());
-        Assert.Equal("streaming-update", response.GetProperty("payload").GetProperty("type").GetString());
-        Assert.Equal("streaming-update-complete",
-            (await channel.ReadOutbound(Ct())).GetProperty("payload").GetProperty("type").GetString());
+
+        await using var forwarding = new ReverseHttpForwardingTransportFactory(
+            new InProcessHubHttpTransportFactory(fixture, hubUrl));
+        await using var caller = await forwarding.ConnectToAsync(
+            Json($$"""{"type":"reverse-http","hub-urls":["{{hubUrl}}"],"entity-id":"{{profile}}"}"""), Ct())
+            ?? throw new InvalidOperationException("Hub did not produce a caller transport.");
+        await Assert.IsType<ReverseHttpTransport>(caller).WaitForRelayEstablishedAsync(Ct());
+        await using (var channel = await caller.ConnectToMessageChannelAsync(Json("""{"type":"chat-client"}"""), Ct()))
+        {
+            await channel.Writer.WriteAsync(
+                Json("""{"type":"process-streaming","content":{"role":"user","text":"hello"}}"""), Ct());
+            Assert.Equal("streaming-update",
+                (await channel.Reader.ReadAsync(Ct())).GetProperty("type").GetString());
+            Assert.Equal("streaming-update-complete",
+                (await channel.Reader.ReadAsync(Ct())).GetProperty("type").GetString());
+        }
+        Assert.True(await sessionsClosed.Reader.ReadAsync(Ct()));
         Assert.True(host.IsConnected);
-        Assert.Same(channel, Assert.Single(http.Channels));
+        Assert.True(fixture.ReverseHttpServer.IsRegistered(profile.ToString()));
         Assert.Equal("endpoint.userinfo", factory.LastReachabilityPublicationStatus?.ReasonCode);
         await factory.RetryReachabilityPublicationAsync(Ct());
         Assert.Equal($"upsert:reverse-http:{hub}", await store.Operations.ReadAsync(Ct()));
         Assert.Null(factory.LastReachabilityPublicationError);
-        await channel.DeliverInbound(Json("""{"type":"channel-message","channelId":"new","payload":{"type":"process-streaming","content":{"role":"user","text":"again"}}}"""));
-        Assert.Equal("streaming-update",
-            (await channel.ReadOutbound(Ct())).GetProperty("payload").GetProperty("type").GetString());
-        Assert.Equal("streaming-update-complete",
-            (await channel.ReadOutbound(Ct())).GetProperty("payload").GetProperty("type").GetString());
-        await channel.DeliverInbound(Json("""{"type":"channel-close","channelId":"new"}"""));
+        await using (var channel = await caller.ConnectToMessageChannelAsync(Json("""{"type":"chat-client"}"""), Ct()))
+        {
+            await channel.Writer.WriteAsync(
+                Json("""{"type":"process-streaming","content":{"role":"user","text":"again"}}"""), Ct());
+            Assert.Equal("streaming-update",
+                (await channel.Reader.ReadAsync(Ct())).GetProperty("type").GetString());
+            Assert.Equal("streaming-update-complete",
+                (await channel.Reader.ReadAsync(Ct())).GetProperty("type").GetString());
+        }
+        Assert.True(await sessionsClosed.Reader.ReadAsync(Ct()));
+        Assert.True(host.IsConnected);
     }
 
     [Fact]
@@ -449,6 +468,60 @@ public sealed class WorkspacesTransportHostTests
         Assert.False(host.IsConnected);
         Assert.Equal(nameof(RouteValidationException), host.LastRegistrationFailureType);
         Assert.Null(factory.LastReachabilityPublicationStatus);
+    }
+
+    [Theory]
+    [InlineData(false, "registration.identity", "descriptor.entity-id.target-mismatch")]
+    [InlineData(true, "registration.authorization", "registration.authorization-unknown")]
+    public async Task RegistrationInfoTransientIdentityMismatch_LogsSafeOriginalFailureThenReconnects(
+        bool unauthorized, string expectedCategory, string expectedReason)
+    {
+        var profile = new EntityId("11111111-1111-4111-8111-111111111111");
+        var hub = new EntityId("22222222-2222-4222-8222-222222222222");
+        var store = new RecordingRouteStore();
+        if (unauthorized)
+            store.FailNextAuthorizationUpsert();
+        else
+            store.FailNextIdentityUpsert();
+        var directory = Path.Combine(AppContext.BaseDirectory, "identity-logs-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var logs = Phantom.Workspaces.Services.Logging.HostFileLoggerFactory.Create(directory);
+            var http = new FakeHubHttpTransportFactory();
+            var factory = new ReverseHttpClientTransportFactory(http, "https://private-hub.example/",
+                profile.ToString(), store, null, logger: logs.CreateLogger<ReverseHttpClientTransportFactory>());
+            var states = Channel.CreateUnbounded<bool>();
+            await using (var host = new WorkspacesTransportHost(new TransportRegistry(), [factory], logs))
+            {
+                host.ConnectionStateChanged += (_, _) => states.Writer.TryWrite(host.IsConnected);
+                await host.StartAsync(Ct());
+                Assert.True(await states.Reader.ReadAsync(Ct()));
+                await http.Channels.Single().DeliverInbound(
+                    Json($$"""{"type":"reverse-registration-info","hub-profile-entity-id":"{{hub}}"}"""));
+                Assert.False(await states.Reader.ReadAsync(Ct()));
+                Assert.True(await states.Reader.ReadAsync(Ct()));
+                Assert.True(host.IsConnected);
+                Assert.Equal($"remove:reverse-http:{hub}", await store.Operations.ReadAsync(Ct()));
+                Assert.Equal($"upsert:reverse-http:{hub}", await store.Operations.ReadAsync(Ct()));
+            }
+            var content = string.Concat(Directory.GetFiles(directory, "*.log").Select(path =>
+            {
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var reader = new StreamReader(stream);
+                return reader.ReadToEnd();
+            }));
+            Assert.Contains(expectedCategory, content);
+            Assert.Contains(expectedReason, content);
+            Assert.Contains("reconnected", content);
+            Assert.DoesNotContain("private-hub", content);
+            Assert.DoesNotContain(profile.ToString(), content);
+            Assert.DoesNotContain(hub.ToString(), content);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
     }
 
     [Fact]
@@ -667,11 +740,36 @@ public sealed class WorkspacesTransportHostTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
+    private sealed class TrackingChatListener(ChatClientTransportListener inner, Action onSessionClosed) : ITransportListener
+    {
+        public async Task<IAsyncDisposable?> OnChannelOpenAsync(JsonElement request, IMessageChannel channel, CancellationToken ct = default)
+        {
+            var session = await inner.OnChannelOpenAsync(request, channel, ct);
+            return session is null ? null : new TrackedSession(session, onSessionClosed);
+        }
+
+        public Task<IAsyncDisposable?> OnStreamOpenAsync(JsonElement request, Stream stream, CancellationToken ct = default)
+            => inner.OnStreamOpenAsync(request, stream, ct);
+
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
+
+        private sealed class TrackedSession(IAsyncDisposable inner, Action onSessionClosed) : IAsyncDisposable
+        {
+            public async ValueTask DisposeAsync()
+            {
+                await inner.DisposeAsync();
+                onSessionClosed();
+            }
+        }
+    }
+
     private sealed class RecordingRouteStore : IReachabilityRouteStore
     {
         private readonly Channel<string> operations = Channel.CreateUnbounded<string>();
         private int failNextUpsert;
         private int failNextValidationUpsert;
+        private int failNextIdentityUpsert;
+        private int failNextAuthorizationUpsert;
         public bool DenyUpsert { get; set; }
         public bool RejectTargetIdentity { get; set; }
 
@@ -679,6 +777,8 @@ public sealed class WorkspacesTransportHostTests
 
         public void FailNextUpsert() => Interlocked.Exchange(ref this.failNextUpsert, 1);
         public void FailNextValidationUpsert() => Interlocked.Exchange(ref this.failNextValidationUpsert, 1);
+        public void FailNextIdentityUpsert() => Interlocked.Exchange(ref this.failNextIdentityUpsert, 1);
+        public void FailNextAuthorizationUpsert() => Interlocked.Exchange(ref this.failNextAuthorizationUpsert, 1);
 
         public Task<IReadOnlyList<ReachabilityRoute>> GetRoutesAsync(
             EntityId profileEntityId,
@@ -694,6 +794,10 @@ public sealed class WorkspacesTransportHostTests
                 throw new UnauthorizedAccessException("private profile");
             if (this.RejectTargetIdentity)
                 throw new RouteValidationException("descriptor.entity-id.target-mismatch", "descriptor.entity-id");
+            if (Interlocked.Exchange(ref this.failNextIdentityUpsert, 0) == 1)
+                throw new RouteValidationException("descriptor.entity-id.target-mismatch", "descriptor.entity-id");
+            if (Interlocked.Exchange(ref this.failNextAuthorizationUpsert, 0) == 1)
+                throw new UnauthorizedAccessException("private profile identity");
             if (Interlocked.Exchange(ref this.failNextValidationUpsert, 0) == 1)
             {
                 this.operations.Writer.TryWrite($"failed-validation:{route.RouteId}");
