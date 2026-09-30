@@ -26,6 +26,89 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class OpenAgentSessionShortcutHandlerTests
 {
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task Handle_RemoteStatusStalls_FailsAtStatusStageAndRetriesWithoutLateReady()
+    {
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var broker = MainWindowIntegrationTests.GetEntityBroker(viewModel);
+        var definition = await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(
+            broker, new EntityId("bbbb1611-0000-4000-8000-000000000003"),
+            """
+            {
+              "entity-id": "bbbb1611-0000-4000-8000-000000000003",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "remote-stage-retry"]],
+              "display-name": { "default": "Remote Stage Retry" },
+              "definition": {
+                "kind": "prompt",
+                "name": "remote-stage-retry",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+        var sessionId = Guid.NewGuid().ToString("N");
+        var session = await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(
+            broker, new EntityId("bbbb1611-0000-4000-8000-000000000004"),
+            $$"""
+            {
+              "entity-id": "bbbb1611-0000-4000-8000-000000000004",
+              "entity-types": ["entity", "agent-session"],
+              "names": [["tests", "agent-sessions", "{{sessionId}}"]],
+              "display-name": { "default": "Remote Stage Retry" },
+              "agent-source-entity-id": "{{definition.EntityId}}",
+              "agent-session-id": "{{sessionId}}",
+              "host-profile-entity-id": "11111111-1111-1111-1111-111111111111",
+              "ownership-generation": 7
+            }
+            """);
+        Assert.NotNull(session);
+        var clock = new FakeTimeProvider();
+        var stalled = new StalledStatusTransport();
+        var retryTransport = new OwnerDecisionTransport(AgentSessionRemoteStatus.Running);
+        var attempts = 0;
+        var registry = new Moq.Mock<ITransportFactoryRegistry>();
+        registry.Setup(value => value.ConnectToAsync(
+                Moq.It.IsAny<JsonElement>(), Moq.It.IsAny<CancellationToken>()))
+            .Returns(() => Task.FromResult<ITransport>(
+                Interlocked.Increment(ref attempts) == 1 ? stalled : retryTransport));
+        var failed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var handler = new OpenAgentSessionShortcutHandler(
+            new AgentSessionShortcutContext(),
+            MainWindowIntegrationTests.CreateLocalTrustedExecutorSelector(),
+            MainWindowIntegrationTests.CreateTestRunningAgentChatTable(),
+            new RecordingOwnerDecisionProvider(AgentSessionOwnerDecision.ResumeLocally),
+            registry.Object,
+            callback =>
+            {
+                callback();
+                var tabs = viewModel.WorkspacePanes.SelectMany(pane => pane.Tabs)
+                    .OfType<AgentSessionWorkspaceTabViewModel>();
+                if (tabs.Any(tab => tab.State == AgentTabState.Failed)) failed.TrySetResult();
+                if (tabs.Any(tab => tab.State == AgentTabState.Ready)) ready.TrySetResult();
+                return Task.CompletedTask;
+            },
+            TimeSpan.FromSeconds(30), clock, TimeSpan.FromSeconds(5));
+        Assert.True(await handler.Handle(viewModel, Shortcut.Open, session!));
+        await stalled.ReadStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
+        clock.Advance(TimeSpan.FromSeconds(5));
+        await failed.Task.WaitAsync(TestContext.Current.CancellationToken);
+        var tab = Assert.Single(viewModel.WorkspacePanes.SelectMany(pane => pane.Tabs)
+            .OfType<AgentSessionWorkspaceTabViewModel>());
+        Assert.Equal(AgentTabState.Failed, tab.State);
+        Assert.Contains("status-first-frame", tab.LoadError);
+        Assert.True(stalled.IsDisposed);
+        Assert.False(stalled.Channel.Writer.TryWrite(
+            JsonDocument.Parse("""{"type":"late-status"}""").RootElement.Clone()));
+        Assert.Null(tab.Lease);
+        Assert.True(await handler.Handle(viewModel, Shortcut.Open, session!));
+        await ready.Task.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(AgentTabState.Ready, tab.State);
+        Assert.Equal(2, attempts);
+    }
+
     [Fact]
     public async Task ResolveRemoteOwner_StatusFirstFrameStalls_ReportsStageAndDisposesTransport()
     {
@@ -64,10 +147,12 @@ public sealed class OpenAgentSessionShortcutHandlerTests
     {
         internal Channel<JsonElement> Channel { get; } =
             System.Threading.Channels.Channel.CreateUnbounded<JsonElement>();
+        internal TaskCompletionSource ReadStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal bool IsDisposed { get; private set; }
         public Task<IMessageChannel> ConnectToMessageChannelAsync(
             JsonElement request, CancellationToken ct = default)
-            => Task.FromResult<IMessageChannel>(new StalledStatusChannel(this.Channel));
+            => Task.FromResult<IMessageChannel>(new StalledStatusChannel(this.Channel, this.ReadStarted));
         public Task<Stream> ConnectToStreamAsync(JsonElement request, CancellationToken ct = default)
             => throw new NotSupportedException();
         public ValueTask DisposeAsync()
@@ -77,9 +162,17 @@ public sealed class OpenAgentSessionShortcutHandlerTests
         }
     }
 
-    private sealed class StalledStatusChannel(Channel<JsonElement> channel) : IMessageChannel
+    private sealed class StalledStatusChannel(
+        Channel<JsonElement> channel, TaskCompletionSource readStarted) : IMessageChannel
     {
-        public ChannelReader<JsonElement> Reader => channel.Reader;
+        public ChannelReader<JsonElement> Reader
+        {
+            get
+            {
+                readStarted.TrySetResult();
+                return channel.Reader;
+            }
+        }
         public ChannelWriter<JsonElement> Writer => channel.Writer;
         public ValueTask DisposeAsync()
         {
