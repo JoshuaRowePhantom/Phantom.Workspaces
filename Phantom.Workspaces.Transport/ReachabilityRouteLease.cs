@@ -70,7 +70,7 @@ internal sealed class ReachabilityRouteLease : IAsyncDisposable
                 ExpiresAt = now.Add(this.leaseDuration),
             };
         }
-        catch (RouteValidationException exception)
+        catch (RouteValidationException exception) when (!exception.IsIdentityFailure)
         {
             await this.HandleValidationFailureAsync(exception, cancellationToken).ConfigureAwait(false);
             return;
@@ -83,7 +83,7 @@ internal sealed class ReachabilityRouteLease : IAsyncDisposable
                 route,
                 cancellationToken).ConfigureAwait(false);
         }
-        catch (RouteValidationException exception)
+        catch (RouteValidationException exception) when (!exception.IsIdentityFailure)
         {
             await this.HandleValidationFailureAsync(exception, cancellationToken).ConfigureAwait(false);
             return;

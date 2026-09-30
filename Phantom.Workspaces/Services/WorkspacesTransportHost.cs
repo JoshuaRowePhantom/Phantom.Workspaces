@@ -195,7 +195,9 @@ public sealed class WorkspacesTransportHost : IAsyncDisposable
             {
                 this.LastRegistrationFailureType = error.GetType().Name;
                 this.logger.LogWarning("Reverse worker registration; outcome reconnect-failed; stage {Stage}; reason {Reason}; exception-type {ExceptionType}; retry {Retry}; next-retry {NextRetry}; registration-active {RegistrationActive}.",
-                    "registration", error is UnauthorizedAccessException ? "registration.authorization" : "registration.unexpected",
+                    "registration", error is UnauthorizedAccessException ? "registration.authorization"
+                        : error is RouteValidationException { IsIdentityFailure: true }
+                            ? "registration.identity" : "registration.unexpected",
                     this.LastRegistrationFailureType, 1, "terminal", factory.IsRegistered);
                 this.OnConnectionStateChanged();
                 return;

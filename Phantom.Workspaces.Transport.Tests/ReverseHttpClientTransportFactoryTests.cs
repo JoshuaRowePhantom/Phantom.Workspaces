@@ -63,6 +63,39 @@ public sealed class ReverseHttpClientTransportFactoryTests
     }
 
     [Fact]
+    public async Task ReverseHttpClientTransportFactory_TargetIdentityMismatch_FailsClosed()
+    {
+        var store = new ValidationStore { Reason = "descriptor.entity-id.target-mismatch" };
+        var http = new FakeHttpTransportFactory();
+        await using var factory = new ReverseHttpClientTransportFactory(
+            http, "https://hub.example/", Worker.ToString(), store, Hub);
+        var failure = await Assert.ThrowsAsync<RouteValidationException>(() => factory.EnsureRegisteredAsync());
+        Assert.True(failure.IsIdentityFailure);
+        Assert.False(factory.IsRegistered);
+        Assert.True(http.Transports.Single().Channels.Single().Disposed);
+        Assert.Empty(store.Routes);
+    }
+
+    [Fact]
+    public async Task ReverseHttpClientTransportFactory_RenewalTargetIdentityMismatch_ClosesRegistration()
+    {
+        var clock = new FakeTimeProvider();
+        var store = new ValidationStore { Reason = null };
+        var http = new FakeHttpTransportFactory();
+        await using var factory = new ReverseHttpClientTransportFactory(
+            http, "https://hub.example/", Worker.ToString(), store, Hub,
+            clock, routeLeaseDuration: TimeSpan.FromMinutes(2));
+        await factory.EnsureRegisteredAsync();
+        await store.Attempts.Reader.ReadAsync();
+        store.Reason = "descriptor.entity-id.target-mismatch";
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await http.Transports.Single().Channels.Single().Reader.Completion.WaitAsync(
+            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        Assert.Equal("route-identity", factory.LastReachabilityPublicationStatus?.Stage);
+        Assert.Equal("terminal", factory.LastReachabilityPublicationStatus?.Outcome);
+    }
+
+    [Fact]
     public async Task ReverseHttpClientTransportFactory_DistinctRouteRejections_LogSafeStagesAndRecover()
     {
         using var logs = new CapturingLoggerFactory();

@@ -299,13 +299,15 @@ public sealed class ReverseHttpClientTransportFactory : ITransportFactory
             exception?.GetType().Name ?? "none",
             this.reachabilityLease?.PublicationAttempts ?? 0,
             exception is null ? "published"
-                : exception is UnauthorizedAccessException ? "terminal" : "renewal-scheduled",
+                : exception is UnauthorizedAccessException or RouteValidationException { IsIdentityFailure: true }
+                    ? "terminal" : "renewal-scheduled",
             this.IsRegistered,
             exception is null ? "true"
                 : validation is not null && this.reachabilityLease?.LastCleanupOutcome == "removed-or-absent"
                     ? "false" : "unknown",
             this.reachabilityLease?.LastCleanupOutcome ?? "unknown",
-            validation is null ? "route-publication" : "route-validation");
+            validation is { IsIdentityFailure: true } ? "route-identity"
+                : validation is null ? "route-publication" : "route-validation");
         this.LastReachabilityPublicationStatus = status;
         if (exception is not null)
         {

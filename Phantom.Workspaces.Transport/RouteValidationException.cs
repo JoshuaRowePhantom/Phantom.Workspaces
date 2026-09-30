@@ -14,6 +14,9 @@ public sealed class RouteValidationException : ArgumentException
 
     public string Field { get; }
 
+    public bool IsIdentityFailure => this.ReasonCode is "descriptor.entity-id.missing-or-invalid"
+        or "descriptor.entity-id.target-mismatch";
+
     private static string SafeReason(string reason) => reason switch
     {
         "route-id.missing" or "route-id.invalid" or "route.priority.out-of-range"

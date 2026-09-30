@@ -429,6 +429,29 @@ public sealed class WorkspacesTransportHostTests
     }
 
     [Fact]
+    public async Task RegistrationInfoTargetIdentityMismatch_FailsClosedWithoutEndpointClassification()
+    {
+        var profile = new EntityId("11111111-1111-4111-8111-111111111111");
+        var hub = new EntityId("22222222-2222-4222-8222-222222222222");
+        var store = new RecordingRouteStore { RejectTargetIdentity = true };
+        var http = new FakeHubHttpTransportFactory();
+        var factory = new ReverseHttpClientTransportFactory(http, "https://hub.example/", profile.ToString(), store, null);
+        var states = Channel.CreateUnbounded<bool>();
+        await using var host = new WorkspacesTransportHost(new TransportRegistry(), [factory],
+            Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
+        host.ConnectionStateChanged += (_, _) => states.Writer.TryWrite(host.IsConnected);
+        await host.StartAsync(Ct());
+        Assert.True(await states.Reader.ReadAsync(Ct()));
+        await http.Channels.Single().DeliverInbound(
+            Json($$"""{"type":"reverse-registration-info","hub-profile-entity-id":"{{hub}}"}"""));
+        Assert.False(await states.Reader.ReadAsync(Ct()));
+        Assert.False(await states.Reader.ReadAsync(Ct()));
+        Assert.False(host.IsConnected);
+        Assert.Equal(nameof(RouteValidationException), host.LastRegistrationFailureType);
+        Assert.Null(factory.LastReachabilityPublicationStatus);
+    }
+
+    [Fact]
     public async Task RegistrationInfoRouteValidation_ConfiguredProcessFileLogContainsSafeFailureAndRecovery()
     {
         var directory = Path.Combine(AppContext.BaseDirectory, "route-logs-" + Guid.NewGuid().ToString("N"));
@@ -650,6 +673,7 @@ public sealed class WorkspacesTransportHostTests
         private int failNextUpsert;
         private int failNextValidationUpsert;
         public bool DenyUpsert { get; set; }
+        public bool RejectTargetIdentity { get; set; }
 
         public ChannelReader<string> Operations => this.operations.Reader;
 
@@ -668,6 +692,8 @@ public sealed class WorkspacesTransportHostTests
         {
             if (this.DenyUpsert)
                 throw new UnauthorizedAccessException("private profile");
+            if (this.RejectTargetIdentity)
+                throw new RouteValidationException("descriptor.entity-id.target-mismatch", "descriptor.entity-id");
             if (Interlocked.Exchange(ref this.failNextValidationUpsert, 0) == 1)
             {
                 this.operations.Writer.TryWrite($"failed-validation:{route.RouteId}");
