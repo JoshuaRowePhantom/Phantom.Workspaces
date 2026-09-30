@@ -44,7 +44,9 @@ public sealed class ReverseExecutionDispatcherTests
         await underlying.DeliverInbound(Json("""{"type":"reverse-registration-info","hub-profile-entity-id":"private-hub"}"""));
         Assert.Equal(ReverseDispatchStopReason.DispatchFailed, (await dispatcher.Completion.WaitAsync(Ct())).Reason);
         Assert.Contains(logs.Entries, entry => entry.Message.Contains("dispatcher-stopped")
-            && entry.Message.Contains("UnauthorizedAccessException"));
+            && entry.Message.Contains("UnauthorizedAccessException")
+            && entry.Message.Contains("dispatch-active False")
+            && entry.Message.Contains("registration-channel-open True"));
         Assert.DoesNotContain(logs.Entries, entry => entry.Exception is not null
             || entry.Message.Contains("secret-identity") || entry.Message.Contains("private-hub")
             || entry.Message.Contains("publication-failed"));

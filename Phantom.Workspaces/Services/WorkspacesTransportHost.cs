@@ -170,11 +170,11 @@ public sealed class WorkspacesTransportHost : IAsyncDisposable
             }
 
             var outcome = await dispatcher.Completion.ConfigureAwait(false);
-            this.logger.LogInformation("Reverse worker registration; outcome disconnected; dispatcher {Reason}; exception-type {ExceptionType}; registration-active {RegistrationActive}.",
-                outcome.Reason, outcome.ExceptionType ?? "none", false);
             try
             {
                 await factory.DisconnectAsync().ConfigureAwait(false);
+                this.logger.LogInformation("Reverse worker registration; outcome disconnected; dispatcher {Reason}; exception-type {ExceptionType}; registration-active {RegistrationActive}.",
+                    outcome.Reason, outcome.ExceptionType ?? "none", factory.IsRegistered);
                 this.LastRegistrationFailureType = outcome.ExceptionType;
                 this.OnConnectionStateChanged();
                 if (token.IsCancellationRequested)
