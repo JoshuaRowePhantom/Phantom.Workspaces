@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading.Channels;
 using Microsoft.Extensions.AI;
+using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Transport.Chat;
 using Phantom.Workspaces.Transport.Mcp;
 using Phantom.Workspaces.Transport.ReverseHttp;
@@ -10,6 +11,57 @@ namespace Phantom.Workspaces.Transport.Tests;
 
 public sealed class ReverseExecutionDispatcherTests
 {
+    [Fact]
+    public async Task ExecutorDispatcher_RegistrationInfoRoutePublicationRejected_ContinuesDispatchingChannelOpen()
+    {
+        await using var underlying = new UnderlyingChannel();
+        var opened = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var registry = new TransportRegistry();
+        registry.Register(new RecordingChannelListener(() => { }, () => opened.TrySetResult()));
+        await using var factory = new ReverseHttpClientTransportFactory(
+            new ReverseHttpClientTransportFactoryTests.FakeHttpTransportFactory(),
+            "https://hub.example/", "11111111-1111-4111-8111-111111111111",
+            new RejectingStore(), null);
+        await factory.EnsureRegisteredAsync();
+        await using var dispatcher = new ReverseExecutionDispatcher(underlying, registry,
+            registrationInfoHandler: factory.ApplyHubProfileEntityIdAsync);
+        await underlying.DeliverInbound(Json("""{"type":"reverse-registration-info","hub-profile-entity-id":"22222222-2222-4222-8222-222222222222"}"""));
+        await underlying.DeliverInbound(Json("""{"type":"channel-open","channelId":"ch1","request":{"type":"recording"}}"""));
+        await opened.Task.WaitAsync(Ct());
+        Assert.False(dispatcher.Completion.IsCompleted);
+        Assert.True(factory.IsRegistered);
+        Assert.Equal("endpoint.invalid-scheme", factory.LastReachabilityPublicationStatus?.ReasonCode);
+    }
+
+    [Fact]
+    public async Task ExecutorDispatcher_UnexpectedHandlerFailure_LogsDistinctSafeStop()
+    {
+        await using var underlying = new UnderlyingChannel();
+        using var logs = new CapturingLoggerFactory();
+        await using var dispatcher = new ReverseExecutionDispatcher(underlying, new TransportRegistry(),
+            registrationInfoHandler: (_, _) => throw new UnauthorizedAccessException("secret-identity"),
+            loggerFactory: logs);
+        await underlying.DeliverInbound(Json("""{"type":"reverse-registration-info","hub-profile-entity-id":"private-hub"}"""));
+        Assert.Equal(ReverseDispatchStopReason.DispatchFailed, (await dispatcher.Completion.WaitAsync(Ct())).Reason);
+        Assert.Contains(logs.Entries, entry => entry.Message.Contains("dispatcher-stopped")
+            && entry.Message.Contains("UnauthorizedAccessException"));
+        Assert.DoesNotContain(logs.Entries, entry => entry.Exception is not null
+            || entry.Message.Contains("secret-identity") || entry.Message.Contains("private-hub")
+            || entry.Message.Contains("publication-failed"));
+    }
+
+    private sealed class RejectingStore : IReachabilityRouteStore
+    {
+        public Task<IReadOnlyList<ReachabilityRoute>> GetRoutesAsync(EntityId profileEntityId, CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<ReachabilityRoute>>([]);
+        public Task UpsertRouteAsync(EntityId profileEntityId, ReachabilityRoute route, CancellationToken cancellationToken = default)
+            => Task.FromException(new RouteValidationException("endpoint.invalid-scheme", "descriptor.hub-urls[]"));
+        public Task RemoveRouteAsync(EntityId profileEntityId, string routeId, EntityId ownerProfileEntityId, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+        public Task ClearOwnedRoutesAsync(EntityId profileEntityId, EntityId ownerProfileEntityId, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+    }
+
     [Fact]
     public async Task ExecutorDispatcher_RelayedChannelOpen_DispatchesToChatListener()
     {

@@ -13,9 +13,15 @@ internal sealed class ReachabilityRouteLease : IAsyncDisposable
     private readonly TimeProvider timeProvider;
     private readonly TimeSpan leaseDuration;
     private readonly Action<Exception?> publicationStatusChanged;
+    private readonly Func<Task>? fatalRenewalFailure;
     private readonly CancellationTokenSource shutdown = new();
     private Task? renewalLoop;
     private int disposed;
+    private int publicationAttempts;
+
+    public int PublicationAttempts => Volatile.Read(ref this.publicationAttempts);
+
+    public string LastCleanupOutcome { get; private set; } = "not-needed";
 
     public ReachabilityRouteLease(
         IReachabilityRouteStore routeStore,
@@ -25,7 +31,8 @@ internal sealed class ReachabilityRouteLease : IAsyncDisposable
         int priority,
         TimeProvider timeProvider,
         TimeSpan leaseDuration,
-        Action<Exception?> publicationStatusChanged)
+        Action<Exception?> publicationStatusChanged,
+        Func<Task>? fatalRenewalFailure = null)
     {
         this.routeStore = routeStore ?? throw new ArgumentNullException(nameof(routeStore));
         this.profileEntityId = profileEntityId;
@@ -37,6 +44,7 @@ internal sealed class ReachabilityRouteLease : IAsyncDisposable
             ? leaseDuration
             : throw new ArgumentOutOfRangeException(nameof(leaseDuration));
         this.publicationStatusChanged = publicationStatusChanged ?? throw new ArgumentNullException(nameof(publicationStatusChanged));
+        this.fatalRenewalFailure = fatalRenewalFailure;
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -47,16 +55,26 @@ internal sealed class ReachabilityRouteLease : IAsyncDisposable
 
     public async Task PublishAsync(CancellationToken cancellationToken)
     {
-        var now = this.timeProvider.GetUtcNow();
-        var route = new ReachabilityRoute
+        Interlocked.Increment(ref this.publicationAttempts);
+        ReachabilityRoute route;
+        try
         {
-            RouteId = this.routeId,
-            Descriptor = this.descriptorProvider().Clone(),
-            OwnerProfileEntityId = this.profileEntityId,
-            Priority = this.priority,
-            LastConfirmed = now,
-            ExpiresAt = now.Add(this.leaseDuration),
-        };
+            var now = this.timeProvider.GetUtcNow();
+            route = new ReachabilityRoute
+            {
+                RouteId = this.routeId,
+                Descriptor = this.descriptorProvider().Clone(),
+                OwnerProfileEntityId = this.profileEntityId,
+                Priority = this.priority,
+                LastConfirmed = now,
+                ExpiresAt = now.Add(this.leaseDuration),
+            };
+        }
+        catch (RouteValidationException exception)
+        {
+            await this.HandleValidationFailureAsync(exception, cancellationToken).ConfigureAwait(false);
+            return;
+        }
 
         try
         {
@@ -64,16 +82,39 @@ internal sealed class ReachabilityRouteLease : IAsyncDisposable
                 this.profileEntityId,
                 route,
                 cancellationToken).ConfigureAwait(false);
-            this.publicationStatusChanged(null);
+        }
+        catch (RouteValidationException exception)
+        {
+            await this.HandleValidationFailureAsync(exception, cancellationToken).ConfigureAwait(false);
+            return;
         }
         catch (ReachabilityRouteStoreException exception)
         {
             this.publicationStatusChanged(exception);
+            return;
         }
         catch (InvalidOperationException exception)
         {
             this.publicationStatusChanged(exception);
+            return;
         }
+        this.LastCleanupOutcome = "not-needed";
+        this.publicationStatusChanged(null);
+    }
+
+    private async Task HandleValidationFailureAsync(RouteValidationException exception, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await this.routeStore.RemoveRouteAsync(
+                this.profileEntityId, this.routeId, this.profileEntityId, cancellationToken).ConfigureAwait(false);
+            this.LastCleanupOutcome = "removed-or-absent";
+        }
+        catch (Exception cleanupError) when (cleanupError is ReachabilityRouteStoreException or InvalidOperationException)
+        {
+            this.LastCleanupOutcome = "unknown";
+        }
+        this.publicationStatusChanged(exception);
     }
 
     public async ValueTask DisposeAsync()
@@ -96,7 +137,6 @@ internal sealed class ReachabilityRouteLease : IAsyncDisposable
                 this.routeId,
                 this.profileEntityId,
                 CancellationToken.None).ConfigureAwait(false);
-            this.publicationStatusChanged(null);
         }
         catch (ReachabilityRouteStoreException exception)
         {
@@ -122,6 +162,12 @@ internal sealed class ReachabilityRouteLease : IAsyncDisposable
         }
         catch (OperationCanceledException) when (this.shutdown.IsCancellationRequested)
         {
+        }
+        catch (Exception error)
+        {
+            this.publicationStatusChanged(error);
+            if (this.fatalRenewalFailure is not null)
+                await this.fatalRenewalFailure().ConfigureAwait(false);
         }
     }
 }

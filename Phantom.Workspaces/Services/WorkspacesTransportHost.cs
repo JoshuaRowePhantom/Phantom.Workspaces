@@ -170,8 +170,8 @@ public sealed class WorkspacesTransportHost : IAsyncDisposable
             }
 
             var outcome = await dispatcher.Completion.ConfigureAwait(false);
-            this.logger.LogInformation("Reverse worker registration; outcome disconnected; dispatcher {Reason}.",
-                outcome.Reason);
+            this.logger.LogInformation("Reverse worker registration; outcome disconnected; dispatcher {Reason}; exception-type {ExceptionType}; registration-active {RegistrationActive}.",
+                outcome.Reason, outcome.ExceptionType ?? "none", false);
             try
             {
                 await factory.DisconnectAsync().ConfigureAwait(false);
@@ -184,7 +184,8 @@ public sealed class WorkspacesTransportHost : IAsyncDisposable
 
                 current = await factory.ReconnectAsync(token).ConfigureAwait(false);
                 this.LastRegistrationFailureType = null;
-                this.logger.LogInformation("Reverse worker registration; outcome reconnected.");
+                this.logger.LogInformation("Reverse worker registration; outcome reconnected; retry {Retry}; registration-active {RegistrationActive}.",
+                    1, factory.IsRegistered);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
@@ -193,8 +194,9 @@ public sealed class WorkspacesTransportHost : IAsyncDisposable
             catch (Exception error)
             {
                 this.LastRegistrationFailureType = error.GetType().Name;
-                this.logger.LogWarning("Reverse worker registration; outcome reconnect-failed; exception-type {ExceptionType}.",
-                    this.LastRegistrationFailureType);
+                this.logger.LogWarning("Reverse worker registration; outcome reconnect-failed; stage {Stage}; reason {Reason}; exception-type {ExceptionType}; retry {Retry}; next-retry {NextRetry}; registration-active {RegistrationActive}.",
+                    "registration", error is UnauthorizedAccessException ? "registration.authorization" : "registration.unexpected",
+                    this.LastRegistrationFailureType, 1, "terminal", factory.IsRegistered);
                 this.OnConnectionStateChanged();
                 return;
             }

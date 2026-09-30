@@ -76,6 +76,13 @@ public sealed class ReverseHttpClientTransportFactory : ITransportFactory
 
     public Exception? LastReachabilityPublicationError { get; private set; }
 
+    public ReachabilityPublicationStatus? LastReachabilityPublicationStatus { get; private set; }
+
+    public event EventHandler<ReachabilityPublicationStatus>? PublicationStatusChanged;
+
+    public Task RetryReachabilityPublicationAsync(CancellationToken cancellationToken = default)
+        => this.reachabilityLease?.PublishAsync(cancellationToken) ?? Task.CompletedTask;
+
     public void ConfigureReachability(
         IReachabilityRouteStore routeStore,
         EntityId profileEntityId,
@@ -206,6 +213,16 @@ public sealed class ReverseHttpClientTransportFactory : ITransportFactory
                 {
                     await lease.DisposeAsync().ConfigureAwait(false);
                 }
+                if (this.LastReachabilityPublicationStatus is { } status)
+                {
+                    this.LastReachabilityPublicationStatus = status with
+                    {
+                        RegistrationActive = false,
+                        Outcome = "disconnected",
+                        Persisted = "unknown",
+                    };
+                    this.PublicationStatusChanged?.Invoke(this, this.LastReachabilityPublicationStatus);
+                }
             }
         }
     }
@@ -260,29 +277,62 @@ public sealed class ReverseHttpClientTransportFactory : ITransportFactory
             priority: 100,
             this.timeProvider,
             this.routeLeaseDuration,
-            this.OnPublicationStatusChanged);
+            this.OnPublicationStatusChanged,
+            async () =>
+            {
+                if (this.registrationChannel is { } channel)
+                    await channel.DisposeAsync().ConfigureAwait(false);
+            });
         await this.reachabilityLease.StartAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private void OnPublicationStatusChanged(Exception? exception)
     {
-        this.LastReachabilityPublicationError = exception;
+        var previous = this.LastReachabilityPublicationError;
+        var validation = exception as RouteValidationException;
+        this.LastReachabilityPublicationError = exception is null
+            ? null : (Exception?)validation ?? new InvalidOperationException("publication.unexpected");
+        var status = new ReachabilityPublicationStatus(
+            validation?.ReasonCode ?? (exception is null ? "none"
+                : exception is UnauthorizedAccessException ? "route.owner-mismatch" : "publication.unexpected"),
+            validation?.Field ?? (exception is UnauthorizedAccessException ? "route.owner-profile-entity-id" : "unknown"),
+            exception?.GetType().Name ?? "none",
+            this.reachabilityLease?.PublicationAttempts ?? 0,
+            exception is null ? "published"
+                : exception is UnauthorizedAccessException ? "terminal" : "renewal-scheduled",
+            this.IsRegistered,
+            exception is null ? "true"
+                : validation is not null && this.reachabilityLease?.LastCleanupOutcome == "removed-or-absent"
+                    ? "false" : "unknown",
+            this.reachabilityLease?.LastCleanupOutcome ?? "unknown",
+            validation is null ? "route-publication" : "route-validation");
+        this.LastReachabilityPublicationStatus = status;
         if (exception is not null)
         {
-            this.logger.LogError("Reverse HTTP registration is live, but its route could not be persisted.");
+            this.logger.LogWarning(
+                "Reachability publication-failed; boundary {Boundary}; stage {Stage}; reason {Reason}; field {Field}; exception-type {ExceptionType}; attempt {Attempt}; outcome {Outcome}; registration-active {RegistrationActive}; persisted {Persisted}; cleanup {Cleanup}.",
+                "route-publication", status.Stage, status.ReasonCode, status.Field, status.ExceptionType,
+                status.Attempt, status.Outcome, status.RegistrationActive, status.Persisted, status.Cleanup);
         }
+        else if (previous is not null)
+        {
+            this.logger.LogInformation(
+                "Reachability publication-recovered; stage {Stage}; attempt {Attempt}; outcome {Outcome}; registration-active {RegistrationActive}; persisted {Persisted}.",
+                "route-publication", status.Attempt, status.Outcome, status.RegistrationActive, status.Persisted);
+        }
+        this.PublicationStatusChanged?.Invoke(this, status);
     }
 
-    internal async Task ApplyHubProfileEntityIdAsync(
+    public async Task ApplyHubProfileEntityIdAsync(
         string hubProfileEntityId,
         CancellationToken cancellationToken)
     {
-        if (!Guid.TryParse(hubProfileEntityId, out var parsedHubProfileEntityId)
-            || this.reachabilityRouteStore is null
-            || this.profileEntityId is null)
+        if (this.reachabilityRouteStore is null || this.profileEntityId is null)
         {
             return;
         }
+        if (!Guid.TryParse(hubProfileEntityId, out var parsedHubProfileEntityId))
+            throw new UnauthorizedAccessException("Invalid hub profile identity.");
 
         var hubId = new EntityId(parsedHubProfileEntityId);
         if (this.hubProfileEntityId == hubId)
@@ -300,3 +350,7 @@ public sealed class ReverseHttpClientTransportFactory : ITransportFactory
         await this.StartReachabilityLeaseAsync(cancellationToken).ConfigureAwait(false);
     }
 }
+
+public sealed record ReachabilityPublicationStatus(
+    string ReasonCode, string Field, string ExceptionType, int Attempt,
+    string Outcome, bool RegistrationActive, string Persisted, string Cleanup, string Stage);

@@ -59,6 +59,13 @@ public sealed class DataAccessReachabilityRouteStore : IReachabilityRouteStore
                 && reachability.TryGetProperty("routes", out routes)
                 && routes.ValueKind == JsonValueKind.Object;
             var hasRoute = hasRoutes && routes.TryGetProperty(normalized.RouteId, out _);
+            if (hasRoute)
+            {
+                var existing = ReadRoutes(snapshot.Data).FirstOrDefault(
+                    item => string.Equals(item.RouteId, normalized.RouteId, StringComparison.Ordinal));
+                if (existing is null || existing.OwnerProfileEntityId != profileEntityId)
+                    throw new UnauthorizedAccessException("Reachability route owner mismatch.");
+            }
 
             JsonElement patch;
             if (!hasReachability)
@@ -200,28 +207,46 @@ public sealed class DataAccessReachabilityRouteStore : IReachabilityRouteStore
     }
 
     public static string NormalizeEndpoint(string endpoint)
+        => NormalizeEndpoint(endpoint, "endpoint");
+
+    private static string NormalizeEndpoint(string endpoint, string field)
     {
-        if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri)
-            || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp)
-            || string.IsNullOrWhiteSpace(uri.Host))
+        if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri))
         {
-            throw new ArgumentException("Reachability endpoints must be absolute HTTP(S) URLs.", nameof(endpoint));
+            foreach (var scheme in new[] { "https://", "http://" })
+            {
+                if (endpoint is not null && endpoint.StartsWith(scheme, StringComparison.OrdinalIgnoreCase))
+                {
+                    var authority = endpoint.AsSpan(scheme.Length);
+                    if (authority.IsEmpty || authority[0] is '/' or '?' or '#')
+                        throw new RouteValidationException("endpoint.missing-host", field);
+                }
+            }
+            throw new RouteValidationException("endpoint.nonabsolute", field);
+        }
+        if (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp)
+        {
+            throw new RouteValidationException("endpoint.invalid-scheme", field);
+        }
+        if (string.IsNullOrWhiteSpace(uri.Host))
+        {
+            throw new RouteValidationException("endpoint.missing-host", field);
         }
 
         if (!string.IsNullOrEmpty(uri.UserInfo))
         {
-            throw new ArgumentException("Reachability endpoints cannot contain user information.", nameof(endpoint));
+            throw new RouteValidationException("endpoint.userinfo", field);
         }
 
         var credentialSurface = $"{uri.Query}#{uri.Fragment}".ToLowerInvariant();
         if (CredentialMarkers.Any(credentialSurface.Contains))
         {
-            throw new ArgumentException("Reachability endpoints cannot contain credential-shaped query or fragment data.", nameof(endpoint));
+            throw new RouteValidationException("endpoint.credential-query-or-fragment", field);
         }
 
         if (uri.Scheme == Uri.UriSchemeHttp && !IsPrivateOrLoopback(uri.Host))
         {
-            throw new ArgumentException("Plain HTTP reachability endpoints are restricted to loopback or private network addresses.", nameof(endpoint));
+            throw new RouteValidationException("endpoint.public-http-host", field);
         }
 
         return uri.AbsoluteUri;
@@ -273,61 +298,69 @@ public sealed class DataAccessReachabilityRouteStore : IReachabilityRouteStore
 
         if (route.Priority is < 0 or > 1000)
         {
-            throw new ArgumentOutOfRangeException(nameof(route), "Reachability route priority must be between 0 and 1000.");
+            throw new RouteValidationException("route.priority.out-of-range", "route.priority");
         }
 
         if (route.ExpiresAt <= route.LastConfirmed)
         {
-            throw new ArgumentException("Reachability route expires-at must be strictly after last-confirmed.", nameof(route));
+            throw new RouteValidationException("route.expiry.not-after-confirmation", "route.expires-at");
         }
 
-        if (route.Descriptor.ValueKind != JsonValueKind.Object
-            || !route.Descriptor.TryGetProperty("type", out var typeProperty)
-            || typeProperty.GetString() is not { } type)
+        if (route.Descriptor.ValueKind != JsonValueKind.Object)
         {
-            throw new ArgumentException("Reachability route descriptor must contain a type.", nameof(route));
+            throw new RouteValidationException("descriptor.shape.invalid", "descriptor");
         }
+        if (!route.Descriptor.TryGetProperty("type", out var typeProperty)
+            || typeProperty.ValueKind != JsonValueKind.String
+            || string.IsNullOrWhiteSpace(typeProperty.GetString()))
+            throw new RouteValidationException("descriptor.type.missing", "descriptor.type");
+        var type = typeProperty.GetString()!;
 
         JsonElement descriptor;
         if (string.Equals(type, "http", StringComparison.Ordinal))
         {
-            if (!string.Equals(route.RouteId, "direct-http", StringComparison.Ordinal)
-                || !route.Descriptor.TryGetProperty("url", out var urlProperty)
+            if (!string.Equals(route.RouteId, "direct-http", StringComparison.Ordinal))
+                throw new RouteValidationException("descriptor.type.route-mismatch", "descriptor.type");
+            if (!route.Descriptor.TryGetProperty("url", out var urlProperty)
+                || urlProperty.ValueKind != JsonValueKind.String
                 || urlProperty.GetString() is not { Length: > 0 } url)
             {
-                throw new ArgumentException("The direct-http route requires an HTTP descriptor with a URL.", nameof(route));
+                throw new RouteValidationException("endpoint.missing", "descriptor.url");
             }
 
             descriptor = JsonSerializer.SerializeToElement(
                 new Dictionary<string, object>
                 {
                     ["type"] = "http",
-                    ["url"] = NormalizeEndpoint(url),
+                    ["url"] = NormalizeEndpoint(url, "descriptor.url"),
                 });
         }
         else if (string.Equals(type, "reverse-http", StringComparison.Ordinal))
         {
-            if (!route.RouteId.StartsWith("reverse-http:", StringComparison.Ordinal)
-                || !route.Descriptor.TryGetProperty("entity-id", out var descriptorEntityId)
-                || !Guid.TryParse(descriptorEntityId.GetString(), out var descriptorEntityGuid)
-                || new EntityId(descriptorEntityGuid) != profileEntityId
-                || !route.Descriptor.TryGetProperty("hub-urls", out var urls)
+            if (!route.RouteId.StartsWith("reverse-http:", StringComparison.Ordinal))
+                throw new RouteValidationException("descriptor.type.route-mismatch", "descriptor.type");
+            if (!route.Descriptor.TryGetProperty("entity-id", out var descriptorEntityId)
+                || descriptorEntityId.ValueKind != JsonValueKind.String
+                || !Guid.TryParse(descriptorEntityId.GetString(), out var descriptorEntityGuid))
+                throw new RouteValidationException("descriptor.entity-id.missing-or-invalid", "descriptor.entity-id");
+            if (new EntityId(descriptorEntityGuid) != profileEntityId)
+                throw new RouteValidationException("descriptor.entity-id.target-mismatch", "descriptor.entity-id");
+            if (!route.Descriptor.TryGetProperty("hub-urls", out var urls)
                 || urls.ValueKind != JsonValueKind.Array)
-            {
-                throw new ArgumentException(
-                    "A reverse-http route requires hub URLs and an entity-id matching its owner and target profile.",
-                    nameof(route));
-            }
+                throw new RouteValidationException("descriptor.hub-urls.invalid-count", "descriptor.hub-urls");
 
+            if (urls.GetArrayLength() is < 1 or > 8
+                || urls.EnumerateArray().Any(static url => url.ValueKind != JsonValueKind.String
+                    || string.IsNullOrWhiteSpace(url.GetString())))
+                throw new RouteValidationException("descriptor.hub-urls.invalid-count", "descriptor.hub-urls");
             var normalizedUrls = urls.EnumerateArray()
-                .Select(static url => url.GetString())
-                .Where(static url => !string.IsNullOrWhiteSpace(url))
-                .Select(static url => NormalizeEndpoint(url!))
+                .Select(static url => url.ValueKind == JsonValueKind.String ? url.GetString() : null)
+                .Select(static url => NormalizeEndpoint(url!, "descriptor.hub-urls[]"))
                 .Distinct(StringComparer.Ordinal)
                 .ToArray();
             if (normalizedUrls.Length is < 1 or > 8)
             {
-                throw new ArgumentException("A reverse-http route requires between one and eight unique hub URLs.", nameof(route));
+                throw new RouteValidationException("descriptor.hub-urls.invalid-count", "descriptor.hub-urls");
             }
 
             descriptor = JsonSerializer.SerializeToElement(
@@ -340,7 +373,7 @@ public sealed class DataAccessReachabilityRouteStore : IReachabilityRouteStore
         }
         else
         {
-            throw new ArgumentException($"Unsupported persisted reachability transport type '{type}'.", nameof(route));
+            throw new RouteValidationException("descriptor.type.unsupported", "descriptor.type");
         }
 
         return route with { Descriptor = descriptor };
@@ -348,7 +381,8 @@ public sealed class DataAccessReachabilityRouteStore : IReachabilityRouteStore
 
     private static void ValidateRouteId(string routeId)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(routeId);
+        if (string.IsNullOrWhiteSpace(routeId))
+            throw new RouteValidationException("route-id.missing", "route-id");
         if (string.Equals(routeId, "direct-http", StringComparison.Ordinal))
         {
             return;
@@ -361,7 +395,7 @@ public sealed class DataAccessReachabilityRouteStore : IReachabilityRouteStore
             return;
         }
 
-        throw new ArgumentException($"Reachability route id '{routeId}' is invalid.", nameof(routeId));
+        throw new RouteValidationException("route-id.invalid", "route-id");
     }
 
     private static object ToPersistedValue(ReachabilityRoute route)

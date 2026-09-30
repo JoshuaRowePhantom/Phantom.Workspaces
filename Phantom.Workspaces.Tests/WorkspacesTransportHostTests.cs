@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading.Channels;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Transport;
@@ -364,6 +365,112 @@ public sealed class WorkspacesTransportHostTests
         Assert.False(store.Operations.TryRead(out _));
     }
 
+    [Fact]
+    public async Task RegistrationInfoInvalidRoute_ContinuesSplitSessionAndRecoversAfterValidPublication()
+    {
+        var profile = new EntityId("11111111-1111-4111-8111-111111111111");
+        var hub = new EntityId("22222222-2222-4222-8222-222222222222");
+        var store = new RecordingRouteStore();
+        store.FailNextValidationUpsert();
+        var http = new FakeHubHttpTransportFactory();
+        var factory = new ReverseHttpClientTransportFactory(http, "https://hub.example/", profile.ToString(), store, null);
+        var registry = new TransportRegistry();
+        registry.Register(new ChatClientTransportListener(new EchoChatClient()));
+        await using var host = new WorkspacesTransportHost(registry, [factory],
+            Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
+        await host.StartAsync(Ct());
+        var channel = Assert.Single(http.Channels);
+        await channel.DeliverInbound(Json($$"""{"type":"reverse-registration-info","hub-profile-entity-id":"{{hub}}"}"""));
+        Assert.Equal($"failed-validation:reverse-http:{hub}", await store.Operations.ReadAsync(Ct()));
+        Assert.Equal($"remove:reverse-http:{hub}", await store.Operations.ReadAsync(Ct()));
+        await channel.DeliverInbound(Json("""{"type":"channel-open","channelId":"new","request":{"type":"chat-client"}}"""));
+        await channel.DeliverInbound(Json("""{"type":"channel-message","channelId":"new","payload":{"type":"process-streaming","content":{"role":"user","text":"hello"}}}"""));
+        var response = await channel.ReadOutbound(Ct());
+        Assert.Equal("new", response.GetProperty("channelId").GetString());
+        Assert.Equal("streaming-update", response.GetProperty("payload").GetProperty("type").GetString());
+        Assert.Equal("streaming-update-complete",
+            (await channel.ReadOutbound(Ct())).GetProperty("payload").GetProperty("type").GetString());
+        Assert.True(host.IsConnected);
+        Assert.Same(channel, Assert.Single(http.Channels));
+        Assert.Equal("endpoint.userinfo", factory.LastReachabilityPublicationStatus?.ReasonCode);
+        await factory.RetryReachabilityPublicationAsync(Ct());
+        Assert.Equal($"upsert:reverse-http:{hub}", await store.Operations.ReadAsync(Ct()));
+        Assert.Null(factory.LastReachabilityPublicationError);
+        await channel.DeliverInbound(Json("""{"type":"channel-message","channelId":"new","payload":{"type":"process-streaming","content":{"role":"user","text":"again"}}}"""));
+        Assert.Equal("streaming-update",
+            (await channel.ReadOutbound(Ct())).GetProperty("payload").GetProperty("type").GetString());
+        Assert.Equal("streaming-update-complete",
+            (await channel.ReadOutbound(Ct())).GetProperty("payload").GetProperty("type").GetString());
+        await channel.DeliverInbound(Json("""{"type":"channel-close","channelId":"new"}"""));
+    }
+
+    [Fact]
+    public async Task RegistrationInfoAuthenticationFails_FailsClosedAndReportsDisconnectedState()
+    {
+        var profile = new EntityId("11111111-1111-4111-8111-111111111111");
+        var hub = new EntityId("22222222-2222-4222-8222-222222222222");
+        var store = new RecordingRouteStore { DenyUpsert = true };
+        var http = new FakeHubHttpTransportFactory();
+        var factory = new ReverseHttpClientTransportFactory(http, "https://hub.example/", profile.ToString(), store, null);
+        var states = Channel.CreateUnbounded<bool>();
+        await using var host = new WorkspacesTransportHost(new TransportRegistry(), [factory],
+            Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
+        host.ConnectionStateChanged += (_, _) => states.Writer.TryWrite(host.IsConnected);
+        await host.StartAsync(Ct());
+        Assert.True(await states.Reader.ReadAsync(Ct()));
+        var channel = Assert.Single(http.Channels);
+        await channel.DeliverInbound(Json($$"""{"type":"reverse-registration-info","hub-profile-entity-id":"{{hub}}"}"""));
+        Assert.False(await states.Reader.ReadAsync(Ct()));
+        Assert.False(await states.Reader.ReadAsync(Ct()));
+        Assert.False(host.IsConnected);
+        Assert.True(channel.Disposed);
+        Assert.Equal(nameof(UnauthorizedAccessException), host.LastRegistrationFailureType);
+        Assert.Null(factory.LastReachabilityPublicationStatus);
+    }
+
+    [Fact]
+    public async Task RegistrationInfoRouteValidation_ConfiguredProcessFileLogContainsSafeFailureAndRecovery()
+    {
+        var directory = Path.Combine(AppContext.BaseDirectory, "route-logs-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var logs = Phantom.Workspaces.Services.Logging.HostFileLoggerFactory.Create(directory);
+            var profile = new EntityId("11111111-1111-4111-8111-111111111111");
+            var hub = new EntityId("22222222-2222-4222-8222-222222222222");
+            var store = new RecordingRouteStore();
+            store.FailNextValidationUpsert();
+            var http = new FakeHubHttpTransportFactory();
+            var factory = new ReverseHttpClientTransportFactory(
+                http, "https://private-hub.example/?access_token=private", profile.ToString(),
+                store, null, logger: logs.CreateLogger<ReverseHttpClientTransportFactory>());
+            await using (var host = new WorkspacesTransportHost(new TransportRegistry(), [factory], logs))
+            {
+                await host.StartAsync(Ct());
+                await http.Channels.Single().DeliverInbound(Json($$"""{"type":"reverse-registration-info","hub-profile-entity-id":"{{hub}}"}"""));
+                Assert.Equal($"failed-validation:reverse-http:{hub}", await store.Operations.ReadAsync(Ct()));
+                Assert.Equal($"remove:reverse-http:{hub}", await store.Operations.ReadAsync(Ct()));
+                await factory.RetryReachabilityPublicationAsync(Ct());
+                Assert.Equal($"upsert:reverse-http:{hub}", await store.Operations.ReadAsync(Ct()));
+            }
+            var content = string.Concat(Directory.GetFiles(directory, "*.log").Select(path =>
+            {
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var reader = new StreamReader(stream);
+                return reader.ReadToEnd();
+            }));
+            Assert.Contains("endpoint.userinfo", content);
+            Assert.Contains("publication-recovered", content);
+            Assert.DoesNotContain("private-hub", content);
+            Assert.DoesNotContain("access_token=private", content);
+            Assert.DoesNotContain(profile.ToString(), content);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static CancellationToken Ct() => new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token;
 
     private static JsonElement Json(string json) => JsonDocument.Parse(json).RootElement.Clone();
@@ -541,10 +648,13 @@ public sealed class WorkspacesTransportHostTests
     {
         private readonly Channel<string> operations = Channel.CreateUnbounded<string>();
         private int failNextUpsert;
+        private int failNextValidationUpsert;
+        public bool DenyUpsert { get; set; }
 
         public ChannelReader<string> Operations => this.operations.Reader;
 
         public void FailNextUpsert() => Interlocked.Exchange(ref this.failNextUpsert, 1);
+        public void FailNextValidationUpsert() => Interlocked.Exchange(ref this.failNextValidationUpsert, 1);
 
         public Task<IReadOnlyList<ReachabilityRoute>> GetRoutesAsync(
             EntityId profileEntityId,
@@ -556,6 +666,13 @@ public sealed class WorkspacesTransportHostTests
             ReachabilityRoute route,
             CancellationToken cancellationToken = default)
         {
+            if (this.DenyUpsert)
+                throw new UnauthorizedAccessException("private profile");
+            if (Interlocked.Exchange(ref this.failNextValidationUpsert, 0) == 1)
+            {
+                this.operations.Writer.TryWrite($"failed-validation:{route.RouteId}");
+                throw new RouteValidationException("endpoint.userinfo", "descriptor.hub-urls[]");
+            }
             if (Interlocked.Exchange(ref this.failNextUpsert, 0) == 1)
             {
                 this.operations.Writer.TryWrite($"failed-upsert:{route.RouteId}");

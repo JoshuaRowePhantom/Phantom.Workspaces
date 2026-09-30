@@ -115,9 +115,10 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
         finally
         {
             await this.CloseHostedSessionsAsync().ConfigureAwait(false);
-            this.logger.LogInformation(
-                "Reverse worker dispatch closed; outcome {Outcome}; exception-type {ExceptionType}.",
-                outcome.Reason, outcome.ExceptionType ?? "none");
+            this.logger.Log(
+                outcome.Reason == ReverseDispatchStopReason.DispatchFailed ? LogLevel.Warning : LogLevel.Information,
+                "Reverse worker dispatcher-stopped; stage {Stage}; stop-reason {StopReason}; exception-type {ExceptionType}; registration-active {RegistrationActive}.",
+                "dispatch", outcome.Reason, outcome.ExceptionType ?? "none", false);
         }
 
         return outcome;

@@ -140,6 +140,67 @@ public sealed class ReachabilityRouteStoreTests
     }
 
     [Theory]
+    [InlineData("relative/path", "endpoint.nonabsolute")]
+    [InlineData("ftp://machine.example/", "endpoint.invalid-scheme")]
+    [InlineData("https://", "endpoint.missing-host")]
+    [InlineData("https://user:password@machine.example/", "endpoint.userinfo")]
+    [InlineData("https://machine.example/?access_token=private", "endpoint.credential-query-or-fragment")]
+    [InlineData("https://machine.example/#token=private", "endpoint.credential-query-or-fragment")]
+    [InlineData("http://public.example/", "endpoint.public-http-host")]
+    public async Task ReachabilityRouteStore_InvalidReverseEndpoint_IsRejectedAtWriteTime(string endpoint, string reason)
+    {
+        var (store, _) = await CreateStoreAsync();
+        var exception = await Assert.ThrowsAsync<RouteValidationException>(() =>
+            store.UpsertRouteAsync(ProfileId, CreateRoute($"reverse-http:{HubId}", ReverseDescriptor(endpoint), ProfileId)));
+        Assert.Equal(reason, exception.ReasonCode);
+        Assert.Equal("descriptor.hub-urls[]", exception.Field);
+        Assert.Empty(await store.GetRoutesAsync(ProfileId));
+    }
+
+    [Fact]
+    public async Task ReachabilityRouteStore_DistinctValidationFailures_ReturnSafeReasonAndField()
+    {
+        var (store, _) = await CreateStoreAsync();
+        var invalidId = await Assert.ThrowsAsync<RouteValidationException>(() =>
+            store.UpsertRouteAsync(ProfileId, CreateRoute("private-id", HttpDescriptor("https://machine.example/"), ProfileId)));
+        Assert.Equal("route-id.invalid", invalidId.ReasonCode);
+        Assert.Equal("route-id", invalidId.Field);
+        var target = await Assert.ThrowsAsync<RouteValidationException>(() =>
+            store.UpsertRouteAsync(ProfileId, CreateRoute($"reverse-http:{HubId}",
+                ReverseDescriptor("https://machine.example/", HubId), ProfileId)));
+        Assert.Equal("descriptor.entity-id.target-mismatch", target.ReasonCode);
+        Assert.Equal("descriptor.entity-id", target.Field);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            store.UpsertRouteAsync(ProfileId, CreateRoute("direct-http", HttpDescriptor("https://machine.example/"), HubId)));
+        Assert.Empty(await store.GetRoutesAsync(ProfileId));
+    }
+
+    [Fact]
+    public async Task ReachabilityRouteStore_ExistingForeignOwnedSlot_CannotBeOverwrittenOrRemoved()
+    {
+        var foreign = new EntityId("30000000-0000-4000-8000-000000000001");
+        var (store, _) = await CreateStoreAsync(
+            $$"""
+            "reverse-http:{{HubId}}": {{RouteJson(ReverseDescriptor("https://foreign.example/", foreign), foreign)}}
+            """);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            store.UpsertRouteAsync(ProfileId,
+                CreateRoute($"reverse-http:{HubId}", ReverseDescriptor("https://hub.example/"), ProfileId)));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            store.RemoveRouteAsync(ProfileId, $"reverse-http:{HubId}", ProfileId));
+        Assert.Equal(foreign, Assert.Single(await store.GetRoutesAsync(ProfileId)).OwnerProfileEntityId);
+    }
+
+    [Fact]
+    public void ReachabilityRouteStore_UnknownValidationMetadata_IsValueFree()
+    {
+        var exception = new RouteValidationException("private-endpoint-value", "private-identity-value");
+        Assert.Equal("route.validation-unknown", exception.ReasonCode);
+        Assert.Equal("unknown", exception.Field);
+        Assert.DoesNotContain("private-", exception.ToString());
+    }
+
+    [Theory]
     [InlineData(0)]
     [InlineData(-1)]
     public async Task ReachabilityRouteStore_ExpiresAtNotAfterLastConfirmed_IsRejectedAtWriteTime(int secondsAfter)
@@ -151,7 +212,7 @@ public sealed class ReachabilityRouteStoreTests
             ProfileId,
             expiresAt: Now.AddSeconds(secondsAfter));
 
-        await Assert.ThrowsAsync<ArgumentException>(() => store.UpsertRouteAsync(ProfileId, route));
+        await Assert.ThrowsAnyAsync<ArgumentException>(() => store.UpsertRouteAsync(ProfileId, route));
         Assert.Empty(await store.GetRoutesAsync(ProfileId));
     }
 
@@ -166,7 +227,7 @@ public sealed class ReachabilityRouteStoreTests
                 new EntityId("30000000-0000-4000-8000-000000000001")),
             ProfileId);
 
-        await Assert.ThrowsAsync<ArgumentException>(() => store.UpsertRouteAsync(ProfileId, route));
+        await Assert.ThrowsAnyAsync<ArgumentException>(() => store.UpsertRouteAsync(ProfileId, route));
         Assert.Empty(await store.GetRoutesAsync(ProfileId));
     }
 
@@ -180,7 +241,7 @@ public sealed class ReachabilityRouteStoreTests
         var (store, _) = await CreateStoreAsync();
         var route = CreateRoute("direct-http", HttpDescriptor(url), ProfileId);
 
-        await Assert.ThrowsAsync<ArgumentException>(() => store.UpsertRouteAsync(ProfileId, route));
+        await Assert.ThrowsAnyAsync<ArgumentException>(() => store.UpsertRouteAsync(ProfileId, route));
         Assert.Empty(await store.GetRoutesAsync(ProfileId));
     }
 
