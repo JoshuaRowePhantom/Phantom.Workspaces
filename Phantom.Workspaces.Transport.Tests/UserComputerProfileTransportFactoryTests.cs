@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Threading.Channels;
+using Microsoft.Extensions.Time.Testing;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Testing;
 using Phantom.Workspaces.Transport.ReverseHttp;
@@ -10,6 +11,59 @@ public sealed class UserComputerProfileTransportFactoryTests
 {
     private static readonly EntityId LocalProfileId = new("11111111-1111-1111-1111-111111111111");
     private static readonly EntityId RemoteProfileId = new("22222222-2222-2222-2222-222222222222");
+
+    [Fact]
+    public async Task UserComputerProfileTransportFactory_RejectedPublicationUsesLiveThenRenewedPersistedRouteAfterLiveLoss()
+    {
+        var clock = new FakeTimeProvider(new DateTimeOffset(2030, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        var dataAccess = await CreateSeededDataAccessLayerAsync(RemoteProfileId);
+        var store = new DataAccessReachabilityRouteStore(dataAccess);
+        await using var client = new ReverseHttpClientTransportFactory(
+            new ReverseHttpClientTransportFactoryTests.FakeHttpTransportFactory(),
+            "http://hub.example", RemoteProfileId.ToString(), store, LocalProfileId,
+            clock, routeLeaseDuration: TimeSpan.FromMinutes(2));
+        await client.EnsureRegisteredAsync();
+        Assert.True(client.IsRegistered);
+        Assert.Equal("endpoint.public-http-host", client.LastReachabilityPublicationStatus?.ReasonCode);
+        Assert.Empty(await store.GetRoutesAsync(RemoteProfileId));
+
+        await using var liveRegistry = new ReverseHttpServerTransportFactory();
+        using var registrationRequest = JsonDocument.Parse(
+            $$"""{"type":"reverse-register","entity-id":"{{RemoteProfileId}}"}""");
+        var registrationLease = await liveRegistry.OnChannelOpenAsync(
+            registrationRequest.RootElement, new TestMessageChannel());
+        Assert.NotNull(registrationLease);
+        var registry = new CapturingTransportFactoryRegistry();
+        var caller = CreateFactory(dataAccess, registry, liveRegistry: liveRegistry,
+            timeProvider: clock, reachabilityRouteStore: store);
+        var live = await caller.ConnectToAsync(ProfileDescriptor());
+        Assert.NotNull(live);
+        await live.DisposeAsync();
+        Assert.Empty(registry.Descriptors);
+
+        await client.SetAdvertisedHubUrlAsync("https://hub.example", CancellationToken.None);
+        var initial = Assert.Single(await store.GetRoutesAsync(RemoteProfileId));
+        var renewed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        client.PublicationStatusChanged += (_, status) =>
+        {
+            if (status.Attempt >= 3 && status.Persisted == "true")
+                renewed.TrySetResult();
+        };
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await renewed.Task.WaitAsync(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        var route = Assert.Single(await store.GetRoutesAsync(RemoteProfileId));
+        Assert.True(route.LastConfirmed > initial.LastConfirmed);
+        Assert.True(route.ExpiresAt > initial.ExpiresAt);
+
+        await registrationLease.DisposeAsync();
+        var persisted = await caller.ConnectToAsync(ProfileDescriptor());
+        Assert.NotNull(persisted);
+        await persisted.DisposeAsync();
+        var selected = Assert.Single(registry.Descriptors);
+        Assert.Equal("reverse-http", selected.GetProperty("type").GetString());
+        Assert.Equal("https://hub.example/", selected.GetProperty("hub-urls")[0].GetString());
+        Assert.Equal(RemoteProfileId.ToString(), selected.GetProperty("entity-id").GetString());
+    }
 
     [Fact]
     public async Task UserComputerProfileTransportFactory_LocalTarget_RoutesLocal()
@@ -385,7 +439,8 @@ public sealed class UserComputerProfileTransportFactoryTests
         IReadOnlyCollection<string>? reverseHttpHubUrls = null,
         ReverseHttpServerTransportFactory? liveRegistry = null,
         TimeProvider? timeProvider = null,
-        bool trustedTransientRoutesEnabled = true)
+        bool trustedTransientRoutesEnabled = true,
+        IReachabilityRouteStore? reachabilityRouteStore = null)
     {
         var session = new WorkspaceEntitySession
         {
@@ -399,7 +454,7 @@ public sealed class UserComputerProfileTransportFactoryTests
             registry,
             reverseHttpHubUrls,
             liveRegistry,
-            null,
+            reachabilityRouteStore,
             timeProvider,
             trustedTransientRoutesEnabled);
     }
