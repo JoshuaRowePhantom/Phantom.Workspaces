@@ -147,6 +147,7 @@ public sealed class ReachabilityRouteStoreTests
     [InlineData("https://machine.example/?access_token=private", "endpoint.credential-query-or-fragment")]
     [InlineData("https://machine.example/#token=private", "endpoint.credential-query-or-fragment")]
     [InlineData("http://public.example/", "endpoint.public-http-host")]
+    [InlineData("http://internal.corp/", "endpoint.public-http-host")]
     public async Task ReachabilityRouteStore_InvalidReverseEndpoint_IsRejectedAtWriteTime(string endpoint, string reason)
     {
         var (store, _) = await CreateStoreAsync();

@@ -10,6 +10,32 @@ public sealed class MainWindowReverseHttpRegistrationTests
     private static readonly EntityId LocalProfileId = new("11111111-1111-1111-1111-111111111111");
 
     [Fact]
+    public void BuildReverseHttpHubFactories_PublicHttpDnsEndpoint_ReportsDegradedPersistedReachabilityWithoutDroppingOutboundRegistration()
+    {
+        var factory = Assert.Single(MainWindowViewModel.BuildReverseHttpHubFactories(
+            new WebRepositorySource("http://hub.example"),
+            LocalProfileId,
+            Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance));
+
+        Assert.Equal("http://hub.example", factory.HubUrl);
+        Assert.Equal("endpoint.public-http-host", factory.LastReachabilityPublicationStatus?.ReasonCode);
+        Assert.Equal("descriptor.hub-urls[]", factory.LastReachabilityPublicationStatus?.Field);
+        Assert.Equal("false", factory.LastReachabilityPublicationStatus?.Persisted);
+    }
+
+    [Fact]
+    public void BuildReverseHttpHubFactories_SeparateAdvertisedEndpoint_DoesNotChangeOutboundConnection()
+    {
+        var factory = Assert.Single(MainWindowViewModel.BuildReverseHttpHubFactories(
+            new WebRepositorySource("http://hub.example"),
+            LocalProfileId,
+            Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+            "https://hub.example"));
+        Assert.Equal("http://hub.example", factory.HubUrl);
+        Assert.Equal("https://hub.example/", factory.AdvertisedHubUrl);
+    }
+
+    [Fact]
     public void BuildReverseHttpHubFactories_WhenRepositorySourceIsWeb_RegistersReverseHttpWithHost()
     {
         var hubFactories = MainWindowViewModel.BuildReverseHttpHubFactories(

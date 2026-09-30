@@ -158,10 +158,12 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
                 dataAccessLayer,
                 workspaceEntitySession,
                 registry,
-                hubFactories?.Select(static factory => factory.HubUrl).Distinct(StringComparer.Ordinal).ToArray(),
+                hubFactories?.Where(static factory => factory.HasPersistableAdvertisedHubUrl)
+                    .Select(static factory => factory.AdvertisedHubUrl).Distinct(StringComparer.Ordinal).ToArray(),
                 this.ReverseHttpServerTransportFactory,
                 this.ReachabilityRouteStore,
-                trustedTransientRoutesEnabled: true);
+                trustedTransientRoutesEnabled: true,
+                logger: loggerFactory.CreateLogger<UserComputerProfileTransportFactory>());
         this.httpClientTransportFactory = new HttpClientTransportFactory();
         this.reverseHttpForwardingTransportFactory = new ReverseHttpForwardingTransportFactory(
             new HttpClientTransportFactory(),

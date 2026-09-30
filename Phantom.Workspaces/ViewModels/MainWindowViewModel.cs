@@ -897,7 +897,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     internal static IReadOnlyList<ReverseHttpClientTransportFactory> BuildReverseHttpHubFactories(
         RepositorySource repositorySource,
         EntityId localProfileEntityId,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        string? advertisedReverseHubEndpoint = null)
     {
         if (repositorySource is WebRepositorySource web
             && !string.IsNullOrWhiteSpace(web.Endpoint))
@@ -907,7 +908,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 new ReverseHttpClientTransportFactory(
                     web.Endpoint,
                     localProfileEntityId.ToString(),
-                    loggerFactory.CreateLogger<ReverseHttpClientTransportFactory>()),
+                    loggerFactory.CreateLogger<ReverseHttpClientTransportFactory>(),
+                    advertisedReverseHubEndpoint),
             ];
         }
 
@@ -924,7 +926,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var hubFactories = BuildReverseHttpHubFactories(
             this.RepositorySource,
             this.entityBroker!.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId,
-            this.applicationServices.LoggerFactory);
+            this.applicationServices.LoggerFactory,
+            this.configuration.DataAccess.AdvertisedReverseHubEndpoint);
 
         var runtimeHostServices =
             await Services.AgentServicesComposition.ComposeRuntimeHostServicesAsync(

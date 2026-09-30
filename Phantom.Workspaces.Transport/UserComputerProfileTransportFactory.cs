@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Transport.ReverseHttp;
 
@@ -16,6 +18,7 @@ public sealed class UserComputerProfileTransportFactory : ITransportFactory
     private readonly TimeProvider timeProvider;
     private readonly bool trustedTransientRoutesEnabled;
     private readonly TransportPeerIdentity localPeer;
+    private readonly ILogger<UserComputerProfileTransportFactory> logger;
 
     public UserComputerProfileTransportFactory(
         IDataAccessLayer dataAccessLayer,
@@ -25,7 +28,8 @@ public sealed class UserComputerProfileTransportFactory : ITransportFactory
         ReverseHttpServerTransportFactory? liveInboundRegistry = null,
         IReachabilityRouteStore? reachabilityRouteStore = null,
         TimeProvider? timeProvider = null,
-        bool trustedTransientRoutesEnabled = false)
+        bool trustedTransientRoutesEnabled = false,
+        ILogger<UserComputerProfileTransportFactory>? logger = null)
     {
         this.dataAccessLayer = dataAccessLayer ?? throw new ArgumentNullException(nameof(dataAccessLayer));
         this.workspaceEntitySession = workspaceEntitySession ?? throw new ArgumentNullException(nameof(workspaceEntitySession));
@@ -36,6 +40,7 @@ public sealed class UserComputerProfileTransportFactory : ITransportFactory
             reachabilityRouteStore ?? new DataAccessReachabilityRouteStore(dataAccessLayer);
         this.timeProvider = timeProvider ?? TimeProvider.System;
         this.trustedTransientRoutesEnabled = trustedTransientRoutesEnabled;
+        this.logger = logger ?? NullLogger<UserComputerProfileTransportFactory>.Instance;
         this.localPeer = new TransportPeerIdentity
         {
             AuthenticationScheme = "local-workspace-session",
@@ -63,6 +68,7 @@ public sealed class UserComputerProfileTransportFactory : ITransportFactory
         _ = await this.GetRequiredProfileEntityAsync(entityId, ct).ConfigureAwait(false);
         if (entityId == this.workspaceEntitySession.UserComputerProfileEntityId)
         {
+            this.ReportRoute("local", "selected");
             using var localDocument = JsonDocument.Parse("""{"type":"local"}""");
             return await this.ConnectAndTargetAsync(
                 localDocument.RootElement,
@@ -91,8 +97,10 @@ public sealed class UserComputerProfileTransportFactory : ITransportFactory
 
             if (live is not null)
             {
+                this.ReportRoute("live", "selected");
                 return WrapTarget(live, connectionDescriptor);
             }
+            this.ReportRoute("live", "unavailable");
         }
 
         var failures = new List<Exception>();
@@ -104,6 +112,7 @@ public sealed class UserComputerProfileTransportFactory : ITransportFactory
             var forced = await this.TryConnectAsync(normalizedForceRoute, failures, ct).ConfigureAwait(false);
             if (forced is not null)
             {
+                this.ReportRoute("transient", "selected");
                 return WrapTarget(forced, connectionDescriptor);
             }
         }
@@ -114,6 +123,7 @@ public sealed class UserComputerProfileTransportFactory : ITransportFactory
             var transport = await this.TryConnectAsync(route.Descriptor, failures, ct).ConfigureAwait(false);
             if (transport is not null)
             {
+                this.ReportRoute("persisted", "selected");
                 return WrapTarget(transport, connectionDescriptor);
             }
         }
@@ -126,6 +136,7 @@ public sealed class UserComputerProfileTransportFactory : ITransportFactory
             var legacy = await this.TryConnectAsync(normalizedLegacyRoute, failures, ct).ConfigureAwait(false);
             if (legacy is not null)
             {
+                this.ReportRoute("transient", "selected");
                 return WrapTarget(legacy, connectionDescriptor);
             }
         }
@@ -142,20 +153,28 @@ public sealed class UserComputerProfileTransportFactory : ITransportFactory
             var configured = await this.TryConnectAsync(configuredRoute, failures, ct).ConfigureAwait(false);
             if (configured is not null)
             {
+                this.ReportRoute("configured", "selected");
                 return WrapTarget(configured, connectionDescriptor);
             }
         }
 
         if (failures.Count > 0)
         {
+            this.ReportRoute("none", "all-failed");
             throw new TransportException(
                 $"All routes to remote user computer profile '{entityId}' failed.",
                 new AggregateException(failures));
         }
 
+        this.ReportRoute("none", "missing");
         throw new TransportException(
             $"Remote user computer profile descriptor '{entityId}' has no transient route and no configured reverse HTTP hub.");
     }
+
+    private void ReportRoute(string route, string outcome)
+        => this.logger.LogInformation(
+            "Remote profile transport; stage transport-choice; route {Route}; outcome {Outcome}.",
+            route, outcome);
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 

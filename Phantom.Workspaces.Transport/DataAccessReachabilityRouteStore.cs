@@ -209,7 +209,7 @@ public sealed class DataAccessReachabilityRouteStore : IReachabilityRouteStore
     public static string NormalizeEndpoint(string endpoint)
         => NormalizeEndpoint(endpoint, "endpoint");
 
-    private static string NormalizeEndpoint(string endpoint, string field)
+    public static string NormalizeEndpoint(string endpoint, string field)
     {
         if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri))
         {

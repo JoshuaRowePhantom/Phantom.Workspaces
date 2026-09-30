@@ -80,6 +80,12 @@ public sealed record DataAccessConnectionProfile
     public string? WebEndpoint { get; init; }
 
     /// <summary>
+    /// Optional caller-reachable reverse hub URL. This must be served by the same hub as
+    /// WebEndpoint, with valid TLS and caller authentication when using HTTPS.
+    /// </summary>
+    public string? AdvertisedReverseHubEndpoint { get; init; }
+
+    /// <summary>
     /// Optional pluggable authentication for web / dev-tunnel data-access modes (issue #1455). When
     /// absent, the dev-tunnel path derives a legacy-migration default (github, or anonymous when the
     /// tunnel access mode is anonymous). Any secret material is only ever a placeholder, never raw.

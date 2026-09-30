@@ -13,11 +13,55 @@ public sealed class ReverseHttpClientTransportFactoryTests
     private static readonly EntityId Hub = new("22222222-2222-4222-8222-222222222222");
 
     [Fact]
+    public async Task ReverseHttpClientTransportFactory_InvalidAdvertisedHubThenCorrectedHub_PublishesAndRenewsOwnedRoute()
+    {
+        var clock = new FakeTimeProvider();
+        var store = new ValidationStore { Reason = null };
+        await using var factory = new ReverseHttpClientTransportFactory(
+            new FakeHttpTransportFactory(), "http://hub.example", Worker.ToString(),
+            store, Hub, clock, routeLeaseDuration: TimeSpan.FromMinutes(2));
+        var channel = await factory.EnsureRegisteredAsync();
+        Assert.True(factory.IsRegistered);
+        Assert.Equal("endpoint.public-http-host", factory.LastReachabilityPublicationStatus?.ReasonCode);
+        Assert.Empty(store.Routes);
+
+        await factory.SetAdvertisedHubUrlAsync("https://hub.example", CancellationToken.None);
+        Assert.Same(channel, await factory.EnsureRegisteredAsync());
+        Assert.Equal("https://hub.example/", store.Routes.Single().Descriptor.GetProperty("hub-urls")[0].GetString());
+        Assert.Equal("true", factory.LastReachabilityPublicationStatus?.Persisted);
+        var renewed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        factory.PublicationStatusChanged += (_, status) =>
+        {
+            if (status.Persisted == "true" && status.Attempt >= 3)
+                renewed.TrySetResult();
+        };
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await renewed.Task.WaitAsync(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        Assert.Single(store.Routes);
+    }
+
+    [Fact]
+    public async Task ReverseHttpClientTransportFactory_RepeatedInvalidAdvertisement_ReportsTransitionWithoutWarningSpam()
+    {
+        using var logs = new CapturingLoggerFactory();
+        var store = new ValidationStore { Reason = null };
+        await using var factory = new ReverseHttpClientTransportFactory(
+            new FakeHttpTransportFactory(), "http://hub.example", Worker.ToString(),
+            store, Hub, logger: logs.CreateLogger<ReverseHttpClientTransportFactory>());
+        await factory.EnsureRegisteredAsync();
+        await factory.RetryReachabilityPublicationAsync();
+        Assert.True(factory.IsRegistered);
+        Assert.Equal(1, logs.Entries.Count(entry => entry.Message.Contains("publication-failed")));
+        Assert.DoesNotContain(logs.Entries, entry => entry.Message.Contains("publication-recovered"));
+        Assert.DoesNotContain(logs.Entries, entry => entry.Message.Contains("hub.example"));
+    }
+
+    [Fact]
     public async Task ReverseHttpClientTransportFactory_RegistrationInfoRouteValidationFails_KeepsRegistrationAndReportsPublicationError()
     {
         var store = new ValidationStore();
         await using var factory = new ReverseHttpClientTransportFactory(
-            new FakeHttpTransportFactory(), "https://private-hub.example/?token=private",
+            new FakeHttpTransportFactory(), "https://user:private@private-hub.example/",
             Worker.ToString(), store, null);
         var channel = await factory.EnsureRegisteredAsync();
         await factory.ApplyHubProfileEntityIdAsync(Hub.ToString(), CancellationToken.None);
@@ -105,13 +149,12 @@ public sealed class ReverseHttpClientTransportFactoryTests
             Worker.ToString(), store, Hub, logger: logs.CreateLogger<ReverseHttpClientTransportFactory>());
         await factory.EnsureRegisteredAsync();
         store.Reason = "route-id.invalid";
-        await factory.RetryReachabilityPublicationAsync();
+        await factory.SetAdvertisedHubUrlAsync("https://hub.example/", CancellationToken.None);
         store.Reason = null;
         await factory.RetryReachabilityPublicationAsync();
-        Assert.Contains(logs.Entries, entry => entry.Message.Contains("endpoint.userinfo")
+        Assert.Contains(logs.Entries, entry => entry.Message.Contains("endpoint.credential-query-or-fragment")
             && entry.Message.Contains("descriptor.hub-urls[]") && entry.Message.Contains("route-publication")
-            && entry.Message.Contains("route-validation")
-            && entry.Message.Contains("registration-active True") && entry.Message.Contains("persisted false"));
+            && entry.Message.Contains("route-validation") && entry.Message.Contains("persisted false"));
         Assert.Contains(logs.Entries, entry => entry.Message.Contains("route-id.invalid") && entry.Message.Contains("attempt 2"));
         Assert.Contains(logs.Entries, entry => entry.Message.Contains("publication-recovered"));
         Assert.DoesNotContain(logs.Entries, entry => entry.Exception is not null

@@ -160,6 +160,43 @@ public sealed class UserComputerProfileTransportFactoryTests
     }
 
     [Fact]
+    public async Task UserComputerProfileTransportFactory_LiveRegistrationGone_SelectsRenewedPersistedRoute()
+    {
+        var dataAccessLayer = await CreateSeededDataAccessLayerAsync(
+            RemoteProfileId,
+            Routes(
+                """
+                "reverse-http:11111111-1111-1111-1111-111111111111": {
+                  "descriptor": { "type": "reverse-http", "hub-urls": ["https://hub.example/"], "entity-id": "22222222-2222-2222-2222-222222222222" },
+                  "owner-profile-entity-id": "22222222-2222-2222-2222-222222222222",
+                  "last-confirmed": "2030-01-01T00:01:00Z",
+                  "expires-at": "2030-01-01T00:03:00Z"
+                }
+                """));
+        var registry = new CapturingTransportFactoryRegistry();
+        await using var liveRegistry = new ReverseHttpServerTransportFactory();
+        var registration = new TestMessageChannel();
+        using var request = JsonDocument.Parse(
+            $$"""{"type":"reverse-register","entity-id":"{{RemoteProfileId}}"}""");
+        var registrationLease = await liveRegistry.OnChannelOpenAsync(request.RootElement, registration);
+        Assert.NotNull(registrationLease);
+        var factory = CreateFactory(dataAccessLayer, registry, liveRegistry: liveRegistry,
+            timeProvider: new StaticTimeProvider(new DateTimeOffset(2030, 1, 1, 0, 2, 0, TimeSpan.Zero)));
+        var live = await factory.ConnectToAsync(ProfileDescriptor());
+        Assert.NotNull(live);
+        await live.DisposeAsync();
+        Assert.Empty(registry.Descriptors);
+
+        await registrationLease.DisposeAsync();
+        var persisted = await factory.ConnectToAsync(ProfileDescriptor());
+        Assert.NotNull(persisted);
+        await persisted.DisposeAsync();
+        var selected = Assert.Single(registry.Descriptors);
+        Assert.Equal("reverse-http", selected.GetProperty("type").GetString());
+        Assert.Equal("https://hub.example/", selected.GetProperty("hub-urls")[0].GetString());
+    }
+
+    [Fact]
     public async Task UserComputerProfileTransportFactory_MultiplePersistedRoutes_AttemptsByPriorityThenType()
     {
         var dataAccessLayer = await CreateSeededDataAccessLayerAsync(

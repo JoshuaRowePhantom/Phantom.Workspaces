@@ -10,6 +10,7 @@ public sealed class ReverseHttpClientTransportFactory : ITransportFactory
 {
     private readonly ITransportFactory httpClientTransportFactory;
     private readonly string hubUrl;
+    private string advertisedHubUrl;
     private readonly string entityId;
     private readonly List<string> hubUrls = [];
     private readonly ILogger logger;
@@ -30,8 +31,10 @@ public sealed class ReverseHttpClientTransportFactory : ITransportFactory
     public ReverseHttpClientTransportFactory(
         string hubUrl,
         string entityId,
-        ILogger<ReverseHttpClientTransportFactory>? logger)
-        : this(new HttpClientTransportFactory(), hubUrl, entityId, null, null, null, logger)
+        ILogger<ReverseHttpClientTransportFactory>? logger,
+        string? advertisedHubUrl = null)
+        : this(new HttpClientTransportFactory(), hubUrl, entityId, null, null, null, logger,
+            advertisedHubUrl: advertisedHubUrl)
     {
     }
 
@@ -53,10 +56,12 @@ public sealed class ReverseHttpClientTransportFactory : ITransportFactory
         EntityId? hubProfileEntityId,
         TimeProvider? timeProvider = null,
         ILogger<ReverseHttpClientTransportFactory>? logger = null,
-        TimeSpan? routeLeaseDuration = null)
+        TimeSpan? routeLeaseDuration = null,
+        string? advertisedHubUrl = null)
     {
         this.httpClientTransportFactory = httpClientTransportFactory ?? throw new ArgumentNullException(nameof(httpClientTransportFactory));
         this.hubUrl = hubUrl ?? throw new ArgumentNullException(nameof(hubUrl));
+        this.advertisedHubUrl = advertisedHubUrl ?? hubUrl;
         this.entityId = entityId ?? throw new ArgumentNullException(nameof(entityId));
         this.reachabilityRouteStore = reachabilityRouteStore;
         this.profileEntityId = reachabilityRouteStore is null ? null : new EntityId(entityId);
@@ -64,9 +69,15 @@ public sealed class ReverseHttpClientTransportFactory : ITransportFactory
         this.timeProvider = timeProvider ?? TimeProvider.System;
         this.logger = logger ?? NullLogger<ReverseHttpClientTransportFactory>.Instance;
         this.routeLeaseDuration = routeLeaseDuration ?? TimeSpan.FromMinutes(2);
+        this.ReportInvalidAdvertisement();
     }
 
     public string HubUrl => this.hubUrl;
+
+    public string AdvertisedHubUrl => this.TryNormalizeAdvertisedHubUrl(out var normalized, out _)
+        ? normalized : this.advertisedHubUrl;
+
+    public bool HasPersistableAdvertisedHubUrl => this.TryNormalizeAdvertisedHubUrl(out _, out _);
 
     public string EntityId => this.entityId;
 
@@ -82,6 +93,16 @@ public sealed class ReverseHttpClientTransportFactory : ITransportFactory
 
     public Task RetryReachabilityPublicationAsync(CancellationToken cancellationToken = default)
         => this.reachabilityLease?.PublishAsync(cancellationToken) ?? Task.CompletedTask;
+
+    public async Task SetAdvertisedHubUrlAsync(string advertisedHubUrl, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(advertisedHubUrl);
+        this.advertisedHubUrl = advertisedHubUrl;
+        if (this.reachabilityLease is not null)
+            await this.reachabilityLease.PublishAsync(cancellationToken).ConfigureAwait(false);
+        else
+            this.ReportInvalidAdvertisement();
+    }
 
     public void ConfigureReachability(
         IReachabilityRouteStore routeStore,
@@ -267,13 +288,7 @@ public sealed class ReverseHttpClientTransportFactory : ITransportFactory
             this.reachabilityRouteStore,
             this.profileEntityId.Value,
             $"reverse-http:{hubId}",
-            () => JsonSerializer.SerializeToElement(
-                new Dictionary<string, object>
-                {
-                    ["type"] = "reverse-http",
-                    ["hub-urls"] = new[] { this.hubUrl },
-                    ["entity-id"] = this.entityId,
-                }),
+            this.CreateReachabilityDescriptor,
             priority: 100,
             this.timeProvider,
             this.routeLeaseDuration,
@@ -303,26 +318,66 @@ public sealed class ReverseHttpClientTransportFactory : ITransportFactory
                     ? "terminal" : "renewal-scheduled",
             this.IsRegistered,
             exception is null ? "true"
-                : validation is not null && this.reachabilityLease?.LastCleanupOutcome == "removed-or-absent"
+                : validation is not null && (this.reachabilityLease is null
+                    || this.reachabilityLease.LastCleanupOutcome == "removed-or-absent")
                     ? "false" : "unknown",
             this.reachabilityLease?.LastCleanupOutcome ?? "unknown",
             validation is { IsIdentityFailure: true } ? "route-identity"
                 : validation is null ? "route-publication" : "route-validation");
         this.LastReachabilityPublicationStatus = status;
-        if (exception is not null)
+        if (exception is not null && (previous is null
+            || (previous as RouteValidationException)?.ReasonCode != validation?.ReasonCode
+            || (previous as RouteValidationException)?.Field != validation?.Field
+            || previous.GetType() != exception.GetType()))
         {
             this.logger.LogWarning(
-                "Reachability publication-failed; boundary {Boundary}; stage {Stage}; reason {Reason}; field {Field}; exception-type {ExceptionType}; attempt {Attempt}; outcome {Outcome}; registration-active {RegistrationActive}; persisted {Persisted}; cleanup {Cleanup}.",
+                "Reachability publication-failed; boundary {Boundary}; stage {Stage}; reason {Reason}; field {Field}; exception-type {ExceptionType}; attempt {Attempt}; outcome {Outcome}; registration-active {RegistrationActive}; persisted {Persisted}; cleanup {Cleanup}. Configure a caller-reachable secure advertised hub and verify TLS, authentication and caller access.",
                 "route-publication", status.Stage, status.ReasonCode, status.Field, status.ExceptionType,
                 status.Attempt, status.Outcome, status.RegistrationActive, status.Persisted, status.Cleanup);
         }
-        else if (previous is not null)
+        else if (exception is null && previous is not null)
         {
             this.logger.LogInformation(
                 "Reachability publication-recovered; stage {Stage}; attempt {Attempt}; outcome {Outcome}; registration-active {RegistrationActive}; persisted {Persisted}.",
                 "route-publication", status.Attempt, status.Outcome, status.RegistrationActive, status.Persisted);
         }
         this.PublicationStatusChanged?.Invoke(this, status);
+    }
+
+    private JsonElement CreateReachabilityDescriptor()
+    {
+        if (!this.TryNormalizeAdvertisedHubUrl(out var normalized, out var error))
+            throw error!;
+        return JsonSerializer.SerializeToElement(
+            new Dictionary<string, object>
+            {
+                ["type"] = "reverse-http",
+                ["hub-urls"] = new[] { normalized },
+                ["entity-id"] = this.entityId,
+            });
+    }
+
+    private bool TryNormalizeAdvertisedHubUrl(out string normalized, out RouteValidationException? error)
+    {
+        try
+        {
+            normalized = DataAccessReachabilityRouteStore.NormalizeEndpoint(
+                this.advertisedHubUrl, "descriptor.hub-urls[]");
+            error = null;
+            return true;
+        }
+        catch (RouteValidationException exception)
+        {
+            normalized = "";
+            error = exception;
+            return false;
+        }
+    }
+
+    private void ReportInvalidAdvertisement()
+    {
+        if (!this.TryNormalizeAdvertisedHubUrl(out _, out var error))
+            this.OnPublicationStatusChanged(error);
     }
 
     public async Task ApplyHubProfileEntityIdAsync(
