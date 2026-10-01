@@ -182,19 +182,60 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
             });
     }
 
-    public Task<QueryResult> QueryAsync(
+    public async Task<QueryResult> QueryAsync(
         QueryRequest request,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(
-            new QueryResult
+        if (request.Timestamps?.Any(static timestamp => timestamp is not null) == true)
+            throw new NotSupportedException("Historical filesystem queries are not supported.");
+
+        // The filesystem stores authoritative snapshots, while the in-memory DAL supplies the
+        // shared query evaluator. Restore disk concurrency tags before returning query results.
+        EntitySnapshot[] snapshots;
+        lock (this.updateLock)
+        {
+            snapshots = this.EnumerateEntityIdsFromFiles()
+                .Select(this.TryLoadEntitySnapshot)
+                .OfType<EntitySnapshot>()
+                .Where(static snapshot => snapshot.Data is not null)
+                .ToArray();
+        }
+        var evaluator = new InMemoryDataAccessLayer(timeProvider: this.timeProvider);
+        if (snapshots.Length > 0)
+        {
+            var seed = await evaluator.UpdateAsync(new UpdateRequest
             {
-                AuthoritativeTimestamp = new Timestamp(this.timeProvider.GetUtcNow(), "query"),
-                Batches = request.Timestamps is { Count: > 0 }
-                    ? request.Timestamps.Select(timestamp => new TimestampedQueryBatch { Timestamp = timestamp, Entities = Array.Empty<QueryEntitySnapshot>() }).ToArray()
-                    : new[] { new TimestampedQueryBatch { Timestamp = null, Entities = Array.Empty<QueryEntitySnapshot>() } },
-            });
+                UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "Evaluate filesystem query." } },
+                Changes = snapshots.Select(snapshot => new EntityChange
+                {
+                    EntityId = snapshot.EntityId,
+                    EntityChangeMode = EntityChangeMode.Replace,
+                    Data = snapshot.Data,
+                }).ToArray(),
+            }, cancellationToken).ConfigureAwait(false);
+            if (seed.EntityResults.Any(static result => result.UpdateState == UpdateState.Failed))
+                throw new InvalidOperationException("Filesystem query snapshot could not be evaluated.");
+        }
+
+        var evaluated = await evaluator.QueryAsync(request, cancellationToken).ConfigureAwait(false);
+        var originals = snapshots.ToDictionary(static snapshot => snapshot.EntityId);
+        return evaluated with
+        {
+            Batches = evaluated.Batches.Select(batch => batch with
+            {
+                Entities = batch.Entities.Select(entity =>
+                {
+                    var original = originals[entity.EntityId];
+                    return entity with
+                    {
+                        ConcurrencyTag = original.ConcurrencyTag,
+                        ModifiedTime = original.ModifiedTime,
+                        Data = original.Data,
+                    };
+                }).ToArray(),
+            }).ToArray(),
+        };
     }
 
     public Task<UpdateResult> UpdateAsync(

@@ -18,6 +18,78 @@ public sealed class FilesystemDataAccessLayerTests : DataAccessLayerNonQueryWith
     }
 
     [Fact]
+    public async Task QueryByType_AfterReopen_ReturnsPersistedEntityAndOriginalConcurrencyTag()
+    {
+        var id = new EntityId("36363636-3636-4363-8363-363636363636");
+        var stored = new FilesystemDataAccessLayer(this.repositoryPath);
+        var data = JsonSerializer.SerializeToElement(new Dictionary<string, object>
+        {
+            ["entity-id"] = id.ToString(),
+            ["entity-types"] = new[] { "entity", "agent-session" },
+            ["agent-session-id"] = "persisted-query",
+        });
+        var update = await RequireUpdateSucceedsAsync(stored, CreateUpdateRequest(new EntityChange
+        {
+            EntityId = id,
+            Data = data,
+            EntityChangeMode = EntityChangeMode.Replace,
+        }));
+        var tag = Assert.Single(update.EntityResults).ConcurrencyTag;
+
+        var reopened = new FilesystemDataAccessLayer(this.repositoryPath);
+        var query = await reopened.QueryAsync(new QueryRequest
+        {
+            Clauses = [new TopLevelQueryClause
+            {
+                ClauseIdentifier = new QueryClauseIdentifier("sessions"),
+                Clause = new EntityTypeQueryClause
+                {
+                    EntityTypeNames = new EntityTypeNameSet(["agent-session"]),
+                },
+            }],
+            Timestamps = [null],
+        });
+
+        var entity = Assert.Single(Assert.Single(query.Batches).Entities);
+        Assert.Equal(id, entity.EntityId);
+        Assert.Equal(tag, entity.ConcurrencyTag);
+        Assert.Equal("persisted-query", entity.Data!.Value.GetProperty("agent-session-id").GetString());
+        Assert.NotNull(query.AuthoritativeTimestamp);
+    }
+
+    [Fact]
+    public async Task QueryByType_EmptyStore_ReturnsEmptyBatch()
+    {
+        var data = new FilesystemDataAccessLayer(this.repositoryPath);
+        var query = await data.QueryAsync(new QueryRequest
+        {
+            Clauses = [new TopLevelQueryClause
+            {
+                ClauseIdentifier = new QueryClauseIdentifier("sessions"),
+                Clause = new EntityTypeQueryClause
+                {
+                    EntityTypeNames = new EntityTypeNameSet(["agent-session"]),
+                },
+            }],
+            Timestamps = [null],
+        });
+
+        Assert.Empty(Assert.Single(query.Batches).Entities);
+        Assert.NotNull(query.AuthoritativeTimestamp);
+    }
+
+    [Fact]
+    public async Task QueryByType_HistoricalTimestamp_FailsRatherThanReturningCurrentData()
+    {
+        var data = new FilesystemDataAccessLayer(this.repositoryPath);
+        await Assert.ThrowsAsync<NotSupportedException>(() => data.QueryAsync(new QueryRequest
+        {
+            Clauses = [],
+            Timestamps = [new Timestamp(DateTimeOffset.UnixEpoch, "0")],
+        }));
+    }
+
+    [Fact]
     public void ComputeEntityNameHash_SameName_ReturnsSameHash()
     {
         var name = new EntityName("foo", "bar");
