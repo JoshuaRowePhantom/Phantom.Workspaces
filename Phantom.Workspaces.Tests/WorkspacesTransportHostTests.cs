@@ -537,7 +537,7 @@ public sealed class WorkspacesTransportHostTests
             store.FailNextValidationUpsert();
             var http = new FakeHubHttpTransportFactory();
             var factory = new ReverseHttpClientTransportFactory(
-                http, "https://private-hub.example/?access_token=private", profile.ToString(),
+                http, "https://private-hub.example/", profile.ToString(),
                 store, null, logger: logs.CreateLogger<ReverseHttpClientTransportFactory>());
             await using (var host = new WorkspacesTransportHost(new TransportRegistry(), [factory], logs))
             {
