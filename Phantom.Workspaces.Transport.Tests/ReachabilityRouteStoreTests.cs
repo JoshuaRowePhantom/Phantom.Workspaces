@@ -146,8 +146,6 @@ public sealed class ReachabilityRouteStoreTests
     [InlineData("https://user:password@machine.example/", "endpoint.userinfo")]
     [InlineData("https://machine.example/?access_token=private", "endpoint.credential-query-or-fragment")]
     [InlineData("https://machine.example/#token=private", "endpoint.credential-query-or-fragment")]
-    [InlineData("http://public.example/", "endpoint.public-http-host")]
-    [InlineData("http://internal.corp/", "endpoint.public-http-host")]
     public async Task ReachabilityRouteStore_InvalidReverseEndpoint_IsRejectedAtWriteTime(string endpoint, string reason)
     {
         var (store, _) = await CreateStoreAsync();
@@ -156,6 +154,25 @@ public sealed class ReachabilityRouteStoreTests
         Assert.Equal(reason, exception.ReasonCode);
         Assert.Equal("descriptor.hub-urls[]", exception.Field);
         Assert.Empty(await store.GetRoutesAsync(ProfileId));
+    }
+
+    [Theory]
+    [InlineData("http://public.example/")]
+    [InlineData("http://internal.corp/")]
+    public async Task ReachabilityRouteStore_HttpDnsHost_PersistsDirectAndReverseRoutes(string endpoint)
+    {
+        var (store, _) = await CreateStoreAsync();
+
+        await store.UpsertRouteAsync(ProfileId, CreateRoute("direct-http", HttpDescriptor(endpoint), ProfileId));
+        await store.UpsertRouteAsync(ProfileId,
+            CreateRoute($"reverse-http:{HubId}", ReverseDescriptor(endpoint), ProfileId));
+
+        var routes = await store.GetRoutesAsync(ProfileId);
+        Assert.Equal(2, routes.Count);
+        Assert.Equal(endpoint, Assert.Single(routes, route => route.RouteId == "direct-http")
+            .Descriptor.GetProperty("url").GetString());
+        Assert.Equal(endpoint, Assert.Single(routes, route => route.RouteId == $"reverse-http:{HubId}")
+            .Descriptor.GetProperty("hub-urls")[0].GetString());
     }
 
     [Fact]
@@ -299,7 +316,6 @@ public sealed class ReachabilityRouteStoreTests
     [InlineData("https://machine.example/?access_token=secret")]
     [InlineData("https://machine.example/#token=secret")]
     [InlineData("https://user:pass@machine.example/")]
-    [InlineData("http://public.example/")]
     public async Task ReachabilityRouteStore_UrlWithCredentialQueryOrFragment_IsRejectedAtWriteTime(string url)
     {
         var (store, _) = await CreateStoreAsync();

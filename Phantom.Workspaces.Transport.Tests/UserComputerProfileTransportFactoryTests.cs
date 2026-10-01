@@ -21,10 +21,11 @@ public sealed class UserComputerProfileTransportFactoryTests
         await using var client = new ReverseHttpClientTransportFactory(
             new ReverseHttpClientTransportFactoryTests.FakeHttpTransportFactory(),
             "http://hub.example", RemoteProfileId.ToString(), store, LocalProfileId,
-            clock, routeLeaseDuration: TimeSpan.FromMinutes(2));
+            clock, routeLeaseDuration: TimeSpan.FromMinutes(2),
+            advertisedHubUrl: "https://hub.example/?token=private");
         await client.EnsureRegisteredAsync();
         Assert.True(client.IsRegistered);
-        Assert.Equal("endpoint.public-http-host", client.LastReachabilityPublicationStatus?.ReasonCode);
+        Assert.Equal("endpoint.credential-query-or-fragment", client.LastReachabilityPublicationStatus?.ReasonCode);
         Assert.Empty(await store.GetRoutesAsync(RemoteProfileId));
 
         await using var liveRegistry = new ReverseHttpServerTransportFactory();
@@ -41,7 +42,7 @@ public sealed class UserComputerProfileTransportFactoryTests
         await live.DisposeAsync();
         Assert.Empty(registry.Descriptors);
 
-        await client.SetAdvertisedHubUrlAsync("https://hub.example", CancellationToken.None);
+        await client.SetAdvertisedHubUrlAsync("http://hub.example", CancellationToken.None);
         var initial = Assert.Single(await store.GetRoutesAsync(RemoteProfileId));
         var renewed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         client.PublicationStatusChanged += (_, status) =>
@@ -61,7 +62,7 @@ public sealed class UserComputerProfileTransportFactoryTests
         await persisted.DisposeAsync();
         var selected = Assert.Single(registry.Descriptors);
         Assert.Equal("reverse-http", selected.GetProperty("type").GetString());
-        Assert.Equal("https://hub.example/", selected.GetProperty("hub-urls")[0].GetString());
+        Assert.Equal("http://hub.example/", selected.GetProperty("hub-urls")[0].GetString());
         Assert.Equal(RemoteProfileId.ToString(), selected.GetProperty("entity-id").GetString());
     }
 

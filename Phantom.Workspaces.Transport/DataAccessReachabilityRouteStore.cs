@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Net;
 using System.Text.Json;
 using Phantom.Workspaces.Data;
 
@@ -244,45 +243,7 @@ public sealed class DataAccessReachabilityRouteStore : IReachabilityRouteStore
             throw new RouteValidationException("endpoint.credential-query-or-fragment", field);
         }
 
-        if (uri.Scheme == Uri.UriSchemeHttp && !IsPrivateOrLoopback(uri.Host))
-        {
-            throw new RouteValidationException("endpoint.public-http-host", field);
-        }
-
         return uri.AbsoluteUri;
-    }
-
-    private static bool IsPrivateOrLoopback(string host)
-    {
-        if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase)
-            || host.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        if (!IPAddress.TryParse(host, out var address))
-        {
-            return false;
-        }
-
-        if (IPAddress.IsLoopback(address))
-        {
-            return true;
-        }
-
-        var bytes = address.GetAddressBytes();
-        if (address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
-        {
-            return bytes[0] == 10
-                || bytes[0] == 127
-                || (bytes[0] == 169 && bytes[1] == 254)
-                || (bytes[0] == 172 && bytes[1] is >= 16 and <= 31)
-                || (bytes[0] == 192 && bytes[1] == 168);
-        }
-
-        return address.IsIPv6LinkLocal
-            || address.IsIPv6SiteLocal
-            || (bytes.Length == 16 && (bytes[0] & 0xfe) == 0xfc);
     }
 
     private static ReachabilityRoute NormalizeAndValidate(

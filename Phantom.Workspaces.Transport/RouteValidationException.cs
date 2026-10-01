@@ -26,7 +26,7 @@ public sealed class RouteValidationException : ArgumentException
         or "descriptor.entity-id.target-mismatch" or "descriptor.hub-urls.invalid-count"
         or "endpoint.missing" or "endpoint.nonabsolute" or "endpoint.invalid-scheme"
         or "endpoint.missing-host" or "endpoint.userinfo"
-        or "endpoint.credential-query-or-fragment" or "endpoint.public-http-host" => reason,
+        or "endpoint.credential-query-or-fragment" => reason,
         _ => "route.validation-unknown",
     };
 

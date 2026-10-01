@@ -19,15 +19,16 @@ public sealed class ReverseHttpClientTransportFactoryTests
         var store = new ValidationStore { Reason = null };
         await using var factory = new ReverseHttpClientTransportFactory(
             new FakeHttpTransportFactory(), "http://hub.example", Worker.ToString(),
-            store, Hub, clock, routeLeaseDuration: TimeSpan.FromMinutes(2));
+            store, Hub, clock, routeLeaseDuration: TimeSpan.FromMinutes(2),
+            advertisedHubUrl: "https://hub.example/?token=private");
         var channel = await factory.EnsureRegisteredAsync();
         Assert.True(factory.IsRegistered);
-        Assert.Equal("endpoint.public-http-host", factory.LastReachabilityPublicationStatus?.ReasonCode);
+        Assert.Equal("endpoint.credential-query-or-fragment", factory.LastReachabilityPublicationStatus?.ReasonCode);
         Assert.Empty(store.Routes);
 
-        await factory.SetAdvertisedHubUrlAsync("https://hub.example", CancellationToken.None);
+        await factory.SetAdvertisedHubUrlAsync("http://hub.example", CancellationToken.None);
         Assert.Same(channel, await factory.EnsureRegisteredAsync());
-        Assert.Equal("https://hub.example/", store.Routes.Single().Descriptor.GetProperty("hub-urls")[0].GetString());
+        Assert.Equal("http://hub.example/", store.Routes.Single().Descriptor.GetProperty("hub-urls")[0].GetString());
         Assert.Equal("true", factory.LastReachabilityPublicationStatus?.Persisted);
         var renewed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         factory.PublicationStatusChanged += (_, status) =>
@@ -47,7 +48,8 @@ public sealed class ReverseHttpClientTransportFactoryTests
         var store = new ValidationStore { Reason = null };
         await using var factory = new ReverseHttpClientTransportFactory(
             new FakeHttpTransportFactory(), "http://hub.example", Worker.ToString(),
-            store, Hub, logger: logs.CreateLogger<ReverseHttpClientTransportFactory>());
+            store, Hub, logger: logs.CreateLogger<ReverseHttpClientTransportFactory>(),
+            advertisedHubUrl: "https://hub.example/?token=private");
         await factory.EnsureRegisteredAsync();
         await factory.RetryReachabilityPublicationAsync();
         Assert.True(factory.IsRegistered);
