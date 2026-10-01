@@ -219,6 +219,10 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
 
                 mainWindowViewModel.NotifyAgentTabStateChanged();
             }), deadline.Token, "ready-publication");
+            if (result is not null)
+                logger.LogInformation(
+                    "Session loading; attempt {Attempt}; stage ready-publication; outcome ready.",
+                    correlation);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested && timer.IsCancellationRequested)
         {

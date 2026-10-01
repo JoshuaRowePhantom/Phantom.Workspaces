@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Net.WebSockets;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Hosting;
@@ -17,6 +18,8 @@ using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.Http;
 using Phantom.Workspaces.Transport.ReverseHttp;
 using Phantom.Workspaces.Web.Server;
+using Phantom.Workspaces.Configuration;
+using Phantom.Workspaces.Services.Logging;
 
 namespace Phantom.Workspaces.Tests;
 
@@ -37,19 +40,28 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
         var ct = timeout.Token;
         var directory = Path.Combine(Path.GetTempPath(), "split-acceptance-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
+        var hubLogs = Path.Combine(directory, "hub-logs");
+        var callerLogs = Path.Combine(directory, "caller-logs");
+        var workerLogs = Path.Combine(directory, "worker-logs");
         try
         {
+            using var hubLoggerFactory = LoggingBootstrap.CreateLoggerFactory(
+                new LogDirectoryProvider(new WorkspacesConfiguration { LogDirectory = hubLogs }, null));
             var data = new MergeProcessingDataAccessLayer(
                 new GitDataAccessLayer(Path.Combine(directory, "entities")));
             var sessionEntityId = await SeedAsync(data, ct);
             var status = new ReverseConnectionStatusRegistry();
             await using var reverse = new ReverseHttpServerTransportFactory(status,
-                requireAuthenticatedRelays: true, hubProfileEntityId: Hub);
+                requireAuthenticatedRelays: true, hubProfileEntityId: Hub,
+                loggerFactory: hubLoggerFactory);
             var registry = new TransportRegistry();
             registry.Register(reverse);
             await using var server = new HttpServerTransportFactory(registry);
             var builder = WebApplication.CreateBuilder();
             builder.Logging.ClearProviders();
+            builder.Logging.AddProvider(new ForwardingLoggerProvider(hubLoggerFactory));
+            builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
+            builder.Logging.AddFilter("Microsoft.Hosting.Lifetime", LogLevel.Warning);
             builder.WebHost.UseUrls($"http://127.0.0.1:{FreePort()}");
             builder.Services.AddSingleton<IDataAccessLayer>(data);
             await using var app = builder.Build();
@@ -80,10 +92,10 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
 
             var callerUrl = $"http://127.0.0.1:{FreePort()}";
             await using var caller = StartRole("caller", url, User, Caller, callerUrl, Worker,
-                Path.Combine(directory, "entities"));
+                Path.Combine(directory, "entities"), callerLogs);
             Assert.Equal("READY caller", await caller.NextLineAsync(ct));
             await using var worker = StartRole("worker", url, User, Worker, callerUrl, Worker,
-                Path.Combine(directory, "entities"));
+                Path.Combine(directory, "entities"), workerLogs);
             Assert.Equal("READY worker", await worker.NextLineAsync(ct));
             Assert.True(reverse.IsRegistered(Worker.ToString()));
             var store = new DataAccessReachabilityRouteStore(data);
@@ -131,12 +143,70 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
             }, ct);
             Assert.Contains(persisted.Batches.SelectMany(batch => batch.Entities),
                 entity => entity.EntityId == sessionEntityId);
+
+            var callerFile = ReadProcessLog(callerLogs);
+            var hubFile = ReadProcessLog(hubLogs);
+            var workerFile = ReadProcessLog(workerLogs);
+            var choices = Regex.Matches(callerFile,
+                @"Session loading; attempt ([0-9a-f]{32}); stage transport-choice; [^\r\n]*outcome started\.");
+            Assert.Equal(2, choices.Count);
+            var failedAttempt = choices[0].Groups[1].Value;
+            var retryAttempt = choices[1].Groups[1].Value;
+            Assert.NotEqual(failedAttempt, retryAttempt);
+            AssertOrdered(callerFile,
+                $"Session loading; attempt {failedAttempt}; stage service-initialization;",
+                $"Session loading; attempt {failedAttempt}; stage transport-choice;",
+                $"Session loading; attempt {failedAttempt}; stage transport-choice; elapsed-ms");
+            Assert.Matches(
+                $@"Session loading; attempt {failedAttempt}; stage transport-choice; elapsed-ms [^\r\n]*; reason stage-timeout\.",
+                callerFile);
+            AssertOrdered(callerFile,
+                $"Session loading; attempt {retryAttempt}; stage service-initialization;",
+                $"Session loading; attempt {retryAttempt}; stage transport-choice;",
+                $"Remote profile transport; attempt {retryAttempt}; stage transport-choice; route persisted; outcome selected.",
+                $"Session loading; attempt {retryAttempt}; stage ready-publication;",
+                $"Session loading; attempt {retryAttempt}; stage ready-publication; outcome ready.");
+            Assert.Contains($"Reverse relay; attempt {retryAttempt}; stage relay-acceptance; outcome attached.", hubFile);
+            Assert.Contains($"Reverse worker; attempt {retryAttempt}; stage worker-channel-open; outcome received.", workerFile);
+            Assert.Contains($"Reverse worker; attempt {retryAttempt}; stage worker-listener; outcome accepted.", workerFile);
+            Assert.Contains("Worker turn; stage worker-turn; outcome request-verified.", workerFile);
+            foreach (var log in new[] { callerFile, hubFile, workerFile })
+            {
+                Assert.DoesNotContain(ProcessAcceptanceCredentials.Token, log, StringComparison.Ordinal);
+                Assert.DoesNotContain(url, log, StringComparison.Ordinal);
+                Assert.DoesNotContain(callerUrl, log, StringComparison.Ordinal);
+                Assert.DoesNotContain("fixture-prompt", log, StringComparison.Ordinal);
+                Assert.DoesNotContain("worker-response", log, StringComparison.Ordinal);
+                Assert.DoesNotContain(SessionId, log, StringComparison.Ordinal);
+                foreach (var identifier in new[] { User, Caller, Worker, Manifest, Hub, sessionEntityId })
+                    Assert.DoesNotContain(identifier.ToString(), log, StringComparison.OrdinalIgnoreCase);
+            }
         }
+
         finally
         {
             foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
                 File.SetAttributes(file, FileAttributes.Normal);
             Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static string ReadProcessLog(string directory)
+    {
+        var path = Assert.Single(Directory.GetFiles(directory, "phantom-workspaces-*.log"));
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+
+    private static void AssertOrdered(string log, params string[] stages)
+    {
+        var offset = 0;
+        foreach (var stage in stages)
+        {
+            var found = log.IndexOf(stage, offset, StringComparison.Ordinal);
+            Assert.True(found >= 0, $"Missing or out-of-order diagnostic stage: {stage}");
+            offset = found + stage.Length;
         }
     }
 
@@ -210,9 +280,9 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
 
     private static RoleProcess StartRole(
         string role, string url, EntityId user, EntityId profile, string callerUrl, EntityId worker,
-        string repositoryPath)
+        string repositoryPath, string logDirectory)
         => new(role, url, user.ToString(), profile.ToString(), SessionId, callerUrl, worker.ToString(),
-            repositoryPath);
+            repositoryPath, logDirectory);
 
     private sealed class RoleProcess : IAsyncDisposable
     {

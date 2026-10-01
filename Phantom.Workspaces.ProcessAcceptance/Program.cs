@@ -8,7 +8,6 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Web.Client;
@@ -17,6 +16,7 @@ using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Services.Logging;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.Http;
 using Phantom.Workspaces.Transport.ReverseHttp;
@@ -36,9 +36,11 @@ internal static class Program
 {
     private static async Task<int> Main(string[] args)
     {
-        if (args.Length != 8 || args[0] is not ("worker" or "caller"))
+        if (args.Length != 9 || args[0] is not ("worker" or "caller"))
             return 2;
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        using var loggerFactory = LoggingBootstrap.CreateLoggerFactory(
+            new LogDirectoryProvider(new WorkspacesConfiguration { LogDirectory = args[8] }, null));
         var stage = "bootstrap";
         try
         {
@@ -55,10 +57,10 @@ internal static class Program
             using var data = new WebClientDataAccessLayer(args[1], http);
             if (args[0] == "worker")
                 await RunWorkerAsync(data, session, args[1], args[5],
-                    value => stage = value, timeout.Token);
+                    loggerFactory, value => stage = value, timeout.Token);
             else
                 await RunCallerAsync(session, args[4], args[1], args[5],
-                    new EntityId(args[6]), args[7], value => stage = value, timeout.Token);
+                    new EntityId(args[6]), args[7], loggerFactory, value => stage = value, timeout.Token);
             return 0;
         }
         catch (Exception error)
@@ -72,7 +74,7 @@ internal static class Program
 
     private static async Task RunWorkerAsync(
         IDataAccessLayer data, WorkspaceEntitySession session, string hubUrl,
-        string liveUrl, Action<string> reportStage, CancellationToken ct)
+        string liveUrl, ILoggerFactory loggerFactory, Action<string> reportStage, CancellationToken ct)
     {
         reportStage("worker-registration");
         var chatClient = new DeterministicTestChatClient();
@@ -88,11 +90,13 @@ internal static class Program
         var hub = new ReverseHttpClientTransportFactory(
             new FixtureAuthenticatedHttpFactory(hubUrl), hubUrl,
             session.UserComputerProfileEntityId.ToString(),
-            null, null, clock, routeLeaseDuration: TimeSpan.FromMinutes(2));
+            null, null, clock, loggerFactory.CreateLogger<ReverseHttpClientTransportFactory>(),
+            routeLeaseDuration: TimeSpan.FromMinutes(2));
         var liveHub = new ReverseHttpClientTransportFactory(
             new FixtureAuthenticatedHttpFactory(liveUrl), liveUrl,
             session.UserComputerProfileEntityId.ToString(),
-            null, null, routeLeaseDuration: TimeSpan.FromMinutes(2));
+            null, null, logger: loggerFactory.CreateLogger<ReverseHttpClientTransportFactory>(),
+            routeLeaseDuration: TimeSpan.FromMinutes(2));
         var published = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var renewed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var livePublished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -109,7 +113,7 @@ internal static class Program
                 livePublished.TrySetResult();
         };
         await using var composition = new WorkspacesTransportComposition(
-            data, session, NullLoggerFactory.Instance, [hub, liveHub],
+            data, session, loggerFactory, [hub, liveHub],
             agentServices: new AgentServices { ChatClientOverride = chatClient },
             runningAgentChats: chats);
         await composition.StartAsync(ct);
@@ -131,6 +135,8 @@ internal static class Program
                 if (!chatClient.LastRequestMessages.Any(message =>
                     message.Contents.OfType<TextContent>().Any(content => content.Text == "fixture-prompt")))
                     throw new InvalidOperationException("Worker did not receive the fixture turn.");
+                loggerFactory.CreateLogger("Phantom.Workspaces.ProcessAcceptance.Worker")
+                    .LogInformation("Worker turn; stage worker-turn; outcome request-verified.");
                 Console.WriteLine("TURN worker");
                 continue;
             }
@@ -148,7 +154,7 @@ internal static class Program
     private static async Task RunCallerAsync(
         WorkspaceEntitySession session, string sessionId,
         string dataEndpoint, string listenUrl, EntityId workerProfile, string repositoryPath,
-        Action<string> reportStage, CancellationToken ct)
+        ILoggerFactory loggerFactory, Action<string> reportStage, CancellationToken ct)
     {
         reportStage("caller-live-ingress");
         await using var liveHub = new ReverseHttpServerTransportFactory(
@@ -159,6 +165,9 @@ internal static class Program
         await using var server = new HttpServerTransportFactory(listeners);
         var builder = WebApplication.CreateBuilder();
         builder.Logging.ClearProviders();
+        builder.Logging.AddProvider(new ForwardingLoggerProvider(loggerFactory));
+        builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
+        builder.Logging.AddFilter("Microsoft.Hosting.Lifetime", LogLevel.Warning);
         builder.WebHost.UseUrls(listenUrl);
         await using var app = builder.Build();
         app.UseWebSockets();
@@ -193,7 +202,7 @@ internal static class Program
             try
             {
                 await RunCallerTabAsync(
-                    session, sessionId, repositoryPath, dataEndpoint, reportStage, ct);
+                    session, sessionId, repositoryPath, dataEndpoint, loggerFactory, reportStage, ct);
                 finished.TrySetResult();
             }
             catch (Exception error)
@@ -211,7 +220,7 @@ internal static class Program
 
     private static async Task RunCallerTabAsync(
         WorkspaceEntitySession session, string sessionId, string repositoryPath, string dataEndpoint,
-        Action<string> reportStage, CancellationToken ct)
+        ILoggerFactory loggerFactory, Action<string> reportStage, CancellationToken ct)
     {
         await using var factory = new AgentChatFactory(
             new InMemoryAgentPersistenceStore(), new AgentServices(),
@@ -219,9 +228,8 @@ internal static class Program
         var provider = new TransportFactoryRegistryProvider();
         var chats = new RunningAgentChatTable(
             factory, AgentSessionRuntimeContextFactory.FromProvider(provider));
-        var routeLog = new RouteLogger<UserComputerProfileTransportFactory>();
         var services = new ApplicationServices(
-            chats, new AgentPersistenceStoreCache(), new FixtureLoggerFactory(routeLog),
+            chats, new AgentPersistenceStoreCache(), loggerFactory,
             transportFactoryRegistryProvider: provider,
             outboundHttpTransportFactory: new FixtureAuthenticatedHttpFactory(dataEndpoint));
         var configuration = new WorkspacesConfiguration
@@ -318,10 +326,9 @@ internal static class Program
         {
             tab.PropertyChanged -= OnStateChanged;
         }
-        reportStage("caller-tab-result-" + tab.State + "-" + tab.LoadError);
+        reportStage("caller-tab-result-" + tab.State);
         if (tab.State != AgentTabState.Ready || !tab.IsRemote
-            || tab.Agent?.AgentChat is not RemoteAgentChat chat
-            || !routeLog.PersistedSelected)
+            || tab.Agent?.AgentChat is not RemoteAgentChat chat)
             throw new InvalidOperationException("Caller tab failed to open the persisted remote route.");
         Console.WriteLine("TAB Ready remote");
         var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -358,16 +365,6 @@ internal static class Program
     }
 
     private sealed class FixtureApplication : Application;
-
-    private sealed class FixtureLoggerFactory(RouteLogger<UserComputerProfileTransportFactory> routeLogger)
-        : ILoggerFactory
-    {
-        public ILogger CreateLogger(string categoryName)
-            => categoryName == typeof(UserComputerProfileTransportFactory).FullName
-                ? routeLogger : NullLogger.Instance;
-        public void AddProvider(ILoggerProvider provider) => throw new NotSupportedException();
-        public void Dispose() { }
-    }
 
     private sealed class OneShotStalledProfileRegistry(ITransportFactoryRegistry inner)
         : ITransportFactoryRegistry
@@ -446,25 +443,5 @@ internal static class Program
         }
 
         public ValueTask DisposeAsync() => this.inner.DisposeAsync();
-    }
-
-    private sealed class RouteLogger<T> : ILogger<T>
-    {
-        internal bool PersistedSelected { get; private set; }
-        public IDisposable BeginScope<TState>(TState state) where TState : notnull
-            => NullScope.Instance;
-        public bool IsEnabled(LogLevel logLevel) => true;
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
-            Exception? exception, Func<TState, Exception?, string> formatter)
-        {
-            if (formatter(state, exception).Contains("route persisted; outcome selected", StringComparison.Ordinal))
-                this.PersistedSelected = true;
-        }
-
-        private sealed class NullScope : IDisposable
-        {
-            internal static readonly NullScope Instance = new();
-            public void Dispose() { }
-        }
     }
 }
