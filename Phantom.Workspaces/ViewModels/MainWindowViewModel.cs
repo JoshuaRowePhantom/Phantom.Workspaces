@@ -940,7 +940,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             hubFactories,
             runtimeHostServices,
             registryProvider: this.applicationServices.TransportFactoryRegistryProvider,
-            runningAgentChats: this.applicationServices.RunningAgentChats);
+            runningAgentChats: this.applicationServices.RunningAgentChats,
+            outboundHttpTransportFactory: this.applicationServices.OutboundHttpTransportFactory);
         this.transportComposition = composition;
         this.trustedExecutorSelector.SetRemoteExecutor(composition.TrustedExecutor);
         await composition.StartAsync();

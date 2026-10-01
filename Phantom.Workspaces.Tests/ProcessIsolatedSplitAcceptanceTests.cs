@@ -79,9 +79,11 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
             Assert.Contains("401", websocketError.Message, StringComparison.Ordinal);
 
             var callerUrl = $"http://127.0.0.1:{FreePort()}";
-            await using var caller = StartRole("caller", url, User, Caller, callerUrl, Worker);
+            await using var caller = StartRole("caller", url, User, Caller, callerUrl, Worker,
+                Path.Combine(directory, "entities"));
             Assert.Equal("READY caller", await caller.NextLineAsync(ct));
-            await using var worker = StartRole("worker", url, User, Worker, callerUrl, Worker);
+            await using var worker = StartRole("worker", url, User, Worker, callerUrl, Worker,
+                Path.Combine(directory, "entities"));
             Assert.Equal("READY worker", await worker.NextLineAsync(ct));
             Assert.True(reverse.IsRegistered(Worker.ToString()));
             var store = new DataAccessReachabilityRouteStore(data);
@@ -104,6 +106,9 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
 
             await caller.SendAsync("DROP", ct);
             Assert.Equal("DROPPED live", await caller.NextLineAsync(ct));
+            Assert.Equal("TAB Loading", await caller.NextLineAsync(ct));
+            Assert.Equal("TAB Failed transport-choice", await caller.NextLineAsync(ct));
+            Assert.Equal("TAB Ready remote", await caller.NextLineAsync(ct));
             Assert.Equal("RESULT persisted worker-response", await caller.NextLineAsync(ct));
             Assert.Equal(0, await caller.WaitForExitAsync(ct));
             Assert.DoesNotContain(ProcessAcceptanceCredentials.Token, caller.CapturedError, StringComparison.Ordinal);
@@ -153,19 +158,22 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
         var documents = new[]
         {
             Parse($$"""
-                {"entity-id":"{{User}}","entity-types":["entity","user"],"names":[["users","username","split-test"]]
+                {"entity-id":"{{User}}","entity-types":["entity","user"],"names":[["users","username",{{JsonSerializer.Serialize(Environment.UserName)}}]]
                 }
                 """),
             Parse($$"""
-                {"entity-id":"{{Caller}}","entity-types":["entity","user-computer-profile"],"names":[["profiles","caller"]],"user-reference":["users","username","split-test"]
+                {"entity-id":"{{Caller}}","entity-types":["entity","user-computer-profile"],
+                 "names":[["computer-user-profiles","users","username",{{JsonSerializer.Serialize(Environment.UserName)}},"computers","hostname","fixture-caller"]],
+                 "user-reference":["users","username",{{JsonSerializer.Serialize(Environment.UserName)}}],
+                 "computer-reference":["computers","hostname",{{JsonSerializer.Serialize(Environment.MachineName)}}]
                 }
                 """),
             Parse($$"""
-                {"entity-id":"{{Worker}}","entity-types":["entity","user-computer-profile"],"names":[["profiles","worker"]],"user-reference":["users","username","split-test"]
+                {"entity-id":"{{Worker}}","entity-types":["entity","user-computer-profile"],"names":[["profiles","worker"]],"user-reference":["users","username",{{JsonSerializer.Serialize(Environment.UserName)}}]
                 }
                 """),
             Parse($$"""
-                {"entity-id":"{{Hub}}","entity-types":["entity","user-computer-profile"],"names":[["profiles","hub"]],"user-reference":["users","username","split-test"]
+                {"entity-id":"{{Hub}}","entity-types":["entity","user-computer-profile"],"names":[["profiles","hub"]],"user-reference":["users","username",{{JsonSerializer.Serialize(Environment.UserName)}}]
                 }
                 """),
             Parse($$"""
@@ -201,8 +209,10 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
     }
 
     private static RoleProcess StartRole(
-        string role, string url, EntityId user, EntityId profile, string callerUrl, EntityId worker)
-        => new(role, url, user.ToString(), profile.ToString(), SessionId, callerUrl, worker.ToString());
+        string role, string url, EntityId user, EntityId profile, string callerUrl, EntityId worker,
+        string repositoryPath)
+        => new(role, url, user.ToString(), profile.ToString(), SessionId, callerUrl, worker.ToString(),
+            repositoryPath);
 
     private sealed class RoleProcess : IAsyncDisposable
     {

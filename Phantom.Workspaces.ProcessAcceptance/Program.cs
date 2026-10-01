@@ -1,4 +1,7 @@
 using System.Text.Json;
+using Avalonia;
+using Avalonia.Headless;
+using Avalonia.Threading;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -9,6 +12,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Web.Client;
+using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Remote;
@@ -16,6 +20,8 @@ using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.Http;
 using Phantom.Workspaces.Transport.ReverseHttp;
+using Phantom.Workspaces.Trust;
+using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces.ProcessAcceptance;
 
@@ -30,7 +36,7 @@ internal static class Program
 {
     private static async Task<int> Main(string[] args)
     {
-        if (args.Length != 7 || args[0] is not ("worker" or "caller"))
+        if (args.Length != 8 || args[0] is not ("worker" or "caller"))
             return 2;
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
         var stage = "bootstrap";
@@ -51,8 +57,8 @@ internal static class Program
                 await RunWorkerAsync(data, session, args[1], args[5],
                     value => stage = value, timeout.Token);
             else
-                await RunCallerAsync(data, session, args[4], args[1], args[5],
-                    new EntityId(args[6]), value => stage = value, timeout.Token);
+                await RunCallerAsync(session, args[4], args[1], args[5],
+                    new EntityId(args[6]), args[7], value => stage = value, timeout.Token);
             return 0;
         }
         catch (Exception error)
@@ -82,11 +88,11 @@ internal static class Program
         var hub = new ReverseHttpClientTransportFactory(
             new FixtureAuthenticatedHttpFactory(hubUrl), hubUrl,
             session.UserComputerProfileEntityId.ToString(),
-            null, null, clock, routeLeaseDuration: TimeSpan.FromSeconds(20));
+            null, null, clock, routeLeaseDuration: TimeSpan.FromMinutes(2));
         var liveHub = new ReverseHttpClientTransportFactory(
             new FixtureAuthenticatedHttpFactory(liveUrl), liveUrl,
             session.UserComputerProfileEntityId.ToString(),
-            null, null, routeLeaseDuration: TimeSpan.FromSeconds(20));
+            null, null, routeLeaseDuration: TimeSpan.FromMinutes(2));
         var published = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var renewed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var livePublished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -131,7 +137,7 @@ internal static class Program
             if (command != "RENEW")
                 throw new InvalidOperationException("Unexpected fixture command.");
             reportStage("worker-route-renewal");
-            clock.Advance(TimeSpan.FromSeconds(10));
+            clock.Advance(TimeSpan.FromMinutes(1));
             await renewed.Task.WaitAsync(ct);
             if (hub.LastReachabilityPublicationStatus?.Persisted != "true")
                 throw new InvalidOperationException("Route renewal failed.");
@@ -140,8 +146,8 @@ internal static class Program
     }
 
     private static async Task RunCallerAsync(
-        IDataAccessLayer data, WorkspaceEntitySession session, string sessionId,
-        string dataEndpoint, string listenUrl, EntityId workerProfile,
+        WorkspaceEntitySession session, string sessionId,
+        string dataEndpoint, string listenUrl, EntityId workerProfile, string repositoryPath,
         Action<string> reportStage, CancellationToken ct)
     {
         reportStage("caller-live-ingress");
@@ -176,8 +182,64 @@ internal static class Program
         await app.StopAsync(ct);
         Console.WriteLine("DROPPED live");
 
-        reportStage("caller-owner-query");
-        var query = await data.QueryAsync(new QueryRequest
+        reportStage("caller-gui-bootstrap");
+        AppBuilder.Configure<FixtureApplication>()
+            .UseHeadless(new AvaloniaHeadlessPlatformOptions())
+            .SetupWithoutStarting();
+        using var loop = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Dispatcher.UIThread.Post(async () =>
+        {
+            try
+            {
+                await RunCallerTabAsync(
+                    session, sessionId, repositoryPath, dataEndpoint, reportStage, ct);
+                finished.TrySetResult();
+            }
+            catch (Exception error)
+            {
+                finished.TrySetException(error);
+            }
+            finally
+            {
+                loop.Cancel();
+            }
+        });
+        Dispatcher.UIThread.MainLoop(loop.Token);
+        await finished.Task.WaitAsync(ct);
+    }
+
+    private static async Task RunCallerTabAsync(
+        WorkspaceEntitySession session, string sessionId, string repositoryPath, string dataEndpoint,
+        Action<string> reportStage, CancellationToken ct)
+    {
+        await using var factory = new AgentChatFactory(
+            new InMemoryAgentPersistenceStore(), new AgentServices(),
+            TaskScheduler.FromCurrentSynchronizationContext());
+        var provider = new TransportFactoryRegistryProvider();
+        var chats = new RunningAgentChatTable(
+            factory, AgentSessionRuntimeContextFactory.FromProvider(provider));
+        var routeLog = new RouteLogger<UserComputerProfileTransportFactory>();
+        var services = new ApplicationServices(
+            chats, new AgentPersistenceStoreCache(), new FixtureLoggerFactory(routeLog),
+            transportFactoryRegistryProvider: provider,
+            outboundHttpTransportFactory: new FixtureAuthenticatedHttpFactory(dataEndpoint));
+        var configuration = new WorkspacesConfiguration
+        {
+            SkipStartupWorkspace = true,
+            UserComputerProfileOverride = "fixture-caller",
+        };
+        await using var window = new MainWindowViewModel(
+            new LocalGitRepositorySource(repositoryPath), configuration,
+            new ProfileStore(Path.Combine(Path.GetDirectoryName(repositoryPath)!, "caller-profile.json")),
+            services);
+        reportStage("caller-gui-initialization");
+        await window.InitializeAsync();
+        if (window.EntityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId
+            != session.UserComputerProfileEntityId)
+            throw new InvalidOperationException("Caller GUI profile does not match the fixture.");
+        reportStage("caller-persisted-session-query");
+        var query = await window.EntityBroker.EntityRepository.DataAccessLayer.QueryAsync(new QueryRequest
         {
             Clauses = [new TopLevelQueryClause
             {
@@ -186,54 +248,82 @@ internal static class Program
             }],
             Timestamps = [null],
         }, ct);
-        var entity = query.Batches.SelectMany(batch => batch.Entities)
+        var persisted = query.Batches.SelectMany(batch => batch.Entities)
             .Single(item => item.Data is JsonElement value
                 && value.GetProperty("agent-session-id").GetString() == sessionId);
-        var persisted = (JsonElement)entity.Data!;
-        var owner = new EntityId(persisted.GetProperty("host-profile-entity-id").GetString()!);
-        var registry = new TransportFactoryRegistry();
-        var routeLog = new RouteLogger<UserComputerProfileTransportFactory>();
-        registry.Register(new UserComputerProfileTransportFactory(
-            data, session, registry, liveInboundRegistry: liveHub,
-            reachabilityRouteStore: new DataAccessReachabilityRouteStore(data),
-            logger: routeLog));
-        var peer = new TransportPeerIdentity
+        reportStage("caller-persisted-session-load");
+        var entity = (await window.EntityBroker.GetEntitiesAsync([persisted.EntityId], ct)).Single();
+        var stalled = new OneShotStalledProfileRegistry(
+            window.TransportComposition?.TransportFactoryRegistry
+                ?? throw new InvalidOperationException("Caller production transport was not initialized."));
+        var clock = new FakeTimeProvider();
+        await using var handler = new OpenAgentSessionShortcutHandler(
+            new AgentSessionShortcutContext(
+                userComputerProfileOverride: "fixture-caller",
+                persistenceStoreCache: services.AgentPersistenceStoreCache),
+            new DeferredTrustedExecutorSelector(),
+            chats, new AgentSessionOwnerDecisionProvider(), stalled,
+            action => { action(); return Task.CompletedTask; },
+            loadingDeadline: TimeSpan.FromSeconds(90),
+            timeProvider: clock,
+            stageDeadline: TimeSpan.FromSeconds(45));
+        reportStage("caller-tab-open");
+        if (!await handler.Handle(window, Shortcut.Open, entity))
+            throw new InvalidOperationException("Session shortcut did not open a tab.");
+        reportStage("caller-tab-discovery");
+        var tab = window.WorkspacePanes.SelectMany(pane => pane.Tabs)
+            .OfType<AgentSessionWorkspaceTabViewModel>()
+            .Single(item => item.Entity?.EntityId == entity.EntityId);
+        reportStage("caller-tab-state-" + tab.State);
+        if (tab.State != AgentTabState.Loading)
+            throw new InvalidOperationException("Session tab did not enter Loading.");
+        Console.WriteLine("TAB Loading");
+        var terminal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnStateChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs args)
         {
-            AuthenticationScheme = "local-workspace-session",
-            StablePeerId = session.UserComputerProfileEntityId.ToString(),
-            UserEntityId = session.UserEntityId.ToString(),
-            UserComputerProfileEntityId = session.UserComputerProfileEntityId.ToString(),
-        };
-        registry.Register(new ReverseHttpForwardingTransportFactory(
-            new FixtureAuthenticatedHttpFactory(dataEndpoint), authenticatedPeer: peer));
-        await using var factory = new AgentChatFactory(
-            new InMemoryAgentPersistenceStore(), new AgentServices(), TaskScheduler.Default);
-        var chats = new RunningAgentChatTable(factory, new AgentSessionRuntimeContextFactory(registry));
-        using var ownerDescriptor = JsonDocument.Parse(JsonSerializer.Serialize(new Dictionary<string, string>
+            if (args.PropertyName == nameof(AgentSessionWorkspaceTabViewModel.State)
+                && tab.State != AgentTabState.Loading)
+                terminal.TrySetResult();
+        }
+        tab.PropertyChanged += OnStateChanged;
+        try
         {
-            ["type"] = "user-computer-profile",
-            ["entity-id"] = owner.ToString(),
-        }));
-        using var attempt = SessionAttachDiagnosticScope.Begin();
-        reportStage("caller-route-selection");
-        var transport = await registry.ConnectToAsync(ownerDescriptor.RootElement, ct)
-            ?? throw new InvalidOperationException("Owner transport was not selected.");
-        if (!routeLog.PersistedSelected)
-            throw new InvalidOperationException("Caller did not select the persisted route.");
-
-        reportStage("caller-remote-acquisition");
-        await using var lease = await chats.AcquireAsync(new AcquireAgentChatRequest
+            await stalled.Entered.WaitAsync(ct);
+            clock.Advance(TimeSpan.FromSeconds(45));
+            await terminal.Task.WaitAsync(ct);
+        }
+        finally
         {
-            AgentSessionId = new AgentSessionId(sessionId),
-            AgentSessionEntity = persisted,
-            AgentServices = new AgentServices(),
-            ForegroundScheduler = TaskScheduler.Default,
-            EntityName = "Static worker",
-            EntityId = entity.EntityId.ToString(),
-            AcquisitionMode = AgentChatAcquisitionMode.StartOrAttachRemote,
-            OwningProfileTransport = transport,
-        }, ct);
-        var chat = (RemoteAgentChat)lease.AgentChat;
+            tab.PropertyChanged -= OnStateChanged;
+        }
+        if (tab.State != AgentTabState.Failed
+            || tab.LoadError?.Contains("transport-choice", StringComparison.Ordinal) != true)
+            throw new InvalidOperationException("The stalled GUI tab did not report transport-choice.");
+        Console.WriteLine("TAB Failed transport-choice");
+        stalled.Release();
+        await stalled.LateTransportDisposed.WaitAsync(ct);
+        if (tab.State != AgentTabState.Failed || tab.Lease is not null)
+            throw new InvalidOperationException("Late transport revived the failed tab.");
+        reportStage("caller-tab-retry");
+        terminal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        tab.PropertyChanged += OnStateChanged;
+        try
+        {
+            if (!await handler.Handle(window, Shortcut.Open, entity)
+                || tab.State != AgentTabState.Loading)
+                throw new InvalidOperationException("Failed tab did not retry through the shortcut.");
+            await terminal.Task.WaitAsync(ct);
+        }
+        finally
+        {
+            tab.PropertyChanged -= OnStateChanged;
+        }
+        reportStage("caller-tab-result-" + tab.State + "-" + tab.LoadError);
+        if (tab.State != AgentTabState.Ready || !tab.IsRemote
+            || tab.Agent?.AgentChat is not RemoteAgentChat chat
+            || !routeLog.PersistedSelected)
+            throw new InvalidOperationException("Caller tab failed to open the persisted remote route.");
+        Console.WriteLine("TAB Ready remote");
         var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         chat.TurnCompleted += OnCompleted;
         try
@@ -264,6 +354,63 @@ internal static class Program
             if (item.Contents.OfType<TextContent>()
                 .Any(content => content.Text == "worker-response"))
                 completed.TrySetResult();
+        }
+    }
+
+    private sealed class FixtureApplication : Application;
+
+    private sealed class FixtureLoggerFactory(RouteLogger<UserComputerProfileTransportFactory> routeLogger)
+        : ILoggerFactory
+    {
+        public ILogger CreateLogger(string categoryName)
+            => categoryName == typeof(UserComputerProfileTransportFactory).FullName
+                ? routeLogger : NullLogger.Instance;
+        public void AddProvider(ILoggerProvider provider) => throw new NotSupportedException();
+        public void Dispose() { }
+    }
+
+    private sealed class OneShotStalledProfileRegistry(ITransportFactoryRegistry inner)
+        : ITransportFactoryRegistry
+    {
+        private readonly TaskCompletionSource<ITransport> release =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource entered =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource disposed =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int attempts;
+
+        internal Task Entered => this.entered.Task;
+        internal Task LateTransportDisposed => this.disposed.Task;
+        internal void Release() => this.release.TrySetResult(this.pending
+            ?? throw new InvalidOperationException("No pending transport."));
+        private ITransport? pending;
+
+        public void Register(ITransportFactory factory) => inner.Register(factory);
+
+        public async Task<ITransport> ConnectToAsync(JsonElement descriptor, CancellationToken ct = default)
+        {
+            var transport = await inner.ConnectToAsync(descriptor, ct);
+            if (Interlocked.Increment(ref this.attempts) != 1)
+                return transport;
+            this.pending = new DisposalObservedTransport(transport, this.disposed);
+            this.entered.TrySetResult();
+            return await this.release.Task;
+        }
+    }
+
+    private sealed class DisposalObservedTransport(
+        ITransport inner, TaskCompletionSource disposed) : ITransport
+    {
+        public Task<IMessageChannel> ConnectToMessageChannelAsync(
+            JsonElement request, CancellationToken ct = default)
+            => inner.ConnectToMessageChannelAsync(request, ct);
+        public Task<Stream> ConnectToStreamAsync(JsonElement request, CancellationToken ct = default)
+            => inner.ConnectToStreamAsync(request, ct);
+        public async ValueTask DisposeAsync()
+        {
+            await inner.DisposeAsync();
+            disposed.TrySetResult();
         }
     }
 

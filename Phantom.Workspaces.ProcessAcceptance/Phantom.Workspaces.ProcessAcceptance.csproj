@@ -6,6 +6,7 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Avalonia.Headless" />
     <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <ProjectReference Include="..\Phantom.Workspaces\Phantom.Workspaces.csproj" />

@@ -47,7 +47,8 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
         TransportFactoryRegistryProvider? registryProvider = null,
         ITransportListener? agentSessionTransportListener = null,
         IRunningAgentChatTable? runningAgentChats = null,
-        TransportMetadataLoggingOptions? metadataLogging = null)
+        TransportMetadataLoggingOptions? metadataLogging = null,
+        ITransportFactory? outboundHttpTransportFactory = null)
     {
         ArgumentNullException.ThrowIfNull(dataAccessLayer);
         ArgumentNullException.ThrowIfNull(workspaceEntitySession);
@@ -166,7 +167,7 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
                 logger: loggerFactory.CreateLogger<UserComputerProfileTransportFactory>());
         this.httpClientTransportFactory = new HttpClientTransportFactory();
         this.reverseHttpForwardingTransportFactory = new ReverseHttpForwardingTransportFactory(
-            new HttpClientTransportFactory(),
+            outboundHttpTransportFactory ?? new HttpClientTransportFactory(),
             authenticatedPeer: this.AgentSessionPeerIdentities is not null ? localPeer : null,
             logger: loggerFactory.CreateLogger<ReverseHttpForwardingTransportFactory>());
 

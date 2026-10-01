@@ -4,6 +4,7 @@ using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Services.Secrets;
 using Phantom.Workspaces.Services.Logging;
 using Phantom.Workspaces.Services.Updates;
+using Phantom.Workspaces.Transport;
 
 namespace Phantom.Workspaces.Services;
 
@@ -22,7 +23,8 @@ public sealed class ApplicationServices
         IPlatformSecretStore? platformSecretStore = null,
         object? mcpOAuthOptions = null,
         TransportFactoryRegistryProvider? transportFactoryRegistryProvider = null,
-        string? updateUnavailableReason = null)
+        string? updateUnavailableReason = null,
+        ITransportFactory? outboundHttpTransportFactory = null)
     {
         this.RunningAgentChats = runningAgentChats;
         this.AgentPersistenceStoreCache = agentPersistenceStoreCache;
@@ -47,6 +49,7 @@ public sealed class ApplicationServices
         this.McpOAuthOptions = mcpOAuthOptions;
         this.TransportFactoryRegistryProvider =
             transportFactoryRegistryProvider ?? new TransportFactoryRegistryProvider();
+        this.OutboundHttpTransportFactory = outboundHttpTransportFactory;
     }
 
     internal static (ISecretProvider SecretProvider, ICredentialPicker CredentialPicker, IAllowedSecretsStore AllowedSecretsStore, IPlatformSecretStore PlatformSecretStore) CreateDefaultSecretServices()
@@ -133,6 +136,9 @@ public sealed class ApplicationServices
     public object? McpOAuthOptions { get; }
 
     public TransportFactoryRegistryProvider TransportFactoryRegistryProvider { get; }
+
+    /// <summary>Optional HTTP factory transferred to transport composition for authenticated forwarding.</summary>
+    public ITransportFactory? OutboundHttpTransportFactory { get; }
 
     /// <summary>
     /// The canonical URL-opening service (#1172). Populated post-construction by <c>App.axaml.cs</c>
