@@ -347,6 +347,7 @@ public sealed class RemoteSplitSessionByokRoundTripTests
 
         chat.EnqueueUserMessage("cancel this turn");
         await setup.Session.ReadSentMessageAsync(TestToken());
+        await WaitForRunningTextAsync(chat, "partial-before-cancel");
         await chat.InterruptAsync();
         await cleared.WaitAsync(TestToken());
 
