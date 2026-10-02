@@ -5,6 +5,7 @@ using System.Net;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
+using Phantom.Workspaces.Transport;
 using Xunit;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
@@ -1000,6 +1001,38 @@ public sealed class ChatOutputHtmlRendererTests
         // <pre> body = remaining detail lines.
         Assert.Contains("chat-collapsible-body", html, StringComparison.Ordinal);
         Assert.Contains("System.Text.Json.JsonException: &#39;e&#39; is an invalid start of a value.", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ChatOutputHtmlRenderer_RemoteWorkerFailure_ShowsTypeMessageStackAndInnerCause()
+    {
+        var remote = new TransportErrorDetails
+        {
+            ExceptionType = "System.InvalidOperationException",
+            Message = "synthetic CLI startup failure",
+            StackTrace = "at Worker.StartAsync()",
+            Inner = new TransportErrorDetails
+            {
+                ExceptionType = "System.IO.IOException",
+                Message = "synthetic inner cause",
+            },
+        };
+        var error = new TransportException("Worker listener failed.", remote);
+        var html = ChatOutputHtmlRenderer.RenderContent(
+            "remote-error",
+            new ErrorContent($"Provider error: {error}"),
+            includeReasoning: false,
+            isDiagnostic: true,
+            isHelp: false);
+
+        Assert.NotNull(html);
+        Assert.Contains("chat-error", html);
+        Assert.Contains("<details", html);
+        Assert.Contains("System.InvalidOperationException", html);
+        Assert.Contains("synthetic CLI startup failure", html);
+        Assert.Contains("at Worker.StartAsync()", html);
+        Assert.Contains("System.IO.IOException", html);
+        Assert.Contains("synthetic inner cause", html);
     }
 
     [Fact]
