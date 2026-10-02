@@ -9,11 +9,15 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
+using GitHub.Copilot;
+using AgentSchema;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Web.Client;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.Copilot;
+using Phantom.Workspaces.Llm.Core.Manifest;
 using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Logging;
@@ -36,7 +40,7 @@ internal static class Program
 {
     private static async Task<int> Main(string[] args)
     {
-        if (args.Length != 9 || args[0] is not ("worker" or "caller"))
+        if (args.Length != 9 || args[0] is not ("worker" or "caller" or "worker-failure" or "caller-failure"))
             return 2;
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
         using var loggerFactory = LoggingBootstrap.CreateLoggerFactory(
@@ -55,12 +59,14 @@ internal static class Program
             http.DefaultRequestHeaders.TryAddWithoutValidation(
                 "X-Tunnel-Authorization", "tunnel " + ProcessAcceptanceCredentials.Token);
             using var data = new WebClientDataAccessLayer(args[1], http);
-            if (args[0] == "worker")
+            var startupFailure = args[0].EndsWith("-failure", StringComparison.Ordinal);
+            if (args[0].StartsWith("worker", StringComparison.Ordinal))
                 await RunWorkerAsync(data, session, args[1], args[5],
-                    loggerFactory, value => stage = value, timeout.Token);
+                    loggerFactory, value => stage = value, startupFailure, timeout.Token);
             else
                 await RunCallerAsync(session, args[4], args[1], args[5],
-                    new EntityId(args[6]), args[7], loggerFactory, value => stage = value, timeout.Token);
+                    new EntityId(args[6]), args[7], loggerFactory, value => stage = value,
+                    startupFailure, timeout.Token);
             return 0;
         }
         catch (Exception error)
@@ -74,7 +80,8 @@ internal static class Program
 
     private static async Task RunWorkerAsync(
         IDataAccessLayer data, WorkspaceEntitySession session, string hubUrl,
-        string liveUrl, ILoggerFactory loggerFactory, Action<string> reportStage, CancellationToken ct)
+        string liveUrl, ILoggerFactory loggerFactory, Action<string> reportStage,
+        bool startupFailure, CancellationToken ct)
     {
         reportStage("worker-registration");
         var chatClient = new DeterministicTestChatClient();
@@ -114,7 +121,11 @@ internal static class Program
         };
         await using var composition = new WorkspacesTransportComposition(
             data, session, loggerFactory, [hub, liveHub],
-            agentServices: new AgentServices { ChatClientOverride = chatClient },
+            agentServices: new AgentServices
+            {
+                ChatClientOverride = chatClient,
+                CopilotClientFactory = startupFailure ? new FailingFixtureCopilotFactory() : null,
+            },
             runningAgentChats: chats);
         await composition.StartAsync(ct);
         reportStage("worker-route-publication");
@@ -154,7 +165,7 @@ internal static class Program
     private static async Task RunCallerAsync(
         WorkspaceEntitySession session, string sessionId,
         string dataEndpoint, string listenUrl, EntityId workerProfile, string repositoryPath,
-        ILoggerFactory loggerFactory, Action<string> reportStage, CancellationToken ct)
+        ILoggerFactory loggerFactory, Action<string> reportStage, bool startupFailure, CancellationToken ct)
     {
         reportStage("caller-live-ingress");
         await using var liveHub = new ReverseHttpServerTransportFactory(
@@ -202,7 +213,8 @@ internal static class Program
             try
             {
                 await RunCallerTabAsync(
-                    session, sessionId, repositoryPath, dataEndpoint, loggerFactory, reportStage, ct);
+                    session, sessionId, repositoryPath, dataEndpoint, loggerFactory, reportStage,
+                    workerProfile, startupFailure, ct);
                 finished.TrySetResult();
             }
             catch (Exception error)
@@ -220,7 +232,8 @@ internal static class Program
 
     private static async Task RunCallerTabAsync(
         WorkspaceEntitySession session, string sessionId, string repositoryPath, string dataEndpoint,
-        ILoggerFactory loggerFactory, Action<string> reportStage, CancellationToken ct)
+        ILoggerFactory loggerFactory, Action<string> reportStage,
+        EntityId workerProfile, bool startupFailure, CancellationToken ct)
     {
         await using var factory = new AgentChatFactory(
             new InMemoryAgentPersistenceStore(), new AgentServices(),
@@ -331,6 +344,12 @@ internal static class Program
             || tab.Agent?.AgentChat is not RemoteAgentChat chat)
             throw new InvalidOperationException("Caller tab failed to open the persisted remote route.");
         Console.WriteLine("TAB Ready remote");
+        if (startupFailure)
+        {
+            await VerifyRemoteStartupFailureInCallerUiAsync(
+                window, workerProfile, loggerFactory, reportStage, ct);
+            return;
+        }
         var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         chat.TurnCompleted += OnCompleted;
         try
@@ -362,6 +381,107 @@ internal static class Program
                 .Any(content => content.Text == "worker-response"))
                 completed.TrySetResult();
         }
+    }
+
+    private static async Task VerifyRemoteStartupFailureInCallerUiAsync(
+        MainWindowViewModel window, EntityId workerProfile, ILoggerFactory loggerFactory,
+        Action<string> reportStage, CancellationToken ct)
+    {
+        using var descriptor = JsonDocument.Parse(JsonSerializer.Serialize(new Dictionary<string, string>
+        {
+            ["type"] = "user-computer-profile",
+            ["entity-id"] = workerProfile.ToString(),
+        }));
+        var services = new AgentServices
+        {
+            ExecutorBindings = new ExecutorBindings
+            {
+                Bindings = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+                {
+                    ["model-worker"] = descriptor.RootElement.Clone(),
+                },
+            },
+            ExecutorTransportFactoryRegistry = window.TransportComposition?.TransportFactoryRegistry
+                ?? throw new InvalidOperationException("Caller transport registry unavailable."),
+            LoggerFactory = loggerFactory,
+        };
+        await using var factory = new AgentChatFactory(
+            new InMemoryAgentPersistenceStore(), services,
+            TaskScheduler.FromCurrentSynchronizationContext());
+        var chats = new RunningAgentChatTable(factory);
+        var definition = AgentDefinition.FromJson(
+            """
+            {"kind":"prompt","name":"synthetic-split","model":{"id":"gpt-5","provider":"github-copilot",
+              "options":{"additionalProperties":{"executor":"model-worker"}}},
+              "instructions":"Fixture-only startup test.","tools":[]}
+            """);
+        await using var lease = await chats.AcquireAsync(new AcquireAgentChatRequest
+        {
+            AgentSessionId = new AgentSessionId("synthetic-split-startup"),
+            AgentDefinition = definition,
+            AgentServices = services,
+            EntityName = "Synthetic split startup",
+        }, ct);
+        using var uiLogs = new Phantom.Workspaces.Agent.Gui.ObservableLoggerFactory();
+        await using var ui = new Phantom.Workspaces.Agent.Gui.ViewModels.AgentViewModel(
+            new Phantom.Workspaces.Agent.Gui.ViewModels.AgentViewModelOptions
+            {
+                AgentChat = lease.AgentChat,
+                DisplayName = "Synthetic split startup",
+                Description = "Fixture",
+                LoggerFactory = uiLogs,
+                ForegroundScheduler = TaskScheduler.FromCurrentSynchronizationContext(),
+            });
+        var diagnostic = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnHistoryChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs args)
+        {
+            foreach (var item in ui.History)
+            {
+                if (item.Role != AgentChatHistoryItem.DiagnosticChatRole)
+                    continue;
+                var message = item.Contents.OfType<ErrorContent>().FirstOrDefault()?.Message;
+                if (message is not null)
+                    diagnostic.TrySetResult(message);
+            }
+        }
+        var historyChanges = (System.Collections.Specialized.INotifyCollectionChanged)ui.History;
+        historyChanges.CollectionChanged += OnHistoryChanged;
+        try
+        {
+            reportStage("caller-split-worker-start");
+            lease.LocalAgentChat.EnqueueUserMessage("synthetic-startup-prompt");
+            var message = await diagnostic.Task.WaitAsync(ct);
+            if (!message.Contains("System.InvalidOperationException", StringComparison.Ordinal)
+                || !message.Contains("Synthetic worker CLI start failed.", StringComparison.Ordinal)
+                || !message.Contains("System.IO.IOException", StringComparison.Ordinal)
+                || !message.Contains("Synthetic worker inner cause.", StringComparison.Ordinal)
+                || !message.Contains(nameof(FailingFixtureCopilotClient.StartAsync), StringComparison.Ordinal))
+                throw new InvalidOperationException("Caller chat UI did not display the detailed worker cause.");
+            Console.WriteLine("RESULT caller-ui startup-type-message-stack-inner");
+        }
+        finally
+        {
+            historyChanges.CollectionChanged -= OnHistoryChanged;
+        }
+    }
+
+    private sealed class FailingFixtureCopilotFactory : ICopilotClientFactory
+    {
+        public ICopilotClient Create(CopilotClientOptions options) => new FailingFixtureCopilotClient();
+    }
+
+    private sealed class FailingFixtureCopilotClient : ICopilotClient
+    {
+        public Task StartAsync(CancellationToken ct)
+            => throw new InvalidOperationException("Synthetic worker CLI start failed.",
+                new IOException("Synthetic worker inner cause."));
+        public Task<IReadOnlyList<ModelInfo>> ListModelsAsync(CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<ModelInfo>>([]);
+        public Task<ICopilotSession> CreateSessionAsync(SessionConfig config, CancellationToken ct)
+            => throw new NotSupportedException();
+        public Task<ICopilotSession> ResumeSessionAsync(string sessionId, ResumeSessionConfig config, CancellationToken ct)
+            => throw new NotSupportedException();
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class FixtureApplication : Application;

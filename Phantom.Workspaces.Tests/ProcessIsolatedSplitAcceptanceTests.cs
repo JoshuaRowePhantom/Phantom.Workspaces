@@ -34,6 +34,13 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
 
     [Fact]
     public async Task SplitMode_ExistingPersistedSessionOpenedAcrossProcesses_CompletesRealWorkerTurnWithoutLocalFallback()
+        => await RunSplitScenarioAsync(startupFailure: false);
+
+    [Fact]
+    public async Task SplitMode_WorkerStartupFails_DisplaysDetailedCauseOnCaller()
+        => await RunSplitScenarioAsync(startupFailure: true);
+
+    private static async Task RunSplitScenarioAsync(bool startupFailure)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(90));
@@ -91,10 +98,12 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
             Assert.Contains("401", websocketError.Message, StringComparison.Ordinal);
 
             var callerUrl = $"http://127.0.0.1:{FreePort()}";
-            await using var caller = StartRole("caller", url, User, Caller, callerUrl, Worker,
+            await using var caller = StartRole(startupFailure ? "caller-failure" : "caller",
+                url, User, Caller, callerUrl, Worker,
                 Path.Combine(directory, "entities"), callerLogs);
             Assert.Equal("READY caller", await caller.NextLineAsync(ct));
-            await using var worker = StartRole("worker", url, User, Worker, callerUrl, Worker,
+            await using var worker = StartRole(startupFailure ? "worker-failure" : "worker",
+                url, User, Worker, callerUrl, Worker,
                 Path.Combine(directory, "entities"), workerLogs);
             Assert.Equal("READY worker", await worker.NextLineAsync(ct));
             Assert.True(reverse.IsRegistered(Worker.ToString()));
@@ -121,12 +130,18 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
             Assert.Equal("TAB Loading", await caller.NextLineAsync(ct));
             Assert.Equal("TAB Failed transport-choice", await caller.NextLineAsync(ct));
             Assert.Equal("TAB Ready remote", await caller.NextLineAsync(ct));
-            Assert.Equal("RESULT persisted worker-response", await caller.NextLineAsync(ct));
+            Assert.Equal(startupFailure
+                    ? "RESULT caller-ui startup-type-message-stack-inner"
+                    : "RESULT persisted worker-response",
+                await caller.NextLineAsync(ct));
             Assert.Equal(0, await caller.WaitForExitAsync(ct));
             Assert.DoesNotContain(ProcessAcceptanceCredentials.Token, caller.CapturedError, StringComparison.Ordinal);
             Assert.True(reverse.IsRegistered(Worker.ToString()));
-            await worker.SendAsync("VERIFY", ct);
-            Assert.Equal("TURN worker", await worker.NextLineAsync(ct));
+            if (!startupFailure)
+            {
+                await worker.SendAsync("VERIFY", ct);
+                Assert.Equal("TURN worker", await worker.NextLineAsync(ct));
+            }
             Assert.DoesNotContain(ProcessAcceptanceCredentials.Token, worker.CapturedOutput, StringComparison.Ordinal);
             Assert.DoesNotContain(ProcessAcceptanceCredentials.Token, caller.CapturedOutput, StringComparison.Ordinal);
             await worker.SendAsync("STOP", ct);
@@ -169,7 +184,23 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
             Assert.Contains($"Reverse relay; attempt {retryAttempt}; stage relay-acceptance; outcome attached.", hubFile);
             Assert.Contains($"Reverse worker; attempt {retryAttempt}; stage worker-channel-open; outcome received.", workerFile);
             Assert.Contains($"Reverse worker; attempt {retryAttempt}; stage worker-listener; outcome accepted.", workerFile);
-            Assert.Contains("Worker turn; stage worker-turn; outcome request-verified.", workerFile);
+            if (startupFailure)
+            {
+                Assert.Contains("Remote Copilot worker startup failed;", workerFile);
+                Assert.Contains("System.InvalidOperationException: Synthetic worker CLI start failed.", workerFile);
+                Assert.Contains("System.IO.IOException: Synthetic worker inner cause.", workerFile);
+                Assert.Contains("FailingFixtureCopilotClient.StartAsync", workerFile);
+                var sdkAttempt = Regex.Match(callerFile,
+                    @"Remote Copilot lifecycle ([0-9a-f]{32}) caller open-start");
+                Assert.True(sdkAttempt.Success, "Caller did not start a split SDK session.");
+                Assert.Contains($"Remote Copilot lifecycle {sdkAttempt.Groups[1].Value} worker request-received", workerFile);
+                Assert.Contains($"Remote Copilot lifecycle {sdkAttempt.Groups[1].Value} worker cli-start-failed", workerFile);
+                Assert.DoesNotContain("stage worker-turn; outcome request-verified.", workerFile);
+            }
+            else
+            {
+                Assert.Contains("Worker turn; stage worker-turn; outcome request-verified.", workerFile);
+            }
             foreach (var log in new[] { callerFile, hubFile, workerFile })
             {
                 Assert.DoesNotContain(ProcessAcceptanceCredentials.Token, log, StringComparison.Ordinal);
@@ -182,7 +213,6 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
                     Assert.DoesNotContain(identifier.ToString(), log, StringComparison.OrdinalIgnoreCase);
             }
         }
-
         finally
         {
             foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
