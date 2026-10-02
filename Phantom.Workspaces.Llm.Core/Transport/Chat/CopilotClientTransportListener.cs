@@ -176,9 +176,17 @@ public sealed class CopilotClientTransportListener : ITransportListener
                 "Remote Copilot worker startup failed; attempt {Attempt}; stage {Stage}.",
                 correlationId, stage);
             exception.Data["Phantom.Workspaces.Transport.WorkerFailureLogged"] = true;
-            lifecycle.Fail("cli-start-failed",
-                stage == "policy-selection" ? "policy-selection-failed" : "cli-start-failed");
+            var policySelectionFailed = stage == "policy-selection";
+            lifecycle.Fail(policySelectionFailed ? "policy-selection-failed" : "cli-start-failed",
+                policySelectionFailed ? "policy-selection-failed" : "cli-start-failed");
             var cleanupFailures = await this.DisposeFailedLaunchAsync(client, selection, correlationId).ConfigureAwait(false);
+            if (policySelectionFailed)
+            {
+                var denial = new InvalidOperationException(
+                    "Remote Copilot launch was denied by host policy.");
+                denial.Data["Phantom.Workspaces.Transport.WorkerFailureLogged"] = true;
+                throw denial;
+            }
             if (cleanupFailures.Count > 0)
                 throw new AggregateException("Remote Copilot startup and cleanup failed.",
                     new[] { exception }.Concat(cleanupFailures));

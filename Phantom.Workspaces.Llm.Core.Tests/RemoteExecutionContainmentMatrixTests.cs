@@ -1,6 +1,7 @@
 using System.Text.Json;
 using AgentSchema;
 using GitHub.Copilot;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Phantom.Workspaces.Llm.Copilot;
 using Phantom.Workspaces.Llm.Core.Manifest;
@@ -158,6 +159,7 @@ public sealed class RemoteExecutionContainmentMatrixTests
     [Fact]
     public async Task ContainmentCompileFails_ReturnsSanitizedErrorAndDoesNotLaunch()
     {
+        using var logs = new ExceptionCapturingLoggerFactory();
         var clientFactory = new ExecutorRoutingTestHarness.RecordingClientFactory();
         var listener = new CopilotClientTransportListener(
             clientFactory,
@@ -165,7 +167,8 @@ public sealed class RemoteExecutionContainmentMatrixTests
             new RecordingCompiler(
                 requiresContainment: true,
                 failMessage: @"C:\secret\policy.json TOKEN=value --unsafe stderr"),
-            new CompilerInvokingRuntimeFactory());
+            new CompilerInvokingRuntimeFactory(),
+            loggerFactory: logs);
         await using var channel = new MatrixMessageChannel();
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
@@ -175,6 +178,10 @@ public sealed class RemoteExecutionContainmentMatrixTests
                 CancellationToken.None));
 
         Assert.Equal("Remote Copilot launch was denied by host policy.", exception.Message);
+        Assert.Null(exception.InnerException);
+        Assert.Contains(logs.Exceptions, error => error is InvalidOperationException
+            && error.Message.Contains("policy.json", StringComparison.Ordinal)
+            && error.StackTrace?.Contains(nameof(RecordingCompiler.Compile), StringComparison.Ordinal) == true);
         Assert.Equal(0, clientFactory.CreateCount);
     }
 
@@ -205,7 +212,7 @@ public sealed class RemoteExecutionContainmentMatrixTests
     }
 
     [Fact]
-    public async Task RemoteCopilot_ClientStartFailure_IsSanitizedAndDisposesSelection()
+    public async Task RemoteCopilot_ClientStartFailure_PreservesOriginalCauseAndDisposesSelection()
     {
         using var files = new MatrixRuntimeFiles();
         var handoff = Path.Combine(files.RemoteLaunchRoot, "unconsumed.json");
@@ -227,8 +234,8 @@ public sealed class RemoteExecutionContainmentMatrixTests
                 channel,
                 CancellationToken.None));
 
-        Assert.Equal("Remote Copilot launch was denied by host policy.", exception.Message);
-        Assert.DoesNotContain("secret", exception.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Same(clientFactory.Client.StartException, exception);
+        Assert.Contains("wrapper.exe --token sensitive", exception.Message, StringComparison.Ordinal);
         Assert.Equal(1, clientFactory.Client.DisposeCount);
         Assert.False(File.Exists(handoff));
     }
@@ -377,6 +384,26 @@ public sealed class RemoteExecutionContainmentMatrixTests
 
     private static MxcProcessPolicy CreatePolicy() =>
         CopilotRuntimeConnectionFactoryTests.CreatePolicy();
+
+    private sealed class ExceptionCapturingLoggerFactory : ILoggerFactory
+    {
+        public List<Exception> Exceptions { get; } = [];
+        public void AddProvider(ILoggerProvider provider) { }
+        public ILogger CreateLogger(string categoryName) => new CapturingLogger(this.Exceptions);
+        public void Dispose() { }
+
+        private sealed class CapturingLogger(List<Exception> exceptions) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+            public bool IsEnabled(LogLevel logLevel) => true;
+            public void Log<TState>(LogLevel level, EventId id, TState state, Exception? exception,
+                Func<TState, Exception?, string> formatter)
+            {
+                if (level == LogLevel.Error && exception is not null)
+                    exceptions.Add(exception);
+            }
+        }
+    }
 
     private sealed class FixedRuntimeFactory(string handoff) : ICopilotRuntimeConnectionFactory
     {

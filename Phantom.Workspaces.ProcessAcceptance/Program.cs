@@ -10,7 +10,6 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
 using GitHub.Copilot;
-using AgentSchema;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Web.Client;
 using Phantom.Workspaces.Configuration;
@@ -409,7 +408,7 @@ internal static class Program
             new InMemoryAgentPersistenceStore(), services,
             TaskScheduler.FromCurrentSynchronizationContext());
         var chats = new RunningAgentChatTable(factory);
-        var definition = AgentDefinition.FromJson(
+        var definition = PhantomAgentSchema.AgentDefinitionFromJson(
             """
             {"kind":"prompt","name":"synthetic-split","model":{"id":"gpt-5","provider":"github-copilot",
               "options":{"additionalProperties":{"executor":"model-worker"}}},
