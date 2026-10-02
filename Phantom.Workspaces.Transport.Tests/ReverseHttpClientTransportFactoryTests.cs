@@ -54,6 +54,8 @@ public sealed class ReverseHttpClientTransportFactoryTests
         await factory.RetryReachabilityPublicationAsync();
         Assert.True(factory.IsRegistered);
         Assert.Equal(1, logs.Entries.Count(entry => entry.Message.Contains("publication-failed")));
+        Assert.Contains(logs.Entries, entry => entry.Message.Contains("network protection"));
+        Assert.DoesNotContain(logs.Entries, entry => entry.Message.Contains("verify TLS"));
         Assert.DoesNotContain(logs.Entries, entry => entry.Message.Contains("publication-recovered"));
         Assert.DoesNotContain(logs.Entries, entry => entry.Message.Contains("hub.example"));
     }

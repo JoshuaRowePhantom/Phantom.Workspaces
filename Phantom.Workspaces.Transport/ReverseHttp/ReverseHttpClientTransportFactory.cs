@@ -331,7 +331,7 @@ public sealed class ReverseHttpClientTransportFactory : ITransportFactory
             || previous.GetType() != exception.GetType()))
         {
             this.logger.LogWarning(
-                "Reachability publication-failed; boundary {Boundary}; stage {Stage}; reason {Reason}; field {Field}; exception-type {ExceptionType}; attempt {Attempt}; outcome {Outcome}; registration-active {RegistrationActive}; persisted {Persisted}; cleanup {Cleanup}. Configure a caller-reachable secure advertised hub and verify TLS, authentication and caller access.",
+                "Reachability publication-failed; boundary {Boundary}; stage {Stage}; reason {Reason}; field {Field}; exception-type {ExceptionType}; attempt {Attempt}; outcome {Outcome}; registration-active {RegistrationActive}; persisted {Persisted}; cleanup {Cleanup}. Configure a caller-reachable advertised hub and verify its network protection, authentication and caller access.",
                 "route-publication", status.Stage, status.ReasonCode, status.Field, status.ExceptionType,
                 status.Attempt, status.Outcome, status.RegistrationActive, status.Persisted, status.Cleanup);
         }
