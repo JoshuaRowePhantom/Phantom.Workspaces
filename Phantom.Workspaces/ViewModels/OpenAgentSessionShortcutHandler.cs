@@ -181,6 +181,21 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         var stage = "service-initialization";
         var correlation = SessionAttachDiagnosticScope.CurrentAttempt!;
         var started = this.timeProvider.GetTimestamp();
+        TimeSpan? remainingAtDecision = null;
+        void SetWaitingForOwnerDecision(bool waiting)
+        {
+            if (waiting)
+            {
+                remainingAtDecision = this.loadingDeadline - this.timeProvider.GetElapsedTime(started);
+                timer.CancelAfter(Timeout.InfiniteTimeSpan);
+            }
+            else
+            {
+                timer.CancelAfter(remainingAtDecision
+                    ?? throw new InvalidOperationException("The owner decision was not started."));
+                remainingAtDecision = null;
+            }
+        }
         var logger = mainWindowViewModel.ApplicationServices.LoggerFactory
             .CreateLogger<OpenAgentSessionShortcutHandler>();
         void ReportStage(string next)
@@ -195,7 +210,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             ReportStage(stage);
             result = await this.TryBuildAgentAsync(
                 mainWindowViewModel, agentSessionEntity, tab, foregroundScheduler,
-                deadline.Token, ReportStage);
+                deadline.Token, ReportStage, SetWaitingForOwnerDecision);
             deadline.Token.ThrowIfCancellationRequested();
             ReportStage("ready-publication");
             await this.AwaitStageAsync(_ => this.invokeOnUiThreadAsync(() =>
@@ -656,7 +671,8 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         AgentSessionWorkspaceTabViewModel tab,
         TaskScheduler foregroundScheduler,
         CancellationToken ct = default,
-        Action<string>? reportStage = null)
+        Action<string>? reportStage = null,
+        Action<bool>? setWaitingForOwnerDecision = null)
     {
         if (agentSessionEntity.Data is not JsonElement agentSessionEntityData
             || !agentSessionEntityData.TryGetProperty("agent-session-id", out var agentSessionIdElement)
@@ -699,7 +715,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             mainWindowViewModel,
             agentSessionEntityData,
             AgentSessionOpenIntent.StartOrAttach,
-            ct, reportStage);
+            ct, reportStage, setWaitingForOwnerDecision);
         tab.SetRemoteProfileDisplayName(acquisition.RemoteProfileDisplayName);
 
         reportStage?.Invoke("remote-flight-chat-acquisition");
@@ -790,7 +806,8 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         JsonElement agentSessionEntity,
         AgentSessionOpenIntent openIntent,
         CancellationToken ct,
-        Action<string>? reportStage = null)
+        Action<string>? reportStage = null,
+        Action<bool>? setWaitingForOwnerDecision = null)
     {
         if (!agentSessionEntity.TryGetProperty("ownership-generation", out _)
             || !agentSessionEntity.TryGetProperty("host-profile-entity-id", out var ownerElement)
@@ -823,7 +840,8 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             stageToken => registry.ConnectToAsync(descriptor.RootElement, stageToken),
             ct, "transport-choice", async late => await late.DisposeAsync(), reportStage);
         var acquisition = await this.ResolveRemoteOwnerAsync(
-            agentSessionEntity, owner, localOwner.Value, transport, openIntent, ct, reportStage);
+            agentSessionEntity, owner, localOwner.Value, transport, openIntent, ct,
+            reportStage, setWaitingForOwnerDecision);
         return (
             acquisition.Mode,
             acquisition.Transport,
@@ -859,7 +877,8 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         Phantom.Workspaces.Transport.ITransport transport,
         AgentSessionOpenIntent openIntent,
         CancellationToken ct,
-        Action<string>? reportStage = null)
+        Action<string>? reportStage = null,
+        Action<bool>? setWaitingForOwnerDecision = null)
     {
         var transferTransport = false;
         try
@@ -884,9 +903,17 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
                 },
                 ct, this.stageDeadline, this.timeProvider, reportStage);
             reportStage?.Invoke("owner-decision");
-            var decision = await this.AwaitStageAsync(stageToken => this.ownerDecisionProvider.ChooseAsync(
-                new AgentSessionOwnerDecisionContext(status, owner.ToString("D")), stageToken),
-                ct, "owner-decision");
+            setWaitingForOwnerDecision?.Invoke(true);
+            AgentSessionOwnerDecision decision;
+            try
+            {
+                decision = await this.ownerDecisionProvider.ChooseAsync(
+                    new AgentSessionOwnerDecisionContext(status, owner.ToString("D")), ct);
+            }
+            finally
+            {
+                setWaitingForOwnerDecision?.Invoke(false);
+            }
             if (decision == AgentSessionOwnerDecision.ConnectOnOwner)
             {
                 transferTransport = true;

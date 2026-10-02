@@ -27,7 +27,7 @@ namespace Phantom.Workspaces.Tests;
 public sealed class OpenAgentSessionShortcutHandlerTests
 {
     [AvaloniaFact(Timeout = 30_000)]
-    public async Task Handle_RemoteStatusStalls_FailsAtStatusStageAndRetriesWithoutLateReady()
+    public async Task Handle_RemoteStatusStalls_RetriesAndAllowsOwnerDecisionBeyondLoadingDeadline()
     {
         await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
@@ -67,6 +67,7 @@ public sealed class OpenAgentSessionShortcutHandlerTests
         var clock = new FakeTimeProvider();
         var stalled = new StalledStatusTransport();
         var retryTransport = new OwnerDecisionTransport(AgentSessionRemoteStatus.Running);
+        var choices = new CompletableOwnerDecisionProvider();
         var attempts = 0;
         var registry = new Moq.Mock<ITransportFactoryRegistry>();
         registry.Setup(value => value.ConnectToAsync(
@@ -79,7 +80,7 @@ public sealed class OpenAgentSessionShortcutHandlerTests
             new AgentSessionShortcutContext(),
             MainWindowIntegrationTests.CreateLocalTrustedExecutorSelector(),
             MainWindowIntegrationTests.CreateTestRunningAgentChatTable(),
-            new RecordingOwnerDecisionProvider(AgentSessionOwnerDecision.ResumeLocally),
+            choices,
             registry.Object,
             callback =>
             {
@@ -104,6 +105,10 @@ public sealed class OpenAgentSessionShortcutHandlerTests
             JsonDocument.Parse("""{"type":"late-status"}""").RootElement.Clone()));
         Assert.Null(tab.Lease);
         Assert.True(await handler.Handle(viewModel, Shortcut.Open, session!));
+        await choices.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
+        clock.Advance(TimeSpan.FromSeconds(40));
+        Assert.Equal(AgentTabState.Loading, tab.State);
+        choices.Complete(AgentSessionOwnerDecision.ResumeLocally);
         await ready.Task.WaitAsync(TestContext.Current.CancellationToken);
         Assert.Equal(AgentTabState.Ready, tab.State);
         Assert.Equal(2, attempts);
@@ -838,6 +843,24 @@ public sealed class OpenAgentSessionShortcutHandlerTests
             await cancelled.Task;
             ct.ThrowIfCancellationRequested();
             throw new InvalidOperationException("The cancellation token should have stopped the decision.");
+        }
+    }
+
+    private sealed class CompletableOwnerDecisionProvider : IAgentSessionOwnerDecisionProvider
+    {
+        internal TaskCompletionSource Started { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<AgentSessionOwnerDecision> choice =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal void Complete(AgentSessionOwnerDecision decision) => this.choice.SetResult(decision);
+
+        public async Task<AgentSessionOwnerDecision> ChooseAsync(
+            AgentSessionOwnerDecisionContext context,
+            CancellationToken ct)
+        {
+            this.Started.TrySetResult();
+            return await this.choice.Task.WaitAsync(ct);
         }
     }
 
