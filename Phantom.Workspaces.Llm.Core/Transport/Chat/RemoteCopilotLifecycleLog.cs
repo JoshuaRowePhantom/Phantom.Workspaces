@@ -65,7 +65,8 @@ internal sealed class RemoteCopilotLifecycleLog
     private static string SafeErrorCategory(string category) => category switch
     {
         "none" or "cancelled" or "timeout" or "transport" or "transport-cancelled"
-            or "open-failed" or "invalid-envelope" or "launch-denied"
+            or "open-failed" or "invalid-envelope" or "launch-denied" or "cli-start-failed"
+            or "policy-selection-failed"
             or "provider-unavailable" or "sdk-create" or "sdk-operation"
             or "remote-error" or "tool-failed" or "other" => category,
         _ => "other",

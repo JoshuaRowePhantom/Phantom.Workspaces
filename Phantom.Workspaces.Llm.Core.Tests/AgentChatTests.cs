@@ -6,6 +6,7 @@ using Moq;
 using MongoDB.Bson;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Secrets;
+using Phantom.Workspaces.Transport;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
@@ -1462,6 +1463,32 @@ public sealed class AgentChatTests
                 item.Contents.OfType<ErrorContent>().Any());
         var error = Assert.Single(diagnosticErrorTurn.Contents.OfType<ErrorContent>());
         Assert.Contains("budget limit", error.Message);
+    }
+
+    [Fact]
+    public async Task ProviderException_RemoteWorkerCause_IsVisibleInDiagnosticErrorContent()
+    {
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueException(new TransportException("Worker listener could not open.",
+            TransportErrorDetails.FromException(new InvalidOperationException(
+                "synthetic worker failure", new ArgumentException("synthetic inner cause")))));
+        await using var chat = CreateChat(client);
+
+        chat.EnqueueUserMessage("hello");
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Any(item => item.Role == AgentChatHistoryItem.DiagnosticChatRole
+                && item.Contents.OfType<ErrorContent>().Any()),
+            "remote worker failure to appear in caller chat");
+
+        var diagnostic = Assert.Single(chat.History, item =>
+            item.Role == AgentChatHistoryItem.DiagnosticChatRole
+            && item.Contents.OfType<ErrorContent>().Any());
+        var message = Assert.Single(diagnostic.Contents.OfType<ErrorContent>()).Message;
+        Assert.Contains("InvalidOperationException", message);
+        Assert.Contains("synthetic worker failure", message);
+        Assert.Contains("synthetic inner cause", message);
     }
 
     [Fact]

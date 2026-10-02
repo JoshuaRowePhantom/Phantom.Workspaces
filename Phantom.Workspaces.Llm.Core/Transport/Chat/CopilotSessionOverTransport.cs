@@ -308,7 +308,8 @@ internal sealed class CopilotSessionOverTransport : ICopilotSession
         }
         catch (Exception exception)
         {
-            failure = exception;
+            failure = exception is ChannelClosedException { InnerException: { } cause }
+                ? cause : exception;
         }
         finally
         {
@@ -642,6 +643,7 @@ internal sealed class CopilotSessionOverTransport : ICopilotSession
                 },
                 Message = errorCategory switch
                 {
+                    _ when exception is TransportException { RemoteError: not null } => exception.Message,
                     "timeout" => "The remote Copilot session timed out before a terminal event.",
                     "provider-unavailable" => "The remote Copilot provider is unavailable.",
                     "sdk-create" => "The remote Copilot session could not be created or resumed.",

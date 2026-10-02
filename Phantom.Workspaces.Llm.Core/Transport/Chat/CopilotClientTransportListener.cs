@@ -6,6 +6,7 @@ using Phantom.Workspaces.Llm.Copilot;
 using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Transport;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.AI;
 using System.Collections.Concurrent;
 
@@ -35,6 +36,8 @@ public sealed class CopilotClientTransportListener : ITransportListener
     private readonly ICopilotRuntimeConnectionFactory runtimeConnectionFactory;
     private readonly IRemoteCopilotProviderResolver? providerResolver;
     private readonly ILoggerFactory? loggerFactory;
+    private ILogger Logger => this.loggerFactory?.CreateLogger<CopilotClientTransportListener>()
+        ?? NullLogger<CopilotClientTransportListener>.Instance;
 
     public CopilotClientTransportListener(AgentServices? agentServices = null)
     {
@@ -120,6 +123,7 @@ public sealed class CopilotClientTransportListener : ITransportListener
 
         CopilotRuntimeConnectionLease? selection = null;
         ICopilotClient? client = null;
+        var stage = "policy-selection";
         try
         {
             if (profileReference is not null)
@@ -144,10 +148,13 @@ public sealed class CopilotClientTransportListener : ITransportListener
                 Mode = CopilotClientMode.CopilotCli,
                 Connection = selection?.Connection,
             };
+            stage = "client-creation";
             client = this.clientFactory.Create(options);
+            stage = "cli-start";
             lifecycle.Confirm("cli-start-started", "started");
             await client.StartAsync(ct).ConfigureAwait(false);
             lifecycle.Confirm("cli-start-succeeded");
+            stage = "session-host";
             return new CopilotSessionTransportHost(
                 client,
                 channel,
@@ -160,32 +167,45 @@ public sealed class CopilotClientTransportListener : ITransportListener
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             lifecycle.Cancel("cli-start-cancelled");
-            await DisposeFailedLaunchAsync(client, selection).ConfigureAwait(false);
+            _ = await this.DisposeFailedLaunchAsync(client, selection, correlationId).ConfigureAwait(false);
             throw;
         }
-        catch
+        catch (Exception exception)
         {
-            lifecycle.Fail("cli-start-failed", "launch-denied");
-            await DisposeFailedLaunchAsync(client, selection).ConfigureAwait(false);
-            throw new InvalidOperationException(
-                "Remote Copilot launch was denied by host policy.");
+            this.Logger.LogError(exception,
+                "Remote Copilot worker startup failed; attempt {Attempt}; stage {Stage}.",
+                correlationId, stage);
+            exception.Data["Phantom.Workspaces.Transport.WorkerFailureLogged"] = true;
+            lifecycle.Fail("cli-start-failed",
+                stage == "policy-selection" ? "policy-selection-failed" : "cli-start-failed");
+            var cleanupFailures = await this.DisposeFailedLaunchAsync(client, selection, correlationId).ConfigureAwait(false);
+            if (cleanupFailures.Count > 0)
+                throw new AggregateException("Remote Copilot startup and cleanup failed.",
+                    new[] { exception }.Concat(cleanupFailures));
+            throw;
         }
     }
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
-    private static async Task DisposeFailedLaunchAsync(
+    private async Task<List<Exception>> DisposeFailedLaunchAsync(
         ICopilotClient? client,
-        CopilotRuntimeConnectionLease? selection)
+        CopilotRuntimeConnectionLease? selection,
+        string correlationId)
     {
+        var failures = new List<Exception>();
         if (client is not null)
         {
             try
             {
                 await client.DisposeAsync().ConfigureAwait(false);
             }
-            catch
+            catch (Exception exception)
             {
+                this.Logger.LogError(exception,
+                    "Remote Copilot worker cleanup failed; attempt {Attempt}; stage client-dispose.",
+                    correlationId);
+                failures.Add(exception);
             }
         }
 
@@ -195,10 +215,15 @@ public sealed class CopilotClientTransportListener : ITransportListener
             {
                 await selection.DisposeAsync().ConfigureAwait(false);
             }
-            catch
+            catch (Exception exception)
             {
+                this.Logger.LogError(exception,
+                    "Remote Copilot worker cleanup failed; attempt {Attempt}; stage lease-dispose.",
+                    correlationId);
+                failures.Add(exception);
             }
         }
+        return failures;
     }
 
     /// <summary>Serves a single channel: reads client request frames and drives a local SDK session.</summary>

@@ -350,18 +350,20 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
                 new KeyValuePair<string, DispatchedChannel>(channelId, pending.Channel));
             pending.Channel.CompleteIncoming();
         }
-        catch (Exception)
+        catch (Exception exception)
         {
-            this.logger.LogWarning(
-                "Reverse worker; attempt {Attempt}; stage worker-listener; outcome failed.",
-                diagnosticAttempt ?? "none");
+            if (exception.Data["Phantom.Workspaces.Transport.WorkerFailureLogged"] is not true)
+                this.logger.LogError(exception,
+                    "Reverse worker; attempt {Attempt}; stage worker-listener; outcome failed.",
+                    diagnosticAttempt ?? "none");
             this.channels.TryRemove(
                 new KeyValuePair<string, DispatchedChannel>(channelId, pending.Channel));
             pending.Channel.CompleteIncoming();
             await this.SendChannelOpenErrorAsync(
                     channelId,
                     "listener-error",
-                    "The remote channel listener failed to open the channel.")
+                    "The remote channel listener failed to open the channel.",
+                    exception)
                 .ConfigureAwait(false);
         }
         finally
@@ -441,17 +443,36 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
         }
     }
 
-    private async Task SendChannelOpenErrorAsync(string channelId, string code, string message)
+    private async Task SendChannelOpenErrorAsync(string channelId, string code, string message, Exception? cause = null)
     {
         try
         {
-            using var document = JsonDocument.Parse(JsonSerializer.Serialize(
-                new Dictionary<string, string>
+            TransportErrorDetails? details = null;
+            if (cause is not null)
+            {
+                try
+                {
+                    details = TransportErrorDetails.FromException(cause);
+                }
+                catch (Exception encodingError)
+                {
+                    this.logger.LogError(encodingError,
+                        "Reverse worker; stage channel-error-encoding; outcome fallback.");
+                    details = new TransportErrorDetails
+                    {
+                        ExceptionType = cause.GetType().FullName ?? "Exception",
+                        Message = "The worker exception could not be encoded.",
+                    };
+                }
+            }
+            // Preserve the original wire names for older peers.
+            using var document = JsonDocument.Parse(JsonSerializer.Serialize(new Dictionary<string, object?>
             {
                 ["type"] = "channel-open-error",
                 ["channelId"] = channelId,
                 ["error-code"] = code,
-                ["message"] = message,
+                ["message"] = cause is null ? message : $"{message} {details!.ExceptionType}: {details.Message}",
+                ["error-details"] = details,
             }));
             await this.registrationChannel.Writer.WriteAsync(document.RootElement.Clone()).ConfigureAwait(false);
         }

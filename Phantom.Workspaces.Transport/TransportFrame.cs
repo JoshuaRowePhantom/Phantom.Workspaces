@@ -50,6 +50,9 @@ public sealed record TransportFrame
     [JsonPropertyName("message")]
     public string? Message { get; init; }
 
+    [JsonPropertyName("error-details")]
+    public TransportErrorDetails? ErrorDetails { get; init; }
+
     /// <summary>
     /// Connection request (for channel-open and stream-open frames).
     /// </summary>

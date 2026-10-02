@@ -165,12 +165,15 @@ public sealed class ReverseHttpTransport : ITransport
                         ? legacyCodeProperty.GetString()
                         : null;
                 var message = frame.TryGetProperty("message", out var messageProperty) ? messageProperty.GetString() : null;
-                var error = new TransportException(
-                    message ?? $"Reverse HTTP relay rejected the connection: {code ?? "unknown"}.");
-                if (TryGetChannelId(frame, out var rejectedChannelId)
-                    && this.channels.TryRemove(rejectedChannelId, out var rejectedChannel))
+                var display = message ?? $"Reverse HTTP relay rejected the connection: {code ?? "unknown"}.";
+                var details = TransportErrorDetails.Read(frame);
+                var error = details is null
+                    ? new TransportException(display)
+                    : new TransportException(display, details);
+                if (TryGetChannelId(frame, out var rejectedChannelId))
                 {
-                    rejectedChannel.CompleteIncoming(error);
+                    if (this.channels.TryRemove(rejectedChannelId, out var rejectedChannel))
+                        rejectedChannel.CompleteIncoming(error);
                 }
                 else
                 {

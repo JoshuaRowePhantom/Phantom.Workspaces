@@ -7,6 +7,58 @@ namespace Phantom.Workspaces.Transport.Tests;
 public sealed class ReverseHttpTransportTests
 {
     [Fact]
+    public async Task ReverseHttpTransport_ChannelOpenErrorWithDetails_PropagatesCauseToMatchingCallerChannel()
+    {
+        await using var underlying = new UnderlyingChannel();
+        await using var transport = new ReverseHttpTransport(underlying);
+        var rejected = await transport.ConnectToMessageChannelAsync(Json("""{"type":"chat-client"}"""), Ct());
+        var surviving = await transport.ConnectToMessageChannelAsync(Json("""{"type":"chat-client"}"""), Ct());
+        var id = (await underlying.Outbound.ReadAsync(Ct())).GetProperty("channelId").GetString();
+        var otherId = (await underlying.Outbound.ReadAsync(Ct())).GetProperty("channelId").GetString();
+        var error = JsonSerializer.SerializeToElement(new Dictionary<string, object?>
+        {
+            ["type"] = "channel-open-error",
+            ["channelId"] = id,
+            ["error-code"] = "listener-error",
+            ["message"] = "worker failed",
+            ["error-details"] = TransportErrorDetails.FromException(
+                CaptureFailure(new InvalidOperationException("startup cause",
+                    new ArgumentException("inner cause")))),
+        });
+        await underlying.DeliverInbound(error);
+        var channelFailure = await Assert.ThrowsAsync<ChannelClosedException>(
+            async () => await rejected.Reader.ReadAsync(Ct()));
+        var failure = Assert.IsType<TransportException>(channelFailure.InnerException);
+        Assert.Contains("InvalidOperationException", failure.Message);
+        Assert.Contains("startup cause", failure.Message);
+        Assert.Contains("inner cause", failure.Message);
+        Assert.Contains(nameof(CaptureFailure), failure.Message);
+        Assert.Equal("inner cause", failure.RemoteError?.Inner?.Message);
+        Assert.False(surviving.Reader.Completion.IsCompleted);
+        await underlying.DeliverInbound(ChannelMessage(otherId!, """{"marker":"alive"}"""));
+        Assert.Equal("alive", (await surviving.Reader.ReadAsync(Ct())).GetProperty("marker").GetString());
+        await underlying.DeliverInbound(Json("""{"type":"channel-open-error","channelId":"unknown","message":"late"}"""));
+        Assert.False(surviving.Reader.Completion.IsCompleted);
+    }
+
+    [Fact]
+    public async Task ReverseHttpTransport_LegacyChannelOpenError_PreservesMessageAndRelayBehavior()
+    {
+        await using var underlying = new UnderlyingChannel();
+        await using var transport = new ReverseHttpTransport(underlying);
+        await underlying.DeliverInbound(Json("""{"type":"channel-open-error","errorCode":"not-registered","message":"legacy relay error"}"""));
+        var failure = await Assert.ThrowsAsync<TransportException>(
+            () => transport.WaitForRelayEstablishedAsync(Ct()));
+        Assert.Equal("legacy relay error", failure.Message);
+        Assert.Null(failure.RemoteError);
+    }
+
+    private static Exception CaptureFailure(Exception exception)
+    {
+        try { throw exception; }
+        catch (Exception caught) { return caught; }
+    }
+    [Fact]
     public async Task ReverseHttpTransport_RelayedRoundTrip_ReceivesResponseFrames()
     {
         await using var underlying = new UnderlyingChannel();

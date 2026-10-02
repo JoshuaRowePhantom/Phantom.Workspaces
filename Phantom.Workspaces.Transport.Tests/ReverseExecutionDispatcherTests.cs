@@ -12,6 +12,52 @@ namespace Phantom.Workspaces.Transport.Tests;
 public sealed class ReverseExecutionDispatcherTests
 {
     [Fact]
+    public async Task ExecutorDispatcher_ChannelListenerThrows_LogsExceptionAndSendsDetailedChannelOpenError()
+    {
+        await using var underlying = new UnderlyingChannel();
+        using var logs = new CapturingLoggerFactory();
+        var original = new InvalidOperationException("worker startup failed",
+            new ArgumentException("nested cause"));
+        var registry = new TransportRegistry();
+        registry.Register(new FakeListener { ThrowOnChannelOpen = original });
+        await using var dispatcher = new ReverseExecutionDispatcher(underlying, registry, loggerFactory: logs);
+
+        await underlying.DeliverInbound(Json("""{"type":"channel-open","channelId":"ch1","request":{"type":"test"}}"""));
+        var error = await underlying.Outbound.ReadAsync(Ct());
+
+        Assert.Equal("ch1", error.GetProperty("channelId").GetString());
+        Assert.Equal("listener-error", error.GetProperty("error-code").GetString());
+        var details = error.GetProperty("error-details");
+        Assert.Contains("InvalidOperationException", details.GetProperty("exception-type").GetString());
+        Assert.Equal("worker startup failed", details.GetProperty("message").GetString());
+        Assert.Equal("nested cause", details.GetProperty("inner").GetProperty("message").GetString());
+        Assert.Contains(logs.Entries, entry => ReferenceEquals(original, entry.Exception)
+            && entry.Level == Microsoft.Extensions.Logging.LogLevel.Error
+            && entry.Message.Contains("worker-listener"));
+    }
+
+    [Fact]
+    public async Task ExecutorDispatcher_ExceptionDetailsCannotBeEncoded_SendsBoundedFallback()
+    {
+        await using var underlying = new UnderlyingChannel();
+        using var logs = new CapturingLoggerFactory();
+        var registry = new TransportRegistry();
+        registry.Register(new FakeListener { ThrowOnChannelOpen = new UnencodableException() });
+        await using var dispatcher = new ReverseExecutionDispatcher(underlying, registry, loggerFactory: logs);
+        await underlying.DeliverInbound(Json("""{"type":"channel-open","channelId":"fallback","request":{}}"""));
+        var error = await underlying.Outbound.ReadAsync(Ct());
+        Assert.Equal("listener-error", error.GetProperty("error-code").GetString());
+        Assert.Equal("The worker exception could not be encoded.",
+            error.GetProperty("error-details").GetProperty("message").GetString());
+        Assert.Contains(logs.Entries, entry => entry.Exception is UnencodableException);
+        Assert.Contains(logs.Entries, entry => entry.Message.Contains("channel-error-encoding"));
+    }
+
+    private sealed class UnencodableException : Exception
+    {
+        public override string Message => throw new InvalidOperationException("bad message getter");
+    }
+    [Fact]
     public async Task ExecutorDispatcher_RegistrationInfoRoutePublicationRejected_ContinuesDispatchingChannelOpen()
     {
         await using var underlying = new UnderlyingChannel();

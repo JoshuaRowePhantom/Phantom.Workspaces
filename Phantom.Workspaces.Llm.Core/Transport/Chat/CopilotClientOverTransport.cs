@@ -113,22 +113,20 @@ internal sealed class CopilotClientOverTransport : ICopilotClient
             lifecycle.Cancel("open-cancelled");
             throw;
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException exception)
         {
             lifecycle.Fail("open-failed", "transport-cancelled");
-            throw new TransportException("The remote Copilot channel could not be opened.");
+            throw new TransportException("The remote Copilot channel could not be opened.", exception);
         }
-        catch (TimeoutException)
+        catch (TimeoutException exception)
         {
             lifecycle.Fail("open-failed", "timeout");
-            throw new TimeoutException(
-                "The remote Copilot channel open timed out.");
+            throw new TimeoutException("The remote Copilot channel open timed out.", exception);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             lifecycle.Fail("open-failed", Categorize(exception));
-            throw new TransportException(
-                "The remote Copilot channel could not be opened.");
+            throw;
         }
     }
 

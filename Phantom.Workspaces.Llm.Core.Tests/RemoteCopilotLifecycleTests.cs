@@ -7,14 +7,163 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Llm.Core.Transport.Chat;
+using Phantom.Workspaces.Llm.Copilot;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.Local;
+using Phantom.Workspaces.Transport.ReverseHttp;
 using Phantom.Workspaces.Llm.Core.Manifest;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
 public sealed class RemoteCopilotLifecycleTests
 {
+    [Fact]
+    public async Task CopilotClientTransportListener_StartAsyncFails_LogsOriginalExceptionAndPreservesRemoteCause()
+    {
+        using var logs = new LifecycleLoggerFactory();
+        var factory = new ExecutorRoutingTestHarness.RecordingClientFactory();
+        var original = CaptureFailure(new InvalidOperationException(
+            "synthetic CLI failure", new ArgumentException("synthetic inner failure")));
+        factory.Client.StartException = original;
+        var listener = new CopilotClientTransportListener(new AgentServices
+        {
+            CopilotClientFactory = factory, LoggerFactory = logs,
+        });
+        await using var channel = new SplitMessageChannel();
+        var attempt = Guid.NewGuid().ToString("N");
+        var caught = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => listener.OnChannelOpenAsync(
+                CopilotSessionTransportFrames.BuildConnectionRequest(correlationId: attempt),
+                channel, TestToken()));
+        Assert.Same(original, caught);
+        Assert.Contains(logs.Entries, entry => ReferenceEquals(original, entry.CapturedException)
+            && entry.Level == LogLevel.Error && entry.Message.Contains(attempt)
+            && entry.Message.Contains("stage cli-start"));
+        Assert.Contains(nameof(CaptureFailure), caught.StackTrace);
+        Assert.Contains(logs.Entries, entry => entry.Stage == "cli-start-failed"
+            && entry.ErrorCategory == "cli-start-failed");
+    }
+
+    private static Exception CaptureFailure(Exception failure)
+    {
+        try { throw failure; }
+        catch (Exception caught) { return caught; }
+    }
+
+    [Fact]
+    public async Task CopilotClientTransportListener_StartAsyncAndCleanupFail_LogsBothAndPreservesStartFailure()
+    {
+        var start = new InvalidOperationException("synthetic start cause");
+        var cleanup = new IOException("synthetic cleanup cause");
+        using var logs = new LifecycleLoggerFactory();
+        var listener = new CopilotClientTransportListener(new AgentServices
+        {
+            CopilotClientFactory = new FailingCleanupClientFactory(start, cleanup),
+            LoggerFactory = logs,
+        });
+        await using var channel = new SplitMessageChannel();
+        var failure = await Assert.ThrowsAsync<AggregateException>(
+            () => listener.OnChannelOpenAsync(
+                CopilotSessionTransportFrames.BuildConnectionRequest(),
+                channel, TestToken()));
+        Assert.Same(start, failure.InnerExceptions[0]);
+        Assert.Same(cleanup, failure.InnerExceptions[1]);
+        Assert.Contains(logs.Entries, entry => ReferenceEquals(start, entry.CapturedException)
+            && entry.Level == LogLevel.Error && entry.Stage == "cli-start");
+        Assert.Contains(logs.Entries, entry => ReferenceEquals(cleanup, entry.CapturedException)
+            && entry.Level == LogLevel.Error && entry.Message.Contains("stage client-dispose"));
+        var details = TransportErrorDetails.FromException(failure);
+        Assert.Equal("synthetic start cause", details.Inner?.Message);
+        Assert.Equal("synthetic cleanup cause", Assert.Single(details.Secondary!).Message);
+        Assert.Contains("synthetic cleanup cause", details.Format());
+    }
+
+    private sealed class FailingCleanupClientFactory(Exception start, Exception cleanup) : ICopilotClientFactory
+    {
+        public ICopilotClient Create(CopilotClientOptions options) => new FailingCleanupClient(start, cleanup);
+    }
+
+    private sealed class FailingCleanupClient(Exception start, Exception cleanup) : ICopilotClient
+    {
+        public Task StartAsync(CancellationToken cancellationToken) => Task.FromException(start);
+        public Task<IReadOnlyList<ModelInfo>> ListModelsAsync(CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<ModelInfo>>([]);
+        public Task<ICopilotSession> CreateSessionAsync(SessionConfig config, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+        public Task<ICopilotSession> ResumeSessionAsync(string sessionId, ResumeSessionConfig config,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+        public ValueTask DisposeAsync() => ValueTask.FromException(cleanup);
+    }
+
+    [Fact]
+    public async Task RemoteCopilotLifecycle_RemoteStartupFails_PreservesDetailedCauseAtCaller()
+    {
+        var cause = new InvalidOperationException("synthetic worker startup",
+            new ArgumentException("synthetic inner cause"));
+        var sdk = new ExecutorRoutingTestHarness.RecordingClientFactory();
+        sdk.Client.StartException = cause;
+        using var workerLogs = new LifecycleLoggerFactory();
+        using var callerLogs = new LifecycleLoggerFactory();
+        var registry = new TransportRegistry();
+        registry.Register(new CopilotClientTransportListener(new AgentServices
+        {
+            CopilotClientFactory = sdk,
+            LoggerFactory = workerLogs,
+        }));
+        var (worker, caller) = CreateChannelPair();
+        await using var dispatcher = new ReverseExecutionDispatcher(worker, registry);
+        var reverse = new ReverseHttpTransport(caller);
+        await using var client = new CopilotClientOverTransport(reverse, loggerFactory: callerLogs);
+
+        var failure = await Assert.ThrowsAsync<TransportException>(
+            () => client.CreateSessionAsync(new SessionConfig { Model = "safe-model" }, TestToken()));
+        Assert.Contains("InvalidOperationException", failure.Message);
+        Assert.Contains("synthetic worker startup", failure.Message);
+        Assert.Contains("synthetic inner cause", failure.Message);
+        Assert.Equal("synthetic inner cause", failure.RemoteError?.Inner?.Message);
+        Assert.Contains(workerLogs.Entries, entry => ReferenceEquals(cause, entry.CapturedException)
+            && entry.Level == LogLevel.Error);
+        Assert.Contains(callerLogs.Entries, entry => entry.Stage == "startup-channel-closed");
+    }
+
+    [Fact]
+    public async Task RemoteCopilotLifecycle_WorkerStarts_AcknowledgesCreatedSessionAndCompletesFirstTurn()
+    {
+        var registry = new TransportRegistry();
+        registry.Register(new CopilotClientTransportListener(new AgentServices
+        {
+            CopilotClientFactory = new ExecutorRoutingTestHarness.RecordingClientFactory(),
+        }));
+        var (worker, caller) = CreateChannelPair();
+        await using var dispatcher = new ReverseExecutionDispatcher(worker, registry);
+        var reverse = new ReverseHttpTransport(caller);
+        await using var client = new CopilotClientOverTransport(reverse);
+        await using var session = await client.CreateSessionAsync(
+            new SessionConfig { Model = "safe-model" }, TestToken());
+        Assert.Equal("remote-session-42", session.SessionId);
+        await session.SendAsync(new MessageOptions { Prompt = "synthetic turn" }, TestToken());
+    }
+
+    private static (IMessageChannel Worker, IMessageChannel Caller) CreateChannelPair()
+    {
+        var toWorker = Channel.CreateUnbounded<JsonElement>();
+        var toCaller = Channel.CreateUnbounded<JsonElement>();
+        return (new ConnectedChannel(toCaller.Writer, toWorker.Reader),
+            new ConnectedChannel(toWorker.Writer, toCaller.Reader));
+    }
+
+    private sealed class ConnectedChannel(ChannelWriter<JsonElement> writer, ChannelReader<JsonElement> reader)
+        : IMessageChannel
+    {
+        public ChannelWriter<JsonElement> Writer => writer;
+        public ChannelReader<JsonElement> Reader => reader;
+        public ValueTask DisposeAsync()
+        {
+            writer.TryComplete();
+            return ValueTask.CompletedTask;
+        }
+    }
+
     private static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(30);
 
     [Fact]
@@ -223,7 +372,9 @@ public sealed class RemoteCopilotLifecycleTests
                 correlationId: Guid.NewGuid().ToString("N")),
             channel, TestToken()));
         Assert.Contains(failedLogs.Entries, entry =>
-            entry.Stage == "cli-start-failed" && entry.ErrorCategory == "launch-denied");
+            entry.Stage == "cli-start-failed" && entry.ErrorCategory == "cli-start-failed");
+        Assert.Contains(failedLogs.Entries, entry => entry.HasException
+            && entry.Level == LogLevel.Error && entry.Message.Contains("stage cli-start"));
         Assert.DoesNotContain(failedLogs.Entries, entry => entry.Stage == "sdk-created");
         AssertSanitized(failedLogs, "private-cli-error");
 
@@ -802,7 +953,7 @@ public sealed class RemoteCopilotLifecycleTests
                 new SessionConfig { Model = "gpt-test" },
                 TestToken()));
 
-        Assert.Equal("The remote Copilot channel could not be opened.", exception.Message);
+        Assert.Equal(secret, exception.Message);
         Assert.Contains(
             logs.Entries,
             entry => entry.Stage == "open-failed"
@@ -831,11 +982,13 @@ public sealed class RemoteCopilotLifecycleTests
                 channel,
                 TestToken()));
 
-        Assert.Equal("Remote Copilot launch was denied by host policy.", exception.Message);
+        Assert.Equal(secret, exception.Message);
         Assert.Contains(
             logs.Entries,
             entry => entry.Stage == "cli-start-failed"
-                && entry.ErrorCategory == "launch-denied");
+                && entry.ErrorCategory == "cli-start-failed");
+        Assert.Contains(logs.Entries, entry => entry.HasException
+            && entry.Level == LogLevel.Error && entry.Message.Contains("stage cli-start"));
         AssertSanitized(logs, secret, "private", "secret");
     }
 
@@ -1571,7 +1724,8 @@ public sealed class RemoteCopilotLifecycleTests
         string? Outcome,
         string? ElapsedMilliseconds,
         LogLevel Level,
-        bool HasException);
+        bool HasException,
+        Exception? CapturedException = null);
 
     private sealed class LifecycleLoggerFactory : ILoggerFactory
     {
@@ -1644,7 +1798,8 @@ public sealed class RemoteCopilotLifecycleTests
                     Value("Outcome"),
                     Value("ElapsedMilliseconds"),
                     logLevel,
-                    exception is not null);
+                    exception is not null,
+                    exception);
                 owner.beforeEnqueue?.Invoke(entry);
                 lock (owner.gate)
                 {
