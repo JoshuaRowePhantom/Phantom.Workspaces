@@ -6,6 +6,10 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reflection;
+using GitHub.Copilot;
+using GitHub.Copilot.Rpc;
+using Phantom.Workspaces.Llm.Core.Tests.Infrastructure;
 using Xunit;
 
 namespace Phantom.Workspaces.Llm.Tests;
@@ -142,6 +146,70 @@ public sealed class AgentChatHostedSubAgentTests
         Assert.Equal(ChatRole.Assistant, chat.History[0].Role);
         Assert.Contains("hello from SDK", GetText(chat.History[0].Contents));
     }
+
+    [Fact]
+    public async Task AgentChat_HostedSubAgent_FollowUpTurn_AppendsToSameTranscript()
+    {
+        var hostedClient = new CopilotSubAgentChatClient();
+        await using var chat = CreateHostedSubAgentChat(hostedClient);
+        hostedClient.Push(new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new TextContent("first invocation")] });
+        hostedClient.Complete();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await WaitForHistoryCountAsync(chat, 1, cts.Token);
+
+        Assert.True(hostedClient.BeginInvocation());
+        chat.RequestHostedFollowUp();
+        hostedClient.Push(new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new TextContent("resumed invocation")] });
+        hostedClient.Complete();
+        await WaitForHistoryCountAsync(chat, 2, cts.Token);
+        Assert.Contains("first invocation", GetText(chat.History[0].Contents));
+        Assert.Contains("resumed invocation", GetText(chat.History[1].Contents));
+    }
+
+#pragma warning disable GHCP001
+    [Fact]
+    public async Task AgentChat_HostedSubAgent_SdkFollowUpWithoutNewStarted_AppendsToOriginalTranscript()
+    {
+        var sdkSession = new FakeCopilotSession();
+        await using var sdkClient = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
+        sdkClient.SetCopilotClientFactoryForTest(new FakeCopilotClientFactory(new FakeCopilotClient(sdkSession)));
+        var ensure = typeof(CopilotSdkChatClient).GetMethod(
+            "EnsureSessionAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        await (Task)ensure.Invoke(sdkClient, [null, CancellationToken.None])!;
+
+        var receiver = new CopilotSubAgentChatClient();
+        await using var chat = CreateHostedSubAgentChat(receiver);
+        var child = new SubAgent(new AgentSessionId(chat.AgentSessionId), chat, null);
+        typeof(CopilotSdkChatClient).GetMethod("RegisterSubAgent", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .Invoke(sdkClient, ["child", "call", child]);
+        sdkSession.Emit(new AssistantMessageDeltaEvent
+        {
+            AgentId = "child",
+            Data = new AssistantMessageDeltaData { MessageId = "first", DeltaContent = "first answer" },
+        });
+        sdkSession.Emit(new SubagentCompletedEvent
+        {
+            AgentId = "child",
+            Data = new SubagentCompletedData { ToolCallId = "call", AgentName = "child", AgentDisplayName = "Child" },
+        });
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await WaitForHistoryCountAsync(chat, 1, cts.Token);
+
+        sdkSession.Emit(new AssistantMessageDeltaEvent
+        {
+            AgentId = "child",
+            Data = new AssistantMessageDeltaData { MessageId = "second", DeltaContent = "resumed answer" },
+        });
+        sdkSession.Emit(new SubagentCompletedEvent
+        {
+            AgentId = "child",
+            Data = new SubagentCompletedData { ToolCallId = "call", AgentName = "child", AgentDisplayName = "Child" },
+        });
+        await WaitForHistoryCountAsync(chat, 2, cts.Token);
+        Assert.Contains("first answer", GetText(chat.History[0].Contents));
+        Assert.Contains("resumed answer", GetText(chat.History[1].Contents));
+    }
+#pragma warning restore GHCP001
 
     [Fact]
     public async Task AgentChat_HostedSubAgent_History_PopulatedFromSdkAssistantMessages()

@@ -84,13 +84,17 @@ public sealed class AgentViewModelSubAgentBrowserTests
     [Fact]
     public void SubAgentBrowserViewModel_HideCompletedFalse_StateFlipKeepsAllItemsVisible()
     {
-        var child = new StubSubAgentItem("child", "Child", AgentChatCompletionState.Succeeded, DateTime.UtcNow);
-        var source = new System.Collections.ObjectModel.ObservableCollection<IRunningSubAgent> { child };
+        var earlier = DateTime.UnixEpoch;
+        var child = new StubSubAgentItem("child", "Child", AgentChatCompletionState.Succeeded, earlier);
+        var other = new StubSubAgentItem("other", "Other", AgentChatCompletionState.Running, earlier.AddMinutes(1));
+        var source = new System.Collections.ObjectModel.ObservableCollection<IRunningSubAgent> { child, other };
         using var browser = new SubAgentBrowserViewModel(
             new System.Collections.ObjectModel.ReadOnlyObservableCollection<IRunningSubAgent>(source));
         var before = browser.VisibleItems;
+        Assert.Equal(["other", "child"], before.Select(item => item.AgentId));
+        child.LastUpdatedAt = earlier.AddMinutes(2);
         child.ChangeState(AgentChatCompletionState.Running);
-        Assert.Same(child, Assert.Single(browser.VisibleItems));
+        Assert.Equal(["child", "other"], browser.VisibleItems.Select(item => item.AgentId));
         Assert.NotSame(before, browser.VisibleItems);
     }
 
@@ -917,7 +921,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
         public string DisplayName { get; } = displayName;
         public string Description => string.Empty;
         public AgentChatCompletionState CompletionState { get; private set; } = completionState;
-        public DateTime LastUpdatedAt { get; } = lastUpdatedAt;
+        public DateTime LastUpdatedAt { get; set; } = lastUpdatedAt;
         public IReadOnlyList<IRunningSubAgent> SubAgents => [];
         private EventHandler? completionStateChanged;
         public int SubscriberCount => this.completionStateChanged?.GetInvocationList().Length ?? 0;

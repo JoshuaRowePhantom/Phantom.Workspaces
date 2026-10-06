@@ -12,6 +12,8 @@ internal interface ICopilotClient : IAsyncDisposable
     Task<ICopilotSession> ResumeSessionAsync(string sessionId, ResumeSessionConfig config, CancellationToken cancellationToken);
     Task<EventsReadResult> ReadPersistedEventsAsync(ReadCopilotPersistedEventsRequest request, CancellationToken cancellationToken) =>
         throw new NotSupportedException("This client does not expose persisted event replay.");
+    Task<IReadOnlyList<AgentRegistryLiveTargetEntry>> ListLiveSessionStatesAsync(CancellationToken cancellationToken) =>
+        throw new NotSupportedException("This client does not expose live session state.");
 }
 
 internal sealed record ReadCopilotPersistedEventsRequest(

@@ -97,7 +97,9 @@ internal static class SubAgentTestFakes
         }
 
         Task<RunningAgentChatLease> IRunningAgentChatFactory.GetAsync(AgentSessionId sessionId, bool registerAsRunningAgent, CancellationToken ct) =>
-            throw new NotImplementedException();
+            CreatedLease is { } lease && lease.SessionId == sessionId
+                ? Task.FromResult(lease)
+                : throw new NotImplementedException();
 
         Task<RunningAgentChatLease> IRunningAgentChatFactory.GetOrCreateAsync(
             AgentSessionId sessionId,

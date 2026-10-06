@@ -19,6 +19,7 @@ internal sealed class CopilotSdkSubAgentStateReconciler(
     private Task? pump;
     private readonly SemaphoreSlim eventGate = new(1, 1);
     private readonly HashSet<Guid> processedEventIds = [];
+    private readonly Dictionary<Guid, SessionEvent> pendingEvents = [];
     private Guid? lastEventId;
 
     internal async Task<bool> ObserveEventAsync(
@@ -30,21 +31,36 @@ internal sealed class CopilotSdkSubAgentStateReconciler(
         try
         {
             if (live.Id != Guid.Empty && this.processedEventIds.Contains(live.Id)) return false;
-            var unrepairedGap = false;
             if (this.lastEventId is { } previous && live.ParentId is { } parent && parent != previous)
             {
                 var events = await replay(this.shutdown.Token).ConfigureAwait(false);
                 foreach (var recovered in OrderReplay(events))
-                    this.AcceptEvent(recovered, apply);
-                unrepairedGap = this.lastEventId != parent
-                    && !this.processedEventIds.Contains(parent);
+                    this.AcceptOrQueue(recovered, apply);
             }
-            this.AcceptEvent(live, apply);
-            return unrepairedGap;
+            this.AcceptOrQueue(live, apply);
+            return live.Id != Guid.Empty && this.pendingEvents.ContainsKey(live.Id);
         }
         finally
         {
             this.eventGate.Release();
+        }
+    }
+
+    private void AcceptOrQueue(SessionEvent value, Action<SessionEvent> apply)
+    {
+        if (value.Id != Guid.Empty && this.processedEventIds.Contains(value.Id)) return;
+        if (this.lastEventId is { } previous && value.ParentId is { } parent && parent != previous)
+        {
+            if (value.Id != Guid.Empty) this.pendingEvents[value.Id] = value;
+            return;
+        }
+        this.AcceptEvent(value, apply);
+        while (this.lastEventId is { } accepted)
+        {
+            var next = this.pendingEvents.Values.FirstOrDefault(e => e.ParentId == accepted);
+            if (next is null) break;
+            this.pendingEvents.Remove(next.Id);
+            this.AcceptEvent(next, apply);
         }
     }
 
@@ -98,18 +114,29 @@ internal sealed class CopilotSdkSubAgentStateReconciler(
                 {
                     return;
                 }
-                lock (this.gate)
+                await this.eventGate.WaitAsync(this.shutdown.Token).ConfigureAwait(false);
+                try
                 {
-                    if (this.disposed) return;
-                    publish(snapshot);
-                    if (!this.dirty)
+                    lock (this.gate)
                     {
-                        this.pump = null;
-                        return;
+                        if (this.disposed) return;
+                        publish(snapshot);
+                        if (this.pendingEvents.Count > 0)
+                        {
+                            this.lastEventId = this.pendingEvents.Values.OrderBy(e => e.Timestamp).Last().Id;
+                            this.pendingEvents.Clear();
+                        }
+                        if (!this.dirty)
+                        {
+                            this.pump = null;
+                            return;
+                        }
                     }
                 }
+                finally { this.eventGate.Release(); }
             }
         }
+        catch (OperationCanceledException) when (this.shutdown.IsCancellationRequested) { }
         catch
         {
             lock (this.gate) this.pump = null;

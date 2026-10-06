@@ -222,7 +222,7 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
             .Select(CopilotSdkStreamAdapter.GetSourceToolCallId)
             .FirstOrDefault(id => !string.IsNullOrEmpty(id));
 
-        this.PushUpdate(agentId, sourceToolCallId, update);
+        await this.PushUpdateAsync(agentId, sourceToolCallId, update).ConfigureAwait(false);
 
         if (string.IsNullOrEmpty(agentId))
         {
@@ -416,7 +416,8 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
                     existing = restoredLease.LocalAgentChat;
                 }
                 var receiver = existing?.GetService(typeof(ICopilotSubAgentReceiver)) as ICopilotSubAgentReceiver;
-                if (receiver is CopilotSubAgentChatClient reusable) reusable.BeginInvocation();
+                if (receiver is CopilotSubAgentChatClient reusable && reusable.BeginInvocation())
+                    existing!.RequestHostedFollowUp();
                 if (receiver is not null)
                 {
                     existing!.SetCompletionState(AgentChatCompletionState.Running);
@@ -572,7 +573,7 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
     // by a SubagentStartedEvent that lacked an AgentId), re-keying it under this AgentId.
     // Otherwise we create a fresh buffering entry on first sight (start lifecycle has not yet
     // arrived). Sub-agent output is NEVER pushed to the parent transcript.
-    private void PushUpdate(string? agentId, string? sourceToolCallId, ChatResponseUpdate update)
+    private async Task PushUpdateAsync(string? agentId, string? sourceToolCallId, ChatResponseUpdate update)
     {
         if (string.IsNullOrEmpty(agentId))
         {
@@ -603,6 +604,24 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
         }
 
         entry.Push(update);
+        if (this.resolveChild?.Invoke(agentId) is { } child && entry.TryBeginCreation())
+        {
+            RunningAgentChatLease? lease = null;
+            var chat = child.AgentChat;
+            if (chat is null)
+            {
+                lease = await child.AcquireLeaseAsync().ConfigureAwait(false);
+                chat = lease.LocalAgentChat;
+            }
+            if (chat?.GetService(typeof(ICopilotSubAgentReceiver)) is ICopilotSubAgentReceiver receiver)
+            {
+                if (receiver is CopilotSubAgentChatClient reusable && reusable.BeginInvocation())
+                    chat.RequestHostedFollowUp();
+                if (lease is null) entry.AttachExisting(chat, receiver);
+                else entry.Attach(lease, receiver);
+            }
+            else if (lease is not null) await lease.DisposeAsync().ConfigureAwait(false);
+        }
     }
 
     private bool TryTakePendingSink(string toolCallId, out ChildRoutingEntry entry)

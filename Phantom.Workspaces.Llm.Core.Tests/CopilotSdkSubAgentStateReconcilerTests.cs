@@ -44,10 +44,17 @@ public sealed class CopilotSdkSubAgentStateReconcilerTests
         };
         using var reconciler = new CopilotSdkSubAgentStateReconciler(
             _ => Task.FromResult<IReadOnlyList<TaskInfo>>([]), _ => { });
+        var applied = new List<Guid>();
         Assert.False(await reconciler.ObserveEventAsync(first, _ => Task.FromResult<IReadOnlyList<SessionEvent>>([]),
-            _ => { }));
+            e => applied.Add(e.Id)));
         Assert.True(await reconciler.ObserveEventAsync(live,
-            _ => Task.FromResult<IReadOnlyList<SessionEvent>>([]), _ => { }));
+            _ => Task.FromResult<IReadOnlyList<SessionEvent>>([]), e => applied.Add(e.Id)));
+        Assert.Equal([first.Id], applied);
+        Assert.False(await reconciler.ObserveEventAsync(new SessionBackgroundTasksChangedEvent
+        {
+            Id = live.ParentId!.Value, ParentId = first.Id, Data = new SessionBackgroundTasksChangedData(),
+        }, _ => Task.FromResult<IReadOnlyList<SessionEvent>>([]), e => applied.Add(e.Id)));
+        Assert.Equal([first.Id, live.ParentId.Value, live.Id], applied);
     }
 
     [Fact]
@@ -74,5 +81,41 @@ public sealed class CopilotSdkSubAgentStateReconcilerTests
         await Task.WhenAll(first, second);
         Assert.Equal(2, count);
         Assert.Equal(GitHub.Copilot.Rpc.TaskStatus.Running, ((TaskInfoAgent)observed[^1][0]).Status);
+    }
+
+    [Fact]
+    public async Task CopilotSdkSubAgentStateReconciler_UnrepairedGap_SnapshotSupersedesDeferredEvent()
+    {
+        var first = new SessionBackgroundTasksChangedEvent { Id = Guid.NewGuid(), Data = new SessionBackgroundTasksChangedData() };
+        var missingId = Guid.NewGuid();
+        var stale = new SessionBackgroundTasksChangedEvent
+        {
+            Id = Guid.NewGuid(), ParentId = missingId, Data = new SessionBackgroundTasksChangedData(),
+        };
+        var applied = new List<Guid>();
+        var snapshots = 0;
+        using var reconciler = new CopilotSdkSubAgentStateReconciler(
+            _ => Task.FromResult<IReadOnlyList<TaskInfo>>([]), _ => Interlocked.Increment(ref snapshots));
+        await reconciler.ObserveEventAsync(first, _ => Task.FromResult<IReadOnlyList<SessionEvent>>([]),
+            e => applied.Add(e.Id));
+        Assert.True(await reconciler.ObserveEventAsync(stale, _ => Task.FromResult<IReadOnlyList<SessionEvent>>([]),
+            e => applied.Add(e.Id)));
+        await reconciler.InvalidateAsync();
+        Assert.Equal(1, snapshots);
+        Assert.Equal([first.Id], applied);
+        var next = new SessionBackgroundTasksChangedEvent
+        {
+            Id = Guid.NewGuid(), ParentId = stale.Id, Data = new SessionBackgroundTasksChangedData(),
+        };
+        Assert.False(await reconciler.ObserveEventAsync(next, _ => Task.FromResult<IReadOnlyList<SessionEvent>>([]),
+            e => applied.Add(e.Id)));
+        Assert.Equal([first.Id, next.Id], applied);
+        var late = new SessionBackgroundTasksChangedEvent
+        {
+            Id = missingId, ParentId = first.Id, Data = new SessionBackgroundTasksChangedData(),
+        };
+        Assert.True(await reconciler.ObserveEventAsync(late, _ => Task.FromResult<IReadOnlyList<SessionEvent>>([]),
+            e => applied.Add(e.Id)));
+        Assert.Equal([first.Id, next.Id], applied);
     }
 }

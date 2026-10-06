@@ -1656,6 +1656,19 @@ public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvid
             this.foregroundScheduler);
     }
 
+    internal void RequestHostedFollowUp()
+    {
+        if (this.acceptsUserInput) return;
+        _ = Task.Factory.StartNew(async () =>
+        {
+            Task? previous;
+            lock (this.processingStateLock) previous = this.activeTurnCompletion?.Task;
+            if (previous is not null) await previous.ConfigureAwait(false);
+            this.ApplySubAgentLifecycleState(new(this.AgentSessionId, CopilotSubAgentLifecycleLayer.Session, "running"));
+            this.StartProcessingLoop();
+        }, CancellationToken.None, TaskCreationOptions.DenyChildAttach, this.foregroundScheduler).Unwrap();
+    }
+
     /// <summary>
     /// Sets the sub-agent completion-state override.
     /// </summary>

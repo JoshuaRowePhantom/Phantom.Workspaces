@@ -42,5 +42,24 @@ internal sealed class RealCopilotClientAdapter : ICopilotClient
             direction: request.Direction,
             cancellationToken: cancellationToken);
 
+    public async Task<IReadOnlyList<AgentRegistryLiveTargetEntry>> ListLiveSessionStatesAsync(CancellationToken cancellationToken)
+    {
+        // SDK 1.0.13 exposes registry entries only in agentRegistry.spawn's response, not in a
+        // list/watch RPC. sessions.list supplies the owning host's live status for existing sessions.
+        var sessions = await this.inner.Rpc.Sessions.ListAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
+        return sessions.Sessions.Where(entry => entry.HostStatus is not null)
+            .Select(entry => new AgentRegistryLiveTargetEntry
+            {
+                SessionId = entry.SessionId,
+                Status = entry.HostStatus == RemoteSessionHostStatus.Working
+                    ? AgentRegistryLiveTargetEntryStatus.Working
+                    : entry.HostStatus == RemoteSessionHostStatus.InputNeeded
+                        ? AgentRegistryLiveTargetEntryStatus.Waiting
+                        : entry.HostStatus == RemoteSessionHostStatus.Error
+                            ? AgentRegistryLiveTargetEntryStatus.Attention
+                            : AgentRegistryLiveTargetEntryStatus.Done,
+            }).ToArray();
+    }
+
     public ValueTask DisposeAsync() => this.inner.DisposeAsync();
 }

@@ -213,11 +213,29 @@ public sealed class CopilotSubAgentRouterTests
                 router.ApplyTaskState("call", state);
                 await changed.Task;
             }
+
             finally
             {
                 chat.CompletionStateChanged -= handler;
             }
         }
+    }
+
+    [Fact]
+    public async Task CopilotSubAgentRouter_WriteAgentOutputWithoutStarted_RoutesToExistingChild()
+    {
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var table = new SubAgentTestFakes.FakeSubAgentTable();
+        SubAgent? existing = null;
+        var router = new CopilotSubAgentRouter(Channel.CreateUnbounded<ChatResponseUpdate>().Writer,
+            factory, table, registerChild: (_, _, child) => existing = child, resolveChild: _ => existing);
+        await router.RouteAsync(LifecycleStart("child", "call"));
+        await router.RouteAsync(LifecycleCompleted("child"));
+        await router.RouteAsync(SubAgentText("child", "follow-up reply"));
+        var output = await DrainReceiverAsync(factory.CreatedReceiver!);
+        Assert.Contains(output, update => update.Contents.OfType<TextContent>()
+            .Any(content => content.Text == "follow-up reply"));
+        Assert.Single(table.AddedChats);
     }
 
     [Fact]
