@@ -156,6 +156,71 @@ public sealed class CopilotSubAgentRouterTests
     // ─── tests ──────────────────────────────────────────────────────────────────
 
     [Fact]
+    public async Task CopilotSubAgentRouter_TerminalInvocationThenNewInvocation_PreservesHistoryAndReactivatesChat()
+    {
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var table = new SubAgentTestFakes.FakeSubAgentTable();
+        SubAgent? existing = null;
+        var channel = Channel.CreateUnbounded<ChatResponseUpdate>();
+        var router = new CopilotSubAgentRouter(channel.Writer, factory, table,
+            registerChild: (_, _, child) => existing = child,
+            resolveChild: _ => existing);
+
+        await router.RouteAsync(LifecycleStart("child", "old-call"));
+        var chat = Assert.Single(table.AddedChats);
+        await router.RouteAsync(LifecycleCompleted("child"));
+        Assert.Equal(AgentChatCompletionState.Succeeded, chat.CompletionState);
+        await router.RouteAsync(RootToolStart("new-call", "task"));
+        await router.RouteAsync(LifecycleStart("child", "new-call"));
+        Assert.Single(table.AddedChats);
+        Assert.Same(chat, existing!.AgentChat);
+        Assert.Equal(AgentChatCompletionState.Running, chat.CompletionState);
+        var updates = await DrainReceiverAsync(factory.CreatedReceiver!);
+        Assert.Contains(updates, update => update.Role == ChatRole.User
+            && update.Contents.OfType<FunctionCallContent>().Any(call => call.CallId == "new-call"));
+    }
+
+    [Fact]
+    public async Task CopilotSubAgentRouter_WriteAgentFollowUpAfterIdle_ReactivatesExistingChatAndPreservesHistory()
+    {
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var table = new SubAgentTestFakes.FakeSubAgentTable();
+        SubAgent? existing = null;
+        var router = new CopilotSubAgentRouter(Channel.CreateUnbounded<ChatResponseUpdate>().Writer,
+            factory, table, registerChild: (_, _, child) => existing = child,
+            resolveTaskChild: _ => existing);
+        await router.RouteAsync(LifecycleStart("child", "call"));
+        var chat = existing!.AgentChat!;
+        await router.RouteAsync(LifecycleCompleted("child"));
+        Assert.Equal(AgentChatCompletionState.Succeeded, chat.CompletionState);
+        await ApplyAndWaitAsync("idle", AgentChatCompletionState.Running);
+        Assert.Equal(AgentChatCompletionState.Running, chat.CompletionState);
+        router.ApplyTaskState("call", "running");
+        Assert.Same(chat, Assert.Single(table.AddedChats));
+        await ApplyAndWaitAsync("completed", AgentChatCompletionState.Succeeded);
+        Assert.Equal(AgentChatCompletionState.Succeeded, chat.CompletionState);
+
+        async Task ApplyAndWaitAsync(string state, AgentChatCompletionState expected)
+        {
+            var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            EventHandler handler = (_, _) =>
+            {
+                if (chat.CompletionState == expected) changed.TrySetResult();
+            };
+            chat.CompletionStateChanged += handler;
+            try
+            {
+                router.ApplyTaskState("call", state);
+                await changed.Task;
+            }
+            finally
+            {
+                chat.CompletionStateChanged -= handler;
+            }
+        }
+    }
+
+    [Fact]
     public async Task RouteAsync_RootUpdate_PushedToRootChannel()
     {
         var (router, channel) = CreateRouter();
@@ -391,7 +456,7 @@ public sealed class CopilotSubAgentRouterTests
     }
 
     [Fact]
-    public async Task SubAgentStarted_WithProvidedName_KeepsSessionGuidAsInternalIdentity()
+    public async Task SubAgentStarted_WithProvidedName_KeepsPersistedSessionIdentityIndependentOfDisplayName()
     {
         // Fix #1133: propagating the provided name into DisplayName MUST NOT change the
         // session id / AgentId, which remain the internally-generated GUID used as the routing
@@ -405,11 +470,12 @@ public sealed class CopilotSubAgentRouterTests
             displayName: "fix-reload1"));
 
         var call = Assert.Single(factory.CreateCalls);
-        // Session id is a freshly generated 32-char hex GUID (Guid.NewGuid().ToString("n")),
-        // NOT the provided display name. The AgentId used for routing is the lifecycle
-        // callId ("agent-1"), which is likewise independent of the display name.
+        // The persisted child id embeds SDK correlation keys for reconnect while retaining
+        // a unique GUID component. The user-facing name never becomes the routing key.
         Assert.NotEqual("fix-reload1", call.SessionId.Value);
-        Assert.Matches("^[0-9a-f]{32}$", call.SessionId.Value!);
+        Assert.True(CopilotSubAgentIdentity.TryRead(call.SessionId.Value, out var agentId, out var toolCallId));
+        Assert.Equal("agent-1", agentId);
+        Assert.Equal("call-1", toolCallId);
     }
 
     [Fact]

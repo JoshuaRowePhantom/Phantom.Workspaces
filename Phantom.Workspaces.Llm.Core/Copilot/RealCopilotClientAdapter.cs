@@ -1,4 +1,6 @@
 using GitHub.Copilot;
+using GitHub.Copilot.Rpc;
+#pragma warning disable GHCP001
 
 namespace Phantom.Workspaces.Llm.Copilot;
 
@@ -31,6 +33,14 @@ internal sealed class RealCopilotClientAdapter : ICopilotClient
         var session = await this.inner.ResumeSessionAsync(sessionId, config, cancellationToken).ConfigureAwait(false);
         return new RealCopilotSessionAdapter(session);
     }
+
+    public Task<EventsReadResult> ReadPersistedEventsAsync(ReadCopilotPersistedEventsRequest request, CancellationToken cancellationToken) =>
+        this.inner.Rpc.Sessions.ReadPersistedEventsAsync(
+            sessionId: request.SessionId,
+            cursor: request.Cursor,
+            max: request.Max,
+            direction: request.Direction,
+            cancellationToken: cancellationToken);
 
     public ValueTask DisposeAsync() => this.inner.DisposeAsync();
 }

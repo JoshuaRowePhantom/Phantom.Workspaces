@@ -1,4 +1,6 @@
 using GitHub.Copilot;
+using GitHub.Copilot.Rpc;
+#pragma warning disable GHCP001
 using Phantom.Workspaces.Llm.Copilot;
 using System.Threading.Channels;
 
@@ -6,6 +8,8 @@ namespace Phantom.Workspaces.Transport.Tests.Infrastructure;
 
 internal sealed class FakeCopilotSession : ICopilotSession
 {
+    public Task<IReadOnlyList<TaskInfo>> ListTasksAsync(CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<TaskInfo>>([]);
     private readonly Queue<SessionEvent> eventQueue = new();
     private readonly List<Action<SessionEvent>> subscribers = new();
     private readonly object lockObject = new();

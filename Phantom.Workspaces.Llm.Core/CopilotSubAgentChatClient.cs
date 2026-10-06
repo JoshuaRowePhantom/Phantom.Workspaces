@@ -15,20 +15,50 @@ namespace Phantom.Workspaces.Llm;
 /// </summary>
 internal sealed class CopilotSubAgentChatClient : IChatClient, ICopilotSubAgentReceiver, IHostedAgentChatClient, ISelfInvokingToolChatClient
 {
-    private readonly Channel<ChatResponseUpdate> _channel =
+    private Channel<ChatResponseUpdate> _channel =
         Channel.CreateUnbounded<ChatResponseUpdate>();
+    private readonly object channelGate = new();
+    private bool completed;
 
     /// <inheritdoc/>
-    public void Push(ChatResponseUpdate update) =>
-        _channel.Writer.TryWrite(update);
+    public void Push(ChatResponseUpdate update)
+    {
+        lock (this.channelGate) this._channel.Writer.TryWrite(update);
+    }
 
     /// <inheritdoc/>
-    public void Complete() =>
-        _channel.Writer.TryComplete();
+    public void Complete()
+    {
+        lock (this.channelGate)
+        {
+            this.completed = true;
+            this._channel.Writer.TryComplete();
+        }
+    }
 
     /// <inheritdoc/>
-    public void Fail(Exception exception) =>
-        _channel.Writer.TryComplete(exception);
+    public void Fail(Exception exception)
+    {
+        lock (this.channelGate)
+        {
+            this.completed = true;
+            this._channel.Writer.TryComplete(exception);
+        }
+    }
+
+    internal bool BeginInvocation()
+    {
+        lock (this.channelGate)
+        {
+            if (this.completed)
+            {
+                this._channel = Channel.CreateUnbounded<ChatResponseUpdate>();
+                this.completed = false;
+                return true;
+            }
+            return false;
+        }
+    }
 
     /// <summary>
     /// Reads all updates from the internal channel until <see cref="Complete"/> or
@@ -39,7 +69,9 @@ internal sealed class CopilotSubAgentChatClient : IChatClient, ICopilotSubAgentR
         ChatOptions? options = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        await foreach (var update in _channel.Reader.ReadAllAsync(cancellationToken))
+        Channel<ChatResponseUpdate> channel;
+        lock (this.channelGate) channel = this._channel;
+        await foreach (var update in channel.Reader.ReadAllAsync(cancellationToken))
             yield return update;
     }
 

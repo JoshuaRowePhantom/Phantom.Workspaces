@@ -14,6 +14,24 @@ public sealed class RunningSubAgentsHtmlTransformerTests
     // ── Panel insertion ───────────────────────────────────────────────────────
 
     [Fact]
+    public void RunningSubAgentsPanel_WriteAgentResumesExistingChild_ReappearsThenHidesWhenTerminal()
+    {
+        var child = new StubSubAgent("child", "Reusable child", AgentChatCompletionState.Succeeded);
+        var children = new ObservableCollection<IRunningSubAgentDisplay> { child };
+        var sink = new RecordingSink();
+        using var transformer = new RunningSubAgentsHtmlTransformer(children, [], sink);
+        sink.Clear();
+        child.SetCompletionState(AgentChatCompletionState.Running);
+        Assert.Contains(sink.Operations, op => op.Kind == "update"
+            && op.Content.Contains("Reusable child", StringComparison.Ordinal));
+        sink.Clear();
+        child.SetCompletionState(AgentChatCompletionState.Failed);
+        Assert.DoesNotContain(sink.Operations, op => op.Kind == "update"
+            && op.Path == ChatOutputHtmlRenderer.SubAgentPanelSentinelId);
+        Assert.Single(children);
+    }
+
+    [Fact]
     public void RunningSubAgentsHtmlTransformer_Panel_ContentUpdated_WhenFirstRunningSubAgentAppears()
     {
         var subAgents = new ObservableCollection<IRunningSubAgentDisplay>();

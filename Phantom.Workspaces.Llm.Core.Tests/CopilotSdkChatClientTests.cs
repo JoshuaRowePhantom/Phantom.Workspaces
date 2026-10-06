@@ -7,15 +7,159 @@ using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using GitHub.Copilot;
+using GitHub.Copilot.Rpc;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Copilot;
+using Phantom.Workspaces.Llm.Interfaces;
 using Xunit;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
 public sealed class CopilotSdkChatClientTests
 {
+#pragma warning disable GHCP001
+    [Fact]
+    public async Task CopilotSdkChatClient_Resume_ReplaysPersistedInvocationsThenReconcilesActiveTasks()
+    {
+        var session = new Infrastructure.FakeCopilotSession
+        {
+            Tasks = [new TaskInfoAgent
+            {
+                Id = "task", ToolCallId = "call", AgentType = "task", Prompt = "follow up",
+                Description = "test", StartedAt = DateTimeOffset.UtcNow, Status = GitHub.Copilot.Rpc.TaskStatus.Running,
+            }],
+        };
+        var readCount = 0;
+        var sdk = new Infrastructure.FakeCopilotClient(session)
+        {
+            ReadEventsHandler = (_, _) =>
+            {
+                readCount++;
+                return Task.FromResult(new EventsReadResult
+                {
+                    Cursor = "tail",
+                    Events = [new SubagentCompletedEvent
+                    {
+                        Id = Guid.NewGuid(), AgentId = "child",
+                        Data = new SubagentCompletedData { ToolCallId = "call", AgentName = "child", AgentDisplayName = "Child" },
+                    }],
+                });
+            },
+        };
+        await using var client = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
+        client.SetCopilotClientFactoryForTest(new Infrastructure.FakeCopilotClientFactory(sdk));
+        client.SetResumeSessionId("previous");
+        await InvokeEnsureSessionAsync(client);
+        Assert.Equal(1, readCount);
+        Assert.Single(session.ResumeSessionCalls);
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var table = new SubAgentTestFakes.FakeSubAgentTable();
+        var lease = await ((IRunningAgentChatFactory)factory).CreateAsync(
+            CopilotSubAgentDefinitionDefaults.Create("child-session", null, null, null), new AgentSessionId("child-session"),
+            null, null, null, null);
+        var child = await ((ISubAgentTable)table).Add(lease.LocalAgentChat!);
+        var chat = child.AgentChat!;
+        chat.SetCompletionState(AgentChatCompletionState.Succeeded);
+        var becameActive = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        chat.CompletionStateChanged += (_, _) =>
+        {
+            if (chat.CompletionState == AgentChatCompletionState.Running) becameActive.TrySetResult();
+        };
+        typeof(CopilotSdkChatClient).GetMethod("RegisterSubAgent", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(client, ["child", "call", child]);
+        await becameActive.Task;
+        Assert.Equal(AgentChatCompletionState.Running, chat.CompletionState);
+    }
+
+    [Fact]
+    public async Task CopilotSdkChatClient_ReconnectWithoutReplayableIdle_UsesSnapshotState()
+    {
+        var session = new Infrastructure.FakeCopilotSession();
+        var sdk = new Infrastructure.FakeCopilotClient(session)
+        {
+            ReadEventsHandler = (_, _) => Task.FromResult(new EventsReadResult { Cursor = "tail", Events = [] }),
+        };
+        await using var client = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
+        client.SetCopilotClientFactoryForTest(new Infrastructure.FakeCopilotClientFactory(sdk));
+        client.SetResumeSessionId("previous");
+        await InvokeEnsureSessionAsync(client);
+        var requested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        session.ListTasksHandler = _ =>
+        {
+            requested.TrySetResult();
+            return Task.FromResult<IReadOnlyList<TaskInfo>>([]);
+        };
+        session.Emit(new SessionBackgroundTasksChangedEvent { Data = new SessionBackgroundTasksChangedData() });
+        await requested.Task;
+    }
+
+    [Fact]
+    public async Task CopilotSdkChatClient_RestoredChild_ActiveTaskReplacesProvisionalTerminalState()
+    {
+        var session = new Infrastructure.FakeCopilotSession
+        {
+            Tasks = [new TaskInfoAgent
+            {
+                Id = "task", ToolCallId = "spawn", AgentType = "task", Prompt = "follow up",
+                Description = "test", StartedAt = DateTimeOffset.UtcNow, Status = GitHub.Copilot.Rpc.TaskStatus.Running,
+            }],
+        };
+        var sdk = new Infrastructure.FakeCopilotClient(session)
+        {
+            ReadEventsHandler = (_, _) => Task.FromResult(new EventsReadResult { Cursor = "tail", Events = [] }),
+        };
+        await using var client = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
+        client.SetCopilotClientFactoryForTest(new Infrastructure.FakeCopilotClientFactory(sdk));
+        client.SetResumeSessionId("previous");
+        await InvokeEnsureSessionAsync(client);
+        var child = new SubAgent(CopilotSubAgentIdentity.Create("sdk-child", "spawn"), null);
+        child.SetRestoredCompletionState(AgentChatCompletionState.Succeeded);
+        client.RegisterRestoredSubAgent(child);
+        Assert.Equal(AgentChatCompletionState.Running, ((IRunningSubAgent)child).CompletionState);
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        child.CompletionStateChanged += (_, _) =>
+        {
+            if (((IRunningSubAgent)child).CompletionState == AgentChatCompletionState.Succeeded)
+                done.TrySetResult();
+        };
+        session.Tasks = [new TaskInfoAgent
+        {
+            Id = "task", ToolCallId = "spawn", AgentType = "task", Prompt = "follow up",
+            Description = "test", StartedAt = DateTimeOffset.UtcNow, Status = GitHub.Copilot.Rpc.TaskStatus.Completed,
+        }];
+        session.Emit(new SessionBackgroundTasksChangedEvent { Data = new SessionBackgroundTasksChangedData() });
+        await done.Task;
+    }
+
+    [Fact]
+    public async Task CopilotSdkChatClient_IdleParent_ObservesChildOutputBeyondTurnSubscription()
+    {
+        var session = new Infrastructure.FakeCopilotSession();
+        await using var client = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
+        client.SetCopilotClientFactoryForTest(
+            new Infrastructure.FakeCopilotClientFactory(new Infrastructure.FakeCopilotClient(session)));
+        await InvokeEnsureSessionAsync(client);
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var lease = await ((IRunningAgentChatFactory)factory).CreateAsync(
+            CopilotSubAgentDefinitionDefaults.Create("child-session", null, null, null),
+            new AgentSessionId("child-session"), null, null, null, null);
+        var child = await ((ISubAgentTable)new SubAgentTestFakes.FakeSubAgentTable()).Add(lease.LocalAgentChat!);
+        typeof(CopilotSdkChatClient).GetMethod("RegisterSubAgent", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(client, ["child", "call", child]);
+        var receiver = factory.CreatedReceiver!;
+        await using var updates = receiver.GetStreamingResponseAsync([]).GetAsyncEnumerator();
+        var next = updates.MoveNextAsync().AsTask();
+        session.Emit(new AssistantMessageDeltaEvent
+        {
+            AgentId = "child",
+            Data = new AssistantMessageDeltaData { MessageId = "message", DeltaContent = "resumed text" },
+        });
+        Assert.True(await next);
+        Assert.Equal("resumed text", updates.Current.Text);
+    }
+#pragma warning restore GHCP001
+
     [Fact]
     public async Task RunStreamingTurn_OnCancellation_AbortsTheTurn_AndReleasesTheLock()
     {

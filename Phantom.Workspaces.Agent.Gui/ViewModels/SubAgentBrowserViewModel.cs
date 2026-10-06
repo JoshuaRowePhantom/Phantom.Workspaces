@@ -1,5 +1,6 @@
 using System.Collections.Specialized;
 using System.Collections.ObjectModel;
+using Avalonia.Threading;
 using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Agent.Gui.ViewModels;
@@ -12,14 +13,17 @@ namespace Phantom.Workspaces.Agent.Gui.ViewModels;
 public sealed class SubAgentBrowserViewModel : ViewModelBase, IDisposable
 {
     private readonly ReadOnlyObservableCollection<IRunningSubAgent> allSubAgents;
+    private readonly Dictionary<IRunningSubAgent, EventHandler> completionHandlers =
+        new(ReferenceEqualityComparer.Instance);
     private bool hideCompleted;
+    private bool disposed;
     private IReadOnlyList<IRunningSubAgent> visibleItems = [];
 
     public SubAgentBrowserViewModel(ReadOnlyObservableCollection<IRunningSubAgent> allSubAgents)
     {
         this.allSubAgents = allSubAgents;
         ((INotifyCollectionChanged)allSubAgents).CollectionChanged += this.OnSubAgentsChanged;
-        this.RefreshVisibleItems();
+        this.SyncSubscriptionsAndRefresh();
     }
 
     public bool HideCompleted
@@ -29,7 +33,7 @@ public sealed class SubAgentBrowserViewModel : ViewModelBase, IDisposable
         {
             if (this.SetProperty(ref this.hideCompleted, value))
             {
-                this.RefreshVisibleItems();
+                this.RunOnUiThread(this.RefreshVisibleItems);
             }
         }
     }
@@ -42,11 +46,50 @@ public sealed class SubAgentBrowserViewModel : ViewModelBase, IDisposable
 
     public void Dispose()
     {
+        if (this.disposed) return;
+        this.disposed = true;
         ((INotifyCollectionChanged)this.allSubAgents).CollectionChanged -= this.OnSubAgentsChanged;
+        foreach (var (agent, handler) in this.completionHandlers)
+            agent.CompletionStateChanged -= handler;
+        this.completionHandlers.Clear();
     }
 
     private void OnSubAgentsChanged(object? sender, NotifyCollectionChangedEventArgs e)
-        => this.RefreshVisibleItems();
+        => this.RunOnUiThread(this.SyncSubscriptionsAndRefresh);
+
+    private void OnCompletionStateChanged(object? sender, EventArgs e)
+        => this.RunOnUiThread(this.RefreshVisibleItems);
+
+    private void RunOnUiThread(Action action)
+    {
+        if (Avalonia.Application.Current is null || Dispatcher.UIThread.CheckAccess())
+        {
+            if (!this.disposed) action();
+        }
+        else
+        {
+            Dispatcher.UIThread.Post(() => { if (!this.disposed) action(); });
+        }
+    }
+
+    private void SyncSubscriptionsAndRefresh()
+    {
+        foreach (var agent in this.completionHandlers.Keys.Where(a => !this.allSubAgents.Contains(a)).ToList())
+        {
+            agent.CompletionStateChanged -= this.completionHandlers[agent];
+            this.completionHandlers.Remove(agent);
+        }
+
+        foreach (var agent in this.allSubAgents)
+        {
+            if (this.completionHandlers.ContainsKey(agent)) continue;
+            EventHandler handler = this.OnCompletionStateChanged;
+            agent.CompletionStateChanged += handler;
+            this.completionHandlers.Add(agent, handler);
+        }
+
+        this.RefreshVisibleItems();
+    }
 
     private void RefreshVisibleItems()
     {

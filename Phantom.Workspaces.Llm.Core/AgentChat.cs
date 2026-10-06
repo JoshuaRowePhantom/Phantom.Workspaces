@@ -125,6 +125,7 @@ public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvid
     private readonly ObservableCollection<IRunningSubAgent> subAgentItems = [];
     private readonly Dictionary<string, SubAgent> subAgentTableMap = new(StringComparer.Ordinal);
     private SubAgentChatClient? subAgentChatClientSource;
+    private CopilotSdkChatClient? copilotSdkClient;
     private string agentId = string.Empty;
     private AgentChat? parentAgent;
     private bool acceptsUserInput = true;
@@ -437,6 +438,7 @@ public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvid
 
        if (resolvedClient.GetService(typeof(CopilotSdkChatClient)) is CopilotSdkChatClient copilotChatClient)
        {
+           this.copilotSdkClient = copilotChatClient;
            copilotChatClient.SteeringMessageForwarded += message => this.AppendSteeringMessagesToHistory([message]);
            // Fix #1109: RunningAgentChatFactory is mandatory for any AgentChat that hosts a Copilot
            // SDK client — the sub-agent router has no fallback path if it's missing. Fail fast so
@@ -1639,6 +1641,21 @@ public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvid
     internal void SetCompletionState(AgentChatCompletionState state)
         => this.SetCompletionState(state, preserveLastUpdatedAt: false);
 
+    internal void ApplySubAgentLifecycleState(ApplySubAgentStateRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var state = request.State is "running" or "idle" or "working" or "waiting" or "attention"
+            ? AgentChatCompletionState.Running
+            : request.State is "failed" or "cancelled"
+                ? AgentChatCompletionState.Failed
+                : AgentChatCompletionState.Succeeded;
+        _ = Task.Factory.StartNew(
+            () => this.SetCompletionState(state),
+            CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach,
+            this.foregroundScheduler);
+    }
+
     /// <summary>
     /// Sets the sub-agent completion-state override.
     /// </summary>
@@ -1724,6 +1741,7 @@ public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvid
         foreach (var stub in stubs)
         {
             this.subAgentItems.Add(stub);
+            this.copilotSdkClient?.RegisterRestoredSubAgent(stub);
         }
     }
 

@@ -21,7 +21,7 @@ public sealed class SubAgent : IRunningSubAgent
     /// Non-null on the eager path (registered via <see cref="ISubAgentTable.Add"/>);
     /// null on the lazy path until <see cref="AcquireLeaseAsync"/> is called.
     /// </summary>
-    internal AgentChat? AgentChat { get; }
+    internal AgentChat? AgentChat { get; private set; }
 
     /// <summary>Eager path — AgentChat already in hand (from <see cref="ISubAgentTable.Add"/>).</summary>
     internal SubAgent(AgentSessionId sessionId, AgentChat agentChat, IRunningAgentChatFactory? factory)
@@ -29,6 +29,7 @@ public sealed class SubAgent : IRunningSubAgent
         SessionId = sessionId;
         AgentChat = agentChat;
         _factory = factory;
+        agentChat.CompletionStateChanged += this.OnChatCompletionStateChanged;
     }
 
     /// <summary>Lazy path — AgentChat not yet loaded (from RestoreSubAgentsAsync).</summary>
@@ -52,7 +53,14 @@ public sealed class SubAgent : IRunningSubAgent
     public void SetRestoredCompletionState(AgentChatCompletionState state)
     {
         _restoredCompletionState = state;
+        this.AgentChat?.SetCompletionState(state);
+        this.CompletionStateChanged?.Invoke(this, EventArgs.Empty);
     }
+
+    public event EventHandler? CompletionStateChanged;
+
+    private void OnChatCompletionStateChanged(object? sender, EventArgs args)
+        => this.CompletionStateChanged?.Invoke(this, args);
 
     /// <summary>Test/inspect helper: the restored completion-state override, if any.</summary>
     internal AgentChatCompletionState? RestoredCompletionState => _restoredCompletionState;
@@ -75,24 +83,22 @@ public sealed class SubAgent : IRunningSubAgent
         // for every persisted sub-agent after a GUI restart. Mirror the opt-out that #1150 added
         // to the live-creation path (GetOrCreateAsync).
         var leaseTask = factory.GetAsync(SessionId, registerAsRunningAgent: false, ct);
-        var overrideState = _restoredCompletionState;
-        if (overrideState is null)
-        {
-            // Fast path: no override to apply — return the factory task directly so
-            // continuations schedule identically to the pre-#1186 behaviour and tests
-            // that verify scheduler ordering keep working.
-            return leaseTask;
-        }
-        return ApplyRestoredCompletionStateAsync(leaseTask, overrideState.Value);
+        if (_restoredCompletionState is null) return leaseTask;
+        return ApplyRestoredCompletionStateAsync(leaseTask);
 
-        static async Task<RunningAgentChatLease> ApplyRestoredCompletionStateAsync(
-            Task<RunningAgentChatLease> pending,
-            AgentChatCompletionState state)
+        async Task<RunningAgentChatLease> ApplyRestoredCompletionStateAsync(
+            Task<RunningAgentChatLease> pending)
         {
             var lease = await pending.ConfigureAwait(false);
             if (lease.LocalAgentChat is { } agentChat)
             {
-                agentChat.SetCompletionState(state, preserveLastUpdatedAt: true);
+                if (!ReferenceEquals(this.AgentChat, agentChat))
+                {
+                    this.AgentChat = agentChat;
+                    agentChat.CompletionStateChanged += this.OnChatCompletionStateChanged;
+                }
+                if (this._restoredCompletionState is { } state)
+                    agentChat.SetCompletionState(state, preserveLastUpdatedAt: true);
             }
             return lease;
         }

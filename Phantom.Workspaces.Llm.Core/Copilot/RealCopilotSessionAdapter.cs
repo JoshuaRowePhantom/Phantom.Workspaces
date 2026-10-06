@@ -1,4 +1,6 @@
 using GitHub.Copilot;
+using GitHub.Copilot.Rpc;
+#pragma warning disable GHCP001
 
 namespace Phantom.Workspaces.Llm.Copilot;
 
@@ -24,6 +26,12 @@ internal sealed class RealCopilotSessionAdapter : ICopilotSession
 
     public Task AbortAsync(CancellationToken cancellationToken) =>
         this.inner.AbortAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<TaskInfo>> ListTasksAsync(CancellationToken cancellationToken)
+    {
+        var result = await this.inner.Rpc.Tasks.ListAsync(cancellationToken).ConfigureAwait(false);
+        return result.Tasks.ToList();
+    }
 
     public Task SetModelAsync(string modelId, CancellationToken cancellationToken) =>
         this.inner.SetModelAsync(modelId, cancellationToken);

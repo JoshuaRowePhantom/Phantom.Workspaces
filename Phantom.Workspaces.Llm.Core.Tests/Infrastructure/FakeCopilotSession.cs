@@ -1,4 +1,6 @@
 using GitHub.Copilot;
+using GitHub.Copilot.Rpc;
+#pragma warning disable GHCP001
 using Phantom.Workspaces.Llm.Copilot;
 
 namespace Phantom.Workspaces.Llm.Core.Tests.Infrastructure;
@@ -12,6 +14,17 @@ internal sealed class FakeCopilotSession : ICopilotSession
     public string SessionId { get; set; } = "fake-session-id";
 
     public IReadOnlyList<ModelInfo> Models { get; set; } = Array.Empty<ModelInfo>();
+    public Func<CancellationToken, Task<IReadOnlyList<TaskInfo>>>? ListTasksHandler { get; set; }
+    public IReadOnlyList<TaskInfo> Tasks { get; set; } = [];
+    public Task<IReadOnlyList<TaskInfo>> ListTasksAsync(CancellationToken cancellationToken) =>
+        this.ListTasksHandler?.Invoke(cancellationToken) ?? Task.FromResult(this.Tasks);
+
+    public void Emit(SessionEvent sessionEvent)
+    {
+        Action<SessionEvent>[] handlers;
+        lock (this.lockObject) handlers = this.subscribers.ToArray();
+        foreach (var handler in handlers) handler(sessionEvent);
+    }
 
     public List<SessionConfig> CreateSessionConfigs { get; } = new();
 

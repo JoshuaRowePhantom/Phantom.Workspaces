@@ -1,4 +1,6 @@
 using GitHub.Copilot;
+using GitHub.Copilot.Rpc;
+#pragma warning disable GHCP001
 using Phantom.Workspaces.Llm.Copilot;
 
 namespace Phantom.Workspaces.Llm.Core.Tests.Infrastructure;
@@ -7,6 +9,10 @@ internal sealed class FakeCopilotClient : ICopilotClient
 {
     private readonly FakeCopilotSession session;
     private bool started;
+    public Func<ReadCopilotPersistedEventsRequest, CancellationToken, Task<EventsReadResult>>? ReadEventsHandler { get; set; }
+    public Task<EventsReadResult> ReadPersistedEventsAsync(ReadCopilotPersistedEventsRequest request, CancellationToken cancellationToken) =>
+        this.ReadEventsHandler?.Invoke(request, cancellationToken)
+        ?? Task.FromResult(new EventsReadResult { Events = [], HasMore = false });
 
     public FakeCopilotClient(FakeCopilotSession session)
     {

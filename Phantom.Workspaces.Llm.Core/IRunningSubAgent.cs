@@ -14,6 +14,11 @@ public interface IRunningSubAgent
     string Name => string.Empty;
 
     AgentChatCompletionState CompletionState { get; }
+    event EventHandler? CompletionStateChanged
+    {
+        add { }
+        remove { }
+    }
     DateTime LastUpdatedAt { get; }
     IReadOnlyList<IRunningSubAgent> SubAgents { get; }
 }

@@ -1,5 +1,6 @@
 using AgentSchema;
 using System.Collections.Specialized;
+using Avalonia.Threading;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
@@ -40,6 +41,81 @@ public sealed class AgentViewModelSubAgentBrowserTests
     }
 
     // ── §10 Browser card ──────────────────────────────────────────────────────
+
+    [Fact]
+    public void SubAgentBrowserViewModel_TerminalToRunningWithHideCompletedTrue_ReappearsWithoutCollectionChange()
+    {
+        var child = new StubSubAgentItem("child", "Child", AgentChatCompletionState.Succeeded, DateTime.UtcNow);
+        var source = new System.Collections.ObjectModel.ObservableCollection<IRunningSubAgent> { child };
+        using var browser = new SubAgentBrowserViewModel(
+            new System.Collections.ObjectModel.ReadOnlyObservableCollection<IRunningSubAgent>(source));
+        browser.HideCompleted = true;
+        Assert.Empty(browser.VisibleItems);
+
+        child.ChangeState(AgentChatCompletionState.Running);
+        Assert.Same(child, Assert.Single(browser.VisibleItems));
+
+        child.ChangeState(AgentChatCompletionState.Failed);
+        Assert.Empty(browser.VisibleItems);
+    }
+
+    [Fact]
+    public void SubAgentBrowserViewModel_RemoveResetAndDispose_UnsubscribesCompletionHandlers()
+    {
+        var child = new StubSubAgentItem("child", "Child", AgentChatCompletionState.Running, DateTime.UtcNow);
+        var replacement = new StubSubAgentItem("new", "New", AgentChatCompletionState.Running, DateTime.UtcNow);
+        var source = new System.Collections.ObjectModel.ObservableCollection<IRunningSubAgent> { child };
+        var browser = new SubAgentBrowserViewModel(
+            new System.Collections.ObjectModel.ReadOnlyObservableCollection<IRunningSubAgent>(source));
+        Assert.Equal(1, child.SubscriberCount);
+        source[0] = replacement;
+        Assert.Equal(0, child.SubscriberCount);
+        Assert.Equal(1, replacement.SubscriberCount);
+        source.Clear();
+        Assert.Equal(0, replacement.SubscriberCount);
+        source.Add(child);
+        source.Remove(child);
+        Assert.Equal(0, child.SubscriberCount);
+        source.Add(replacement);
+        browser.Dispose();
+        Assert.Equal(0, replacement.SubscriberCount);
+    }
+
+    [Fact]
+    public void SubAgentBrowserViewModel_HideCompletedFalse_StateFlipKeepsAllItemsVisible()
+    {
+        var child = new StubSubAgentItem("child", "Child", AgentChatCompletionState.Succeeded, DateTime.UtcNow);
+        var source = new System.Collections.ObjectModel.ObservableCollection<IRunningSubAgent> { child };
+        using var browser = new SubAgentBrowserViewModel(
+            new System.Collections.ObjectModel.ReadOnlyObservableCollection<IRunningSubAgent>(source));
+        var before = browser.VisibleItems;
+        child.ChangeState(AgentChatCompletionState.Running);
+        Assert.Same(child, Assert.Single(browser.VisibleItems));
+        Assert.NotSame(before, browser.VisibleItems);
+    }
+
+    [AvaloniaFact]
+    public async Task SubAgentBrowserViewModel_CompletionRaisedOffThread_RefreshesOnUiScheduler()
+    {
+        var child = new StubSubAgentItem("child", "Child", AgentChatCompletionState.Succeeded, DateTime.UtcNow);
+        var source = new System.Collections.ObjectModel.ObservableCollection<IRunningSubAgent> { child };
+        using var browser = new SubAgentBrowserViewModel(
+            new System.Collections.ObjectModel.ReadOnlyObservableCollection<IRunningSubAgent>(source));
+        browser.HideCompleted = true;
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        browser.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(browser.VisibleItems) && browser.VisibleItems.Count == 1)
+            {
+                Assert.True(Dispatcher.UIThread.CheckAccess());
+                completed.TrySetResult();
+            }
+        };
+
+        await Task.Run(() => child.ChangeState(AgentChatCompletionState.Running));
+        await completed.Task;
+        Assert.Same(child, Assert.Single(browser.VisibleItems));
+    }
 
     [Fact]
     public void BrowserCard_SortedReverseChronologically_ByLastUpdatedAt()
@@ -840,8 +916,20 @@ public sealed class AgentViewModelSubAgentBrowserTests
         public string AgentId { get; } = agentId;
         public string DisplayName { get; } = displayName;
         public string Description => string.Empty;
-        public AgentChatCompletionState CompletionState { get; } = completionState;
+        public AgentChatCompletionState CompletionState { get; private set; } = completionState;
         public DateTime LastUpdatedAt { get; } = lastUpdatedAt;
         public IReadOnlyList<IRunningSubAgent> SubAgents => [];
+        private EventHandler? completionStateChanged;
+        public int SubscriberCount => this.completionStateChanged?.GetInvocationList().Length ?? 0;
+        public event EventHandler? CompletionStateChanged
+        {
+            add => this.completionStateChanged += value;
+            remove => this.completionStateChanged -= value;
+        }
+        public void ChangeState(AgentChatCompletionState state)
+        {
+            this.CompletionState = state;
+            this.completionStateChanged?.Invoke(this, EventArgs.Empty);
+        }
     }
 }

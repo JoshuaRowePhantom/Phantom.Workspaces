@@ -37,6 +37,10 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
     private readonly IRunningAgentChatFactory factory;
     private readonly ISubAgentTable subAgentTable;
     private readonly ILogger? logger;
+    private readonly Action<string, string?, SubAgent>? registerChild;
+    private readonly Func<string, SubAgent?>? resolveChild;
+    private readonly Func<string, SubAgent?>? resolveTaskChild;
+    private readonly Action<string, string?>? invocationFinished;
 
     // Tool starts arriving on the root stream, keyed by CallId, buffered so they can be injected
     // as the first history message when the corresponding sub-agent-started lifecycle signal
@@ -72,7 +76,11 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
         ChannelWriter<ChatResponseUpdate> rootWriter,
         IRunningAgentChatFactory factory,
         ISubAgentTable subAgentTable,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        Action<string, string?, SubAgent>? registerChild = null,
+        Func<string, SubAgent?>? resolveChild = null,
+        Func<string, SubAgent?>? resolveTaskChild = null,
+        Action<string, string?>? invocationFinished = null)
     {
         ArgumentNullException.ThrowIfNull(rootWriter);
         ArgumentNullException.ThrowIfNull(factory);
@@ -82,6 +90,17 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
         this.factory = factory;
         this.subAgentTable = subAgentTable;
         this.logger = logger;
+        this.registerChild = registerChild;
+        this.resolveChild = resolveChild;
+        this.resolveTaskChild = resolveTaskChild;
+        this.invocationFinished = invocationFinished;
+    }
+
+    internal void ApplyTaskState(string toolCallId, string state)
+    {
+        if (this.resolveTaskChild?.Invoke(toolCallId)?.AgentChat is not { } child) return;
+        child.ApplySubAgentLifecycleState(new(child.AgentSessionId, CopilotSubAgentLifecycleLayer.Task, state,
+            InvocationToolCallId: toolCallId));
     }
 
     /// <summary>
@@ -386,11 +405,35 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
             {
                 InjectToolCallPrompt(entry, buffered);
             }
+
+            if (!string.IsNullOrEmpty(agentId) && this.resolveChild?.Invoke(agentId) is { } restored)
+            {
+                RunningAgentChatLease? restoredLease = null;
+                var existing = restored.AgentChat;
+                if (existing is null)
+                {
+                    restoredLease = await restored.AcquireLeaseAsync().ConfigureAwait(false);
+                    existing = restoredLease.LocalAgentChat;
+                }
+                var receiver = existing?.GetService(typeof(ICopilotSubAgentReceiver)) as ICopilotSubAgentReceiver;
+                if (receiver is CopilotSubAgentChatClient reusable) reusable.BeginInvocation();
+                if (receiver is not null)
+                {
+                    existing!.SetCompletionState(AgentChatCompletionState.Running);
+                    if (restoredLease is not null) entry.Attach(restoredLease, receiver);
+                    else entry.AttachExisting(existing, receiver);
+                    return;
+                }
+                if (restoredLease is not null) await restoredLease.DisposeAsync().ConfigureAwait(false);
+            }
+
         }
 
         try
         {
-            var sessionId = new AgentSessionId(Guid.NewGuid().ToString("n"));
+            var sessionId = CopilotSubAgentIdentity.Create(
+                string.IsNullOrEmpty(agentId) ? parentToolCallId! : agentId,
+                parentToolCallId);
             var subAgentDefinition = CopilotSubAgentDefinitionDefaults.Create(
                 subAgentSessionId: sessionId.Value,
                 displayName: displayNameOverride,
@@ -411,7 +454,8 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
                     "Sub-agent AgentChat does not expose ICopilotSubAgentReceiver. " +
                     "Ensure the AgentDefinition uses the 'github-copilot-subagent' provider.");
 
-            await this.subAgentTable.Add(agentChat);
+            var child = await this.subAgentTable.Add(agentChat);
+            this.registerChild?.Invoke(agentId, parentToolCallId, child);
 
             entry.Attach(lease, receiver);
         }
@@ -500,6 +544,9 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
         {
             await entry.CompleteAsync().ConfigureAwait(false);
         }
+        this.invocationFinished?.Invoke(agentId,
+            result.AdditionalProperties?.TryGetValue(CopilotSdkStreamAdapter.InvocationToolCallIdPropertyName,
+                out var invocation) == true ? invocation as string : null);
 
         if (removeFromChildSinks)
         {
@@ -670,6 +717,7 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
         private readonly List<ChatResponseUpdate> pending = new();
         private ICopilotSubAgentReceiver? receiver;
         private RunningAgentChatLease? lease;
+        private AgentChat? existingChat;
         private bool completedSucceeded;
         private Exception? completedFailure;
         private bool endSignalled;
@@ -760,6 +808,19 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
             }
         }
 
+        internal void AttachExisting(AgentChat chat, ICopilotSubAgentReceiver receiver)
+        {
+            List<ChatResponseUpdate> updates;
+            lock (this.gate)
+            {
+                this.existingChat = chat;
+                this.receiver = receiver;
+                updates = new List<ChatResponseUpdate>(this.pending);
+                this.pending.Clear();
+            }
+            foreach (var update in updates) receiver.Push(update);
+        }
+
         internal void Fail(Exception exception)
         {
             ICopilotSubAgentReceiver? target;
@@ -808,10 +869,11 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
             if (target is not null)
             {
                 target.Complete();
-                if (leaseToDispose is { } lease && lease.LocalAgentChat is { } agentChat)
+                if (leaseToDispose?.LocalAgentChat is { } agentChat)
                 {
                     agentChat.SetCompletionState(AgentChatCompletionState.Succeeded);
                 }
+                else this.existingChat?.SetCompletionState(AgentChatCompletionState.Succeeded);
             }
 
             if (leaseToDispose is not null)
@@ -840,10 +902,11 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
             if (target is not null)
             {
                 target.Fail(exception);
-                if (leaseToDispose is { } lease && lease.LocalAgentChat is { } agentChat)
+                if (leaseToDispose?.LocalAgentChat is { } agentChat)
                 {
                     agentChat.SetCompletionState(AgentChatCompletionState.Failed);
                 }
+                else this.existingChat?.SetCompletionState(AgentChatCompletionState.Failed);
             }
 
             if (leaseToDispose is not null)

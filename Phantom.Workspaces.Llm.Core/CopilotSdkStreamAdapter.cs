@@ -58,6 +58,10 @@ public static class CopilotSdkStreamAdapter
 
     /// <summary>Lifecycle-start argument: the root tool call that spawned the sub-agent.</summary>
     public const string ParentToolCallIdArgumentName = "parent-tool-call-id";
+    public const string InvocationToolCallIdPropertyName = "invocation-tool-call-id";
+    public const string LifecycleEventIdPropertyName = "lifecycle-event-id";
+    public const string LifecycleParentEventIdPropertyName = "lifecycle-parent-event-id";
+    public const string LifecycleTimestampPropertyName = "lifecycle-timestamp";
 
     /// <summary>Lifecycle-start argument: the sub-agent's display name.</summary>
     public const string DisplayNameArgumentName = "display-name";
@@ -204,7 +208,7 @@ public static class CopilotSdkStreamAdapter
                                     [DisplayNameArgumentName] = started.Data?.AgentDisplayName,
                                     [DescriptionArgumentName] = started.Data?.AgentDescription,
                                     [AgentNameArgumentName] = started.Data?.AgentName,
-                                })),
+                                }), started, started.Data?.ToolCallId),
                         ],
                     };
                     break;
@@ -216,7 +220,7 @@ public static class CopilotSdkStreamAdapter
                         [
                             TagLifecycle(new FunctionResultContent(
                                 completedId,
-                                """{"event":"completed"}""")),
+                                """{"event":"completed"}"""), completed, completed.Data?.ToolCallId),
                         ],
                     };
                     break;
@@ -232,7 +236,7 @@ public static class CopilotSdkStreamAdapter
                                 {
                                     ["event"] = "failed",
                                     ["error"] = failed.Data?.Error,
-                                }))),
+                                })), failed, failed.Data?.ToolCallId),
                         ],
                     };
                     break;
@@ -426,13 +430,17 @@ public static class CopilotSdkStreamAdapter
     private static string? GetAssistantParentToolCallId(AssistantMessageData data) => data.ParentToolCallId;
 #pragma warning restore GHCP001
 
-    private static AIContent TagLifecycle(AIContent content)
+    private static AIContent TagLifecycle(AIContent content, SessionEvent source, string? toolCallId)
     {
         // Lifecycle signals have explicit CallId routing and never carry
         // ParentToolCallIdPropertyName; the content-type marker lets the router recognise them
         // without maintaining a table of known IDs.
         content.AdditionalProperties ??= [];
         content.AdditionalProperties[ContentTypePropertyName] = SubAgentLifecycleContentType;
+        content.AdditionalProperties[InvocationToolCallIdPropertyName] = toolCallId;
+        content.AdditionalProperties[LifecycleEventIdPropertyName] = source.Id;
+        content.AdditionalProperties[LifecycleParentEventIdPropertyName] = source.ParentId;
+        content.AdditionalProperties[LifecycleTimestampPropertyName] = source.Timestamp;
         return content;
     }
 

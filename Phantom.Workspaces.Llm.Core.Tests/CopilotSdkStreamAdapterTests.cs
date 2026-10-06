@@ -182,6 +182,27 @@ public sealed class CopilotSdkStreamAdapterTests
     }
 
     [Fact]
+    public async Task SubagentLifecycle_PreservesInvocationAndEventMetadata()
+    {
+        var eventId = Guid.NewGuid();
+        var previous = Guid.NewGuid();
+        var timestamp = DateTimeOffset.UtcNow;
+        var updates = await TranslateAsync(new SubagentStartedEvent
+        {
+            Id = eventId, ParentId = previous, Timestamp = timestamp, AgentId = "child",
+            Data = new SubagentStartedData
+            {
+                ToolCallId = "call", AgentName = "child", AgentDisplayName = "Child", AgentDescription = "test",
+            },
+        });
+        var call = Assert.IsType<FunctionCallContent>(Assert.Single(Assert.Single(updates).Contents));
+        Assert.Equal("call", call.AdditionalProperties![CopilotSdkStreamAdapter.InvocationToolCallIdPropertyName]);
+        Assert.Equal(eventId, call.AdditionalProperties[CopilotSdkStreamAdapter.LifecycleEventIdPropertyName]);
+        Assert.Equal(previous, call.AdditionalProperties[CopilotSdkStreamAdapter.LifecycleParentEventIdPropertyName]);
+        Assert.Equal(timestamp, call.AdditionalProperties[CopilotSdkStreamAdapter.LifecycleTimestampPropertyName]);
+    }
+
+    [Fact]
     public async Task TranslateCopilotSdkSessionEvents_SubagentStartedEvent_YieldsLifecycleFunctionCall()
     {
         var updates = await TranslateAsync(new SubagentStartedEvent

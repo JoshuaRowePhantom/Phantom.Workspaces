@@ -1,4 +1,6 @@
 using GitHub.Copilot;
+using GitHub.Copilot.Rpc;
+#pragma warning disable GHCP001
 
 namespace Phantom.Workspaces.Llm.Copilot;
 
@@ -9,6 +11,8 @@ internal interface ICopilotSession : IAsyncDisposable
     Task<AssistantMessageEvent?> SendAndWaitAsync(MessageOptions options, TimeSpan? timeout, CancellationToken cancellationToken);
     Task SendAsync(MessageOptions options, CancellationToken cancellationToken);
     Task AbortAsync(CancellationToken cancellationToken);
+    Task<IReadOnlyList<TaskInfo>> ListTasksAsync(CancellationToken cancellationToken) =>
+        throw new NotSupportedException("This session does not expose background task snapshots.");
 
     /// <summary>
     /// Changes the active model on the live session without tearing it down, so the conversation
