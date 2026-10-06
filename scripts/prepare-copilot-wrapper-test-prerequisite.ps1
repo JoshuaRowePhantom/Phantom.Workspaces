@@ -147,6 +147,7 @@ function Test-CompletedCache {
             'prepared/Phantom.Workspaces.Llm.Core.dll'
             'prepared/Phantom.Workspaces.dll'
             'prepared/copilot.exe'
+            'prepared/copilot-runtime.exe'
             'prepared/copilot_runtime.dll'
             'prepared/mxc_ffi.dll'
             'prepared/phantom-copilot-wrapper.exe'
@@ -562,6 +563,8 @@ try
                     [StringComparison]::OrdinalIgnoreCase)
             } |
             Select-Object -First 1 -ExpandProperty FullName
+        $copilotSdkWrapperSource = Join-Path (Split-Path $copilotSource) 'copilot-runtime.exe'
+        $copilotNodeSource = Join-Path (Split-Path $copilotSource) 'runtime.node'
         $copilotLicenseSource = Get-ChildItem `
                 -LiteralPath $wrapperBuildDirectory `
                 -Filter 'LICENSE.md' `
@@ -670,6 +673,8 @@ try
         $requiredSources = @(
             $wrapperSource
             $copilotSource
+            $copilotSdkWrapperSource
+            $copilotNodeSource
             $copilotRuntimeSource
             $copilotLicenseSource
             $mxcFfiSource
@@ -698,6 +703,16 @@ try
         {
             throw "The published copilot.exe does not match the checksum-verified CLI source."
         }
+        if ((Get-Sha256 $copilotSdkWrapperSource) -ne
+            (Get-Sha256 $copilotInputExecutable))
+        {
+            throw "The SDK copilot-runtime.exe does not match the checksum-verified CLI source."
+        }
+        if ((Get-Sha256 $copilotNodeSource) -ne
+            (Get-Sha256 $copilotInputRuntimeLibrary))
+        {
+            throw "The SDK runtime.node does not match the checksum-verified CLI source."
+        }
         if ((Get-Sha256 $copilotRuntimeSource) -ne
             (Get-Sha256 $copilotInputRuntimeLibrary))
         {
@@ -716,7 +731,9 @@ try
             'prepared/phantom-copilot-wrapper.exe' = $wrapperSource
             'prepared/phantom-copilot-wrapper.dll' = $wrapperAssemblySource
             'prepared/copilot.exe' = $copilotSource
+            'prepared/copilot-runtime.exe' = $copilotSdkWrapperSource
             'prepared/copilot_runtime.dll' = $copilotRuntimeSource
+            'prepared/runtime.node' = $copilotNodeSource
             'prepared/LICENSE.md' = $copilotLicenseSource
             'prepared/mxc_ffi.dll' = $mxcFfiSource
             'prepared/plm.exe' = $plmSource

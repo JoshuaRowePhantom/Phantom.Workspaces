@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
-    Release-gate assertions that the published/installed payload bundles the GitHub Copilot CLI
-    runtime and its license (issue #1376).
+    Release-gate assertions that the published/installed payload bundles the GitHub Copilot SDK
+    runtime pair, its native sidecars and license (issues #1376 and #1614).
 
 .DESCRIPTION
     GitHub.Copilot.SDK resolves the Copilot CLI strictly from
@@ -10,7 +10,7 @@
     had no runtime and the provider failed with "Copilot runtime not found". These checks fail the
     build if the loose runtime and its required license are absent, and (unless -SkipStartupSmoke)
     launch the bundled `copilot.exe` without server-mode arguments and confirm it reaches the
-    runtime's expected argument validation.
+    runtime's expected argument validation, then start a genuine SDK client from that payload.
 
     Implements the CI / packaging checks documented in docs/design/build-and-installation.md:
       - Publish_IncludesCopilotRuntime_ForEachRid
@@ -25,9 +25,13 @@
     The runtime identifier the payload was published for (e.g. win-x64, win-arm64).
 
 .PARAMETER SkipStartupSmoke
-    Skip launching copilot.exe. Set this when validating a payload whose RID differs from
+    Skip launching copilot.exe and the SDK. Set this when validating a payload whose RID differs from
     the host architecture (e.g. asserting the win-arm64 payload on an x64 runner), because the
     bundled binary cannot execute on a mismatched CPU.
+
+.PARAMETER SkipSdkStartupSmoke
+    Test-fixture-only escape hatch for synthetic payloads without all SDK-staged native assets.
+    Release and installed-payload validation must not set this.
 #>
 [CmdletBinding()]
 param(
@@ -36,7 +40,9 @@ param(
     [Parameter(Mandatory)]
     [string] $RuntimeIdentifier,
     [Parameter()]
-    [switch] $SkipStartupSmoke
+    [switch] $SkipStartupSmoke,
+    [Parameter()]
+    [switch] $SkipSdkStartupSmoke
 )
 
 $ErrorActionPreference = 'Stop'
@@ -56,6 +62,18 @@ if (-not (Test-Path -LiteralPath $copilotExe))
         "GitHub.Copilot.SDK resolves the CLI from AppContext.BaseDirectory\runtimes\<rid>\native\copilot.exe."
 }
 Write-Host "OK  Copilot runtime present: $copilotExe"
+
+$sdkWrapper = Join-Path $nativeDir 'copilot-runtime.exe'
+if (-not (Test-Path -LiteralPath $sdkWrapper -PathType Leaf))
+{
+    throw "SDK runtime wrapper missing from payload: expected loose file '$sdkWrapper' (issue #1614)."
+}
+$runtimeNode = Join-Path $nativeDir 'runtime.node'
+if (-not (Test-Path -LiteralPath $runtimeNode -PathType Leaf))
+{
+    throw "SDK runtime.node sidecar missing from payload: '$runtimeNode' (issue #1614)."
+}
+Write-Host "OK  Copilot SDK runtime pair and sidecar present: $sdkWrapper"
 
 $wrapperExe = Join-Path $nativeDir 'phantom-copilot-wrapper.exe'
 if (-not (Test-Path -LiteralPath $wrapperExe -PathType Leaf))
@@ -207,6 +225,27 @@ namespace Phantom.Workspaces
         throw "Bundled copilot.exe did not reach expected server-mode argument validation (exit $startupExitCode): $startup (issue #1376)."
     }
     Write-Host "OK  Copilot runtime launches and validates server mode."
+}
+
+if (-not $SkipStartupSmoke -and -not $SkipSdkStartupSmoke)
+{
+    $probe = Join-Path $PSScriptRoot 'CopilotSdkStartupProbe\CopilotSdkStartupProbe.csproj'
+    $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+    try
+    {
+        $PSNativeCommandUseErrorActionPreference = $false
+        $sdkStartup = & dotnet run --project $probe --configuration Release -- $PayloadDirectory 2>&1
+        $sdkExitCode = $LASTEXITCODE
+    }
+    finally
+    {
+        $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
+    }
+    if ($sdkExitCode -ne 0 -or ($sdkStartup | Out-String) -notmatch 'Copilot SDK StartAsync succeeded')
+    {
+        throw "Installed payload Copilot SDK StartAsync failed (exit $sdkExitCode): $sdkStartup (issue #1614)."
+    }
+    Write-Host "OK  Installed payload Copilot SDK StartAsync succeeded."
 }
 
 Write-Host "Copilot runtime payload validation passed for $RuntimeIdentifier."

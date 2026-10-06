@@ -39,7 +39,7 @@ public sealed class CopilotWrapperPackagingTests
     }
 
     [Fact]
-    public async Task RuntimePayload_WinX64_IncludesWrapperCliMxcAndLicenses()
+    public async Task RuntimePayload_WinX64_IncludesSdkRuntimePairAndSidecars()
     {
         var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         await using var payload = new MxcRepositoryTestSupport.TestDirectory(
@@ -70,7 +70,9 @@ public sealed class CopilotWrapperPackagingTests
         {
             ["phantom-copilot-wrapper.exe"] = prerequisite.WrapperExecutable,
             ["copilot.exe"] = prerequisite.CopilotExecutable,
+            ["copilot-runtime.exe"] = Path.Combine(prerequisite.PreparedDirectory, "copilot-runtime.exe"),
             ["copilot_runtime.dll"] = prerequisite.CopilotRuntimeLibrary,
+            ["runtime.node"] = Path.Combine(prerequisite.PreparedDirectory, "runtime.node"),
             ["mxc_ffi.dll"] = prerequisite.MxcFfi,
             ["plm.exe"] = prerequisite.Plm,
             ["LICENSE.md"] = prerequisite.CopilotLicense,
@@ -89,12 +91,79 @@ public sealed class CopilotWrapperPackagingTests
             "validate",
             "Assert-CopilotRuntimePayload.ps1",
             "-PayloadDirectory", payload.Path,
-            "-RuntimeIdentifier", "win-x64");
+            "-RuntimeIdentifier", "win-x64",
+            "-SkipSdkStartupSmoke");
         Assert.Equal(0, validation.ExitCode);
         Assert.Contains(
             "Copilot runtime payload validation passed",
             validation.StandardOutput,
             StringComparison.Ordinal);
+        Assert.NotEqual(
+            await HashFileAsync(prerequisite.WrapperExecutable),
+            await HashFileAsync(Path.Combine(nativeDirectory, "copilot-runtime.exe")));
+    }
+
+    [Fact]
+    public async Task RuntimePayload_MissingSdkRuntimeWrapper_FailsValidation()
+    {
+        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        await using var payload = CreateValidatorPayload(prerequisite);
+        File.Delete(Path.Combine(payload.Path, "runtimes", "win-x64", "native", "copilot-runtime.exe"));
+
+        var validation = await MxcRepositoryTestSupport.InvokePowerShellAsync(
+            "packaging", "validate", "Assert-CopilotRuntimePayload.ps1",
+            "-PayloadDirectory", payload.Path,
+            "-RuntimeIdentifier", "win-x64",
+            "-SkipStartupSmoke");
+        Assert.NotEqual(0, validation.ExitCode);
+        Assert.Contains("SDK runtime wrapper missing", validation.StandardError + validation.StandardOutput);
+    }
+
+    [Fact]
+    public async Task RuntimeZip_SdkRuntimePairPreserved_PassesValidation()
+    {
+        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        await using var payload = CreateValidatorPayload(prerequisite);
+        await using var archive = new MxcRepositoryTestSupport.TestDirectory();
+        var zip = Path.Combine(archive.Path, "release.zip");
+        System.IO.Compression.ZipFile.CreateFromDirectory(payload.Path, zip);
+        var validation = await MxcRepositoryTestSupport.InvokePowerShellAsync(
+            "packaging", "validate", "Assert-CopilotRuntimeZip.ps1",
+            "-ZipPath", zip, "-RuntimeIdentifier", "win-x64", "-SkipStartupSmoke");
+        Assert.Equal(0, validation.ExitCode);
+        File.Delete(Path.Combine(payload.Path, "runtimes", "win-x64", "native", "copilot-runtime.exe"));
+        var brokenZip = Path.Combine(archive.Path, "broken.zip");
+        System.IO.Compression.ZipFile.CreateFromDirectory(payload.Path, brokenZip);
+        var broken = await MxcRepositoryTestSupport.InvokePowerShellAsync(
+            "packaging", "validate", "Assert-CopilotRuntimeZip.ps1",
+            "-ZipPath", brokenZip, "-RuntimeIdentifier", "win-x64", "-SkipStartupSmoke");
+        Assert.NotEqual(0, broken.ExitCode);
+        Assert.Contains("SDK runtime wrapper missing", broken.StandardError + broken.StandardOutput);
+    }
+
+    [Fact]
+    public async Task InstalledPayload_SdkClientStartup_SucceedsFromCurrentNativeDirectory()
+    {
+        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        await using var payload = CreateValidatorPayload(prerequisite);
+        var nativeDirectory = Path.Combine(payload.Path, "runtimes", "win-x64", "native");
+        var stagedSdkDirectory = Path.GetDirectoryName(prerequisite.CopilotExecutable)!;
+        foreach (var source in Directory.EnumerateFiles(stagedSdkDirectory, "*", SearchOption.AllDirectories))
+        {
+            var relativePath = Path.GetRelativePath(stagedSdkDirectory, source);
+            var destination = Path.Combine(nativeDirectory, relativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            File.Copy(source, destination, overwrite: true);
+        }
+
+        var validation = await MxcRepositoryTestSupport.InvokePowerShellAsync(
+            Path.Combine(MxcRepositoryTestSupport.Root.FullName, "packaging", "validate",
+                "Assert-CopilotRuntimePayload.ps1"),
+            new MxcRepositoryTestSupport.InvocationOptions { Timeout = TimeSpan.FromSeconds(90) },
+            "-PayloadDirectory", payload.Path, "-RuntimeIdentifier", "win-x64");
+        Assert.True(validation.ExitCode == 0,
+            $"SDK startup failed.\nSTDOUT:\n{validation.StandardOutput}\nSTDERR:\n{validation.StandardError}");
+        Assert.Contains("Copilot SDK StartAsync succeeded", validation.StandardOutput);
     }
 
     [Theory]
@@ -358,6 +427,28 @@ public sealed class CopilotWrapperPackagingTests
     }
 
     [Fact]
+    public async Task RuntimePayload_TamperedSdkRuntimeWrapperHash_FailsClosed()
+    {
+        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        await using var payload = new MxcRepositoryTestSupport.TestDirectory();
+        await using var artifacts = new MxcRepositoryTestSupport.TestDirectory();
+        await using var normalOutput = new MxcRepositoryTestSupport.TestDirectory();
+        var arguments = MxcRepositoryTestSupport.CreateCopilotRuntimePayloadArguments(
+            payload.Path, artifacts.Path, normalOutput.Path, prerequisite);
+        var expected = $"-p:PreparedCopilotSdkWrapperSha256={prerequisite.ArtifactSha256("prepared/copilot-runtime.exe")}";
+        var index = Array.IndexOf(arguments, expected);
+        Assert.True(index >= 0);
+        arguments[index] = "-p:PreparedCopilotSdkWrapperSha256=" + new string('0', 64);
+
+        var result = await MxcRepositoryTestSupport.InvokeAsync("dotnet", arguments);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("copilot-runtime.exe' does not match its provenance hash",
+            result.StandardError + result.StandardOutput, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(payload.Path));
+    }
+
+    [Fact]
     public async Task RuntimePayload_PreparedPropertiesWithoutTestOptIn_FailClosed()
     {
         var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
@@ -468,7 +559,9 @@ public sealed class CopilotWrapperPackagingTests
         {
             ["phantom-copilot-wrapper.exe"] = prerequisite.WrapperExecutable,
             ["copilot.exe"] = prerequisite.CopilotExecutable,
+            ["copilot-runtime.exe"] = Path.Combine(prerequisite.PreparedDirectory, "copilot-runtime.exe"),
             ["copilot_runtime.dll"] = prerequisite.CopilotRuntimeLibrary,
+            ["runtime.node"] = Path.Combine(prerequisite.PreparedDirectory, "runtime.node"),
             ["mxc_ffi.dll"] = prerequisite.MxcFfi,
             ["plm.exe"] = prerequisite.Plm,
             ["LICENSE.md"] = prerequisite.CopilotLicense,
@@ -497,7 +590,7 @@ public sealed class CopilotWrapperPackagingTests
             $$"""
             $ErrorActionPreference = 'stop'
             $PSNativeCommandUseErrorActionPreference = ${{useNativeErrorPreference.ToString().ToLowerInvariant()}}
-            & '{{EscapePowerShellLiteral(validator)}}' -PayloadDirectory '{{EscapePowerShellLiteral(payloadDirectory)}}' -RuntimeIdentifier 'win-x64'
+            & '{{EscapePowerShellLiteral(validator)}}' -PayloadDirectory '{{EscapePowerShellLiteral(payloadDirectory)}}' -RuntimeIdentifier 'win-x64' -SkipSdkStartupSmoke
             if ((Test-Path -LiteralPath variable:\LASTEXITCODE)) { exit $LASTEXITCODE }
             """);
         return await MxcRepositoryTestSupport.InvokeAsync(

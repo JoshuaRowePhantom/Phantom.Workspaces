@@ -221,13 +221,16 @@ what `current` points at.
 #### What ends up in the release payload
 
 - `Phantom.Workspaces.exe` — the bundled GUI (runtime + all managed + native deps inside).
-- `runtimes\<rid>\native\copilot.exe` — the GitHub Copilot CLI, shipped as a **loose file** beside
-  the single-file exe, plus `copilot_runtime.dll` and the CLI `LICENSE.md` in the same folder.
+- `runtimes\<rid>\native\copilot-runtime.exe` — the SDK 1.0.13 runtime entrypoint, shipped as a
+  **loose file** alongside its identical `copilot.exe` compatibility alias, `runtime.node`,
+  `copilot_runtime.dll`, the SDK-staged native sidecars and the CLI `LICENSE.md`.
   `GitHub.Copilot.SDK` resolves the CLI strictly from
   `AppContext.BaseDirectory\runtimes\<rid>\native\copilot.exe` and does **not** search PATH, and
   single-file publish drops the SDK's Content-registered binary from the bundle, so the GUI csproj
-  target `PublishCopilotRuntimeLoose` copies it (and the license) from the build output into the
-  publish output. The CLI is redistributed **unmodified** under the GitHub Copilot CLI License; that
+  target `PublishCopilotRuntimeLoose` copies the SDK-staged native layout (and license) from the
+  build output into the publish output. The MXC containment binary
+  `phantom-copilot-wrapper.exe` is distinct from the SDK runtime entrypoint. The CLI is redistributed
+  **unmodified** under the GitHub Copilot CLI License; that
   license (added as content by `Phantom.Workspaces.Llm.Core.csproj`) ships beside the binary to
   satisfy the redistribution conditions (issue #1376).
 - A few assets the bundler intentionally leaves on disk if any (e.g. the WebView2 loader, if
@@ -1060,8 +1063,10 @@ touch the developer's actual install or processes (respecting "don't kill my pro
   asserts the published payload contains the loose file `runtimes\<rid>\native\copilot.exe`
   (`Publish_IncludesCopilotRuntime_ForEachRid`) and the GitHub Copilot CLI `LICENSE.md` beside it
   (`Distribution_IncludesCopilotCliLicense`), and — for the host-arch RID — launches the bundled
-  `copilot.exe` and confirms its expected server-mode argument validation
-  (`InstalledPayload_StartsCopilotProvider_Smoke`).
+  `copilot.exe` and confirms its expected server-mode argument validation, then starts a genuine
+  SDK `CopilotClient` from the published or ZIP-extracted layout with a bounded timeout and
+  deterministic disposal. This startup check requires no account credentials and does not prove
+  an authenticated chat turn or a deployed remote worker connection.
   Wired into `release.yml` (release gate) and `publish-validation.yml`. Rationale: the SDK resolves
   the CLI strictly from `AppContext.BaseDirectory\runtimes\<rid>\native\copilot.exe` (no PATH
   search); single-file publish drops that Content-registered binary, so it must be re-added as a
