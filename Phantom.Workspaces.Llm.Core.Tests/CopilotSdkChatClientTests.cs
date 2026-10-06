@@ -180,6 +180,74 @@ public sealed class CopilotSdkChatClientTests
     }
 
     [Fact]
+    public async Task CopilotSdkChatClient_BackgroundTaskInvalidation_ReactivatesChildWithoutRegistryPoll()
+    {
+        var session = new Infrastructure.FakeCopilotSession
+        {
+            Tasks = [new TaskInfoAgent
+            {
+                Id = "task", ToolCallId = "call", AgentType = "task", Prompt = "first",
+                Description = "test", StartedAt = DateTimeOffset.UtcNow, Status = GitHub.Copilot.Rpc.TaskStatus.Completed,
+            }],
+        };
+        var sdk = new Infrastructure.FakeCopilotClient(session);
+        await using var client = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
+        client.SetCopilotClientFactoryForTest(new Infrastructure.FakeCopilotClientFactory(sdk));
+        await InvokeEnsureSessionAsync(client);
+        var child = new SubAgent(CopilotSubAgentIdentity.Create("child", "call"), null);
+        child.SetRestoredCompletionState(AgentChatCompletionState.Succeeded);
+        client.RegisterRestoredSubAgent(child);
+        Assert.Equal(AgentChatCompletionState.Succeeded, ((IRunningSubAgent)child).CompletionState);
+
+        var reactivated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        child.CompletionStateChanged += (_, _) =>
+        {
+            if (((IRunningSubAgent)child).CompletionState == AgentChatCompletionState.Running)
+                reactivated.TrySetResult();
+        };
+        session.Tasks = [new TaskInfoAgent
+        {
+            Id = "task", ToolCallId = "call", AgentType = "task", Prompt = "follow-up",
+            Description = "test", StartedAt = DateTimeOffset.UtcNow, Status = GitHub.Copilot.Rpc.TaskStatus.Running,
+        }];
+        session.Emit(new SessionBackgroundTasksChangedEvent { Data = new SessionBackgroundTasksChangedData() });
+        await reactivated.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(AgentChatCompletionState.Running, ((IRunningSubAgent)child).CompletionState);
+        Assert.Empty(sdk.LiveSessionStates);
+    }
+
+    [Fact]
+    public async Task CopilotSdkChatClient_SubagentStartedSignal_ReactivatesWithoutTaskChange()
+    {
+        var session = new Infrastructure.FakeCopilotSession();
+        var sdk = new Infrastructure.FakeCopilotClient(session);
+        await using var client = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
+        client.SetCopilotClientFactoryForTest(new Infrastructure.FakeCopilotClientFactory(sdk));
+        await InvokeEnsureSessionAsync(client);
+        var child = new SubAgent(CopilotSubAgentIdentity.Create("child", "original"), null);
+        child.SetRestoredCompletionState(AgentChatCompletionState.Succeeded);
+        client.RegisterRestoredSubAgent(child);
+        var active = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        child.CompletionStateChanged += (_, _) =>
+        {
+            if (((IRunningSubAgent)child).CompletionState == AgentChatCompletionState.Running)
+                active.TrySetResult();
+        };
+        session.Emit(new SubagentStartedEvent
+        {
+            Id = Guid.NewGuid(), AgentId = "child",
+            Data = new SubagentStartedData
+            {
+                ToolCallId = "follow-up", AgentName = "child",
+                AgentDisplayName = "Child", AgentDescription = "test",
+            },
+        });
+        await active.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(AgentChatCompletionState.Running, ((IRunningSubAgent)child).CompletionState);
+        Assert.Empty(sdk.LiveSessionStates);
+    }
+
+    [Fact]
     public async Task CopilotSdkChatClient_RegistryRevision_ReactivatesRestoredChildAndRejectsOlderDone()
     {
         var session = new Infrastructure.FakeCopilotSession();
@@ -228,7 +296,8 @@ public sealed class CopilotSdkChatClientTests
         }
         finally { client.LiveSessionSnapshotApplied -= OnRemoved; }
         Assert.Equal(AgentChatCompletionState.Succeeded, ((IRunningSubAgent)child).CompletionState);
-        await ChangeRegistryStateAsync("working", 1, AgentChatCompletionState.Running);
+        await ChangeRegistryStateAsync("working", 1, AgentChatCompletionState.Succeeded);
+        await ChangeRegistryStateAsync("working", 9, AgentChatCompletionState.Running);
 
         async Task ChangeRegistryStateAsync(string state, long revision, AgentChatCompletionState expected)
         {

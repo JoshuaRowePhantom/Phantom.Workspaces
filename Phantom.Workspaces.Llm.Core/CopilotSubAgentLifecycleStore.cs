@@ -63,7 +63,11 @@ internal sealed class CopilotSubAgentLifecycleStore
     internal bool IsInvocationTerminal(string invocationId) =>
         this.invocations.TryGetValue(invocationId, out var invocation) && IsTerminal(invocation.State);
 
-    internal void RemoveSession(string chatKey) => this.sessions.Remove(chatKey);
+    internal void RemoveSession(string chatKey)
+    {
+        if (this.sessions.TryGetValue(chatKey, out var previous))
+            this.sessions[chatKey] = ("done", previous.Revision);
+    }
 
     internal bool IsActive(string chatKey)
     {

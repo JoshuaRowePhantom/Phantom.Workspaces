@@ -60,4 +60,18 @@ public sealed class CopilotSubAgentLifecycleStoreTests
         Assert.True(store.IsInvocationTerminal("call"));
         Assert.False(store.IsActive("child"));
     }
+
+    [Fact]
+    public void CopilotSubAgentLifecycleStore_MissingSession_KeepsRevisionHighWaterMark()
+    {
+        var store = new CopilotSubAgentLifecycleStore();
+        Assert.True(store.Apply(new("child", CopilotSubAgentLifecycleLayer.Session, "working", StatusRevision: 8)));
+        store.RemoveSession("child");
+        Assert.False(store.IsActive("child"));
+        Assert.False(store.Apply(new("child", CopilotSubAgentLifecycleLayer.Session, "working", StatusRevision: 1)));
+        Assert.False(store.Apply(new("child", CopilotSubAgentLifecycleLayer.Session, "working")));
+        Assert.False(store.IsActive("child"));
+        Assert.True(store.Apply(new("child", CopilotSubAgentLifecycleLayer.Session, "working", StatusRevision: 9)));
+        Assert.True(store.IsActive("child"));
+    }
 }
