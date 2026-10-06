@@ -1064,14 +1064,21 @@ touch the developer's actual install or processes (respecting "don't kill my pro
   (`Publish_IncludesCopilotRuntime_ForEachRid`) and the GitHub Copilot CLI `LICENSE.md` beside it
   (`Distribution_IncludesCopilotCliLicense`), and — for the host-arch RID — launches the bundled
   `copilot.exe` and confirms its expected server-mode argument validation, then starts a genuine
-  SDK `CopilotClient` from the published or ZIP-extracted layout with a bounded timeout and
-  deterministic disposal. This startup check requires no account credentials and does not prove
-  an authenticated chat turn or a deployed remote worker connection.
+  SDK `CopilotClient` from the published or ZIP-extracted layout. A 20-second cancellation token
+  bounds startup, and an outer 90-second process-tree deadline bounds restore, launch, startup
+  and teardown. No credentials are passed to the probe, which performs only the SDK startup
+  handshake (not a model turn); cached user authentication may still be visible on the host.
+  This does not prove an authenticated chat turn or a deployed remote worker connection.
   Wired into `release.yml` (release gate) and `publish-validation.yml`. Rationale: the SDK resolves
   the CLI strictly from `AppContext.BaseDirectory\runtimes\<rid>\native\copilot.exe` (no PATH
   search); single-file publish drops that Content-registered binary, so it must be re-added as a
   loose file (issue #1376). The startup smoke is skipped for the cross-arch payload because the
   bundled binary only executes on a matching CPU.
+  After deployment, rerun the same validator with `-PayloadDirectory` pointing to the worker's
+  **installed current directory** (the directory containing its `Phantom.Workspaces.exe`) and
+  `-RuntimeIdentifier win-x64`, without either skip switch. An extracted release ZIP has the
+  same installed-style layout and is tested locally, but does not establish that the actual
+  installation was updated or that a remote authenticated session completed a turn.
 - **Copilot SDK version pin** — `packaging\validate\Assert-CopilotSdkVersion.ps1` asserts
   `GitHub.Copilot.SDK` is pinned to the reviewed version in `Directory.Packages.props`
   (`PackageVersions_CopilotSdk_IsExpectedPinnedVersion`). The redistributed CLI version is fixed 1:1

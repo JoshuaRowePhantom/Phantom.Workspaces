@@ -46,6 +46,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$runBounded = Join-Path $PSScriptRoot 'Invoke-BoundedProcess.ps1'
 
 if (-not (Test-Path -LiteralPath $PayloadDirectory))
 {
@@ -194,8 +195,9 @@ namespace Phantom.Workspaces
         $PSNativeCommandUseErrorActionPreference = $false
         try
         {
-            $startup = & $copilotExe 2>&1
-            $startupExitCode = $LASTEXITCODE
+            $startupResult = & $runBounded -FileName $copilotExe -TimeoutSeconds 15
+            $startup = $startupResult.StandardOutput + $startupResult.StandardError
+            $startupExitCode = $startupResult.ExitCode
         }
         catch
         {
@@ -230,20 +232,13 @@ namespace Phantom.Workspaces
 if (-not $SkipStartupSmoke -and -not $SkipSdkStartupSmoke)
 {
     $probe = Join-Path $PSScriptRoot 'CopilotSdkStartupProbe\CopilotSdkStartupProbe.csproj'
-    $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
-    try
+    $sdkStartup = & $runBounded -FileName 'dotnet' `
+        -ProcessArguments @('run', '--project', $probe, '--configuration', 'Release', '--', $PayloadDirectory) `
+        -TimeoutSeconds 90
+    if ($sdkStartup.ExitCode -ne 0 -or
+        $sdkStartup.StandardOutput -notmatch 'Copilot SDK StartAsync succeeded')
     {
-        $PSNativeCommandUseErrorActionPreference = $false
-        $sdkStartup = & dotnet run --project $probe --configuration Release -- $PayloadDirectory 2>&1
-        $sdkExitCode = $LASTEXITCODE
-    }
-    finally
-    {
-        $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
-    }
-    if ($sdkExitCode -ne 0 -or ($sdkStartup | Out-String) -notmatch 'Copilot SDK StartAsync succeeded')
-    {
-        throw "Installed payload Copilot SDK StartAsync failed (exit $sdkExitCode): $sdkStartup (issue #1614)."
+        throw "Installed payload Copilot SDK StartAsync failed (exit $($sdkStartup.ExitCode)): $($sdkStartup.StandardOutput) $($sdkStartup.StandardError) (issue #1614)."
     }
     Write-Host "OK  Installed payload Copilot SDK StartAsync succeeded."
 }
