@@ -285,6 +285,33 @@ public sealed class CopilotWrapperPackagingTests
         Assert.Equal(0U, result.ActiveJobProcessesAfterCleanup);
     }
 
+    [Fact]
+    public async Task RuntimePayload_BoundedRunner_ReturnsSingleProcessResult()
+    {
+        await using var scripts = new MxcRepositoryTestSupport.TestDirectory();
+        var runner = Path.Combine(MxcRepositoryTestSupport.Root.FullName, "packaging",
+            "validate", "Invoke-BoundedProcess.ps1");
+        var script = Path.Combine(scripts.Path, "bounded-success.ps1");
+        await File.WriteAllTextAsync(script,
+            $$"""
+            $ErrorActionPreference = 'Stop'
+            $results = @(& '{{EscapePowerShellLiteral(runner)}}' -FileName 'pwsh' `
+                -ProcessArguments @('-NoProfile', '-NonInteractive', '-Command', 'Write-Output SDK_READY') `
+                -TimeoutSeconds 15)
+            if ($results.Count -ne 1 -or $results[0].ExitCode -ne 0 -or
+                $results[0].StandardOutput.Trim() -ne 'SDK_READY') {
+                throw "Bounded runner returned unexpected process results: $($results.Count)"
+            }
+            Write-Output 'Bounded runner result verified'
+            """);
+
+        var result = await MxcRepositoryTestSupport.InvokeAsync(
+            "pwsh", MxcRepositoryTestSupport.CreateValidatorInvocationOptions(),
+            "-NoProfile", "-NonInteractive", "-File", script);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("Bounded runner result verified", result.StandardOutput);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

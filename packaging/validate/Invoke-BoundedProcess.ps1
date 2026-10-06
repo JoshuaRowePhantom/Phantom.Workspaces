@@ -35,7 +35,7 @@ try
     $stderr = $process.StandardError.ReadToEndAsync()
     try
     {
-        $process.WaitForExitAsync($deadline.Token).GetAwaiter().GetResult()
+        [void] $process.WaitForExitAsync($deadline.Token).GetAwaiter().GetResult()
         $standardOutput = $stdout.WaitAsync($deadline.Token).GetAwaiter().GetResult()
         $standardError = $stderr.WaitAsync($deadline.Token).GetAwaiter().GetResult()
     }
