@@ -696,7 +696,7 @@ public sealed class ChatOutputBrowserIntegrationTests
         });
 
     [Fact]
-    public Task HeaderAffordances_SuppressedHeaderWithInspectableContent_ShowsActions()
+    public Task ChatOutput_SuppressedAssistantHeaderWithInspectTargets_RemainsHiddenAndActionsUsable()
         => this.fixture.InvokeAsync(async () =>
         {
             var (web, window) = await ShowReadyBrowserAsync();
@@ -710,7 +710,8 @@ public sealed class ChatOutputBrowserIntegrationTests
                 var message = ChatOutputHtmlRenderer.RenderMessage(
                     "suppressed",
                     "assistant",
-                    [("suppressed-c0", content)],
+                    [("suppressed-c0", content),
+                     ("suppressed-usage", "<div class=\"chat-content chat-usage\" data-usage-inspect-target id=\"suppressed-usage\"></div>")],
                     suppressRoleHeader: true);
                 web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
                     "chat-history-container",
@@ -719,9 +720,42 @@ public sealed class ChatOutputBrowserIntegrationTests
 
                 var result = await EvalAsync(
                     web,
-                    "(function(){var h=document.getElementById('suppressed-header');"
-                    + "return !h.hidden&&!!h.querySelector('.inspect-gutter-btn');})()");
+                    "(function(){var m=document.getElementById('suppressed');var h=document.getElementById('suppressed-header');"
+                    + "var c=m.querySelector(':scope > .chat-contents');"
+                    + "return h.hidden&&!h.querySelector('.inspect-gutter-btn')"
+                    + "&&!!c.querySelector(':scope > .inspect-gutter-btn')"
+                    + "&&!!c.querySelector(':scope > .usage-gutter-btn')"
+                    + "&&!!c.querySelector('[data-copy-target]');})()");
                 Assert.Contains("true", result, StringComparison.Ordinal);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task ToolGroup_PromotedFromRunningToHistory_RetainsExpandedState()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history-container", "append",
+                    ChatOutputHtmlRenderer.RenderToolCallGroup("group-running", ["read"], 1, "<div>read</div>",
+                        assistantRunId: "stable-run")));
+                await EvalAsync(web,
+                    "(function(){var g=document.getElementById('group-running-details');g.open=true;"
+                    + "g.dispatchEvent(new Event('toggle', { bubbles: true }));return 'opened';})()");
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Remove("group-running"));
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history-container", "append",
+                    ChatOutputHtmlRenderer.RenderToolCallGroup("group-history", ["read", "write"], 2, "<div>calls</div>",
+                        assistantRunId: "stable-run")));
+                var expanded = await EvalAsync(web,
+                    "document.getElementById('group-history-details').open && document.querySelectorAll('[data-assistant-run-id=\"stable-run\"]').length === 1");
+                Assert.Contains("true", expanded, StringComparison.Ordinal);
             }
             finally
             {

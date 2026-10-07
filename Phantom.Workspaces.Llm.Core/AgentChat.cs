@@ -1249,6 +1249,11 @@ public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvid
         {
             foreach (var historyItem in this.runningItemOperations.CaptureItems(item))
             {
+                if (item.AssistantRunId is not null &&
+                    this.History.Any(existing => ReferenceEquals(existing, historyItem)))
+                {
+                    continue;
+                }
                 this.AddHistoryItem(historyItem);
                 this.TurnCompleted?.Invoke(this, historyItem);
             }
@@ -1781,6 +1786,9 @@ public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvid
                 Role = message.Role,
                 Contents = message.Contents.ToArray(),
                 Timestamp = message.CreatedAt,
+                AssistantRunId = message.AdditionalProperties?.TryGetValue(
+                    StreamingPersistenceMiddleware.AssistantRunIdProperty, out var runId) == true
+                    ? runId?.ToString() : null,
             });
         }
     }
@@ -1934,6 +1942,7 @@ public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvid
     {
         private readonly AgentChat owner;
         private readonly AgentChatRunningItem runningItem;
+        private readonly string assistantRunId;
         private readonly TaskScheduler foregroundScheduler;
         private readonly List<AgentResponseUpdate> updates = new();
         private readonly List<(int AfterUpdateCount, AgentChatHistoryItem Item)> interstitials = new();
@@ -1945,11 +1954,14 @@ public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvid
         private AgentChatHistoryItem[] cachedItems = [];
         private int promotedCount;
 
-        public PartialResponseConflator(AgentChat owner, AgentChatRunningItem runningItem)
+        public PartialResponseConflator(AgentChat owner, AgentChatRunningItem runningItem, string assistantRunId)
         {
             this.owner = owner;
             this.runningItem = runningItem;
+            this.assistantRunId = assistantRunId;
             this.foregroundScheduler = owner.foregroundScheduler;
+            runningItem.AssistantRunId = this.assistantRunId;
+            (owner.client as StreamingPersistenceMiddleware)?.SetAssistantRunId(this.assistantRunId);
         }
 
         public void Notify(AgentResponseUpdate update)
@@ -2018,7 +2030,11 @@ public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvid
             {
                 var toPromote = finalItems[this.promotedCount..];
                 await Task.Factory.StartNew(
-                    () => this.owner.PromoteItemsToHistory(this.runningItem, toPromote),
+                    () =>
+                    {
+                        this.owner.UpdateRunningItem(this.runningItem, []);
+                        this.owner.PromoteItemsToHistory(this.runningItem, toPromote);
+                    },
                     CancellationToken.None,
                     TaskCreationOptions.DenyChildAttach,
                     this.foregroundScheduler);
@@ -2057,7 +2073,7 @@ public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvid
                 var previousItems = this.cachedItems;
 
                 // Build the chat history items on a background task (does not touch the foreground).
-                var chatHistoryItems = await Task.Run(() => CoalesceAsync(snapshot, previousItems, interstitialSnapshot, this.owner.timeProvider));
+                var chatHistoryItems = await Task.Run(() => CoalesceAsync(snapshot, previousItems, interstitialSnapshot, this.owner.timeProvider, this.assistantRunId));
 
                 // Store the newly-coalesced result so the next cycle can reuse stable references.
                 this.cachedItems = chatHistoryItems;
@@ -2076,10 +2092,11 @@ public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvid
                     this.promotedCount = stableCount;
                 }
 
-                // Populate the running item with only the active tail on the foreground scheduler
-                // so the UI-bound collection is only ever mutated there.
+                // Keep the full assistant run visible in the running region even when its stable
+                // prefix is already in History. The HTML projection suppresses that prefix in
+                // History until the run ends, so tool groups never split across DOM containers.
                 await Task.Factory.StartNew(
-                    () => this.owner.UpdateRunningItem(this.runningItem, chatHistoryItems[this.promotedCount..]),
+                    () => this.owner.UpdateRunningItem(this.runningItem, chatHistoryItems),
                     CancellationToken.None,
                     TaskCreationOptions.DenyChildAttach,
                     this.foregroundScheduler);
@@ -2095,7 +2112,8 @@ public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvid
             AgentResponseUpdate[] snapshot,
             AgentChatHistoryItem[] previous,
             (int AfterUpdateCount, AgentChatHistoryItem Item)[] interstitials,
-            TimeProvider timeProvider)
+            TimeProvider timeProvider,
+            string assistantRunId)
         {
             AgentChatHistoryItem[] newItems;
 
@@ -2142,6 +2160,9 @@ public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvid
                 newItems = [..newItems, new AgentChatHistoryItem { Role = ChatRole.Assistant, Timestamp = timeProvider.GetUtcNow() }];
             }
 
+            newItems = newItems.Select(item => item.AssistantRunId is null && item.Role != ChatRole.User
+                ? item with { AssistantRunId = assistantRunId }
+                : item).ToArray();
             // Re-use the cached reference for each item whose content is structurally unchanged.
             // This lets AgentRunningItems.SyncItems' ReferenceEquals guard suppress unnecessary
             // Replace notifications (and their downstream HTML re-render work) for stable items.
@@ -2287,17 +2308,20 @@ public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvid
                 PartialResponseConflator? partialResponses = null;
                 try
                 {
+                    var assistantRunId = Guid.NewGuid().ToString("n");
                     currentPartialTextResponseItem = this.CreateRunningItem([
                         new AgentChatHistoryItem
                         {
                             Role = ChatRole.Assistant,
                             Timestamp = this.timeProvider.GetUtcNow(),
+                            AssistantRunId = assistantRunId,
                         }]);
 
                     partialResponses = new PartialResponseConflator(
                         this,
                         currentPartialTextResponseItem
-                            ?? throw new InvalidOperationException("Running item was unexpectedly null while starting a run."));
+                            ?? throw new InvalidOperationException("Running item was unexpectedly null while starting a run."),
+                        assistantRunId);
 
                     lock (this.steeringLock)
                     {
@@ -2486,16 +2510,19 @@ public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvid
         PartialResponseConflator? partialResponses = null;
         try
         {
+            var assistantRunId = Guid.NewGuid().ToString("n");
             runningItem = this.CreateRunningItem([
                 new AgentChatHistoryItem
                 {
                     Role = ChatRole.Assistant,
                     Timestamp = this.timeProvider.GetUtcNow(),
+                    AssistantRunId = assistantRunId,
                 }]);
 
             partialResponses = new PartialResponseConflator(
                 this,
-                runningItem);
+                runningItem,
+                assistantRunId);
 
             lock (this.steeringLock)
             {

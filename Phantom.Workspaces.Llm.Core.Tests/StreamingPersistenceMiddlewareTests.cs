@@ -4,6 +4,7 @@ using Microsoft.Extensions.AI;
 using MongoDB.Bson;
 using Phantom.Workspaces.Llm.Interfaces;
 using System.Collections.Concurrent;
+using System.Text.Json;
 using Phantom.Workspaces.Llm.Tests;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
@@ -25,6 +26,35 @@ public class StreamingPersistenceMiddlewareTests
         Assert.Single(updates);
         Assert.Single(spyStore.StoredMessages);
         Assert.Equal("hello", GetText(spyStore.StoredMessages[0]));
+    }
+
+    [Fact]
+    public async Task SeparateServiceCallsWithinOneAssistantRun_PersistSameBoundary()
+    {
+        var store = new SpyAgentPersistenceStore();
+        var (middleware, session) = CreateMiddleware(store, [MakeUpdate("one", finishReason: "stop")]);
+        middleware.SetAssistantRunId("run-1");
+        await ConsumeAsync(middleware, session);
+        await ConsumeAsync(middleware, session);
+        middleware.SetAssistantRunId("run-2");
+        await ConsumeAsync(middleware, session);
+        Assert.Equal(["run-1", "run-1", "run-2"], store.StoredMessages.Select(message =>
+            message.AdditionalProperties?[StreamingPersistenceMiddleware.AssistantRunIdProperty]?.ToString() ?? string.Empty).ToArray());
+    }
+
+    [Fact]
+    public async Task NormalStreamEndWithoutFinishReason_PersistsTrailingToolResult()
+    {
+        var store = new SpyAgentPersistenceStore();
+        var (middleware, session) = CreateMiddleware(store,
+        [
+            new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new FunctionCallContent("call", "read")] },
+            new ChatResponseUpdate { Role = ChatRole.Tool, Contents = [new FunctionResultContent("call", "value")] },
+        ]);
+        await ConsumeAsync(middleware, session);
+        Assert.Equal(2, store.StoredMessages.Count);
+        Assert.Equal(store.StoredMessages[0].AdditionalProperties?[StreamingPersistenceMiddleware.AssistantRunIdProperty]?.ToString(),
+            store.StoredMessages[1].AdditionalProperties?[StreamingPersistenceMiddleware.AssistantRunIdProperty]?.ToString());
     }
 
     [Fact]
@@ -156,6 +186,16 @@ public class StreamingPersistenceMiddlewareTests
         Assert.Equal(ChatRole.Tool,      spyStore.StoredMessages[1].Role);
         Assert.Equal(ChatRole.Assistant, spyStore.StoredMessages[2].Role);
         Assert.Equal(ChatRole.Tool,      spyStore.StoredMessages[3].Role);
+        var runIds = spyStore.StoredMessages.Select(message =>
+            message.AdditionalProperties?[StreamingPersistenceMiddleware.AssistantRunIdProperty]?.ToString()).ToArray();
+        Assert.All(runIds, id => Assert.False(string.IsNullOrWhiteSpace(id)));
+        Assert.Single(runIds.Distinct());
+        var restored = spyStore.StoredMessages.Select(message =>
+            JsonSerializer.Deserialize<ChatMessage>(
+                JsonSerializer.Serialize(message, AIJsonUtilities.DefaultOptions),
+                AIJsonUtilities.DefaultOptions)!).ToArray();
+        Assert.All(restored, message => Assert.Equal(runIds[0],
+            message.AdditionalProperties?[StreamingPersistenceMiddleware.AssistantRunIdProperty]?.ToString()));
     }
 
     [Fact]

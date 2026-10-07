@@ -7,5 +7,7 @@ namespace Phantom.Workspaces.Llm;
 /// </summary>
 public sealed class AgentChatRunningItem
 {
+    public string? AssistantRunId { get; set; }
+
     public ObservableCollection<AgentChatHistoryItem> Items { get; } = [];
 }

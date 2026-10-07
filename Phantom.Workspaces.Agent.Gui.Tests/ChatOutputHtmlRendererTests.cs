@@ -13,6 +13,19 @@ namespace Phantom.Workspaces.Agent.Gui.Tests;
 public sealed class ChatOutputHtmlRendererTests
 {
     [Fact]
+    public void RenderToolCallGroup_ActiveAndCompletedStates_EmitsAccessibleStatusWithoutCompletedAnimation()
+    {
+        var active = ChatOutputHtmlRenderer.RenderToolCallGroup(
+            "g", ["read", "write"], 2, "<div>calls</div>", pendingToolNames: ["write"], assistantRunId: "run-1");
+        Assert.Contains("role=\"status\" aria-live=\"polite\"", active);
+        Assert.Contains("data-assistant-run-id=\"run-1\"", active);
+        Assert.Contains("Running: write", active);
+        Assert.DoesNotContain("Running: read", active);
+        var completed = ChatOutputHtmlRenderer.RenderToolCallGroup("g", ["read", "write"], 2, "<div>calls</div>");
+        Assert.DoesNotContain("tool-active-indicator", completed);
+        Assert.Contains("2 calls", completed);
+    }
+    [Fact]
     public void RenderCollapsible_EmitsDataStickyLevelOnSummary()
     {
         var html = ChatOutputHtmlRenderer.RenderContent(

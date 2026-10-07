@@ -92,15 +92,22 @@ internal static class ChatOutputHtmlRenderer
         string bodyContent,
         DateTimeOffset? timestamp = null,
         string? postGroupContent = null,
-        bool suppressRoleHeader = false)
+        bool suppressRoleHeader = true,
+        IReadOnlyList<string>? pendingToolNames = null,
+        string? assistantRunId = null)
     {
         var builder = new StringBuilder();
         builder.Append("<div class=\"chat-message ").Append(RoleClass("assistant")).Append("\" id=\"")
             .Append(groupId).Append("\" data-sticky-base-level=\"1\">");
         builder.Append(RenderHeader(groupId, "assistant", timestamp, suppressRoleHeader));
         builder.Append("<div class=\"chat-contents\" id=\"").Append(ContentsContainerId(groupId)).Append("\">");
-        builder.Append("<details class=\"chat-content chat-tool-group\" id=\"").Append(ToolGroupDetailsId(groupId)).Append("\">");
-        builder.Append(RenderToolCallGroupSummary(groupId, toolNames, callCount));
+        builder.Append("<details class=\"chat-content chat-tool-group\" id=\"").Append(ToolGroupDetailsId(groupId)).Append('"');
+        if (assistantRunId is not null)
+        {
+            builder.Append(" data-assistant-run-id=\"").Append(HtmlEscape(assistantRunId)).Append('"');
+        }
+        builder.Append('>');
+        builder.Append(RenderToolCallGroupSummary(groupId, toolNames, callCount, pendingToolNames));
         builder.Append("<div class=\"chat-tool-group-body\" id=\"").Append(ToolGroupBodyId(groupId)).Append("\">");
         builder.Append(bodyContent);
         builder.Append("</div></details>");
@@ -120,7 +127,8 @@ internal static class ChatOutputHtmlRenderer
     /// in first-seen order, formatted <c>tools (a, b)</c> (a single tool renders <c>tools (a)</c>),
     /// followed by the call-count badge.
     /// </summary>
-    public static string RenderToolCallGroupSummary(string groupId, IReadOnlyList<string> toolNames, int callCount)
+    public static string RenderToolCallGroupSummary(string groupId, IReadOnlyList<string> toolNames, int callCount,
+        IReadOnlyList<string>? pendingToolNames = null)
     {
         var builder = new StringBuilder();
         builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"2\" id=\"").Append(ToolGroupSummaryId(groupId)).Append("\">");
@@ -146,6 +154,17 @@ internal static class ChatOutputHtmlRenderer
         }
 
         builder.Append(" <span class=\"tool-count-badge\">").Append(callCount).Append(" calls</span>");
+        if (pendingToolNames is { Count: > 0 })
+        {
+            builder.Append(" <span class=\"tool-active-status\" role=\"status\" aria-live=\"polite\">")
+                .Append("<span class=\"tool-active-indicator\" aria-hidden=\"true\"></span>Running: ");
+            for (var i = 0; i < pendingToolNames.Count; i++)
+            {
+                if (i > 0) builder.Append(", ");
+                builder.Append(HtmlEscape(pendingToolNames[i]));
+            }
+            builder.Append("</span>");
+        }
         builder.Append("<button type=\"button\" class=\"tool-expand-toggle\" data-tool-expand-toggle ")
             .Append("aria-label=\"Expand or collapse all tools\" aria-hidden=\"true\">")
             .Append("\u21F2</button>");

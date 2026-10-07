@@ -20,6 +20,9 @@ public sealed record AgentChatHistoryItem
     /// </summary>
     public DateTimeOffset? Timestamp { get; init; }
 
+    /// <summary>Stable identity of the assistant invocation that produced this item, if known.</summary>
+    public string? AssistantRunId { get; init; }
+
     /// <summary>Structured content blocks for this turn.</summary>
     public IReadOnlyList<AIContent> Contents { get; init; } = [];
 }

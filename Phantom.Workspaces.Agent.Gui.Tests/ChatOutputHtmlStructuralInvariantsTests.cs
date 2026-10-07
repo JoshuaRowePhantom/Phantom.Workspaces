@@ -51,6 +51,72 @@ public sealed class ChatOutputHtmlStructuralInvariantsTests
     private static AgentChatHistoryItem ToolResultMessage(string callId)
         => new() { Role = ChatRole.Tool, Contents = [new FunctionResultContent(callId, "result")] };
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ChatOutput_SameRunPromotedAcrossHistoryAndRunning_UsesOneStableToolGroup()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>();
+        var runningItem = new AgentChatRunningItem { AssistantRunId = "run" };
+        var running = new ObservableCollection<AgentChatRunningItem> { runningItem };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, running, () => true, sink);
+        await model.HistoryLoaded;
+
+        runningItem.Items.Add(ToolCallMessage("read", "c1") with { AssistantRunId = "run" });
+        runningItem.Items.Add(TextMessage(ChatRole.Assistant, "working") with { AssistantRunId = "run" });
+        runningItem.Items.Add(ToolCallMessage("write", "c2") with { AssistantRunId = "run" });
+        history.Add(ToolCallMessage("read", "c1") with { AssistantRunId = "run" });
+        history.Add(ToolResultMessage("c1") with { AssistantRunId = "run" });
+        history.Add(TextMessage(ChatRole.Assistant, "working") with { AssistantRunId = "run" });
+        Assert.DoesNotContain(sink.Operations, op => op.Path == ChatOutputHtmlRenderer.HistoryContainerId &&
+            op.Content.Contains("id=\"tool-group-0\"", StringComparison.Ordinal));
+
+        runningItem.Items.Clear();
+        history.Add(ToolCallMessage("write", "c2") with { AssistantRunId = "run" });
+        history.Add(ToolResultMessage("c2") with { AssistantRunId = "run" });
+        Assert.DoesNotContain(sink.Operations, op =>
+            op.Path == ChatOutputHtmlRenderer.HistoryContainerId &&
+            op.Content.Contains("id=\"tool-group-0\"", StringComparison.Ordinal));
+        running.Remove(runningItem);
+
+        var groupId = ChatOutputHtmlRenderer.ToolGroupId(0);
+        Assert.Contains(sink.Operations, op => op.Path == ChatOutputHtmlRenderer.ToolGroupSummaryId(groupId)
+            && op.Content.Contains("2 calls", StringComparison.Ordinal));
+        Assert.DoesNotContain(sink.Operations, op => op.Path == ChatOutputHtmlRenderer.HistoryContainerId
+            && op.Content.Contains("id=\"tool-group-1\"", StringComparison.Ordinal));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ChatOutput_HistoryReloadAfterCompletedRun_MatchesLiveGroupedShape()
+    {
+        var items = new[]
+        {
+            ToolCallMessage("read", "c1") with { AssistantRunId = "run" },
+            ToolResultMessage("c1") with { AssistantRunId = "run" },
+            TextMessage(ChatRole.Assistant, "working") with { AssistantRunId = "run" },
+            ToolCallMessage("write", "c2") with { AssistantRunId = "run" },
+            ToolResultMessage("c2") with { AssistantRunId = "run" },
+        };
+        var history = new ObservableCollection<AgentChatHistoryItem>();
+        var liveSink = new RecordingSink();
+        using var live = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, liveSink);
+        await live.HistoryLoaded;
+        foreach (var item in items) history.Add(item);
+
+        var reloadSink = new RecordingSink();
+        using var reload = new ChatOutputHtmlModel(new ObservableCollection<AgentChatHistoryItem>(items),
+            new ObservableCollection<AgentChatRunningItem>(), () => true, reloadSink);
+        await reload.HistoryLoaded;
+        var html = string.Concat(reloadSink.Operations.Select(op => op.Content));
+        Assert.Single(Regex.Matches(html, "class=\"chat-content chat-tool-group\"").Cast<object>());
+        Assert.Contains("2 calls", html);
+        Assert.Contains("working", html);
+        Assert.Contains("read", html);
+        Assert.Contains("write", html);
+        Assert.Contains("result", html);
+        Assert.Contains(liveSink.Operations, op => op.Path == ChatOutputHtmlRenderer.ToolGroupSummaryId(ChatOutputHtmlRenderer.ToolGroupId(0))
+            && op.Content.Contains("2 calls", StringComparison.Ordinal));
+    }
+
     /// <summary>
     /// Drives a representative multi-chunk scenario through the model: 205 history items with a
     /// tool run, live promotion/extension, a removal, a streaming running item, and a completion

@@ -133,6 +133,9 @@ public class AgentChatHistoryPromotionTests
         Assert.Equal(4, chat.History.Count);
         Assert.Equal([ChatRole.User, ChatRole.Assistant, ChatRole.Tool, ChatRole.Assistant],
             chat.History.Select(h => h.Role).ToArray());
+        Assert.NotNull(chat.History[1].AssistantRunId);
+        Assert.Equal(chat.History[1].AssistantRunId, chat.History[2].AssistantRunId);
+        Assert.Equal(chat.History[1].AssistantRunId, chat.History[3].AssistantRunId);
     }
 
     [Fact]
@@ -256,16 +259,16 @@ public class AgentChatHistoryPromotionTests
     }
 
     [Fact]
-    public async Task RunningItem_ContainsOnlyActiveTail_AfterPromotion()
+    public async Task RunningItem_RetainsPromotedRunForGrouping_AfterPromotion()
     {
         // After the first two updates arrive (func-call and tool-result), CoalesceAsync appends a
         // blank assistant placeholder because the snapshot ends with a tool result. This produces:
         //   [assistant(func-call), tool-result, blank-placeholder]
         //   stableCount = 2 → [assistant, tool] are promoted to History
-        //   running item is updated to [blank-placeholder] only
+        //   running item retains the whole run for a single visible tool group
         //
         // While the third update (assistant text) is still gated, the running item must expose
-        // only the blank placeholder (the active tail).
+        // all three items (including the blank placeholder).
         
         // Run the test body on a SingleThreadPump to avoid cross-thread enumeration issues.
         // All async continuations will resume on the pump's SynchronizationContext, so reads
@@ -300,17 +303,20 @@ public class AgentChatHistoryPromotionTests
             await WaitForHistoryCountAsync(chat.History, 3, "stable items promoted");
 
             // Wait for the ExclusiveScheduler's UpdateRunningItem task (Step B) to complete.
-            await WaitForRunningItemCountAsync(chat.RunningItems, 1, "active tail only");
+            await WaitForRunningItemCountAsync(chat.RunningItems, 1, "active run");
+            await WaitForRunningItemCountAsync(chat.RunningItems[0].Items, 3, "promoted run retained");
 
             // The awaits above resumed on the foreground SynchronizationContext, so we are
             // on the pump thread here. Reads are serialized with UpdateRunningItem / SyncItems
             // on the same ExclusiveScheduler — no race, no explicit scheduling.
             Assert.Single(chat.RunningItems);
             var runningItem = chat.RunningItems[0];
-            Assert.Single(runningItem.Items);
+            Assert.Equal(3, runningItem.Items.Count);
             Assert.Equal(ChatRole.Assistant, runningItem.Items[0].Role);
+            Assert.Equal(ChatRole.Tool, runningItem.Items[1].Role);
+            Assert.Equal(runningItem.AssistantRunId, runningItem.Items[0].AssistantRunId);
             // Blank placeholder has no text content.
-            Assert.Empty(string.Concat(runningItem.Items[0].Contents.OfType<TextContent>().Select(c => c.Text)));
+            Assert.Empty(string.Concat(runningItem.Items[2].Contents.OfType<TextContent>().Select(c => c.Text)));
 
             third.MarkReady();
             terminal.MarkReady();

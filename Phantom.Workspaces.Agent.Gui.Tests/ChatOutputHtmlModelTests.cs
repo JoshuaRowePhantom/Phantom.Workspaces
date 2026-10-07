@@ -1870,15 +1870,14 @@ public sealed class ChatOutputHtmlModelTests
 
         // The last top-level element is the group wrapping items 1-2, so the live item inserts
         // after the group element, not after a nested member.
-        // Two ops: the insert After, plus the #1222 header-suppression Replace on the new element
-        // (same assistant role as the tool-call group predecessor).
-        Assert.Equal(2, sink.ContentOperations.Count);
+        // The tool-only group has no visible role header, so the actual answer is the first
+        // assistant header and requires no suppression Replace.
+        Assert.Single(sink.ContentOperations);
         var op = sink.ContentOperations[0];
         Assert.Equal(ChatOutputUpdateLocation.After, op.Location);
         Assert.Equal(ChatOutputHtmlRenderer.ToolGroupId(1), op.Path);
         Assert.Contains("new-live", op.Content);
-        Assert.Equal(ChatOutputUpdateLocation.Replace, sink.ContentOperations[1].Location);
-        Assert.Contains("chat-header-suppressed", sink.ContentOperations[1].Content);
+        Assert.Contains("<span class=\"chat-sender\">assistant</span>", op.Content);
     }
 
     [Fact]
@@ -2895,6 +2894,99 @@ public sealed class ChatOutputHtmlModelTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task ChatOutput_CompletedTurnWithInterleavedAssistantContent_CoalescesToolsAndPreservesTextOrder()
+    {
+        const string run = "one-run";
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("read_file", "c1") with { AssistantRunId = run },
+            TextMessage(ChatRole.Assistant, "between calls") with { AssistantRunId = run },
+            ToolCallMessage("write_file", "c2") with { AssistantRunId = run },
+            TextMessage(ChatRole.Assistant, "finished") with { AssistantRunId = run },
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+        var html = string.Concat(sink.ContentOperations.Select(op => op.Content));
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(html, "class=\"chat-content chat-tool-group\"").Cast<object>());
+        Assert.Contains("2 calls", html);
+        Assert.Contains("id=\"tool-group-0-header\" hidden", html);
+        Assert.Contains("id=\"history-1-header\" data-sticky-level", html);
+        Assert.True(html.IndexOf("between calls", StringComparison.Ordinal) < html.IndexOf("finished", StringComparison.Ordinal));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ChatOutput_SeparateAssistantTurnsAndUserBoundary_DoesNotMergeToolGroups()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("a", "a") with { AssistantRunId = "run-a" },
+            ToolCallMessage("b", "b") with { AssistantRunId = "run-b" },
+            TextMessage(ChatRole.User, "next") with { AssistantRunId = "run-b" },
+            ToolCallMessage("c", "c") with { AssistantRunId = "run-b" },
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+        var html = string.Concat(sink.ContentOperations.Select(op => op.Content));
+        Assert.Equal(3, System.Text.RegularExpressions.Regex.Matches(html, "class=\"chat-content chat-tool-group\"").Count);
+    }
+
+    [Fact]
+    public void ChatOutput_ResultWithReusedCallIdInAnotherRun_DoesNotBindAcrossRuns()
+    {
+        var snapshot = new[]
+        {
+            ToolCallMessage("read", "shared") with { AssistantRunId = "first" },
+            new AgentChatHistoryItem
+            {
+                Role = ChatRole.Tool,
+                AssistantRunId = "second",
+                Contents = [new FunctionResultContent("shared", "wrong result")],
+            },
+        };
+        var plan = ChatOutputHtmlModel.BuildHistoryRenderPlan(snapshot, new RecordingSink(), () => true);
+        Assert.True(plan.Slots[1].HasDomElement);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task RunningItem_MultipleParallelToolCalls_ShowsCurrentNamesAndActiveState()
+    {
+        var item = new AgentChatRunningItem();
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(new ObservableCollection<AgentChatHistoryItem>(),
+            new ObservableCollection<AgentChatRunningItem> { item }, () => true, sink);
+        await model.HistoryLoaded;
+        item.Items.Add(MultiToolCallMessage(("first", "read"), ("second", "write")) with { AssistantRunId = "run" });
+        var html = string.Concat(sink.ContentOperations.Select(op => op.Content));
+        Assert.Contains("Running: read, write", html);
+        Assert.Contains("aria-live=\"polite\"", html);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(html, "class=\"chat-content chat-tool-group\"").Cast<object>());
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task RunningItem_ToolResultArrives_UpdatesCurrentNamesWithoutDuplicateRows()
+    {
+        var item = new AgentChatRunningItem();
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(new ObservableCollection<AgentChatHistoryItem>(),
+            new ObservableCollection<AgentChatRunningItem> { item }, () => true, sink);
+        await model.HistoryLoaded;
+        item.Items.Add(MultiToolCallMessage(("first", "read"), ("second", "write")) with { AssistantRunId = "run" });
+        sink.Clear();
+        item.Items.Add(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Tool,
+            AssistantRunId = "run",
+            Contents = [new FunctionResultContent("first", "done")],
+        });
+        Assert.Contains(sink.ContentOperations, op => op.Path.EndsWith("-summary", StringComparison.Ordinal) &&
+            op.Content.Contains("Running: write", StringComparison.Ordinal) &&
+            !op.Content.Contains("Running: read", StringComparison.Ordinal));
+        Assert.DoesNotContain(sink.ContentOperations, op => op.Content.Contains("class=\"chat-content chat-tool-group\"", StringComparison.Ordinal));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ConsecutiveToolCalls_NoInterleaving_CoalesceIntoSingleGroup()
     {
         // Guard against over-fixing: three single-call tool messages in a row still coalesce
@@ -3521,7 +3613,7 @@ public sealed class ChatOutputHtmlModelTests
     }
 
     [Fact]
-    public void ConsecutiveAssistantToolCalls_EmitExactlyOneAssistantHeader()
+    public void ConsecutiveAssistantToolCalls_EmitNoEmptyAssistantHeader()
     {
         var snapshot = new List<AgentChatHistoryItem>
         {
@@ -3534,8 +3626,9 @@ public sealed class ChatOutputHtmlModelTests
 
         var html = ChatOutputHtmlModel.GenerateHistoryChunk(plan, 0, snapshot.Count);
 
-        Assert.Single(System.Text.RegularExpressions.Regex.Matches(html, "chat-header"));
-        Assert.Contains(">assistant<", html);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(html, "<div class=\"chat-header"));
+        Assert.Contains("chat-header-suppressed", html);
+        Assert.DoesNotContain("<span class=\"chat-sender\">assistant</span>", html);
     }
 
     [Fact]
@@ -3655,8 +3748,9 @@ public sealed class ChatOutputHtmlModelTests
             op.Location == ChatOutputUpdateLocation.Replace && op.Content.Contains("chat-tool-group"));
         var messageMatches = System.Text.RegularExpressions.Regex.Matches(replaceOp.Content, "chat-message");
         Assert.Single(messageMatches);
-        var headerMatches = System.Text.RegularExpressions.Regex.Matches(replaceOp.Content, "chat-header");
+        var headerMatches = System.Text.RegularExpressions.Regex.Matches(replaceOp.Content, "<div class=\"chat-header");
         Assert.Single(headerMatches);
+        Assert.Contains("chat-header-suppressed", replaceOp.Content);
     }
 
     [AvaloniaFact(Timeout = 15_000)]

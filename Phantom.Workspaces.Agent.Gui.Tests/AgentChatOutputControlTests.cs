@@ -66,11 +66,31 @@ public sealed class AgentChatOutputControlTests
     {
         var html = ReadShellHtml();
 
-        Assert.Contains("meta.appendChild(makeButton(message));", html, StringComparison.Ordinal);
+        Assert.Contains("host.appendChild(makeButton(message));", html, StringComparison.Ordinal);
         Assert.Contains("querySelector(\":scope > .chat-header\")", html, StringComparison.Ordinal);
         Assert.Contains("header.querySelector(\":scope > .chat-meta\")", html, StringComparison.Ordinal);
         Assert.Contains(".chat-content.chat-usage", html, StringComparison.Ordinal);
         Assert.DoesNotContain(".chat-usage-marker { display: none; }", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ChatOutput_SuppressedAssistantHeaderWithInspectTargets_RemainsHiddenAndActionsUsable()
+    {
+        var html = ReadShellHtml();
+        Assert.DoesNotContain("header.hidden = false", html, StringComparison.Ordinal);
+        Assert.Contains("header.hidden ? message.querySelector(\":scope > .chat-contents\") : meta", html, StringComparison.Ordinal);
+        Assert.Contains("postToHost({", html, StringComparison.Ordinal);
+        Assert.Contains("type: \"inspect\"", html, StringComparison.Ordinal);
+        Assert.Contains("CopyGutter.init(document)", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ChatOutput_ActiveToolsWithReducedMotion_ShowsStaticStatusWithoutAnimation()
+    {
+        var html = ReadShellHtml();
+        Assert.Contains("prefers-reduced-motion: reduce", html, StringComparison.Ordinal);
+        Assert.Contains(".tool-active-indicator { animation: none; }", html, StringComparison.Ordinal);
+        Assert.Contains("animation: tool-active-pulse", html, StringComparison.Ordinal);
     }
 
     [Fact]

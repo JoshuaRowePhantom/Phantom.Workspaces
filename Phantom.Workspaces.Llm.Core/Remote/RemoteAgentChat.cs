@@ -385,15 +385,18 @@ public sealed class RemoteAgentChat : IAgentChat
                 break;
             case StreamingStartedEvent e:
                 var running = new AgentChatRunningItem();
-                running.Items.Add(Deserialize<AgentChatHistoryItem>(e.Item));
+                var initial = Deserialize<AgentChatHistoryItem>(e.Item);
+                running.AssistantRunId = initial.AssistantRunId;
+                running.Items.Add(initial);
                 this.runningById.Add(e.RunId, running);
                 this.RunningItems.Add(running);
                 break;
             case StreamingUpdatedEvent e:
                 if (!this.runningById.TryGetValue(e.RunId, out var updated))
                     throw new RemoteAgentProtocolException("A streaming update referenced an unknown run.");
-                updated.Items.Clear();
-                foreach (var update in DeserializeStreamingItems(e.Update)) updated.Items.Add(update);
+                var updates = DeserializeStreamingItems(e.Update).ToArray();
+                updated.AssistantRunId ??= updates.FirstOrDefault(item => item.AssistantRunId is not null)?.AssistantRunId;
+                new AgentRunningItems(this.RunningItems).Update(updated, updates);
                 break;
             case StreamingCompletedEvent e:
                 if (!this.runningById.Remove(e.RunId, out var completed))
@@ -476,6 +479,7 @@ public sealed class RemoteAgentChat : IAgentChat
         {
             var state = Deserialize<RemoteRunningItemState>(value);
             var running = new AgentChatRunningItem();
+            running.AssistantRunId = state.Items.FirstOrDefault(item => item.AssistantRunId is not null)?.AssistantRunId;
             foreach (var item in state.Items) running.Items.Add(item);
             this.runningById.Add(state.RunId, running);
             this.RunningItems.Add(running);

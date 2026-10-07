@@ -162,6 +162,11 @@ internal sealed class ChatMessageHtmlModel
         return false;
     }
 
+    internal bool HasResultForCall(string? callId)
+        => callId is not null &&
+           (this.supplementalResults?.ContainsKey(callId) == true ||
+            this.source.Contents.OfType<FunctionResultContent>().Any(result => result.CallId == callId));
+
     /// <summary>
     /// Injects a <see cref="FunctionResultContent"/> from a separate tool-role message into this
     /// message's rendering so the result appears nested under its matching call item. Recomputes the
@@ -421,7 +426,7 @@ internal sealed class ChatMessageHtmlModel
 }
 
 /// <summary>
-/// Renders a run of consecutive tool-call history items as a single collapsible
+/// Renders the tool calls of one assistant invocation as a single collapsible
 /// <c>details</c> element. Children are <see cref="ChatMessageHtmlModel"/> instances whose HTML
 /// is placed intact inside the expanded body (so later per-content diffs can still target their
 /// child ids). The summary line lists the distinct tool names across all members (in first-seen
@@ -433,12 +438,14 @@ internal sealed class ToolCallGroupHtmlModel
 {
     private readonly IChatOutputHtmlSink sink;
     private readonly List<ChatMessageHtmlModel> members = [];
+    private readonly bool isRunning;
 
-    public ToolCallGroupHtmlModel(int firstHistoryIndex, string groupId, IChatOutputHtmlSink sink, ChatMessageHtmlModel firstMember)
+    public ToolCallGroupHtmlModel(int firstHistoryIndex, string groupId, IChatOutputHtmlSink sink, ChatMessageHtmlModel firstMember, bool isRunning = false)
     {
         this.FirstHistoryIndex = firstHistoryIndex;
         this.GroupId = groupId;
         this.sink = sink;
+        this.isRunning = isRunning;
         this.members.Add(firstMember);
     }
 
@@ -447,10 +454,9 @@ internal sealed class ToolCallGroupHtmlModel
 
     public string GroupId { get; }
 
-    /// <summary>See <see cref="ChatMessageHtmlModel.SuppressRoleHeader"/> — the tool-group's outer
-    /// message frame renders the assistant role header, and role-run reconciliation may hide it
-    /// (#1222).</summary>
-    public bool SuppressRoleHeader { get; private set; }
+    /// <summary>Tool-only groups never show an empty assistant role header; inspect and usage
+    /// actions remain accessible from the visible group contents.</summary>
+    public bool SuppressRoleHeader { get; private set; } = true;
 
     internal void SetSuppressRoleHeader(bool value, bool emit)
     {
@@ -516,6 +522,13 @@ internal sealed class ToolCallGroupHtmlModel
         }
     }
 
+    internal IReadOnlyList<string> PendingToolNames => this.isRunning
+        ? this.members.SelectMany(member => member.Source.Contents.OfType<FunctionCallContent>()
+                .Where(call => !member.HasResultForCall(call.CallId))
+                .Select(call => call.Name ?? string.Empty))
+            .Distinct(StringComparer.Ordinal).ToArray()
+        : [];
+
     /// <summary>
     /// Builds the complete group element for DOM insertion, with <paramref name="firstMessageHtml"/>
     /// (or the concatenated member HTML) pre-placed inside the body container.
@@ -530,7 +543,9 @@ internal sealed class ToolCallGroupHtmlModel
             firstMessageHtml,
             this.members[0].Source.Timestamp,
             postGroupHtml ?? this.members[0].BuildGroupedMemberPostGroupHtml(),
-            this.SuppressRoleHeader);
+            this.SuppressRoleHeader,
+            this.PendingToolNames,
+            this.members[0].Source.AssistantRunId);
 
     /// <summary>Appends <paramref name="model"/> to the group body in the DOM and updates the summary badge.</summary>
     public void AppendItem(ChatMessageHtmlModel model)
@@ -582,7 +597,7 @@ internal sealed class ToolCallGroupHtmlModel
         this.sink.UpdateContent(
             ChatOutputHtmlRenderer.ToolGroupSummaryId(this.GroupId),
             ChatOutputUpdateLocation.Replace,
-            ChatOutputHtmlRenderer.RenderToolCallGroupSummary(this.GroupId, this.DistinctToolNames, this.CallCount));
+            ChatOutputHtmlRenderer.RenderToolCallGroupSummary(this.GroupId, this.DistinctToolNames, this.CallCount, this.PendingToolNames));
     }
 }
 
@@ -637,6 +652,9 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
     private readonly IToolVisualizerFactory? toolFactory;
     private readonly IAgentStatusSink? statusSink;
     private readonly Func<string, string?>? resolveSubAgentId;
+    private readonly bool isRunning;
+    private readonly Func<string?, bool>? isRunActive;
+    private readonly HashSet<string> suppressedRunIds = new(StringComparer.Ordinal);
     private int nextCreateIndex;
 
     public ChatMessageHtmlTransformer(
@@ -652,7 +670,10 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         IAgentStatusSink? statusSink = null,
         Func<string, string?>? resolveSubAgentId = null,
         int preloadedCount = 0,
-        IReadOnlyList<NotifyCollectionChangedEventArgs>? bufferedEvents = null)
+        IReadOnlyList<NotifyCollectionChangedEventArgs>? bufferedEvents = null,
+        bool isRunning = false,
+        Func<string?, bool>? isRunActive = null,
+        IReadOnlySet<string>? suppressedAtLoad = null)
         : base(source, target)
     {
         ArgumentNullException.ThrowIfNull(elementIdForSourceIndex);
@@ -667,7 +688,17 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         this.toolFactory = toolFactory;
         this.statusSink = statusSink;
         this.resolveSubAgentId = resolveSubAgentId;
+        this.isRunning = isRunning;
+        this.isRunActive = isRunActive;
         this.nextCreateIndex = preloadedCount;
+        foreach (var slot in target)
+        {
+            if (slot.Model.Source.AssistantRunId is { } id &&
+                (isRunActive?.Invoke(id) == true || suppressedAtLoad?.Contains(id) == true))
+            {
+                this.suppressedRunIds.Add(id);
+            }
+        }
 
         // Preloaded slots (from the Phase B render plan) are already in `target` and in the DOM.
         // When the buffered events captured during loading are supplied, replaying them applies
@@ -711,6 +742,16 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         var oldSource = target.Model.Source;
         if (ReferenceEquals(oldSource, sourceItem))
         {
+            return;
+        }
+
+        if (!target.HasDomElement && this.isRunActive?.Invoke(sourceItem.AssistantRunId) == true)
+        {
+            var hiddenIndex = this.Target.IndexOf(target);
+            this.Target[hiddenIndex] = new RenderSlot(new ChatMessageHtmlModel(
+                target.Model.SourceIndex, target.Model.ElementId, sourceItem,
+                this.isReasoningVisible, this.sink, this.toolFactory, this.statusSink,
+                this.resolveSubAgentId)) { HasDomElement = false };
             return;
         }
 
@@ -759,7 +800,10 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
 
     protected override void OnInsert(int index, RenderSlot slot)
     {
-        this.AddCallIdsToIndex(slot.Model.Source, slot);
+        if (this.isRunActive?.Invoke(slot.Model.Source.AssistantRunId) != true)
+        {
+            this.AddCallIdsToIndex(slot.Model.Source, slot);
+        }
         this.ClassifyAndInsert(index, slot);
         this.ReconcileRoleHeaders();
     }
@@ -829,6 +873,49 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         }
     }
 
+    internal void RefreshActiveRuns()
+    {
+        var first = -1;
+        for (var i = 0; i < this.Target.Count; i++)
+        {
+            if (this.Target[i].Model.Source.AssistantRunId is { } id &&
+                this.suppressedRunIds.Contains(id) &&
+                this.isRunActive?.Invoke(id) != true)
+            {
+                first = i;
+                break;
+            }
+        }
+        if (first < 0) return;
+        this.suppressedRunIds.RemoveWhere(id => this.isRunActive?.Invoke(id) != true);
+
+        var removed = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = first; i < this.Target.Count; i++)
+        {
+            var slot = this.Target[i];
+            if (slot.HasDomElement && removed.Add(slot.Group?.GroupId ?? slot.Model.ElementId))
+            {
+                this.sink.RemoveContent(slot.Group?.GroupId ?? slot.Model.ElementId);
+            }
+            this.RemoveCallIdsFromIndex(slot);
+            slot.Group = null;
+            slot.IsTopLevelFirstGroupMember = false;
+            slot.HasDomElement = true;
+            slot.Model.IsInserted = false;
+            slot.Model.SetIsInsideMessageLevelToolGroup(false, emit: false);
+        }
+        for (var index = first; index < this.Target.Count; index++)
+        {
+            var slot = this.Target[index];
+            if (this.isRunActive?.Invoke(slot.Model.Source.AssistantRunId) != true)
+            {
+                this.AddCallIdsToIndex(slot.Model.Source, slot);
+            }
+            this.ClassifyAndInsert(index, slot);
+        }
+        this.ReconcileRoleHeaders();
+    }
+
     /// <summary>
     /// Classifies <paramref name="slot"/> (no-DOM, grouped, or standalone) and emits the DOM
     /// operations that realize it. This is the normative live-insert algorithm: the first
@@ -838,6 +925,12 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
     private void ClassifyAndInsert(int index, RenderSlot slot)
     {
         var sourceItem = slot.Model.Source;
+        if (this.isRunActive?.Invoke(sourceItem.AssistantRunId) == true)
+        {
+            this.suppressedRunIds.Add(sourceItem.AssistantRunId!);
+            slot.HasDomElement = false;
+            return;
+        }
 
         // A message containing only FunctionResultContent items produces no DOM element of its own
         // when every result matches a known call: each result is injected into the matched call
@@ -884,7 +977,8 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
                     groupablePredecessor.Model.SourceIndex,
                     this.groupIdForSourceIndex(groupablePredecessor.Model.SourceIndex),
                     this.sink,
-                    groupablePredecessor.Model);
+                    groupablePredecessor.Model,
+                    this.isRunning);
                 this.sink.UpdateContent(
                     groupablePredecessor.Model.ElementId,
                     ChatOutputUpdateLocation.Replace,
@@ -896,6 +990,16 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
                 slot.Group = group;
                 return;
             }
+
+            if (sourceItem.AssistantRunId is not null)
+            {
+                slot.Model.SetIsInsideMessageLevelToolGroup(true, emit: false);
+                var group = new ToolCallGroupHtmlModel(
+                    slot.Model.SourceIndex, this.groupIdForSourceIndex(slot.Model.SourceIndex),
+                    this.sink, slot.Model, this.isRunning);
+                slot.Group = group;
+                slot.IsTopLevelFirstGroupMember = true;
+            }
         }
 
         // Standalone insert (non-tool-call, or first/isolated tool call with no adjacent group).
@@ -905,7 +1009,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
             this.sink.UpdateContent(
                 previous.Group?.GroupId ?? previous.Model.ElementId,
                 ChatOutputUpdateLocation.After,
-                slot.Model.BuildHtml());
+                slot.Group?.BuildHtml(slot.Model.BuildGroupedMemberHtml()) ?? slot.Model.BuildHtml());
         }
         else
         {
@@ -915,11 +1019,12 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
                 this.sink.UpdateContent(
                     next.Group?.GroupId ?? next.Model.ElementId,
                     ChatOutputUpdateLocation.Before,
-                    slot.Model.BuildHtml());
+                    slot.Group?.BuildHtml(slot.Model.BuildGroupedMemberHtml()) ?? slot.Model.BuildHtml());
             }
             else
             {
-                this.sink.UpdateContent(this.containerPath, ChatOutputUpdateLocation.Append, slot.Model.BuildHtml());
+                this.sink.UpdateContent(this.containerPath, ChatOutputUpdateLocation.Append,
+                    slot.Group?.BuildHtml(slot.Model.BuildGroupedMemberHtml()) ?? slot.Model.BuildHtml());
             }
         }
 
@@ -945,7 +1050,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         }
 
         var first = members[0];
-        if (members.Count == 1)
+        if (members.Count == 1 && first.Model.Source.AssistantRunId is null)
         {
             first.Group = null;
             first.IsTopLevelFirstGroupMember = false;
@@ -960,7 +1065,8 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
             first.Model.SourceIndex,
             this.groupIdForSourceIndex(first.Model.SourceIndex),
             this.sink,
-            first.Model);
+            first.Model,
+            this.isRunning);
         first.Model.SetIsInsideMessageLevelToolGroup(true, emit: false);
         var body = new StringBuilder(first.Model.BuildGroupedMemberHtml());
         var postGroup = new StringBuilder(first.Model.BuildGroupedMemberPostGroupHtml());
@@ -1116,7 +1222,9 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         foreach (var content in item.Contents)
         {
             var result = (FunctionResultContent)content;
-            if (result.CallId is null || !this.sharedSlotByCallId.TryGetValue(result.CallId, out var matchedSlot))
+            if (result.CallId is null || !this.sharedSlotByCallId.TryGetValue(result.CallId, out var matchedSlot) ||
+                item.AssistantRunId is not null && matchedSlot.Model.Source.AssistantRunId is not null &&
+                item.AssistantRunId != matchedSlot.Model.Source.AssistantRunId)
             {
                 return false;
             }
@@ -1132,6 +1240,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         foreach (var (matchedSlot, result) in matches)
         {
             matchedSlot.Model.AddSupplementalResult(result);
+            matchedSlot.Group?.RefreshSummary();
         }
 
         return true;
@@ -1242,18 +1351,32 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
             || slot.Model.ProducesNoVisibleContent;
 
     /// <summary>
-    /// Searches backwards from <paramref name="index"/> - 1, skipping every grouping-transparent
-    /// slot (result-only messages, suppressed diagnostics, and messages that render no visible
-    /// content), and returns the slot of the most recent source item that is either a tool-call-only
-    /// message or already belongs to a group. Returns <see langword="null"/> when the search reaches
-    /// the start of the collection or hits any displayed non-tool message: grouping never crosses
-    /// visible text or other visible non-tool content.
+    /// Finds the previous call in this assistant run, crossing visible assistant content only when
+    /// both items have the same explicit run id. Legacy items still group only across transparent slots.
+    /// A user message or a different run always terminates the search.
     /// </summary>
     internal RenderSlot? FindGroupablePredecessor(int index)
     {
+        var runId = this.Target[index].Model.Source.AssistantRunId;
         for (var i = index - 1; i >= 0; i--)
         {
             var candidate = this.Target[i];
+            if (candidate.Model.Source.Role == ChatRole.User)
+            {
+                return null;
+            }
+            var candidateRunId = candidate.Model.Source.AssistantRunId;
+            if (runId is not null && candidateRunId == runId &&
+                !IsToolCallOnlyItem(candidate.Model.Source) &&
+                candidate.Group is null)
+            {
+                continue;
+            }
+            if (runId is not null && candidateRunId != runId ||
+                runId is null && candidateRunId is not null)
+            {
+                return null;
+            }
             if (IsGroupingTransparent(candidate))
             {
                 continue;
@@ -1316,9 +1439,6 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
                 continue;
             }
 
-            string effectiveRole;
-            bool isGroupOwner;
-            ToolCallGroupHtmlModel? group;
             if (slot.Group is { } g)
             {
                 if (!slot.IsTopLevelFirstGroupMember || ReferenceEquals(g, previousGroupOwner))
@@ -1328,17 +1448,12 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
                     continue;
                 }
 
-                group = g;
-                effectiveRole = "assistant";
-                isGroupOwner = true;
-            }
-            else
-            {
-                group = null;
-                effectiveRole = slot.Model.Source.Role.Value;
-                isGroupOwner = false;
+                g.SetSuppressRoleHeader(true, emit: slot.Model.IsInserted);
+                previousGroupOwner = g;
+                continue;
             }
 
+            var effectiveRole = slot.Model.Source.Role.Value;
             // The "tool" role never emits a header (see RenderHeader) — leave it transparent so a
             // stray tool slot with a DOM element doesn't split a surrounding assistant run.
             if (string.Equals(effectiveRole, "tool", StringComparison.OrdinalIgnoreCase))
@@ -1349,16 +1464,8 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
             var isLeader = !string.Equals(previousRole, effectiveRole, StringComparison.OrdinalIgnoreCase);
             var suppress = !isLeader;
 
-            if (isGroupOwner)
-            {
-                group!.SetSuppressRoleHeader(suppress, emit: slot.Model.IsInserted);
-                previousGroupOwner = group;
-            }
-            else
-            {
-                slot.Model.SetSuppressRoleHeader(suppress, emit: slot.Model.IsInserted);
-                previousGroupOwner = null;
-            }
+            slot.Model.SetSuppressRoleHeader(suppress, emit: slot.Model.IsInserted);
+            previousGroupOwner = null;
 
             previousRole = effectiveRole;
         }
@@ -1516,7 +1623,8 @@ internal sealed class RunningChatItemHtmlModel : IDisposable
             sharedSlotByCallId: this.sharedSlotByCallId,
             toolFactory: this.toolFactory,
             statusSink: this.statusSink,
-            preloadedCount: 0);
+            preloadedCount: 0,
+            isRunning: true);
     }
 
     public void Update(AgentChatRunningItem? source)
@@ -1741,6 +1849,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
     private readonly IAgentStatusSink? statusSink;
     private readonly Func<string, string?>? resolveSubAgentId;
     private readonly Action? beforeDispatchHistoryChunk;
+    private readonly HashSet<string> activeRunIdsAtLoad;
     private readonly Func<bool> isCurrentGeneration;
     private readonly RunningChatItemsHtmlTransformer runningTransformer;
     private readonly RunningSubAgentsHtmlTransformer? subAgentsTransformer;
@@ -1834,6 +1943,8 @@ public sealed class ChatOutputHtmlModel : IDisposable
         this.statusSink = statusSink is null ? null : generationSink;
         this.resolveSubAgentId = resolveSubAgentId;
         this.beforeDispatchHistoryChunk = beforeDispatchHistoryChunk;
+        this.activeRunIdsAtLoad = runningItems.Where(item => item?.AssistantRunId is not null)
+            .Select(item => item.AssistantRunId!).ToHashSet(StringComparer.Ordinal);
 
         // Phase A: take a snapshot of history for off-thread processing.
         var snapshot = new List<AgentChatHistoryItem>(historyItems);
@@ -1937,7 +2048,8 @@ public sealed class ChatOutputHtmlModel : IDisposable
         Func<bool> isReasoningVisible,
         IToolVisualizerFactory? toolFactory = null,
         IAgentStatusSink? statusSink = null,
-        Func<string, string?>? resolveSubAgentId = null)
+        Func<string, string?>? resolveSubAgentId = null,
+        Func<string?, bool>? isRunActive = null)
     {
         var slots = new RenderSlot[snapshot.Count];
         var slotByCallId = new Dictionary<string, RenderSlot>(StringComparer.Ordinal);
@@ -1956,6 +2068,11 @@ public sealed class ChatOutputHtmlModel : IDisposable
                 resolveSubAgentId));
             slots[i] = slot;
 
+            if (isRunActive?.Invoke(snapshot[i].AssistantRunId) == true)
+            {
+                slot.HasDomElement = false;
+                continue;
+            }
             foreach (var content in snapshot[i].Contents)
             {
                 if (content is FunctionCallContent call && call.CallId is not null)
@@ -1971,6 +2088,10 @@ public sealed class ChatOutputHtmlModel : IDisposable
         for (var i = 0; i < snapshot.Count; i++)
         {
             var item = snapshot[i];
+            if (isRunActive?.Invoke(item.AssistantRunId) == true)
+            {
+                continue;
+            }
 
             if (!ChatMessageHtmlTransformer.IsToolResultOnlyItem(item))
             {
@@ -1987,7 +2108,9 @@ public sealed class ChatOutputHtmlModel : IDisposable
             foreach (var content in item.Contents)
             {
                 var result = (FunctionResultContent)content;
-                if (result.CallId is null || !slotByCallId.TryGetValue(result.CallId, out var matchedSlot))
+                if (result.CallId is null || !slotByCallId.TryGetValue(result.CallId, out var matchedSlot) ||
+                    item.AssistantRunId is not null && matchedSlot.Model.Source.AssistantRunId is not null &&
+                    item.AssistantRunId != matchedSlot.Model.Source.AssistantRunId)
                 {
                     allMatched = false;
                     break;
@@ -2009,12 +2132,10 @@ public sealed class ChatOutputHtmlModel : IDisposable
             slots[i].HasDomElement = false;
         }
 
-        // Pass 3: compute contiguous tool-call groups globally. Group ids use the first member's
-        // history index; grouping skips grouping-transparent items (result-only, no-DOM, and
-        // no-visible-content messages) but never crosses any displayed non-tool message.
+        // Pass 3: use explicit run boundaries where available; legacy messages retain contiguous grouping.
         for (var i = 0; i < snapshot.Count; i++)
         {
-            if (!ChatMessageHtmlTransformer.IsToolCallOnlyItem(snapshot[i]))
+            if (!slots[i].HasDomElement || !ChatMessageHtmlTransformer.IsToolCallOnlyItem(snapshot[i]))
             {
                 continue;
             }
@@ -2022,6 +2143,22 @@ public sealed class ChatOutputHtmlModel : IDisposable
             RenderSlot? groupablePredecessor = null;
             for (var j = i - 1; j >= 0; j--)
             {
+                if (snapshot[j].Role == ChatRole.User)
+                {
+                    break;
+                }
+                var runId = snapshot[i].AssistantRunId;
+                if (runId is not null && snapshot[j].AssistantRunId == runId &&
+                    !ChatMessageHtmlTransformer.IsToolCallOnlyItem(snapshot[j]) &&
+                    slots[j].Group is null)
+                {
+                    continue;
+                }
+                if (runId is not null && snapshot[j].AssistantRunId != runId ||
+                    runId is null && snapshot[j].AssistantRunId is not null)
+                {
+                    break;
+                }
                 if (ChatMessageHtmlTransformer.IsGroupingTransparent(slots[j]))
                 {
                     continue;
@@ -2038,6 +2175,13 @@ public sealed class ChatOutputHtmlModel : IDisposable
 
             if (groupablePredecessor is null)
             {
+                if (snapshot[i].AssistantRunId is not null)
+                {
+                    slots[i].Model.SetIsInsideMessageLevelToolGroup(true, emit: false);
+                    slots[i].Group = new ToolCallGroupHtmlModel(
+                        i, ChatOutputHtmlRenderer.ToolGroupId(i), sink, slots[i].Model);
+                    slots[i].IsTopLevelFirstGroupMember = true;
+                }
                 continue;
             }
 
@@ -2084,9 +2228,8 @@ public sealed class ChatOutputHtmlModel : IDisposable
                     continue;
                 }
 
-                effectiveRole = "assistant";
-                var suppress = string.Equals(previousRole, effectiveRole, StringComparison.OrdinalIgnoreCase);
-                g.SetSuppressRoleHeader(suppress, emit: false);
+                g.SetSuppressRoleHeader(true, emit: false);
+                continue;
             }
             else
             {
@@ -2146,10 +2289,6 @@ public sealed class ChatOutputHtmlModel : IDisposable
                         postGroup.Append(plan.Slots[j].Model.BuildGroupedMemberPostGroupHtml());
                         plan.Slots[j].Model.IsInserted = true;
                     }
-                    else if (plan.Slots[j].HasDomElement)
-                    {
-                        break;
-                    }
                 }
 
                 builder.Append(group.BuildHtml(body.ToString(), postGroup.ToString()));
@@ -2183,7 +2322,8 @@ public sealed class ChatOutputHtmlModel : IDisposable
                 this.isReasoningVisible,
                 this.toolFactory,
                 this.statusSink,
-                this.resolveSubAgentId);
+                this.resolveSubAgentId,
+                runId => runId is not null && this.activeRunIdsAtLoad.Contains(runId));
 
             var scrolled = false;
 
@@ -2276,7 +2416,10 @@ public sealed class ChatOutputHtmlModel : IDisposable
                         statusSink: this.statusSink,
                         resolveSubAgentId: this.resolveSubAgentId,
                         preloadedCount: snapshot.Count,
-                        bufferedEvents: this.bufferedHistoryEvents);
+                        bufferedEvents: this.bufferedHistoryEvents,
+                        isRunActive: this.IsAssistantRunActive,
+                        suppressedAtLoad: this.activeRunIdsAtLoad);
+                    this.historyTransformer.RefreshActiveRuns();
 
                     this.historyLoading = false;
 
@@ -2383,6 +2526,13 @@ public sealed class ChatOutputHtmlModel : IDisposable
     private static int SnapCutPoint(IReadOnlyList<AgentChatHistoryItem> snapshot, int rawCut)
     {
         var k = rawCut;
+        if (k < snapshot.Count && snapshot[k].AssistantRunId is { } runId)
+        {
+            while (k > 0 && snapshot[k - 1].AssistantRunId == runId)
+            {
+                k--;
+            }
+        }
         while (k > 0 && IsToolRelated(snapshot[k - 1]))
         {
             k--;
@@ -2475,6 +2625,10 @@ public sealed class ChatOutputHtmlModel : IDisposable
         }
 
         this.SyncRunningItemSubscriptions();
+        if (e.OldItems?.Cast<AgentChatRunningItem?>().Any(item => item?.AssistantRunId is not null) == true)
+        {
+            this.historyTransformer?.RefreshActiveRuns();
+        }
         this.sink.ScrollToBottom();
     }
 
@@ -2485,6 +2639,10 @@ public sealed class ChatOutputHtmlModel : IDisposable
             this.sink.ScrollToBottom();
         }
     }
+
+    private bool IsAssistantRunActive(string? runId)
+        => runId is not null && this.runningItems.Any(item =>
+            item is not null && item.AssistantRunId == runId);
 
     private void SyncRunningItemSubscriptions()
     {

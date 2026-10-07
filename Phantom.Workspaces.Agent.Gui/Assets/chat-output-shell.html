@@ -333,6 +333,24 @@
       display: none;
     }
 
+    .tool-active-status { margin-left: 0.5em; }
+    .tool-active-indicator {
+      display: inline-block;
+      width: 0.55em;
+      height: 0.55em;
+      border-radius: 50%;
+      margin-right: 0.35em;
+      background: currentColor;
+      animation: tool-active-pulse 1.2s ease-in-out infinite;
+    }
+    @keyframes tool-active-pulse {
+      50% { opacity: 0.3; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .tool-active-indicator { animation: none; }
+    }
+    .chat-content-actions { display: inline-flex; gap: 0.25em; }
+
     .tool-expand-toggle {
       background: none;
       border: none;
@@ -593,6 +611,31 @@
     })();
   </script>
   <script>
+    /* Keep a run's expanded tools open when streaming content moves into history. */
+    (function () {
+      var expandedRuns = new Map();
+      document.addEventListener("toggle", function (event) {
+        var group = event.target;
+        if (group.matches && group.matches("details.chat-tool-group[data-assistant-run-id]")) {
+          expandedRuns.set(group.getAttribute("data-assistant-run-id"), group.open);
+        }
+      }, true);
+      new MutationObserver(function (mutations) {
+        mutations.forEach(function (mutation) {
+          mutation.addedNodes.forEach(function (node) {
+            if (node.nodeType !== 1) { return; }
+            var groups = node.matches("details.chat-tool-group[data-assistant-run-id]")
+              ? [node] : node.querySelectorAll("details.chat-tool-group[data-assistant-run-id]");
+            groups.forEach(function (group) {
+              var id = group.getAttribute("data-assistant-run-id");
+              if (expandedRuns.has(id)) { group.open = expandedRuns.get(id); }
+            });
+          });
+        });
+      }).observe(document.body, { childList: true, subtree: true });
+    })();
+  </script>
+  <script>
      /* inspect-gutter.js — message-header inspect button component.
      * Call InspectGutter.init(root) to wire up all [data-inspect-target] elements inside root.
      * A MutationObserver keeps watching for elements added later (streaming / incremental updates).
@@ -643,13 +686,15 @@
         var header = message.querySelector(":scope > .chat-header");
         var meta = header && header.querySelector(":scope > .chat-meta");
         if (!meta) { return; }
-        if (header.hidden) { header.hidden = false; }
-        var existing = meta.querySelector(".inspect-gutter-btn");
+        var host = header.hidden ? message.querySelector(":scope > .chat-contents") : meta;
+        if (!host) { return; }
+        var existing = message.querySelector(":scope > .chat-header .inspect-gutter-btn, :scope > .chat-contents > .inspect-gutter-btn");
         if (!target) {
           if (existing) { existing.remove(); }
           return;
         }
-        if (existing) { return; }
+        if (existing && existing.parentElement === host) { return; }
+        if (existing) { existing.remove(); }
         var btn = document.createElement("button");
         btn.className = "chat-affordance-btn inspect-gutter-btn";
         btn.setAttribute("aria-label", "Open in inspector");
@@ -666,7 +711,7 @@
           });
         });
 
-        meta.insertBefore(btn, meta.querySelector(".usage-gutter-btn"));
+        host.insertBefore(btn, host === meta ? meta.querySelector(".usage-gutter-btn") : host.firstChild);
       }
 
       return { init: init };
@@ -718,13 +763,16 @@
         var header = message.querySelector(":scope > .chat-header");
         var meta = header && header.querySelector(":scope > .chat-meta");
         if (!meta) { return; }
-        if (header.hidden) { header.hidden = false; }
-        var existing = meta.querySelector(".usage-gutter-btn");
+        var host = header.hidden ? message.querySelector(":scope > .chat-contents") : meta;
+        if (!host) { return; }
+        var existing = message.querySelector(":scope > .chat-header .usage-gutter-btn, :scope > .chat-contents > .usage-gutter-btn");
         if (!marker) {
           if (existing) { existing.remove(); }
           return;
         }
-        if (!existing) { meta.appendChild(makeButton(message)); }
+        if (existing && existing.parentElement === host) { return; }
+        if (existing) { existing.remove(); }
+        host.appendChild(makeButton(message));
       }
 
       function makeButton(message) {

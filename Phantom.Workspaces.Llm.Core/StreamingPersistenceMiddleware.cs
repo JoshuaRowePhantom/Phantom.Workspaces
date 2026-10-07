@@ -23,6 +23,7 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
     private readonly IncrementalPersistenceChatHistoryProvider provider;
     private readonly IAgentPersistenceStore store;
     private AgentSession? currentSession;
+    private string? currentAssistantRunId;
 
     internal event Action<ChatMessage>? MessagePersisted;
 
@@ -45,6 +46,8 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
     {
         this.currentSession = session;
     }
+
+    internal void SetAssistantRunId(string runId) => this.currentAssistantRunId = runId;
 
     /// <inheritdoc />
     public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
@@ -69,6 +72,7 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
         // the binding-affecting view-model mutations downstream remain on the foreground context.
         var buffer = new List<ChatResponseUpdate>();
         var persistedCount = 0;
+        var assistantRunId = this.currentAssistantRunId ?? Guid.NewGuid().ToString("n");
 
         var enumerator = this.inner
             .GetStreamingResponseAsync(messages, options, cancellationToken)
@@ -100,7 +104,7 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
 
                         for (var i = persistedCount; i < stableCount; i++)
                         {
-                            await this.PersistMessageAsync(response.Messages[i]).ConfigureAwait(false);
+                            await this.PersistMessageAsync(response.Messages[i], assistantRunId).ConfigureAwait(false);
                         }
 
                         persistedCount = stableCount;
@@ -115,6 +119,20 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
                 }
 
                 yield return step.Update!;
+            }
+
+            // A provider may end normally without a terminal FinishReason. Its final message is
+            // stable once enumeration ends and must be durable along with its matching tool call.
+            if (buffer.Count > 0)
+            {
+                await Task.Run(async () =>
+                {
+                    var finalMessages = buffer.ToChatResponse().Messages;
+                    for (var i = persistedCount; i < finalMessages.Count; i++)
+                    {
+                        await this.PersistMessageAsync(finalMessages[i], assistantRunId).ConfigureAwait(false);
+                    }
+                }, cancellationToken).ConfigureAwait(false);
             }
         }
         finally
@@ -144,7 +162,9 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
     /// <inheritdoc />
     public void Dispose() => this.inner.Dispose();
 
-    private async ValueTask PersistMessageAsync(ChatMessage message)
+    internal const string AssistantRunIdProperty = "phantomAssistantRunId";
+
+    private async ValueTask PersistMessageAsync(ChatMessage message, string assistantRunId)
     {
         var session = this.currentSession;
         if (session is null)
@@ -157,6 +177,8 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
             message.CreatedAt = DateTimeOffset.UtcNow;
         }
 
+        message.AdditionalProperties ??= [];
+        message.AdditionalProperties[AssistantRunIdProperty] = assistantRunId;
         var agent = this.provider.BuildPersistedAgent(session);
         await this.store.StoreAsync(
             new StoreRequestAgent

@@ -44,6 +44,33 @@ public sealed partial class RemoteAgentChatTests
     }
 
     [Fact]
+    public async Task AttachAsync_ActiveRunSnapshot_RetainsAssistantRunBoundary()
+    {
+        var transport = new TestTransport();
+        var client = new RemoteAgentSessionClient(transport);
+        var attaching = RemoteAgentChat.AttachAsync(new RemoteAgentChatAttachOptions
+        {
+            Client = client,
+            OpenRequest = AgentSessionProtocolCodecTests.Open(),
+            ForegroundScheduler = TaskScheduler.Default,
+        });
+        var item = new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            AssistantRunId = "assistant-run",
+            Contents = [new FunctionCallContent("c", "read")],
+        };
+        var snapshot = AgentSessionProtocolCodecTests.Snapshot() with
+        {
+            RunningItems = [JsonSerializer.SerializeToElement(
+                new { RunId = "stream", Items = new[] { item } }, AIJsonUtilities.DefaultOptions)],
+        };
+        await transport.SendAsync(Frame(1, new SessionSnapshotEvent { Snapshot = snapshot }));
+        await using var chat = await attaching;
+        Assert.Equal("assistant-run", Assert.Single(chat.RunningItems).AssistantRunId);
+    }
+
+    [Fact]
     public async Task AttachAsync_CancelledBeforeSnapshot_DisposesClientAndPublishesNothing()
     {
         var transport = new TestTransport();
@@ -134,6 +161,60 @@ public sealed partial class RemoteAgentChatTests
             Assert.Equal(ChatRole.Assistant, chat.History[0].Role);
         }
     }
+
+        [Fact]
+        public async Task StreamingUpdates_KeepRunIdentityWithoutClearingActiveToolGroup()
+        {
+            var (transport, chat) = await AttachAsync();
+            await using (chat)
+            {
+                var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                ((System.Collections.Specialized.INotifyCollectionChanged)chat.RunningItems).CollectionChanged +=
+                    (_, _) => started.TrySetResult();
+                var placeholder = new AgentChatHistoryItem { Role = ChatRole.Assistant, AssistantRunId = "assistant-run" };
+                await transport.SendAsync(Frame(2, new StreamingStartedEvent
+                {
+                    RunId = "stream",
+                    Item = JsonSerializer.SerializeToElement(placeholder, AIJsonUtilities.DefaultOptions),
+                }));
+                await started.Task;
+                var running = Assert.Single(chat.RunningItems);
+                Assert.Equal("assistant-run", running.AssistantRunId);
+
+                var call = new AgentChatHistoryItem
+                {
+                    Role = ChatRole.Assistant,
+                    AssistantRunId = "assistant-run",
+                    Contents = [new FunctionCallContent("c1", "read")],
+                };
+                var result = new AgentChatHistoryItem
+                {
+                    Role = ChatRole.Tool,
+                    AssistantRunId = "assistant-run",
+                    Contents = [new FunctionResultContent("c1", "value")],
+                };
+                var updated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                var observedEmpty = false;
+                running.Items.CollectionChanged += (_, _) =>
+                {
+                    if (running.Items.Count == 0) observedEmpty = true;
+                    if (running.Items.Count == 2) updated.TrySetResult();
+                };
+                await transport.SendAsync(Frame(3, new StreamingUpdatedEvent
+                {
+                    RunId = "stream",
+                    Update = JsonSerializer.SerializeToElement(new[] { call }, AIJsonUtilities.DefaultOptions),
+                }));
+                await transport.SendAsync(Frame(4, new StreamingUpdatedEvent
+                {
+                    RunId = "stream",
+                    Update = JsonSerializer.SerializeToElement(new[] { call, result }, AIJsonUtilities.DefaultOptions),
+                }));
+                await updated.Task;
+                Assert.False(observedEmpty);
+                Assert.Equal("assistant-run", running.AssistantRunId);
+            }
+        }
 
     [Fact]
     public async Task EnqueueSystemNote_RemoteProxy_AddsLocalDisplayOnlyNote()
