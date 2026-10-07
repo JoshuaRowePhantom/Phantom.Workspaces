@@ -11,8 +11,9 @@
     `AppContext.BaseDirectory\runtimes\<rid>\native\copilot.exe` - failed.
 
     This script extracts the produced ZIP to a temporary directory and reuses
-    Assert-CopilotRuntimePayload.ps1 to assert the nested `runtimes\<rid>\native\copilot.exe` and
-    LICENSE.md are present. It validates the SHIPPED artifact, not the publish directory, closing
+    Assert-CopilotRuntimePayload.ps1 to assert the nested SDK runtime pair, sidecars and
+    LICENSE.md are present and to start the SDK on matching architectures. It validates the
+    SHIPPED artifact, not the publish directory, closing
     the gap that let the flatten reach releases.
 
 .PARAMETER ZipPath
@@ -33,7 +34,9 @@ param(
     [Parameter(Mandatory)]
     [string] $RuntimeIdentifier,
     [Parameter()]
-    [switch] $SkipStartupSmoke
+    [switch] $SkipStartupSmoke,
+    [Parameter()]
+    [switch] $SkipSdkStartupSmoke
 )
 
 $ErrorActionPreference = 'Stop'
@@ -42,6 +45,7 @@ if (-not (Test-Path -LiteralPath $ZipPath))
 {
     throw "Release zip not found: $ZipPath"
 }
+$ZipPath = (Resolve-Path -LiteralPath $ZipPath).ProviderPath
 
 $assertPayload = Join-Path $PSScriptRoot 'Assert-CopilotRuntimePayload.ps1'
 if (-not (Test-Path -LiteralPath $assertPayload))
@@ -49,7 +53,7 @@ if (-not (Test-Path -LiteralPath $assertPayload))
     throw "Companion payload assertion script not found: $assertPayload"
 }
 
-$extractRoot = Join-Path ([System.IO.Path]::GetTempPath()) "phantom-zip-validate-$([Guid]::NewGuid().ToString('N'))"
+$extractRoot = Join-Path $PSScriptRoot "..\..\artifacts\phantom-zip-validate-$([Guid]::NewGuid().ToString('N'))"
 
 try
 {
@@ -60,7 +64,7 @@ try
 
     Write-Host "Extracted $ZipPath -> $extractRoot"
 
-    & $assertPayload -PayloadDirectory $extractRoot -RuntimeIdentifier $RuntimeIdentifier -SkipStartupSmoke:$SkipStartupSmoke
+    & $assertPayload -PayloadDirectory $extractRoot -RuntimeIdentifier $RuntimeIdentifier -SkipStartupSmoke:$SkipStartupSmoke -SkipSdkStartupSmoke:$SkipSdkStartupSmoke
 
     Write-Host "Release zip runtime payload validation passed for $RuntimeIdentifier ($ZipPath)."
 }

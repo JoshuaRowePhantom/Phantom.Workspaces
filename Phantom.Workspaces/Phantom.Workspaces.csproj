@@ -60,25 +60,48 @@
     </PropertyGroup>
     <ItemGroup>
       <_CopilotRuntimeToPublish Include="$(_CopilotRuntimeSourceDirectory)\copilot.exe" />
+      <_CopilotRuntimeToPublish Include="$(_CopilotRuntimeSourceDirectory)\copilot-runtime.exe" />
       <_CopilotRuntimeToPublish Include="$(_CopilotRuntimeSourceDirectory)\copilot_runtime.dll"
                                 Condition="Exists('$(_CopilotRuntimeSourceDirectory)\copilot_runtime.dll')" />
+      <_CopilotRuntimeToPublish Include="$(_CopilotRuntimeSourceDirectory)\runtime.node" />
       <_CopilotRuntimeToPublish Include="$(_CopilotRuntimeSourceDirectory)\LICENSE.md" />
+      <_CopilotRuntimeToPublish Include="$(_CopilotRuntimeSourceDirectory)\**\*"
+                                Exclude="$(_CopilotRuntimeSourceDirectory)\copilot.exe;$(_CopilotRuntimeSourceDirectory)\copilot-runtime.exe;$(_CopilotRuntimeSourceDirectory)\copilot_runtime.dll;$(_CopilotRuntimeSourceDirectory)\runtime.node;$(_CopilotRuntimeSourceDirectory)\LICENSE.md;$(_CopilotRuntimeSourceDirectory)\phantom-copilot-wrapper.exe;$(_CopilotRuntimeSourceDirectory)\mxc_ffi.dll;$(_CopilotRuntimeSourceDirectory)\plm.exe;$(_CopilotRuntimeSourceDirectory)\MXC-LICENSE.md;$(_CopilotRuntimeSourceDirectory)\.copilot-runtime-assets"
+                                Condition="'$(UsePreparedCopilotPayloadForTests)' != 'true'" />
     </ItemGroup>
     <Error Condition="!Exists('$(_CopilotRuntimeSourceDirectory)\copilot.exe')"
            Text="Copilot CLI not found in payload source '$(_CopilotRuntimeSourceDirectory)\copilot.exe'; cannot bundle it into the publish payload (issue #1376)." />
+    <Error Condition="!Exists('$(_CopilotRuntimeSourceDirectory)\copilot-runtime.exe')"
+           Text="SDK runtime wrapper missing from payload source '$(_CopilotRuntimeSourceDirectory)\copilot-runtime.exe' (issue #1614)." />
+    <Error Condition="!Exists('$(_CopilotRuntimeSourceDirectory)\runtime.node')"
+           Text="SDK runtime.node sidecar missing from payload source '$(_CopilotRuntimeSourceDirectory)\runtime.node' (issue #1614)." />
+    <GetFileHash Files="$(_CopilotRuntimeSourceDirectory)\copilot.exe;$(_CopilotRuntimeSourceDirectory)\copilot-runtime.exe"
+                 Algorithm="SHA256">
+      <Output TaskParameter="Items" ItemName="_CopilotRuntimePairHashes" />
+    </GetFileHash>
+    <PropertyGroup>
+      <_CopilotCliHash>@(_CopilotRuntimePairHashes->WithMetadataValue('Filename', 'copilot')->'%(FileHash)')</_CopilotCliHash>
+      <_CopilotSdkWrapperHash>@(_CopilotRuntimePairHashes->WithMetadataValue('Filename', 'copilot-runtime')->'%(FileHash)')</_CopilotSdkWrapperHash>
+    </PropertyGroup>
+    <Error Condition="'$(_CopilotCliHash)' != '$(_CopilotSdkWrapperHash)'"
+           Text="Copilot SDK runtime pair does not match: copilot.exe must be the SDK-staged alias of copilot-runtime.exe (issue #1614)." />
     <Error Condition="!Exists('$(_CopilotRuntimeSourceDirectory)\LICENSE.md')"
            Text="GitHub Copilot CLI LICENSE.md not found in payload source '$(_CopilotRuntimeSourceDirectory)\LICENSE.md'; the redistributed CLI must ship its license (issue #1376)." />
     <Copy SourceFiles="@(_CopilotRuntimeToPublish)"
-          DestinationFolder="$(PublishDir)runtimes\$(RuntimeIdentifier)\native"
+          DestinationFiles="@(_CopilotRuntimeToPublish->'$(PublishDir)runtimes\$(RuntimeIdentifier)\native\%(RecursiveDir)%(Filename)%(Extension)')"
           SkipUnchangedFiles="true" />
     <Error Condition="!Exists('$(PublishDir)runtimes\$(RuntimeIdentifier)\native\copilot.exe')"
            Text="Copilot CLI (runtimes\$(RuntimeIdentifier)\native\copilot.exe) was not published as a loose file (issue #1376)." />
+    <Error Condition="!Exists('$(PublishDir)runtimes\$(RuntimeIdentifier)\native\copilot-runtime.exe')"
+           Text="SDK runtime wrapper missing from published payload (issue #1614)." />
+    <Error Condition="!Exists('$(PublishDir)runtimes\$(RuntimeIdentifier)\native\runtime.node')"
+           Text="SDK runtime.node sidecar missing from published payload (issue #1614)." />
     <Error Condition="!Exists('$(PublishDir)runtimes\$(RuntimeIdentifier)\native\phantom-copilot-wrapper.exe')"
            Text="The Copilot MXC wrapper was not published as a loose file." />
   </Target>
   <Target Name="ValidatePreparedCopilotPayload"
           BeforeTargets="PublishCopilotWrapperLoose;PublishCopilotRuntimeLoose;PublishMxcRuntimeLoose"
-          Condition="'$(UsePreparedCopilotPayloadForTests)' != '' Or '$(PreparedCopilotPayloadDirectory)' != '' Or '$(PreparedCopilotPayloadFingerprint)' != '' Or '$(PreparedCopilotPayloadConfiguration)' != '' Or '$(PreparedCopilotPayloadRuntimeIdentifier)' != '' Or '$(PreparedCopilotPayloadManifestSha256)' != '' Or '$(PreparedCopilotWrapperSha256)' != '' Or '$(PreparedCopilotCliSha256)' != '' Or '$(PreparedCopilotRuntimeSha256)' != '' Or '$(PreparedCopilotLicenseSha256)' != '' Or '$(PreparedMxcFfiSha256)' != '' Or '$(PreparedPlmSha256)' != '' Or '$(PreparedMxcLicenseSha256)' != '' Or '$(SimulateMissingCopilotWrapperChildOutputForTests)' != '' Or '$(UsePreparedCopilotPayload)' != '' Or '$(RequirePreparedCopilotWrapper)' != '' Or '$(CopilotWrapperPreparedExecutable)' != '' Or '$(CopilotWrapperPreparedConfiguration)' != '' Or '$(CopilotWrapperPreparedRuntimeIdentifier)' != ''">
+          Condition="'$(UsePreparedCopilotPayloadForTests)' != '' Or '$(PreparedCopilotPayloadDirectory)' != '' Or '$(PreparedCopilotPayloadFingerprint)' != '' Or '$(PreparedCopilotPayloadConfiguration)' != '' Or '$(PreparedCopilotPayloadRuntimeIdentifier)' != '' Or '$(PreparedCopilotPayloadManifestSha256)' != '' Or '$(PreparedCopilotWrapperSha256)' != '' Or '$(PreparedCopilotCliSha256)' != '' Or '$(PreparedCopilotSdkWrapperSha256)' != '' Or '$(PreparedCopilotRuntimeSha256)' != '' Or '$(PreparedCopilotNodeSha256)' != '' Or '$(PreparedCopilotLicenseSha256)' != '' Or '$(PreparedMxcFfiSha256)' != '' Or '$(PreparedPlmSha256)' != '' Or '$(PreparedMxcLicenseSha256)' != '' Or '$(SimulateMissingCopilotWrapperChildOutputForTests)' != '' Or '$(UsePreparedCopilotPayload)' != '' Or '$(RequirePreparedCopilotWrapper)' != '' Or '$(CopilotWrapperPreparedExecutable)' != '' Or '$(CopilotWrapperPreparedConfiguration)' != '' Or '$(CopilotWrapperPreparedRuntimeIdentifier)' != ''">
     <Error Condition="'$(UsePreparedCopilotPayload)' != '' Or '$(RequirePreparedCopilotWrapper)' != '' Or '$(CopilotWrapperPreparedExecutable)' != '' Or '$(CopilotWrapperPreparedConfiguration)' != '' Or '$(CopilotWrapperPreparedRuntimeIdentifier)' != ''"
            Text="Legacy prepared Copilot properties are unsafe and are not supported." />
     <Error Condition="'$(UsePreparedCopilotPayloadForTests)' != 'true'"
@@ -135,9 +158,17 @@
         <ExpectedSha256>$(PreparedCopilotCliSha256)</ExpectedSha256>
         <ArtifactName>copilot.exe</ArtifactName>
       </_PreparedCopilotPayloadArtifact>
+      <_PreparedCopilotPayloadArtifact Include="$(_PreparedCopilotPayloadCanonicalDirectory)\copilot-runtime.exe">
+        <ExpectedSha256>$(PreparedCopilotSdkWrapperSha256)</ExpectedSha256>
+        <ArtifactName>copilot-runtime.exe</ArtifactName>
+      </_PreparedCopilotPayloadArtifact>
       <_PreparedCopilotPayloadArtifact Include="$(_PreparedCopilotPayloadCanonicalDirectory)\copilot_runtime.dll">
         <ExpectedSha256>$(PreparedCopilotRuntimeSha256)</ExpectedSha256>
         <ArtifactName>copilot_runtime.dll</ArtifactName>
+      </_PreparedCopilotPayloadArtifact>
+      <_PreparedCopilotPayloadArtifact Include="$(_PreparedCopilotPayloadCanonicalDirectory)\runtime.node">
+        <ExpectedSha256>$(PreparedCopilotNodeSha256)</ExpectedSha256>
+        <ArtifactName>runtime.node</ArtifactName>
       </_PreparedCopilotPayloadArtifact>
       <_PreparedCopilotPayloadArtifact Include="$(_PreparedCopilotPayloadCanonicalDirectory)\LICENSE.md">
         <ExpectedSha256>$(PreparedCopilotLicenseSha256)</ExpectedSha256>
