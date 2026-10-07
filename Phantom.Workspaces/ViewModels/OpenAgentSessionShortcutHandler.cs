@@ -992,7 +992,11 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             options.AgentChat,
             options.AgentSessionEntity.DisplayName,
             options.Tab.Id,
-            options.ForegroundScheduler);
+            options.ForegroundScheduler,
+            options.AgentChat is RemoteAgentChat
+                ? (parent, agentId, ct) => this.AttachRemoteChildAsync(
+                    options.MainWindowViewModel, parent, agentId, options.ForegroundScheduler, ct)
+                : null);
 
         var trustedExecutorIdentifier = ResolveTrustedExecutorIdentifier(options.MainWindowViewModel, options.AgentSessionEntity);
 
@@ -1055,13 +1059,63 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             : TrustProfile.LocalClientInstance;
     }
 
+    private async Task<IAgentChat> AttachRemoteChildAsync(
+        MainWindowViewModel window, IAgentChat parent, string agentId,
+        TaskScheduler foregroundScheduler, CancellationToken ct)
+    {
+        if (parent is not RemoteAgentChat remote)
+            throw new InvalidOperationException("The parent is not a remote session.");
+        var descriptor = await remote.OpenSubagentAsync(agentId, ct).ConfigureAwait(false);
+        if (descriptor.AgentId != agentId || string.IsNullOrWhiteSpace(descriptor.AgentSessionId)
+            || !Guid.TryParse(descriptor.OwningProfileEntityId, out var owner))
+            throw new InvalidOperationException("The owner returned an invalid child identity.");
+        var registry = this.transportFactoryRegistry
+            ?? window.TransportComposition?.TransportFactoryRegistry
+            ?? throw new InvalidOperationException("Remote transport is unavailable.");
+        using var profile = JsonDocument.Parse(
+            $$"""{"type":"user-computer-profile","entity-id":"{{owner:D}}"}""");
+        var transport = await registry.ConnectToAsync(profile.RootElement, ct).ConfigureAwait(false);
+        var client = new RemoteAgentSessionClient(transport);
+        try
+        {
+            var chat = await RemoteAgentChat.AttachAsync(new RemoteAgentChatAttachOptions
+            {
+                Client = client,
+                ForegroundScheduler = foregroundScheduler,
+                OpenRequest = new AgentSessionOpenRequest
+                {
+                    ProtocolVersion = 1,
+                    AgentSessionId = descriptor.AgentSessionId,
+                    ExpectedOwningProfileEntityId = descriptor.OwningProfileEntityId,
+                    ExpectedOwnershipGeneration = descriptor.OwnershipGeneration,
+                    OpenIntent = AgentSessionOpenIntent.Attach,
+                    AttachmentToken = Guid.NewGuid().ToString("N"),
+                    Capabilities = [],
+                },
+            }, ct).ConfigureAwait(false);
+            if (chat.Information.AgentSessionId != descriptor.AgentSessionId
+                || client.LastAppliedCursor?.Epoch != descriptor.RuntimeEpoch)
+            {
+                await chat.DisposeAsync().ConfigureAwait(false);
+                throw new InvalidOperationException("The child runtime changed during attachment.");
+            }
+            return chat;
+        }
+        catch
+        {
+            await client.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
     private static AgentViewModel BuildAgentViewModel(
         MainWindowViewModel mainWindowViewModel,
         ObservableLoggerFactory loggerFactory,
         IAgentChat agentChat,
         string title,
         string agentSessionTabId,
-        TaskScheduler foregroundScheduler)
+        TaskScheduler foregroundScheduler,
+        Func<IAgentChat, string, CancellationToken, Task<IAgentChat>>? remoteChildResolver = null)
     {
         // #1122: foregroundScheduler is a required constructor parameter on AgentViewModel so
         // sub-agent restore continuations run on the UI thread. Callers capture the scheduler
@@ -1073,6 +1127,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             Description = agentChat.Information.Description,
             LoggerFactory = loggerFactory,
             ForegroundScheduler = foregroundScheduler,
+            RemoteChildResolver = remoteChildResolver,
         })
         {
             OpenUrlHandler = url => _ = mainWindowViewModel.OpenTabAsync(

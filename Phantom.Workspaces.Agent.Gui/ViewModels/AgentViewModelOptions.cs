@@ -27,4 +27,7 @@ public sealed record AgentViewModelOptions
 
     /// <summary>The parent view-model when this instance represents a sub-agent editor.</summary>
     public AgentViewModel? ParentAgentViewModel { get; init; } = null;
+
+    /// <summary>Authorized remote child attachment, scoped to this tab.</summary>
+    public Func<IAgentChat, string, CancellationToken, Task<IAgentChat>>? RemoteChildResolver { get; init; }
 }

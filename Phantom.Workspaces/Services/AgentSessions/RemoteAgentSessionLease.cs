@@ -137,6 +137,8 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         JsonSerializer.SerializeToElement(new
         {
             item.AgentId,
+            AgentSessionId = item is SubAgent sub ? sub.SessionId.Value
+                : item is AgentChat chat ? chat.AgentSessionId : string.Empty,
             item.DisplayName,
             item.Description,
             item.Name,

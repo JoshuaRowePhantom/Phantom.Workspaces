@@ -14,6 +14,7 @@ using Phantom.Workspaces.Agent.Gui.ViewModels.Collections;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.SlashCommands;
+using Phantom.Workspaces.Llm.Remote;
 
 namespace Phantom.Workspaces.Agent.Gui.ViewModels;
 
@@ -43,6 +44,10 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private readonly ToolsCollectionTransformer toolsTransformer;
     private readonly SubAgentsCollectionTransformer subAgentsTransformer;
     private readonly TaskScheduler foregroundScheduler;
+    private readonly Func<IAgentChat, string, CancellationToken, Task<IAgentChat>>? remoteChildResolver;
+    private readonly CancellationTokenSource remoteChildrenLifetime = new();
+    private readonly Dictionary<string, RemoteChildSlot> remoteChildren = new(StringComparer.Ordinal);
+    private bool isDisposed;
     private readonly AgentChatInterruptState interruptState;
     private readonly AsyncRelayCommand interruptCommand;
     private bool isReasoningVisible;
@@ -80,11 +85,12 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             options.Description,
             options.LoggerFactory,
             options.ForegroundScheduler,
-            options.ParentAgentViewModel)
+            options.ParentAgentViewModel,
+            options.RemoteChildResolver)
     {
     }
 
-    internal AgentViewModel(IAgentChat agentChat, string displayName, string description, ObservableLoggerFactory loggerFactory, TaskScheduler foregroundScheduler, AgentViewModel? parentAgentViewModel = null)
+    internal AgentViewModel(IAgentChat agentChat, string displayName, string description, ObservableLoggerFactory loggerFactory, TaskScheduler foregroundScheduler, AgentViewModel? parentAgentViewModel = null, Func<IAgentChat, string, CancellationToken, Task<IAgentChat>>? remoteChildResolver = null)
     {
         ArgumentNullException.ThrowIfNull(agentChat);
         ArgumentNullException.ThrowIfNull(loggerFactory);
@@ -92,6 +98,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.loggerFactory = loggerFactory;
         this.logger = loggerFactory.CreateLogger<AgentViewModel>();
         this.foregroundScheduler = foregroundScheduler ?? throw new ArgumentNullException(nameof(foregroundScheduler));
+        this.remoteChildResolver = remoteChildResolver;
         if (foregroundScheduler is SynchronizationContextTaskScheduler synchronizationScheduler
             && SynchronizationContext.Current is { } currentContext
             && currentContext != synchronizationScheduler.SynchronizationContext)
@@ -759,6 +766,12 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     public async ValueTask DisposeViewResourcesAsync()
     {
+        if (this.isDisposed) return;
+        this.isDisposed = true;
+        this.remoteChildrenLifetime.Cancel();
+        foreach (var child in this.remoteChildren.Values)
+            if (child.StatusHandler is not null)
+                child.Reference.CompletionStateChanged -= child.StatusHandler;
         this.interruptState.StateChanged -= this.OnInterruptStateChanged;
         this.toolsTransformer.Dispose();
         this.subAgentsTransformer.Dispose();
@@ -789,6 +802,13 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         {
             await subAgentViewModel.DisposeViewResourcesAsync();
         }
+        foreach (var child in this.remoteChildren.Values)
+        {
+            try { await child.Attachment; }
+            catch (OperationCanceledException) { }
+            if (child.Chat is not null) await child.Chat.DisposeAsync();
+        }
+        this.remoteChildrenLifetime.Dispose();
 
         foreach (var display in this.subAgentDisplayItems)
         {
@@ -834,19 +854,34 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     private void OnSubAgentsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
-        if (e.NewItems is not null)
-        {
-            foreach (IRunningSubAgent subAgent in e.NewItems)
-            {
-                this.AddSubAgentSlot(subAgent);
-            }
-        }
-
+        var selectedId = e.Action == NotifyCollectionChangedAction.Replace
+            ? this.RootView().SelectedEditorItem?.Id : null;
         if (e.OldItems is not null)
         {
             foreach (IRunningSubAgent subAgent in e.OldItems)
             {
-                this.RemoveSubAgentDetailContents(subAgent.AgentId);
+                RemoteChildSlot? remote = null;
+                if (this.remoteChildren.Remove(subAgent.AgentId, out remote))
+                {
+                    if (remote.StatusHandler is not null)
+                        remote.Reference.CompletionStateChanged -= remote.StatusHandler;
+                    this.subAgentAllChildren.Remove(remote.Navigation);
+                    this.allDetailContents.Remove(remote.Document);
+                    this.subAgentsTransformer.Refresh();
+                    if (this.SelectedEditorItem?.Id == remote.Navigation.Id)
+                        this.SelectedEditorItem = this.subAgentsNavItem;
+                }
+                var removal = this.RemoveSubAgentDetailContents(subAgent.AgentId);
+                if (remote is not null) _ = this.DisposeRemoteChildAsync(remote, removal);
+            }
+        }
+        if (e.NewItems is not null)
+        {
+            foreach (IRunningSubAgent added in e.NewItems)
+            {
+                this.AddSubAgentSlot(added);
+                if (selectedId == $"sub-agent-{added.AgentId}")
+                    this.RootView().NavigateToAgent(added.AgentId);
             }
         }
     }
@@ -870,8 +905,15 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
                 this.AddSubAgentSlotLazy(sub);
                 return;
             }
+
             // Eager path with SubAgent wrapper
             this.AddSubAgentSlotEager(sub, subAgentChat);
+            return;
+        }
+
+        if (subAgent is IRemoteSubagentReference remote && this.remoteChildResolver is not null)
+        {
+            this.AddRemoteChild(remote);
             return;
         }
 
@@ -894,6 +936,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             LoggerFactory = childMemory,
             ForegroundScheduler = this.foregroundScheduler,
             ParentAgentViewModel = this,
+            RemoteChildResolver = this.remoteChildResolver,
         });
         // Delegate the sub-agent's navigation handler to this parent so ancestor navigation works
         // (issue #1046): the parent can resolve its own children, and if the target is above this
@@ -956,13 +999,15 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         }
     }
 
-    private void RemoveSubAgentDetailContents(string agentId)
+    private Task RemoveSubAgentDetailContents(string agentId)
     {
-        var subAgentViewModel = this.subAgentViewModels
-            .FirstOrDefault(vm => string.Equals(vm.agentChat.Information.AgentId, agentId, StringComparison.Ordinal));
+        var subAgentViewModel = this.subAgentsContainerDetail.Slots
+            .FirstOrDefault(slot => slot.AgentId == agentId)?.SubAgentViewModel
+            ?? this.subAgentViewModels.FirstOrDefault(vm =>
+                string.Equals(vm.agentChat.Information.AgentId, agentId, StringComparison.Ordinal));
         if (subAgentViewModel is null)
         {
-            return;
+            return Task.CompletedTask;
         }
 
         if (this.subAgentDetailSubscriptions.TryGetValue(subAgentViewModel, out var handler))
@@ -991,7 +1036,168 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
                 disposable.Dispose();
         }
         this.RefreshModalProjection();
-        _ = this.DisposeRemovedSubAgentViewModelAsync(subAgentViewModel);
+        return this.DisposeRemovedSubAgentViewModelAsync(subAgentViewModel);
+    }
+
+    private async Task DisposeRemoteChildAsync(RemoteChildSlot child, Task removal)
+    {
+        try
+        {
+            await removal.ConfigureAwait(false);
+            await child.Attachment.ConfigureAwait(false);
+            if (child.Chat is not null) await child.Chat.DisposeAsync().ConfigureAwait(false);
+            child.Chat = null;
+        }
+        catch (Exception exception)
+        {
+            this.logger.LogWarning(exception, "Could not release remote child {AgentId}", child.Reference.AgentId);
+        }
+    }
+
+    private void AddRemoteChild(IRemoteSubagentReference remote)
+    {
+        if (this.remoteChildren.ContainsKey(remote.AgentId)) return;
+        var placeholder = new AgentChatPlaceholderDetailViewModel(
+            remote.DisplayName, "Opening child transcript…");
+        var document = new AgentDetailDocumentItem(
+            $"{this.detailKeyPrefix}/remote-{remote.AgentId}", remote.DisplayName, placeholder);
+        var navigation = new AgentEditorNavigationItemViewModel(
+            $"sub-agent-{remote.AgentId}", remote.DisplayName, null, remote.Description,
+            null, placeholder, [], runningSubAgent: remote);
+        var slot = new RemoteChildSlot(remote, navigation, document);
+        slot.StatusHandler = (_, _) =>
+        {
+            slot.Navigation.RefreshStatus();
+            this.subAgentsTransformer.Refresh();
+            this.subAgentsContainerDetail.NotifySubAgentUpdated();
+        };
+        remote.CompletionStateChanged += slot.StatusHandler;
+        this.remoteChildren.Add(remote.AgentId, slot);
+        this.allDetailContents.Add(document);
+        this.subAgentAllChildren.Add(navigation);
+        this.subAgentsTransformer.Refresh();
+    }
+
+    /// <summary>Await an in-flight remote child attachment (also useful to synchronize UI tests).</summary>
+    public Task WaitForRemoteChildAsync(string agentId)
+        => this.remoteChildren.TryGetValue(agentId, out var child)
+            ? child.Attachment : Task.CompletedTask;
+
+    private void StartRemoteChild(RemoteChildSlot child)
+    {
+        if (!child.Attachment.IsCompleted || child.Chat is not null) return;
+        child.Attachment = this.AttachRemoteChildAsync(child);
+    }
+
+    private async Task AttachRemoteChildAsync(RemoteChildSlot child)
+    {
+        IAgentChat? chat = null;
+        try
+        {
+            var acquisition = this.remoteChildResolver!(
+                this.agentChat, child.Reference.AgentId, this.remoteChildrenLifetime.Token);
+            try
+            {
+                chat = await acquisition.WaitAsync(this.remoteChildrenLifetime.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (this.remoteChildrenLifetime.IsCancellationRequested)
+            {
+                _ = DisposeLateRemoteChildAsync(acquisition);
+                throw;
+            }
+            var viewer = chat;
+            await Task.Factory.StartNew(() =>
+            {
+                if (this.isDisposed || !this.remoteChildren.TryGetValue(child.Reference.AgentId, out var current)
+                    || !ReferenceEquals(current, child)) return;
+                if (!string.IsNullOrWhiteSpace(child.Reference.AgentSessionId)
+                    && child.Reference.AgentSessionId != viewer.Information.AgentSessionId)
+                    throw new InvalidOperationException("The authorized child session identity changed.");
+                this.AddSubAgentSlotRemote(child.Reference, viewer);
+                child.Chat = viewer;
+                chat = null;
+            }, CancellationToken.None, TaskCreationOptions.None, this.foregroundScheduler).ConfigureAwait(false);
+        }
+
+        catch (OperationCanceledException) when (this.remoteChildrenLifetime.IsCancellationRequested) { }
+        catch (Exception exception)
+        {
+            this.logger.LogWarning(exception, "Could not attach remote child {AgentId}", child.Reference.AgentId);
+            await Task.Factory.StartNew(() =>
+            {
+                if (this.isDisposed || !this.remoteChildren.TryGetValue(child.Reference.AgentId, out var current)
+                    || !ReferenceEquals(current, child)) return;
+                this.subAgentAllChildren.Remove(child.Navigation);
+                this.allDetailContents.Remove(child.Document);
+                var error = new AgentChatPlaceholderDetailViewModel(
+                    child.Reference.DisplayName, "Child transcript unavailable. Select again to retry.");
+                child.Document = new AgentDetailDocumentItem(
+                    $"{this.detailKeyPrefix}/remote-{child.Reference.AgentId}-error",
+                    child.Reference.DisplayName, error);
+                child.Navigation = new AgentEditorNavigationItemViewModel(
+                    $"sub-agent-{child.Reference.AgentId}", child.Reference.DisplayName,
+                    null, exception.Message, null, error, [], runningSubAgent: child.Reference);
+                this.allDetailContents.Add(child.Document);
+                this.subAgentAllChildren.Add(child.Navigation);
+                this.subAgentsTransformer.Refresh();
+                var root = this.RootView();
+                if (root.SelectedEditorItem?.Id == child.Navigation.Id)
+                    root.SelectedEditorItem = child.Navigation;
+            }, CancellationToken.None, TaskCreationOptions.None, this.foregroundScheduler).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (chat is not null) await chat.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    private static async Task DisposeLateRemoteChildAsync(Task<IAgentChat> acquisition)
+    {
+        try { await (await acquisition.ConfigureAwait(false)).DisposeAsync().ConfigureAwait(false); }
+        catch (OperationCanceledException) { }
+        catch (Exception) { }
+    }
+
+    private void AddSubAgentSlotRemote(IRemoteSubagentReference reference, IAgentChat chat)
+    {
+        var child = this.remoteChildren[reference.AgentId];
+        var root = this.RootView();
+        var selected = root.SelectedEditorItem == child.Navigation;
+        this.subAgentAllChildren.Remove(child.Navigation);
+        this.allDetailContents.Remove(child.Document);
+        var view = new AgentViewModel(new AgentViewModelOptions
+        {
+            AgentChat = chat, DisplayName = reference.DisplayName, Description = reference.Description,
+            LoggerFactory = this.loggerFactory, ForegroundScheduler = this.foregroundScheduler,
+            ParentAgentViewModel = this, RemoteChildResolver = this.remoteChildResolver,
+        });
+        view.NavigateToAgentHandler = this.NavigateToAgentHandler;
+        this.subAgentViewModels.Add(view);
+        this.AppendSubAgentDetailContents(view);
+        this.subAgentsContainerDetail.AddSlot(reference.AgentId, view, reference);
+        this.subAgentsTransformer.Refresh();
+        if (selected) root.SelectedEditorItem = this.subAgentAllChildren
+            .First(item => item.Id == $"sub-agent-{reference.AgentId}");
+    }
+
+    private AgentViewModel RootView()
+    {
+        var root = this;
+        while (root.ParentAgentViewModel is not null) root = root.ParentAgentViewModel;
+        return root;
+    }
+
+    private sealed class RemoteChildSlot(
+        IRemoteSubagentReference reference,
+        AgentEditorNavigationItemViewModel navigation,
+        AgentDetailDocumentItem document)
+    {
+        public IRemoteSubagentReference Reference { get; } = reference;
+        public AgentEditorNavigationItemViewModel Navigation { get; set; } = navigation;
+        public AgentDetailDocumentItem Document { get; set; } = document;
+        public IAgentChat? Chat { get; set; }
+        public Task Attachment { get; set; } = Task.CompletedTask;
+        public EventHandler? StatusHandler { get; set; }
     }
 
     private async Task DisposeRemovedSubAgentViewModelAsync(AgentViewModel subAgentViewModel)
@@ -1073,8 +1279,37 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         }
 
         var target = root.FindInTreeById(agentId);
-        var resolvedAgentId = target is not null ? target.agentChat.Information.AgentId : agentId;
+        var resolvedAgentId = target is not null ? target.agentChat.Information.AgentId
+            : root.FindRemoteAlias(agentId) ?? agentId;
+        if (root.FindChildNavigation(resolvedAgentId) is { } nested && nested.Owner != root)
+        {
+            var (owner, item) = nested;
+            if (owner.remoteChildren.TryGetValue(resolvedAgentId, out var remote))
+                owner.StartRemoteChild(remote);
+            owner.subAgentsContainerDetail.ShowSubAgent(resolvedAgentId);
+            root.SelectedEditorItem = item;
+            return;
+        }
         root.NavigateToSubAgent(resolvedAgentId);
+    }
+
+    private (AgentViewModel Owner, AgentEditorNavigationItemViewModel Item)? FindChildNavigation(string agentId)
+    {
+        var item = this.subAgentAllChildren.FirstOrDefault(child => child.Id == $"sub-agent-{agentId}");
+        if (item is not null) return (this, item);
+        foreach (var child in this.subAgentViewModels)
+            if (child.FindChildNavigation(agentId) is { } result) return result;
+        return null;
+    }
+
+    private string? FindRemoteAlias(string id)
+    {
+        foreach (var child in this.remoteChildren.Values)
+            if (id == child.Reference.AgentSessionId || id == child.Reference.AgentId)
+                return child.Reference.AgentId;
+        foreach (var child in this.subAgentViewModels)
+            if (child.FindRemoteAlias(id) is { } result) return result;
+        return null;
     }
 
     private AgentViewModel? FindInTreeById(string agentId)
@@ -1148,6 +1383,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         // which shows the shared browser card instead of the sub-agent's own transcript.
         var childItem = this.subAgentAllChildren.FirstOrDefault(c =>
             c.Id == $"sub-agent-{agentId}");
+        if (this.remoteChildren.TryGetValue(agentId, out var remote))
+            this.StartRemoteChild(remote);
 
         subAgentsGroup.IsExpanded = true;
         this.SelectedEditorItem = childItem ?? subAgentsGroup;
@@ -1330,9 +1567,9 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
         protected override void OnInsert(int index, AgentEditorNavigationItemViewModel target)
         {
-            if (target.RunningSubAgent is AgentChat chat)
+            if (target.RunningSubAgent is { } running)
             {
-                chat.CompletionStateChanged += (_, _) =>
+                running.CompletionStateChanged += (_, _) =>
                 {
                     target.RefreshStatus();
                     this.container.NotifySubAgentUpdated();
@@ -1343,6 +1580,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             this.RefreshVisibleChildren();
             this.UpdateSubAgentsLabel();
         }
+
+        public void Refresh() => this.RefreshVisibleChildren();
 
         protected override void OnRemoveAt(int index, AgentEditorNavigationItemViewModel target)
         {

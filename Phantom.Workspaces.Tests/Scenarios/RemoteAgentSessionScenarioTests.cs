@@ -671,18 +671,33 @@ public sealed class RemoteAgentSessionScenarioTests
         await using var parent = await fixture.OpenProxyAsync("parent", AgentSessionOpenIntent.Start);
         var parentRuntime = await fixture.RuntimeAsync("parent", 0);
         var parentOwner = Assert.IsType<AgentChat>(parentRuntime.Chat);
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => parent.Chat.OpenSubagentAsync("unknown-child", TestContext.Current.CancellationToken));
+        var childProjected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnChildChanged(object? sender, NotifyCollectionChangedEventArgs args)
+        {
+            if (parent.Chat.SubAgents.Any(child => child.AgentId == "child-agent"))
+                childProjected.TrySetResult();
+        }
+        ((INotifyCollectionChanged)parent.Chat.SubAgents).CollectionChanged += OnChildChanged;
         await parentOwner.GetOrCreateAsync(
             "child-agent",
             Definition("child"),
             "tool-call",
             TestContext.Current.CancellationToken);
-        await fixture.SeedAsync(Session("child-agent"));
-
-        var descriptor = await parent.Client.OpenSubagentAsync(new OpenAgentSubagentRequest
+        OnChildChanged(null, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
+        await childProjected.Task;
+        ((INotifyCollectionChanged)parent.Chat.SubAgents).CollectionChanged -= OnChildChanged;
+        var canonicalChildId = parentOwner.SubAgents.Single(child => child.AgentId == "child-agent") switch
         {
-            AgentId = "child-agent",
-            CommandId = Guid.NewGuid(),
-        }, TestContext.Current.CancellationToken);
+            SubAgent sub => sub.SessionId.Value,
+            AgentChat chat => chat.AgentSessionId,
+            _ => throw new InvalidOperationException("Missing canonical child identity."),
+        };
+        await fixture.SeedAsync(Session(canonicalChildId));
+
+        var descriptor = await parent.Chat.OpenSubagentAsync(
+            "child-agent", TestContext.Current.CancellationToken);
         await using var child = await fixture.OpenProxyAsync(
             descriptor.AgentSessionId,
             AgentSessionOpenIntent.Attach,
@@ -698,16 +713,91 @@ public sealed class RemoteAgentSessionScenarioTests
             TestContext.Current.CancellationToken);
 
         Assert.Equal("child-agent", descriptor.AgentId);
+        Assert.Equal(canonicalChildId, descriptor.AgentSessionId);
         Assert.NotSame(parentRuntime, childRuntime);
         Assert.NotSame(parentOwner, childOwner);
         Assert.Equal("parent", parentRuntime.SessionId);
-        Assert.Equal("child-agent", childRuntime.SessionId);
+        Assert.Equal(canonicalChildId, childRuntime.SessionId);
         Assert.NotEqual(parentRuntime.SessionId, childRuntime.SessionId);
         Assert.DoesNotContain(parent.Chat.InputQueues.Snapshot.Queues, queue => queue.Name == "child-only");
 
         await child.Chat.DetachAsync(TestContext.Current.CancellationToken);
         await childResource.Disposed;
-        Assert.Null(await fixture.TryRuntimeAsync("child-agent", 0));
+        Assert.Null(await fixture.TryRuntimeAsync(canonicalChildId, 0));
+    }
+
+    [Fact]
+    public async Task RemoteSubagent_ChildAgentIdDiffersFromSessionId_AttachesCanonicalSession()
+    {
+        await using var fixture = await ScenarioFixture.CreateAsync(Session("parent-alias", background: true));
+        await using var parent = await fixture.OpenProxyAsync("parent-alias", AgentSessionOpenIntent.Start);
+        var owner = Assert.IsType<AgentChat>((await fixture.RuntimeAsync("parent-alias", 0)).Chat);
+        await owner.GetOrCreateAsync("child-alias", Definition("child"), "tool-call",
+            TestContext.Current.CancellationToken);
+        var canonical = Assert.IsType<AgentChat>(Assert.Single(owner.SubAgents)).AgentSessionId;
+        Assert.NotEqual("child-alias", canonical);
+        await fixture.SeedAsync(Session(canonical, background: true));
+
+        var descriptor = await parent.Client.OpenSubagentAsync(new OpenAgentSubagentRequest
+        {
+            AgentId = "child-alias", CommandId = Guid.NewGuid(),
+        }, TestContext.Current.CancellationToken);
+        await using var child = await fixture.OpenProxyAsync(
+            descriptor.AgentSessionId, AgentSessionOpenIntent.Attach,
+            descriptor.OwningProfileEntityId, descriptor.OwnershipGeneration);
+        Assert.Equal(canonical, descriptor.AgentSessionId);
+        Assert.Equal(canonical, child.Chat.Information.AgentSessionId);
+        Assert.Equal("child-alias", descriptor.AgentId);
+    }
+
+    [Fact]
+    public async Task RemoteSubagent_ParentAndChildViewers_CloseChildWithoutTerminatingOwner()
+    {
+        await using var fixture = await ScenarioFixture.CreateAsync(Session("parent-viewers", background: true));
+        await using var parent = await fixture.OpenProxyAsync("parent-viewers", AgentSessionOpenIntent.Start);
+        var parentRuntime = await fixture.RuntimeAsync("parent-viewers", 0);
+        var owner = Assert.IsType<AgentChat>(parentRuntime.Chat);
+        await owner.GetOrCreateAsync("child-viewer", Definition("child"), "tool-call",
+            TestContext.Current.CancellationToken);
+        var canonical = Assert.IsType<AgentChat>(Assert.Single(owner.SubAgents)).AgentSessionId;
+        await fixture.SeedAsync(Session(canonical, background: true));
+        var descriptor = await parent.Client.OpenSubagentAsync(new OpenAgentSubagentRequest
+        {
+            AgentId = "child-viewer", CommandId = Guid.NewGuid(),
+        }, TestContext.Current.CancellationToken);
+        await using (var child = await fixture.OpenProxyAsync(
+            descriptor.AgentSessionId, AgentSessionOpenIntent.Attach,
+            descriptor.OwningProfileEntityId, descriptor.OwnershipGeneration))
+        {
+            Assert.NotSame(parentRuntime, await fixture.RuntimeAsync(canonical, 0));
+            Assert.True(parent.Chat.IsConnected);
+        }
+
+        Assert.Same(parentRuntime, await fixture.RuntimeAsync("parent-viewers", 0));
+        Assert.False(parentRuntime.IsFenced);
+        Assert.True(parent.Chat.IsConnected);
+    }
+
+    [Fact]
+    public async Task RemoteSubagent_UnauthorizedChild_DoesNotStartRuntime()
+    {
+        await using var fixture = await ScenarioFixture.CreateAsync(Session("parent-allowed", background: true));
+        await using var parent = await fixture.OpenProxyAsync("parent-allowed", AgentSessionOpenIntent.Start);
+        var owner = Assert.IsType<AgentChat>((await fixture.RuntimeAsync("parent-allowed", 0)).Chat);
+        await owner.GetOrCreateAsync("child-denied", Definition("child"), "tool-call",
+            TestContext.Current.CancellationToken);
+        var canonical = Assert.IsType<AgentChat>(Assert.Single(owner.SubAgents)).AgentSessionId;
+        await fixture.SeedAsync(Session(canonical));
+        fixture.DeniedSessionId = canonical;
+
+        var rejected = await Assert.ThrowsAsync<RemoteAgentSessionException>(async () =>
+            await parent.Client.OpenSubagentAsync(new OpenAgentSubagentRequest
+            {
+                AgentId = "child-denied", CommandId = Guid.NewGuid(),
+            }, TestContext.Current.CancellationToken));
+        Assert.Equal("unauthorized", rejected.Code);
+        Assert.Null(await fixture.TryRuntimeAsync(canonical, 0));
+        Assert.True(parent.Chat.IsConnected);
     }
 
     [Fact]
@@ -1206,7 +1296,7 @@ public sealed class RemoteAgentSessionScenarioTests
                 Time,
                 new AgentServices { ChatClientOverride = this.Model });
             var host = new RemoteAgentSessionHost(
-                new AllowAllAuthorizer(),
+                new AllowAllAuthorizer(this),
                 this.runtimes,
                 runtimeFactory);
             this.productionListener = new AgentSessionTransportListener(
@@ -1221,6 +1311,7 @@ public sealed class RemoteAgentSessionScenarioTests
         internal DeterministicTestChatClient Model { get; } = new();
         internal InMemoryAgentPersistenceStore Persistence { get; }
         internal ObservableTransportListener Listener { get; }
+        internal string? DeniedSessionId { get; set; }
 
         internal static async Task<ScenarioFixture> CreateAsync(params ScenarioSession[] sessions)
         {
@@ -1622,7 +1713,7 @@ public sealed class RemoteAgentSessionScenarioTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
-    private sealed class AllowAllAuthorizer : IAgentSessionAttachAuthorizer
+    private sealed class AllowAllAuthorizer(ScenarioFixture fixture) : IAgentSessionAttachAuthorizer
     {
         public ValueTask<AgentSessionAuthorizationDecision> AuthorizeAsync(
             TransportPeerIdentity peer,
@@ -1630,7 +1721,10 @@ public sealed class RemoteAgentSessionScenarioTests
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
-            return ValueTask.FromResult(new AgentSessionAuthorizationDecision { IsAllowed = true });
+            return ValueTask.FromResult(new AgentSessionAuthorizationDecision
+            {
+                IsAllowed = request.AgentSessionId != fixture.DeniedSessionId,
+            });
         }
     }
 
