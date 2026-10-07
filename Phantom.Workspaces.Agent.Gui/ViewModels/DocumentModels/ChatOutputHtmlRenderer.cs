@@ -101,7 +101,11 @@ internal static class ChatOutputHtmlRenderer
             .Append(groupId).Append("\" data-sticky-base-level=\"1\">");
         builder.Append(RenderHeader(groupId, "assistant", timestamp, suppressRoleHeader));
         builder.Append("<div class=\"chat-contents\" id=\"").Append(ContentsContainerId(groupId)).Append("\">");
-        builder.Append("<details class=\"chat-content chat-tool-group\" id=\"").Append(ToolGroupDetailsId(groupId)).Append('"');
+        builder.Append("<details class=\"chat-content chat-tool-group\"");
+        // Run groups can contain substantive assistant text between calls; keep it visible by
+        // default while still allowing the user to collapse the group.
+        if (assistantRunId is not null) builder.Append(" open");
+        builder.Append(" id=\"").Append(ToolGroupDetailsId(groupId)).Append('"');
         if (assistantRunId is not null)
         {
             builder.Append(" data-assistant-run-id=\"").Append(HtmlEscape(assistantRunId)).Append('"');

@@ -454,8 +454,8 @@ internal sealed class ToolCallGroupHtmlModel
 
     public string GroupId { get; }
 
-    /// <summary>Tool-only groups never show an empty assistant role header; inspect and usage
-    /// actions remain accessible from the visible group contents.</summary>
+    /// <summary>Grouped runs omit redundant assistant role chrome; inspect and usage
+    /// actions remain accessible from the group contents.</summary>
     public bool SuppressRoleHeader { get; private set; } = true;
 
     internal void SetSuppressRoleHeader(bool value, bool emit)
@@ -953,9 +953,13 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
 
         slot.HasDomElement = true;
 
-        if (IsToolCallOnlyItem(sourceItem))
+        var isToolCall = IsRunToolCallItem(sourceItem);
+        var groupablePredecessor = isToolCall || sourceItem.AssistantRunId is not null &&
+            sourceItem.Role == ChatRole.Assistant
+            ? this.FindGroupablePredecessor(index)
+            : null;
+        if (isToolCall || groupablePredecessor?.Group is not null)
         {
-            var groupablePredecessor = this.FindGroupablePredecessor(index);
             if (groupablePredecessor is not null)
             {
                 if (groupablePredecessor.Group is { } existingGroup)
@@ -1198,7 +1202,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
 
     private StructuralCategory Categorize(AgentChatHistoryItem item)
     {
-        if (IsToolCallOnlyItem(item))
+        if (IsRunToolCallItem(item))
         {
             return StructuralCategory.ToolCallOnly;
         }
@@ -1323,6 +1327,11 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         return true;
     }
 
+    internal static bool IsRunToolCallItem(AgentChatHistoryItem item)
+        => IsToolCallOnlyItem(item) ||
+           item.AssistantRunId is not null && item.Role == ChatRole.Assistant &&
+           item.Contents.Any(content => content is FunctionCallContent);
+
     /// <summary>
     /// Looks up the slot whose source message contains a <see cref="FunctionCallContent"/> with the
     /// given <paramref name="callId"/> via the shared call-id map. Returns <see langword="null"/>
@@ -1367,7 +1376,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
             }
             var candidateRunId = candidate.Model.Source.AssistantRunId;
             if (runId is not null && candidateRunId == runId &&
-                !IsToolCallOnlyItem(candidate.Model.Source) &&
+                !IsRunToolCallItem(candidate.Model.Source) &&
                 candidate.Group is null)
             {
                 continue;
@@ -1383,7 +1392,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
             }
 
             return candidate.HasDomElement &&
-                   (candidate.Group is not null || IsToolCallOnlyItem(candidate.Model.Source))
+                   (candidate.Group is not null || IsRunToolCallItem(candidate.Model.Source))
                 ? candidate
                 : null;
         }
@@ -2135,12 +2144,19 @@ public sealed class ChatOutputHtmlModel : IDisposable
         // Pass 3: use explicit run boundaries where available; legacy messages retain contiguous grouping.
         for (var i = 0; i < snapshot.Count; i++)
         {
-            if (!slots[i].HasDomElement || !ChatMessageHtmlTransformer.IsToolCallOnlyItem(snapshot[i]))
+            if (!slots[i].HasDomElement || !(ChatMessageHtmlTransformer.IsRunToolCallItem(snapshot[i]) ||
+                snapshot[i].AssistantRunId is not null && snapshot[i].Role == ChatRole.Assistant &&
+                PreviousRunGroup(i) is not null))
             {
                 continue;
             }
 
-            RenderSlot? groupablePredecessor = null;
+            var groupablePredecessor = PreviousRunGroup(i);
+            if (groupablePredecessor is null && !ChatMessageHtmlTransformer.IsRunToolCallItem(snapshot[i]))
+            {
+                continue;
+            }
+            if (groupablePredecessor is null)
             for (var j = i - 1; j >= 0; j--)
             {
                 if (snapshot[j].Role == ChatRole.User)
@@ -2149,7 +2165,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
                 }
                 var runId = snapshot[i].AssistantRunId;
                 if (runId is not null && snapshot[j].AssistantRunId == runId &&
-                    !ChatMessageHtmlTransformer.IsToolCallOnlyItem(snapshot[j]) &&
+                    !ChatMessageHtmlTransformer.IsRunToolCallItem(snapshot[j]) &&
                     slots[j].Group is null)
                 {
                     continue;
@@ -2165,7 +2181,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
                 }
 
                 if (slots[j].HasDomElement &&
-                    (slots[j].Group is not null || ChatMessageHtmlTransformer.IsToolCallOnlyItem(snapshot[j])))
+                    (slots[j].Group is not null || ChatMessageHtmlTransformer.IsRunToolCallItem(snapshot[j])))
                 {
                     groupablePredecessor = slots[j];
                 }
@@ -2206,6 +2222,20 @@ public sealed class ChatOutputHtmlModel : IDisposable
                 group.AppendItemStateOnly(slots[i].Model);
                 slots[i].Group = group;
             }
+        }
+
+        RenderSlot? PreviousRunGroup(int index)
+        {
+            var runId = snapshot[index].AssistantRunId;
+            if (runId is null) return null;
+            for (var j = index - 1; j >= 0; j--)
+            {
+                if (snapshot[j].Role == ChatRole.User || snapshot[j].AssistantRunId != runId)
+                    return null;
+                if (slots[j].Group is not null && slots[j].HasDomElement)
+                    return slots[j];
+            }
+            return null;
         }
 
         // Pass 4: collapse consecutive same-role runs into a single header (#1222). Mirrors

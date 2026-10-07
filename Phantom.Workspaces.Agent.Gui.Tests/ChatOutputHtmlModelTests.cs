@@ -1,4 +1,5 @@
 using Avalonia.Headless.XUnit;
+using AgentSchema;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
@@ -2911,8 +2912,117 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Single(System.Text.RegularExpressions.Regex.Matches(html, "class=\"chat-content chat-tool-group\"").Cast<object>());
         Assert.Contains("2 calls", html);
         Assert.Contains("id=\"tool-group-0-header\" hidden", html);
-        Assert.Contains("id=\"history-1-header\" data-sticky-level", html);
-        Assert.True(html.IndexOf("between calls", StringComparison.Ordinal) < html.IndexOf("finished", StringComparison.Ordinal));
+        var read = html.IndexOf("read_file(…)", StringComparison.Ordinal);
+        var between = html.IndexOf("between calls", StringComparison.Ordinal);
+        var write = html.IndexOf("write_file(…)", StringComparison.Ordinal);
+        var finished = html.IndexOf("finished", StringComparison.Ordinal);
+        Assert.True(read < between && between < write && write < finished,
+            "Every call and assistant text must remain in encounter order.");
+        Assert.Contains("class=\"chat-content chat-tool-group\" open", html);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ChatOutput_SameRunMixedContent_GroupsAllCallsWithoutLosingText()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            new() { Role = ChatRole.Assistant, AssistantRunId = "run",
+                Contents = [new TextContent("before call"), new FunctionCallContent("c1", "read_file")] },
+            new() { Role = ChatRole.Tool, AssistantRunId = "run",
+                Contents = [new FunctionResultContent("c1", "result-one")] },
+            new() { Role = ChatRole.Assistant, AssistantRunId = "run",
+                Contents = [new TextContent("between calls"), new FunctionCallContent("c2", "write_file")] },
+            new() { Role = ChatRole.Tool, AssistantRunId = "run",
+                Contents = [new FunctionResultContent("c2", "result-two")] },
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+        var html = string.Concat(sink.ContentOperations.Select(op => op.Content));
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(html, "class=\"chat-content chat-tool-group\"").Cast<object>());
+        Assert.Contains("2 calls", html);
+        Assert.True(html.IndexOf("before call", StringComparison.Ordinal) < html.IndexOf("read_file(…)", StringComparison.Ordinal));
+        Assert.True(html.IndexOf("read_file(…)", StringComparison.Ordinal) < html.IndexOf("between calls", StringComparison.Ordinal));
+        Assert.True(html.IndexOf("between calls", StringComparison.Ordinal) < html.IndexOf("write_file(…)", StringComparison.Ordinal));
+        Assert.Contains("result-one", html);
+        Assert.Contains("result-two", html);
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task ChatOutput_PersistedCompletedToolRun_ReloadsWithLiveGroupAndResults()
+    {
+        var store = new InMemoryAgentPersistenceStore();
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate { Role = ChatRole.Assistant,
+            Contents = [new FunctionCallContent("c1", "read")] });
+        stream.EnqueueUpdate(new ChatResponseUpdate { Role = ChatRole.Tool,
+            Contents = [new FunctionResultContent("c1", "read-result")] });
+        stream.EnqueueUpdate(new ChatResponseUpdate { Role = ChatRole.Assistant,
+            Contents = [new TextContent("between")] });
+        stream.EnqueueUpdate(new ChatResponseUpdate { Role = ChatRole.Assistant,
+            Contents = [new FunctionCallContent("c2", "write")] });
+        stream.EnqueueUpdate(new ChatResponseUpdate { Role = ChatRole.Tool,
+            Contents = [new FunctionResultContent("c2", "write-result")], FinishReason = ChatFinishReason.Stop });
+        stream.Complete();
+
+        var definition = AgentDefinitionLoader.LoadAgentFromJson("""
+            {"kind":"prompt","name":"echo-agent",
+             "model":{"id":"echo","provider":"echo","apiType":"Echo"},"tools":[]}
+            """);
+        await using var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = definition,
+            ConfiguredStore = store,
+            ClientOverride = client,
+            DisplayNameOverride = "test",
+        });
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void CheckCompletion()
+        {
+            if (chat.History.Count >= 6 && chat.RunningItems.Count == 0) completed.TrySetResult();
+        }
+        ((System.Collections.Specialized.INotifyCollectionChanged)chat.History).CollectionChanged += (_, _) => CheckCompletion();
+        ((System.Collections.Specialized.INotifyCollectionChanged)chat.RunningItems).CollectionChanged += (_, _) => CheckCompletion();
+        chat.EnqueueUserMessage("run two tools");
+        CheckCompletion();
+        await completed.Task;
+
+        var liveSink = new RecordingSink();
+        using var live = new ChatOutputHtmlModel(new ObservableCollection<AgentChatHistoryItem>(chat.History),
+            new ObservableCollection<AgentChatRunningItem>(), () => true, liveSink);
+        await live.HistoryLoaded;
+        var liveHtml = string.Concat(liveSink.ContentOperations.Select(op => op.Content));
+        var sessionId = chat.AgentSessionId;
+
+        await using var restored = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = definition,
+            AgentSessionId = sessionId,
+            ConfiguredStore = store,
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "restored",
+        });
+        await restored.HistoryPopulated;
+        var reloadSink = new RecordingSink();
+        using var reload = new ChatOutputHtmlModel(new ObservableCollection<AgentChatHistoryItem>(restored.History),
+            new ObservableCollection<AgentChatRunningItem>(), () => true, reloadSink);
+        await reload.HistoryLoaded;
+        var reloadedHtml = string.Concat(reloadSink.ContentOperations.Select(op => op.Content));
+        foreach (var html in new[] { liveHtml, reloadedHtml })
+        {
+            Assert.Single(System.Text.RegularExpressions.Regex.Matches(html, "class=\"chat-content chat-tool-group\"").Cast<object>());
+            Assert.Contains("2 calls", html);
+            Assert.Contains("read-result", html);
+            Assert.Contains("write-result", html);
+            Assert.True(html.IndexOf("read(…)", StringComparison.Ordinal) <
+                        html.IndexOf("between", StringComparison.Ordinal));
+            Assert.True(html.IndexOf("between", StringComparison.Ordinal) <
+                        html.IndexOf("write(…)", StringComparison.Ordinal));
+        }
+        Assert.Equal(
+            Assert.Single(chat.History.Where(item => item.AssistantRunId is not null).Select(item => item.AssistantRunId).Distinct()),
+            Assert.Single(restored.History.Where(item => item.AssistantRunId is not null).Select(item => item.AssistantRunId).Distinct()));
     }
 
     [AvaloniaFact(Timeout = 15_000)]

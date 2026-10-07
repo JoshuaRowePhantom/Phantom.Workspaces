@@ -1207,18 +1207,102 @@ public sealed class ChatOutputBrowserIntegrationTests
                 var runningItem = new AgentChatRunningItem();
                 running.Add(runningItem);
 
-                var wrapperParent = await EvalAsync(web, "document.getElementById('run-0').parentElement.id");
+                var runId = ChatOutputHtmlRenderer.RunningItemId(model.GenerationId, 0);
+                var wrapperParent = await EvalAsync(web, $"document.getElementById('{runId}').parentElement.id");
                 Assert.Equal("\"running-items-container\"", wrapperParent);
 
                 var initiallyEmpty = await EvalAsync(
                     web,
-                    "document.querySelectorAll('#run-0-contents .chat-message').length.toString()");
+                    $"document.querySelectorAll('#{runId}-contents .chat-message').length.toString()");
                 Assert.Equal("\"0\"", initiallyEmpty);
 
                 runningItem.Items.Add(TextItem("streaming text"));
 
-                var streamed = await EvalAsync(web, "document.getElementById('run-0-contents').textContent");
+                var streamed = await EvalAsync(web, $"document.getElementById('{runId}-contents').textContent");
                 Assert.Contains("streaming text", streamed, StringComparison.Ordinal);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task ToolRun_InterleavedTextAndMixedCalls_KeepEncounterOrderInLiveBrowser()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                var running = new ObservableCollection<AgentChatRunningItem>();
+                using var model = CreateModel(web, [], running);
+                await model.HistoryLoaded;
+                var run = new AgentChatRunningItem { AssistantRunId = "run-interleaved" };
+                running.Add(run);
+                run.Items.Add(ToolCallItem("read", "c1") with { AssistantRunId = run.AssistantRunId });
+                run.Items.Add(TextItem("between calls") with { AssistantRunId = run.AssistantRunId });
+                run.Items.Add(new AgentChatHistoryItem
+                {
+                    Role = ChatRole.Assistant,
+                    AssistantRunId = run.AssistantRunId,
+                    Contents = [new TextContent("before write"), new FunctionCallContent("c2", "write")],
+                });
+                var order = await EvalAsync(web, """
+                    (() => {
+                      const group = document.querySelector('#running-items-container details.chat-tool-group');
+                      const body = group.querySelector('.chat-tool-group-body');
+                      return JSON.stringify({
+                        groups: document.querySelectorAll('#running-items-container details.chat-tool-group').length,
+                        open: group.open,
+                        items: body.querySelectorAll('details.chat-tool-group-item').length,
+                        text: body.textContent
+                      });
+                    })()
+                    """);
+                Assert.Contains("\\\"groups\\\":1", order, StringComparison.Ordinal);
+                Assert.Contains("\\\"open\\\":true", order, StringComparison.Ordinal);
+                Assert.Contains("\\\"items\\\":2", order, StringComparison.Ordinal);
+                var read = order.IndexOf("read", StringComparison.Ordinal);
+                var between = order.IndexOf("between calls", StringComparison.Ordinal);
+                var beforeWrite = order.IndexOf("before write", StringComparison.Ordinal);
+                var write = order.IndexOf("write", beforeWrite + "before write".Length, StringComparison.Ordinal);
+                Assert.True(read < between && between < beforeWrite && beforeWrite < write);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task ToolRun_StreamingTextBecomesMixedCall_ReclassifiesIntoSingleGroup()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                var running = new ObservableCollection<AgentChatRunningItem>();
+                using var model = CreateModel(web, [], running);
+                await model.HistoryLoaded;
+                var run = new AgentChatRunningItem { AssistantRunId = "run-changing" };
+                running.Add(run);
+                run.Items.Add(TextItem("thinking") with { AssistantRunId = run.AssistantRunId });
+                run.Items[0] = new AgentChatHistoryItem
+                {
+                    Role = ChatRole.Assistant,
+                    AssistantRunId = run.AssistantRunId,
+                    Contents = [new TextContent("thinking"), new FunctionCallContent("c1", "read")],
+                };
+                var state = await EvalAsync(web, """
+                    (() => {
+                      const group = document.querySelector('#running-items-container details.chat-tool-group');
+                      return JSON.stringify({ count: document.querySelectorAll('#running-items-container details.chat-tool-group').length,
+                        text: group?.textContent || '' });
+                    })()
+                    """);
+                Assert.Contains("\\\"count\\\":1", state, StringComparison.Ordinal);
+                Assert.Contains("thinking", state, StringComparison.Ordinal);
+                Assert.Contains("read", state, StringComparison.Ordinal);
             }
             finally
             {
@@ -1283,20 +1367,21 @@ public sealed class ChatOutputBrowserIntegrationTests
                 runningItem.Items.Add(TextItem("in flight"));
                 running.Add(runningItem);
 
+                var runId = ChatOutputHtmlRenderer.RunningItemId(model.GenerationId, 0);
                 // Simulate the wrapper element being lost in the browser (the failure mode the
                 // shell reports as commandFailed for subsequent commands targeting it).
-                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Remove("run-0"));
-                var removed = await EvalAsync(web, "(document.getElementById('run-0') === null).toString()");
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Remove(runId));
+                var removed = await EvalAsync(web, $"(document.getElementById('{runId}') === null).toString()");
                 Assert.Equal("\"true\"", removed);
 
                 // Recovery: the model re-inserts using a stable Append into the persistent
                 // running-items region rather than a sibling anchor.
-                model.NotifyInsertionFailed("run-0-contents");
+                model.NotifyInsertionFailed(runId + "-contents");
 
-                var wrapperParent = await EvalAsync(web, "document.getElementById('run-0').parentElement.id");
+                var wrapperParent = await EvalAsync(web, $"document.getElementById('{runId}').parentElement.id");
                 Assert.Equal("\"running-items-container\"", wrapperParent);
 
-                var contents = await EvalAsync(web, "document.getElementById('run-0-contents').textContent");
+                var contents = await EvalAsync(web, $"document.getElementById('{runId}-contents').textContent");
                 Assert.Contains("in flight", contents, StringComparison.Ordinal);
             }
             finally
