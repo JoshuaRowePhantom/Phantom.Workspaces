@@ -19,12 +19,19 @@ public sealed class SubAgentBrowserViewModel : ViewModelBase, IDisposable
     private bool disposed;
     private IReadOnlyList<IRunningSubAgent> visibleItems = [];
 
-    public SubAgentBrowserViewModel(ReadOnlyObservableCollection<IRunningSubAgent> allSubAgents)
+    public SubAgentBrowserViewModel(
+        ReadOnlyObservableCollection<IRunningSubAgent> allSubAgents,
+        Action<string>? navigateToAgent = null)
     {
         this.allSubAgents = allSubAgents;
+        this.OpenChildCommand = new RelayCommand<string>(
+            id => navigateToAgent?.Invoke(id),
+            id => !string.IsNullOrWhiteSpace(id));
         ((INotifyCollectionChanged)allSubAgents).CollectionChanged += this.OnSubAgentsChanged;
         this.SyncSubscriptionsAndRefresh();
     }
+
+    public RelayCommand<string> OpenChildCommand { get; }
 
     public bool HideCompleted
     {

@@ -216,8 +216,11 @@
                 <ItemsControl ItemsSource="{Binding VisibleItems}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate>
-                            <Border Classes="agent-surface compact"
-                                    Margin="0,2">
+                            <Button Command="{Binding DataContext.OpenChildCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                    CommandParameter="{Binding AgentId}"
+                                    Margin="0,2"
+                                    HorizontalContentAlignment="Stretch">
+                              <Border Classes="agent-surface compact">
                                 <DockPanel>
                                     <TextBlock DockPanel.Dock="Right"
                                                Text="✔"
@@ -243,7 +246,8 @@
                                                    IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
                                     </StackPanel>
                                 </DockPanel>
-                            </Border>
+                              </Border>
+                            </Button>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>

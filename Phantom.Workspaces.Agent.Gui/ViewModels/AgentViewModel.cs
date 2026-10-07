@@ -116,7 +116,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.chatDetailsDetail = new AgentChatDetailsViewModel(this);
         this.toolsDetail = new AgentChatToolsDetailViewModel();
         this.logsDetail = new AgentChatLogsDetailViewModel(loggerFactory, foregroundScheduler);
-        this.subAgentsBrowserDetail = new SubAgentBrowserViewModel(agentChat.SubAgents);
+        this.subAgentsBrowserDetail = new SubAgentBrowserViewModel(
+            agentChat.SubAgents, id => this.NavigateToAgent(id));
         this.subAgentsContainerDetail = new SubAgentsContainerViewModel(this.subAgentsBrowserDetail);
         this.SubAgentDisplays = new ReadOnlyObservableCollection<IRunningSubAgentDisplay>(this.subAgentDisplayItems);
         this.Modals = new ReadOnlyObservableCollection<AgentSessionModalViewModel>(this.modalSource);
@@ -807,6 +808,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             try { await child.Attachment; }
             catch (OperationCanceledException) { }
             if (child.Chat is not null) await child.Chat.DisposeAsync();
+            child.Cancellation.Dispose();
         }
         this.remoteChildrenLifetime.Dispose();
 
@@ -863,6 +865,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
                 RemoteChildSlot? remote = null;
                 if (this.remoteChildren.Remove(subAgent.AgentId, out remote))
                 {
+                    remote.Cancellation.Cancel();
                     if (remote.StatusHandler is not null)
                         remote.Reference.CompletionStateChanged -= remote.StatusHandler;
                     this.subAgentAllChildren.Remove(remote.Navigation);
@@ -1052,6 +1055,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         {
             this.logger.LogWarning(exception, "Could not release remote child {AgentId}", child.Reference.AgentId);
         }
+        finally { child.Cancellation.Dispose(); }
     }
 
     private void AddRemoteChild(IRemoteSubagentReference remote)
@@ -1064,7 +1068,9 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         var navigation = new AgentEditorNavigationItemViewModel(
             $"sub-agent-{remote.AgentId}", remote.DisplayName, null, remote.Description,
             null, placeholder, [], runningSubAgent: remote);
-        var slot = new RemoteChildSlot(remote, navigation, document);
+        var slot = new RemoteChildSlot(
+            remote, navigation, document,
+            CancellationTokenSource.CreateLinkedTokenSource(this.remoteChildrenLifetime.Token));
         slot.StatusHandler = (_, _) =>
         {
             slot.Navigation.RefreshStatus();
@@ -1095,12 +1101,12 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         try
         {
             var acquisition = this.remoteChildResolver!(
-                this.agentChat, child.Reference.AgentId, this.remoteChildrenLifetime.Token);
+                this.agentChat, child.Reference.AgentId, child.Cancellation.Token);
             try
             {
-                chat = await acquisition.WaitAsync(this.remoteChildrenLifetime.Token).ConfigureAwait(false);
+                chat = await acquisition.WaitAsync(child.Cancellation.Token).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (this.remoteChildrenLifetime.IsCancellationRequested)
+            catch (OperationCanceledException) when (child.Cancellation.IsCancellationRequested)
             {
                 _ = DisposeLateRemoteChildAsync(acquisition);
                 throw;
@@ -1119,7 +1125,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             }, CancellationToken.None, TaskCreationOptions.None, this.foregroundScheduler).ConfigureAwait(false);
         }
 
-        catch (OperationCanceledException) when (this.remoteChildrenLifetime.IsCancellationRequested) { }
+        catch (OperationCanceledException) when (child.Cancellation.IsCancellationRequested) { }
         catch (Exception exception)
         {
             this.logger.LogWarning(exception, "Could not attach remote child {AgentId}", child.Reference.AgentId);
@@ -1190,13 +1196,15 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private sealed class RemoteChildSlot(
         IRemoteSubagentReference reference,
         AgentEditorNavigationItemViewModel navigation,
-        AgentDetailDocumentItem document)
+        AgentDetailDocumentItem document,
+        CancellationTokenSource cancellation)
     {
         public IRemoteSubagentReference Reference { get; } = reference;
         public AgentEditorNavigationItemViewModel Navigation { get; set; } = navigation;
         public AgentDetailDocumentItem Document { get; set; } = document;
         public IAgentChat? Chat { get; set; }
         public Task Attachment { get; set; } = Task.CompletedTask;
+        public CancellationTokenSource Cancellation { get; } = cancellation;
         public EventHandler? StatusHandler { get; set; }
     }
 
@@ -1279,8 +1287,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         }
 
         var target = root.FindInTreeById(agentId);
-        var resolvedAgentId = target is not null ? target.agentChat.Information.AgentId
-            : root.FindRemoteAlias(agentId) ?? agentId;
+        var resolvedAgentId = root.FindRemoteAlias(agentId)
+            ?? target?.agentChat.Information.AgentId ?? agentId;
         if (root.FindChildNavigation(resolvedAgentId) is { } nested && nested.Owner != root)
         {
             var (owner, item) = nested;

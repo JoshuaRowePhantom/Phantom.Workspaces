@@ -725,7 +725,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
             RemoteChildResolver = (_, id, _) => { requested.TrySetResult(id); return release.Task; },
         });
         AddRemoteChild(parent, "child-alias", child.AgentSessionId);
-        view.NavigateToAgent(child.AgentSessionId);
+        view.SubAgentsContainer.Browser.OpenChildCommand.Execute("child-alias");
         Assert.True(requested.Task.IsCompleted, $"Selected node: {view.SelectedEditorItem?.Id}");
         Assert.Equal("child-alias", await requested.Task);
         Assert.Equal("sub-agent-child-alias", view.SelectedEditorItem?.Id);
@@ -734,6 +734,8 @@ public sealed class AgentViewModelSubAgentBrowserTests
         var slot = Assert.Single(view.SubAgentsContainer.Slots);
         Assert.Same(slot.SubAgentViewModel.ConversationDetail, view.SelectedEditorItem?.DetailContent);
         Assert.Same(child.History, slot.SubAgentViewModel.History);
+        view.NavigateToAgent(child.AgentSessionId);
+        Assert.Same(slot.SubAgentViewModel.ConversationDetail, view.SelectedEditorItem?.DetailContent);
     }
 
     [AvaloniaFact]
@@ -753,6 +755,25 @@ public sealed class AgentViewModelSubAgentBrowserTests
         await view.WaitForRemoteChildAsync("done");
         Assert.Equal("sub-agent-done", view.SelectedEditorItem?.Id);
         Assert.Same(child.History, Assert.Single(view.SubAgentsContainer.Slots).SubAgentViewModel.History);
+    }
+
+    [AvaloniaFact]
+    public async Task AgentViewModel_RestoredIdleRemoteChild_OpensTranscript()
+    {
+        var parent = await CreateChatAsync();
+        var child = await CreateChatAsync();
+        AddRemoteChild(parent, "restored-idle", child.AgentSessionId, AgentChatCompletionState.Unknown);
+        using var logger = new ObservableLoggerFactory();
+        await using var view = new AgentViewModel(new AgentViewModelOptions
+        {
+            AgentChat = parent, DisplayName = "Parent", Description = "",
+            LoggerFactory = logger, ForegroundScheduler = TaskScheduler.FromCurrentSynchronizationContext(),
+            RemoteChildResolver = (_, _, _) => Task.FromResult<IAgentChat>(child),
+        });
+        view.NavigateToAgent("restored-idle");
+        await view.WaitForRemoteChildAsync("restored-idle");
+        Assert.Same(child.History, Assert.Single(view.SubAgentsContainer.Slots).SubAgentViewModel.History);
+        Assert.Equal("sub-agent-restored-idle", view.SelectedEditorItem?.Id);
     }
 
     [AvaloniaFact]
@@ -834,6 +855,37 @@ public sealed class AgentViewModelSubAgentBrowserTests
         await view.WaitForRemoteChildAsync("alias");
         Assert.Same(newChild.History, Assert.Single(view.SubAgentsContainer.Slots).SubAgentViewModel.History);
         Assert.Equal("sub-agent-alias", view.SelectedEditorItem?.Id);
+    }
+
+    [AvaloniaFact]
+    public async Task AgentViewModel_RemovedRemoteChild_CancelsPendingViewer()
+    {
+        var parent = await CreateChatAsync();
+        var pending = new TaskCompletionSource<IAgentChat>(TaskCreationOptions.RunContinuationsAsynchronously);
+        CancellationToken attachmentToken = default;
+        using var logger = new ObservableLoggerFactory();
+        await using var view = new AgentViewModel(new AgentViewModelOptions
+        {
+            AgentChat = parent, DisplayName = "Parent", Description = "",
+            LoggerFactory = logger, ForegroundScheduler = TaskScheduler.FromCurrentSynchronizationContext(),
+            RemoteChildResolver = (_, _, ct) =>
+            {
+                attachmentToken = ct;
+                ct.Register(() => pending.TrySetCanceled(ct));
+                return pending.Task;
+            },
+        });
+        AddRemoteChild(parent, "removed", "removed-session");
+        view.NavigateToAgent("removed");
+        var attachment = view.WaitForRemoteChildAsync("removed");
+        var field = typeof(AgentChat).GetField("subAgentItems",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        var collection = (System.Collections.ObjectModel.ObservableCollection<IRunningSubAgent>)field!.GetValue(parent)!;
+        collection.RemoveAt(0);
+        await attachment;
+        Assert.True(attachmentToken.IsCancellationRequested);
+        Assert.Empty(view.SubAgentsContainer.Slots);
+        Assert.Equal("chat-sub-agents", view.SelectedEditorItem?.Id);
     }
 
     private static void AddRemoteChild(
