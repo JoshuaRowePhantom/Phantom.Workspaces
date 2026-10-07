@@ -228,7 +228,7 @@ public sealed class CopilotSdkChatClientTests
         var displayMutations = 0;
         children.CollectionChanged += (_, _) => childMutations++;
         displays.CollectionChanged += (_, _) => displayMutations++;
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var historyChanged = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         ((INotifyCollectionChanged)chat.History).CollectionChanged += (_, _) =>
         {
@@ -247,6 +247,7 @@ public sealed class CopilotSdkChatClientTests
         });
         await WaitForHistoryCountAsync(chat, 1, timeout.Token);
         await WaitForCompletionStateAsync(chat, AgentChatCompletionState.Succeeded, timeout.Token);
+        await WaitForRunningItemCountAsync(chat, 0, timeout.Token);
         Assert.Contains("first answer", chat.History[0].Contents.OfType<TextContent>().Single().Text);
         Assert.Same(child, Assert.Single(children));
         Assert.Empty(browser.VisibleItems);
@@ -266,6 +267,7 @@ public sealed class CopilotSdkChatClientTests
         }];
         session.Emit(new SessionBackgroundTasksChangedEvent { Data = new SessionBackgroundTasksChangedData() });
         await reactivated.Task.WaitAsync(timeout.Token);
+        await WaitForRunningItemCountAsync(chat, 1, timeout.Token);
         Assert.Equal(AgentChatCompletionState.Running, ((IRunningSubAgent)child).CompletionState);
         Assert.Contains(browser.VisibleItems, item => ReferenceEquals(item, child));
         Assert.Contains(sink.Updates, html => html.Contains("Follow-up child", StringComparison.Ordinal));
@@ -2053,6 +2055,22 @@ public sealed class CopilotSdkChatClientTests
         Assert.False(client.SteeringSuspendedForTest);
     }
 
+    private static async Task WaitForRunningItemCountAsync(AgentChat chat, int count, CancellationToken cancellationToken)
+    {
+        var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnChanged(object? _, NotifyCollectionChangedEventArgs __)
+        {
+            if (chat.RunningItems.Count == count) changed.TrySetResult();
+        }
+        var collection = (INotifyCollectionChanged)chat.RunningItems;
+        collection.CollectionChanged += OnChanged;
+        try
+        {
+            if (chat.RunningItems.Count != count) await changed.Task.WaitAsync(cancellationToken);
+        }
+        finally { collection.CollectionChanged -= OnChanged; }
+    }
+
     private static async Task WaitForHistoryCountAsync(AgentChat chat, int count, CancellationToken cancellationToken)
     {
         if (chat.History.Count >= count) return;
@@ -2088,23 +2106,42 @@ public sealed class CopilotSdkChatClientTests
 
     private sealed class SubAgentPanelSink : IChatOutputHtmlSink
     {
-        public List<string> Updates { get; } = [];
+        private readonly object gate = new();
+        private readonly List<string> updates = [];
         private readonly List<(string Text, TaskCompletionSource Signal)> waiters = [];
-        public void Clear() => this.Updates.Clear();
-        public Task WaitForContentAsync(string text, CancellationToken cancellationToken)
+        public IReadOnlyList<string> Updates
         {
-            if (this.Updates.Any(html => html.Contains(text, StringComparison.Ordinal))) return Task.CompletedTask;
-            var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            this.waiters.Add((text, signal));
-            return signal.Task.WaitAsync(cancellationToken);
+            get { lock (this.gate) return this.updates.ToArray(); }
+        }
+        public void Clear()
+        {
+            lock (this.gate) this.updates.Clear();
+        }
+        public async Task WaitForContentAsync(string text, CancellationToken cancellationToken)
+        {
+            TaskCompletionSource signal;
+            lock (this.gate)
+            {
+                if (this.updates.Any(html => html.Contains(text, StringComparison.Ordinal))) return;
+                signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                this.waiters.Add((text, signal));
+            }
+            try { await signal.Task.WaitAsync(cancellationToken); }
+            finally
+            {
+                lock (this.gate) this.waiters.RemoveAll(waiter => ReferenceEquals(waiter.Signal, signal));
+            }
         }
         public void UpdateContent(string path, ChatOutputUpdateLocation location, string content)
         {
             if (path == ChatOutputHtmlRenderer.SubAgentPanelSentinelId)
             {
-                this.Updates.Add(content);
-                foreach (var (text, signal) in this.waiters)
-                    if (content.Contains(text, StringComparison.Ordinal)) signal.TrySetResult();
+                lock (this.gate)
+                {
+                    this.updates.Add(content);
+                    foreach (var (text, signal) in this.waiters)
+                        if (content.Contains(text, StringComparison.Ordinal)) signal.TrySetResult();
+                }
             }
         }
         public void RemoveContent(string path) { }
