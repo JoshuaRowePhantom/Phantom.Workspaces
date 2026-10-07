@@ -1,16 +1,24 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.IO;
+using System.Text.Json;
+using System.Threading.Channels;
 using System.Threading.Tasks;
+using AgentSchema;
 using Avalonia;
 using Avalonia.Controls;
+using GitHub.Copilot;
+using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.Controls;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 using Phantom.Workspaces.Gui.Shared.Controls;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Remote;
+using Phantom.Workspaces.Transport;
 using Xunit;
 
 namespace Phantom.Workspaces.Agent.Gui.WebViewTests;
@@ -827,14 +835,13 @@ public sealed class ChatOutputBrowserIntegrationTests
                 var initial = await EvalAsync(web, """
                     (() => {
                       const segments = document.querySelectorAll('#history-0 .chat-tool-segment');
-                      return segments.length === 2 &&
-                        Array.from(segments).every((segment, i) => {
-                          const host = segment.querySelector(':scope > .chat-tool-group-actions');
-                          return host.querySelectorAll(':scope > .inspect-gutter-btn').length === i + 1 &&
-                            host.querySelectorAll(':scope > .usage-gutter-btn').length === 1 &&
-                            new Set(Array.from(host.querySelectorAll('button'),
-                              button => button.getAttribute('aria-label'))).size === host.querySelectorAll('button').length;
-                        });
+                      const host = segments[0]?.querySelector(':scope > .chat-tool-group-actions');
+                      return segments.length === 2 && host &&
+                        host.querySelectorAll(':scope > .inspect-gutter-btn').length === 3 &&
+                        host.querySelectorAll(':scope > .usage-gutter-btn').length === 2 &&
+                        segments[1].querySelectorAll(':scope > .chat-tool-group-actions > button').length === 0 &&
+                        new Set(Array.from(host.querySelectorAll('button'),
+                          button => button.getAttribute('aria-label'))).size === 5;
                     })()
                     """);
                 Assert.Contains("true", initial, StringComparison.Ordinal);
@@ -842,11 +849,8 @@ public sealed class ChatOutputBrowserIntegrationTests
                 var targetIds = await EvalAsync(web, """
                     (() => {
                       const segments = document.querySelectorAll('#history-0 .chat-tool-segment');
-                      segments[0].querySelector('.inspect-gutter-btn').click();
-                      segments[0].querySelector('.usage-gutter-btn').click();
-                      segments[1].querySelectorAll('.inspect-gutter-btn')[0].click();
-                      segments[1].querySelectorAll('.inspect-gutter-btn')[1].click();
-                      segments[1].querySelector('.usage-gutter-btn').click();
+                      const buttons = segments[0].querySelectorAll(':scope > .chat-tool-group-actions > button');
+                      buttons.forEach(b => b.click());
                       return Array.from(segments).map(s => s.querySelector('details').open).join(',');
                     })()
                     """);
@@ -858,10 +862,13 @@ public sealed class ChatOutputBrowserIntegrationTests
                 history[0] = Item("c3");
                 var rebound = await EvalAsync(web, """
                     (() => {
-                      const second = document.querySelectorAll('#history-0 .chat-tool-segment')[1];
-                      second.querySelectorAll('.inspect-gutter-btn')[0].click();
-                      return second.querySelectorAll('.inspect-gutter-btn').length === 2 &&
-                        second.querySelectorAll('.usage-gutter-btn').length === 1;
+                      const segments = document.querySelectorAll('#history-0 .chat-tool-segment');
+                      const host = segments[0].querySelector(':scope > .chat-tool-group-actions');
+                      const second = Array.from(host.querySelectorAll('button'))
+                        .filter(b => b.getAttribute('data-segment-origin-id') === segments[1].id);
+                      second[0]?.click();
+                      return second.length === 3 &&
+                        segments[1].querySelectorAll(':scope > .chat-tool-group-actions > button').length === 0;
                     })()
                     """);
                 Assert.Contains("true", rebound, StringComparison.Ordinal);
@@ -876,13 +883,125 @@ public sealed class ChatOutputBrowserIntegrationTests
                     (() => {
                       const segments = document.querySelectorAll('#history-0 .chat-tool-segment');
                       return segments.length === 2 &&
-                        segments[0].querySelectorAll(':scope > .chat-tool-group-actions > button').length === 2 &&
-                        segments[1].querySelectorAll(':scope > .chat-tool-group-actions > button').length === 3 &&
+                        segments[0].querySelectorAll(':scope > .chat-tool-group-actions > button').length === 5 &&
+                        segments[1].querySelectorAll(':scope > .chat-tool-group-actions > button').length === 0 &&
                         Array.from(document.querySelectorAll('[id]')).every(e => document.querySelectorAll(
                           '[id="' + CSS.escape(e.id) + '"]').length === 1);
                     })()
                     """);
                 Assert.Contains("true", restored, StringComparison.Ordinal);
+            }
+            finally { window.Close(); }
+        });
+
+    [Fact]
+    public Task MixedMessage_SecondaryActions_StayAdjacentToVisibleSummaryAndKeyboardReachableWhenCollapsed()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            var messages = new List<string>();
+            web.JavaScriptMessageReceived += (_, body) => messages.Add(body);
+            try
+            {
+                var history = new ObservableCollection<AgentChatHistoryItem>
+                {
+                    new()
+                    {
+                        Role = ChatRole.Assistant, AssistantRunId = "run",
+                        Contents =
+                        [
+                            new FunctionCallContent("c1", "read"),
+                            new UsageContent(new UsageDetails { InputTokenCount = 10 }),
+                            new TextContent("narration"),
+                            new FunctionCallContent("c2", "write"),
+                            new FunctionResultContent("c2", "done"),
+                            new UsageContent(new UsageDetails { OutputTokenCount = 20 }),
+                        ],
+                    },
+                };
+                using var model = CreateModel(web, history);
+                await model.HistoryLoaded;
+                async Task AssertChromeAsync(bool expanded)
+                {
+                    var visible = await EvalAsync(web, """
+                        (() => {
+                          const segments = document.querySelectorAll('#history-0 .chat-tool-segment');
+                          const leader = segments[0].querySelector(':scope > .chat-tool-group-actions');
+                          const summary = segments[0].querySelector(':scope > details > summary');
+                          const actions = Array.from(document.querySelectorAll('#history-0 .chat-tool-group-actions > button'));
+                          const second = Array.from(actions).filter(b =>
+                            b.getAttribute('data-segment-origin-id') === segments[1].id);
+                          return segments.length === 2 && !summary.hidden &&
+                            actions.length === 5 && second.length === 3 &&
+                            second.every(b => b.parentElement === leader &&
+                              b.getClientRects().length > 0 && b.tabIndex >= 0 &&
+                              b.getAttribute('aria-label') && !b.disabled) &&
+                            leader.getBoundingClientRect().bottom <= summary.getBoundingClientRect().top + 2 &&
+                            leader.getBoundingClientRect().width <= segments[0].getBoundingClientRect().width &&
+                            segments[1].querySelector(':scope > details > summary').hidden &&
+                            segments[0].querySelector(':scope > details').open === EXPANDED;
+                        })()
+                        """.Replace("EXPANDED", expanded ? "true" : "false", StringComparison.Ordinal));
+                    Assert.Contains("true", visible, StringComparison.Ordinal);
+                }
+                await AssertChromeAsync(true);
+                await EvalAsync(web, "document.querySelector('#history-0 .chat-tool-segment summary').click();'collapsed'");
+                await AssertChromeAsync(false);
+                var focused = await EvalAsync(web, """
+                    (() => {
+                      const b = Array.from(document.querySelectorAll('#history-0 .chat-tool-group-actions > button'))
+                        .find(x => x.getAttribute('data-segment-target-id').endsWith('-result'));
+                      b.focus(); b.click(); return document.activeElement === b;
+                    })()
+                    """);
+                Assert.Contains("true", focused, StringComparison.Ordinal);
+                Assert.Contains(messages, m => m.Contains("-result\"", StringComparison.Ordinal));
+            }
+            finally { window.Close(); }
+        });
+
+    [Fact]
+    public Task ToolRun_UnmatchedResultBetweenCalls_LiveAndReloadKeepResultInDomOrder()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                var items = new[]
+                {
+                    ToolCallItem("first_tool", "c1") with { AssistantRunId = "run" },
+                    new AgentChatHistoryItem { Role = ChatRole.Tool, AssistantRunId = "run",
+                        Contents = [new FunctionResultContent("unmatched", "unmatched-result")] },
+                    ToolCallItem("second_tool", "c2") with { AssistantRunId = "run" },
+                };
+                var history = new ObservableCollection<AgentChatHistoryItem>();
+                using var live = CreateModel(web, history);
+                await live.HistoryLoaded;
+                foreach (var item in items) history.Add(item);
+                async Task AssertOrderAsync()
+                {
+                    var order = await EvalAsync(web, """
+                        (() => {
+                          const root = document.getElementById('chat-history-container');
+                          const calls = Array.from(root.querySelectorAll('details.chat-tool-group'));
+                          const result = Array.from(root.querySelectorAll('.chat-tool'))
+                            .find(e => e.textContent.includes('unmatched-result'));
+                          const ids = Array.from(root.querySelectorAll('[id]')).map(e => e.id);
+                          return calls.length === 2 && !!result &&
+                            !!(calls[0].compareDocumentPosition(result) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+                            !!(result.compareDocumentPosition(calls[1]) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+                            !result.closest('details.chat-tool-group') && ids.length === new Set(ids).size;
+                        })()
+                        """);
+                    Assert.Contains("true", order, StringComparison.Ordinal);
+                }
+                await AssertOrderAsync();
+                live.Dispose();
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history-container", "replace", "<div id=\"chat-history-container\"></div>"));
+                using var reload = CreateModel(web, new ObservableCollection<AgentChatHistoryItem>(items));
+                await reload.HistoryLoaded;
+                await AssertOrderAsync();
             }
             finally { window.Close(); }
         });
@@ -1032,6 +1151,238 @@ public sealed class ChatOutputBrowserIntegrationTests
             }
             finally { window.Close(); }
         });
+
+    [Fact]
+    public Task RemoteNotification_ActualStreamingAndSnapshotCollections_RenderInNativeBrowser()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                var events = Channel.CreateUnbounded<SessionEvent>();
+                events.Writer.TryWrite(new ToolExecutionStartEvent
+                {
+                    AgentId = string.Empty,
+                    Data = new ToolExecutionStartData { ToolCallId = "parent", ToolName = "task" },
+                });
+                events.Writer.TryWrite(new SystemNotificationEvent
+                {
+                    AgentId = string.Empty,
+                    Data = new SystemNotificationData
+                    {
+                        Content = "<system_notification>child idle</system_notification>",
+                        Kind = new SystemNotificationAgentIdle
+                        {
+                            AgentId = "child", AgentType = "background", Description = "idle",
+                        },
+                    },
+                });
+                events.Writer.TryWrite(new ToolExecutionCompleteEvent
+                {
+                    AgentId = string.Empty,
+                    Data = new ToolExecutionCompleteData
+                    {
+                        ToolCallId = "parent", Success = true,
+                        Result = new ToolExecutionCompleteResult { Content = "done" },
+                    },
+                });
+                events.Writer.Complete();
+                var updates = new List<AgentResponseUpdate>();
+                await foreach (var update in CopilotSdkStreamAdapter.TranslateCopilotSdkSessionEvents(
+                    events.Reader, CancellationToken.None))
+                    updates.Add(new AgentResponseUpdate { Role = update.Role, Contents = update.Contents });
+                var items = AgentResponseUpdateCoalescer.Coalesce(updates.ToArray(), TimeProvider.System)
+                    .Select(item => item with { AssistantRunId = "remote-run" }).ToArray();
+                Assert.Equal(new[] { ChatRole.Assistant, ChatRole.System, ChatRole.Tool },
+                    items.Select(item => item.Role));
+                static JsonElement Json(object value)
+                    => JsonSerializer.SerializeToElement(value, AIJsonUtilities.DefaultOptions);
+                var child = Json(new
+                {
+                    AgentId = "child", Name = "background", DisplayName = "Background agent",
+                    Description = "Child running", CompletionState = AgentChatCompletionState.Running,
+                    LastUpdatedAt = DateTime.UnixEpoch, SubAgents = Array.Empty<object>(),
+                });
+                var renamedChild = Json(new
+                {
+                    AgentId = "child", Name = "background", DisplayName = "Renamed child",
+                    Description = "Child running", CompletionState = AgentChatCompletionState.Running,
+                    LastUpdatedAt = DateTime.UnixEpoch, SubAgents = Array.Empty<object>(),
+                });
+                var initialSnapshot = RemoteBrowserSnapshot([], [child]);
+                var (transport, chat) = await AttachBrowserRemoteAsync(initialSnapshot);
+                await using (chat)
+                {
+                    using var loggerFactory = new ObservableLoggerFactory();
+                    await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory,
+                        TaskScheduler.FromCurrentSynchronizationContext());
+                    using var model = CreateModel(web, chat.History, chat.RunningItems,
+                        viewModel.SubAgentDisplays);
+                    await model.HistoryLoaded;
+
+                    var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    ((INotifyCollectionChanged)chat.RunningItems).CollectionChanged += (_, _) =>
+                    {
+                        if (chat.RunningItems.Count == 1) started.TrySetResult();
+                    };
+                    await transport.SendAsync(RemoteBrowserFrame(2, new StreamingStartedEvent
+                    {
+                        RunId = "stream", Item = Json(items[0]),
+                    }));
+                    await started.Task.WaitAsync(TimeSpan.FromSeconds(15));
+
+                    var updated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    var running = Assert.Single(chat.RunningItems);
+                    running.Items.CollectionChanged += (_, _) =>
+                    {
+                        if (running.Items.Count == items.Length) updated.TrySetResult();
+                    };
+                    await transport.SendAsync(RemoteBrowserFrame(3, new StreamingUpdatedEvent
+                    {
+                        RunId = "stream", Update = Json(items),
+                    }));
+                    await updated.Task.WaitAsync(TimeSpan.FromSeconds(15));
+                    Assert.Contains("true", await EvalAsync(web, """
+                        (() => {
+                          const run = document.querySelector('.chat-running-item');
+                          const call = run?.querySelector('.chat-tool-call');
+                          const notice = run?.querySelector('.chat-system-message');
+                          const result = Array.from(run?.querySelectorAll('.chat-tool') || [])
+                            .find(e => e.textContent.includes('done'));
+                          return !!call && !!notice && !!result &&
+                            !!(call.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+                            !!(notice.compareDocumentPosition(result) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+                            document.getElementById('subagent-panel-inner').textContent.includes('Background agent');
+                        })()
+                        """), StringComparison.Ordinal);
+
+                    var promoted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    ((INotifyCollectionChanged)chat.History).CollectionChanged += (_, _) =>
+                    {
+                        if (chat.History.Count == items.Length) promoted.TrySetResult();
+                    };
+                    var renamed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    ((INotifyCollectionChanged)viewModel.SubAgentDisplays).CollectionChanged += (_, _) =>
+                    {
+                        if (viewModel.SubAgentDisplays.Count == 1 &&
+                            viewModel.SubAgentDisplays[0].DisplayName == "Renamed child")
+                            renamed.TrySetResult();
+                    };
+                    await transport.SendAsync(RemoteBrowserFrame(4, new SubagentsChangedEvent
+                    {
+                        Subagents = [renamedChild],
+                    }));
+                    await renamed.Task.WaitAsync(TimeSpan.FromSeconds(15));
+                    await transport.SendAsync(RemoteBrowserFrame(5, new StreamingCompletedEvent
+                    {
+                        RunId = "stream", Item = Json(items[^1]), Items = items.Select(Json).ToArray(),
+                    }));
+                    await promoted.Task.WaitAsync(TimeSpan.FromSeconds(15));
+                    await AssertRemoteBrowserOrderAsync(web, "Renamed child");
+                }
+
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history-container", "replace", "<div id=\"chat-history-container\"></div>"));
+                var (_, reloaded) = await AttachBrowserRemoteAsync(
+                    RemoteBrowserSnapshot(items.Select(Json).ToArray(), [renamedChild]));
+                await using (reloaded)
+                {
+                    using var loggerFactory = new ObservableLoggerFactory();
+                    await using var viewModel = new AgentViewModel(reloaded, "parent", "", loggerFactory,
+                        TaskScheduler.FromCurrentSynchronizationContext());
+                    using var model = CreateModel(web, reloaded.History, reloaded.RunningItems,
+                        viewModel.SubAgentDisplays);
+                    await model.HistoryLoaded;
+                    await AssertRemoteBrowserOrderAsync(web, "Renamed child");
+                }
+            }
+            finally { window.Close(); }
+        });
+
+    private static async Task AssertRemoteBrowserOrderAsync(ControllableWebViewControl web, string displayName)
+    {
+        var actual = await EvalAsync(web, """
+            (() => {
+              const root = document.getElementById('chat-history-container');
+              const call = root.querySelector('details.chat-tool-group');
+              const notice = root.querySelector('.chat-system-message');
+              const result = Array.from(root.querySelectorAll('.chat-tool'))
+                .find(e => e.textContent.includes('done'));
+              const ids = Array.from(root.querySelectorAll('[id]')).map(e => e.id);
+              return !!call && !!notice && !!result &&
+                !!(call.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+                !!(notice.compareDocumentPosition(result) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+                !result.closest('details.chat-tool-group') &&
+                notice.querySelector('.chat-sender').textContent === 'system' &&
+                document.getElementById('subagent-panel-inner').textContent.includes('DISPLAY_NAME') &&
+                ids.length === new Set(ids).size;
+            })()
+            """.Replace("DISPLAY_NAME", displayName, StringComparison.Ordinal));
+        Assert.Contains("true", actual, StringComparison.Ordinal);
+    }
+
+    private static AgentSessionSnapshot RemoteBrowserSnapshot(
+        IReadOnlyList<JsonElement> history, IReadOnlyList<JsonElement> subagents) => new()
+    {
+        Information = new AgentInformation
+        {
+            AgentSessionId = "session", AgentId = "parent", Name = "parent",
+            DisplayName = "Parent", Description = "Remote parent", AcceptsUserInput = false,
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson("""
+                {"kind":"prompt","name":"parent","model":{"id":"echo","provider":"echo","apiType":"Echo"}}
+                """),
+        },
+        Usage = new Usage(),
+        InputQueues = new AgentInputQueuesSnapshot { Revision = 0, Queues = [] },
+        IsBusy = false, History = history, RunningItems = [], Subagents = subagents,
+        Tools = [], Modals = [], ViewerCount = 1, ContinueInBackground = false,
+    };
+
+    private static async Task<(BrowserRemoteTransport Transport, RemoteAgentChat Chat)> AttachBrowserRemoteAsync(
+        AgentSessionSnapshot snapshot)
+    {
+        var transport = new BrowserRemoteTransport();
+        var attaching = RemoteAgentChat.AttachAsync(new RemoteAgentChatAttachOptions
+        {
+            Client = new RemoteAgentSessionClient(transport),
+            OpenRequest = new AgentSessionOpenRequest
+            {
+                ProtocolVersion = 1, AgentSessionId = "session",
+                ExpectedOwningProfileEntityId = "profile", ExpectedOwnershipGeneration = 2,
+                OpenIntent = AgentSessionOpenIntent.Attach, AttachmentToken = "00112233445566778899aabbccddeeff",
+                Capabilities = ["queue", "replay"],
+            },
+            ForegroundScheduler = TaskScheduler.FromCurrentSynchronizationContext(),
+        });
+        await transport.SendAsync(RemoteBrowserFrame(1, new SessionSnapshotEvent { Snapshot = snapshot }));
+        return (transport, await attaching.WaitAsync(TimeSpan.FromSeconds(15)));
+    }
+
+    private static JsonElement RemoteBrowserFrame(long sequence, AgentSessionServerEvent value)
+        => AgentSessionProtocolCodec.SerializeFrame(
+            AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.CreateFrame(
+                new RuntimeEpoch { Value = Guid.Parse("11111111-1111-1111-1111-111111111111") },
+                sequence, Guid.NewGuid(), value));
+
+    private sealed class BrowserRemoteTransport : ITransport, IMessageChannel
+    {
+        private readonly Channel<JsonElement> incoming = Channel.CreateUnbounded<JsonElement>();
+        private readonly Channel<JsonElement> outgoing = Channel.CreateUnbounded<JsonElement>();
+
+        public ChannelWriter<JsonElement> Writer => this.outgoing.Writer;
+        public ChannelReader<JsonElement> Reader => this.incoming.Reader;
+        public Task<IMessageChannel> ConnectToMessageChannelAsync(JsonElement request, CancellationToken ct = default)
+            => Task.FromResult<IMessageChannel>(this);
+        public Task<Stream> ConnectToStreamAsync(JsonElement request, CancellationToken ct = default)
+            => throw new NotSupportedException();
+        public ValueTask SendAsync(JsonElement frame) => this.incoming.Writer.WriteAsync(frame);
+        public ValueTask DisposeAsync()
+        {
+            this.incoming.Writer.TryComplete();
+            this.outgoing.Writer.TryComplete();
+            return ValueTask.CompletedTask;
+        }
+    }
 
     private static async Task<(ControllableWebViewControl Web, Window Window)> ShowReadyBrowserAsync()
     {
@@ -1910,9 +2261,9 @@ public sealed class ChatOutputBrowserIntegrationTests
 
     private static ChatOutputHtmlModel CreateModel(
         ControllableWebViewControl web,
-        ObservableCollection<AgentChatHistoryItem> history,
-        ObservableCollection<AgentChatRunningItem>? running = null,
-        ObservableCollection<IRunningSubAgentDisplay>? subAgents = null)
+        IReadOnlyList<AgentChatHistoryItem> history,
+        IReadOnlyList<AgentChatRunningItem>? running = null,
+        IReadOnlyList<IRunningSubAgentDisplay>? subAgents = null)
         => new(
             history,
             running ?? [],

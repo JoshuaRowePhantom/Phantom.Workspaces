@@ -1385,7 +1385,6 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
     /// </summary>
     internal static bool IsGroupingTransparent(RenderSlot slot)
         => !slot.HasDomElement
-            || IsToolResultOnlyItem(slot.Model.Source)
             || slot.Model.ProducesNoVisibleContent;
 
     /// <summary>

@@ -347,12 +347,23 @@
       padding-right: 4em;
     }
 
+    .chat-tool-segment > .chat-tool-group-actions {
+      position: relative;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+      max-width: 100%;
+    }
+
+    .chat-tool-segment > .chat-tool-group-actions + .chat-tool-group > summary {
+      padding-right: 0;
+    }
+
     .chat-tool-group-secondary > summary[hidden] {
       display: none;
     }
 
     .chat-contents:has(> .chat-tool-group-secondary:not([open])) > .chat-tool-group-actions,
-    .chat-tool-segment:has(> .chat-tool-group-secondary:not([open])) > .chat-tool-group-actions {
+    .chat-tool-segment:has(> .chat-tool-group-secondary) > .chat-tool-group-actions {
       display: none;
     }
 
@@ -672,6 +683,22 @@
         if (label && label.textContent !== title) { label.textContent = title; }
         var badge = leader.querySelector(".tool-count-badge");
         if (badge && badge.textContent !== count + " calls") { badge.textContent = count + " calls"; }
+        groups.forEach(function (group) {
+          var message = group.closest(".chat-message");
+          if (message && typeof InlineToolSegmentGutter !== "undefined") {
+            InlineToolSegmentGutter.reconcile(message, "data-inspect-target",
+              "inspect-gutter-btn", "Open in inspector", "\u24d8");
+            InlineToolSegmentGutter.reconcile(message, "data-usage-inspect-target",
+              "usage-gutter-btn", "Open token usage details", "#");
+          }
+        });
+        groups.slice(1).forEach(function (group) {
+          var host = group.previousElementSibling;
+          if (host && host.matches(".chat-tool-group-actions")) {
+            host.querySelectorAll(":scope > .inspect-gutter-btn, :scope > .usage-gutter-btn")
+              .forEach(function (button) { button.remove(); });
+          }
+        });
       }
       document.addEventListener("toggle", function (event) {
         var group = event.target;
@@ -724,8 +751,19 @@
           ", :scope > .chat-contents > ." + buttonClass).forEach(function (button) { button.remove(); });
 
         segments.forEach(function (segment) {
-          var host = segment.querySelector(":scope > .chat-tool-group-actions");
+          var group = segment.querySelector(":scope > details.chat-tool-group[data-assistant-run-id]");
+          var runId = group && group.getAttribute("data-assistant-run-id");
+          var leader = runId && Array.from(document.querySelectorAll("details.chat-tool-group[data-assistant-run-id]"))
+            .find(function (candidate) { return candidate.getAttribute("data-assistant-run-id") === runId; });
+          var host = leader && leader.previousElementSibling;
+          if (!host || !host.matches(".chat-tool-group-actions")) {
+            host = segment.querySelector(":scope > .chat-tool-group-actions");
+          }
           if (!host) { return; }
+          var originId = segment.id;
+          segment.querySelectorAll(":scope > .chat-tool-group-actions > ." + buttonClass).forEach(function (button) {
+            if (button.parentElement !== host) { button.remove(); }
+          });
           var targets = Array.from(segment.querySelectorAll("[" + marker + "][id]"));
           for (var sibling = segment.nextElementSibling;
                sibling && !sibling.matches(".chat-tool-segment"); sibling = sibling.nextElementSibling) {
@@ -737,11 +775,13 @@
           }
 
           var ids = new Set(targets.map(function (target) { return target.id; }));
-          host.querySelectorAll(":scope > ." + buttonClass).forEach(function (button) {
+          host.querySelectorAll(":scope > ." + buttonClass +
+            "[data-segment-origin-id=\"" + CSS.escape(originId) + "\"]").forEach(function (button) {
             if (!ids.has(button.getAttribute("data-segment-target-id"))) { button.remove(); }
           });
           targets.forEach(function (target) {
-            if (Array.from(host.querySelectorAll(":scope > ." + buttonClass))
+            if (Array.from(host.querySelectorAll(":scope > ." + buttonClass +
+              "[data-segment-origin-id=\"" + CSS.escape(originId) + "\"]"))
               .some(function (button) { return button.getAttribute("data-segment-target-id") === target.id; })) {
               return;
             }
@@ -750,11 +790,13 @@
             button.className = "chat-affordance-btn " + buttonClass;
             button.setAttribute("aria-label", label + " (" + target.id + ")");
             button.setAttribute("data-segment-target-id", target.id);
+            button.setAttribute("data-segment-origin-id", originId);
             button.textContent = glyph;
             button.addEventListener("click", function (event) {
               event.stopPropagation();
               var current = document.getElementById(button.getAttribute("data-segment-target-id"));
-              if (!current || !message.contains(current)) { return; }
+              var origin = document.getElementById(button.getAttribute("data-segment-origin-id"));
+              if (!current || !origin || !origin.closest(".chat-message").contains(current)) { return; }
               if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
                 window.chrome.webview.postMessage(JSON.stringify({
                   type: "inspect", contentId: current.id,

@@ -265,6 +265,23 @@ public sealed class ChatOutputHtmlTransformerLookupTests
     }
 
     [Fact]
+    public void FindGroupablePredecessor_VisibleUnmatchedResult_StopsGrouping()
+    {
+        var source = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("tool_a", "call-1") with { AssistantRunId = "run" },
+            ToolResultMessage("unknown", "unmatched") with { AssistantRunId = "run" },
+            ToolCallMessage("tool_b", "call-2") with { AssistantRunId = "run" },
+        };
+        var target = new List<RenderSlot>();
+        using var transformer = MakeTransformer(source, target, new RecordingSink());
+
+        Assert.True(target[1].HasDomElement);
+        Assert.Null(transformer.FindGroupablePredecessor(2));
+        Assert.NotSame(target[0].Group, target[2].Group);
+    }
+
+    [Fact]
     public void FindGroupablePredecessor_TextMessageBetween_ReturnsNull()
     {
         var source = new ObservableCollection<AgentChatHistoryItem>

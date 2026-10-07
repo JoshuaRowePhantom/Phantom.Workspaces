@@ -314,3 +314,28 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
                 d.Dispose();
     }
 }
+
+internal sealed class RemoteRunningSubAgentDisplay : IRunningSubAgentDisplay
+{
+    private readonly IRunningSubAgent subAgent;
+    private readonly IReadOnlyList<IRunningSubAgentDisplay> children;
+
+    public RemoteRunningSubAgentDisplay(IRunningSubAgent subAgent)
+    {
+        this.subAgent = subAgent;
+        this.children = subAgent.SubAgents.Select(child => (IRunningSubAgentDisplay)new RemoteRunningSubAgentDisplay(child))
+            .ToArray();
+    }
+
+    public string AgentId => this.subAgent.AgentId;
+    public string DisplayName => this.subAgent.DisplayName;
+    public string Description => this.subAgent.Description;
+    public string Name => this.subAgent.Name;
+    public AgentChatCompletionState CompletionState => this.subAgent.CompletionState;
+    public IReadOnlyList<SubAgentActivityLine> RecentActivity => [];
+    public IReadOnlyList<IRunningSubAgentDisplay> SubAgents => this.children;
+
+    // Remote snapshots are immutable; a replacement arrives through the parent's collection.
+    public event EventHandler? ActivityChanged { add { } remove { } }
+    public event EventHandler? CompletionStateChanged { add { } remove { } }
+}

@@ -32,6 +32,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private readonly List<AgentViewModel> subAgentViewModels = [];
     private readonly List<RunningAgentChatLease> subAgentLeases = [];
     private readonly ObservableCollection<IRunningSubAgentDisplay> subAgentDisplayItems = [];
+    private readonly Dictionary<IRunningSubAgent, IRunningSubAgentDisplay> remoteSubAgentDisplays =
+        new(ReferenceEqualityComparer.Instance);
     private readonly ObservableCollection<AgentDetailDocumentItem> allDetailContents = [];
     private readonly ObservableCollection<AgentSessionModalViewModel> modalSource = [];
     private readonly Dictionary<AgentViewModel, NotifyCollectionChangedEventHandler> subAgentDetailSubscriptions = new();
@@ -860,24 +862,27 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     {
         var selectedId = e.Action == NotifyCollectionChangedAction.Replace
             ? this.RootView().SelectedEditorItem?.Id : null;
+        if (e.Action == NotifyCollectionChangedAction.Reset && this.agentChat is RemoteAgentChat)
+        {
+            foreach (var child in this.remoteChildren.Values.ToArray())
+                this.RemoveRemoteChild(child.Reference.AgentId);
+            foreach (var display in this.remoteSubAgentDisplays.Values)
+                this.subAgentDisplayItems.Remove(display);
+            this.remoteSubAgentDisplays.Clear();
+            foreach (var subAgent in this.agentChat.SubAgents)
+                this.AddSubAgentSlot(subAgent);
+            return;
+        }
+
         if (e.OldItems is not null)
         {
             foreach (IRunningSubAgent subAgent in e.OldItems)
             {
-                RemoteChildSlot? remote = null;
-                if (this.remoteChildren.Remove(subAgent.AgentId, out remote))
-                {
-                    remote.Cancellation.Cancel();
-                    if (remote.StatusHandler is not null)
-                        remote.Reference.CompletionStateChanged -= remote.StatusHandler;
-                    this.subAgentAllChildren.Remove(remote.Navigation);
-                    this.allDetailContents.Remove(remote.Document);
-                    this.subAgentsTransformer.Refresh();
-                    if (this.SelectedEditorItem?.Id == remote.Navigation.Id)
-                        this.SelectedEditorItem = this.subAgentsNavItem;
-                }
-                var removal = this.RemoveSubAgentDetailContents(subAgent.AgentId);
-                if (remote is not null) _ = this.DisposeRemoteChildAsync(remote, removal);
+                this.RemoveRemoteChild(subAgent.AgentId);
+                if (this.remoteSubAgentDisplays.Remove(subAgent, out var display))
+                    this.subAgentDisplayItems.Remove(display);
+                else
+                    _ = this.RemoveSubAgentDetailContents(subAgent.AgentId);
             }
         }
         if (e.NewItems is not null)
@@ -891,8 +896,32 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         }
     }
 
+    private void RemoveRemoteChild(string agentId)
+    {
+        if (!this.remoteChildren.Remove(agentId, out var remote)) return;
+        remote.Cancellation.Cancel();
+        if (remote.StatusHandler is not null)
+            remote.Reference.CompletionStateChanged -= remote.StatusHandler;
+        this.subAgentAllChildren.Remove(remote.Navigation);
+        this.allDetailContents.Remove(remote.Document);
+        this.subAgentsTransformer.Refresh();
+        if (this.SelectedEditorItem?.Id == remote.Navigation.Id)
+            this.SelectedEditorItem = this.subAgentsNavItem;
+        _ = this.DisposeRemoteChildAsync(remote, this.RemoveSubAgentDetailContents(agentId));
+    }
+
     private void AddSubAgentSlot(IRunningSubAgent subAgent)
     {
+        if (this.agentChat is RemoteAgentChat)
+        {
+            var display = new RemoteRunningSubAgentDisplay(subAgent);
+            this.remoteSubAgentDisplays.Add(subAgent, display);
+            this.subAgentDisplayItems.Add(display);
+            if (subAgent is IRemoteSubagentReference remote && this.remoteChildResolver is not null)
+                this.AddRemoteChild(remote);
+            return;
+        }
+
         // Handle both AgentChat (eager path from GetOrCreateAsync) and SubAgent (lazy path from RestoreSubAgentsAsync)
         if (subAgent is AgentChat agentChat)
         {
