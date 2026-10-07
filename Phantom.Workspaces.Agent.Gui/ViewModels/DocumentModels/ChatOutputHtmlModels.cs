@@ -260,9 +260,10 @@ internal sealed class ChatMessageHtmlModel
 
         // Pre-scan: build a CallId → result lookup for content-level call+result pairing.
         Dictionary<string, FunctionResultContent>? resultLookup = null;
-        foreach (var content in this.source.Contents)
+        for (var i = 0; i < this.source.Contents.Count; i++)
         {
-            if (content is FunctionResultContent result && result.CallId is not null)
+            if (this.source.Contents[i] is FunctionResultContent result &&
+                result.CallId is not null && this.HasAdjacentCallForResult(i, result.CallId))
             {
                 resultLookup ??= new Dictionary<string, FunctionResultContent>(StringComparer.Ordinal);
                 resultLookup.TryAdd(result.CallId, result);
@@ -393,6 +394,19 @@ internal sealed class ChatMessageHtmlModel
         this.hasRendered = true;
         this.lastReasoningVisible = includeReasoning;
         this.renderedRoleLabel = roleLabel;
+    }
+
+    private bool HasAdjacentCallForResult(int resultIndex, string callId)
+    {
+        for (var i = resultIndex - 1; i >= 0; i--)
+        {
+            var content = this.source.Contents[i];
+            if (content is FunctionResultContent ||
+                content is TextContent text && string.IsNullOrWhiteSpace(text.Text))
+                continue;
+            return content is FunctionCallContent call && call.CallId == callId;
+        }
+        return false;
     }
 
     private void EmitDiff(List<ContentBinding> newBindings, string roleLabel, bool visibilityChanged)
@@ -1233,7 +1247,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
             if (result.CallId is null || !this.sharedSlotByCallId.TryGetValue(result.CallId, out var matchedSlot) ||
                 item.AssistantRunId is not null && matchedSlot.Model.Source.AssistantRunId is not null &&
                 item.AssistantRunId != matchedSlot.Model.Source.AssistantRunId ||
-                HasInterveningSystemNotification(this.Target, this.Target.IndexOf(matchedSlot), resultIndex))
+                HasInterveningVisibleContent(this.Target, this.Target.IndexOf(matchedSlot), resultIndex))
             {
                 return false;
             }
@@ -1255,13 +1269,13 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         return true;
     }
 
-    internal static bool HasInterveningSystemNotification(IList<RenderSlot> slots, int callIndex, int resultIndex)
+    internal static bool HasInterveningVisibleContent(IList<RenderSlot> slots, int callIndex, int resultIndex)
     {
-        // Injecting a result into its call would move it before a notification encountered between them.
+        // Other tool calls may share a grouped result message, but visible narration must retain its position.
         if (callIndex < 0 || callIndex >= resultIndex) return true;
         for (var i = callIndex + 1; i < resultIndex; i++)
         {
-            if (slots[i].Model.Source.Role == ChatRole.System && slots[i].HasDomElement)
+            if (slots[i].HasDomElement && !IsRunToolCallItem(slots[i].Model.Source))
                 return true;
         }
         return false;
@@ -2128,7 +2142,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
                 if (result.CallId is null || !slotByCallId.TryGetValue(result.CallId, out var matchedSlot) ||
                     item.AssistantRunId is not null && matchedSlot.Model.Source.AssistantRunId is not null &&
                     item.AssistantRunId != matchedSlot.Model.Source.AssistantRunId ||
-                    ChatMessageHtmlTransformer.HasInterveningSystemNotification(slots, Array.IndexOf(slots, matchedSlot), i))
+                    ChatMessageHtmlTransformer.HasInterveningVisibleContent(slots, Array.IndexOf(slots, matchedSlot), i))
                 {
                     allMatched = false;
                     break;

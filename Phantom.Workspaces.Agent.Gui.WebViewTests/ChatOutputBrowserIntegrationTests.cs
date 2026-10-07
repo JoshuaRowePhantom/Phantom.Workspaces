@@ -800,6 +800,94 @@ public sealed class ChatOutputBrowserIntegrationTests
         });
 
     [Fact]
+    public Task MixedMessage_TwoToolSegments_InspectResultAndUsageActionsSurviveMutationAndReload()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            var messages = new List<string>();
+            web.JavaScriptMessageReceived += (_, body) => messages.Add(body);
+            try
+            {
+                static AgentChatHistoryItem Item(string secondCallId) => new()
+                {
+                    Role = ChatRole.Assistant, AssistantRunId = "mixed-run",
+                    Contents =
+                    [
+                        new FunctionCallContent("c1", "read"),
+                        new UsageContent(new UsageDetails { InputTokenCount = 10 }),
+                        new TextContent("between calls"),
+                        new FunctionCallContent(secondCallId, "write"),
+                        new FunctionResultContent(secondCallId, "done"),
+                        new UsageContent(new UsageDetails { OutputTokenCount = 20 }),
+                    ],
+                };
+                var history = new ObservableCollection<AgentChatHistoryItem> { Item("c2") };
+                using var model = CreateModel(web, history);
+                await model.HistoryLoaded;
+                var initial = await EvalAsync(web, """
+                    (() => {
+                      const segments = document.querySelectorAll('#history-0 .chat-tool-segment');
+                      return segments.length === 2 &&
+                        Array.from(segments).every((segment, i) => {
+                          const host = segment.querySelector(':scope > .chat-tool-group-actions');
+                          return host.querySelectorAll(':scope > .inspect-gutter-btn').length === i + 1 &&
+                            host.querySelectorAll(':scope > .usage-gutter-btn').length === 1 &&
+                            new Set(Array.from(host.querySelectorAll('button'),
+                              button => button.getAttribute('aria-label'))).size === host.querySelectorAll('button').length;
+                        });
+                    })()
+                    """);
+                Assert.Contains("true", initial, StringComparison.Ordinal);
+
+                var targetIds = await EvalAsync(web, """
+                    (() => {
+                      const segments = document.querySelectorAll('#history-0 .chat-tool-segment');
+                      segments[0].querySelector('.inspect-gutter-btn').click();
+                      segments[0].querySelector('.usage-gutter-btn').click();
+                      segments[1].querySelectorAll('.inspect-gutter-btn')[0].click();
+                      segments[1].querySelectorAll('.inspect-gutter-btn')[1].click();
+                      segments[1].querySelector('.usage-gutter-btn').click();
+                      return Array.from(segments).map(s => s.querySelector('details').open).join(',');
+                    })()
+                    """);
+                Assert.Contains("true,true", targetIds, StringComparison.Ordinal);
+                Assert.Equal(5, messages.Count(m => m.Contains("\"type\":\"inspect\"", StringComparison.Ordinal)));
+                Assert.Equal(5, messages.Select(m => System.Text.Json.JsonDocument.Parse(m))
+                    .Select(json => json.RootElement.GetProperty("contentId").GetString()).Distinct().Count());
+
+                history[0] = Item("c3");
+                var rebound = await EvalAsync(web, """
+                    (() => {
+                      const second = document.querySelectorAll('#history-0 .chat-tool-segment')[1];
+                      second.querySelectorAll('.inspect-gutter-btn')[0].click();
+                      return second.querySelectorAll('.inspect-gutter-btn').length === 2 &&
+                        second.querySelectorAll('.usage-gutter-btn').length === 1;
+                    })()
+                    """);
+                Assert.Contains("true", rebound, StringComparison.Ordinal);
+                Assert.Contains(messages, m => m.Contains("\"CallId\": \"c3\"", StringComparison.Ordinal)
+                    || m.Contains("\\\"CallId\\\": \\\"c3\\\"", StringComparison.Ordinal));
+
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history-container", "replace", "<div id=\"chat-history-container\"></div>"));
+                using var reload = CreateModel(web, new ObservableCollection<AgentChatHistoryItem> { Item("c3") });
+                await reload.HistoryLoaded;
+                var restored = await EvalAsync(web, """
+                    (() => {
+                      const segments = document.querySelectorAll('#history-0 .chat-tool-segment');
+                      return segments.length === 2 &&
+                        segments[0].querySelectorAll(':scope > .chat-tool-group-actions > button').length === 2 &&
+                        segments[1].querySelectorAll(':scope > .chat-tool-group-actions > button').length === 3 &&
+                        Array.from(document.querySelectorAll('[id]')).every(e => document.querySelectorAll(
+                          '[id="' + CSS.escape(e.id) + '"]').length === 1);
+                    })()
+                    """);
+                Assert.Contains("true", restored, StringComparison.Ordinal);
+            }
+            finally { window.Close(); }
+        });
+
+    [Fact]
     public Task ToolRun_NotificationBetweenCalls_LiveAndReloadKeepSystemOutsideCollapsedSegments()
         => this.fixture.InvokeAsync(async () =>
         {
@@ -813,7 +901,10 @@ public sealed class ChatOutputBrowserIntegrationTests
                     ToolCallItem("second_tool", "c2") with { AssistantRunId = "ordered-run" },
                 };
                 var history = new ObservableCollection<AgentChatHistoryItem>();
-                using var model = CreateModel(web, history, new ObservableCollection<AgentChatRunningItem>());
+                var subAgents = new ObservableCollection<IRunningSubAgentDisplay>
+                    { new StubSubAgentDisplay("child", "Background agent") };
+                using var model = CreateModel(web, history, new ObservableCollection<AgentChatRunningItem>(),
+                    subAgents: subAgents);
                 await model.HistoryLoaded;
                 foreach (var item in items) history.Add(item);
                 var live = await EvalAsync(web, """
@@ -827,7 +918,8 @@ public sealed class ChatOutputBrowserIntegrationTests
                           !!(system.compareDocumentPosition(groups[1]) & Node.DOCUMENT_POSITION_FOLLOWING),
                         role: system.querySelector('.chat-sender').textContent,
                         outside: !system.closest('details.chat-tool-group'),
-                        summaries: Array.from(groups).filter(g => !g.querySelector(':scope > summary').hidden).length
+                        summaries: Array.from(groups).filter(g => !g.querySelector(':scope > summary').hidden).length,
+                        panel: document.getElementById('subagent-panel-inner').textContent.includes('Background agent')
                       });
                     })()
                     """);
@@ -835,6 +927,7 @@ public sealed class ChatOutputBrowserIntegrationTests
                 Assert.Contains("\\\"role\\\":\\\"system\\\"", live, StringComparison.Ordinal);
                 Assert.Contains("\\\"outside\\\":true", live, StringComparison.Ordinal);
                 Assert.Contains("\\\"summaries\\\":1", live, StringComparison.Ordinal);
+                Assert.Contains("\\\"panel\\\":true", live, StringComparison.Ordinal);
 
                 await EvalAsync(web, "document.querySelector('details.chat-tool-group > summary').click();'collapsed'");
                 var collapsed = await EvalAsync(web, """
@@ -849,12 +942,93 @@ public sealed class ChatOutputBrowserIntegrationTests
                 web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
                     "chat-history-container", "replace", "<div id=\"chat-history-container\"></div>"));
                 using var reload = CreateModel(web, new ObservableCollection<AgentChatHistoryItem>(items),
-                    new ObservableCollection<AgentChatRunningItem>());
+                    new ObservableCollection<AgentChatRunningItem>(), subAgents:
+                    new ObservableCollection<IRunningSubAgentDisplay>
+                        { new StubSubAgentDisplay("child", "Background agent") });
                 await reload.HistoryLoaded;
                 var restored = await EvalAsync(web,
-                    "document.querySelectorAll('#chat-history-container details.chat-tool-group').length === 2"
-                    + " && document.querySelector('#chat-history-container .chat-system-message') !== null");
+                    "(function(){var root=document.getElementById('chat-history-container');"
+                    + "var groups=root.querySelectorAll('details.chat-tool-group');"
+                    + "var system=root.querySelector('.chat-system-message');"
+                    + "var ids=Array.from(root.querySelectorAll('[id]')).map(e=>e.id);"
+                    + "return groups.length===2 && !!(groups[0].compareDocumentPosition(system)&4)"
+                    + " && !!(system.compareDocumentPosition(groups[1])&4)"
+                    + " && system.querySelector('.chat-sender').textContent==='system'"
+                    + " && !system.closest('details.chat-tool-group')"
+                    + " && Array.from(groups).filter(g=>!g.querySelector(':scope > summary').hidden).length===1"
+                    + " && !groups[0].open && !groups[1].open"
+                    + " && document.getElementById('subagent-panel-inner').textContent.includes('Background agent')"
+                    + " && ids.length===new Set(ids).size;})()");
                 Assert.Contains("true", restored, StringComparison.Ordinal);
+            }
+            finally { window.Close(); }
+        });
+
+    [Fact]
+    public Task ToolRun_NotificationBeforeCallAndBetweenCallResult_LiveAndReloadDomOrder()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                async Task AssertSequenceAsync(AgentChatHistoryItem[] items, bool beforeCall)
+                {
+                    var history = new ObservableCollection<AgentChatHistoryItem>();
+                    using var live = CreateModel(web, history);
+                    await live.HistoryLoaded;
+                    foreach (var item in items) history.Add(item);
+
+                    async Task AssertDomAsync()
+                    {
+                        var actual = await EvalAsync(web, """
+                            (() => {
+                              const root = document.getElementById('chat-history-container');
+                              const system = root.querySelector('.chat-system-message');
+                              const call = root.querySelector('details.chat-tool-group');
+                              const result = root.querySelector('.chat-tool:not(.chat-tool-group)');
+                              const ids = Array.from(root.querySelectorAll('[id]')).map(e => e.id);
+                              return JSON.stringify({
+                                beforeCall: !!(system.compareDocumentPosition(call) & Node.DOCUMENT_POSITION_FOLLOWING),
+                                callBeforeSystem: !!(call.compareDocumentPosition(system) & Node.DOCUMENT_POSITION_FOLLOWING),
+                                systemBeforeResult: result
+                                  ? !!(system.compareDocumentPosition(result) & Node.DOCUMENT_POSITION_FOLLOWING)
+                                  : null,
+                                resultOutside: result ? !result.closest('details.chat-tool-group') : null,
+                                role: system.querySelector('.chat-sender').textContent,
+                                unique: ids.length === new Set(ids).size
+                              });
+                            })()
+                            """);
+                        Assert.Contains($"\\\"beforeCall\\\":{beforeCall.ToString().ToLowerInvariant()}", actual, StringComparison.Ordinal);
+                        Assert.Contains($"\\\"callBeforeSystem\\\":{(!beforeCall).ToString().ToLowerInvariant()}", actual, StringComparison.Ordinal);
+                        Assert.Contains("\\\"role\\\":\\\"system\\\"", actual, StringComparison.Ordinal);
+                        Assert.Contains("\\\"unique\\\":true", actual, StringComparison.Ordinal);
+                        if (!beforeCall)
+                        {
+                            Assert.Contains("\\\"systemBeforeResult\\\":true", actual, StringComparison.Ordinal);
+                            Assert.Contains("\\\"resultOutside\\\":true", actual, StringComparison.Ordinal);
+                        }
+                    }
+
+                    await AssertDomAsync();
+                    live.Dispose();
+                    web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                        "chat-history-container", "replace", "<div id=\"chat-history-container\"></div>"));
+                    using var reload = CreateModel(web, new ObservableCollection<AgentChatHistoryItem>(items));
+                    await reload.HistoryLoaded;
+                    await AssertDomAsync();
+                    reload.Dispose();
+                    web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                        "chat-history-container", "replace", "<div id=\"chat-history-container\"></div>"));
+                    await EvalAsync(web, "'cleared'");
+                }
+
+                var notification = TextItem("agent idle") with { Role = ChatRole.System, AssistantRunId = "run" };
+                var call = ToolCallItem("parent_task", "c1") with { AssistantRunId = "run" };
+                await AssertSequenceAsync([notification, call], beforeCall: true);
+                var result = new AgentChatHistoryItem { Role = ChatRole.Tool, AssistantRunId = "run",
+                    Contents = [new FunctionResultContent("c1", "completed")] };
+                await AssertSequenceAsync([call, notification, result], beforeCall: false);
             }
             finally { window.Close(); }
         });

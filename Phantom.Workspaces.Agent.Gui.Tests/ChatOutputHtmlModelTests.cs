@@ -1617,7 +1617,7 @@ public sealed class ChatOutputHtmlModelTests
     }
 
     [Fact]
-    public void BuildHistoryRenderPlan_ResultInNewerChunkCallInOlderChunk_InjectedIntoCall()
+    public void BuildHistoryRenderPlan_ResultInNewerChunkAfterNarration_RemainsInNewerChunk()
     {
         // The call sits at index 10 (older chunk) while its result sits at index 300 (newer chunk).
         var snapshot = Enumerable.Range(0, 10)
@@ -1636,20 +1636,17 @@ public sealed class ChatOutputHtmlModelTests
 
         var plan = BuildPlan(snapshot, sink);
 
-        // The result-only message renders no element of its own.
-        Assert.False(plan.Slots[300].HasDomElement);
+        Assert.True(plan.Slots[300].HasDomElement);
 
-        // The older chunk containing the call renders the injected result nested under it.
         Assert.True(plan.Chunks.Count >= 2);
         var olderChunk = plan.Chunks.First(chunk => chunk.Start <= 10 && chunk.End > 10);
         var html = ChatOutputHtmlModel.GenerateHistoryChunk(plan, olderChunk.Start, olderChunk.End);
-        Assert.Contains("cross-chunk result data", html);
-        Assert.Contains("chat-tool-result", html);
+        Assert.DoesNotContain("cross-chunk result data", html);
 
-        // The newer chunk contains no standalone rendering of the result message.
         var newerChunk = plan.Chunks.First(chunk => chunk.Start <= 300 && chunk.End > 300);
         var newerHtml = ChatOutputHtmlModel.GenerateHistoryChunk(plan, newerChunk.Start, newerChunk.End);
-        Assert.DoesNotContain($"id=\"{ChatOutputHtmlRenderer.MessageId(300)}\"", newerHtml);
+        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.MessageId(300)}\"", newerHtml);
+        Assert.Contains("cross-chunk result data", newerHtml);
     }
 
     [Fact]
@@ -2706,7 +2703,7 @@ public sealed class ChatOutputHtmlModelTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public async Task Regression_BugE_CrossChunkToolResult_MatchesCall()
+    public async Task Regression_BugE_CrossChunkToolResult_AfterNarrationRendersAtEncounterPosition()
     {
         // The call lands in the older chunk while its result lands in the newer chunk.
         var history = new ObservableCollection<AgentChatHistoryItem>(
@@ -2733,14 +2730,11 @@ public sealed class ChatOutputHtmlModelTests
 
         var allContent = string.Concat(sink.ContentOperations.Select(op => op.Content));
 
-        // The result is injected (nested under its call), never rendered standalone.
         Assert.Contains("cross-chunk result data", allContent);
-        Assert.DoesNotContain($"id=\"{ChatOutputHtmlRenderer.MessageId(300)}\"", allContent);
+        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.MessageId(300)}\"", allContent);
 
-        // The chunk containing the call renders it with the injected result.
         var chunkWithCall = sink.ContentOperations.First(op => op.Content.Contains("my_tool"));
-        Assert.Contains("cross-chunk result data", chunkWithCall.Content);
-        Assert.Contains("chat-tool-result", chunkWithCall.Content);
+        Assert.DoesNotContain("cross-chunk result data", chunkWithCall.Content);
     }
 
     // ── Live insertion anchor regression tests (issue #900) ────────────────────
@@ -2981,6 +2975,60 @@ public sealed class ChatOutputHtmlModelTests
             html.IndexOf("id=\"history-0-1-details\"", StringComparison.Ordinal),
             html.IndexOf("</details>", html.IndexOf("id=\"history-0-1-details\"", StringComparison.Ordinal), StringComparison.Ordinal)
                 - html.IndexOf("id=\"history-0-1-details\"", StringComparison.Ordinal)));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ChatOutput_MixedCallNarrationResult_PreservesBindingOrderInLiveAndReload()
+    {
+        var item = new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant, AssistantRunId = "run",
+            Contents =
+            [
+                new FunctionCallContent("c1", "first_tool"),
+                new TextContent("between call and result"),
+                new FunctionResultContent("c1", "result-after-text"),
+            ],
+        };
+        var liveHistory = new ObservableCollection<AgentChatHistoryItem>();
+        var liveSink = new RecordingSink();
+        using var live = new ChatOutputHtmlModel(liveHistory, new ObservableCollection<AgentChatRunningItem>(),
+            () => true, liveSink);
+        await live.HistoryLoaded;
+        liveHistory.Add(item);
+        var reloadSink = new RecordingSink();
+        using var reload = new ChatOutputHtmlModel(new ObservableCollection<AgentChatHistoryItem> { item },
+            new ObservableCollection<AgentChatRunningItem>(), () => true, reloadSink);
+        await reload.HistoryLoaded;
+        foreach (var sink in new[] { liveSink, reloadSink })
+        {
+            var html = string.Concat(sink.ContentOperations.Select(op => op.Content));
+            var call = html.IndexOf("first_tool(…)", StringComparison.Ordinal);
+            var narration = html.IndexOf("between call and result", StringComparison.Ordinal);
+            var result = html.IndexOf("tool result: c1", StringComparison.Ordinal);
+            Assert.True(call >= 0 && call < narration && narration < result);
+            Assert.Contains("result-after-text", html);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ChatOutput_ResultAfterSeparateNarration_DoesNotInjectBeforeProse()
+    {
+        var items = new[]
+        {
+            ToolCallMessage("first_tool", "c1") with { AssistantRunId = "run" },
+            TextMessage(ChatRole.Assistant, "between call and result") with { AssistantRunId = "run" },
+            new AgentChatHistoryItem { Role = ChatRole.Tool, AssistantRunId = "run",
+                Contents = [new FunctionResultContent("c1", "after-narration")] },
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(new ObservableCollection<AgentChatHistoryItem>(items),
+            new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+        var html = string.Concat(sink.ContentOperations.Select(op => op.Content));
+        Assert.True(html.IndexOf("between call and result", StringComparison.Ordinal) <
+            html.IndexOf("tool result: c1", StringComparison.Ordinal));
+        Assert.Contains("after-narration", html);
     }
 
     [AvaloniaFact(Timeout = 15_000)]

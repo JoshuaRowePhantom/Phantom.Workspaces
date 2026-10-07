@@ -714,6 +714,64 @@
     })();
   </script>
   <script>
+    var InlineToolSegmentGutter = (function () {
+      "use strict";
+
+      function reconcile(message, marker, buttonClass, label, glyph) {
+        var segments = message.querySelectorAll(":scope > .chat-contents > .chat-tool-segment");
+        if (!segments.length) { return false; }
+        message.querySelectorAll(":scope > .chat-header ." + buttonClass +
+          ", :scope > .chat-contents > ." + buttonClass).forEach(function (button) { button.remove(); });
+
+        segments.forEach(function (segment) {
+          var host = segment.querySelector(":scope > .chat-tool-group-actions");
+          if (!host) { return; }
+          var targets = Array.from(segment.querySelectorAll("[" + marker + "][id]"));
+          for (var sibling = segment.nextElementSibling;
+               sibling && !sibling.matches(".chat-tool-segment"); sibling = sibling.nextElementSibling) {
+            if (marker === "data-usage-inspect-target" ||
+                sibling.matches(".chat-tool[data-inspect-target]")) {
+              if (sibling.matches("[" + marker + "][id]")) { targets.push(sibling); }
+              sibling.querySelectorAll("[" + marker + "][id]").forEach(function (target) { targets.push(target); });
+            }
+          }
+
+          var ids = new Set(targets.map(function (target) { return target.id; }));
+          host.querySelectorAll(":scope > ." + buttonClass).forEach(function (button) {
+            if (!ids.has(button.getAttribute("data-segment-target-id"))) { button.remove(); }
+          });
+          targets.forEach(function (target) {
+            if (Array.from(host.querySelectorAll(":scope > ." + buttonClass))
+              .some(function (button) { return button.getAttribute("data-segment-target-id") === target.id; })) {
+              return;
+            }
+            var button = document.createElement("button");
+            button.type = "button";
+            button.className = "chat-affordance-btn " + buttonClass;
+            button.setAttribute("aria-label", label + " (" + target.id + ")");
+            button.setAttribute("data-segment-target-id", target.id);
+            button.textContent = glyph;
+            button.addEventListener("click", function (event) {
+              event.stopPropagation();
+              var current = document.getElementById(button.getAttribute("data-segment-target-id"));
+              if (!current || !message.contains(current)) { return; }
+              if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
+                window.chrome.webview.postMessage(JSON.stringify({
+                  type: "inspect", contentId: current.id,
+                  contentJson: current.getAttribute("data-details-target") || ""
+                }));
+              }
+            });
+            host.appendChild(button);
+          });
+        });
+        return true;
+      }
+
+      return { reconcile: reconcile };
+    })();
+  </script>
+  <script>
      /* inspect-gutter.js — message-header inspect button component.
      * Call InspectGutter.init(root) to wire up all [data-inspect-target] elements inside root.
      * A MutationObserver keeps watching for elements added later (streaming / incremental updates).
@@ -750,6 +808,8 @@
       }
 
       function reconcile(message) {
+        if (InlineToolSegmentGutter.reconcile(message, "data-inspect-target",
+          "inspect-gutter-btn", "Open in inspector", "\u24d8")) { return; }
         var targetId = message.getAttribute("data-message-inspect-target");
         var target = targetId ? document.getElementById(targetId) : null;
         if (!target || !message.contains(target) || !target.hasAttribute("data-inspect-target")) {
@@ -831,6 +891,8 @@
       }
 
       function reconcile(message) {
+        if (InlineToolSegmentGutter.reconcile(message, "data-usage-inspect-target",
+          "usage-gutter-btn", "Open token usage details", "#")) { return; }
         var targetId = message.getAttribute("data-message-usage-target");
         var marker = targetId ? document.getElementById(targetId) : null;
         if (!marker || !message.contains(marker) || !marker.hasAttribute("data-usage-inspect-target")) {
