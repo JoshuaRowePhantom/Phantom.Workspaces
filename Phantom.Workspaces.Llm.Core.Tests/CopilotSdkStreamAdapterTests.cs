@@ -540,6 +540,56 @@ public sealed class CopilotSdkStreamAdapterTests
     }
 
     [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_ToolAndIdleNotificationSequence_PreservesProviderOrderAndSystemRole()
+    {
+        var updates = await TranslateAsync(
+            new ToolExecutionStartEvent
+            {
+                AgentId = string.Empty,
+                Data = new ToolExecutionStartData { ToolCallId = "parent-1", ToolName = "task" },
+            },
+            new SystemNotificationEvent
+            {
+                AgentId = string.Empty,
+                Data = new SystemNotificationData
+                {
+                    Content = "<system_notification>agent idle</system_notification>",
+                    Kind = new SystemNotificationAgentIdle
+                    {
+                        AgentId = "agent-1", AgentType = "background", Description = "idle",
+                    },
+                },
+            },
+            new ToolExecutionCompleteEvent
+            {
+                AgentId = string.Empty,
+                Data = new ToolExecutionCompleteData
+                {
+                    ToolCallId = "parent-1", Success = true,
+                    Result = new ToolExecutionCompleteResult { Content = "done" },
+                },
+            },
+            new ToolExecutionStartEvent
+            {
+                AgentId = string.Empty,
+                Data = new ToolExecutionStartData { ToolCallId = "parent-2", ToolName = "task" },
+            });
+
+        Assert.Equal(4, updates.Count);
+        Assert.Equal(ChatRole.Assistant, updates[0].Role);
+        Assert.Equal(ChatRole.System, updates[1].Role);
+        Assert.Equal(ChatRole.Tool, updates[2].Role);
+        Assert.Equal(ChatRole.Assistant, updates[3].Role);
+        Assert.Equal("parent-1", Assert.IsType<FunctionCallContent>(Assert.Single(updates[0].Contents)).CallId);
+        Assert.Equal("agent idle", Assert.IsType<TextContent>(Assert.Single(updates[1].Contents)).Text);
+        Assert.Equal("parent-1", Assert.IsType<FunctionResultContent>(Assert.Single(updates[2].Contents)).CallId);
+        Assert.Equal("parent-2", Assert.IsType<FunctionCallContent>(Assert.Single(updates[3].Contents)).CallId);
+        Assert.Equal(CopilotSdkStreamAdapter.SystemNotificationContentType,
+            Assert.IsType<TextContent>(Assert.Single(updates[1].Contents))
+                .AdditionalProperties![CopilotSdkStreamAdapter.ContentTypePropertyName]);
+    }
+
+    [Fact]
     public async Task TranslateCopilotSdkSessionEvents_SessionIdleEvent_CompletesStream()
     {
         var updates = await TranslateAsync(

@@ -2909,8 +2909,7 @@ public sealed class ChatOutputHtmlModelTests
         using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
         await model.HistoryLoaded;
         var html = string.Concat(sink.ContentOperations.Select(op => op.Content));
-        Assert.Single(System.Text.RegularExpressions.Regex.Matches(html, "class=\"chat-content chat-tool-group\"").Cast<object>());
-        Assert.Contains("2 calls", html);
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(html, "class=\"chat-content chat-tool-group\"").Count);
         Assert.Contains("id=\"tool-group-0-header\" hidden", html);
         var read = html.IndexOf("read_file(…)", StringComparison.Ordinal);
         var between = html.IndexOf("between calls", StringComparison.Ordinal);
@@ -2918,7 +2917,9 @@ public sealed class ChatOutputHtmlModelTests
         var finished = html.IndexOf("finished", StringComparison.Ordinal);
         Assert.True(read < between && between < write && write < finished,
             "Every call and assistant text must remain in encounter order.");
-        Assert.Contains("class=\"chat-content chat-tool-group\" open", html);
+        Assert.DoesNotContain("between calls", html.Substring(html.IndexOf("id=\"tool-group-0-details\"", StringComparison.Ordinal),
+            html.IndexOf("</details>", html.IndexOf("id=\"tool-group-0-details\"", StringComparison.Ordinal), StringComparison.Ordinal)
+            - html.IndexOf("id=\"tool-group-0-details\"", StringComparison.Ordinal)));
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -2939,13 +2940,67 @@ public sealed class ChatOutputHtmlModelTests
         using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
         await model.HistoryLoaded;
         var html = string.Concat(sink.ContentOperations.Select(op => op.Content));
-        Assert.Single(System.Text.RegularExpressions.Regex.Matches(html, "class=\"chat-content chat-tool-group\"").Cast<object>());
-        Assert.Contains("2 calls", html);
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(html, "class=\"chat-content chat-tool-group\"").Count);
         Assert.True(html.IndexOf("before call", StringComparison.Ordinal) < html.IndexOf("read_file(…)", StringComparison.Ordinal));
         Assert.True(html.IndexOf("read_file(…)", StringComparison.Ordinal) < html.IndexOf("between calls", StringComparison.Ordinal));
         Assert.True(html.IndexOf("between calls", StringComparison.Ordinal) < html.IndexOf("write_file(…)", StringComparison.Ordinal));
         Assert.Contains("result-one", html);
         Assert.Contains("result-two", html);
+        Assert.True(html.IndexOf("before call", StringComparison.Ordinal) <
+            html.IndexOf("read_file(…)", StringComparison.Ordinal));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ChatOutput_SameRunMixedContent_SplitsTextAndCallsWithoutLosingOrder()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            new()
+            {
+                Role = ChatRole.Assistant, AssistantRunId = "run",
+                Contents =
+                [
+                    new TextContent("before segment"),
+                    new FunctionCallContent("c1", "first_tool"),
+                    new TextContent("between segments"),
+                    new FunctionCallContent("c2", "second_tool"),
+                    new TextContent("after segment"),
+                ],
+            },
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+        var html = string.Concat(sink.ContentOperations.Select(op => op.Content));
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(html, "class=\"chat-content chat-tool-group\"").Count);
+        var markers = new[] { "before segment", "first_tool(…)", "between segments", "second_tool(…)", "after segment" };
+        var positions = markers.Select(text => html.IndexOf(text, StringComparison.Ordinal)).ToArray();
+        Assert.All(positions, position => Assert.True(position >= 0));
+        Assert.True(positions.SequenceEqual(positions.OrderBy(position => position)));
+        Assert.DoesNotContain("between segments", html.Substring(
+            html.IndexOf("id=\"history-0-1-details\"", StringComparison.Ordinal),
+            html.IndexOf("</details>", html.IndexOf("id=\"history-0-1-details\"", StringComparison.Ordinal), StringComparison.Ordinal)
+                - html.IndexOf("id=\"history-0-1-details\"", StringComparison.Ordinal)));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ChatOutput_RunAcrossHistoryChunkBoundary_PreservesOneSummaryAndProseOrder()
+    {
+        var items = Enumerable.Range(0, 199).Select(i => TextMessage(ChatRole.User, $"user-{i}")).ToList();
+        items.Add(ToolCallMessage("first_tool", "c1") with { AssistantRunId = "chunk-run" });
+        items.Add(TextMessage(ChatRole.Assistant, "between calls") with { AssistantRunId = "chunk-run" });
+        items.Add(ToolCallMessage("second_tool", "c2") with { AssistantRunId = "chunk-run" });
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(new ObservableCollection<AgentChatHistoryItem>(items),
+            new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+        var html = string.Concat(sink.ContentOperations.Select(op => op.Content));
+        Assert.True(html.IndexOf("first_tool(…)", StringComparison.Ordinal) <
+            html.IndexOf("between calls", StringComparison.Ordinal));
+        Assert.True(html.IndexOf("between calls", StringComparison.Ordinal) <
+            html.IndexOf("second_tool(…)", StringComparison.Ordinal));
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(html, "data-assistant-run-id=\"chunk-run\"").Count);
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(html, "class=\"chat-content chat-tool-group\"").Count);
     }
 
     [AvaloniaFact(Timeout = 30_000)]
@@ -3011,8 +3066,7 @@ public sealed class ChatOutputHtmlModelTests
         var reloadedHtml = string.Concat(reloadSink.ContentOperations.Select(op => op.Content));
         foreach (var html in new[] { liveHtml, reloadedHtml })
         {
-            Assert.Single(System.Text.RegularExpressions.Regex.Matches(html, "class=\"chat-content chat-tool-group\"").Cast<object>());
-            Assert.Contains("2 calls", html);
+            Assert.True(System.Text.RegularExpressions.Regex.Matches(html, "class=\"chat-content chat-tool-group\"").Count >= 1);
             Assert.Contains("read-result", html);
             Assert.Contains("write-result", html);
             Assert.True(html.IndexOf("read(…)", StringComparison.Ordinal) <

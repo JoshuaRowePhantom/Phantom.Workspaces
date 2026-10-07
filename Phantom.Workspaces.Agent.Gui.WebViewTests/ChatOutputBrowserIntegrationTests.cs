@@ -763,6 +763,102 @@ public sealed class ChatOutputBrowserIntegrationTests
             }
         });
 
+    [Fact]
+    public Task ToolGroup_HiddenHeader_InspectAndUsageStayOnVisibleChromeAndTargetOwnGroup()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            var messages = new List<string>();
+            web.JavaScriptMessageReceived += (_, body) => messages.Add(body);
+            try
+            {
+                foreach (var id in new[] { "group-a", "group-b" })
+                {
+                    var body = $"<div id=\"{id}-call\" data-inspect-target data-details-target=\"{id}-inspect\"></div>";
+                    web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update("chat-history-container", "append",
+                        ChatOutputHtmlRenderer.RenderToolCallGroup(id, ["read"], 1, body +
+                            $"<div id=\"{id}-usage\" data-usage-inspect-target data-details-target=\"{id}-tokens\"></div>")));
+                }
+                var structure = await EvalAsync(web,
+                    "(function(){return ['group-a','group-b'].every(function(id){var m=document.getElementById(id);"
+                    + "var a=m.querySelector('.chat-tool-group-actions');"
+                    + "return a && a.querySelectorAll('button').length===2"
+                    + " && !m.querySelector(':scope > .chat-contents > .inspect-gutter-btn')"
+                    + " && !m.querySelector(':scope > .chat-contents > .usage-gutter-btn')"
+                    + " && m.querySelector('details').previousElementSibling===a;});})()");
+                Assert.Contains("true", structure, StringComparison.Ordinal);
+                var state = await EvalAsync(web,
+                    "(function(){var d=document.getElementById('group-b-details');"
+                    + "d.open=false;document.querySelector('#group-b .inspect-gutter-btn').click();"
+                    + "document.querySelector('#group-b .usage-gutter-btn').click();return !d.open;})()");
+                Assert.Contains("true", state, StringComparison.Ordinal);
+                Assert.Contains(messages, m => m.Contains("\"contentId\":\"group-b-call\"", StringComparison.Ordinal));
+                Assert.Contains(messages, m => m.Contains("\"contentId\":\"group-b-usage\"", StringComparison.Ordinal));
+                Assert.DoesNotContain(messages, m => m.Contains("\"contentId\":\"group-a-call\"", StringComparison.Ordinal));
+            }
+            finally { window.Close(); }
+        });
+
+    [Fact]
+    public Task ToolRun_NotificationBetweenCalls_LiveAndReloadKeepSystemOutsideCollapsedSegments()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                var items = new[]
+                {
+                    ToolCallItem("first_tool", "c1") with { AssistantRunId = "ordered-run" },
+                    TextItem("agent idle") with { Role = ChatRole.System, AssistantRunId = "ordered-run" },
+                    ToolCallItem("second_tool", "c2") with { AssistantRunId = "ordered-run" },
+                };
+                var history = new ObservableCollection<AgentChatHistoryItem>();
+                using var model = CreateModel(web, history, new ObservableCollection<AgentChatRunningItem>());
+                await model.HistoryLoaded;
+                foreach (var item in items) history.Add(item);
+                var live = await EvalAsync(web, """
+                    (() => {
+                      const root = document.getElementById('chat-history-container');
+                      const system = root.querySelector('.chat-system-message');
+                      const groups = root.querySelectorAll('details.chat-tool-group');
+                      return JSON.stringify({
+                        ordered: groups.length === 2 &&
+                          !!(groups[0].compareDocumentPosition(system) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+                          !!(system.compareDocumentPosition(groups[1]) & Node.DOCUMENT_POSITION_FOLLOWING),
+                        role: system.querySelector('.chat-sender').textContent,
+                        outside: !system.closest('details.chat-tool-group'),
+                        summaries: Array.from(groups).filter(g => !g.querySelector(':scope > summary').hidden).length
+                      });
+                    })()
+                    """);
+                Assert.Contains("\\\"ordered\\\":true", live, StringComparison.Ordinal);
+                Assert.Contains("\\\"role\\\":\\\"system\\\"", live, StringComparison.Ordinal);
+                Assert.Contains("\\\"outside\\\":true", live, StringComparison.Ordinal);
+                Assert.Contains("\\\"summaries\\\":1", live, StringComparison.Ordinal);
+
+                await EvalAsync(web, "document.querySelector('details.chat-tool-group > summary').click();'collapsed'");
+                var collapsed = await EvalAsync(web, """
+                    (() => {
+                      const groups = document.querySelectorAll('details.chat-tool-group');
+                      return !groups[0].open && !groups[1].open &&
+                        document.querySelector('.chat-system-message').getClientRects().length > 0;
+                    })()
+                    """);
+                Assert.Contains("true", collapsed, StringComparison.Ordinal);
+
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history-container", "replace", "<div id=\"chat-history-container\"></div>"));
+                using var reload = CreateModel(web, new ObservableCollection<AgentChatHistoryItem>(items),
+                    new ObservableCollection<AgentChatRunningItem>());
+                await reload.HistoryLoaded;
+                var restored = await EvalAsync(web,
+                    "document.querySelectorAll('#chat-history-container details.chat-tool-group').length === 2"
+                    + " && document.querySelector('#chat-history-container .chat-system-message') !== null");
+                Assert.Contains("true", restored, StringComparison.Ordinal);
+            }
+            finally { window.Close(); }
+        });
+
     private static async Task<(ControllableWebViewControl Web, Window Window)> ShowReadyBrowserAsync()
     {
         var web = new ControllableWebViewControl();
@@ -1250,18 +1346,26 @@ public sealed class ChatOutputBrowserIntegrationTests
                 var order = await EvalAsync(web, """
                     (() => {
                       const group = document.querySelector('#running-items-container details.chat-tool-group');
-                      const body = group.querySelector('.chat-tool-group-body');
+                      const root = document.querySelector('#running-items-container');
+                      const texts = Array.from(root.querySelectorAll('.chat-text'));
                       return JSON.stringify({
-                        groups: document.querySelectorAll('#running-items-container details.chat-tool-group').length,
+                        groups: root.querySelectorAll('details.chat-tool-group').length,
                         open: group.open,
-                        items: body.querySelectorAll('details.chat-tool-group-item').length,
-                        text: body.textContent
+                        items: root.querySelectorAll('details.chat-tool-group-item').length,
+                        proseOutside: texts.every(t => !t.closest('details.chat-tool-group')),
+                        summaries: Array.from(root.querySelectorAll('details.chat-tool-group > summary'))
+                          .filter(s => !s.hidden).length,
+                        total: group.querySelector('.tool-count-badge').textContent,
+                        text: root.textContent
                       });
                     })()
                     """);
-                Assert.Contains("\\\"groups\\\":1", order, StringComparison.Ordinal);
+                Assert.Contains("\\\"groups\\\":2", order, StringComparison.Ordinal);
                 Assert.Contains("\\\"open\\\":true", order, StringComparison.Ordinal);
                 Assert.Contains("\\\"items\\\":2", order, StringComparison.Ordinal);
+                Assert.Contains("\\\"proseOutside\\\":true", order, StringComparison.Ordinal);
+                Assert.Contains("\\\"summaries\\\":1", order, StringComparison.Ordinal);
+                Assert.Contains("2 calls", order, StringComparison.Ordinal);
                 var read = order.IndexOf("read", StringComparison.Ordinal);
                 var between = order.IndexOf("between calls", StringComparison.Ordinal);
                 var beforeWrite = order.IndexOf("before write", StringComparison.Ordinal);
@@ -1295,12 +1399,14 @@ public sealed class ChatOutputBrowserIntegrationTests
                 };
                 var state = await EvalAsync(web, """
                     (() => {
-                      const group = document.querySelector('#running-items-container details.chat-tool-group');
-                      return JSON.stringify({ count: document.querySelectorAll('#running-items-container details.chat-tool-group').length,
-                        text: group?.textContent || '' });
+                      const root = document.querySelector('#running-items-container');
+                      return JSON.stringify({ count: root.querySelectorAll('details.chat-tool-group-item').length,
+                        proseOutside: !root.querySelector('.chat-text')?.closest('details.chat-tool-group-item'),
+                        text: root.textContent });
                     })()
                     """);
                 Assert.Contains("\\\"count\\\":1", state, StringComparison.Ordinal);
+                Assert.Contains("\\\"proseOutside\\\":true", state, StringComparison.Ordinal);
                 Assert.Contains("thinking", state, StringComparison.Ordinal);
                 Assert.Contains("read", state, StringComparison.Ordinal);
             }

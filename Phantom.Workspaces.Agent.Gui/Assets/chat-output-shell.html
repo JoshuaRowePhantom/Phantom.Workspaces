@@ -131,6 +131,11 @@
       padding-left: 1.5em;
     }
 
+    .chat-system-message .chat-contents {
+      padding-left: 1.5em;
+      color: var(--chat-meta);
+    }
+
     .chat-help {
       white-space: pre-wrap;
       font-family: var(--chat-font-family);
@@ -321,6 +326,34 @@
       cursor: pointer;
       user-select: none;
       color: var(--chat-tool-summary);
+    }
+
+    .chat-contents:has(> .chat-tool-group-actions),
+    .chat-tool-segment {
+      position: relative;
+    }
+
+    .chat-tool-group-actions {
+      position: absolute;
+      right: 0;
+      top: 0;
+      z-index: 2;
+      display: flex;
+      align-items: center;
+      gap: 0.25em;
+    }
+
+    .chat-tool-group-actions + .chat-tool-group > summary {
+      padding-right: 4em;
+    }
+
+    .chat-tool-group-secondary > summary[hidden] {
+      display: none;
+    }
+
+    .chat-contents:has(> .chat-tool-group-secondary:not([open])) > .chat-tool-group-actions,
+    .chat-tool-segment:has(> .chat-tool-group-secondary:not([open])) > .chat-tool-group-actions {
+      display: none;
     }
 
     .tool-count-badge {
@@ -611,17 +644,58 @@
     })();
   </script>
   <script>
-    /* Keep a run's expanded tools open when streaming content moves into history. */
+    /* A run's tool-only segments share one visible summary and collapse state. */
     (function () {
       var expandedRuns = new Map();
+      function reconcileRun(id) {
+        var groups = Array.from(document.querySelectorAll("details.chat-tool-group[data-assistant-run-id]"))
+          .filter(function (group) { return group.getAttribute("data-assistant-run-id") === id; });
+        if (!groups.length) { return; }
+        var names = [];
+        var count = 0;
+        groups.forEach(function (group, index) {
+          var summary = group.querySelector(":scope > summary");
+          if (!summary) { return; }
+          summary.hidden = index !== 0;
+          group.classList.toggle("chat-tool-group-secondary", index !== 0);
+          count += Number(summary.getAttribute("data-segment-call-count")) || 0;
+          try {
+            JSON.parse(summary.getAttribute("data-segment-tool-names") || "[]").forEach(function (name) {
+              if (!names.includes(name)) { names.push(name); }
+            });
+          } catch (_) { /* A malformed attribute must not break collapsing tools. */ }
+        });
+        var leader = groups[0].querySelector(":scope > summary");
+        if (!leader) { return; }
+        var title = names.length ? "tools (" + names.join(", ") + ")" : "tools";
+        var label = leader.querySelector(".tool-group-label");
+        if (label && label.textContent !== title) { label.textContent = title; }
+        var badge = leader.querySelector(".tool-count-badge");
+        if (badge && badge.textContent !== count + " calls") { badge.textContent = count + " calls"; }
+      }
       document.addEventListener("toggle", function (event) {
         var group = event.target;
         if (group.matches && group.matches("details.chat-tool-group[data-assistant-run-id]")) {
-          expandedRuns.set(group.getAttribute("data-assistant-run-id"), group.open);
+          var id = group.getAttribute("data-assistant-run-id");
+          expandedRuns.set(id, group.open);
+          document.querySelectorAll("details.chat-tool-group[data-assistant-run-id]").forEach(function (other) {
+            if (other !== group && other.getAttribute("data-assistant-run-id") === id) {
+              other.open = group.open;
+            }
+          });
         }
       }, true);
       new MutationObserver(function (mutations) {
+        var changed = new Set();
         mutations.forEach(function (mutation) {
+          mutation.removedNodes.forEach(function (node) {
+            if (node.nodeType !== 1) { return; }
+            var groups = node.matches("details.chat-tool-group[data-assistant-run-id]")
+              ? [node] : node.querySelectorAll("details.chat-tool-group[data-assistant-run-id]");
+            groups.forEach(function (group) {
+              changed.add(group.getAttribute("data-assistant-run-id"));
+            });
+          });
           mutation.addedNodes.forEach(function (node) {
             if (node.nodeType !== 1) { return; }
             var groups = node.matches("details.chat-tool-group[data-assistant-run-id]")
@@ -629,9 +703,13 @@
             groups.forEach(function (group) {
               var id = group.getAttribute("data-assistant-run-id");
               if (expandedRuns.has(id)) { group.open = expandedRuns.get(id); }
+              changed.add(id);
             });
+            var owningGroup = node.closest("details.chat-tool-group[data-assistant-run-id]");
+            if (owningGroup) { changed.add(owningGroup.getAttribute("data-assistant-run-id")); }
           });
         });
+        changed.forEach(reconcileRun);
       }).observe(document.body, { childList: true, subtree: true });
     })();
   </script>
@@ -686,9 +764,13 @@
         var header = message.querySelector(":scope > .chat-header");
         var meta = header && header.querySelector(":scope > .chat-meta");
         if (!meta) { return; }
-        var host = header.hidden ? message.querySelector(":scope > .chat-contents") : meta;
+        var host = header.hidden
+          ? message.querySelector(":scope > .chat-contents > .chat-tool-group-actions")
+            || message.querySelector(":scope > .chat-contents > .chat-tool-segment > .chat-tool-group-actions")
+            || message.querySelector(":scope > .chat-contents")
+          : meta;
         if (!host) { return; }
-        var existing = message.querySelector(":scope > .chat-header .inspect-gutter-btn, :scope > .chat-contents > .inspect-gutter-btn");
+        var existing = message.querySelector(":scope > .chat-header .inspect-gutter-btn, :scope > .chat-contents > .inspect-gutter-btn, :scope > .chat-contents > .chat-tool-group-actions > .inspect-gutter-btn, :scope > .chat-contents > .chat-tool-segment > .chat-tool-group-actions > .inspect-gutter-btn");
         if (!target) {
           if (existing) { existing.remove(); }
           return;
@@ -763,9 +845,13 @@
         var header = message.querySelector(":scope > .chat-header");
         var meta = header && header.querySelector(":scope > .chat-meta");
         if (!meta) { return; }
-        var host = header.hidden ? message.querySelector(":scope > .chat-contents") : meta;
+        var host = header.hidden
+          ? message.querySelector(":scope > .chat-contents > .chat-tool-group-actions")
+            || message.querySelector(":scope > .chat-contents > .chat-tool-segment > .chat-tool-group-actions")
+            || message.querySelector(":scope > .chat-contents")
+          : meta;
         if (!host) { return; }
-        var existing = message.querySelector(":scope > .chat-header .usage-gutter-btn, :scope > .chat-contents > .usage-gutter-btn");
+        var existing = message.querySelector(":scope > .chat-header .usage-gutter-btn, :scope > .chat-contents > .usage-gutter-btn, :scope > .chat-contents > .chat-tool-group-actions > .usage-gutter-btn, :scope > .chat-contents > .chat-tool-segment > .chat-tool-group-actions > .usage-gutter-btn");
         if (!marker) {
           if (existing) { existing.remove(); }
           return;
