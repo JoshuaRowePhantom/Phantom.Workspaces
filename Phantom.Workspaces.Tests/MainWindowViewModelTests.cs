@@ -629,6 +629,42 @@ public sealed class MainWindowViewModelTests
         Assert.Same(workspaceBVm, Assert.Single(entities, vm => vm.EntityId == workspaceB.ToString()));
     }
 
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task OpenViewTab_WhenQueryMembershipChanges_UpdatesTabAndPreservesSelection()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var broker = GetEntityBroker(viewModel);
+        var workspaceA = new EntityId("16220001-0000-4000-8000-000000000001");
+        var workspaceB = new EntityId("16220001-0000-4000-8000-000000000002");
+        var workspaceC = new EntityId("16220001-0000-4000-8000-000000000003");
+        var workspaceD = new EntityId("16220001-0000-4000-8000-000000000004");
+        await UpsertWorkspaceAsync(broker, workspaceA, "issue1622-a", "Issue1622 A");
+        await UpsertWorkspaceAsync(broker, workspaceB, "issue1622-b", "Issue1622 B");
+        var workspaces = Assert.Single(viewModel.TopLevelViews, view => view.Title == "Workspaces");
+        var originalSelection = viewModel.SelectedTopLevelView;
+        await viewModel.OpenViewTabAsync(workspaces.ViewEntity!);
+
+        var tab = Assert.IsType<ViewWorkspaceTabViewModel>(
+            Assert.Single(viewModel.SelectedWorkspacePane.Tabs, item => item.Id == workspaces.Id));
+        var entityA = Assert.Single(tab.Population.Entities, vm => vm.EntityId == workspaceA.ToString());
+        entityA.EntityCardNode.Card.IsSelected = true;
+        entityA.IsExpanded = false;
+        await UpsertWorkspaceAsync(broker, workspaceC, "issue1622-c", "Issue1622 C");
+        await WaitForEntityInCollectionAsync(tab.Population.Entities, workspaceC.ToString());
+        await UpsertWorkspaceAsync(broker, workspaceD, "issue1622-d", "Issue1622 D");
+        await WaitForEntityInCollectionAsync(tab.Population.Entities, workspaceD.ToString());
+
+        Assert.Same(entityA, Assert.Single(tab.Population.Entities, vm => vm.EntityId == workspaceA.ToString()));
+        Assert.True(entityA.EntityCardNode.Card.IsSelected);
+        Assert.False(entityA.IsExpanded);
+        Assert.Same(originalSelection, viewModel.SelectedTopLevelView);
+
+        viewModel.CloseTab(tab);
+        await tab.DisposeAsync();
+        Assert.True(tab.Population.CancellationToken.IsCancellationRequested);
+    }
+
     [AvaloniaFact]
     public async Task ViewPopulation_NoMembershipChange_DoesNotMutateCollectionStructure()
     {

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Threading;
@@ -9,13 +10,13 @@ using Avalonia.Threading;
 namespace Phantom.Workspaces.ViewModels;
 
 /// <summary>
-/// Holds all mutable state for one population run of the selected top-level view.
-/// A new instance is created each time <c>ApplySelectedViewAsync</c> starts;
-/// disposing the old instance cancels any in-flight work and releases broker subscriptions.
+/// Holds mutable state and subscriptions for one view host (left navigation or a view tab).
+/// Disposing the host's population cancels in-flight work and detaches live query observers.
 /// </summary>
 public sealed class ViewPopulationViewModel : IAsyncDisposable
 {
     private readonly CancellationTokenSource _cts = new();
+    internal SemaphoreSlim ReconcileGate { get; } = new(1, 1);
     private readonly List<SubscribedGet> _getSubscriptions = [];
     private readonly List<(SubscribedQuery Query, NotifyCollectionChangedEventHandler Handler)> _querySubscriptions = [];
 
@@ -60,7 +61,7 @@ public sealed class ViewPopulationViewModel : IAsyncDisposable
 
     private void NormalizeSelectionIfHidden()
     {
-        foreach (var entity in this.Entities)
+        foreach (var entity in this.Entities.ToArray())
         {
             if (!entity.IsVisible && entity.EntityCardNode.Card.IsSelected)
             {
@@ -79,18 +80,21 @@ public sealed class ViewPopulationViewModel : IAsyncDisposable
     /// marshaled to the UI thread and posted (rather than run inline) to rebuild the view after the
     /// broker's own collection mutation has completed.
     /// </summary>
-    internal void AddQuerySubscription(SubscribedQuery subscription, Func<Task> onResultsChanged)
+    internal void AddQuerySubscription(
+        SubscribedQuery subscription, Func<Task> onResultsChanged,
+        ViewPopulationViewModel? lifetimeOwner = null)
     {
+        var owner = lifetimeOwner ?? this;
         void Handler(object? sender, NotifyCollectionChangedEventArgs e)
         {
-            if (_cts.IsCancellationRequested)
+            if (owner._cts.IsCancellationRequested)
             {
                 return;
             }
 
             Dispatcher.UIThread.Post(() =>
             {
-                if (_cts.IsCancellationRequested)
+                if (owner._cts.IsCancellationRequested)
                 {
                     return;
                 }
@@ -120,11 +124,24 @@ public sealed class ViewPopulationViewModel : IAsyncDisposable
         _getSubscriptions.Clear();
     }
 
+    internal void AdoptSubscriptions(ViewPopulationViewModel candidate)
+    {
+        this.PrepareForIncrementalReconcile();
+        _getSubscriptions.AddRange(candidate._getSubscriptions);
+        _querySubscriptions.AddRange(candidate._querySubscriptions);
+        candidate._getSubscriptions.Clear();
+        candidate._querySubscriptions.Clear();
+    }
+
     public async ValueTask DisposeAsync()
     {
         await _cts.CancelAsync();
         DetachQuerySubscriptions();
         _getSubscriptions.Clear();
+        foreach (var entity in this.Entities)
+        {
+            await entity.DisposeAsync();
+        }
     }
 
     private void DetachQuerySubscriptions()

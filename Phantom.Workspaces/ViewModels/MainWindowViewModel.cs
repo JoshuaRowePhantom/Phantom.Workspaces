@@ -421,6 +421,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 _ = this.UpdateSelectedViewIncrementallyAsync(
                     changedEntityIds: null,
                     hasQueryMembershipChanges: true);
+                _ = this.RefreshViewTabsAsync(changedEntityIds: null, hasQueryMembershipChanges: true);
             }
         }
     }
@@ -1447,7 +1448,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         await previous.DisposeAsync();
 
-        await this.PopulateViewAsync(next);
+        await this.PopulateViewAsync(next, this.selectedTopLevelView ?? EmptyView);
     }
 
     /// <summary>
@@ -1460,8 +1461,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     {
         // A population that is no longer current (already replaced by a navigation) must not resurrect
         // itself; only the displayed population rebinds.
-        if (!ReferenceEquals(this.currentPopulation, population)
-            || population.CancellationToken.IsCancellationRequested)
+        if (population.CancellationToken.IsCancellationRequested)
         {
             return;
         }
@@ -1469,13 +1469,22 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         await this.UpdateSelectedViewIncrementallyAsync(
             changedEntityIds: null,
             hasQueryMembershipChanges: true,
-            targetPopulation: population);
+            targetPopulation: population,
+            view: this.GetViewForPopulation(population));
     }
+
+    private ViewDefinitionViewModel? GetViewForPopulation(ViewPopulationViewModel population) =>
+        ReferenceEquals(this.currentPopulation, population)
+            ? this.selectedTopLevelView
+            : this.WorkspacePanes.SelectMany(static pane => pane.Tabs)
+                .OfType<ViewWorkspaceTabViewModel>()
+                .FirstOrDefault(tab => ReferenceEquals(tab.Population, population))?.Definition;
 
     private async Task UpdateSelectedViewIncrementallyAsync(
         IReadOnlyCollection<EntityId>? changedEntityIds,
         bool hasQueryMembershipChanges,
-        ViewPopulationViewModel? targetPopulation = null)
+        ViewPopulationViewModel? targetPopulation = null,
+        ViewDefinitionViewModel? view = null)
     {
         // The broker raises Changed on a thread-pool thread (its refresh pipeline awaits with
         // ConfigureAwait(false)), so this reconcile can otherwise mutate view models and the broker's
@@ -1489,22 +1498,61 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 () => this.UpdateSelectedViewIncrementallyAsync(
                     changedEntityIds,
                     hasQueryMembershipChanges,
-                    targetPopulation));
-            return;
-        }
-
-        if ((this.selectedTopLevelView ?? EmptyView).IsEntityBrowser)
-        {
+                    targetPopulation,
+                    view));
             return;
         }
 
         var population = targetPopulation ?? this.currentPopulation;
-        if (!ReferenceEquals(this.currentPopulation, population)
-            || population.CancellationToken.IsCancellationRequested)
+        view ??= this.GetViewForPopulation(population);
+        if (view is null || view.IsEntityBrowser)
         {
             return;
         }
 
+        try
+        {
+            await population.ReconcileGate.WaitAsync(population.CancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        try
+        {
+            await this.ReconcileViewPopulationAsync(
+                population, view, changedEntityIds, hasQueryMembershipChanges);
+        }
+        finally
+        {
+            population.ReconcileGate.Release();
+        }
+    }
+
+    private async Task ReconcileViewPopulationAsync(
+        ViewPopulationViewModel population,
+        ViewDefinitionViewModel view,
+        IReadOnlyCollection<EntityId>? changedEntityIds,
+        bool hasQueryMembershipChanges)
+    {
+        if (population.CancellationToken.IsCancellationRequested
+            || (!ReferenceEquals(this.currentPopulation, population)
+                && this.GetViewForPopulation(population) is null))
+        {
+            return;
+        }
+
+        if (view.ViewEntity is { } viewEntity
+            && changedEntityIds?.Contains(viewEntity.EntityId) == true)
+        {
+            var latest = this.entityBroker?.GetEntity(viewEntity.EntityId);
+            if (latest is not null && !ReferenceEquals(latest, viewEntity))
+            {
+                viewEntity.UpdateSnapshot(latest.Snapshot);
+            }
+            hasQueryMembershipChanges = true;
+        }
         if (!hasQueryMembershipChanges)
         {
             this.RefreshPopulationEntityData(
@@ -1514,16 +1562,19 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         var candidate = new ViewPopulationViewModel();
-        await this.PopulateViewAsync(candidate);
+        await this.PopulateViewAsync(candidate, view,
+            () => this.RebindPopulationAsync(population), population);
 
-        if (!ReferenceEquals(this.currentPopulation, population)
-            || population.CancellationToken.IsCancellationRequested)
+        if (population.CancellationToken.IsCancellationRequested
+            || (!ReferenceEquals(this.currentPopulation, population)
+                && this.GetViewForPopulation(population) is null))
         {
             await candidate.DisposeAsync();
             return;
         }
 
-        this.ReconcilePopulationInPlace(population, candidate);
+        await this.ReconcilePopulationInPlaceAsync(population, candidate);
+        population.AdoptSubscriptions(candidate);
         await candidate.DisposeAsync();
     }
 
@@ -1557,10 +1608,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
     }
 
-    private void ReconcilePopulationInPlace(
+    private async Task ReconcilePopulationInPlaceAsync(
         ViewPopulationViewModel population,
         ViewPopulationViewModel candidate)
     {
+        var previousEntities = population.Entities.ToArray();
         var existingByEntityId = population.Entities
             .GroupBy(static entity => entity.EntityId, StringComparer.Ordinal)
             .ToDictionary(static group => group.Key, static group => group.First(), StringComparer.Ordinal);
@@ -1576,6 +1628,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         ObservableCollectionReconciler.Merge(population.RootEntities, desiredRoots, static entity => entity.EntityId);
         ObservableCollectionReconciler.Merge(population.Entities, desiredEntities, static entity => entity.EntityId);
+        foreach (var removed in previousEntities.Concat(candidate.Entities).Except(desiredEntities))
+        {
+            await removed.DisposeAsync();
+        }
+        candidate.Entities.Clear();
         population.ReapplyFindAfterAssembly();
     }
 
@@ -1630,15 +1687,20 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         this.ProjectEntityBadges(existing.Entity);
         existing.RefreshFromEntity();
+        this.RegisterCardNode(existing.Entity, existing.EntityCardNode);
         return existing;
     }
 
-    private async Task PopulateViewAsync(ViewPopulationViewModel next)
+    private async Task PopulateViewAsync(
+        ViewPopulationViewModel next,
+        ViewDefinitionViewModel selectedView,
+        Func<Task>? onResultsChanged = null,
+        ViewPopulationViewModel? subscriptionOwner = null)
     {
-        var selectedView = this.selectedTopLevelView ?? EmptyView;
+        var isLeftView = ReferenceEquals(next, this.currentPopulation);
         if (string.Equals(selectedView.Id, EmptyView.Id, StringComparison.Ordinal))
         {
-            this.StickyParentContextText = string.Empty;
+            if (isLeftView) this.StickyParentContextText = string.Empty;
             return;
         }
 
@@ -1647,7 +1709,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         if (selectedView.IsEntityBrowser)
         {
             await this.OpenEntityBrowserTabAsync();
-            this.StickyParentContextText = string.Empty;
+            if (isLeftView) this.StickyParentContextText = string.Empty;
             return;
         }
 
@@ -1655,13 +1717,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         if (selectedView.ViewEntity is not SubscribedEntityViewModel selectedViewEntity)
         {
-            this.StickyParentContextText = selectedView.Title;
+            if (isLeftView) this.StickyParentContextText = selectedView.Title;
             return;
         }
 
         if (selectedViewEntity.Snapshot.Data is not JsonElement selectedViewData)
         {
-            this.StickyParentContextText = selectedView.Title;
+            if (isLeftView) this.StickyParentContextText = selectedView.Title;
             return;
         }
 
@@ -1671,6 +1733,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         if (associatedNoteEntity is not null)
         {
             var viewEntity = await this.CreateViewEntityViewModelAsync(associatedNoteEntity, indentLevel: 0, isParentContext: true);
+            if (next.CancellationToken.IsCancellationRequested)
+            {
+                await viewEntity.DisposeAsync();
+                return;
+            }
             next.Entities.Add(viewEntity);
             next.RootEntities.Add(viewEntity);
         }
@@ -1690,6 +1757,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                     && subViewEntity is not null)
                 {
                     var viewEntity = await this.CreateViewEntityViewModelAsync(subViewEntity, indentLevel: 0);
+                    if (next.CancellationToken.IsCancellationRequested)
+                    {
+                        await viewEntity.DisposeAsync();
+                        return;
+                    }
                     next.Entities.Add(viewEntity);
                     next.RootEntities.Add(viewEntity);
                     continue;
@@ -1706,7 +1778,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
                 if (TryReadSubViewQueryRequest(subView, this.interestCatalog, out var queryRequest))
                 {
-                    var queryEntities = await this.LoadQuerySubViewEntitiesAsync(next, queryRequest);
+                    var queryEntities = await this.LoadQuerySubViewEntitiesAsync(
+                        next, queryRequest, onResultsChanged ?? (() => this.RebindPopulationAsync(next)),
+                        subscriptionOwner);
                     if (next.CancellationToken.IsCancellationRequested) return;
                     await this.AddSubViewEntitiesWithHierarchyAsync(next, queryEntities);
                     if (next.CancellationToken.IsCancellationRequested) return;
@@ -1716,7 +1790,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         if (next.CancellationToken.IsCancellationRequested) return;
 
-        this.StickyParentContextText = $"Parent Context: {selectedView.Title}";
+        if (isLeftView) this.StickyParentContextText = $"Parent Context: {selectedView.Title}";
     }
 
     private async Task LoadSubViewEntitiesAsync(
@@ -1762,7 +1836,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private async Task<IReadOnlyList<SubscribedEntityViewModel>> LoadQuerySubViewEntitiesAsync(
         ViewPopulationViewModel population,
-        QueryRequest queryRequest)
+        QueryRequest queryRequest,
+        Func<Task> onResultsChanged,
+        ViewPopulationViewModel? subscriptionOwner)
     {
         // Exclude not-interesting targets at the query level (via a join) unless the user opts to show
         // hidden items.
@@ -1774,7 +1850,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         // every view (query, get, or get-entity) always requests every interest relationship type. No
         // additional WithInterestRelationships call is needed here.
         var subscribedQuery = await this.EntityBroker.SubscribeQueryAsync(effectiveQuery);
-        population.AddQuerySubscription(subscribedQuery, () => this.RebindPopulationAsync(population));
+        population.AddQuerySubscription(subscribedQuery, onResultsChanged, subscriptionOwner);
 
         if (subscribedQuery.Results.Count == 0)
         {
@@ -1922,6 +1998,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.cardNodesByEntity.AddOrUpdate(entity, cardNode);
     }
 
+    internal void UnregisterCardNode(SubscribedEntityViewModel entity, EntityListNodeViewModel cardNode)
+    {
+        if (this.cardNodesByEntity.TryGetValue(entity, out var registered)
+            && ReferenceEquals(registered, cardNode))
+        {
+            this.cardNodesByEntity.Remove(entity);
+        }
+    }
+
     /// <summary>Finds the card node currently rendering the supplied entity, if any.</summary>
     public EntityListNodeViewModel? FindCardNode(SubscribedEntityViewModel entity)
     {
@@ -2045,6 +2130,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var hierarchy = await new ViewHierarchyAssembler(this.EntityBroker).AssembleAsync(rootEntities);
         foreach (var node in hierarchy)
         {
+            if (population.CancellationToken.IsCancellationRequested) return;
             await this.AddHierarchyNodeAsync(population, node, indentLevel: 0);
         }
 
@@ -2057,10 +2143,16 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         int indentLevel,
         ViewEntityViewModel? parent = null)
     {
+        if (population.CancellationToken.IsCancellationRequested) return;
         ViewEntityViewModel? vm = null;
         if (!node.IsAncestorGroup)
         {
             vm = await this.CreateViewEntityViewModelAsync(node.Entity!, indentLevel, isExpanded: node.IsExpanded);
+            if (population.CancellationToken.IsCancellationRequested)
+            {
+                await vm.DisposeAsync();
+                return;
+            }
             if (node.Children.Count > 0)
             {
                 vm.HasTraversedChildren = true;
@@ -2134,6 +2226,26 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             _ = this.UpdateSelectedViewIncrementallyAsync(
                 e.ChangedEntityIds,
                 e.HasQueryMembershipChanges);
+            _ = this.RefreshViewTabsAsync(e.ChangedEntityIds, e.HasQueryMembershipChanges);
+        }
+    }
+
+    private async Task RefreshViewTabsAsync(
+        IReadOnlyCollection<EntityId>? changedEntityIds,
+        bool hasQueryMembershipChanges)
+    {
+        if (!Dispatcher.UIThread.CheckAccess())
+        {
+            await Dispatcher.UIThread.InvokeAsync(
+                () => this.RefreshViewTabsAsync(changedEntityIds, hasQueryMembershipChanges));
+            return;
+        }
+
+        foreach (var tab in this.WorkspacePanes.SelectMany(static pane => pane.Tabs)
+            .OfType<ViewWorkspaceTabViewModel>().ToArray())
+        {
+            _ = this.UpdateSelectedViewIncrementallyAsync(
+                changedEntityIds, hasQueryMembershipChanges, tab.Population, tab.Definition);
         }
     }
 
@@ -2601,6 +2713,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
+        if (subscribedEntity.IsEntityType("view"))
+        {
+            await this.OpenViewTabAsync(subscribedEntity, focus);
+            return;
+        }
+
         await this.OpenTabAsync(
             new EntityWorkspaceTabViewModel(this.EntityBroker, this.entityTypeViewCatalog, this)
             {
@@ -2609,6 +2727,61 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 Entity = subscribedEntity,
             },
             focus: focus);
+    }
+
+    internal async Task<ViewWorkspaceTabViewModel> CreateViewTabAsync(
+        SubscribedEntityViewModel entity,
+        string? tabId = null,
+        string? title = null,
+        string? dockRegion = null)
+    {
+        var definition = CreateTopLevelView(entity);
+        var tab = new ViewWorkspaceTabViewModel(this, definition)
+        {
+            Id = tabId ?? entity.EntityId.ToString(),
+            Title = title ?? definition.Title,
+            Entity = entity,
+            DockRegion = dockRegion ?? "full",
+        };
+        await this.PopulateViewAsync(
+            tab.Population, definition, () => this.RebindPopulationAsync(tab.Population));
+        return tab;
+    }
+
+    internal async Task OpenViewTabAsync(SubscribedEntityViewModel entity, bool focus = true)
+    {
+        var existing = this.WorkspacePanes.SelectMany(static pane => pane.Tabs)
+            .OfType<ViewWorkspaceTabViewModel>()
+            .FirstOrDefault(tab => tab.Entity?.EntityId == entity.EntityId);
+        if (existing is not null)
+        {
+            await this.OpenTabAsync(existing, focus: focus, workspacePaneId: existing.WorkspacePaneId);
+            return;
+        }
+
+        var legacyRawTab = this.WorkspacePanes.SelectMany(static pane => pane.Tabs)
+            .OfType<EntityWorkspaceTabViewModel>()
+            .FirstOrDefault(tab => tab.Entity?.EntityId == entity.EntityId
+                && tab.Id == entity.EntityId.ToString());
+        if (legacyRawTab is not null)
+        {
+            this.CloseTab(legacyRawTab);
+        }
+
+        await this.OpenTabAsync(await this.CreateViewTabAsync(entity), focus: focus);
+    }
+
+    internal async Task OpenViewDefinitionAsync(ViewWorkspaceTabViewModel viewTab)
+    {
+        await this.OpenTabAsync(
+            new EntityWorkspaceTabViewModel(this.EntityBroker, this.entityTypeViewCatalog, this)
+            {
+                Id = $"view-definition-{viewTab.Entity!.EntityId}",
+                Title = $"Edit definition: {viewTab.Title}",
+                Entity = viewTab.Entity,
+            },
+            insertAfterTabId: viewTab.Id,
+            workspacePaneId: viewTab.WorkspacePaneId);
     }
 
     public async Task OpenTabAsync(WorkspaceTabViewModel tab, string? insertAfterTabId = null, bool focus = true, string? workspacePaneId = null)
@@ -3556,6 +3729,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                             !string.IsNullOrEmpty(entityDesc.Title) ? entityDesc.Title :
                             !string.IsNullOrEmpty(entity.DisplayName) ? entity.DisplayName :
                             entity.EntityId.Value.ToString();
+                        if (entity.IsEntityType("view")
+                            && !tabId.StartsWith("view-definition-", StringComparison.Ordinal))
+                        {
+                            var viewTab = await this.CreateViewTabAsync(entity, tabId, restoredTitle);
+                            viewTab.IsTitleExplicit = entityDesc.IsTitleExplicit;
+                            return viewTab;
+                        }
                         return new EntityWorkspaceTabViewModel(this.EntityBroker, this.entityTypeViewCatalog, this)
                         {
                             Id = tabId,

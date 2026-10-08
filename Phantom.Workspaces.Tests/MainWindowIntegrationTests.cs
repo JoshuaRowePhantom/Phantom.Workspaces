@@ -955,6 +955,122 @@ public sealed class MainWindowIntegrationTests
             static entity => string.Equals(entity.EntityType, "view", StringComparison.Ordinal));
     }
 
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task OpenViewTab_SubViewsAndRelatedEntities_ShowsSameHierarchyAsSelectedView()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var sessions = Assert.Single(viewModel.TopLevelViews, view => view.Title == "Sessions");
+        viewModel.SelectedTopLevelView = sessions;
+        var apply = typeof(MainWindowViewModel).GetMethod(
+            "ApplySelectedViewAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        await (Task)apply.Invoke(viewModel, [])!;
+
+        var leftPopulation = viewModel.CurrentViewPopulation;
+        var tab = await viewModel.CreateViewTabAsync(sessions.ViewEntity!);
+
+        Assert.NotSame(leftPopulation, tab.Population);
+        Assert.Equal(
+            leftPopulation.RootEntities.Select(node => node.EntityId),
+            tab.Population.RootEntities.Select(node => node.EntityId));
+        Assert.Contains(tab.Population.Entities, node => node.EntityType == "agent-manifest");
+        Assert.All(tab.Population.Entities,
+            node => Assert.Empty(node.EntityCardNode.Card.FieldEditors));
+        Assert.Same(sessions, viewModel.SelectedTopLevelView);
+        Assert.Same(leftPopulation, viewModel.CurrentViewPopulation);
+        await tab.DisposeAsync();
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task OpenEntityShortcutHandler_ViewEntity_OpensPopulatedViewTab_AndDefinitionAction()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var selected = viewModel.SelectedTopLevelView;
+        var sessions = Assert.Single(viewModel.TopLevelViews, view => view.Title == "Sessions");
+        var handler = new OpenEntityShortcutHandler();
+
+        Assert.True(await handler.Handle(viewModel, Shortcut.Open, sessions.ViewEntity!));
+        var tab = Assert.IsType<ViewWorkspaceTabViewModel>(
+            Assert.Single(viewModel.SelectedWorkspacePane.Tabs,
+                item => item.Id == sessions.Id));
+        Assert.NotEmpty(tab.Population.Entities);
+        Assert.Same(selected, viewModel.SelectedTopLevelView);
+
+        await handler.Handle(viewModel, Shortcut.Open, sessions.ViewEntity!);
+        Assert.Single(viewModel.SelectedWorkspacePane.Tabs, item => item.Id == sessions.Id);
+
+        tab.EditDefinitionCommand.Execute(null);
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+        Assert.Contains(viewModel.SelectedWorkspacePane.Tabs,
+            item => item is EntityWorkspaceTabViewModel
+                && item.Id == $"view-definition-{sessions.Id}");
+        Assert.Null(await handler.TryCreateTabForRestoreAsync(
+            viewModel, sessions.ViewEntity!,
+            $"view-definition-{sessions.Id}", "Edit definition", "full"));
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task OpenViewTab_RestoreAndClose_RestoresPopulationAndDisposesSubscriptions()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var sessions = Assert.Single(viewModel.TopLevelViews, view => view.Title == "Sessions");
+        var handler = new OpenEntityShortcutHandler();
+        var restored = Assert.IsType<ViewWorkspaceTabViewModel>(
+            await handler.TryCreateTabForRestoreAsync(viewModel, sessions.ViewEntity!,
+                "saved-view-tab", "My sessions", "full"));
+        Assert.Equal("saved-view-tab", restored.Id);
+        Assert.Equal("My sessions", restored.Title);
+        Assert.Contains(restored.Population.Entities, node => node.EntityType == "agent-manifest");
+
+        await viewModel.OpenTabAsync(restored);
+        await handler.Handle(viewModel, Shortcut.Open, sessions.ViewEntity!);
+        Assert.Same(restored, Assert.Single(viewModel.SelectedWorkspacePane.Tabs,
+            tab => tab is ViewWorkspaceTabViewModel viewTab
+                && viewTab.Entity?.EntityId == sessions.ViewEntity!.EntityId));
+
+        viewModel.CloseTab(restored);
+        await restored.DisposeAsync();
+        Assert.True(restored.Population.CancellationToken.IsCancellationRequested);
+    }
+
+    [AvaloniaFact(Timeout = 45_000)]
+    public async Task OpenViewTab_DockDescriptorRestore_RepopulatesView()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var sessions = Assert.Single(viewModel.TopLevelViews, view => view.Title == "Sessions");
+        await viewModel.OpenViewTabAsync(sessions.ViewEntity!);
+        var pane = viewModel.SelectedWorkspacePane;
+        var dock = FindDocumentDockIn(pane.ContentLayout!);
+        await WaitForWorkspaceTabAsync(dock!, sessions.Id);
+
+        var serializer = new DockSerializer(
+            typeof(System.Collections.ObjectModel.ObservableCollection<>),
+            new WorkspaceDockTypeInfoResolver());
+        var dockLayoutJson = serializer.Serialize(pane.ContentLayout!);
+        var broker = GetEntityBroker(viewModel);
+        var workspaceId = new EntityId("16220002-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(broker, workspaceId, $$"""
+            {
+              "entity-id": "16220002-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "View Tab Restore Workspace" },
+              "dock-layout": {{dockLayoutJson}},
+              "regions": []
+            }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+        var restoredPane = Assert.Single(viewModel.WorkspacePanes,
+            candidate => candidate.Id == workspaceId.ToString());
+        await WaitForPanePopulatedAsync(restoredPane);
+        var restored = Assert.IsType<ViewWorkspaceTabViewModel>(
+            Assert.Single(restoredPane.Tabs, tab => tab.Id == sessions.Id));
+        Assert.Contains(restored.Population.Entities, node => node.EntityType == "agent-manifest");
+        Assert.NotSame(pane.Tabs.First(tab => tab.Id == sessions.Id), restored);
+    }
+
     [AvaloniaFact(Timeout = 15_000)]
     public async Task ViewEntityViewModel_TraversedEntitiesCollapsed_WhenDispositionIsCollapsed()
     {

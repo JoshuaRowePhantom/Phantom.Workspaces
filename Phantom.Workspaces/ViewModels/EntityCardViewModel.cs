@@ -46,6 +46,7 @@ public sealed class EntityCardViewModel : ViewModelBase
     private ShortcutManager? shortcutManager;
     private IReadOnlyList<EntityShortcutViewModel> shortcuts = Array.Empty<EntityShortcutViewModel>();
     private CancellationTokenSource? shortcutResolutionCts;
+    private int disposed;
     // Issue #1177: field editors are built lazily on first realization instead of eagerly in the
     // constructor. This flag guards EnsureFieldEditorsBuilt so the build is scheduled at most once,
     // and it also gates the snapshot-change rebuild so unrealized cards do not re-launch schema work
@@ -59,6 +60,24 @@ public sealed class EntityCardViewModel : ViewModelBase
     // it is invoked by BuildFieldEditorsAsync instead of the FieldEditorFactory path so the entity
     // browser can defer its own FieldTypeResolver-based schema work until the card is realized.
     private Func<CancellationToken, Task<IReadOnlyCollection<EntityFieldEditorViewModel>>>? lazyFieldEditorBuilder;
+
+    public override async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref this.disposed, 1) != 0)
+        {
+            return;
+        }
+
+        if (this.entity is not null)
+        {
+            this.entity.PropertyChanged -= this.OnEntityPropertyChanged;
+        }
+
+        this.shortcutResolutionCts?.Cancel();
+        await base.DisposeAsync();
+        this.shortcutResolutionCts?.Dispose();
+        this.shortcutResolutionCts = null;
+    }
 
     public EntityCardViewModel(
         SubscribedEntityViewModel entity,
