@@ -708,6 +708,8 @@ public sealed class ChatOutputBrowserIntegrationTests
         => this.fixture.InvokeAsync(async () =>
         {
             var (web, window) = await ShowReadyBrowserAsync();
+            var messages = new List<string>();
+            web.JavaScriptMessageReceived += (_, body) => messages.Add(body);
             try
             {
                 var content = ChatOutputHtmlRenderer.RenderContent(
@@ -719,7 +721,7 @@ public sealed class ChatOutputBrowserIntegrationTests
                     "suppressed",
                     "assistant",
                     [("suppressed-c0", content),
-                     ("suppressed-usage", "<div class=\"chat-content chat-usage\" data-usage-inspect-target id=\"suppressed-usage\"></div>")],
+                     ("suppressed-usage", "<div class=\"chat-content chat-usage\" data-usage-inspect-target data-details-target=\"usage payload\" id=\"suppressed-usage\"></div>")],
                     suppressRoleHeader: true);
                 web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
                     "chat-history-container",
@@ -735,6 +737,16 @@ public sealed class ChatOutputBrowserIntegrationTests
                     + "&&!!c.querySelector(':scope > .usage-gutter-btn')"
                     + "&&!!c.querySelector('[data-copy-target]');})()");
                 Assert.Contains("true", result, StringComparison.Ordinal);
+                var activated = await EvalAsync(web,
+                    "(function(){var m=document.getElementById('suppressed');"
+                    + "var c=m.querySelector(':scope > .chat-contents');"
+                    + "c.querySelector(':scope > .inspect-gutter-btn').click();"
+                    + "c.querySelector(':scope > .usage-gutter-btn').click();"
+                    + "return m.querySelector(':scope > .chat-header').hidden;})()");
+                Assert.Contains("true", activated, StringComparison.Ordinal);
+                Assert.Contains(messages, body => body.Contains("\"contentId\":\"suppressed-c0\"", StringComparison.Ordinal));
+                Assert.Contains(messages, body => body.Contains("\"contentId\":\"suppressed-usage\"", StringComparison.Ordinal)
+                    && body.Contains("usage payload", StringComparison.Ordinal));
             }
             finally
             {
