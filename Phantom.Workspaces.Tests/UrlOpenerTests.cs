@@ -44,6 +44,24 @@ public sealed class UrlOpenerTests
     }
 
     [Fact]
+    public async Task CreateDefault_LauncherReturnsTrue_DoesNotUseShellFallback()
+    {
+        var tabs = new FakeTabService();
+        var launched = new List<Uri>();
+        var shellUrls = new List<string>();
+        var opener = UrlOpener.CreateDefault(tabs, () => null,
+            launchUri: uri => { launched.Add(uri); return Task.FromResult(true); },
+            shellLauncher: url => { shellUrls.Add(url); return Task.CompletedTask; });
+
+        await opener.OpenAsync(new OpenUrlRequest("mailto:someone@example.com"), TestContext.Current.CancellationToken);
+
+        Assert.Equal("mailto:someone@example.com", Assert.Single(launched).OriginalString);
+        Assert.Empty(shellUrls);
+        Assert.Empty(tabs.OpenedTabs);
+        Assert.Empty(tabs.TryFocusUrls);
+    }
+
+    [Fact]
     public async Task CreateDefault_LauncherReturnsFalse_FallsBackToShell()
     {
         var urls = new List<string>();
