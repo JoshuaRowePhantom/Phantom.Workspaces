@@ -830,6 +830,41 @@ public sealed class AgentViewModelSubAgentBrowserTests
             view.SelectedEditorItem!.DetailContent);
     }
 
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NavigateToAgent_UnloadedRemoteNestedChild_OpensDirectLink(bool useSessionId)
+    {
+        var parent = await CreateChatAsync();
+        var child = await CreateChatAsync();
+        var nested = await CreateChatAsync();
+        AddRemoteChild(child, "nested-alias", nested.AgentSessionId);
+        AddRemoteChild(parent, "child-alias", child.AgentSessionId,
+            nested: [new RemoteChildItem("nested-alias", nested.AgentSessionId, AgentChatCompletionState.Succeeded)]);
+        var requests = new List<string>();
+        using var logger = new ObservableLoggerFactory();
+        await using var view = new AgentViewModel(new AgentViewModelOptions
+        {
+            AgentChat = parent, DisplayName = "Parent", Description = "",
+            LoggerFactory = logger, ForegroundScheduler = TaskScheduler.FromCurrentSynchronizationContext(),
+            RemoteChildResolver = (chat, id, _) =>
+            {
+                requests.Add(id);
+                return Task.FromResult<IAgentChat>(ReferenceEquals(chat, parent) ? child : nested);
+            },
+        });
+
+        view.NavigateToAgent(useSessionId ? nested.AgentSessionId : "nested-alias");
+        await view.WaitForRemoteNavigationAsync();
+
+        Assert.Equal(["child-alias", "nested-alias"], requests);
+        var childView = Assert.Single(view.SubAgentsContainer.Slots).SubAgentViewModel;
+        var nestedView = Assert.Single(childView.SubAgentsContainer.Slots).SubAgentViewModel;
+        Assert.Equal("sub-agent-nested-alias", view.SelectedEditorItem?.Id);
+        Assert.Same(nested.History, nestedView.History);
+        Assert.Same(nestedView.ConversationDetail, view.SelectedEditorItem?.DetailContent);
+    }
+
     [AvaloniaFact]
     public async Task AgentViewModel_RemoteChildIdentityReplacement_ReattachesInsteadOfShowingStaleTranscript()
     {
@@ -890,22 +925,25 @@ public sealed class AgentViewModelSubAgentBrowserTests
 
     private static void AddRemoteChild(
         AgentChat parent, string agentId, string sessionId,
-        AgentChatCompletionState state = AgentChatCompletionState.Running)
+        AgentChatCompletionState state = AgentChatCompletionState.Running,
+        IReadOnlyList<IRunningSubAgent>? nested = null)
     {
         var field = typeof(AgentChat).GetField("subAgentItems",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
         var collection = (System.Collections.ObjectModel.ObservableCollection<IRunningSubAgent>)field!.GetValue(parent)!;
-        collection.Add(new RemoteChildItem(agentId, sessionId, state));
+        collection.Add(new RemoteChildItem(agentId, sessionId, state, nested));
     }
 
-    private sealed record RemoteChildItem(string AgentId, string AgentSessionId, AgentChatCompletionState CompletionState)
+    private sealed record RemoteChildItem(
+        string AgentId, string AgentSessionId, AgentChatCompletionState CompletionState,
+        IReadOnlyList<IRunningSubAgent>? Children = null)
         : IRemoteSubagentReference
     {
         public string DisplayName => AgentId;
         public string Description => "";
         public string Name => AgentId;
         public DateTime LastUpdatedAt => DateTime.UtcNow;
-        public IReadOnlyList<IRunningSubAgent> SubAgents => [];
+        public IReadOnlyList<IRunningSubAgent> SubAgents => Children ?? [];
     }
 
     private static AgentDefinition CreateAgentDefinition()

@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
+using MongoDB.Bson;
 using GitHub.Copilot;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Web.Client;
@@ -39,7 +40,8 @@ internal static class Program
 {
     private static async Task<int> Main(string[] args)
     {
-        if (args.Length != 9 || args[0] is not ("worker" or "caller" or "worker-failure" or "caller-failure"))
+        if (args.Length != 9 || args[0] is not (
+            "worker" or "caller" or "worker-failure" or "caller-failure" or "worker-child" or "caller-child"))
             return 2;
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
         using var loggerFactory = LoggingBootstrap.CreateLoggerFactory(
@@ -60,12 +62,12 @@ internal static class Program
             using var data = new WebClientDataAccessLayer(args[1], http);
             var startupFailure = args[0].EndsWith("-failure", StringComparison.Ordinal);
             if (args[0].StartsWith("worker", StringComparison.Ordinal))
-                await RunWorkerAsync(data, session, args[1], args[5],
-                    loggerFactory, value => stage = value, startupFailure, timeout.Token);
+                await RunWorkerAsync(data, session, args[4], args[1], args[5],
+                    loggerFactory, value => stage = value, startupFailure, args[0] == "worker-child", timeout.Token);
             else
                 await RunCallerAsync(session, args[4], args[1], args[5],
                     new EntityId(args[6]), args[7], loggerFactory, value => stage = value,
-                    startupFailure, timeout.Token);
+                    startupFailure, args[0] == "caller-child", timeout.Token);
             return 0;
         }
         catch (Exception error)
@@ -78,17 +80,18 @@ internal static class Program
     }
 
     private static async Task RunWorkerAsync(
-        IDataAccessLayer data, WorkspaceEntitySession session, string hubUrl,
+        IDataAccessLayer data, WorkspaceEntitySession session, string sessionId, string hubUrl,
         string liveUrl, ILoggerFactory loggerFactory, Action<string> reportStage,
-        bool startupFailure, CancellationToken ct)
+        bool startupFailure, bool childAttachment, CancellationToken ct)
     {
         reportStage("worker-registration");
         var chatClient = new DeterministicTestChatClient();
         var response = chatClient.EnqueueStreamingResponse();
         response.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "worker-response"));
         response.Complete();
+        var persistence = new InMemoryAgentPersistenceStore();
         await using var factory = new AgentChatFactory(
-            new InMemoryAgentPersistenceStore(),
+            persistence,
             new AgentServices { ChatClientOverride = chatClient },
             TaskScheduler.Default);
         var chats = new RunningAgentChatTable(factory);
@@ -150,6 +153,14 @@ internal static class Program
                 Console.WriteLine("TURN worker");
                 continue;
             }
+            if (command == "PREPARE-CHILD" && childAttachment)
+            {
+                reportStage("worker-child-preparation");
+                var childId = await PrepareChildAsync(
+                    data, session, sessionId, chats, persistence, ct);
+                Console.WriteLine("CHILD ready " + childId);
+                continue;
+            }
             if (command != "RENEW")
                 throw new InvalidOperationException("Unexpected fixture command.");
             reportStage("worker-route-renewal");
@@ -161,10 +172,89 @@ internal static class Program
         }
     }
 
+    private static async Task<string> PrepareChildAsync(
+        IDataAccessLayer data, WorkspaceEntitySession session, string sessionId,
+        RunningAgentChatTable chats, InMemoryAgentPersistenceStore persistence, CancellationToken ct)
+    {
+        var rootId = new AgentSessionId(sessionId);
+        if (!chats.RunningSessions.Any(item => item.SessionId == rootId))
+            throw new InvalidOperationException("The remote parent has not started on the worker.");
+        await using var lease = await chats.AcquireAsync(new AcquireAgentChatRequest
+        {
+            AgentSessionId = rootId,
+            EntityName = sessionId,
+        }, ct);
+        var owner = lease.AgentChat as AgentChat
+            ?? throw new InvalidOperationException("The worker parent is not a local chat.");
+        var definition = PhantomAgentSchema.AgentDefinitionFromJson(
+            """
+            {"kind":"prompt","name":"fixture-child","model":{"id":"echo","provider":"echo","apiType":"Echo"},
+             "instructions":"Fixture child transcript.","tools":[]}
+            """);
+        await owner.GetOrCreateAsync("fixture-child", definition, "fixture-child-tool", ct);
+        var child = owner.SubAgents.OfType<AgentChat>().Single(item => item.AgentId == "fixture-child");
+        var childId = child.AgentSessionId;
+        await persistence.StoreAsync(new StoreRequestAgent
+        {
+            Agent = new PersistedAgent
+            {
+                AgentSessionId = childId,
+                AgentDefinitionJson = BsonDocument.Parse(definition.ToJson()),
+            },
+            NewMessages =
+            [
+                new ChatMessage(ChatRole.User, "child persisted question"),
+                new ChatMessage(ChatRole.Assistant, "child persisted answer"),
+            ],
+        }, ct);
+        var parent = await data.QueryAsync(new QueryRequest
+        {
+            Clauses = [new TopLevelQueryClause
+            {
+                ClauseIdentifier = new QueryClauseIdentifier("sessions"),
+                Clause = new EntityTypeQueryClause { EntityTypeNames = new EntityTypeNameSet(["agent-session"]) },
+            }],
+            Timestamps = [null],
+        }, ct);
+        var root = parent.Batches.SelectMany(batch => batch.Entities)
+            .Single(item => item.Data is JsonElement value
+                && value.GetProperty("agent-session-id").GetString() == sessionId);
+        var source = ((JsonElement)root.Data!).GetProperty("agent-source-entity-id").GetString()
+            ?? throw new InvalidOperationException("The parent source entity is missing.");
+        var childEntity = AgentSessionEntityFactory.CreateEntityData(new CreateAgentSessionEntityDataRequest
+        {
+            AgentDefinitionEntityId = new EntityId(source),
+            AgentDisplayName = "Fixture child",
+            AgentSessionId = childId,
+            AgentSessionNames = [new EntityName("tests", "sessions", childId)],
+            CurrentTime = DateTimeOffset.UtcNow,
+            ComputerName = "worker",
+            HostProfileEntityId = session.UserComputerProfileEntityId,
+            ParameterValues = new Dictionary<string, string>(),
+        });
+        var update = await data.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata
+            {
+                Comment = new Markdown { Text = "Seed fixture child session." },
+            },
+            Changes = [new EntityChange
+            {
+                EntityId = new EntityId(childEntity.GetProperty("entity-id").GetString()!),
+                EntityChangeMode = EntityChangeMode.Replace,
+                Data = childEntity,
+            }],
+        }, ct);
+        if (update.EntityResults.Any(item => item.UpdateState == UpdateState.Failed))
+            throw new InvalidOperationException("The fixture child was not persisted.");
+        return childId;
+    }
+
     private static async Task RunCallerAsync(
         WorkspaceEntitySession session, string sessionId,
         string dataEndpoint, string listenUrl, EntityId workerProfile, string repositoryPath,
-        ILoggerFactory loggerFactory, Action<string> reportStage, bool startupFailure, CancellationToken ct)
+        ILoggerFactory loggerFactory, Action<string> reportStage,
+        bool startupFailure, bool childAttachment, CancellationToken ct)
     {
         reportStage("caller-live-ingress");
         await using var liveHub = new ReverseHttpServerTransportFactory(
@@ -213,7 +303,7 @@ internal static class Program
             {
                 await RunCallerTabAsync(
                     session, sessionId, repositoryPath, dataEndpoint, loggerFactory, reportStage,
-                    workerProfile, startupFailure, ct);
+                    workerProfile, startupFailure, childAttachment, ct);
                 finished.TrySetResult();
             }
             catch (Exception error)
@@ -232,7 +322,7 @@ internal static class Program
     private static async Task RunCallerTabAsync(
         WorkspaceEntitySession session, string sessionId, string repositoryPath, string dataEndpoint,
         ILoggerFactory loggerFactory, Action<string> reportStage,
-        EntityId workerProfile, bool startupFailure, CancellationToken ct)
+        EntityId workerProfile, bool startupFailure, bool childAttachment, CancellationToken ct)
     {
         await using var factory = new AgentChatFactory(
             new InMemoryAgentPersistenceStore(), new AgentServices(),
@@ -273,16 +363,16 @@ internal static class Program
                 && value.GetProperty("agent-session-id").GetString() == sessionId);
         reportStage("caller-persisted-session-load");
         var entity = (await window.EntityBroker.GetEntitiesAsync([persisted.EntityId], ct)).Single();
-        var stalled = new OneShotStalledProfileRegistry(
-            window.TransportComposition?.TransportFactoryRegistry
-                ?? throw new InvalidOperationException("Caller production transport was not initialized."));
+        var registry = window.TransportComposition?.TransportFactoryRegistry
+            ?? throw new InvalidOperationException("Caller production transport was not initialized.");
+        var stalled = childAttachment ? null : new OneShotStalledProfileRegistry(registry);
         var clock = new FakeTimeProvider();
         await using var handler = new OpenAgentSessionShortcutHandler(
             new AgentSessionShortcutContext(
                 userComputerProfileOverride: "fixture-caller",
                 persistenceStoreCache: services.AgentPersistenceStoreCache),
             new DeferredTrustedExecutorSelector(),
-            chats, new AgentSessionOwnerDecisionProvider(), stalled,
+            chats, new AgentSessionOwnerDecisionProvider(), stalled ?? registry,
             action => { action(); return Task.CompletedTask; },
             loadingDeadline: TimeSpan.FromSeconds(90),
             timeProvider: clock,
@@ -308,41 +398,54 @@ internal static class Program
         tab.PropertyChanged += OnStateChanged;
         try
         {
-            await stalled.Entered.WaitAsync(ct);
-            clock.Advance(TimeSpan.FromSeconds(45));
+            if (!childAttachment)
+            {
+                await stalled!.Entered.WaitAsync(ct);
+                clock.Advance(TimeSpan.FromSeconds(45));
+            }
             await terminal.Task.WaitAsync(ct);
         }
         finally
         {
             tab.PropertyChanged -= OnStateChanged;
         }
-        if (tab.State != AgentTabState.Failed
-            || tab.LoadError?.Contains("transport-choice", StringComparison.Ordinal) != true)
-            throw new InvalidOperationException("The stalled GUI tab did not report transport-choice.");
-        Console.WriteLine("TAB Failed transport-choice");
-        stalled.Release();
-        await stalled.LateTransportDisposed.WaitAsync(ct);
-        if (tab.State != AgentTabState.Failed || tab.Lease is not null)
-            throw new InvalidOperationException("Late transport revived the failed tab.");
-        reportStage("caller-tab-retry");
-        terminal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        tab.PropertyChanged += OnStateChanged;
-        try
+        if (!childAttachment)
         {
-            if (!await handler.Handle(window, Shortcut.Open, entity)
-                || tab.State != AgentTabState.Loading)
-                throw new InvalidOperationException("Failed tab did not retry through the shortcut.");
-            await terminal.Task.WaitAsync(ct);
-        }
-        finally
-        {
-            tab.PropertyChanged -= OnStateChanged;
+            if (tab.State != AgentTabState.Failed
+                || tab.LoadError?.Contains("transport-choice", StringComparison.Ordinal) != true)
+                throw new InvalidOperationException("The stalled GUI tab did not report transport-choice.");
+            Console.WriteLine("TAB Failed transport-choice");
+            stalled!.Release();
+            await stalled.LateTransportDisposed.WaitAsync(ct);
+            if (tab.State != AgentTabState.Failed || tab.Lease is not null)
+                throw new InvalidOperationException("Late transport revived the failed tab.");
+            reportStage("caller-tab-retry");
+            terminal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            tab.PropertyChanged += OnStateChanged;
+            try
+            {
+                if (!await handler.Handle(window, Shortcut.Open, entity)
+                    || tab.State != AgentTabState.Loading)
+                    throw new InvalidOperationException("Failed tab did not retry through the shortcut.");
+                await terminal.Task.WaitAsync(ct);
+            }
+            finally
+            {
+                tab.PropertyChanged -= OnStateChanged;
+            }
         }
         reportStage("caller-tab-result-" + tab.State);
         if (tab.State != AgentTabState.Ready || !tab.IsRemote
             || tab.Agent?.AgentChat is not RemoteAgentChat chat)
             throw new InvalidOperationException("Caller tab failed to open the persisted remote route.");
         Console.WriteLine("TAB Ready remote");
+        if (childAttachment)
+        {
+            if (await Console.In.ReadLineAsync(ct) != "OPEN-CHILD")
+                throw new InvalidOperationException("Expected the fixture child open command.");
+            reportStage("caller-child-attachment");
+            await VerifyChildAttachmentAsync(window, tab, chat, ct);
+        }
         if (startupFailure)
         {
             await VerifyRemoteStartupFailureInCallerUiAsync(
@@ -380,6 +483,84 @@ internal static class Program
                 .Any(content => content.Text == "worker-response"))
                 completed.TrySetResult();
         }
+    }
+
+    private static async Task VerifyChildAttachmentAsync(
+        MainWindowViewModel window, AgentSessionWorkspaceTabViewModel tab,
+        RemoteAgentChat parent, CancellationToken ct)
+    {
+        var projected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnSubagentsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs args)
+        {
+            if (parent.SubAgents.Any(child => child.AgentId == "fixture-child"))
+                projected.TrySetResult();
+        }
+        var changes = (System.Collections.Specialized.INotifyCollectionChanged)parent.SubAgents;
+        changes.CollectionChanged += OnSubagentsChanged;
+        try
+        {
+            OnSubagentsChanged(null, new System.Collections.Specialized.NotifyCollectionChangedEventArgs(
+                System.Collections.Specialized.NotifyCollectionChangedAction.Reset));
+            await projected.Task.WaitAsync(ct);
+        }
+        finally
+        {
+            changes.CollectionChanged -= OnSubagentsChanged;
+        }
+        var view = tab.Agent ?? throw new InvalidOperationException("The shortcut did not compose a GUI agent.");
+        view.NavigateToAgent("fixture-child");
+        await view.WaitForRemoteChildAsync("fixture-child").WaitAsync(ct);
+        var slot = view.SubAgentsContainer.Slots.Single();
+        var child = slot.SubAgentViewModel.AgentChat as RemoteAgentChat
+            ?? throw new InvalidOperationException("The child was not attached remotely.");
+        var childId = child.Information.AgentSessionId;
+        if (childId == "fixture-child"
+            || view.SelectedEditorItem?.Id != "sub-agent-fixture-child"
+            || !ReferenceEquals(slot.SubAgentViewModel.ConversationDetail, view.SelectedEditorItem.DetailContent)
+            || child.ViewerCount != 1
+            || !slot.SubAgentViewModel.History.Any(item => item.Contents.OfType<TextContent>()
+                .Any(text => text.Text == "child persisted answer"))
+            || !slot.SubAgentViewModel.History.Any(item => item.Contents.OfType<TextContent>()
+                .Any(text => text.Text == "child persisted question"))
+            || view.History.Any(item => item.Contents.OfType<TextContent>()
+                .Any(text => text.Text == "child persisted answer")))
+            throw new InvalidOperationException("The composed child viewer did not render its own transcript.");
+        Console.WriteLine("CHILD rendered " + childId + " viewer-1");
+
+        await view.DisposeViewResourcesAsync();
+        var descriptor = await parent.OpenSubagentAsync("fixture-child", ct);
+        if (descriptor.AgentSessionId != childId)
+            throw new InvalidOperationException("The child owner changed after viewer release.");
+        using var profile = JsonDocument.Parse(
+            $$"""{"type":"user-computer-profile","entity-id":"{{descriptor.OwningProfileEntityId}}"}""");
+        var registry = window.TransportComposition?.TransportFactoryRegistry
+            ?? throw new InvalidOperationException("The caller production transport is unavailable.");
+        var transport = await registry.ConnectToAsync(profile.RootElement, ct);
+        var client = new RemoteAgentSessionClient(transport);
+        await using var reopened = await RemoteAgentChat.AttachAsync(new RemoteAgentChatAttachOptions
+        {
+            Client = client,
+            ForegroundScheduler = TaskScheduler.FromCurrentSynchronizationContext(),
+            OpenRequest = new AgentSessionOpenRequest
+            {
+                ProtocolVersion = 1,
+                AgentSessionId = descriptor.AgentSessionId,
+                ExpectedOwningProfileEntityId = descriptor.OwningProfileEntityId,
+                ExpectedOwnershipGeneration = descriptor.OwnershipGeneration,
+                OpenIntent = AgentSessionOpenIntent.Attach,
+                AttachmentToken = Guid.NewGuid().ToString("N"),
+                Capabilities = [],
+            },
+        }, ct);
+        if (reopened.ViewerCount != 1
+            || !reopened.History.Any(item => item.Contents.OfType<TextContent>()
+                .Any(text => text.Text == "child persisted answer")))
+            throw new InvalidOperationException("Re-attaching did not confirm child viewer release.");
+        Console.WriteLine("CHILD reopened " + childId + " viewer-1");
+        await reopened.DetachAsync(ct);
+        if (!parent.IsConnected)
+            throw new InvalidOperationException("Closing the child viewer terminated the parent owner.");
+        Console.WriteLine("CHILD parent-alive");
     }
 
     private static async Task VerifyRemoteStartupFailureInCallerUiAsync(

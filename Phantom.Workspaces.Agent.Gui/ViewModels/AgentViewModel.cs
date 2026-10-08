@@ -47,6 +47,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private readonly Func<IAgentChat, string, CancellationToken, Task<IAgentChat>>? remoteChildResolver;
     private readonly CancellationTokenSource remoteChildrenLifetime = new();
     private readonly Dictionary<string, RemoteChildSlot> remoteChildren = new(StringComparer.Ordinal);
+    private Task remoteNavigation = Task.CompletedTask;
+    private long remoteNavigationGeneration;
     private bool isDisposed;
     private readonly AgentChatInterruptState interruptState;
     private readonly AsyncRelayCommand interruptCommand;
@@ -1089,6 +1091,9 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         => this.remoteChildren.TryGetValue(agentId, out var child)
             ? child.Attachment : Task.CompletedTask;
 
+    /// <summary>Await navigation through unloaded remote descendants.</summary>
+    public Task WaitForRemoteNavigationAsync() => this.RootView().remoteNavigation;
+
     private void StartRemoteChild(RemoteChildSlot child)
     {
         if (!child.Attachment.IsCompleted || child.Chat is not null) return;
@@ -1280,15 +1285,18 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     /// </summary>
     public void NavigateToAgent(string agentId)
     {
-        var root = this;
-        while (root.ParentAgentViewModel is not null)
-        {
-            root = root.ParentAgentViewModel;
-        }
+        var root = this.RootView();
+        var generation = ++root.remoteNavigationGeneration;
 
         var target = root.FindInTreeById(agentId);
         var resolvedAgentId = root.FindRemoteAlias(agentId)
             ?? target?.agentChat.Information.AgentId ?? agentId;
+        if (root.FindChildNavigation(resolvedAgentId) is null
+            && root.FindUnloadedRemotePath(agentId) is { Count: > 1 } path)
+        {
+            root.remoteNavigation = root.NavigateRemotePathAsync(path, generation);
+            return;
+        }
         if (root.FindChildNavigation(resolvedAgentId) is { } nested && nested.Owner != root)
         {
             var (owner, item) = nested;
@@ -1299,6 +1307,69 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             return;
         }
         root.NavigateToSubAgent(resolvedAgentId);
+    }
+
+    private IReadOnlyList<IRemoteSubagentReference>? FindUnloadedRemotePath(string id)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return null;
+        foreach (var child in this.remoteChildren.Values)
+        {
+            var path = FindRemotePath(child.Reference, id);
+            if (path is not null) return path;
+        }
+        foreach (var child in this.subAgentViewModels)
+        {
+            var path = child.FindUnloadedRemotePath(id);
+            if (path is not null) return path;
+        }
+        return null;
+    }
+
+    private static IReadOnlyList<IRemoteSubagentReference>? FindRemotePath(
+        IRemoteSubagentReference reference, string id)
+    {
+        if (id == reference.AgentId || id == reference.AgentSessionId) return [reference];
+        foreach (var nested in reference.SubAgents.OfType<IRemoteSubagentReference>())
+        {
+            if (FindRemotePath(nested, id) is { } path)
+                return [reference, .. path];
+        }
+        return null;
+    }
+
+    private async Task NavigateRemotePathAsync(
+        IReadOnlyList<IRemoteSubagentReference> path, long generation)
+    {
+        var owner = this;
+        for (var index = 0; index < path.Count; index++)
+        {
+            var reference = path[index];
+            var attachment = await Task.Factory.StartNew(() =>
+            {
+                if (this.isDisposed || generation != this.remoteNavigationGeneration
+                    || !owner.remoteChildren.TryGetValue(reference.AgentId, out var slot)
+                    || slot.Reference.AgentSessionId != reference.AgentSessionId)
+                    return null;
+                owner.StartRemoteChild(slot);
+                owner.subAgentsContainerDetail.ShowSubAgent(reference.AgentId);
+                if (owner.FindChildNavigation(reference.AgentId) is { } navigation)
+                    this.SelectedEditorItem = navigation.Item;
+                return slot.Attachment;
+            }, CancellationToken.None, TaskCreationOptions.None, this.foregroundScheduler).ConfigureAwait(false);
+            if (attachment is null) return;
+            await attachment.ConfigureAwait(false);
+            var nextOwner = await Task.Factory.StartNew(() =>
+            {
+                if (this.isDisposed || generation != this.remoteNavigationGeneration
+                    || !owner.remoteChildren.TryGetValue(reference.AgentId, out var slot)
+                    || slot.Reference.AgentSessionId != reference.AgentSessionId)
+                    return null;
+                return owner.subAgentsContainerDetail.Slots
+                    .FirstOrDefault(item => item.AgentId == reference.AgentId)?.SubAgentViewModel;
+            }, CancellationToken.None, TaskCreationOptions.None, this.foregroundScheduler).ConfigureAwait(false);
+            if (nextOwner is null) return;
+            owner = nextOwner;
+        }
     }
 
     private (AgentViewModel Owner, AgentEditorNavigationItemViewModel Item)? FindChildNavigation(string agentId)

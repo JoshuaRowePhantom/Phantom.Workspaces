@@ -15,6 +15,8 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     private readonly object gate = new();
     private readonly SemaphoreSlim transitionGate = new(1, 1);
     private readonly Dictionary<string, AttachmentState> attachments = new(StringComparer.Ordinal);
+    // An authorized subagent is owned by its parent runtime, not by its last transcript viewer.
+    private readonly HashSet<RemoteAgentSessionLease> ownedChildRuntimes = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<string, long> attachmentGenerations = new(StringComparer.Ordinal);
     private readonly Dictionary<Guid, CommandCacheEntry> commands = [];
     private readonly Dictionary<AgentChatRunningItem, string> runningItemIds =
@@ -39,6 +41,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     private bool fenced;
     private bool hasTerminated;
     private bool continueInBackground;
+    private int owningParentCount;
 
     internal RemoteAgentSessionLease(
         string sessionId,
@@ -132,6 +135,44 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         }
     }
     internal bool ContinueInBackground { get { lock (this.gate) return this.continueInBackground; } }
+
+    internal bool TryKeepChildAlive(RemoteAgentSessionLease child)
+    {
+        if (ReferenceEquals(this, child)) return false;
+        lock (this.gate)
+        {
+            if (this.fenced) return false;
+            if (this.ownedChildRuntimes.Contains(child)) return true;
+            lock (child.gate)
+            {
+                if (child.fenced) return false;
+                child.owningParentCount++;
+            }
+            this.ownedChildRuntimes.Add(child);
+            return true;
+        }
+    }
+
+    private async ValueTask ReleaseOwningParentAsync()
+    {
+        Task? stop = null;
+        await this.transitionGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            lock (this.gate)
+            {
+                this.owningParentCount--;
+                if (!this.fenced && this.owningParentCount == 0
+                    && this.attachments.Count == 0 && !this.continueInBackground)
+                    stop = this.BeginTerminationUnderLock("runtime-stopped");
+            }
+        }
+        finally
+        {
+            this.transitionGate.Release();
+        }
+        if (stop is not null) await stop.ConfigureAwait(false);
+    }
 
     internal static JsonElement SerializeSubagent(IRunningSubAgent item) =>
         JsonSerializer.SerializeToElement(new
@@ -302,7 +343,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             {
                 if (this.fenced) throw new InvalidOperationException("The runtime is stopping.");
                 this.continueInBackground = value;
-                stop = !value && this.attachments.Count == 0;
+                stop = !value && this.attachments.Count == 0 && this.owningParentCount == 0;
             }
             await this.PublishRetentionChangedAsync(ct).ConfigureAwait(false);
         }
@@ -433,7 +474,8 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
                     new ObjectDisposedException(nameof(RemoteAgentAttachmentLease)));
                 state.Released.TrySetResult();
                 changed = true;
-                if (!this.fenced && this.attachments.Count == 0 && !this.continueInBackground)
+                if (!this.fenced && this.attachments.Count == 0 && !this.continueInBackground
+                    && this.owningParentCount == 0)
                     terminationTask = this.BeginTerminationUnderLock("runtime-stopped");
             }
         }
@@ -655,6 +697,18 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
                 await this.Chat.DisposeAsync().ConfigureAwait(false);
         }
         catch (Exception error) { failures.Add(error); }
+
+        RemoteAgentSessionLease[] ownedChildren;
+        lock (this.gate)
+        {
+            ownedChildren = this.ownedChildRuntimes.ToArray();
+            this.ownedChildRuntimes.Clear();
+        }
+        foreach (var child in ownedChildren)
+        {
+            try { await child.ReleaseOwningParentAsync().ConfigureAwait(false); }
+            catch (Exception error) { failures.Add(error); }
+        }
 
         Exception? persistenceFailure = null;
         try

@@ -415,6 +415,8 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
                 intent,
                 token => this.runtimeFactory.StartAsync(intent, token),
                 ct).ConfigureAwait(false);
+        if (!parent.TryKeepChildAlive(runtime))
+            throw new AgentSessionUnavailableException();
 
         return new RemoteSubagentDescriptor
         {
