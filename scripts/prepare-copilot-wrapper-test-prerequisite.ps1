@@ -4,7 +4,11 @@ param(
     [Parameter(Mandatory)]
     [string] $CacheRoot,
     [Parameter(Mandatory)]
-    [string] $PathOutputFile
+    [string] $PathOutputFile,
+    [Parameter(Mandatory)]
+    [string] $ProjectDirectory,
+    [Parameter(Mandatory)]
+    [string] $BaseIntermediateOutputPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -20,6 +24,9 @@ $nativeFeatures = @('dotnetsdk')
 $RepositoryRoot = [IO.Path]::GetFullPath($RepositoryRoot)
 $CacheRoot = [IO.Path]::GetFullPath($CacheRoot)
 $PathOutputFile = [IO.Path]::GetFullPath($PathOutputFile)
+. (Join-Path $PSScriptRoot 'CopilotWrapperPrerequisiteCache.ps1')
+Assert-PrerequisiteLayout `
+    $ProjectDirectory $BaseIntermediateOutputPath $CacheRoot $PathOutputFile '' | Out-Null
 
 function Add-HashText {
     param(
@@ -354,6 +361,7 @@ finally
     $hasher.Dispose()
 }
 
+$rootLease = Open-PrerequisiteRootLease $ProjectDirectory
 $mutex = [System.Threading.Mutex]::new(
     $false,
     "Local\Phantom.Workspaces.CopilotWrapperPrerequisite.$sourceFingerprint")
@@ -372,6 +380,10 @@ try
     }
 
     $cacheDirectory = $null
+    if (Test-Path -LiteralPath $CacheRoot)
+    {
+        Assert-PrerequisiteTreeSafe $CacheRoot
+    }
     if (Test-Path -LiteralPath $PathOutputFile -PathType Leaf)
     {
         $candidateCacheDirectory = (
@@ -402,13 +414,13 @@ try
         $stagingDirectory = Join-Path `
             $CacheRoot `
             "$($sourceFingerprint.Substring(0, 16)).staging-$PID"
-        $cargoTargetDirectory = Join-Path $stagingDirectory 'cargo'
-        $dotnetArtifactsDirectory = Join-Path $stagingDirectory 'dotnet'
-        $publishDirectory = Join-Path $stagingDirectory 'publish'
-        $releaseAssetsDirectory = Join-Path $stagingDirectory 'release-assets'
         $productionIntermediateDirectory = Join-Path `
             $RepositoryRoot `
             "artifacts\cw-$PID-$([Guid]::NewGuid().ToString('N').Substring(0, 8))"
+        $cargoTargetDirectory = Join-Path $productionIntermediateDirectory 'cargo'
+        $dotnetArtifactsDirectory = Join-Path $productionIntermediateDirectory 'dotnet'
+        $publishDirectory = Join-Path $productionIntermediateDirectory 'publish'
+        $releaseAssetsDirectory = Join-Path $productionIntermediateDirectory 'release-assets'
         $preparedDirectory = Join-Path $stagingDirectory 'prepared'
         New-Item -ItemType Directory -Path $preparedDirectory -Force | Out-Null
 
@@ -872,4 +884,5 @@ finally
         $mutex.ReleaseMutex()
     }
     $mutex.Dispose()
+    $rootLease.Dispose()
 }

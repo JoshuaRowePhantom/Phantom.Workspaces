@@ -11,7 +11,7 @@ public sealed class MxcIntegrationCollection
 }
 
 [Collection(MxcIntegrationCollection.Name)]
-public sealed class BuildIntegrationTests
+public sealed partial class BuildIntegrationTests
 {
     [Fact]
     public async Task BuildSolution_MxcSourceDependency_BuildsThroughStandardEntryPoint()
@@ -165,7 +165,7 @@ public sealed class MxcSdkVersionTests
     [Fact]
     public void MxcSdkVersion_AppReleaseVersionOverride_LeavesSdkAssemblyVersionUnchanged()
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
 
         Assert.Equal("0.0.21", prerequisite.Manifest.AppReleaseVersion);
         Assert.Equal(
@@ -218,7 +218,7 @@ public sealed class MxcSdkVersionTests
     [Fact]
     public async Task MxcSdkVersion_ProductPublishWithReleaseVersion_ValidatorPasses()
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         var appResult = await MxcRepositoryTestSupport.InvokePowerShellAsync(
             "packaging", "validate", "Assert-PhantomReleaseVersion.ps1",
             "-ExpectedVersion", prerequisite.Manifest.AppReleaseVersion,
@@ -347,7 +347,7 @@ public sealed class MxcRuntimePayloadTests
     [Fact]
     public void MxcRuntimePayload_CommandConsumesTopLevelNativeBuild()
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         var arguments = MxcRepositoryTestSupport.CreateMxcRuntimePayloadArguments(
             "payload",
             "isolated-artifacts",
@@ -373,7 +373,7 @@ public sealed class MxcRuntimePayloadTests
     [Fact]
     public async Task MxcRuntimePayload_RequiredNativeUnit_IsPresent()
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         var processObserver = new RecordingProcessObserver();
         MxcRepositoryTestSupport.ProcessResult? publish = null;
         MxcRepositoryTestSupport.ProcessResult? validation = null;
@@ -880,12 +880,12 @@ public sealed class InstallScriptTests
 }
 
 [Collection(MxcIntegrationCollection.Name)]
-public sealed class CopilotWrapperNestedPublishTests
+public sealed partial class CopilotWrapperNestedPublishTests
 {
     [Fact]
     public void NestedPublish_CommandRequiresPreparedReleaseWrapper()
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         var arguments = MxcRepositoryTestSupport.CreateCopilotWrapperPublishArguments(
             "payload",
             "isolated-artifacts",
@@ -908,7 +908,7 @@ public sealed class CopilotWrapperNestedPublishTests
     [Fact]
     public void PreparedWrapper_SourceToolchainAndPayloadProvenanceAreCurrent()
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
 
         Assert.Equal(5, prerequisite.Manifest.SchemaVersion);
         Assert.True(prerequisite.Manifest.ProductionPublishValidated);
@@ -984,7 +984,7 @@ public sealed class CopilotWrapperNestedPublishTests
     [Fact]
     public async Task NestedPublish_RidConsistentGraphProducesUniqueCompleteWrapperPayload()
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         await using var payload = new MxcRepositoryTestSupport.TestDirectory(
             cleanupProgress: message => Console.WriteLine($"wrapper payload {message}"));
         await using var buildArtifacts = new MxcRepositoryTestSupport.TestDirectory(
@@ -1042,7 +1042,7 @@ public sealed class CopilotWrapperNestedPublishTests
     [Fact]
     public async Task NestedPublish_CustomIntermediateWithSpaces_IsCanonicalAndInvocationUnique()
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         await using var intermediateOwner = new MxcRepositoryTestSupport.TestDirectory();
         await using var firstPayload = new MxcRepositoryTestSupport.TestDirectory();
         await using var firstArtifacts = new MxcRepositoryTestSupport.TestDirectory();
@@ -1091,7 +1091,7 @@ public sealed class CopilotWrapperNestedPublishTests
     [Fact]
     public async Task NestedPublish_CustomBaseIntermediateWithSpaces_StaysUnderCanonicalBase()
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         await using var intermediateOwner = new MxcRepositoryTestSupport.TestDirectory();
         await using var payload = new MxcRepositoryTestSupport.TestDirectory();
         await using var artifacts = new MxcRepositoryTestSupport.TestDirectory();
@@ -1117,7 +1117,7 @@ public sealed class CopilotWrapperNestedPublishTests
     [Fact]
     public async Task NestedPublish_ReparseIntermediate_FailsBeforeWritingChildOutput()
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         await using var intermediateOwner = new MxcRepositoryTestSupport.TestDirectory();
         await using var payload = new MxcRepositoryTestSupport.TestDirectory();
         await using var artifacts = new MxcRepositoryTestSupport.TestDirectory();
@@ -1164,7 +1164,7 @@ public sealed class CopilotWrapperNestedPublishTests
     [Fact]
     public async Task NestedPublish_MissingChildOutput_FailsClosed()
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         await using var payload = new MxcRepositoryTestSupport.TestDirectory();
         await using var artifacts = new MxcRepositoryTestSupport.TestDirectory();
         var result = await MxcRepositoryTestSupport.InvokeAsync(
@@ -1191,7 +1191,7 @@ public sealed class CopilotWrapperNestedPublishTests
     [Fact]
     public async Task NestedPublish_SharedPreparedWrapperProducesConcurrentIsolatedPayloads()
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         await using var firstPayload = new MxcRepositoryTestSupport.TestDirectory();
         await using var firstArtifacts = new MxcRepositoryTestSupport.TestDirectory();
         await using var secondPayload = new MxcRepositoryTestSupport.TestDirectory();
@@ -1435,6 +1435,23 @@ internal static class MxcRepositoryTestSupport
 
     internal static CopilotWrapperPrerequisite LoadCopilotWrapperPrerequisite()
     {
+        var lease = File.Open(
+            Path.Combine(Root.FullName, "Phantom.Workspaces.Install.Tests", "obj", "mxcw.lock"),
+            FileMode.Open, FileAccess.Read, FileShare.Read);
+        try
+        {
+            return LoadCopilotWrapperPrerequisiteCore(lease);
+        }
+        catch
+        {
+            lease.Dispose();
+            throw;
+        }
+    }
+
+    private static CopilotWrapperPrerequisite LoadCopilotWrapperPrerequisiteCore(
+        FileStream lease)
+    {
         var pathFile = Path.Combine(
             AppContext.BaseDirectory,
             "copilot-wrapper-prerequisite.path");
@@ -1501,7 +1518,8 @@ internal static class MxcRepositoryTestSupport
             ArtifactPath("prepared/Phantom.Workspaces.dll"),
             ArtifactPath("prepared/Microsoft.Mxc.Sdk.dll"),
             ArtifactPath("prepared/phantom-copilot-wrapper.dll"),
-            ArtifactPath("prepared/Phantom.Workspaces.Llm.Core.dll"));
+            ArtifactPath("prepared/Phantom.Workspaces.Llm.Core.dll"),
+            lease);
         prerequisite.AssertArtifactHashes();
         return prerequisite;
     }
@@ -1706,8 +1724,10 @@ internal static class MxcRepositoryTestSupport
         string AppAssembly,
         string MxcSdkAssembly,
         string CopilotWrapperAssembly,
-        string LlmCoreAssembly)
+        string LlmCoreAssembly,
+        FileStream Lease) : IDisposable
     {
+        public void Dispose() => Lease.Dispose();
         internal string ArtifactSha256(string relativePath) =>
             Assert.Single(
                 Manifest.Artifacts,

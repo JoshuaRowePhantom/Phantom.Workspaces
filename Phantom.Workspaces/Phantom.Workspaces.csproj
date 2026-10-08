@@ -99,6 +99,33 @@
     <Error Condition="!Exists('$(PublishDir)runtimes\$(RuntimeIdentifier)\native\phantom-copilot-wrapper.exe')"
            Text="The Copilot MXC wrapper was not published as a loose file." />
   </Target>
+  <UsingTask TaskName="HoldCopilotWrapperPrerequisiteLease"
+             TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <LockPath ParameterType="System.String" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System.IO" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        var engine = (Microsoft.Build.Framework.IBuildEngine4)BuildEngine;
+        var key = "CopilotWrapperPrerequisiteLease:" + LockPath.ToUpperInvariant();
+        if (engine.GetRegisteredTaskObject(key, Microsoft.Build.Framework.RegisteredTaskObjectLifetime.Build) == null)
+        {
+            var lease = new FileStream(LockPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            try
+            {
+                engine.RegisterTaskObject(key, lease, Microsoft.Build.Framework.RegisteredTaskObjectLifetime.Build, false);
+            }
+            catch
+            {
+                lease.Dispose();
+                throw;
+            }
+        }
+      ]]></Code>
+    </Task>
+  </UsingTask>
   <Target Name="ValidatePreparedCopilotPayload"
           BeforeTargets="PublishCopilotWrapperLoose;PublishCopilotRuntimeLoose;PublishMxcRuntimeLoose"
           Condition="'$(UsePreparedCopilotPayloadForTests)' != '' Or '$(PreparedCopilotPayloadDirectory)' != '' Or '$(PreparedCopilotPayloadFingerprint)' != '' Or '$(PreparedCopilotPayloadConfiguration)' != '' Or '$(PreparedCopilotPayloadRuntimeIdentifier)' != '' Or '$(PreparedCopilotPayloadManifestSha256)' != '' Or '$(PreparedCopilotWrapperSha256)' != '' Or '$(PreparedCopilotCliSha256)' != '' Or '$(PreparedCopilotSdkWrapperSha256)' != '' Or '$(PreparedCopilotRuntimeSha256)' != '' Or '$(PreparedCopilotNodeSha256)' != '' Or '$(PreparedCopilotLicenseSha256)' != '' Or '$(PreparedMxcFfiSha256)' != '' Or '$(PreparedPlmSha256)' != '' Or '$(PreparedMxcLicenseSha256)' != '' Or '$(SimulateMissingCopilotWrapperChildOutputForTests)' != '' Or '$(UsePreparedCopilotPayload)' != '' Or '$(RequirePreparedCopilotWrapper)' != '' Or '$(CopilotWrapperPreparedExecutable)' != '' Or '$(CopilotWrapperPreparedConfiguration)' != '' Or '$(CopilotWrapperPreparedRuntimeIdentifier)' != ''">
@@ -110,6 +137,8 @@
            Text="SimulateMissingCopilotWrapperChildOutputForTests only accepts true in prepared test mode." />
     <Error Condition="'$(NoBuild)' != 'true'"
            Text="Prepared Copilot payload inputs may only be used by a build-free target invocation with NoBuild=true." />
+    <HoldCopilotWrapperPrerequisiteLease
+        LockPath="$(MSBuildProjectDirectory)\..\Phantom.Workspaces.Install.Tests\obj\mxcw.lock" />
     <Error Condition="'$(PreparedCopilotPayloadDirectory)' == '' Or !$([System.IO.Path]::IsPathFullyQualified('$(PreparedCopilotPayloadDirectory)')) Or !Exists('$(PreparedCopilotPayloadDirectory)')"
            Text="The prepared Copilot payload directory does not exist at '$(PreparedCopilotPayloadDirectory)'." />
     <Error Condition="'$(PreparedCopilotPayloadConfiguration)' != '$(Configuration)'"
