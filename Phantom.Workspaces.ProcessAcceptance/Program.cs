@@ -130,6 +130,7 @@ internal static class Program
             },
             runningAgentChats: chats);
         await composition.StartAsync(ct);
+        string? preparedChildId = null;
         reportStage("worker-route-publication");
         await published.Task.WaitAsync(ct);
         await livePublished.Task.WaitAsync(ct);
@@ -156,9 +157,26 @@ internal static class Program
             if (command == "PREPARE-CHILD" && childAttachment)
             {
                 reportStage("worker-child-preparation");
-                var childId = await PrepareChildAsync(
+                preparedChildId = await PrepareChildAsync(
                     data, session, sessionId, chats, persistence, ct);
-                Console.WriteLine("CHILD ready " + childId);
+                Console.WriteLine("CHILD ready " + preparedChildId);
+                continue;
+            }
+            if (command?.StartsWith("VERIFY-CHILD ", StringComparison.Ordinal) == true && childAttachment)
+            {
+                var expectedId = command["VERIFY-CHILD ".Length..];
+                await using var parentLease = await chats.AcquireAsync(new AcquireAgentChatRequest
+                {
+                    AgentSessionId = new AgentSessionId(sessionId),
+                    EntityName = sessionId,
+                }, ct);
+                var parent = parentLease.AgentChat as AgentChat
+                    ?? throw new InvalidOperationException("Child owner parent became remote.");
+                var child = parent.SubAgents.OfType<AgentChat>()
+                    .Single(item => item.AgentId == "fixture-child");
+                if (preparedChildId != expectedId || child.AgentSessionId != expectedId)
+                    throw new InvalidOperationException("The authenticated worker child owner changed.");
+                Console.WriteLine("CHILD owner " + expectedId + " unchanged");
                 continue;
             }
             if (command != "RENEW")
@@ -366,13 +384,14 @@ internal static class Program
         var registry = window.TransportComposition?.TransportFactoryRegistry
             ?? throw new InvalidOperationException("Caller production transport was not initialized.");
         var stalled = childAttachment ? null : new OneShotStalledProfileRegistry(registry);
+        var failedChildTransport = childAttachment ? new OneShotFailedChildRegistry(registry) : null;
         var clock = new FakeTimeProvider();
         await using var handler = new OpenAgentSessionShortcutHandler(
             new AgentSessionShortcutContext(
                 userComputerProfileOverride: "fixture-caller",
                 persistenceStoreCache: services.AgentPersistenceStoreCache),
             new DeferredTrustedExecutorSelector(),
-            chats, new AgentSessionOwnerDecisionProvider(), stalled ?? registry,
+            chats, new AgentSessionOwnerDecisionProvider(), stalled ?? (ITransportFactoryRegistry?)failedChildTransport ?? registry,
             action => { action(); return Task.CompletedTask; },
             loadingDeadline: TimeSpan.FromSeconds(90),
             timeProvider: clock,
@@ -441,10 +460,12 @@ internal static class Program
         Console.WriteLine("TAB Ready remote");
         if (childAttachment)
         {
-            if (await Console.In.ReadLineAsync(ct) != "OPEN-CHILD")
+            var command = await Console.In.ReadLineAsync(ct);
+            if (command is not ("OPEN-CHILD" or "OPEN-CHILD-FAILURE"))
                 throw new InvalidOperationException("Expected the fixture child open command.");
             reportStage("caller-child-attachment");
-            await VerifyChildAttachmentAsync(window, tab, chat, ct);
+            await VerifyChildAttachmentAsync(window, tab, chat, failedChildTransport!,
+                command == "OPEN-CHILD-FAILURE", ct);
         }
         if (startupFailure)
         {
@@ -487,7 +508,8 @@ internal static class Program
 
     private static async Task VerifyChildAttachmentAsync(
         MainWindowViewModel window, AgentSessionWorkspaceTabViewModel tab,
-        RemoteAgentChat parent, CancellationToken ct)
+        RemoteAgentChat parent, OneShotFailedChildRegistry failedChildTransport,
+        bool failFirst, CancellationToken ct)
     {
         var projected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         void OnSubagentsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs args)
@@ -508,6 +530,32 @@ internal static class Program
             changes.CollectionChanged -= OnSubagentsChanged;
         }
         var view = tab.Agent ?? throw new InvalidOperationException("The shortcut did not compose a GUI agent.");
+        if (failFirst)
+        {
+            failedChildTransport.Arm();
+            view.NavigateToAgent("fixture-child");
+            await view.WaitForRemoteChildAsync("fixture-child").WaitAsync(ct);
+            var descriptorBeforeRetry = await parent.OpenSubagentAsync("fixture-child", ct);
+            if (failedChildTransport.FailureCount != 1
+                || !failedChildTransport.FailedTransportDisposed
+                || view.SelectedEditorItem?.Id != "sub-agent-fixture-child"
+                || view.SelectedEditorItem.DetailContent is not
+                    Phantom.Workspaces.Agent.Gui.ViewModels.AgentChatPlaceholderDetailViewModel placeholder
+                || !placeholder.Description.Contains("Select again to retry.", StringComparison.Ordinal)
+                || view.SubAgentsContainer.Slots.Count != 0
+                || view.History.Any(item => item.Contents.OfType<TextContent>()
+                    .Any(text => text.Text is "child persisted question" or "child persisted answer")))
+                throw new InvalidOperationException("Child transport loss did not show a retryable child-only error.");
+            Console.WriteLine("CHILD failed " + descriptorBeforeRetry.AgentSessionId
+                + " retryable no-slot no-parent-transcript");
+            if (await Console.In.ReadLineAsync(ct) != "RETRY-CHILD")
+                throw new InvalidOperationException("Expected child retry.");
+            var descriptorAfterFailure = await parent.OpenSubagentAsync("fixture-child", ct);
+            if (descriptorAfterFailure.AgentSessionId != descriptorBeforeRetry.AgentSessionId
+                || descriptorAfterFailure.OwnershipGeneration != descriptorBeforeRetry.OwnershipGeneration
+                || descriptorAfterFailure.RuntimeEpoch != descriptorBeforeRetry.RuntimeEpoch)
+                throw new InvalidOperationException("Child owner changed following transport loss.");
+        }
         view.NavigateToAgent("fixture-child");
         await view.WaitForRemoteChildAsync("fixture-child").WaitAsync(ct);
         var slot = view.SubAgentsContainer.Slots.Single();
@@ -693,6 +741,30 @@ internal static class Program
             this.pending = new DisposalObservedTransport(transport, this.disposed);
             this.entered.TrySetResult();
             return await this.release.Task;
+        }
+    }
+
+    private sealed class OneShotFailedChildRegistry(ITransportFactoryRegistry inner)
+        : ITransportFactoryRegistry
+    {
+        private bool armed;
+        internal int FailureCount { get; private set; }
+        internal bool FailedTransportDisposed { get; private set; }
+
+        internal void Arm() => this.armed = true;
+
+        public void Register(ITransportFactory factory) => inner.Register(factory);
+
+        public async Task<ITransport> ConnectToAsync(JsonElement descriptor, CancellationToken ct = default)
+        {
+            var transport = await inner.ConnectToAsync(descriptor, ct);
+            if (!this.armed)
+                return transport;
+            this.armed = false;
+            this.FailureCount++;
+            await transport.DisposeAsync();
+            this.FailedTransportDisposed = true;
+            throw new IOException("Fixture child transport lost after owner authorization.");
         }
     }
 

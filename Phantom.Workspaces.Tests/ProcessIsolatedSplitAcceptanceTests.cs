@@ -44,12 +44,18 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
     public async Task SplitMode_ProductionShortcut_RemoteChildTranscriptAndViewerReleaseCrossAuthenticatedProcesses()
         => await RunSplitScenarioAsync(startupFailure: false, childAttachment: true);
 
-    private static async Task RunSplitScenarioAsync(bool startupFailure, bool childAttachment = false)
+    [Fact]
+    public async Task SplitMode_ProductionShortcut_ChildTransportLossShowsRetryAndPreservesOwnerAcrossProcesses()
+        => await RunSplitScenarioAsync(startupFailure: false, childAttachment: true, childTransportFailure: true);
+
+    private static async Task RunSplitScenarioAsync(
+        bool startupFailure, bool childAttachment = false, bool childTransportFailure = false)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(childAttachment ? 180 : 90));
         var ct = timeout.Token;
-        var directory = Path.Combine(Path.GetTempPath(), "split-acceptance-" + Guid.NewGuid().ToString("N"));
+        var directory = Path.Combine(Directory.GetCurrentDirectory(),
+            "split-acceptance-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         var hubLogs = Path.Combine(directory, "hub-logs");
         var callerLogs = Path.Combine(directory, "caller-logs");
@@ -146,7 +152,15 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
                 Assert.NotEqual(SessionId, childSessionId);
                 Assert.NotEqual("fixture-child", childSessionId);
                 Assert.True(Guid.TryParse(childSessionId, out _));
-                await caller.SendAsync("OPEN-CHILD", ct);
+                await caller.SendAsync(childTransportFailure ? "OPEN-CHILD-FAILURE" : "OPEN-CHILD", ct);
+                if (childTransportFailure)
+                {
+                    Assert.Equal($"CHILD failed {childSessionId} retryable no-slot no-parent-transcript",
+                        await caller.NextLineAsync(ct));
+                    await worker.SendAsync("VERIFY-CHILD " + childSessionId, ct);
+                    Assert.Equal($"CHILD owner {childSessionId} unchanged", await worker.NextLineAsync(ct));
+                    await caller.SendAsync("RETRY-CHILD", ct);
+                }
                 Assert.Equal($"CHILD rendered {childSessionId} viewer-1", await caller.NextLineAsync(ct));
                 Assert.Equal($"CHILD reopened {childSessionId} viewer-1", await caller.NextLineAsync(ct));
                 Assert.Equal("CHILD parent-alive", await caller.NextLineAsync(ct));
