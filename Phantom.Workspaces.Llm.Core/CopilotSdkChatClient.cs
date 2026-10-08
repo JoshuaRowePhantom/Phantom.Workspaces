@@ -918,7 +918,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             CopilotSubAgentLifecycleLayer.Session, state);
         if (child.AgentChat is { } chat) chat.ApplySubAgentLifecycleState(request);
         else child.SetRestoredCompletionState(state == "running" ? AgentChatCompletionState.Running :
-            state == "failed" ? AgentChatCompletionState.Failed : AgentChatCompletionState.Succeeded);
+            state is "failed" or "cancelled" ? AgentChatCompletionState.Failed : AgentChatCompletionState.Succeeded);
     }
 
     private void ObserveSubAgentLifecycle(SessionEvent sessionEvent)

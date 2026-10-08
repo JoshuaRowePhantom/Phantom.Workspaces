@@ -60,6 +60,15 @@ internal interface IAgentChatRunningItemsSnapshotProvider
         IReadOnlyList<AgentChatRunningItem> subscribedItems);
 }
 
+internal interface IAgentChatSubagentsSnapshotProvider
+{
+    void SubscribeAndCaptureSubagents(
+        NotifyCollectionChangedEventHandler changed,
+        Action<IReadOnlyList<IRunningSubAgent>> initialize);
+
+    void UnsubscribeSubagents(NotifyCollectionChangedEventHandler changed);
+}
+
 internal readonly record struct AgentChatRunningItemSnapshot(
     AgentChatRunningItem Item,
     ImmutableArray<AgentChatHistoryItem> Items);

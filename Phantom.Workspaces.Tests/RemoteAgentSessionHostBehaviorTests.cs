@@ -432,18 +432,121 @@ public sealed partial class RemoteAgentSessionHostTests
                 .Deserialize<AgentChatCompletionState>(AgentSessionProtocolCodec.Options));
     }
 
+    [Fact]
+    public async Task RemoteAgentSessionLease_ConcurrentAttachmentAndChildMutation_UsesConsistentSnapshots()
+    {
+        var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var fixture = new HostFixture(beforeLease: items =>
+            items.CollectionChanged += (_, _) => changed.TrySetResult());
+        var first = new MutableRunningSubagent("first");
+        fixture.Subagents.Add(first);
+        var enteredRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseRead = new ManualResetEvent(false);
+        first.OnStateRead = () =>
+        {
+            enteredRead.TrySetResult();
+            releaseRead.WaitOne();
+        };
+        var attach = Task.Run(() => fixture.Host.OpenAsync(fixture.Request(AgentSessionOpenIntent.Attach)));
+        await enteredRead.Task;
+        changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var add = Task.Run(() => fixture.Subagents.Add(new MutableRunningSubagent("second")));
+        await changed.Task;
+        releaseRead.Set();
+        await using var attachment = await attach;
+        await add;
+        var snapshot = Assert.IsType<SessionSnapshotEvent>(
+            AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(
+                AgentSessionProtocolCodec.DeserializeFrame(await fixture.Channel.Output.ReadAsync())));
+        Assert.Equal("first", snapshot.Snapshot.Subagents[0].GetProperty("agentId").GetString());
+        Assert.Contains(fixture.Subagents, child => child.AgentId == "second");
+    }
+
+    [Fact]
+    public async Task RemoteAgentSessionLease_RemovalNestedReplacementAndDispose_DetachesHandlers()
+    {
+        await using var fixture = new HostFixture();
+        var parent = new MutableRunningSubagent("parent");
+        var first = new MutableRunningSubagent("first");
+        parent.Children.Add(first);
+        fixture.Subagents.Add(parent);
+        Assert.Equal(1, parent.SubscriberCount);
+        Assert.Equal(1, first.SubscriberCount);
+        var second = new MutableRunningSubagent("second");
+        parent.Children.Clear();
+        parent.Children.Add(second);
+        Assert.Equal(0, first.SubscriberCount);
+        Assert.Equal(1, second.SubscriberCount);
+        fixture.Subagents.Clear();
+        Assert.Equal(0, parent.SubscriberCount);
+        Assert.Equal(0, second.SubscriberCount);
+        fixture.Subagents.Add(parent);
+        Assert.Equal(1, parent.SubscriberCount);
+        await fixture.Runtime.TryTerminateAsync();
+        Assert.Equal(0, parent.SubscriberCount);
+        Assert.Equal(0, second.SubscriberCount);
+        parent.SetState(AgentChatCompletionState.Succeeded);
+    }
+
+    [Fact]
+    public async Task RemoteAgentSessionLease_ValueEqualChildReplacement_UnsubscribesOriginalInstance()
+    {
+        await using var fixture = new HostFixture();
+        var old = new MutableRunningSubagent("same");
+        var replacement = new MutableRunningSubagent("same");
+        fixture.Subagents.Add(old);
+        Assert.Equal(1, old.SubscriberCount);
+        fixture.Subagents[0] = replacement;
+        Assert.Equal(0, old.SubscriberCount);
+        Assert.Equal(1, replacement.SubscriberCount);
+    }
+
+    [Fact]
+    public async Task RemoteAgentSessionLease_InFlightCollectionEventAfterCleanup_CannotResubscribe()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEvent(false);
+        await using var fixture = new HostFixture(beforeLease: items =>
+            items.CollectionChanged += (_, _) =>
+            {
+                entered.TrySetResult();
+                release.WaitOne();
+            });
+        var child = new MutableRunningSubagent("child");
+        var add = Task.Run(() => fixture.Subagents.Add(child));
+        await entered.Task;
+        await fixture.Runtime.TryTerminateAsync();
+        release.Set();
+        await add;
+        Assert.Equal(0, child.SubscriberCount);
+    }
+
     private sealed class MutableRunningSubagent(string agentId) : IRunningSubAgent
     {
+        public override bool Equals(object? obj)
+            => obj is MutableRunningSubagent other && other.AgentId == this.AgentId;
+        public override int GetHashCode() => this.AgentId.GetHashCode(StringComparison.Ordinal);
         public string AgentId => agentId;
         public string DisplayName => agentId;
         public string Description => string.Empty;
-        public AgentChatCompletionState CompletionState { get; private set; } = AgentChatCompletionState.Running;
+        private AgentChatCompletionState state = AgentChatCompletionState.Running;
+        public AgentChatCompletionState CompletionState
+        {
+            get
+            {
+                this.OnStateRead?.Invoke();
+                return this.state;
+            }
+        }
+        public Action? OnStateRead { get; set; }
         public DateTime LastUpdatedAt => DateTime.UtcNow;
-        public IReadOnlyList<IRunningSubAgent> SubAgents => [];
+        public ObservableCollection<IRunningSubAgent> Children { get; } = [];
+        public IReadOnlyList<IRunningSubAgent> SubAgents => this.Children;
         public event EventHandler? CompletionStateChanged;
+        public int SubscriberCount => this.CompletionStateChanged?.GetInvocationList().Length ?? 0;
         public void SetState(AgentChatCompletionState state)
         {
-            this.CompletionState = state;
+            this.state = state;
             this.CompletionStateChanged?.Invoke(this, EventArgs.Empty);
         }
     }
@@ -1486,8 +1589,9 @@ public sealed partial class RemoteAgentSessionHostTests
         internal readonly RemoteAgentSessionHost Host;
         internal int FactoryStarts;
 
-        internal HostFixture(bool started = true)
+        internal HostFixture(bool started = true, Action<ObservableCollection<IRunningSubAgent>>? beforeLease = null)
         {
+            beforeLease?.Invoke(this.Subagents);
             this.Queues.SetupGet(value => value.Snapshot).Returns(new AgentInputQueuesSnapshot { Revision = 0, Queues = [] });
             this.Chat = RemoteAgentSessionHostTests.Chat(this.Queues, this.RunningItems, this.Subagents);
             this.Runtime = new RemoteAgentSessionLease(

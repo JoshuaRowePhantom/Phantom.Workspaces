@@ -32,7 +32,7 @@ namespace Phantom.Workspaces.Llm;
 /// otherwise a dedicated exclusive scheduler that serializes foreground work so the
 /// running-item collections are never mutated concurrently off the UI thread.
 /// </summary>
-public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvider, ISubAgentChatRegistry, IRunningSubAgent, ISubAgentTable
+public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvider, IAgentChatSubagentsSnapshotProvider, ISubAgentChatRegistry, IRunningSubAgent, ISubAgentTable
 {
     internal static TimeSpan DisposeDrainTimeout { get; } = TimeSpan.FromSeconds(2);
 
@@ -122,6 +122,7 @@ public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvid
         new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> parentToolCallIdToAgentId = new(StringComparer.Ordinal);
     private readonly object subAgentsLock = new();
+    private readonly object subAgentItemsLock = new();
     private readonly ObservableCollection<IRunningSubAgent> subAgentItems = [];
     private readonly Dictionary<string, SubAgent> subAgentTableMap = new(StringComparer.Ordinal);
     private SubAgentChatClient? subAgentChatClientSource;
@@ -650,6 +651,24 @@ public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvid
             runningItemsChanged,
             runningItemChanged,
             subscribedItems);
+
+    void IAgentChatSubagentsSnapshotProvider.SubscribeAndCaptureSubagents(
+        System.Collections.Specialized.NotifyCollectionChangedEventHandler changed,
+        Action<IReadOnlyList<IRunningSubAgent>> initialize)
+    {
+        lock (this.subAgentItemsLock)
+        {
+            ((System.Collections.Specialized.INotifyCollectionChanged)this.SubAgents).CollectionChanged += changed;
+            initialize(this.subAgentItems.ToArray());
+        }
+    }
+
+    void IAgentChatSubagentsSnapshotProvider.UnsubscribeSubagents(
+        System.Collections.Specialized.NotifyCollectionChangedEventHandler changed)
+    {
+        lock (this.subAgentItemsLock)
+            ((System.Collections.Specialized.INotifyCollectionChanged)this.SubAgents).CollectionChanged -= changed;
+    }
 
     /// <summary>
     /// Fired when the active streaming turn finishes.
@@ -1562,7 +1581,7 @@ public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvid
         }
 
         await Task.Factory.StartNew(
-            () => this.subAgentItems.Add(childChat),
+            () => { lock (this.subAgentItemsLock) this.subAgentItems.Add(childChat); },
             CancellationToken.None,
             TaskCreationOptions.DenyChildAttach,
             this.foregroundScheduler);
@@ -1615,7 +1634,7 @@ public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvid
         }
 
         _ = Task.Factory.StartNew(
-            () => this.subAgentItems.Add(subAgent),
+            () => { lock (this.subAgentItemsLock) this.subAgentItems.Add(subAgent); },
             CancellationToken.None,
             TaskCreationOptions.DenyChildAttach,
             this.foregroundScheduler);
@@ -1758,7 +1777,7 @@ public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvid
         // mutate it after cancellation, disposal, or replacement.
         foreach (var stub in stubs)
         {
-            this.subAgentItems.Add(stub);
+            lock (this.subAgentItemsLock) this.subAgentItems.Add(stub);
             this.copilotSdkClient?.RegisterRestoredSubAgent(stub);
         }
     }

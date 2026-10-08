@@ -200,7 +200,8 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
         Tools = chat.GetToolSnapshot().Select(item => JsonSerializer.SerializeToElement(
             item,
             Microsoft.Extensions.AI.AIJsonUtilities.DefaultOptions)).ToArray(),
-        Subagents = chat.SubAgents.Select(RemoteAgentSessionLease.SerializeSubagent).ToArray(),
+        // The lease overlays its synchronized child-state mirror.
+        Subagents = [],
         Modals = chat.Modals.ToArray(),
         ContinueInBackground = false,
         ViewerCount = 0,

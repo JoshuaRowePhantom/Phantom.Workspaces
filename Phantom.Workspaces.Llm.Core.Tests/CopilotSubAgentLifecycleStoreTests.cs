@@ -60,7 +60,34 @@ public sealed class CopilotSubAgentLifecycleStoreTests
         Assert.True(store.IsActive("child"));
         store.Apply(new("child", CopilotSubAgentLifecycleLayer.Task, "completed", TaskId: "other"));
         Assert.False(store.IsActive("child"));
-        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Session, "working", StatusRevision: 2));
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Session, "waiting", StatusRevision: 2));
+        Assert.False(store.IsActive("child"));
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Session, "attention", StatusRevision: 3));
+        Assert.False(store.IsActive("child"));
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Session, "working", StatusRevision: 4));
+        Assert.False(store.IsActive("child"));
+    }
+
+    [Fact]
+    public void CopilotSubAgentLifecycleStore_RegistryPollAfterIdle_DoesNotReactivateUntilNewWork()
+    {
+        var store = new CopilotSubAgentLifecycleStore();
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Session, "working", StatusRevision: 1));
+        store.ReplaceTasks([new("child", CopilotSubAgentLifecycleLayer.Task, "idle",
+            TaskId: "task", InvocationToolCallId: "call")]);
+        for (var revision = 2; revision <= 5; revision++)
+        {
+            store.Apply(new("child", CopilotSubAgentLifecycleLayer.Session,
+                revision % 2 == 0 ? "waiting" : "working", StatusRevision: revision));
+            Assert.False(store.IsActive("child"));
+        }
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Task, "running", TaskId: "task",
+            InvocationToolCallId: "call"));
+        Assert.True(store.IsActive("child"));
+        store.ReplaceTasks([new("child", CopilotSubAgentLifecycleLayer.Task, "idle",
+            TaskId: "task", InvocationToolCallId: "call")]);
+        Assert.False(store.IsActive("child"));
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Invocation, "running", InvocationToolCallId: "new"));
         Assert.True(store.IsActive("child"));
     }
 

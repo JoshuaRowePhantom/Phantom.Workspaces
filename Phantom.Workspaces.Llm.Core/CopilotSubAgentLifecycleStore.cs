@@ -81,7 +81,9 @@ internal sealed class CopilotSubAgentLifecycleStore
     {
         if (this.tasks.Values.Any(t => t.Chat == chatKey && IsTaskActive(t.State))) return true;
         if (this.invocations.Values.Any(i => i.Chat == chatKey && !IsTerminal(i.State))) return true;
-        return this.sessions.TryGetValue(chatKey, out var session) && session.State is "working" or "waiting" or "attention";
+        return !this.tasks.Values.Any(t => t.Chat == chatKey && t.State == "idle")
+            && this.sessions.TryGetValue(chatKey, out var session)
+            && session.State is "working" or "waiting" or "attention";
     }
 
     private static bool IsTaskActive(string state) => state == "running";
