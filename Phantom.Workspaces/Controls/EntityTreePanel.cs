@@ -33,10 +33,29 @@ public static class EntityTreePanel
         var offset = scroll?.Offset;
         var expanded = tree.GetVisualDescendants().OfType<TreeViewItem>()
             .Where(item => item.IsExpanded).Select(item => item.DataContext).ToHashSet();
+        var anchor = scroll is null ? null : tree.GetVisualDescendants().OfType<TreeViewItem>()
+            .Select(item => (Item: item, Position: item.TranslatePoint(default, scroll!)))
+            .Where(entry => entry.Position is { } position &&
+                position.Y <= 0 && position.Y + entry.Item.Bounds.Height > 0)
+            .OrderByDescending(entry => entry.Position!.Value.Y)
+            .FirstOrDefault().Item;
+        var anchorItem = anchor?.DataContext;
+        var anchorY = anchor?.TranslatePoint(default, scroll!)?.Y;
         var focused = tree.GetVisualDescendants().OfType<Control>()
             .FirstOrDefault(control => control.IsFocused);
-        var focusedItem = focused is TreeViewItem item ? item.DataContext :
-            focused?.GetVisualAncestors().OfType<TreeViewItem>().FirstOrDefault()?.DataContext;
+        var focusedContainer = focused as TreeViewItem ??
+            focused?.GetVisualAncestors().OfType<TreeViewItem>().FirstOrDefault();
+        var focusedItem = focusedContainer?.DataContext;
+        var focusPath = new List<int>();
+        for (Visual? current = focused; current is not null && current != focusedContainer;
+             current = current.GetVisualParent())
+        {
+            if (current.GetVisualParent() is { } parent)
+            {
+                focusPath.Add(parent.GetVisualChildren().ToList().IndexOf(current));
+            }
+        }
+        focusPath.Reverse();
 
         tree.Classes.Set("entity-card-tree-small", small);
         if (scroll is null)
@@ -68,23 +87,50 @@ public static class EntityTreePanel
                     return;
                 }
 
-                if (focusedItem is not null)
+                if (anchorItem is not null && tree.ContainerFromItem(anchorItem) is null)
+                {
+                    tree.ScrollIntoView(anchorItem);
+                    tree.UpdateLayout();
+                }
+
+                if (focusedItem is not null && focused?.IsAttachedToVisualTree() != true)
                 {
                     var container = tree.GetVisualDescendants().OfType<TreeViewItem>()
                         .FirstOrDefault(candidate => ReferenceEquals(candidate.DataContext, focusedItem));
-                    if (focused?.IsAttachedToVisualTree() == true)
+                    if (container is null && anchorItem is null)
                     {
-                        focused.Focus();
+                        tree.ScrollIntoView(focusedItem);
+                        tree.UpdateLayout();
+                        container = tree.GetVisualDescendants().OfType<TreeViewItem>()
+                            .FirstOrDefault(candidate => ReferenceEquals(candidate.DataContext, focusedItem));
                     }
-                    else
+
+                    Visual? replacement = container;
+                    foreach (int index in focusPath)
                     {
-                        container?.Focus();
+                        var children = replacement?.GetVisualChildren().ToList();
+                        replacement = children is not null && index >= 0 && index < children.Count
+                            ? children[index] : null;
                     }
+                    (replacement as InputElement ?? container)?.Focus();
                 }
 
                 if (offset is { } oldOffset)
                 {
-                    scroll.Offset = oldOffset;
+                    if (anchorItem is not null && anchorY is { } y)
+                    {
+                        var newAnchor = tree.GetVisualDescendants().OfType<TreeViewItem>()
+                            .FirstOrDefault(candidate => ReferenceEquals(candidate.DataContext, anchorItem));
+                        var newY = newAnchor?.TranslatePoint(default, scroll)?.Y;
+                        scroll.Offset = new Vector(oldOffset.X,
+                            newY is { } actualY
+                                ? Math.Max(0, scroll.Offset.Y + actualY - y)
+                                : oldOffset.Y);
+                    }
+                    else
+                    {
+                        scroll.Offset = oldOffset;
+                    }
                 }
             }, DispatcherPriority.Loaded);
         }

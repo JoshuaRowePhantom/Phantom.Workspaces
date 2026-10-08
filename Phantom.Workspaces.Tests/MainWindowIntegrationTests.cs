@@ -48,6 +48,74 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class MainWindowIntegrationTests
 {
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task PrimaryViewTree_ActualPopulationBinding_CountsCollapsedDescendantsAndViewSwitch()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+            var tree = window.GetVisualDescendants().OfType<TreeView>()
+                .Single(item => item.Classes.Contains("entity-card-tree-entity"));
+            var population = viewModel.CurrentViewPopulation;
+            population.Entities.Clear();
+            population.RootEntities.Clear();
+            Assert.IsType<StackPanel>(tree.ItemsPanelRoot);
+
+            ViewEntityViewModel CreateNode(int i) => new(
+                new SubscribedEntityViewModel(new EntitySnapshot
+                {
+                    EntityId = new EntityId(Guid.NewGuid().ToString()),
+                    ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, i.ToString()),
+                    Data = JsonDocument.Parse("""{"display-name":"Node","entity-types":["entity"]}""").RootElement.Clone(),
+                    Relationships = [],
+                }),
+                viewModel, new ShortcutManager(), indentLevel: i == 0 ? 0 : 1);
+
+            var root = CreateNode(0);
+            population.RootEntities.Add(root);
+            population.RootEntities.Add(CreateNode(1));
+            population.Entities.Add(root);
+            population.Entities.Add(population.RootEntities[1]);
+            for (int i = 2; i < 99; i++)
+            {
+                var child = CreateNode(i);
+                root.AddChild(child);
+                population.Entities.Add(child);
+            }
+            Dispatcher.UIThread.RunJobs();
+            Assert.IsType<StackPanel>(tree.ItemsPanelRoot);
+            var lastChild = CreateNode(99);
+            root.AddChild(lastChild);
+            population.Entities.Add(lastChild);
+            Dispatcher.UIThread.RunJobs();
+            Assert.Equal(2, population.RootEntities.Count);
+            Assert.IsType<VirtualizingStackPanel>(tree.ItemsPanelRoot);
+            Assert.Equal(100, Phantom.Workspaces.Controls.EntityTreePanel.GetNodeCount(tree));
+            population.ApplyFind("nonexistent", hideUnmatched: true);
+            Dispatcher.UIThread.RunJobs();
+            Assert.IsType<VirtualizingStackPanel>(tree.ItemsPanelRoot);
+            population.Entities.RemoveAt(99);
+            Dispatcher.UIThread.RunJobs();
+            Assert.IsType<StackPanel>(tree.ItemsPanelRoot);
+
+            var previousPopulation = viewModel.CurrentViewPopulation;
+            var alternative = viewModel.TopLevelViews.First(view => view != viewModel.SelectedTopLevelView);
+            viewModel.SelectedTopLevelView = alternative;
+            Dispatcher.UIThread.RunJobs();
+            Assert.NotSame(previousPopulation, viewModel.CurrentViewPopulation);
+            Assert.Equal(viewModel.CurrentViewPopulation.Entities.Count,
+                Phantom.Workspaces.Controls.EntityTreePanel.GetNodeCount(tree));
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
+    }
+
     [AvaloniaFact(Timeout = 15_000)]
     public async Task TrustedExecutor_Production_UsesTransportFactoryRegistry()
     {

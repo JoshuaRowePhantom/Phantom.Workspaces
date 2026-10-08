@@ -4,6 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Data;
 using Avalonia.Headless.XUnit;
 using Avalonia.VisualTree;
+using Avalonia.Input;
 using Phantom.Workspaces.Controls;
 using Phantom.Workspaces.Testing.Gui;
 using Phantom.Workspaces.ViewModels;
@@ -178,6 +179,87 @@ public sealed class EntityTreePanelTests
         }
     }
 
+    [AvaloniaFact]
+    public void EntityCardTreeView_InsertAndRemoveBeforeViewport_PreserveVisibleObjectAtVariableHeights()
+    {
+        var nodes = new ObservableCollection<TreeNode>(
+            Enumerable.Range(0, 99).Select(i => new TreeNode($"Node {i}")));
+        var tree = CreateTree(nodes);
+        tree.ItemTemplate = new Avalonia.Controls.Templates.FuncTreeDataTemplate<TreeNode>(
+            (node, _) => new TextBlock { Text = node.Name, Height = node.Height },
+            node => node.Children);
+        tree.Bind(EntityTreePanel.NodeCountProperty, new Binding("Count") { Source = nodes });
+        var window = new Window { Content = tree, Width = 400, Height = 240 };
+        try
+        {
+            window.Show();
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            var scroll = Assert.Single(tree.GetVisualDescendants().OfType<ScrollViewer>());
+            scroll.Offset = new Vector(0, 410);
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            var anchor = Assert.IsType<TreeViewItem>(tree.ContainerFromItem(nodes[7]));
+            var before = Assert.NotNull(anchor.TranslatePoint(default, scroll)).Y;
+
+            var inserted = new TreeNode("Tall item") { Height = 91 };
+            nodes.Insert(3, inserted);
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            Assert.IsType<VirtualizingStackPanel>(tree.ItemsPanelRoot);
+            Assert.Equal(before, Assert.NotNull(
+                Assert.IsType<TreeViewItem>(tree.ContainerFromItem(anchor.DataContext!))
+                    .TranslatePoint(default, scroll)).Y, 1);
+
+            nodes.Remove(inserted);
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            Assert.IsType<StackPanel>(tree.ItemsPanelRoot);
+            Assert.Equal(before, Assert.NotNull(
+                Assert.IsType<TreeViewItem>(tree.ContainerFromItem(anchor.DataContext!))
+                    .TranslatePoint(default, scroll)).Y, 1);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public void EntityCardTreeView_NestedEditorFocus_SurvivesBothPanelTransitions()
+    {
+        var nodes = new ObservableCollection<TreeNode>(
+            Enumerable.Range(0, 99).Select(i => new TreeNode($"Node {i}")));
+        var child = new TreeNode("Nested");
+        nodes[0].Children.Add(child);
+        var tree = CreateTree(nodes);
+        tree.ItemTemplate = new Avalonia.Controls.Templates.FuncTreeDataTemplate<TreeNode>(
+            (node, _) => new Button { Name = "Editor", Content = node.Name, Height = 34 },
+            node => node.Children);
+        tree.Bind(EntityTreePanel.NodeCountProperty, new Binding("Count") { Source = nodes });
+        var window = new Window { Content = tree, Width = 400, Height = 240 };
+        try
+        {
+            window.Show();
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            Assert.IsType<TreeViewItem>(tree.ContainerFromIndex(0)).IsExpanded = true;
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            var editor = tree.GetVisualDescendants().OfType<Button>()
+                .Single(button => Equals(button.Content, "Nested"));
+            editor.Focus();
+            Assert.True(editor.IsFocused);
+
+            nodes.Add(new TreeNode("Node 99"));
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            Assert.True(tree.GetVisualDescendants().OfType<Button>()
+                .Single(button => Equals(button.Content, "Nested")).IsFocused);
+            nodes.RemoveAt(99);
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            Assert.True(tree.GetVisualDescendants().OfType<Button>()
+                .Single(button => Equals(button.Content, "Nested")).IsFocused);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
     private static TreeView CreateTree(System.Collections.IEnumerable items)
     {
         var tree = new TreeView { ItemsSource = items };
@@ -188,6 +270,7 @@ public sealed class EntityTreePanelTests
     private sealed class TreeNode(string name)
     {
         public string Name { get; } = name;
+        public double Height { get; init; } = 34;
         public ObservableCollection<TreeNode> Children { get; } = [];
     }
 }
