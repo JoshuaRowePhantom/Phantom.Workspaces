@@ -500,11 +500,14 @@
                         <Button Content="{Binding Url}"
                                 Classes="workspace-url-link"
                                 Command="{Binding OpenCommand}"
+                                IsEnabled="{Binding IsSupported}"
                                 HorizontalAlignment="Left" />
+                        <TextBlock Text="{Binding ErrorMessage}"
+                                   IsVisible="{Binding HasError}"
+                                   Classes="muted" />
                     </StackPanel>
                 </DataTemplate>
             </ItemsControl.ItemTemplate>
         </ItemsControl>
     </DataTemplate>
 </DataTemplates>
-
