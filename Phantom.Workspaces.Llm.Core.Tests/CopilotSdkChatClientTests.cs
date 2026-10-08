@@ -288,6 +288,27 @@ public sealed class CopilotSdkChatClientTests
                 .Invoke(client, [CancellationToken.None])!;
             Assert.Equal(AgentChatCompletionState.Succeeded, ((IRunningSubAgent)child).CompletionState);
         }
+        var applySnapshot = typeof(CopilotSdkChatClient).GetMethod(
+            "ApplyTaskSnapshot", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        applySnapshot.Invoke(client, [Array.Empty<TaskInfo>()]);
+        Assert.Equal(AgentChatCompletionState.Succeeded, ((IRunningSubAgent)child).CompletionState);
+        applySnapshot.Invoke(client, [new TaskInfo[]
+        {
+            new TaskInfoAgent
+            {
+                Id = "child", ToolCallId = "call", AgentType = "task", Prompt = "first",
+                Description = "test", StartedAt = DateTimeOffset.UtcNow,
+                Status = GitHub.Copilot.Rpc.TaskStatus.Completed,
+            },
+        }]);
+        sdk.LiveSessionStates = [new AgentRegistryLiveTargetEntry
+        {
+            SessionId = "child", Status = new AgentRegistryLiveTargetEntryStatus("waiting"),
+        }];
+        await (Task)typeof(CopilotSdkChatClient).GetMethod(
+            "RefreshLiveSessionStatesAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(client, [CancellationToken.None])!;
+        Assert.Equal(AgentChatCompletionState.Succeeded, ((IRunningSubAgent)child).CompletionState);
         var active = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         child.CompletionStateChanged += (_, _) =>
         {
@@ -302,6 +323,54 @@ public sealed class CopilotSdkChatClientTests
         session.Emit(new SessionBackgroundTasksChangedEvent { Data = new SessionBackgroundTasksChangedData() });
         await active.Task;
         Assert.Equal(AgentChatCompletionState.Running, ((IRunningSubAgent)child).CompletionState);
+    }
+
+    [Fact]
+    public async Task CopilotSdkChatClient_LiveIdleChild_RegistryPollAfterEmptySnapshotStaysNonrunning()
+    {
+        var session = new Infrastructure.FakeCopilotSession
+        {
+            Tasks = [new TaskInfoAgent
+            {
+                Id = "child", ToolCallId = "call", AgentType = "task", Prompt = "first",
+                Description = "test", StartedAt = DateTimeOffset.UtcNow, Status = GitHub.Copilot.Rpc.TaskStatus.Idle,
+            }],
+        };
+        var sdk = new Infrastructure.FakeCopilotClient(session);
+        await using var client = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
+        client.SetCopilotClientFactoryForTest(new Infrastructure.FakeCopilotClientFactory(sdk));
+        await InvokeEnsureSessionAsync(client);
+        var definition = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {"kind":"prompt","name":"hosted-subagent","model":{"id":"github-copilot-subagent","provider":"github-copilot-subagent"},"tools":[]}
+            """);
+        await using var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = definition, ConfiguredStore = new InMemoryAgentPersistenceStore(),
+            ClientOverride = new CopilotSubAgentChatClient(),
+        });
+        var child = new SubAgent(new AgentSessionId(chat.AgentSessionId), chat, null);
+        typeof(CopilotSdkChatClient).GetMethod("RegisterSubAgent", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(client, ["child", "call", child]);
+        var scheduler = (TaskScheduler)typeof(AgentChat).GetField(
+            "foregroundScheduler", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(chat)!;
+        await Task.Factory.StartNew(() => { }, CancellationToken.None, TaskCreationOptions.None, scheduler);
+        Assert.Equal(AgentChatCompletionState.Succeeded, chat.CompletionState);
+        typeof(CopilotSdkChatClient).GetMethod("ApplyTaskSnapshot", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(client, [Array.Empty<TaskInfo>()]);
+        foreach (var status in new[] { "waiting", "working" })
+        {
+            sdk.LiveSessionStates = [new AgentRegistryLiveTargetEntry
+            {
+                SessionId = "child", Status = new AgentRegistryLiveTargetEntryStatus(status),
+            }];
+            await (Task)typeof(CopilotSdkChatClient).GetMethod(
+                "RefreshLiveSessionStatesAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .Invoke(client, [CancellationToken.None])!;
+            await Task.Factory.StartNew(() => { }, CancellationToken.None, TaskCreationOptions.None, scheduler);
+            Assert.Equal(AgentChatCompletionState.Succeeded, chat.CompletionState);
+            Assert.Same(chat, child.AgentChat);
+        }
     }
 
     [Fact]

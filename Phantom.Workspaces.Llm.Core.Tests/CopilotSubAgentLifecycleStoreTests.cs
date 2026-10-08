@@ -92,6 +92,39 @@ public sealed class CopilotSubAgentLifecycleStoreTests
     }
 
     [Fact]
+    public void CopilotSubAgentLifecycleStore_IdleThenEmptySnapshot_KeepsRegistrySuppressedUntilNewExecution()
+    {
+        var store = new CopilotSubAgentLifecycleStore();
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Session, "working", StatusRevision: 1));
+        store.ReplaceTasks([new("child", CopilotSubAgentLifecycleLayer.Task, "idle",
+            TaskId: "old", InvocationToolCallId: "old-call")]);
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Session, "waiting", StatusRevision: 2));
+        store.ReplaceTasks([]);
+        Assert.False(store.IsActive("child"));
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Session, "working", StatusRevision: 3));
+        Assert.False(store.IsActive("child"));
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Invocation, "running", InvocationToolCallId: "fresh"));
+        Assert.True(store.IsActive("child"));
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Invocation, "completed", InvocationToolCallId: "fresh"));
+        Assert.False(store.IsActive("child"));
+    }
+
+    [Fact]
+    public void CopilotSubAgentLifecycleStore_TerminalOnlySnapshot_KeepsStaleWaitingSessionSuppressed()
+    {
+        var store = new CopilotSubAgentLifecycleStore();
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Session, "waiting", StatusRevision: 1));
+        store.ReplaceTasks([new("child", CopilotSubAgentLifecycleLayer.Task, "completed",
+            TaskId: "old", InvocationToolCallId: "old-call")]);
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Session, "waiting", StatusRevision: 2));
+        Assert.False(store.IsActive("child"));
+        store.ReplaceTasks([]);
+        Assert.False(store.IsActive("child"));
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Task, "running", TaskId: "fresh"));
+        Assert.True(store.IsActive("child"));
+    }
+
+    [Fact]
     public void CopilotSubAgentLifecycleStore_NewInvocation_PreservesTerminalHistory()
     {
         var store = new CopilotSubAgentLifecycleStore();

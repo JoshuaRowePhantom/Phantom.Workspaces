@@ -29,7 +29,8 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     private readonly List<IRunningSubAgent> rootSubagents = [];
     private readonly Dictionary<IRunningSubAgent, List<IRunningSubAgent>> subagentChildren =
         new(ReferenceEqualityComparer.Instance);
-    private readonly Dictionary<IRunningSubAgent, (INotifyCollectionChanged Collection,
+    private readonly Dictionary<IRunningSubAgent, (INotifyCollectionChanged? Collection,
+        IAgentChatSubagentsSnapshotProvider? Provider,
         NotifyCollectionChangedEventHandler Handler)> childCollections =
         new(ReferenceEqualityComparer.Instance);
     private readonly TimeProvider timeProvider;
@@ -679,8 +680,11 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             foreach (var child in this.subscribedSubagents)
                 child.CompletionStateChanged -= this.OnSubagentCompletionStateChanged;
             this.subscribedSubagents.Clear();
-            foreach (var (collection, handler) in this.childCollections.Values)
-                collection.CollectionChanged -= handler;
+            foreach (var (collection, provider, handler) in this.childCollections.Values)
+            {
+                if (provider is not null) provider.UnsubscribeSubagents(handler);
+                else if (collection is not null) collection.CollectionChanged -= handler;
+            }
             this.childCollections.Clear();
             this.subagentChildren.Clear();
             this.rootSubagents.Clear();
@@ -1304,14 +1308,22 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             if (!current.Add(child)) return;
             if (!this.subagentChildren.TryGetValue(child, out var children))
             {
-                children = child.SubAgents.ToList();
+                children = [];
                 this.subagentChildren.Add(child, children);
-                if (child.SubAgents is INotifyCollectionChanged collection)
+                NotifyCollectionChangedEventHandler handler = (_, args) => this.OnNestedSubagentsChanged(child, args);
+                if (child is IAgentChatSubagentsSnapshotProvider provider
+                    && child is not SubAgent { AgentChat: null })
                 {
-                    NotifyCollectionChangedEventHandler handler = (_, args) => this.OnNestedSubagentsChanged(child, args);
-                    collection.CollectionChanged += handler;
-                    this.childCollections.Add(child, (collection, handler));
+                    provider.SubscribeAndCaptureSubagents(handler, snapshot => children.AddRange(snapshot));
+                    this.childCollections.Add(child, (null, provider, handler));
                 }
+                else if (child.SubAgents is INotifyCollectionChanged collection)
+                {
+                    collection.CollectionChanged += handler;
+                    children.AddRange(child.SubAgents);
+                    this.childCollections.Add(child, (collection, null, handler));
+                }
+                else children.AddRange(child.SubAgents);
             }
             foreach (var nested in children) Visit(nested);
         }
@@ -1321,7 +1333,10 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             child.CompletionStateChanged -= this.OnSubagentCompletionStateChanged;
             this.subscribedSubagents.Remove(child);
             if (this.childCollections.Remove(child, out var entry))
-                entry.Collection.CollectionChanged -= entry.Handler;
+            {
+                if (entry.Provider is not null) entry.Provider.UnsubscribeSubagents(entry.Handler);
+                else entry.Collection?.CollectionChanged -= entry.Handler;
+            }
             this.subagentChildren.Remove(child);
         }
         foreach (var child in current.Where(child => !this.subscribedSubagents.Contains(child)))
@@ -1339,6 +1354,10 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         lock (this.gate)
         {
             if (this.fenced) return;
+            if (sender is SubAgent { AgentChat: not null } child
+                && !this.childCollections.ContainsKey(child)
+                && this.subagentChildren.Remove(child))
+                this.SyncSubagentSubscriptionsUnderLock();
             this.PublishSubagentsUnderLock();
         }
     }

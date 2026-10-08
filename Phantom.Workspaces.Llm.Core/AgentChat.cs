@@ -665,10 +665,7 @@ public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvid
 
     void IAgentChatSubagentsSnapshotProvider.UnsubscribeSubagents(
         System.Collections.Specialized.NotifyCollectionChangedEventHandler changed)
-    {
-        lock (this.subAgentItemsLock)
-            ((System.Collections.Specialized.INotifyCollectionChanged)this.SubAgents).CollectionChanged -= changed;
-    }
+        => ((System.Collections.Specialized.INotifyCollectionChanged)this.SubAgents).CollectionChanged -= changed;
 
     /// <summary>
     /// Fired when the active streaming turn finishes.

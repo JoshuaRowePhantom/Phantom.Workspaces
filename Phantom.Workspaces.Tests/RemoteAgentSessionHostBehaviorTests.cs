@@ -521,6 +521,69 @@ public sealed partial class RemoteAgentSessionHostTests
         Assert.Equal(0, child.SubscriberCount);
     }
 
+    [Fact]
+    public async Task RemoteAgentSessionLease_NestedMutationDuringSubscription_IsCapturedOrRelayed()
+    {
+        await using var fixture = new HostFixture();
+        var parent = new AtomicNestedSubagent("parent");
+        var capturing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEvent(false);
+        parent.OnCapture = () =>
+        {
+            capturing.TrySetResult();
+            release.WaitOne();
+        };
+        var registration = Task.Run(() => fixture.Subagents.Add(parent));
+        await capturing.Task;
+        var nested = new MutableRunningSubagent("nested");
+        var additionStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var addition = Task.Run(() =>
+        {
+            additionStarted.TrySetResult();
+            parent.AddChild(nested);
+        });
+        await additionStarted.Task;
+        release.Set();
+        await registration;
+        await addition;
+        await using var attachment = await fixture.Host.OpenAsync(fixture.Request(AgentSessionOpenIntent.Attach));
+        var snapshot = Assert.IsType<SessionSnapshotEvent>(
+            AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(
+                AgentSessionProtocolCodec.DeserializeFrame(await fixture.Channel.Output.ReadAsync())));
+        var children = snapshot.Snapshot.Subagents.Single().GetProperty("subAgents");
+        Assert.Equal("nested", children.EnumerateArray().Single().GetProperty("agentId").GetString());
+        Assert.Equal(1, nested.SubscriberCount);
+    }
+
+    private sealed class AtomicNestedSubagent(string id) : IRunningSubAgent, IAgentChatSubagentsSnapshotProvider
+    {
+        private readonly object gate = new();
+        private readonly ObservableCollection<IRunningSubAgent> children = [];
+        public string AgentId => id;
+        public string DisplayName => id;
+        public string Description => string.Empty;
+        public AgentChatCompletionState CompletionState => AgentChatCompletionState.Running;
+        public DateTime LastUpdatedAt => DateTime.UtcNow;
+        public IReadOnlyList<IRunningSubAgent> SubAgents => this.children;
+        public Action? OnCapture { get; set; }
+        public void AddChild(IRunningSubAgent child)
+        {
+            lock (this.gate) this.children.Add(child);
+        }
+        void IAgentChatSubagentsSnapshotProvider.SubscribeAndCaptureSubagents(
+            NotifyCollectionChangedEventHandler changed, Action<IReadOnlyList<IRunningSubAgent>> initialize)
+        {
+            lock (this.gate)
+            {
+                this.OnCapture?.Invoke();
+                this.children.CollectionChanged += changed;
+                initialize(this.children.ToArray());
+            }
+        }
+        void IAgentChatSubagentsSnapshotProvider.UnsubscribeSubagents(NotifyCollectionChangedEventHandler changed)
+            => this.children.CollectionChanged -= changed;
+    }
+
     private sealed class MutableRunningSubagent(string agentId) : IRunningSubAgent
     {
         public override bool Equals(object? obj)

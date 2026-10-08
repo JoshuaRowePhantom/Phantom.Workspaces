@@ -8,7 +8,7 @@ namespace Phantom.Workspaces.Llm;
 /// Implements <see cref="IRunningSubAgent"/> so it can appear in the parent's
 /// <see cref="AgentChat.SubAgents"/> observable collection.
 /// </summary>
-public sealed class SubAgent : IRunningSubAgent
+public sealed class SubAgent : IRunningSubAgent, IAgentChatSubagentsSnapshotProvider
 {
     private readonly IRunningAgentChatFactory? _factory;
     private AgentChatCompletionState? _restoredCompletionState;
@@ -114,4 +114,20 @@ public sealed class SubAgent : IRunningSubAgent
         ?? AgentChatCompletionState.Unknown;
     DateTime IRunningSubAgent.LastUpdatedAt => AgentChat?.LastUpdatedAt ?? DateTime.MinValue;
     IReadOnlyList<IRunningSubAgent> IRunningSubAgent.SubAgents => AgentChat?.SubAgents ?? (IReadOnlyList<IRunningSubAgent>)[];
+
+    void IAgentChatSubagentsSnapshotProvider.SubscribeAndCaptureSubagents(
+        System.Collections.Specialized.NotifyCollectionChangedEventHandler changed,
+        Action<IReadOnlyList<IRunningSubAgent>> initialize)
+    {
+        if (this.AgentChat is { } chat)
+            ((IAgentChatSubagentsSnapshotProvider)chat).SubscribeAndCaptureSubagents(changed, initialize);
+        else initialize([]);
+    }
+
+    void IAgentChatSubagentsSnapshotProvider.UnsubscribeSubagents(
+        System.Collections.Specialized.NotifyCollectionChangedEventHandler changed)
+    {
+        if (this.AgentChat is { } chat)
+            ((IAgentChatSubagentsSnapshotProvider)chat).UnsubscribeSubagents(changed);
+    }
 }

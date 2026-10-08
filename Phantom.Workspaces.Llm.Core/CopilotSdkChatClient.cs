@@ -913,7 +913,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private void ProjectSubAgent(SubAgent child, string terminalState)
     {
         var state = this.subAgentStates.IsActive(child.SessionId.Value) ? "running" :
-            terminalState == "idle" ? "completed" : terminalState;
+            terminalState is "idle" or "working" or "waiting" or "attention"
+                ? "completed" : terminalState;
         var request = new ApplySubAgentStateRequest(child.SessionId.Value,
             CopilotSubAgentLifecycleLayer.Session, state);
         if (child.AgentChat is { } chat) chat.ApplySubAgentLifecycleState(request);

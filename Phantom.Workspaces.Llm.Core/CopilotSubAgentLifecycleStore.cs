@@ -20,6 +20,7 @@ internal sealed class CopilotSubAgentLifecycleStore
     private readonly Dictionary<string, (string State, long? Revision)> sessions = new(StringComparer.Ordinal);
     private readonly Dictionary<string, (string Chat, string State)> tasks = new(StringComparer.Ordinal);
     private readonly Dictionary<string, (string Chat, string State)> invocations = new(StringComparer.Ordinal);
+    private readonly HashSet<string> sessionSupersededByTask = new(StringComparer.Ordinal);
     private readonly HashSet<Guid> events = [];
 
     internal bool Apply(ApplySubAgentStateRequest request)
@@ -37,9 +38,12 @@ internal sealed class CopilotSubAgentLifecycleStore
             case CopilotSubAgentLifecycleLayer.Task:
                 if (string.IsNullOrEmpty(request.TaskId)) return false;
                 this.tasks[request.TaskId] = (request.ChatKey, request.State);
-                if (request.State == "idle")
+                if (request.State == "running")
+                    this.sessionSupersededByTask.Remove(request.ChatKey);
+                else if (request.State == "idle" || IsTerminal(request.State))
                 {
-                    if (request.InvocationToolCallId is { Length: > 0 } toolCallId)
+                    this.sessionSupersededByTask.Add(request.ChatKey);
+                    if (request.State == "idle" && request.InvocationToolCallId is { Length: > 0 } toolCallId)
                         this.Apply(new(request.ChatKey, CopilotSubAgentLifecycleLayer.Invocation,
                             "completed", InvocationToolCallId: toolCallId));
                     if (this.sessions.TryGetValue(request.ChatKey, out var session))
@@ -51,6 +55,8 @@ internal sealed class CopilotSubAgentLifecycleStore
                 if (this.invocations.TryGetValue(request.InvocationToolCallId, out var previous)
                     && IsTerminal(previous.State)) return false;
                 this.invocations[request.InvocationToolCallId] = (request.ChatKey, request.State);
+                if (request.State == "running") this.sessionSupersededByTask.Remove(request.ChatKey);
+                else if (IsTerminal(request.State)) this.sessionSupersededByTask.Add(request.ChatKey);
                 break;
         }
         return true;
@@ -81,7 +87,7 @@ internal sealed class CopilotSubAgentLifecycleStore
     {
         if (this.tasks.Values.Any(t => t.Chat == chatKey && IsTaskActive(t.State))) return true;
         if (this.invocations.Values.Any(i => i.Chat == chatKey && !IsTerminal(i.State))) return true;
-        return !this.tasks.Values.Any(t => t.Chat == chatKey && t.State == "idle")
+        return !this.sessionSupersededByTask.Contains(chatKey)
             && this.sessions.TryGetValue(chatKey, out var session)
             && session.State is "working" or "waiting" or "attention";
     }
