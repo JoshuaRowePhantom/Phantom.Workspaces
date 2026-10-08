@@ -96,6 +96,17 @@ public sealed class ExternalEntityCardViewModelTests
         Assert.Equal(EntityCardViewResolver.RawViewName, viewName);
     }
 
+    [AvaloniaFact]
+    public void EntityCardViewResolver_ExternalAndNote_ReturnsCompositeViewName()
+    {
+        var entity = new SubscribedEntityViewModel(MixedExternalNoteTestData.CreateSnapshot());
+        var resolver = new EntityCardViewResolver();
+
+        Assert.Equal("external-note", resolver.ResolveViewName(entity));
+        Assert.Equal(EntityCardViewResolver.RawViewName,
+            resolver.ResolveViewName(entity, EntityCardViewResolver.RawViewName));
+    }
+
     private static EntitySnapshot CreateExternalEntity(string urlsJson)
     {
         var json = $$"""
@@ -121,5 +132,40 @@ public sealed class ExternalEntityCardViewModelTests
             Data = document.RootElement.Clone(),
             Relationships = Array.Empty<EntitySnapshot>(),
         };
+    }
+
+    internal static class MixedExternalNoteTestData
+    {
+        public static EntitySnapshot CreateSnapshot(
+            string types = "\"entity\", \"external\", \"note\"",
+            string url = "https://example.com/first",
+            string body = "# First note")
+        {
+            using var document = JsonDocument.Parse(
+                $$"""
+                {
+                  "entity-id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                  "entity-types": [{{types}}],
+                  "names": [["externals", "my-link"]],
+                  "display-name": { "default": "My Link" },
+                  "urls": { "default": {{JsonSerializer.Serialize(url)}} },
+                  "content": {
+                    "default": {
+                      "mime-type": "text/markdown",
+                      "content": { "text": {{JsonSerializer.Serialize(body)}} }
+                    }
+                  },
+                  "internal-metadata": "must never appear"
+                }
+                """);
+            return new EntitySnapshot
+            {
+                EntityId = new EntityId("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+                ConcurrencyTag = new ConcurrencyTag("1"),
+                ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, Guid.NewGuid().ToString()),
+                Data = document.RootElement.Clone(),
+                Relationships = Array.Empty<EntitySnapshot>(),
+            };
+        }
     }
 }

@@ -32,9 +32,11 @@ public sealed class EntityListNodeViewModel : ViewModelBase
         IReadOnlyCollection<EntityFieldEditorViewModel>? fieldEditors = null,
         string? cardViewName = null,
         IEntitySchemaComposer? schemaComposer = null,
-        FieldEditorFactory? fieldEditorFactory = null)
+        FieldEditorFactory? fieldEditorFactory = null,
+        bool autoResolveCardView = false)
     {
-        this.Card = new EntityCardViewModel(entity, fieldEditors, cardViewName, schemaComposer, fieldEditorFactory);
+        this.Card = new EntityCardViewModel(
+            entity, fieldEditors, cardViewName, schemaComposer, fieldEditorFactory, autoResolveCardView);
         this.NameComponents = nameComponents;
         this.SortKey = sortKey;
         this.ToggleExpandCommand = new RelayCommand(

@@ -125,7 +125,7 @@
                 </DockPanel>
                 <ItemsControl ItemsSource="{Binding FieldEditors}"
                               Classes="workspace-field-editor-list"
-                              IsVisible="{Binding ExternalCard, Converter={x:Static ObjectConverters.IsNull}}" />
+                              IsVisible="{Binding ShowFieldEditors}" />
                 <ContentControl Content="{Binding ExternalCard}"
                                 IsVisible="{Binding ExternalCard, Converter={x:Static ObjectConverters.IsNotNull}}" />
                 <TextBox Text="{Binding RawJsonText, Mode=TwoWay}"
@@ -139,7 +139,6 @@
                            Classes.workspace-validation-error="{Binding Validation.HasError}" />
     </StackPanel>
 </UserControl>
-
 
 
 

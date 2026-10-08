@@ -40,6 +40,39 @@ public sealed class EntityWorkspaceTabViewModelTests : IAsyncDisposable
         Assert.NotNull(cardNode.Card.ActivateShortcutCommand);
     }
 
+    [AvaloniaFact]
+    public void EntityWorkspaceTabViewModel_ExternalAndNote_OpenAndReopenShowsBoth()
+    {
+        var entity = new SubscribedEntityViewModel(ExternalEntityCardViewModelTests.MixedExternalNoteTestData.CreateSnapshot());
+        EntityWorkspaceTabViewModel Open() => new()
+        {
+            Id = "mixed",
+            Title = "Mixed",
+            Entity = entity,
+        };
+
+        var first = Open().EntityCardNode!.Card;
+        Assert.Equal("external-note", first.CardViewName);
+        Assert.True(first.ShowFieldEditors);
+        Assert.Equal("https://example.com/first", Assert.Single(first.ExternalCard!.Urls).Url);
+        Assert.Empty(first.FieldEditors);
+
+        var reopened = Open().EntityCardNode!.Card;
+        Assert.Equal("external-note", reopened.CardViewName);
+        Assert.NotNull(reopened.ExternalCard);
+        Assert.True(reopened.ShowFieldEditors);
+
+        entity.UpdateSnapshot(ExternalEntityCardViewModelTests.MixedExternalNoteTestData.CreateSnapshot(types: "\"entity\", \"external\""));
+        Assert.Equal("external", first.CardViewName);
+        Assert.False(first.ShowFieldEditors);
+        Assert.Equal("external", Open().EntityCardNode!.Card.CardViewName);
+
+        entity.UpdateSnapshot(ExternalEntityCardViewModelTests.MixedExternalNoteTestData.CreateSnapshot(types: "\"entity\", \"note\""));
+        Assert.Equal("raw", first.CardViewName);
+        Assert.Null(first.ExternalCard);
+        Assert.Equal("raw", Open().EntityCardNode!.Card.CardViewName);
+    }
+
     private static SubscribedEntityViewModel CreateEntity(string entityType)
     {
         using var document = JsonDocument.Parse(
