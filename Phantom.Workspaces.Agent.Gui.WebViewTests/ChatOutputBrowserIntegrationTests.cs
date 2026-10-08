@@ -808,6 +808,105 @@ public sealed class ChatOutputBrowserIntegrationTests
         });
 
     [Fact]
+    public Task ToolRun_DistinctMessageGroups_RouteActionsToVisibleSummaryAcrossCollapseMutationAndReload()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            var messages = new List<string>();
+            web.JavaScriptMessageReceived += (_, body) => messages.Add(body);
+            try
+            {
+                static AgentChatHistoryItem Call(string id) => new()
+                {
+                    Role = ChatRole.Assistant, AssistantRunId = "message-run",
+                    Contents =
+                    [
+                        new FunctionCallContent(id, "read", new Dictionary<string, object?>()),
+                        new UsageContent(new UsageDetails { InputTokenCount = id == "c1" ? 11 : 22 }),
+                    ],
+                };
+                var items = new[] { Call("c1"), TextItem("between message groups") with
+                    { AssistantRunId = "message-run" }, Call("c2") };
+                var history = new ObservableCollection<AgentChatHistoryItem>();
+                using var live = CreateModel(web, history);
+                await live.HistoryLoaded;
+                foreach (var item in items) history.Add(item);
+
+                async Task AssertActionsAsync(string secondCall, bool expanded)
+                {
+                    var state = await EvalAsync(web, """
+                        (() => {
+                          const groups = Array.from(document.querySelectorAll('details.chat-tool-group[data-assistant-run-id="message-run"]'));
+                          if (groups.length !== 2 || groups[0].closest('.chat-message') === groups[1].closest('.chat-message')) return false;
+                          const host = groups[0].previousElementSibling;
+                          const secondHost = groups[1].previousElementSibling;
+                          const buttons = Array.from(host?.querySelectorAll(':scope > button') || []);
+                          const targets = buttons.map(b => document.getElementById(b.getAttribute('data-segment-target-id')));
+                          const ids = Array.from(document.querySelectorAll('[id]')).map(e => e.id);
+                          const summary = groups[0].querySelector(':scope > summary');
+                          return host?.matches('.chat-tool-group-actions') && secondHost?.matches('.chat-tool-group-actions') &&
+                            buttons.length === 4 && secondHost.querySelectorAll('button').length === 0 &&
+                            targets.every(t => t && t.hasAttribute('data-details-target')) &&
+                            buttons.filter(b => b.classList.contains('inspect-gutter-btn')).length === 2 &&
+                            buttons.filter(b => b.classList.contains('usage-gutter-btn')).length === 2 &&
+                            buttons.some(b => b.getAttribute('data-segment-target-id')?.includes('history-2')) &&
+                            targets.some(t => t.getAttribute('data-details-target')?.includes('SECOND')) &&
+                            buttons.every(b => b.getClientRects().length > 0 && b.tabIndex >= 0 && !b.disabled &&
+                              b.getAttribute('aria-label') && b.parentElement === host) &&
+                            host.getBoundingClientRect().bottom <= summary.getBoundingClientRect().top + 2 &&
+                            !summary.hidden && groups[1].querySelector(':scope > summary').hidden &&
+                            groups.every(g => g.open === EXPANDED) && ids.length === new Set(ids).size;
+                        })()
+                        """.Replace("SECOND", secondCall, StringComparison.Ordinal)
+                            .Replace("EXPANDED", expanded ? "true" : "false", StringComparison.Ordinal));
+                    Assert.Contains("true", state, StringComparison.Ordinal);
+                }
+
+                await AssertActionsAsync("c2", true);
+                await EvalAsync(web, "document.querySelector('details.chat-tool-group[data-assistant-run-id=\"message-run\"] > summary').click();'collapsed'");
+                await AssertActionsAsync("c2", false);
+                var activated = await EvalAsync(web, """
+                    (() => {
+                      const groups = Array.from(document.querySelectorAll('details.chat-tool-group[data-assistant-run-id="message-run"]'));
+                      const buttons = groups[0].previousElementSibling.querySelectorAll('button');
+                      buttons.forEach(b => { b.focus(); b.click(); });
+                      return document.activeElement === buttons[buttons.length - 1] && groups.every(g => !g.open);
+                    })()
+                    """);
+                Assert.Contains("true", activated, StringComparison.Ordinal);
+                Assert.Equal(4, messages.Count);
+                Assert.Equal(4, messages.Select(m => JsonDocument.Parse(m).RootElement.GetProperty("contentId").GetString())
+                    .Distinct().Count());
+                Assert.Contains(messages, m => m.Contains("c1", StringComparison.Ordinal));
+                Assert.Contains(messages, m => m.Contains("c2", StringComparison.Ordinal));
+
+                history[2] = Call("c3");
+                await AssertActionsAsync("c3", false);
+                messages.Clear();
+                await EvalAsync(web, """
+                    (() => {
+                      const host = document.querySelector('details.chat-tool-group[data-assistant-run-id="message-run"]')
+                        .previousElementSibling;
+                      host.querySelectorAll('button').forEach(b => b.click());
+                      return 'clicked';
+                    })()
+                    """);
+                Assert.Equal(4, messages.Count);
+                Assert.Contains(messages, m => m.Contains("c3", StringComparison.Ordinal));
+                Assert.DoesNotContain(messages, m => m.Contains("c2", StringComparison.Ordinal));
+
+                live.Dispose();
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history-container", "replace", "<div id=\"chat-history-container\"></div>"));
+                using var reload = CreateModel(web, new ObservableCollection<AgentChatHistoryItem>
+                    { items[0], items[1], Call("c3") });
+                await reload.HistoryLoaded;
+                await AssertActionsAsync("c3", false);
+            }
+            finally { window.Close(); }
+        });
+
+    [Fact]
     public Task MixedMessage_TwoToolSegments_InspectResultAndUsageActionsSurviveMutationAndReload()
         => this.fixture.InvokeAsync(async () =>
         {
