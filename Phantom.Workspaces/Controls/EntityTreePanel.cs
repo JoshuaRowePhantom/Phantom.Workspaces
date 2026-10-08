@@ -3,12 +3,21 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using System.Runtime.CompilerServices;
 
 namespace Phantom.Workspaces.Controls;
 
 /// <summary>Opt-in panel selection for entity trees, based on all object nodes, not just roots.</summary>
 public static class EntityTreePanel
 {
+    private static readonly ConditionalWeakTable<TreeView, TransitionState> Transitions = new();
+
+    private sealed class TransitionState
+    {
+        public int Generation;
+        public Action? Cancel;
+    }
+
     public static readonly AttachedProperty<int> NodeCountProperty =
         AvaloniaProperty.RegisterAttached<TreeView, int>("NodeCount", typeof(EntityTreePanel), -1);
 
@@ -29,6 +38,9 @@ public static class EntityTreePanel
             return;
         }
 
+        var transition = Transitions.GetOrCreateValue(tree);
+        transition.Cancel?.Invoke();
+        int generation = ++transition.Generation;
         var scroll = tree.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();
         var offset = scroll?.Offset;
         var expanded = tree.GetVisualDescendants().OfType<TreeViewItem>()
@@ -46,6 +58,7 @@ public static class EntityTreePanel
         var focusedContainer = focused as TreeViewItem ??
             focused?.GetVisualAncestors().OfType<TreeViewItem>().FirstOrDefault();
         var focusedItem = focusedContainer?.DataContext;
+        var focusedDataContext = focused?.DataContext;
         var focusPath = new List<int>();
         for (Visual? current = focused; current is not null && current != focusedContainer;
              current = current.GetVisualParent())
@@ -65,13 +78,19 @@ public static class EntityTreePanel
 
         void Restore(object? sender, EventArgs args)
         {
+            if (transition.Generation != generation)
+            {
+                Cancel();
+                return;
+            }
+
             if (tree.ItemsPanelRoot is null ||
                 (tree.ItemsPanelRoot is VirtualizingStackPanel) == small)
             {
                 return;
             }
 
-            tree.LayoutUpdated -= Restore;
+            Cancel();
             foreach (var container in tree.GetVisualDescendants().OfType<TreeViewItem>())
             {
                 if (expanded.Contains(container.DataContext))
@@ -82,7 +101,7 @@ public static class EntityTreePanel
 
             Dispatcher.UIThread.Post(() =>
             {
-                if (!tree.IsAttachedToVisualTree())
+                if (transition.Generation != generation || !tree.IsAttachedToVisualTree())
                 {
                     return;
                 }
@@ -93,29 +112,44 @@ public static class EntityTreePanel
                     tree.UpdateLayout();
                 }
 
+                bool focusRequiresScroll = false;
                 if (focusedItem is not null && focused?.IsAttachedToVisualTree() != true)
                 {
                     var container = tree.GetVisualDescendants().OfType<TreeViewItem>()
                         .FirstOrDefault(candidate => ReferenceEquals(candidate.DataContext, focusedItem));
-                    if (container is null && anchorItem is null)
+                    if (container is null)
                     {
                         tree.ScrollIntoView(focusedItem);
                         tree.UpdateLayout();
                         container = tree.GetVisualDescendants().OfType<TreeViewItem>()
                             .FirstOrDefault(candidate => ReferenceEquals(candidate.DataContext, focusedItem));
+                        focusRequiresScroll = container is not null;
                     }
 
-                    Visual? replacement = container;
-                    foreach (int index in focusPath)
+                    InputElement? target = null;
+                    if (focusedDataContext is not null &&
+                        !ReferenceEquals(focusedDataContext, focusedItem))
                     {
-                        var children = replacement?.GetVisualChildren().ToList();
-                        replacement = children is not null && index >= 0 && index < children.Count
-                            ? children[index] : null;
+                        target = container?.GetVisualDescendants().OfType<Control>()
+                            .FirstOrDefault(control =>
+                                control.GetType() == focused?.GetType() &&
+                                ReferenceEquals(control.DataContext, focusedDataContext));
                     }
-                    (replacement as InputElement ?? container)?.Focus();
+                    if (target is null)
+                    {
+                        Visual? replacement = container;
+                        foreach (int index in focusPath)
+                        {
+                            var children = replacement?.GetVisualChildren().ToList();
+                            replacement = children is not null && index >= 0 && index < children.Count
+                                ? children[index] : null;
+                        }
+                        target = replacement as InputElement ?? container;
+                    }
+                    target?.Focus();
                 }
 
-                if (offset is { } oldOffset)
+                if (!focusRequiresScroll && offset is { } oldOffset)
                 {
                     if (anchorItem is not null && anchorY is { } y)
                     {
@@ -135,6 +169,16 @@ public static class EntityTreePanel
             }, DispatcherPriority.Loaded);
         }
 
+        void Cancel()
+        {
+            tree.LayoutUpdated -= Restore;
+            if (transition.Generation == generation)
+            {
+                transition.Cancel = null;
+            }
+        }
+
+        transition.Cancel = Cancel;
         tree.LayoutUpdated += Restore;
     }
 }

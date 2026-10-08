@@ -5,6 +5,7 @@ using Avalonia.Data;
 using Avalonia.Headless.XUnit;
 using Avalonia.VisualTree;
 using Avalonia.Input;
+using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Controls;
 using Phantom.Workspaces.Testing.Gui;
 using Phantom.Workspaces.ViewModels;
@@ -260,6 +261,137 @@ public sealed class EntityTreePanelTests
         }
     }
 
+    [AvaloniaFact]
+    public void EntityCardTreeView_RapidThresholdReversals_DoNotRestoreStaleAnchorOrFocus()
+    {
+        var nodes = new ObservableCollection<TreeNode>(
+            Enumerable.Range(0, 99).Select(i => new TreeNode($"Node {i}")));
+        var tree = CreateTree(nodes);
+        tree.ItemTemplate = new Avalonia.Controls.Templates.FuncTreeDataTemplate<TreeNode>(
+            (node, _) => new Button { Content = node.Name, Height = 34 },
+            node => node.Children);
+        tree.Bind(EntityTreePanel.NodeCountProperty, new Binding("Count") { Source = nodes });
+        var window = new Window { Content = tree, Width = 400, Height = 240 };
+        try
+        {
+            window.Show();
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            var scroll = Assert.Single(tree.GetVisualDescendants().OfType<ScrollViewer>());
+            scroll.Offset = new Vector(0, 500);
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            var original = new TreeNode("First insertion") { Height = 91 };
+            nodes.Insert(2, original);
+            nodes.Remove(original);
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            Assert.IsType<StackPanel>(tree.ItemsPanelRoot);
+
+            scroll.Offset = new Vector(0, 1200);
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            var focused = tree.GetVisualDescendants().OfType<Button>()
+                .First(button => Equals(button.Content, "Node 20"));
+            focused.Focus();
+            var before = Assert.NotNull(
+                Assert.IsType<TreeViewItem>(tree.ContainerFromItem(nodes[20]))
+                    .TranslatePoint(default, scroll)).Y;
+            nodes.Insert(2, new TreeNode("Second insertion") { Height = 91 });
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            Assert.IsType<VirtualizingStackPanel>(tree.ItemsPanelRoot);
+            Assert.Equal(before, Assert.NotNull(
+                Assert.IsType<TreeViewItem>(tree.ContainerFromItem(nodes[21]))
+                    .TranslatePoint(default, scroll)).Y, 1);
+            Assert.True(tree.GetVisualDescendants().OfType<Button>()
+                .Single(button => Equals(button.Content, "Node 20")).IsFocused);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public void EntityCardTreeView_UnrealizedFocusedItemWithVisibleAnchor_RestoresFocusedControl()
+    {
+        var nodes = new ObservableCollection<TreeNode>(
+            Enumerable.Range(0, 99).Select(i => new TreeNode($"Node {i}")));
+        var tree = CreateTree(nodes);
+        tree.ItemTemplate = new Avalonia.Controls.Templates.FuncTreeDataTemplate<TreeNode>(
+            (node, _) => new TextBox { Text = node.Name, Height = 34 },
+            node => node.Children);
+        tree.Bind(EntityTreePanel.NodeCountProperty, new Binding("Count") { Source = nodes });
+        var window = new Window { Content = tree, Width = 400, Height = 240 };
+        try
+        {
+            window.Show();
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            var focused = tree.GetVisualDescendants().OfType<TextBox>()
+                .Single(box => box.Text == "Node 80");
+            focused.Focus();
+            Assert.True(focused.IsFocused);
+            var scroll = tree.GetVisualDescendants().OfType<ScrollViewer>().First();
+            scroll.Offset = default;
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            Assert.True(focused.IsFocused);
+
+            nodes.Add(new TreeNode("Node 99"));
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            Assert.IsType<VirtualizingStackPanel>(tree.ItemsPanelRoot);
+            Assert.Contains(tree.GetVisualDescendants().OfType<TextBox>(),
+                box => box.Text == "Node 80" && box.IsFocused);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public void EntityCardTreeView_RealCardFieldEditor_RetainsSemanticTextBoxFocusAcrossThreshold()
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse("""{"display-name":"Card","entity-types":["entity"]}""");
+        var entity = new SubscribedEntityViewModel(new EntitySnapshot
+        {
+            EntityId = new EntityId(Guid.NewGuid().ToString()),
+            ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
+            Data = doc.RootElement.Clone(),
+            Relationships = [],
+        });
+        var field = new StringFieldEditorViewModel("path", "editable value");
+        var card = new EntityCardViewModel(entity, [field]);
+        card.EnterEditMode();
+        var nodes = new ObservableCollection<CardNode>(
+            Enumerable.Range(0, 99).Select(i => new CardNode($"Node {i}", i == 0 ? card : null)));
+        var tree = CreateTree(nodes);
+        tree.ItemTemplate = new Avalonia.Controls.Templates.FuncTreeDataTemplate<CardNode>(
+            (node, _) => node.Card is null
+                ? new TextBlock { Text = node.Name, Height = 34 }
+                : new EntityCardControl { DataContext = node.Card },
+            node => node.Children);
+        tree.Bind(EntityTreePanel.NodeCountProperty, new Binding("Count") { Source = nodes });
+        var window = new Window { Content = tree, Width = 400, Height = 320 };
+        try
+        {
+            window.Show();
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            var editor = tree.GetVisualDescendants().OfType<TextBox>()
+                .Single(box => ReferenceEquals(box.DataContext, field));
+            Assert.True(editor.Focus());
+            Assert.True(editor.IsFocused);
+            nodes.Add(new CardNode("Node 99", null));
+            card.SetFieldEditors([new StringFieldEditorViewModel("new field", "other"), field]);
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            Assert.True(tree.GetVisualDescendants().OfType<TextBox>()
+                .Single(box => ReferenceEquals(box.DataContext, field)).IsFocused);
+            nodes.RemoveAt(99);
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            Assert.True(tree.GetVisualDescendants().OfType<TextBox>()
+                .Single(box => ReferenceEquals(box.DataContext, field)).IsFocused);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
     private static TreeView CreateTree(System.Collections.IEnumerable items)
     {
         var tree = new TreeView { ItemsSource = items };
@@ -272,5 +404,12 @@ public sealed class EntityTreePanelTests
         public string Name { get; } = name;
         public double Height { get; init; } = 34;
         public ObservableCollection<TreeNode> Children { get; } = [];
+    }
+
+    private sealed class CardNode(string name, EntityCardViewModel? card)
+    {
+        public string Name { get; } = name;
+        public EntityCardViewModel? Card { get; } = card;
+        public ObservableCollection<CardNode> Children { get; } = [];
     }
 }
