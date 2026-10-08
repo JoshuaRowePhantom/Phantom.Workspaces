@@ -327,6 +327,18 @@
             </ItemsPanelTemplate>
         </Setter>
     </Style>
+    <!-- Only explicitly opted-in entity Views use ordinary scrolling below 100 total nodes.
+         Other consumers retain the virtualizing default; both panels share the width limits. -->
+    <Style Selector="TreeView.entity-card-tree.entity-card-tree-small, TreeView.entity-card-tree-view.entity-card-tree-small">
+        <Setter Property="ItemsPanel">
+            <ItemsPanelTemplate>
+                <StackPanel Orientation="Vertical"
+                            HorizontalAlignment="Stretch"
+                            MinWidth="160"
+                            MaxWidth="{Binding $parent[ScrollViewer].Viewport.Width}" />
+            </ItemsPanelTemplate>
+        </Setter>
+    </Style>
     <!-- Issue #1048: scope hover/selection highlights to the item's own header StackPanel so
          ancestor/descendant chains are not highlighted. The StackPanel.entity-card-tree-item sits
          in grid row 0 and does NOT contain the row-1 ItemsPresenter, so its :pointerover is true
@@ -1446,4 +1458,3 @@
     </Style>
 
 </Styles>
-
