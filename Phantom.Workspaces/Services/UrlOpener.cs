@@ -39,28 +39,44 @@ public sealed class UrlOpener : IUrlOpener
     /// <summary>
     /// Convenience factory for production use: wraps <c>TopLevel.Launcher.LaunchUriAsync</c>
     /// (obtained via <paramref name="topLevelAccessor"/>) with a <c>Process.Start</c>
-    /// shell-execute fallback.
+    /// shell-execute fallback when the launcher reports failure. Fallback failures propagate
+    /// to the caller.
     /// </summary>
     public static UrlOpener CreateDefault(
         IWorkspaceTabService tabService,
         Func<Avalonia.Controls.TopLevel?> topLevelAccessor)
+        => CreateDefault(tabService, topLevelAccessor, launchUri: null, shellLauncher: null);
+
+    internal static UrlOpener CreateDefault(
+        IWorkspaceTabService tabService,
+        Func<Avalonia.Controls.TopLevel?> topLevelAccessor,
+        Func<Uri, Task<bool>>? launchUri,
+        Func<string, Task>? shellLauncher)
     {
         return new UrlOpener(tabService, async url =>
         {
             var top = topLevelAccessor();
-            if (top?.Launcher is { } launcher && Uri.TryCreate(url, UriKind.Absolute, out var launchUri))
+            if (Uri.TryCreate(url, UriKind.Absolute, out var uri)
+                && (launchUri is not null || top?.Launcher is not null))
             {
-                await launcher.LaunchUriAsync(launchUri).ConfigureAwait(false);
+                var launched = launchUri is not null
+                    ? await launchUri(uri).ConfigureAwait(false)
+                    : await top!.Launcher.LaunchUriAsync(uri).ConfigureAwait(false);
+                if (launched)
+                {
+                    return;
+                }
+            }
+
+            if (shellLauncher is not null)
+            {
+                await shellLauncher(url).ConfigureAwait(false);
                 return;
             }
 
-            try
+            if (Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true }) is null)
             {
-                Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
-            }
-            catch
-            {
-                // Best-effort: leave the failure to the user; nothing else we can do.
+                throw new InvalidOperationException($"No application could open the URL: {url}");
             }
         });
     }

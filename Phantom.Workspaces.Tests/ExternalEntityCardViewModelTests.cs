@@ -1,4 +1,10 @@
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
+using Avalonia.Input;
+using Avalonia.Threading;
+using Avalonia.VisualTree;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -8,6 +14,7 @@ using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.ViewModels;
+using Phantom.Workspaces.Gui.Shared.Controls;
 
 using Phantom.Workspaces.Testing.Gui;
 
@@ -204,6 +211,132 @@ public sealed class ExternalEntityCardViewModelTests
 
         Assert.Equal(new[] { "https://new.example.com", "https://new.example.com/docs" },
             opener.Requests.Select(request => request.Url));
+    }
+
+    [AvaloniaFact]
+    public async Task EntityWorkspaceTab_ExternalCard_LateRegisteredOpenerAndSnapshotRefresh()
+    {
+        await using var owner = new MainWindowViewModel(new UnknownRepositorySource());
+        var entity = new SubscribedEntityViewModel(CreateExternalEntity(
+            """{ "default": "https://old.example.com" }"""));
+        var tab = new EntityWorkspaceTabViewModel(mainWindowViewModel: owner)
+        {
+            Id = "external-test",
+            Title = "External",
+            Entity = entity,
+        };
+        var card = Assert.IsType<ExternalEntityCardViewModel>(tab.EntityCardNode!.Card.ExternalCard);
+        var initial = Assert.Single(card.Urls);
+        Assert.False(initial.ShowKey);
+        await ClickAsync(initial);
+        Assert.Contains("unavailable", initial.ErrorMessage);
+
+        var opener = new RecordingOpener();
+        owner.ApplicationServices.SetUrlOpener(opener);
+        await ClickAsync(initial);
+        Assert.Null(initial.ErrorMessage);
+
+        entity.UpdateSnapshot(CreateExternalEntity(
+            """{ "default": "https://new.example.com", "docs": "https://new.example.com/docs" }"""));
+        var refreshed = tab.EntityCardNode.Card.ExternalCard!;
+        Assert.All(refreshed.Urls, url => Assert.True(url.ShowKey));
+        foreach (var link in refreshed.Urls)
+        {
+            await ClickAsync(link);
+        }
+
+        Assert.Equal(new[] { "https://old.example.com", "https://new.example.com", "https://new.example.com/docs" },
+            opener.Requests.Select(request => request.Url));
+        Assert.All(opener.Requests, request => Assert.Equal(UrlOpenPreference.Auto, request.Preference));
+    }
+
+    [AvaloniaFact]
+    public async Task ExternalCardTemplate_BoundButtonsShowErrorsAndPreserveLabels()
+    {
+        var opener = new RecordingOpener { Fail = true };
+        var card = ExternalEntityCardViewModel.Create(
+            new SubscribedEntityViewModel(CreateExternalEntity(
+                """{ "default": "https://example.com", "docs": "https://example.com/docs", "unsafe": "javascript:alert(1)" }""")),
+            () => opener);
+        var window = new Window { Width = 800, Height = 300, Content = new ContentControl { Content = card } };
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+            var buttons = window.GetVisualDescendants().OfType<Button>()
+                .Where(button => button.Classes.Contains("workspace-url-link")).ToArray();
+            Assert.Equal(3, buttons.Length);
+            Assert.All(card.Urls, url => Assert.True(url.ShowKey));
+            var namedLabels = window.GetVisualDescendants().OfType<SafeSelectableTextBlock>()
+                .Where(label => label.Classes.Contains("workspace-field-label"))
+                .ToArray();
+            Assert.Equal(3, namedLabels.Length);
+            Assert.All(namedLabels, label => Assert.True(label.IsVisible));
+            Assert.Equal(new[] { "default", "docs", "unsafe" }, namedLabels.Select(label => label.Text));
+            Assert.False(buttons[2].IsEnabled);
+            Assert.Contains(window.GetVisualDescendants().OfType<TextBlock>(),
+                text => text.IsVisible && text.Text == "Invalid or unsupported URL.");
+
+            Assert.Same(card.Urls[0].OpenCommand, buttons[0].Command);
+            var point = buttons[0].TranslatePoint(
+                new Point(buttons[0].Bounds.Width / 2, buttons[0].Bounds.Height / 2), window);
+            Assert.NotNull(point);
+            window.MouseDown(point.Value, MouseButton.Left);
+            window.MouseUp(point.Value, MouseButton.Left);
+            await card.Urls[0].OpenCommand.LastExecutionTask!;
+            Dispatcher.UIThread.RunJobs();
+            Assert.Contains(window.GetVisualDescendants().OfType<TextBlock>(),
+                text => text.IsVisible && text.Text == "Failed to open URL: Cannot launch");
+            Assert.Empty(opener.Requests);
+        }
+        finally
+        {
+            window.Close();
+        }
+
+        var single = ExternalEntityCardViewModel.Create(
+            new SubscribedEntityViewModel(CreateExternalEntity("""{ "default": "https://example.com" }""")),
+            () => opener);
+        var singleWindow = new Window { Content = new ContentControl { Content = single } };
+        singleWindow.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+            var label = Assert.Single(singleWindow.GetVisualDescendants().OfType<SafeSelectableTextBlock>(),
+                text => text.Classes.Contains("workspace-field-label"));
+            Assert.False(label.IsVisible);
+            Assert.Equal("https://example.com", Assert.Single(singleWindow.GetVisualDescendants().OfType<Button>(),
+                button => button.Classes.Contains("workspace-url-link")).Content);
+        }
+        finally
+        {
+            singleWindow.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task ExternalCard_ProductionLauncherFails_ReportsFailure()
+    {
+        var tabs = new RecordingTabService();
+        var attempted = new List<string>();
+        var opener = UrlOpener.CreateDefault(
+            tabs,
+            () => null,
+            launchUri: _ => Task.FromResult(false),
+            shellLauncher: url =>
+            {
+                attempted.Add(url);
+                throw new InvalidOperationException("No registered handler");
+            });
+        var link = Assert.Single(ExternalEntityCardViewModel.Create(
+            new SubscribedEntityViewModel(CreateExternalEntity("""{ "default": "mailto:someone@example.com" }""")),
+            () => opener).Urls);
+
+        await ClickAsync(link);
+
+        Assert.Equal(new[] { "mailto:someone@example.com" }, attempted);
+        Assert.Contains("No registered handler", link.ErrorMessage);
+        Assert.Empty(tabs.OpenedTabs);
     }
 
     [AvaloniaFact]

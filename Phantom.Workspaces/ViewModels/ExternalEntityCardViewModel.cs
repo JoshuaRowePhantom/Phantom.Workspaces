@@ -17,14 +17,15 @@ public sealed class ExternalUrlViewModel : ViewModelBase
         this.Url = url;
         this.ShowKey = showKey;
         this.urlOpenerProvider = urlOpenerProvider;
-        if (!IsSupportedUrl(url))
+        this.IsSupported = IsSupportedUrl(url);
+        if (!this.IsSupported)
         {
             this.ErrorMessage = "Invalid or unsupported URL.";
         }
 
         this.OpenCommand = new AsyncRelayCommand(
             _ => this.OpenAsync(),
-            _ => IsSupportedUrl(this.Url),
+            _ => this.IsSupported,
             allowConcurrentExecutions: false);
     }
 
@@ -33,6 +34,8 @@ public sealed class ExternalUrlViewModel : ViewModelBase
     public string Url { get; }
 
     public bool ShowKey { get; }
+
+    public bool IsSupported { get; }
 
     public AsyncRelayCommand OpenCommand { get; }
 

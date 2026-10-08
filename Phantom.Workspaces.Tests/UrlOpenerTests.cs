@@ -44,6 +44,31 @@ public sealed class UrlOpenerTests
     }
 
     [Fact]
+    public async Task CreateDefault_LauncherReturnsFalse_FallsBackToShell()
+    {
+        var urls = new List<string>();
+        var opener = UrlOpener.CreateDefault(new FakeTabService(), () => null,
+            launchUri: _ => Task.FromResult(false),
+            shellLauncher: url => { urls.Add(url); return Task.CompletedTask; });
+
+        await opener.OpenAsync(new OpenUrlRequest("mailto:someone@example.com"), TestContext.Current.CancellationToken);
+
+        Assert.Equal(new[] { "mailto:someone@example.com" }, urls);
+    }
+
+    [Fact]
+    public async Task CreateDefault_ShellLauncherFails_PropagatesFailure()
+    {
+        var opener = UrlOpener.CreateDefault(new FakeTabService(), () => null,
+            launchUri: null,
+            shellLauncher: _ => throw new InvalidOperationException("No handler available"));
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => opener.OpenAsync(new OpenUrlRequest("tel:+15551234567"), TestContext.Current.CancellationToken));
+        Assert.Equal("No handler available", error.Message);
+    }
+
+    [Fact]
     public async Task OpenAsync_Auto_HttpUrl_OpensEmbeddedWebViewModelTab()
     {
         var (opener, tabs, external) = Create();
