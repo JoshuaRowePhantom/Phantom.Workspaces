@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using System.Windows.Input;
 using Avalonia.Threading;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Services;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -29,6 +30,7 @@ public sealed class EntityCardViewModel : ViewModelBase
 
     private readonly SubscribedEntityViewModel? entity;
     private readonly FieldEditorFactory? fieldEditorFactory;
+    private readonly Func<IUrlOpener?>? urlOpenerProvider;
     private readonly string cardViewName;
     private readonly string displayName;
     private readonly string entityType;
@@ -65,10 +67,12 @@ public sealed class EntityCardViewModel : ViewModelBase
         IReadOnlyCollection<EntityFieldEditorViewModel>? fieldEditors = null,
         string? cardViewName = null,
         IEntitySchemaComposer? schemaComposer = null,
-        FieldEditorFactory? fieldEditorFactory = null)
+        FieldEditorFactory? fieldEditorFactory = null,
+        Func<IUrlOpener?>? urlOpenerProvider = null)
     {
         this.entity = entity;
         this.fieldEditorFactory = fieldEditorFactory;
+        this.urlOpenerProvider = urlOpenerProvider;
         this.cardViewName = cardViewName ?? EntityCardViewResolver.RawViewName;
         this.displayName = entity.DisplayName;
         this.entityType = entity.EntityType;
@@ -90,7 +94,10 @@ public sealed class EntityCardViewModel : ViewModelBase
             _ => this.IsEditMode);
         this.ToggleJsonViewCommand = entity.ToggleRawJsonVisibilityCommand;
         this.DeleteEntityCommand = entity.DeleteEntityCommand;
-        this.externalCard = this.cardViewName == "external" ? ExternalEntityCardViewModel.Create(entity) : null;
+        this.externalCard = this.cardViewName == "external"
+            ? ExternalEntityCardViewModel.Create(entity, () => this.urlOpenerProvider?.Invoke()
+                ?? this.shortcutMainWindowViewModel?.ApplicationServices.UrlOpener)
+            : null;
         // Issue #1177: do NOT eagerly build field editors here. Realizing the card control triggers
         // EnsureFieldEditorsBuilt via EntityCardControl.OnAttachedToVisualTree, so off-screen cards
         // in a virtualized tree pay no schema/type-resolution cost.
@@ -772,7 +779,9 @@ public sealed class EntityCardViewModel : ViewModelBase
 
             if (this.cardViewName == "external" && this.entity is not null)
             {
-                this.externalCard = ExternalEntityCardViewModel.Create(this.entity);
+                this.externalCard = ExternalEntityCardViewModel.Create(
+                    this.entity, () => this.urlOpenerProvider?.Invoke()
+                        ?? this.shortcutMainWindowViewModel?.ApplicationServices.UrlOpener);
                 this.RaisePropertyChanged(nameof(this.ExternalCard));
             }
 
