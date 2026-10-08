@@ -1442,7 +1442,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private async Task ApplySelectedViewAsync()
     {
-        var next = new ViewPopulationViewModel();
+        var next = new ViewPopulationViewModel(this.expandedEntityIds);
         var previous = this.currentPopulation;
         this.CurrentViewPopulation = next;
 
@@ -1561,7 +1561,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
-        var candidate = new ViewPopulationViewModel();
+        var candidate = new ViewPopulationViewModel(population.ExpandedEntityIds);
         await this.PopulateViewAsync(candidate, view,
             () => this.RebindPopulationAsync(population), population);
 
@@ -1732,7 +1732,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         if (associatedNoteEntity is not null)
         {
-            var viewEntity = await this.CreateViewEntityViewModelAsync(associatedNoteEntity, indentLevel: 0, isParentContext: true);
+            var viewEntity = await this.CreateViewEntityViewModelAsync(next, associatedNoteEntity, indentLevel: 0, isParentContext: true);
             if (next.CancellationToken.IsCancellationRequested)
             {
                 await viewEntity.DisposeAsync();
@@ -1756,7 +1756,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 if (this.EntityBroker.TryGetReferencedEntity(subView, "view-entity-id", out var subViewEntity)
                     && subViewEntity is not null)
                 {
-                    var viewEntity = await this.CreateViewEntityViewModelAsync(subViewEntity, indentLevel: 0);
+                    var viewEntity = await this.CreateViewEntityViewModelAsync(next, subViewEntity, indentLevel: 0);
                     if (next.CancellationToken.IsCancellationRequested)
                     {
                         await viewEntity.DisposeAsync();
@@ -2037,19 +2037,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     /// entity, by the current user) when none exists.
     /// </summary>
     private async Task<ViewEntityViewModel> CreateViewEntityViewModelAsync(
+        ViewPopulationViewModel population,
         SubscribedEntityViewModel entity,
         int indentLevel,
         bool isExpanded = true,
         bool isParentContext = false)
     {
         this.ProjectEntityBadges(entity);
-        entity.PropertyChanged += (_, e) =>
-        {
-            if (string.Equals(e.PropertyName, nameof(SubscribedEntityViewModel.Snapshot), StringComparison.Ordinal))
-            {
-                this.ProjectEntityBadges(entity);
-            }
-        };
 
         // Project the entity's annotated status fields into colored status badges. Discovery is
         // asynchronous (each field's status annotation is resolved through the schema), so the badges
@@ -2061,7 +2055,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             this,
             this.shortcutManager,
             indentLevel,
-            isExpanded: this.expandedEntityIds.TryGetValue(entity.EntityId.ToString(), out var storedExpanded) ? storedExpanded : isExpanded,
+            isExpanded: population.ExpandedEntityIds.TryGetValue(entity.EntityId.ToString(), out var storedExpanded) ? storedExpanded : isExpanded,
             isParentContext: isParentContext,
             fieldEditorFactory: this.fieldEditorFactory);
         await vm.InitializeAsync();
@@ -2073,14 +2067,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             if (string.Equals(e.PropertyName, nameof(ViewEntityViewModel.IsExpanded), StringComparison.Ordinal)
                 && sender is ViewEntityViewModel toggled)
             {
-                this.expandedEntityIds[entityIdStr] = toggled.IsExpanded;
+                population.ExpandedEntityIds[entityIdStr] = toggled.IsExpanded;
             }
         };
 
         return vm;
     }
 
-    private void ProjectEntityBadges(SubscribedEntityViewModel entity)
+    internal void ProjectEntityBadges(SubscribedEntityViewModel entity)
     {
         if (this.interestCatalog is not { } interestCatalog
             || this.entityTypeCatalog is not { } entityTypeCatalog
@@ -2147,7 +2141,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         ViewEntityViewModel? vm = null;
         if (!node.IsAncestorGroup)
         {
-            vm = await this.CreateViewEntityViewModelAsync(node.Entity!, indentLevel, isExpanded: node.IsExpanded);
+            vm = await this.CreateViewEntityViewModelAsync(population, node.Entity!, indentLevel, isExpanded: node.IsExpanded);
             if (population.CancellationToken.IsCancellationRequested)
             {
                 await vm.DisposeAsync();

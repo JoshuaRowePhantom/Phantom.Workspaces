@@ -23,6 +23,15 @@ public sealed class ViewPopulationViewModel : IAsyncDisposable
     private string? findQuery;
     private bool hideUnmatched;
 
+    public ViewPopulationViewModel(Dictionary<string, bool>? expandedEntityIds = null)
+    {
+        this.ExpandedEntityIds = expandedEntityIds ?? new Dictionary<string, bool>(StringComparer.Ordinal);
+    }
+
+    internal Dictionary<string, bool> ExpandedEntityIds { get; }
+
+    internal int QueryObserverCount => _querySubscriptions.Count;
+
     public ObservableCollection<ViewEntityViewModel> Entities { get; } = [];
 
     public ObservableCollection<ViewEntityViewModel> RootEntities { get; } = [];
@@ -136,11 +145,19 @@ public sealed class ViewPopulationViewModel : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await _cts.CancelAsync();
-        DetachQuerySubscriptions();
-        _getSubscriptions.Clear();
-        foreach (var entity in this.Entities)
+        await this.ReconcileGate.WaitAsync();
+        try
         {
-            await entity.DisposeAsync();
+            DetachQuerySubscriptions();
+            _getSubscriptions.Clear();
+            foreach (var entity in this.Entities.ToArray())
+            {
+                await entity.DisposeAsync();
+            }
+        }
+        finally
+        {
+            this.ReconcileGate.Release();
         }
     }
 

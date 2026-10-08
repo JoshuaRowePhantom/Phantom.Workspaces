@@ -216,6 +216,10 @@ public sealed class ViewEntityViewModel : ViewModelBase
             || string.Equals(e.PropertyName, nameof(SubscribedEntityViewModel.DisplayName), System.StringComparison.Ordinal)
             || string.Equals(e.PropertyName, nameof(SubscribedEntityViewModel.EntityType), System.StringComparison.Ordinal))
         {
+            if (string.Equals(e.PropertyName, nameof(SubscribedEntityViewModel.Snapshot), System.StringComparison.Ordinal))
+            {
+                this.owner.ProjectEntityBadges(this.Entity);
+            }
             this.RefreshFromEntity();
         }
     }

@@ -955,29 +955,217 @@ public sealed class MainWindowIntegrationTests
             static entity => string.Equals(entity.EntityType, "view", StringComparison.Ordinal));
     }
 
-    [AvaloniaFact(Timeout = 30_000)]
+    [AvaloniaFact(Timeout = 60_000)]
     public async Task OpenViewTab_SubViewsAndRelatedEntities_ShowsSameHierarchyAsSelectedView()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
-        var sessions = Assert.Single(viewModel.TopLevelViews, view => view.Title == "Sessions");
-        viewModel.SelectedTopLevelView = sessions;
+        var broker = GetEntityBroker(viewModel);
+        var viewId = new EntityId("16220010-0000-4000-8000-000000000001");
+        var noteId = new EntityId("16220010-0000-4000-8000-000000000002");
+        var referencedId = new EntityId("16220010-0000-4000-8000-000000000003");
+        var getId = new EntityId("16220010-0000-4000-8000-000000000004");
+        var workspaceId = new EntityId("16220010-0000-4000-8000-000000000005");
+        var childId = new EntityId("16220010-0000-4000-8000-000000000006");
+        var relationshipId = new EntityId("16220010-0000-4000-8000-000000000007");
+        await UpsertEntityAndLoadAsync(broker, noteId, $$$"""
+            {
+              "entity-id": "{{{noteId}}}",
+              "entity-types": ["entity", "note"],
+              "names": [["views", "issue1622", "hierarchy"]],
+              "display-name": {"default": "Parent context"},
+              "content": {"mime-type": "text/markdown", "content": {"text": "Context"}}
+            }
+            """);
+        await UpsertEntityAndLoadAsync(broker, referencedId, $$$"""
+            {
+              "entity-id": "{{{referencedId}}}",
+              "entity-types": ["entity", "view"],
+              "names": [["views", "issue1622", "referenced"]],
+              "title": {"default": "Referenced"},
+              "sub-views": []
+            }
+            """);
+        await UpsertEntityAndLoadAsync(broker, getId, $$$"""
+            {
+              "entity-id": "{{{getId}}}",
+              "entity-types": ["entity", "note"],
+              "names": [["notes", "issue1622-get"]],
+              "display-name": {"default": "Get result"},
+              "content": {"mime-type": "text/markdown", "content": {"text": "Get"}}
+            }
+            """);
+        await UpsertEntityAndLoadAsync(broker, workspaceId, $$$"""
+            {
+              "entity-id": "{{{workspaceId}}}",
+              "entity-types": ["entity", "workspace"],
+              "names": [["workspaces", "issue1622-hierarchy"]],
+              "display-name": {"default": "Hierarchy workspace"},
+              "regions": []
+            }
+            """);
+        await UpsertEntityAndLoadAsync(broker, childId, $$$"""
+            {
+              "entity-id": "{{{childId}}}",
+              "entity-types": ["entity", "note"],
+              "names": [["notes", "issue1622-child"]],
+              "display-name": {"default": "Related child"},
+              "content": {"mime-type": "text/markdown", "content": {"text": "Child"}}
+            }
+            """);
+        await UpsertEntityAndLoadAsync(broker, relationshipId, $$$"""
+            {
+              "entity-id": "{{{relationshipId}}}",
+              "entity-types": ["entity", "related", "relationship"],
+              "names": [["relationships", "issue1622-child"]],
+              "participants": {"entities": ["{{{workspaceId}}}", "{{{childId}}}"]}
+            }
+            """);
+        var viewEntity = await UpsertEntityAndLoadAsync(broker, viewId, $$$"""
+            {
+              "entity-id": "{{{viewId}}}",
+              "entity-types": ["entity", "view"],
+              "names": [["views", "issue1622", "hierarchy"]],
+              "title": {"default": "Issue1622 hierarchy"},
+              "sub-views": [
+                {"disposition": "expanded", "view-entity-id": ["views", "issue1622", "referenced"]},
+                {"disposition": "expanded", "get-entity": [{"entity-id": "{{{getId}}}"}]},
+                {"disposition": "expanded", "query": {"clauses": [{
+                  "clause-identifier": {"value": "workspaces"},
+                  "clause": {"clause-type": "entity-type", "entity-type-names": {"values": ["workspace"]}}
+                }]}, "relationships-to-return": [{"relationship-type-names": ["related"]}]}
+              ]
+            }
+            """);
+        var selected = new ViewDefinitionViewModel
+        {
+            Id = viewId.ToString(), Title = "Issue1622 hierarchy",
+            Description = "Hierarchy fixture", IconGlyph = "", ViewEntity = viewEntity,
+        };
+        viewModel.SelectedTopLevelView = selected;
         var apply = typeof(MainWindowViewModel).GetMethod(
             "ApplySelectedViewAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
         await (Task)apply.Invoke(viewModel, [])!;
+        await (Task)apply.Invoke(viewModel, [])!;
 
         var leftPopulation = viewModel.CurrentViewPopulation;
-        var tab = await viewModel.CreateViewTabAsync(sessions.ViewEntity!);
+        var tab = await viewModel.CreateViewTabAsync(viewEntity);
 
         Assert.NotSame(leftPopulation, tab.Population);
-        Assert.Equal(
-            leftPopulation.RootEntities.Select(node => node.EntityId),
-            tab.Population.RootEntities.Select(node => node.EntityId));
-        Assert.Contains(tab.Population.Entities, node => node.EntityType == "agent-manifest");
+        var leftHierarchy = DescribeViewHierarchy(leftPopulation);
+        var tabHierarchy = DescribeViewHierarchy(tab.Population);
+        Assert.True(leftHierarchy.SequenceEqual(tabHierarchy),
+            $"Left: {string.Join(", ", leftHierarchy)}; tab: {string.Join(", ", tabHierarchy)}");
+        Assert.Contains(tab.Population.RootEntities, node => node.EntityId == noteId.ToString() && node.IsParentContext);
+        Assert.Contains(tab.Population.RootEntities, node => node.EntityId == referencedId.ToString());
+        Assert.Contains(tab.Population.RootEntities, node => node.EntityId == getId.ToString());
+        var workspaceNode = Assert.Single(tab.Population.RootEntities, node => node.EntityId == workspaceId.ToString());
+        Assert.Contains(workspaceNode.Children, child => child.EntityId == childId.ToString());
         Assert.All(tab.Population.Entities,
             node => Assert.Empty(node.EntityCardNode.Card.FieldEditors));
-        Assert.Same(sessions, viewModel.SelectedTopLevelView);
+        Assert.Same(selected, viewModel.SelectedTopLevelView);
         Assert.Same(leftPopulation, viewModel.CurrentViewPopulation);
+        await tab.DisposeAsync();
+    }
+
+    private static string[] DescribeViewHierarchy(ViewPopulationViewModel population)
+    {
+        static IEnumerable<string> Walk(ViewEntityViewModel node, string path)
+        {
+            var current = $"{path}/{node.EntityId}:{node.IsParentContext}";
+            yield return current;
+            foreach (var child in node.Children)
+            {
+                foreach (var descendant in Walk(child, current))
+                {
+                    yield return descendant;
+                }
+            }
+        }
+
+        return population.RootEntities.SelectMany(root => Walk(root, "")).ToArray();
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task OpenViewTab_MissingNoteAndBrokenReferences_RendersEmptyHierarchy()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var broker = GetEntityBroker(viewModel);
+        var viewId = new EntityId("16220011-0000-4000-8000-000000000001");
+        var missingId = new EntityId("16220011-0000-4000-8000-000000000002");
+        var viewEntity = await UpsertEntityAndLoadAsync(broker, viewId, $$$"""
+            {
+              "entity-id": "{{{viewId}}}",
+              "entity-types": ["entity", "view"],
+              "names": [["views", "issue1622", "empty"]],
+              "title": {"default": "Empty view"},
+              "sub-views": [
+                {"disposition": "expanded", "view-entity-id": ["views", "issue1622", "missing"]},
+                {"disposition": "expanded", "get-entity": [{"entity-id": "{{{missingId}}}"}]},
+                {"disposition": "expanded", "query": {"clauses": [{
+                  "clause-identifier": {"value": "missing"},
+                  "clause": {"clause-type": "entity-type",
+                             "entity-type-names": {"values": ["issue1622-nonexistent-type"]}}
+                }]}}
+              ]
+            }
+            """);
+        var tab = await viewModel.CreateViewTabAsync(viewEntity);
+        Assert.Empty(tab.Population.RootEntities);
+        Assert.Empty(tab.Population.Entities);
+        await tab.DisposeAsync();
+    }
+
+    [AvaloniaFact(Timeout = 60_000)]
+    public async Task OpenViewTab_LargeView_DoesNotBuildFieldEditorsForNonRealizedEntities()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var broker = GetEntityBroker(viewModel);
+        var changes = new List<EntityChange>();
+        for (var i = 1; i <= 48; i++)
+        {
+            var id = new EntityId($"16220012-0000-4000-8000-{i:D12}");
+            using var document = JsonDocument.Parse($$"""
+                {
+                  "entity-id": "{{id}}",
+                  "entity-types": ["entity", "workspace"],
+                  "names": [["workspaces", "issue1622-lazy-{{i}}"]],
+                  "display-name": {"default": "Lazy workspace {{i}}"},
+                  "regions": []
+                }
+                """);
+            changes.Add(new EntityChange
+            {
+                EntityId = id, EntityChangeMode = EntityChangeMode.Replace,
+                Data = document.RootElement.Clone(),
+            });
+        }
+
+        var result = await broker.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "Seed lazy view" } },
+            Changes = changes,
+        });
+        Assert.DoesNotContain(result.EntityResults, entity => entity.UpdateState == UpdateState.Failed);
+
+        var workspaces = Assert.Single(viewModel.TopLevelViews, view => view.Title == "Workspaces");
+        var tab = await viewModel.CreateViewTabAsync(workspaces.ViewEntity!);
+        var nodes = tab.Population.Entities
+            .Where(node => node.EntityId.StartsWith("16220012-", StringComparison.Ordinal)).ToArray();
+        Assert.Equal(48, nodes.Length);
+        var buildRequested = typeof(EntityCardViewModel).GetField("fieldEditorsBuildRequested",
+            BindingFlags.Instance | BindingFlags.NonPublic)!;
+        Assert.All(nodes, node =>
+        {
+            Assert.Equal(0, buildRequested.GetValue(node.EntityCardNode.Card));
+            Assert.Empty(node.EntityCardNode.Card.FieldEditors);
+        });
+        nodes[0].EntityCardNode.Card.EnsureFieldEditorsBuilt();
+        await nodes[0].EntityCardNode.Card.FieldEditorsBuildTask;
+        Assert.Equal(1, buildRequested.GetValue(nodes[0].EntityCardNode.Card));
+        Assert.All(nodes.Skip(1), node => Assert.Equal(0, buildRequested.GetValue(node.EntityCardNode.Card)));
         await tab.DisposeAsync();
     }
 
@@ -1002,9 +1190,18 @@ public sealed class MainWindowIntegrationTests
 
         tab.EditDefinitionCommand.Execute(null);
         await Dispatcher.UIThread.InvokeAsync(() => { });
-        Assert.Contains(viewModel.SelectedWorkspacePane.Tabs,
-            item => item is EntityWorkspaceTabViewModel
-                && item.Id == $"view-definition-{sessions.Id}");
+        var definitionTab = Assert.IsType<EntityWorkspaceTabViewModel>(
+            Assert.Single(viewModel.SelectedWorkspacePane.Tabs,
+                item => item.Id == $"view-definition-{sessions.Id}"));
+        Assert.Same(sessions.ViewEntity, definitionTab.Entity);
+        var definitionCard = definitionTab.EntityCardNode!.Card;
+        Assert.Equal("raw", definitionCard.CardViewName);
+        Assert.Contains("\"sub-views\"", definitionCard.RawJsonText);
+        Assert.True(definitionCard.ToggleEditModeCommand.CanExecute(null));
+        definitionCard.ToggleEditModeCommand.Execute(null);
+        Assert.True(definitionCard.IsEditMode);
+        Assert.False(definitionCard.IsRawJsonReadOnly);
+        definitionCard.DiscardEditModeCommand.Execute(null);
         Assert.Null(await handler.TryCreateTabForRestoreAsync(
             viewModel, sessions.ViewEntity!,
             $"view-definition-{sessions.Id}", "Edit definition", "full"));
