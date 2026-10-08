@@ -109,6 +109,24 @@ public sealed class CopilotSubAgentLifecycleStoreTests
         Assert.False(store.IsActive("child"));
     }
 
+    [Theory]
+    [InlineData("failed")]
+    [InlineData("cancelled")]
+    public void CopilotSubAgentLifecycleStore_TerminalOutcomeSurvivesEmptySnapshotUntilNewExecution(string outcome)
+    {
+        var store = new CopilotSubAgentLifecycleStore();
+        store.ReplaceTasks([new("child", CopilotSubAgentLifecycleLayer.Task, outcome,
+            TaskId: "old", InvocationToolCallId: "old-call")]);
+        store.ReplaceTasks([]);
+        Assert.Equal(outcome, store.LastNonrunningTaskState("child"));
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Session, "working", StatusRevision: 10));
+        Assert.False(store.IsActive("child"));
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Task, "running", TaskId: "new",
+            InvocationToolCallId: "new-call"));
+        Assert.Null(store.LastNonrunningTaskState("child"));
+        Assert.True(store.IsActive("child"));
+    }
+
     [Fact]
     public void CopilotSubAgentLifecycleStore_TerminalOnlySnapshot_KeepsStaleWaitingSessionSuppressed()
     {

@@ -260,6 +260,44 @@ public sealed class CopilotSdkChatClientTests
         Assert.Equal(AgentChatCompletionState.Failed, ((IRunningSubAgent)child).CompletionState);
     }
 
+    [Theory]
+    [InlineData("failed")]
+    [InlineData("cancelled")]
+    public async Task CopilotSdkChatClient_TerminalChild_KeepsFailureAfterTaskEvictionAndRegistryPoll(
+        string outcome)
+    {
+        var session = new Infrastructure.FakeCopilotSession
+        {
+            Tasks = [new TaskInfoAgent
+            {
+                Id = "child", ToolCallId = "call", AgentType = "task", Prompt = "first",
+                Description = "test", StartedAt = DateTimeOffset.UtcNow,
+                Status = outcome == "failed" ? GitHub.Copilot.Rpc.TaskStatus.Failed
+                    : GitHub.Copilot.Rpc.TaskStatus.Cancelled,
+            }],
+        };
+        var sdk = new Infrastructure.FakeCopilotClient(session);
+        await using var client = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
+        client.SetCopilotClientFactoryForTest(new Infrastructure.FakeCopilotClientFactory(sdk));
+        await InvokeEnsureSessionAsync(client);
+        var child = new SubAgent(CopilotSubAgentIdentity.Create("child", "call"), null);
+        client.RegisterRestoredSubAgent(child);
+        var applySnapshot = typeof(CopilotSdkChatClient).GetMethod(
+            "ApplyTaskSnapshot", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        applySnapshot.Invoke(client, [session.Tasks]);
+        Assert.Equal(AgentChatCompletionState.Failed, ((IRunningSubAgent)child).CompletionState);
+        applySnapshot.Invoke(client, [Array.Empty<TaskInfo>()]);
+        Assert.Equal(AgentChatCompletionState.Failed, ((IRunningSubAgent)child).CompletionState);
+        sdk.LiveSessionStates = [new AgentRegistryLiveTargetEntry
+        {
+            SessionId = "child", Status = new AgentRegistryLiveTargetEntryStatus("working"),
+        }];
+        await (Task)typeof(CopilotSdkChatClient).GetMethod(
+            "RefreshLiveSessionStatesAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(client, [CancellationToken.None])!;
+        Assert.Equal(AgentChatCompletionState.Failed, ((IRunningSubAgent)child).CompletionState);
+    }
+
     [Fact]
     public async Task CopilotSdkChatClient_IdleChild_StaysNonrunningAcrossSyntheticRegistryRevisions()
     {

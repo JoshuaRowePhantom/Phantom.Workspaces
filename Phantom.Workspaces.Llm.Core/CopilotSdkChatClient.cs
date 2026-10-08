@@ -874,7 +874,9 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             foreach (var child in this.childrenByAgentId.Values.Concat(this.childrenByToolCallId.Values).Distinct())
             {
                 var task = snapshot.OfType<TaskInfoAgent>().LastOrDefault(t => this.FindTaskChild(t) == child);
-                this.ProjectSubAgent(child, task?.Status.Value ?? "completed");
+                this.ProjectSubAgent(child, task?.Status.Value
+                    ?? this.subAgentStates.LastNonrunningTaskState(child.SessionId.Value)
+                    ?? "completed");
             }
         }
     }
@@ -912,9 +914,13 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
     private void ProjectSubAgent(SubAgent child, string terminalState)
     {
+        var lastTaskState = this.subAgentStates.LastNonrunningTaskState(child.SessionId.Value);
         var state = this.subAgentStates.IsActive(child.SessionId.Value) ? "running" :
-            terminalState is "idle" or "working" or "waiting" or "attention"
-                ? "completed" : terminalState;
+            terminalState is "failed" or "cancelled" ? terminalState :
+            lastTaskState is "failed" or "cancelled"
+                ? lastTaskState
+                : terminalState is "idle" or "working" or "waiting" or "attention"
+                    ? "completed" : terminalState;
         var request = new ApplySubAgentStateRequest(child.SessionId.Value,
             CopilotSubAgentLifecycleLayer.Session, state);
         if (child.AgentChat is { } chat) chat.ApplySubAgentLifecycleState(request);
