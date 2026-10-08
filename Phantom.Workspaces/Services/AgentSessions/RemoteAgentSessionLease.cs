@@ -24,6 +24,8 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     private readonly List<AgentChatRunningItem> runningItemOrder = [];
     private readonly HashSet<AgentChatHistoryItem> runningHistoryItems =
         new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<IRunningSubAgent> subscribedSubagents =
+        new(ReferenceEqualityComparer.Instance);
     private readonly TimeProvider timeProvider;
     private readonly AgentChatHistoryCollection? history;
     private readonly Func<bool, CancellationToken, ValueTask> persistRetentionAsync;
@@ -111,6 +113,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             ((INotifyCollectionChanged)this.history).CollectionChanged += this.OnHistoryChanged;
         this.Chat.InputQueues.Changed += this.OnQueuesChanged;
         ((INotifyCollectionChanged)this.Chat.SubAgents).CollectionChanged += this.OnSubagentsChanged;
+        this.SyncSubagentSubscriptions();
         ((INotifyCollectionChanged)this.Chat.Modals).CollectionChanged += this.OnModalsChanged;
     }
 
@@ -644,6 +647,12 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             this.runningHistoryItems.Clear();
         }
         ((INotifyCollectionChanged)this.Chat.SubAgents).CollectionChanged -= this.OnSubagentsChanged;
+        lock (this.gate)
+        {
+            foreach (var child in this.subscribedSubagents)
+                child.CompletionStateChanged -= this.OnSubagentCompletionStateChanged;
+            this.subscribedSubagents.Clear();
+        }
         ((INotifyCollectionChanged)this.Chat.Modals).CollectionChanged -= this.OnModalsChanged;
         try
         {
@@ -1193,6 +1202,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
                     },
                     Microsoft.Extensions.AI.AIJsonUtilities.DefaultOptions))
                 .ToArray(),
+            Subagents = this.Chat.SubAgents.Select(SerializeSubagent).ToArray(),
         };
     }
 
@@ -1210,6 +1220,42 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     }
 
     private void OnSubagentsChanged(object? sender, NotifyCollectionChangedEventArgs args)
+    {
+        this.SyncSubagentSubscriptions();
+        this.PublishSubagents();
+    }
+
+    private void SyncSubagentSubscriptions()
+    {
+        lock (this.gate)
+        {
+            HashSet<IRunningSubAgent> current = new(ReferenceEqualityComparer.Instance);
+            foreach (var child in this.Chat.SubAgents.SelectMany(EnumerateSubagents))
+                current.Add(child);
+            foreach (var child in this.subscribedSubagents.Except(current).ToArray())
+            {
+                child.CompletionStateChanged -= this.OnSubagentCompletionStateChanged;
+                this.subscribedSubagents.Remove(child);
+            }
+            foreach (var child in current.Except(this.subscribedSubagents))
+            {
+                child.CompletionStateChanged += this.OnSubagentCompletionStateChanged;
+                this.subscribedSubagents.Add(child);
+            }
+        }
+    }
+
+    private static IEnumerable<IRunningSubAgent> EnumerateSubagents(IRunningSubAgent child)
+    {
+        yield return child;
+        foreach (var nested in child.SubAgents.SelectMany(EnumerateSubagents))
+            yield return nested;
+    }
+
+    private void OnSubagentCompletionStateChanged(object? sender, EventArgs args)
+        => this.PublishSubagents();
+
+    private void PublishSubagents()
         => this.PublishFromOwner(new SubagentsChangedEvent
         {
             Subagents = this.Chat.SubAgents.Select(SerializeSubagent).ToArray(),

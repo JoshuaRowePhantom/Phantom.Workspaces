@@ -400,6 +400,55 @@ public sealed partial class RemoteAgentSessionHostTests
     }
 
     [Fact]
+    public async Task RemoteAgentSessionLease_ExistingChildBecomesIdle_PublishesUpdatedSubagents()
+    {
+        await using var fixture = new HostFixture();
+        var child = new MutableRunningSubagent("child");
+        fixture.Subagents.Add(child);
+        await using var attachment = await fixture.Host.OpenAsync(fixture.Request(AgentSessionOpenIntent.Attach));
+        var initial = Assert.IsType<SessionSnapshotEvent>(
+            AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(
+                AgentSessionProtocolCodec.DeserializeFrame(await fixture.Channel.Output.ReadAsync())));
+        Assert.Equal(AgentChatCompletionState.Running,
+            initial.Snapshot.Subagents.Single().GetProperty("completionState")
+                .Deserialize<AgentChatCompletionState>(AgentSessionProtocolCodec.Options));
+        child.SetState(AgentChatCompletionState.Succeeded);
+        var update = Assert.IsType<SubagentsChangedEvent>(
+            AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(
+                AgentSessionProtocolCodec.DeserializeFrame(await fixture.Channel.Output.ReadAsync())));
+        Assert.Equal(AgentChatCompletionState.Succeeded,
+            update.Subagents.Single().GetProperty("completionState")
+                .Deserialize<AgentChatCompletionState>(AgentSessionProtocolCodec.Options));
+        Assert.Same(child, Assert.Single(fixture.Subagents));
+
+        await using var reconnected = new DuplexChannel();
+        await using var reconnect = await fixture.Host.OpenAsync(
+            fixture.Request(AgentSessionOpenIntent.Attach, channel: reconnected, token: "reconnect"));
+        var snapshot = Assert.IsType<SessionSnapshotEvent>(
+            AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(
+                AgentSessionProtocolCodec.DeserializeFrame(await reconnected.Output.ReadAsync())));
+        Assert.Equal(AgentChatCompletionState.Succeeded,
+            snapshot.Snapshot.Subagents.Single().GetProperty("completionState")
+                .Deserialize<AgentChatCompletionState>(AgentSessionProtocolCodec.Options));
+    }
+
+    private sealed class MutableRunningSubagent(string agentId) : IRunningSubAgent
+    {
+        public string AgentId => agentId;
+        public string DisplayName => agentId;
+        public string Description => string.Empty;
+        public AgentChatCompletionState CompletionState { get; private set; } = AgentChatCompletionState.Running;
+        public DateTime LastUpdatedAt => DateTime.UtcNow;
+        public IReadOnlyList<IRunningSubAgent> SubAgents => [];
+        public event EventHandler? CompletionStateChanged;
+        public void SetState(AgentChatCompletionState state)
+        {
+            this.CompletionState = state;
+            this.CompletionStateChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    [Fact]
     public async Task OpenSubagentCommand_AuthorizedChild_StartsChildRuntimeAndReturnsAttachDescriptor()
     {
         await using var fixture = new HostFixture();

@@ -37,6 +37,14 @@ internal sealed class CopilotSubAgentLifecycleStore
             case CopilotSubAgentLifecycleLayer.Task:
                 if (string.IsNullOrEmpty(request.TaskId)) return false;
                 this.tasks[request.TaskId] = (request.ChatKey, request.State);
+                if (request.State == "idle")
+                {
+                    if (request.InvocationToolCallId is { Length: > 0 } toolCallId)
+                        this.Apply(new(request.ChatKey, CopilotSubAgentLifecycleLayer.Invocation,
+                            "completed", InvocationToolCallId: toolCallId));
+                    if (this.sessions.TryGetValue(request.ChatKey, out var session))
+                        this.sessions[request.ChatKey] = ("done", session.Revision);
+                }
                 break;
             case CopilotSubAgentLifecycleLayer.Invocation:
                 if (string.IsNullOrEmpty(request.InvocationToolCallId)) return false;
@@ -76,6 +84,6 @@ internal sealed class CopilotSubAgentLifecycleStore
         return this.sessions.TryGetValue(chatKey, out var session) && session.State is "working" or "waiting" or "attention";
     }
 
-    private static bool IsTaskActive(string state) => state is "running" or "idle";
+    private static bool IsTaskActive(string state) => state == "running";
     private static bool IsTerminal(string state) => state is "done" or "completed" or "failed" or "cancelled";
 }

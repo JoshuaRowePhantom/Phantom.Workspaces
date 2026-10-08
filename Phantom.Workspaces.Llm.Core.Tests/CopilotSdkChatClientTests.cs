@@ -185,6 +185,55 @@ public sealed class CopilotSdkChatClientTests
     }
 
     [Fact]
+    public async Task CopilotSdkChatClient_BackgroundTaskInvalidation_RunningToIdleProjectsRestoredChildAsNonrunning()
+    {
+        var session = new Infrastructure.FakeCopilotSession
+        {
+            Tasks = [new TaskInfoAgent
+            {
+                Id = "child", ToolCallId = "call", AgentType = "task", Prompt = "first",
+                Description = "test", StartedAt = DateTimeOffset.UtcNow, Status = GitHub.Copilot.Rpc.TaskStatus.Running,
+            }],
+        };
+        await using var client = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
+        client.SetCopilotClientFactoryForTest(new Infrastructure.FakeCopilotClientFactory(
+            new Infrastructure.FakeCopilotClient(session)));
+        await InvokeEnsureSessionAsync(client);
+        var child = new SubAgent(CopilotSubAgentIdentity.Create("child", "call"), null);
+        client.RegisterRestoredSubAgent(child);
+        Assert.Equal(AgentChatCompletionState.Running, ((IRunningSubAgent)child).CompletionState);
+        var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        child.CompletionStateChanged += (_, _) =>
+        {
+            if (((IRunningSubAgent)child).CompletionState == AgentChatCompletionState.Succeeded)
+                changed.TrySetResult();
+        };
+        session.Tasks = [new TaskInfoAgent
+        {
+            Id = "child", ToolCallId = "call", AgentType = "task", Prompt = "first",
+            Description = "test", StartedAt = DateTimeOffset.UtcNow, Status = GitHub.Copilot.Rpc.TaskStatus.Idle,
+        }];
+        session.Emit(new SessionBackgroundTasksChangedEvent { Data = new SessionBackgroundTasksChangedData() });
+        await changed.Task;
+        Assert.Equal(AgentChatCompletionState.Succeeded, ((IRunningSubAgent)child).CompletionState);
+
+        var failed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        child.CompletionStateChanged += (_, _) =>
+        {
+            if (((IRunningSubAgent)child).CompletionState == AgentChatCompletionState.Failed)
+                failed.TrySetResult();
+        };
+        session.Tasks = [new TaskInfoAgent
+        {
+            Id = "child", ToolCallId = "call", AgentType = "task", Prompt = "first",
+            Description = "test", StartedAt = DateTimeOffset.UtcNow, Status = GitHub.Copilot.Rpc.TaskStatus.Failed,
+        }];
+        session.Emit(new SessionBackgroundTasksChangedEvent { Data = new SessionBackgroundTasksChangedData() });
+        await failed.Task;
+        Assert.Equal(AgentChatCompletionState.Failed, ((IRunningSubAgent)child).CompletionState);
+    }
+
+    [Fact]
     public async Task CopilotSdkChatClient_BackgroundTaskInvalidation_IdleToRunningResumesSameChatAndViewsWithoutRegistryPoll()
     {
         var session = new Infrastructure.FakeCopilotSession
@@ -216,10 +265,12 @@ public sealed class CopilotSdkChatClientTests
         client.RegisterRestoredSubAgent(child);
         typeof(CopilotSdkChatClient).GetMethod("RegisterSubAgent", BindingFlags.Instance | BindingFlags.NonPublic)!
             .Invoke(client, ["child", "call", child]);
+        await WaitForCompletionStateAsync(chat, AgentChatCompletionState.Succeeded, CancellationToken.None);
 
         var children = new ObservableCollection<IRunningSubAgent> { child };
         var readOnlyChildren = new ReadOnlyObservableCollection<IRunningSubAgent>(children);
         using var browser = new SubAgentBrowserViewModel(readOnlyChildren) { HideCompleted = true };
+        Assert.Empty(browser.VisibleItems);
         using var display = new RunningSubAgentDisplay(chat);
         var displays = new ObservableCollection<IRunningSubAgentDisplay> { display };
         var sink = new SubAgentPanelSink();
@@ -271,6 +322,37 @@ public sealed class CopilotSdkChatClientTests
         Assert.Equal(AgentChatCompletionState.Running, ((IRunningSubAgent)child).CompletionState);
         Assert.Contains(browser.VisibleItems, item => ReferenceEquals(item, child));
         Assert.Contains(sink.Updates, html => html.Contains("Follow-up child", StringComparison.Ordinal));
+
+        var idled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        chat.CompletionStateChanged += (_, _) =>
+        {
+            if (chat.CompletionState == AgentChatCompletionState.Succeeded) idled.TrySetResult();
+        };
+        session.Tasks = [new TaskInfoAgent
+        {
+            Id = "task", ToolCallId = "call", AgentType = "task", Prompt = "follow-up",
+            Description = "test", StartedAt = DateTimeOffset.UtcNow, Status = GitHub.Copilot.Rpc.TaskStatus.Idle,
+        }];
+        session.Emit(new SessionBackgroundTasksChangedEvent { Data = new SessionBackgroundTasksChangedData() });
+        await idled.Task.WaitAsync(timeout.Token);
+        Assert.Empty(browser.VisibleItems);
+        Assert.Same(child, Assert.Single(children));
+        Assert.Equal(AgentChatCompletionState.Succeeded, display.CompletionState);
+        Assert.Contains("first answer", chat.History[0].Contents.OfType<TextContent>().Single().Text);
+
+        reactivated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        chat.CompletionStateChanged += (_, _) =>
+        {
+            if (chat.CompletionState == AgentChatCompletionState.Running) reactivated.TrySetResult();
+        };
+        session.Tasks = [new TaskInfoAgent
+        {
+            Id = "task", ToolCallId = "call", AgentType = "task", Prompt = "again",
+            Description = "test", StartedAt = DateTimeOffset.UtcNow, Status = GitHub.Copilot.Rpc.TaskStatus.Running,
+        }];
+        session.Emit(new SessionBackgroundTasksChangedEvent { Data = new SessionBackgroundTasksChangedData() });
+        await reactivated.Task.WaitAsync(timeout.Token);
+        Assert.Contains(browser.VisibleItems, item => ReferenceEquals(item, child));
 
         session.Emit(new AssistantMessageDeltaEvent
         {
