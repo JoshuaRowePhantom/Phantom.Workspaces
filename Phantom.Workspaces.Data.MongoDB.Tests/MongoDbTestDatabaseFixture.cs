@@ -44,8 +44,7 @@ public sealed class MongoDbTestDatabaseFixture : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        // The broker creates the data directory before starting the container; relying on that here
-        // gives integration coverage that the directory is created before the container starts.
+        // The broker creates both bind-mount sources before starting the container.
         var client = await _connectionBroker.GetClientAsync(ConnectionDefinition);
         Database = client.GetDatabase(DatabaseName);
 

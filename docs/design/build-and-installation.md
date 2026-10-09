@@ -555,6 +555,13 @@ environments, and release outputs) the build/installation design requires. Items
   integration suite. Scheduled (e.g. nightly), on-demand, and **gated before release**. A
   self-hosted Docker-capable Windows runner is only needed if a test ever requires *Windows*
   containers specifically.
+  - The Windows job downloads the standalone Copilot CLI version matching `GitHub.Copilot.SDK`
+    (and verifies the release archive's SHA-256), then sets `COPILOT_CLI_PATH` for real BYOK
+    tests. The SDK-staged `copilot.exe` is a server-only runtime, not the interactive CLI.
+    When upgrading the SDK, update the pinned CLI version and archive hash together.
+  - The Linux job needs a working Docker daemon. The MongoDB broker creates both the data
+    directory and its `configdb` bind-mount source before `docker create`; unlike Docker
+    Desktop on Windows, Linux Docker rejects a missing `--mount` source.
   - **Targeting on Linux:** the full suite also contains **Windows-only** tests (Avalonia GUI,
     the `StartupTaskService`/scheduled-task and junction/symlink integration tests). The
     `ubuntu-latest` job therefore runs the **cross-platform data-layer Docker tests** (e.g. via

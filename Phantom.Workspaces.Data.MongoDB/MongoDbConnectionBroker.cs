@@ -152,9 +152,10 @@ public sealed class MongoDbConnectionBroker
     {
         var resolvedConnectionDefinition = NormalizeContainerDataDirectory(connectionDefinition);
 
-        // The data directory is bind-mounted into the container; it must exist before the container
-        // is created, otherwise the container engine fails to start it.
+        // Both bind sources must exist before docker create (Linux does not create missing
+        // --mount sources). Keep the configdb mount separate from the persisted data directory.
         Directory.CreateDirectory(resolvedConnectionDefinition.DataDirectory);
+        Directory.CreateDirectory(Path.Combine(resolvedConnectionDefinition.DataDirectory, "configdb"));
 
         await EnsureContainerStartedAsync(resolvedConnectionDefinition, cancellationToken).ConfigureAwait(false);
 
