@@ -41,6 +41,7 @@ public static class EntityTreePanel
         var transition = Transitions.GetOrCreateValue(tree);
         transition.Cancel?.Invoke();
         int generation = ++transition.Generation;
+        bool restored = false;
         var scroll = tree.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();
         var offset = scroll?.Offset;
         var expanded = tree.GetVisualDescendants().OfType<TreeViewItem>()
@@ -70,6 +71,32 @@ public static class EntityTreePanel
         }
         focusPath.Reverse();
 
+        bool FocusReplacement(TreeViewItem container)
+        {
+            InputElement? target = null;
+            if (focusedDataContext is not null &&
+                !ReferenceEquals(focusedDataContext, focusedItem))
+            {
+                target = container.GetVisualDescendants().OfType<Control>()
+                    .FirstOrDefault(control =>
+                        control.GetType() == focused?.GetType() &&
+                        ReferenceEquals(control.DataContext, focusedDataContext));
+            }
+            if (target is null)
+            {
+                Visual? replacement = container;
+                foreach (int index in focusPath)
+                {
+                    var children = replacement?.GetVisualChildren().ToList();
+                    replacement = children is not null && index >= 0 && index < children.Count
+                        ? children[index] : null;
+                }
+                target = replacement as InputElement ?? container;
+            }
+            target.Focus();
+            return target.IsFocused;
+        }
+
         tree.Classes.Set("entity-card-tree-small", small);
         if (scroll is null)
         {
@@ -78,7 +105,7 @@ public static class EntityTreePanel
 
         void Restore(object? sender, EventArgs args)
         {
-            if (transition.Generation != generation)
+            if (restored || transition.Generation != generation)
             {
                 Cancel();
                 return;
@@ -91,11 +118,36 @@ public static class EntityTreePanel
             }
 
             Cancel();
+            restored = true;
             foreach (var container in tree.GetVisualDescendants().OfType<TreeViewItem>())
             {
                 if (expanded.Contains(container.DataContext))
                 {
                     container.IsExpanded = true;
+                }
+            }
+
+            // The desktop can complete a panel layout before a Loaded callback runs. Correct the
+            // realized anchor and focus now so a live threshold change cannot visibly jump.
+            bool focusRestored = false;
+            if (focusedItem is not null && focused?.IsAttachedToVisualTree() != true)
+            {
+                var replacement = tree.GetVisualDescendants().OfType<TreeViewItem>()
+                    .FirstOrDefault(item => ReferenceEquals(item.DataContext, focusedItem));
+                if (replacement is not null)
+                {
+                    focusRestored = FocusReplacement(replacement);
+                    tree.UpdateLayout();
+                }
+            }
+            if (anchorItem is not null && anchorY is { } oldY)
+            {
+                var currentAnchor = tree.GetVisualDescendants().OfType<TreeViewItem>()
+                    .FirstOrDefault(item => ReferenceEquals(item.DataContext, anchorItem));
+                if (currentAnchor?.TranslatePoint(default, scroll)?.Y is { } currentY)
+                {
+                    scroll.Offset = new Vector(scroll.Offset.X,
+                        Math.Max(0, scroll.Offset.Y + currentY - oldY));
                 }
             }
 
@@ -113,7 +165,7 @@ public static class EntityTreePanel
                 }
 
                 bool focusRequiresScroll = false;
-                if (focusedItem is not null && focused?.IsAttachedToVisualTree() != true)
+                if (!focusRestored && focusedItem is not null && focused?.IsAttachedToVisualTree() != true)
                 {
                     var container = tree.GetVisualDescendants().OfType<TreeViewItem>()
                         .FirstOrDefault(candidate => ReferenceEquals(candidate.DataContext, focusedItem));
@@ -126,27 +178,10 @@ public static class EntityTreePanel
                         focusRequiresScroll = container is not null;
                     }
 
-                    InputElement? target = null;
-                    if (focusedDataContext is not null &&
-                        !ReferenceEquals(focusedDataContext, focusedItem))
+                    if (container is not null)
                     {
-                        target = container?.GetVisualDescendants().OfType<Control>()
-                            .FirstOrDefault(control =>
-                                control.GetType() == focused?.GetType() &&
-                                ReferenceEquals(control.DataContext, focusedDataContext));
+                        FocusReplacement(container);
                     }
-                    if (target is null)
-                    {
-                        Visual? replacement = container;
-                        foreach (int index in focusPath)
-                        {
-                            var children = replacement?.GetVisualChildren().ToList();
-                            replacement = children is not null && index >= 0 && index < children.Count
-                                ? children[index] : null;
-                        }
-                        target = replacement as InputElement ?? container;
-                    }
-                    target?.Focus();
                 }
 
                 if (!focusRequiresScroll && offset is { } oldOffset)
@@ -180,5 +215,7 @@ public static class EntityTreePanel
 
         transition.Cancel = Cancel;
         tree.LayoutUpdated += Restore;
+        // A panel replacement may finish layout synchronously before the handler is attached.
+        Dispatcher.UIThread.Post(() => Restore(tree, EventArgs.Empty), DispatcherPriority.Loaded);
     }
 }
