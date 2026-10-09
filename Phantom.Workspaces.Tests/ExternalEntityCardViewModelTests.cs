@@ -273,9 +273,26 @@ public sealed class ExternalEntityCardViewModelTests
             Assert.Equal(3, namedLabels.Length);
             Assert.All(namedLabels, label => Assert.True(label.IsVisible));
             Assert.Equal(new[] { "default", "docs", "unsafe" }, namedLabels.Select(label => label.Text));
+            Assert.All(links.Take(2), link =>
+            {
+                Assert.Contains("available", link.Classes);
+                Assert.Equal(1, link.Opacity);
+                Assert.Equal("Hand", link.Cursor?.ToString());
+                Assert.NotEmpty(link.TextDecorations!);
+            });
+            Assert.DoesNotContain("available", links[2].Classes);
             Assert.True(links[2].IsEnabled);
+            Assert.Equal(0.65, links[2].Opacity);
+            Assert.Equal("Arrow", links[2].Cursor?.ToString());
+            Assert.True(links[2].TextDecorations is null or { Count: 0 });
             Assert.False(links[2].Command!.CanExecute(null));
+            var unsafePoint = links[2].TranslatePoint(
+                new Point(links[2].Bounds.Width / 2, links[2].Bounds.Height / 2), window);
+            Assert.NotNull(unsafePoint);
+            window.MouseDown(unsafePoint.Value, MouseButton.Left);
+            window.MouseUp(unsafePoint.Value, MouseButton.Left);
             links[2].Focus();
+            window.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, "\r");
             links[2].SelectAll();
             window.KeyPress(Key.C, RawInputModifiers.Control, PhysicalKey.C, "c");
             using (var copied = await window.Clipboard!.TryGetDataAsync())

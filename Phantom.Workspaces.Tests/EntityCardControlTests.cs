@@ -717,6 +717,68 @@ public sealed class EntityCardControlTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityCardControl_UnavailableReferences_AreMutedButStillCopyable()
+    {
+        const string id = "a1b2c3d4-e5f6-4123-8123-123456789abc";
+        var opened = 0;
+        var editors = new EntityFieldEditorViewModel[]
+        {
+            new EntityReferenceFieldEditorViewModel("unavailable-reference", id, Array.Empty<string>(), null),
+            new EntityReferenceFieldEditorViewModel("available-reference", id, Array.Empty<string>(), null, _ => opened++),
+            new EntityListFieldEditorViewModel("unavailable-list", new[] { id }, Array.Empty<string>(), null),
+            new EntityListFieldEditorViewModel("available-list", new[] { id }, Array.Empty<string>(), null, _ => opened++),
+        };
+        var window = new Window
+        {
+            Content = new EntityCardControl
+            {
+                DataContext = new EntityCardViewModel(
+                    new SubscribedEntityViewModel(BuildGitWorktreeSnapshotForTests()), editors),
+            },
+            Width = 600,
+            Height = 420,
+        };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            var links = window.GetVisualDescendants().OfType<CopyableLinkTextBlock>()
+                .Where(link => link.Classes.Contains("workspace-entity-reference-link")).ToArray();
+            Assert.Equal(4, links.Length);
+            foreach (var link in links)
+            {
+                var available = link.DataContext switch
+                {
+                    EntityReferenceFieldEditorViewModel reference => reference.CanOpen,
+                    EntityReferenceListItemViewModel item => item.CanOpen,
+                    _ => throw new InvalidOperationException("Unexpected reference link context"),
+                };
+                Assert.Equal(available, link.Classes.Contains("available"));
+                Assert.True(link.IsEnabled);
+                Assert.Equal(available ? 1 : 0.65, link.Opacity);
+                Assert.Equal(available ? "Hand" : "Arrow", link.Cursor?.ToString());
+                Assert.Equal(available, link.TextDecorations is { Count: > 0 });
+                Assert.Equal(available, link.Command!.CanExecute(null));
+
+                if (!available)
+                {
+                    ClickText(window, link);
+                    link.Focus();
+                    window.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, "\r");
+                    Assert.Equal(0, opened);
+                    await AssertMouseSelectAndCopyAsync(window, link);
+                    Assert.Equal(0, opened);
+                }
+            }
+            Assert.Equal(2, links.Count(link => link.Classes.Contains("available")));
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task EntityCardControl_EntityListLink_MouseCopiesAndClickOpens()
     {
         const string id = "a1b2c3d4-e5f6-4123-8123-123456789abc";

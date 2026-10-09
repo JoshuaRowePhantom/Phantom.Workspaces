@@ -194,6 +194,7 @@
                     ToolTip.Tip="{Binding TooltipText}"
                     Command="{Binding OpenCommand}"
                     Classes="workspace-entity-reference-link"
+                    Classes.available="{Binding CanOpen}"
                     HorizontalAlignment="Left"
                     IsVisible="{Binding IsReadMode}" />
             <!-- Edit mode: search box plus candidate results. -->
@@ -233,6 +234,7 @@
                                 ToolTip.Tip="{Binding TooltipText}"
                                 Command="{Binding OpenCommand}"
                                 Classes="workspace-entity-reference-link"
+                                Classes.available="{Binding CanOpen}"
                                 HorizontalAlignment="Left" />
                     </DataTemplate>
                 </ItemsControl.ItemTemplate>
@@ -552,6 +554,7 @@
                         <controls:CopyableLinkTextBlock Grid.Column="1"
                                 Text="{Binding Url}"
                                 Classes="workspace-url-link"
+                                Classes.available="{Binding IsSupported}"
                                 Command="{Binding OpenCommand}"
                                 HorizontalAlignment="Left" />
                         <controls:SafeSelectableTextBlock Grid.Row="1" Grid.Column="1"
