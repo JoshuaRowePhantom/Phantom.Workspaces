@@ -78,7 +78,9 @@ public sealed class AgentChatOutputControlTests
     {
         var html = ReadShellHtml();
         Assert.DoesNotContain("header.hidden = false", html, StringComparison.Ordinal);
-        Assert.Contains("header.hidden ? message.querySelector(\":scope > .chat-contents\") : meta", html, StringComparison.Ordinal);
+        Assert.Contains("var host = header.hidden", html, StringComparison.Ordinal);
+        Assert.Contains("message.querySelector(\":scope > .chat-contents > .chat-tool-group-actions\")", html, StringComparison.Ordinal);
+        Assert.Contains("message.querySelector(\":scope > .chat-contents\")", html, StringComparison.Ordinal);
         Assert.Contains("postToHost({", html, StringComparison.Ordinal);
         Assert.Contains("type: \"inspect\"", html, StringComparison.Ordinal);
         Assert.Contains("CopyGutter.init(document)", html, StringComparison.Ordinal);
@@ -98,8 +100,11 @@ public sealed class AgentChatOutputControlTests
     {
         var html = ReadShellHtml();
 
-        Assert.Contains("meta.querySelector(\".usage-gutter-btn\")", html, StringComparison.Ordinal);
-        Assert.DoesNotContain("previousElementSibling", html, StringComparison.Ordinal);
+        Assert.Contains("var leader = runId && Array.from(document.querySelectorAll(\"details.chat-tool-group[data-assistant-run-id]\"))", html, StringComparison.Ordinal);
+        Assert.Contains("var host = leader && leader.previousElementSibling;", html, StringComparison.Ordinal);
+        Assert.Contains("var ids = new Set(targets.map(function (target) { return target.id; }));", html, StringComparison.Ordinal);
+        Assert.Contains("if (!ids.has(button.getAttribute(\"data-segment-target-id\"))) { button.remove(); }", html, StringComparison.Ordinal);
+        Assert.Contains("if (button.parentElement !== host) { button.remove(); }", html, StringComparison.Ordinal);
     }
 
     [Fact]

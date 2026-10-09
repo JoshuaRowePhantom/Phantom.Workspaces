@@ -1,16 +1,24 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.IO;
+using System.Text.Json;
+using System.Threading.Channels;
 using System.Threading.Tasks;
+using AgentSchema;
 using Avalonia;
 using Avalonia.Controls;
+using GitHub.Copilot;
+using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.Controls;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 using Phantom.Workspaces.Gui.Shared.Controls;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Remote;
+using Phantom.Workspaces.Transport;
 using Xunit;
 
 namespace Phantom.Workspaces.Agent.Gui.WebViewTests;
@@ -700,6 +708,8 @@ public sealed class ChatOutputBrowserIntegrationTests
         => this.fixture.InvokeAsync(async () =>
         {
             var (web, window) = await ShowReadyBrowserAsync();
+            var messages = new List<string>();
+            web.JavaScriptMessageReceived += (_, body) => messages.Add(body);
             try
             {
                 var content = ChatOutputHtmlRenderer.RenderContent(
@@ -711,7 +721,7 @@ public sealed class ChatOutputBrowserIntegrationTests
                     "suppressed",
                     "assistant",
                     [("suppressed-c0", content),
-                     ("suppressed-usage", "<div class=\"chat-content chat-usage\" data-usage-inspect-target id=\"suppressed-usage\"></div>")],
+                     ("suppressed-usage", "<div class=\"chat-content chat-usage\" data-usage-inspect-target data-details-target=\"usage payload\" id=\"suppressed-usage\"></div>")],
                     suppressRoleHeader: true);
                 web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
                     "chat-history-container",
@@ -727,6 +737,16 @@ public sealed class ChatOutputBrowserIntegrationTests
                     + "&&!!c.querySelector(':scope > .usage-gutter-btn')"
                     + "&&!!c.querySelector('[data-copy-target]');})()");
                 Assert.Contains("true", result, StringComparison.Ordinal);
+                var activated = await EvalAsync(web,
+                    "(function(){var m=document.getElementById('suppressed');"
+                    + "var c=m.querySelector(':scope > .chat-contents');"
+                    + "c.querySelector(':scope > .inspect-gutter-btn').click();"
+                    + "c.querySelector(':scope > .usage-gutter-btn').click();"
+                    + "return m.querySelector(':scope > .chat-header').hidden;})()");
+                Assert.Contains("true", activated, StringComparison.Ordinal);
+                Assert.Contains(messages, body => body.Contains("\"contentId\":\"suppressed-c0\"", StringComparison.Ordinal));
+                Assert.Contains(messages, body => body.Contains("\"contentId\":\"suppressed-usage\"", StringComparison.Ordinal)
+                    && body.Contains("usage payload", StringComparison.Ordinal));
             }
             finally
             {
@@ -762,6 +782,732 @@ public sealed class ChatOutputBrowserIntegrationTests
                 window.Close();
             }
         });
+
+    [Fact]
+    public Task ToolGroup_HiddenHeader_InspectAndUsageStayOnVisibleChromeAndTargetOwnGroup()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            var messages = new List<string>();
+            web.JavaScriptMessageReceived += (_, body) => messages.Add(body);
+            try
+            {
+                foreach (var id in new[] { "group-a", "group-b" })
+                {
+                    var body = $"<div id=\"{id}-call\" data-inspect-target data-details-target=\"{id}-inspect\"></div>";
+                    web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update("chat-history-container", "append",
+                        ChatOutputHtmlRenderer.RenderToolCallGroup(id, ["read"], 1, body +
+                            $"<div id=\"{id}-usage\" data-usage-inspect-target data-details-target=\"{id}-tokens\"></div>")));
+                }
+                var structure = await EvalAsync(web,
+                    "(function(){return ['group-a','group-b'].every(function(id){var m=document.getElementById(id);"
+                    + "var a=m.querySelector('.chat-tool-group-actions');"
+                    + "return a && a.querySelectorAll('button').length===2"
+                    + " && !m.querySelector(':scope > .chat-contents > .inspect-gutter-btn')"
+                    + " && !m.querySelector(':scope > .chat-contents > .usage-gutter-btn')"
+                    + " && m.querySelector('details').previousElementSibling===a;});})()");
+                Assert.Contains("true", structure, StringComparison.Ordinal);
+                var state = await EvalAsync(web,
+                    "(function(){var d=document.getElementById('group-b-details');"
+                    + "d.open=false;document.querySelector('#group-b .inspect-gutter-btn').click();"
+                    + "document.querySelector('#group-b .usage-gutter-btn').click();return !d.open;})()");
+                Assert.Contains("true", state, StringComparison.Ordinal);
+                Assert.Contains(messages, m => m.Contains("\"contentId\":\"group-b-call\"", StringComparison.Ordinal));
+                Assert.Contains(messages, m => m.Contains("\"contentId\":\"group-b-usage\"", StringComparison.Ordinal));
+                Assert.DoesNotContain(messages, m => m.Contains("\"contentId\":\"group-a-call\"", StringComparison.Ordinal));
+            }
+            finally { window.Close(); }
+        });
+
+    [Fact]
+    public Task ToolRun_DistinctMessageGroups_RouteActionsToVisibleSummaryAcrossCollapseMutationAndReload()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            var messages = new List<string>();
+            web.JavaScriptMessageReceived += (_, body) => messages.Add(body);
+            try
+            {
+                static AgentChatHistoryItem Call(string id) => new()
+                {
+                    Role = ChatRole.Assistant, AssistantRunId = "message-run",
+                    Contents =
+                    [
+                        new FunctionCallContent(id, "read", new Dictionary<string, object?>()),
+                        new UsageContent(new UsageDetails { InputTokenCount = id == "c1" ? 11 : 22 }),
+                    ],
+                };
+                var items = new[] { Call("c1"), TextItem("between message groups") with
+                    { AssistantRunId = "message-run" }, Call("c2") };
+                var history = new ObservableCollection<AgentChatHistoryItem>();
+                using var live = CreateModel(web, history);
+                await live.HistoryLoaded;
+                foreach (var item in items) history.Add(item);
+
+                async Task AssertActionsAsync(string secondCall, bool expanded)
+                {
+                    var state = await EvalAsync(web, """
+                        (() => {
+                          const groups = Array.from(document.querySelectorAll('details.chat-tool-group[data-assistant-run-id="message-run"]'));
+                          if (groups.length !== 2 || groups[0].closest('.chat-message') === groups[1].closest('.chat-message')) return false;
+                          const host = groups[0].previousElementSibling;
+                          const secondHost = groups[1].previousElementSibling;
+                          const buttons = Array.from(host?.querySelectorAll(':scope > button') || []);
+                          const targets = buttons.map(b => document.getElementById(b.getAttribute('data-segment-target-id')));
+                          const ids = Array.from(document.querySelectorAll('[id]')).map(e => e.id);
+                          const summary = groups[0].querySelector(':scope > summary');
+                          return host?.matches('.chat-tool-group-actions') && secondHost?.matches('.chat-tool-group-actions') &&
+                            buttons.length === 4 && secondHost.querySelectorAll('button').length === 0 &&
+                            targets.every(t => t && t.hasAttribute('data-details-target')) &&
+                            buttons.filter(b => b.classList.contains('inspect-gutter-btn')).length === 2 &&
+                            buttons.filter(b => b.classList.contains('usage-gutter-btn')).length === 2 &&
+                            buttons.some(b => b.getAttribute('data-segment-target-id')?.includes('history-2')) &&
+                            targets.some(t => t.getAttribute('data-details-target')?.includes('SECOND')) &&
+                            buttons.every(b => b.getClientRects().length > 0 && b.tabIndex >= 0 && !b.disabled &&
+                              b.getAttribute('aria-label') && b.parentElement === host) &&
+                            host.getBoundingClientRect().bottom <= summary.getBoundingClientRect().top + 2 &&
+                            !summary.hidden && groups[1].querySelector(':scope > summary').hidden &&
+                            groups.every(g => g.open === EXPANDED) && ids.length === new Set(ids).size;
+                        })()
+                        """.Replace("SECOND", secondCall, StringComparison.Ordinal)
+                            .Replace("EXPANDED", expanded ? "true" : "false", StringComparison.Ordinal));
+                    Assert.Contains("true", state, StringComparison.Ordinal);
+                }
+
+                await AssertActionsAsync("c2", true);
+                await EvalAsync(web, "document.querySelector('details.chat-tool-group[data-assistant-run-id=\"message-run\"] > summary').click();'collapsed'");
+                await AssertActionsAsync("c2", false);
+                var activated = await EvalAsync(web, """
+                    (() => {
+                      const groups = Array.from(document.querySelectorAll('details.chat-tool-group[data-assistant-run-id="message-run"]'));
+                      const buttons = groups[0].previousElementSibling.querySelectorAll('button');
+                      buttons.forEach(b => { b.focus(); b.click(); });
+                      return document.activeElement === buttons[buttons.length - 1] && groups.every(g => !g.open);
+                    })()
+                    """);
+                Assert.Contains("true", activated, StringComparison.Ordinal);
+                Assert.Equal(4, messages.Count);
+                Assert.Equal(4, messages.Select(m => JsonDocument.Parse(m).RootElement.GetProperty("contentId").GetString())
+                    .Distinct().Count());
+                Assert.Contains(messages, m => m.Contains("c1", StringComparison.Ordinal));
+                Assert.Contains(messages, m => m.Contains("c2", StringComparison.Ordinal));
+
+                history[2] = Call("c3");
+                await AssertActionsAsync("c3", false);
+                messages.Clear();
+                await EvalAsync(web, """
+                    (() => {
+                      const host = document.querySelector('details.chat-tool-group[data-assistant-run-id="message-run"]')
+                        .previousElementSibling;
+                      host.querySelectorAll('button').forEach(b => b.click());
+                      return 'clicked';
+                    })()
+                    """);
+                Assert.Equal(4, messages.Count);
+                Assert.Contains(messages, m => m.Contains("c3", StringComparison.Ordinal));
+                Assert.DoesNotContain(messages, m => m.Contains("c2", StringComparison.Ordinal));
+
+                live.Dispose();
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history-container", "replace", "<div id=\"chat-history-container\"></div>"));
+                using var reload = CreateModel(web, new ObservableCollection<AgentChatHistoryItem>
+                    { items[0], items[1], Call("c3") });
+                await reload.HistoryLoaded;
+                await AssertActionsAsync("c3", false);
+            }
+            finally { window.Close(); }
+        });
+
+    [Fact]
+    public Task MixedMessage_TwoToolSegments_InspectResultAndUsageActionsSurviveMutationAndReload()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            var messages = new List<string>();
+            web.JavaScriptMessageReceived += (_, body) => messages.Add(body);
+            try
+            {
+                static AgentChatHistoryItem Item(string secondCallId) => new()
+                {
+                    Role = ChatRole.Assistant, AssistantRunId = "mixed-run",
+                    Contents =
+                    [
+                        new FunctionCallContent("c1", "read"),
+                        new UsageContent(new UsageDetails { InputTokenCount = 10 }),
+                        new TextContent("between calls"),
+                        new FunctionCallContent(secondCallId, "write"),
+                        new FunctionResultContent(secondCallId, "done"),
+                        new UsageContent(new UsageDetails { OutputTokenCount = 20 }),
+                    ],
+                };
+                var history = new ObservableCollection<AgentChatHistoryItem> { Item("c2") };
+                using var model = CreateModel(web, history);
+                await model.HistoryLoaded;
+                var initial = await EvalAsync(web, """
+                    (() => {
+                      const segments = document.querySelectorAll('#history-0 .chat-tool-segment');
+                      const host = segments[0]?.querySelector(':scope > .chat-tool-group-actions');
+                      return segments.length === 2 && host &&
+                        host.querySelectorAll(':scope > .inspect-gutter-btn').length === 3 &&
+                        host.querySelectorAll(':scope > .usage-gutter-btn').length === 2 &&
+                        segments[1].querySelectorAll(':scope > .chat-tool-group-actions > button').length === 0 &&
+                        new Set(Array.from(host.querySelectorAll('button'),
+                          button => button.getAttribute('aria-label'))).size === 5;
+                    })()
+                    """);
+                Assert.Contains("true", initial, StringComparison.Ordinal);
+
+                var targetIds = await EvalAsync(web, """
+                    (() => {
+                      const segments = document.querySelectorAll('#history-0 .chat-tool-segment');
+                      const buttons = segments[0].querySelectorAll(':scope > .chat-tool-group-actions > button');
+                      buttons.forEach(b => b.click());
+                      return Array.from(segments).map(s => s.querySelector('details').open).join(',');
+                    })()
+                    """);
+                Assert.Contains("true,true", targetIds, StringComparison.Ordinal);
+                Assert.Equal(5, messages.Count(m => m.Contains("\"type\":\"inspect\"", StringComparison.Ordinal)));
+                Assert.Equal(5, messages.Select(m => System.Text.Json.JsonDocument.Parse(m))
+                    .Select(json => json.RootElement.GetProperty("contentId").GetString()).Distinct().Count());
+
+                history[0] = Item("c3");
+                var rebound = await EvalAsync(web, """
+                    (() => {
+                      const segments = document.querySelectorAll('#history-0 .chat-tool-segment');
+                      const host = segments[0].querySelector(':scope > .chat-tool-group-actions');
+                      const second = Array.from(host.querySelectorAll('button'))
+                        .filter(b => b.getAttribute('data-segment-origin-id') === segments[1].id);
+                      second[0]?.click();
+                      return second.length === 3 &&
+                        segments[1].querySelectorAll(':scope > .chat-tool-group-actions > button').length === 0;
+                    })()
+                    """);
+                Assert.Contains("true", rebound, StringComparison.Ordinal);
+                Assert.Contains(messages, m => m.Contains("\"CallId\": \"c3\"", StringComparison.Ordinal)
+                    || m.Contains("\\\"CallId\\\": \\\"c3\\\"", StringComparison.Ordinal));
+
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history-container", "replace", "<div id=\"chat-history-container\"></div>"));
+                using var reload = CreateModel(web, new ObservableCollection<AgentChatHistoryItem> { Item("c3") });
+                await reload.HistoryLoaded;
+                var restored = await EvalAsync(web, """
+                    (() => {
+                      const segments = document.querySelectorAll('#history-0 .chat-tool-segment');
+                      return segments.length === 2 &&
+                        segments[0].querySelectorAll(':scope > .chat-tool-group-actions > button').length === 5 &&
+                        segments[1].querySelectorAll(':scope > .chat-tool-group-actions > button').length === 0 &&
+                        Array.from(document.querySelectorAll('[id]')).every(e => document.querySelectorAll(
+                          '[id="' + CSS.escape(e.id) + '"]').length === 1);
+                    })()
+                    """);
+                Assert.Contains("true", restored, StringComparison.Ordinal);
+            }
+            finally { window.Close(); }
+        });
+
+    [Fact]
+    public Task MixedMessage_SecondaryActions_StayAdjacentToVisibleSummaryAndKeyboardReachableWhenCollapsed()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            var messages = new List<string>();
+            web.JavaScriptMessageReceived += (_, body) => messages.Add(body);
+            try
+            {
+                var history = new ObservableCollection<AgentChatHistoryItem>
+                {
+                    new()
+                    {
+                        Role = ChatRole.Assistant, AssistantRunId = "run",
+                        Contents =
+                        [
+                            new FunctionCallContent("c1", "read"),
+                            new UsageContent(new UsageDetails { InputTokenCount = 10 }),
+                            new TextContent("narration"),
+                            new FunctionCallContent("c2", "write"),
+                            new FunctionResultContent("c2", "done"),
+                            new UsageContent(new UsageDetails { OutputTokenCount = 20 }),
+                        ],
+                    },
+                };
+                using var model = CreateModel(web, history);
+                await model.HistoryLoaded;
+                async Task AssertChromeAsync(bool expanded)
+                {
+                    var visible = await EvalAsync(web, """
+                        (() => {
+                          const segments = document.querySelectorAll('#history-0 .chat-tool-segment');
+                          const leader = segments[0].querySelector(':scope > .chat-tool-group-actions');
+                          const summary = segments[0].querySelector(':scope > details > summary');
+                          const actions = Array.from(document.querySelectorAll('#history-0 .chat-tool-group-actions > button'));
+                          const second = Array.from(actions).filter(b =>
+                            b.getAttribute('data-segment-origin-id') === segments[1].id);
+                          return segments.length === 2 && !summary.hidden &&
+                            actions.length === 5 && second.length === 3 &&
+                            second.every(b => b.parentElement === leader &&
+                              b.getClientRects().length > 0 && b.tabIndex >= 0 &&
+                              b.getAttribute('aria-label') && !b.disabled) &&
+                            leader.getBoundingClientRect().bottom <= summary.getBoundingClientRect().top + 2 &&
+                            leader.getBoundingClientRect().width <= segments[0].getBoundingClientRect().width &&
+                            segments[1].querySelector(':scope > details > summary').hidden &&
+                            segments[0].querySelector(':scope > details').open === EXPANDED;
+                        })()
+                        """.Replace("EXPANDED", expanded ? "true" : "false", StringComparison.Ordinal));
+                    Assert.Contains("true", visible, StringComparison.Ordinal);
+                }
+                await AssertChromeAsync(true);
+                await EvalAsync(web, "document.querySelector('#history-0 .chat-tool-segment summary').click();'collapsed'");
+                await AssertChromeAsync(false);
+                var focused = await EvalAsync(web, """
+                    (() => {
+                      const b = Array.from(document.querySelectorAll('#history-0 .chat-tool-group-actions > button'))
+                        .find(x => x.getAttribute('data-segment-target-id').endsWith('-result'));
+                      b.focus(); b.click(); return document.activeElement === b;
+                    })()
+                    """);
+                Assert.Contains("true", focused, StringComparison.Ordinal);
+                Assert.Contains(messages, m => m.Contains("-result\"", StringComparison.Ordinal));
+            }
+            finally { window.Close(); }
+        });
+
+    [Fact]
+    public Task ToolRun_UnmatchedResultBetweenCalls_LiveAndReloadKeepResultInDomOrder()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                var items = new[]
+                {
+                    ToolCallItem("first_tool", "c1") with { AssistantRunId = "run" },
+                    new AgentChatHistoryItem { Role = ChatRole.Tool, AssistantRunId = "run",
+                        Contents = [new FunctionResultContent("unmatched", "unmatched-result")] },
+                    ToolCallItem("second_tool", "c2") with { AssistantRunId = "run" },
+                };
+                var history = new ObservableCollection<AgentChatHistoryItem>();
+                using var live = CreateModel(web, history);
+                await live.HistoryLoaded;
+                foreach (var item in items) history.Add(item);
+                async Task AssertOrderAsync()
+                {
+                    var order = await EvalAsync(web, """
+                        (() => {
+                          const root = document.getElementById('chat-history-container');
+                          const calls = Array.from(root.querySelectorAll('details.chat-tool-group'));
+                          const result = Array.from(root.querySelectorAll('.chat-tool'))
+                            .find(e => e.textContent.includes('unmatched-result'));
+                          const ids = Array.from(root.querySelectorAll('[id]')).map(e => e.id);
+                          return calls.length === 2 && !!result &&
+                            !!(calls[0].compareDocumentPosition(result) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+                            !!(result.compareDocumentPosition(calls[1]) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+                            !result.closest('details.chat-tool-group') && ids.length === new Set(ids).size;
+                        })()
+                        """);
+                    Assert.Contains("true", order, StringComparison.Ordinal);
+                }
+                await AssertOrderAsync();
+                live.Dispose();
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history-container", "replace", "<div id=\"chat-history-container\"></div>"));
+                using var reload = CreateModel(web, new ObservableCollection<AgentChatHistoryItem>(items));
+                await reload.HistoryLoaded;
+                await AssertOrderAsync();
+            }
+            finally { window.Close(); }
+        });
+
+    [Fact]
+    public Task ToolRun_NotificationBetweenCalls_LiveAndReloadKeepSystemOutsideCollapsedSegments()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                var items = new[]
+                {
+                    ToolCallItem("first_tool", "c1") with { AssistantRunId = "ordered-run" },
+                    TextItem("agent idle") with { Role = ChatRole.System, AssistantRunId = "ordered-run" },
+                    ToolCallItem("second_tool", "c2") with { AssistantRunId = "ordered-run" },
+                };
+                var history = new ObservableCollection<AgentChatHistoryItem>();
+                var subAgents = new ObservableCollection<IRunningSubAgentDisplay>
+                    { new StubSubAgentDisplay("child", "Background agent") };
+                using var model = CreateModel(web, history, new ObservableCollection<AgentChatRunningItem>(),
+                    subAgents: subAgents);
+                await model.HistoryLoaded;
+                foreach (var item in items) history.Add(item);
+                var live = await EvalAsync(web, """
+                    (() => {
+                      const root = document.getElementById('chat-history-container');
+                      const system = root.querySelector('.chat-system-message');
+                      const groups = root.querySelectorAll('details.chat-tool-group');
+                      return JSON.stringify({
+                        ordered: groups.length === 2 &&
+                          !!(groups[0].compareDocumentPosition(system) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+                          !!(system.compareDocumentPosition(groups[1]) & Node.DOCUMENT_POSITION_FOLLOWING),
+                        role: system.querySelector('.chat-sender').textContent,
+                        outside: !system.closest('details.chat-tool-group'),
+                        summaries: Array.from(groups).filter(g => !g.querySelector(':scope > summary').hidden).length,
+                        panel: document.getElementById('subagent-panel-inner').textContent.includes('Background agent')
+                      });
+                    })()
+                    """);
+                Assert.Contains("\\\"ordered\\\":true", live, StringComparison.Ordinal);
+                Assert.Contains("\\\"role\\\":\\\"system\\\"", live, StringComparison.Ordinal);
+                Assert.Contains("\\\"outside\\\":true", live, StringComparison.Ordinal);
+                Assert.Contains("\\\"summaries\\\":1", live, StringComparison.Ordinal);
+                Assert.Contains("\\\"panel\\\":true", live, StringComparison.Ordinal);
+
+                await EvalAsync(web, "document.querySelector('details.chat-tool-group > summary').click();'collapsed'");
+                var collapsed = await EvalAsync(web, """
+                    (() => {
+                      const groups = document.querySelectorAll('details.chat-tool-group');
+                      return !groups[0].open && !groups[1].open &&
+                        document.querySelector('.chat-system-message').getClientRects().length > 0;
+                    })()
+                    """);
+                Assert.Contains("true", collapsed, StringComparison.Ordinal);
+
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history-container", "replace", "<div id=\"chat-history-container\"></div>"));
+                using var reload = CreateModel(web, new ObservableCollection<AgentChatHistoryItem>(items),
+                    new ObservableCollection<AgentChatRunningItem>(), subAgents:
+                    new ObservableCollection<IRunningSubAgentDisplay>
+                        { new StubSubAgentDisplay("child", "Background agent") });
+                await reload.HistoryLoaded;
+                var restored = await EvalAsync(web,
+                    "(function(){var root=document.getElementById('chat-history-container');"
+                    + "var groups=root.querySelectorAll('details.chat-tool-group');"
+                    + "var system=root.querySelector('.chat-system-message');"
+                    + "var ids=Array.from(root.querySelectorAll('[id]')).map(e=>e.id);"
+                    + "return groups.length===2 && !!(groups[0].compareDocumentPosition(system)&4)"
+                    + " && !!(system.compareDocumentPosition(groups[1])&4)"
+                    + " && system.querySelector('.chat-sender').textContent==='system'"
+                    + " && !system.closest('details.chat-tool-group')"
+                    + " && Array.from(groups).filter(g=>!g.querySelector(':scope > summary').hidden).length===1"
+                    + " && !groups[0].open && !groups[1].open"
+                    + " && document.getElementById('subagent-panel-inner').textContent.includes('Background agent')"
+                    + " && ids.length===new Set(ids).size;})()");
+                Assert.Contains("true", restored, StringComparison.Ordinal);
+            }
+            finally { window.Close(); }
+        });
+
+    [Fact]
+    public Task ToolRun_NotificationBeforeCallAndBetweenCallResult_LiveAndReloadDomOrder()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                async Task AssertSequenceAsync(AgentChatHistoryItem[] items, bool beforeCall)
+                {
+                    var history = new ObservableCollection<AgentChatHistoryItem>();
+                    using var live = CreateModel(web, history);
+                    await live.HistoryLoaded;
+                    foreach (var item in items) history.Add(item);
+
+                    async Task AssertDomAsync()
+                    {
+                        var actual = await EvalAsync(web, """
+                            (() => {
+                              const root = document.getElementById('chat-history-container');
+                              const system = root.querySelector('.chat-system-message');
+                              const call = root.querySelector('details.chat-tool-group');
+                              const result = root.querySelector('.chat-tool:not(.chat-tool-group)');
+                              const ids = Array.from(root.querySelectorAll('[id]')).map(e => e.id);
+                              return JSON.stringify({
+                                beforeCall: !!(system.compareDocumentPosition(call) & Node.DOCUMENT_POSITION_FOLLOWING),
+                                callBeforeSystem: !!(call.compareDocumentPosition(system) & Node.DOCUMENT_POSITION_FOLLOWING),
+                                systemBeforeResult: result
+                                  ? !!(system.compareDocumentPosition(result) & Node.DOCUMENT_POSITION_FOLLOWING)
+                                  : null,
+                                resultOutside: result ? !result.closest('details.chat-tool-group') : null,
+                                role: system.querySelector('.chat-sender').textContent,
+                                unique: ids.length === new Set(ids).size
+                              });
+                            })()
+                            """);
+                        Assert.Contains($"\\\"beforeCall\\\":{beforeCall.ToString().ToLowerInvariant()}", actual, StringComparison.Ordinal);
+                        Assert.Contains($"\\\"callBeforeSystem\\\":{(!beforeCall).ToString().ToLowerInvariant()}", actual, StringComparison.Ordinal);
+                        Assert.Contains("\\\"role\\\":\\\"system\\\"", actual, StringComparison.Ordinal);
+                        Assert.Contains("\\\"unique\\\":true", actual, StringComparison.Ordinal);
+                        if (!beforeCall)
+                        {
+                            Assert.Contains("\\\"systemBeforeResult\\\":true", actual, StringComparison.Ordinal);
+                            Assert.Contains("\\\"resultOutside\\\":true", actual, StringComparison.Ordinal);
+                        }
+                    }
+
+                    await AssertDomAsync();
+                    live.Dispose();
+                    web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                        "chat-history-container", "replace", "<div id=\"chat-history-container\"></div>"));
+                    using var reload = CreateModel(web, new ObservableCollection<AgentChatHistoryItem>(items));
+                    await reload.HistoryLoaded;
+                    await AssertDomAsync();
+                    reload.Dispose();
+                    web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                        "chat-history-container", "replace", "<div id=\"chat-history-container\"></div>"));
+                    await EvalAsync(web, "'cleared'");
+                }
+
+                var notification = TextItem("agent idle") with { Role = ChatRole.System, AssistantRunId = "run" };
+                var call = ToolCallItem("parent_task", "c1") with { AssistantRunId = "run" };
+                await AssertSequenceAsync([notification, call], beforeCall: true);
+                var result = new AgentChatHistoryItem { Role = ChatRole.Tool, AssistantRunId = "run",
+                    Contents = [new FunctionResultContent("c1", "completed")] };
+                await AssertSequenceAsync([call, notification, result], beforeCall: false);
+            }
+            finally { window.Close(); }
+        });
+
+    [Fact]
+    public Task RemoteNotification_ActualStreamingAndSnapshotCollections_RenderInNativeBrowser()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                var events = Channel.CreateUnbounded<SessionEvent>();
+                events.Writer.TryWrite(new ToolExecutionStartEvent
+                {
+                    AgentId = string.Empty,
+                    Data = new ToolExecutionStartData { ToolCallId = "parent", ToolName = "task" },
+                });
+                events.Writer.TryWrite(new SystemNotificationEvent
+                {
+                    AgentId = string.Empty,
+                    Data = new SystemNotificationData
+                    {
+                        Content = "<system_notification>child idle</system_notification>",
+                        Kind = new SystemNotificationAgentIdle
+                        {
+                            AgentId = "child", AgentType = "background", Description = "idle",
+                        },
+                    },
+                });
+                events.Writer.TryWrite(new ToolExecutionCompleteEvent
+                {
+                    AgentId = string.Empty,
+                    Data = new ToolExecutionCompleteData
+                    {
+                        ToolCallId = "parent", Success = true,
+                        Result = new ToolExecutionCompleteResult { Content = "done" },
+                    },
+                });
+                events.Writer.Complete();
+                var updates = new List<AgentResponseUpdate>();
+                await foreach (var update in CopilotSdkStreamAdapter.TranslateCopilotSdkSessionEvents(
+                    events.Reader, CancellationToken.None))
+                    updates.Add(new AgentResponseUpdate { Role = update.Role, Contents = update.Contents });
+                var items = AgentResponseUpdateCoalescer.Coalesce(updates.ToArray(), TimeProvider.System)
+                    .Select(item => item with { AssistantRunId = "remote-run" }).ToArray();
+                Assert.Equal(new[] { ChatRole.Assistant, ChatRole.System, ChatRole.Tool },
+                    items.Select(item => item.Role));
+                static JsonElement Json(object value)
+                    => JsonSerializer.SerializeToElement(value, AIJsonUtilities.DefaultOptions);
+                var child = Json(new
+                {
+                    AgentId = "child", Name = "background", DisplayName = "Background agent",
+                    Description = "Child running", CompletionState = AgentChatCompletionState.Running,
+                    LastUpdatedAt = DateTime.UnixEpoch, SubAgents = Array.Empty<object>(),
+                });
+                var renamedChild = Json(new
+                {
+                    AgentId = "child", Name = "background", DisplayName = "Renamed child",
+                    Description = "Child running", CompletionState = AgentChatCompletionState.Running,
+                    LastUpdatedAt = DateTime.UnixEpoch, SubAgents = Array.Empty<object>(),
+                });
+                var initialSnapshot = RemoteBrowserSnapshot([], [child]);
+                var (transport, chat) = await AttachBrowserRemoteAsync(initialSnapshot);
+                await using (chat)
+                {
+                    using var loggerFactory = new ObservableLoggerFactory();
+                    await using var viewModel = new AgentViewModel(new AgentViewModelOptions
+                    {
+                        AgentChat = chat, DisplayName = "parent", Description = "",
+                        LoggerFactory = loggerFactory,
+                        ForegroundScheduler = TaskScheduler.FromCurrentSynchronizationContext(),
+                        RemoteChildResolver = (_, _, _) =>
+                            throw new InvalidOperationException("Child transcript should remain unopened."),
+                    });
+                    var childNavigation = Assert.Single(
+                        Assert.Single(viewModel.EditorItems).Children
+                            .Single(item => item.Id == "chat-sub-agents").Children);
+                    Assert.Equal("Background agent", childNavigation.Name);
+                    using var model = CreateModel(web, chat.History, chat.RunningItems,
+                        viewModel.SubAgentDisplays);
+                    await model.HistoryLoaded;
+
+                    var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    ((INotifyCollectionChanged)chat.RunningItems).CollectionChanged += (_, _) =>
+                    {
+                        if (chat.RunningItems.Count == 1) started.TrySetResult();
+                    };
+                    await transport.SendAsync(RemoteBrowserFrame(2, new StreamingStartedEvent
+                    {
+                        RunId = "stream", Item = Json(items[0]),
+                    }));
+                    await started.Task.WaitAsync(TimeSpan.FromSeconds(15));
+
+                    var updated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    var running = Assert.Single(chat.RunningItems);
+                    running.Items.CollectionChanged += (_, _) =>
+                    {
+                        if (running.Items.Count == items.Length) updated.TrySetResult();
+                    };
+                    await transport.SendAsync(RemoteBrowserFrame(3, new StreamingUpdatedEvent
+                    {
+                        RunId = "stream", Update = Json(items),
+                    }));
+                    await updated.Task.WaitAsync(TimeSpan.FromSeconds(15));
+                    Assert.Contains("true", await EvalAsync(web, """
+                        (() => {
+                          const run = document.querySelector('.chat-running-item');
+                          const call = run?.querySelector('.chat-tool-call');
+                          const notice = run?.querySelector('.chat-system-message');
+                          const result = Array.from(run?.querySelectorAll('.chat-tool') || [])
+                            .find(e => e.textContent.includes('done'));
+                          return !!call && !!notice && !!result &&
+                            !!(call.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+                            !!(notice.compareDocumentPosition(result) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+                            document.getElementById('subagent-panel-inner').textContent.includes('Background agent');
+                        })()
+                        """), StringComparison.Ordinal);
+
+                    var promoted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    ((INotifyCollectionChanged)chat.History).CollectionChanged += (_, _) =>
+                    {
+                        if (chat.History.Count == items.Length) promoted.TrySetResult();
+                    };
+                    var renamed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    viewModel.SubAgentDisplays[0].CompletionStateChanged += (_, _) =>
+                    {
+                        if (viewModel.SubAgentDisplays.Count == 1 &&
+                            viewModel.SubAgentDisplays[0].DisplayName == "Renamed child")
+                            renamed.TrySetResult();
+                    };
+                    await transport.SendAsync(RemoteBrowserFrame(4, new SubagentsChangedEvent
+                    {
+                        Subagents = [renamedChild],
+                    }));
+                    await renamed.Task.WaitAsync(TimeSpan.FromSeconds(15));
+                    Assert.Same(childNavigation, Assert.Single(
+                        Assert.Single(viewModel.EditorItems).Children
+                            .Single(item => item.Id == "chat-sub-agents").Children));
+                    Assert.Equal("Renamed child", childNavigation.Name);
+                    await transport.SendAsync(RemoteBrowserFrame(5, new StreamingCompletedEvent
+                    {
+                        RunId = "stream", Item = Json(items[^1]), Items = items.Select(Json).ToArray(),
+                    }));
+                    await promoted.Task.WaitAsync(TimeSpan.FromSeconds(15));
+                    await AssertRemoteBrowserOrderAsync(web, "Renamed child");
+                }
+
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history-container", "replace", "<div id=\"chat-history-container\"></div>"));
+                var (_, reloaded) = await AttachBrowserRemoteAsync(
+                    RemoteBrowserSnapshot(items.Select(Json).ToArray(), [renamedChild]));
+                await using (reloaded)
+                {
+                    using var loggerFactory = new ObservableLoggerFactory();
+                    await using var viewModel = new AgentViewModel(reloaded, "parent", "", loggerFactory,
+                        TaskScheduler.FromCurrentSynchronizationContext());
+                    using var model = CreateModel(web, reloaded.History, reloaded.RunningItems,
+                        viewModel.SubAgentDisplays);
+                    await model.HistoryLoaded;
+                    await AssertRemoteBrowserOrderAsync(web, "Renamed child");
+                }
+            }
+            finally { window.Close(); }
+        });
+
+    private static async Task AssertRemoteBrowserOrderAsync(ControllableWebViewControl web, string displayName)
+    {
+        var actual = await EvalAsync(web, """
+            (() => {
+              const root = document.getElementById('chat-history-container');
+              const call = root.querySelector('details.chat-tool-group');
+              const notice = root.querySelector('.chat-system-message');
+              const result = Array.from(root.querySelectorAll('.chat-tool'))
+                .find(e => e.textContent.includes('done'));
+              const ids = Array.from(root.querySelectorAll('[id]')).map(e => e.id);
+              return !!call && !!notice && !!result &&
+                !!(call.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+                !!(notice.compareDocumentPosition(result) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+                !result.closest('details.chat-tool-group') &&
+                notice.querySelector('.chat-sender').textContent === 'system' &&
+                document.getElementById('subagent-panel-inner').textContent.includes('DISPLAY_NAME') &&
+                ids.length === new Set(ids).size;
+            })()
+            """.Replace("DISPLAY_NAME", displayName, StringComparison.Ordinal));
+        Assert.Contains("true", actual, StringComparison.Ordinal);
+    }
+
+    private static AgentSessionSnapshot RemoteBrowserSnapshot(
+        IReadOnlyList<JsonElement> history, IReadOnlyList<JsonElement> subagents) => new()
+    {
+        Information = new AgentInformation
+        {
+            AgentSessionId = "session", AgentId = "parent", Name = "parent",
+            DisplayName = "Parent", Description = "Remote parent", AcceptsUserInput = false,
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson("""
+                {"kind":"prompt","name":"parent","model":{"id":"echo","provider":"echo","apiType":"Echo"}}
+                """),
+        },
+        Usage = new Usage(),
+        InputQueues = new AgentInputQueuesSnapshot { Revision = 0, Queues = [] },
+        IsBusy = false, History = history, RunningItems = [], Subagents = subagents,
+        Tools = [], Modals = [], ViewerCount = 1, ContinueInBackground = false,
+    };
+
+    private static async Task<(BrowserRemoteTransport Transport, RemoteAgentChat Chat)> AttachBrowserRemoteAsync(
+        AgentSessionSnapshot snapshot)
+    {
+        var transport = new BrowserRemoteTransport();
+        var attaching = RemoteAgentChat.AttachAsync(new RemoteAgentChatAttachOptions
+        {
+            Client = new RemoteAgentSessionClient(transport),
+            OpenRequest = new AgentSessionOpenRequest
+            {
+                ProtocolVersion = 1, AgentSessionId = "session",
+                ExpectedOwningProfileEntityId = "profile", ExpectedOwnershipGeneration = 2,
+                OpenIntent = AgentSessionOpenIntent.Attach, AttachmentToken = "00112233445566778899aabbccddeeff",
+                Capabilities = ["queue", "replay"],
+            },
+            ForegroundScheduler = TaskScheduler.FromCurrentSynchronizationContext(),
+        });
+        await transport.SendAsync(RemoteBrowserFrame(1, new SessionSnapshotEvent { Snapshot = snapshot }));
+        return (transport, await attaching.WaitAsync(TimeSpan.FromSeconds(15)));
+    }
+
+    private static JsonElement RemoteBrowserFrame(long sequence, AgentSessionServerEvent value)
+        => AgentSessionProtocolCodec.SerializeFrame(
+            AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.CreateFrame(
+                new RuntimeEpoch { Value = Guid.Parse("11111111-1111-1111-1111-111111111111") },
+                sequence, Guid.NewGuid(), value));
+
+    private sealed class BrowserRemoteTransport : ITransport, IMessageChannel
+    {
+        private readonly Channel<JsonElement> incoming = Channel.CreateUnbounded<JsonElement>();
+        private readonly Channel<JsonElement> outgoing = Channel.CreateUnbounded<JsonElement>();
+
+        public ChannelWriter<JsonElement> Writer => this.outgoing.Writer;
+        public ChannelReader<JsonElement> Reader => this.incoming.Reader;
+        public Task<IMessageChannel> ConnectToMessageChannelAsync(JsonElement request, CancellationToken ct = default)
+            => Task.FromResult<IMessageChannel>(this);
+        public Task<Stream> ConnectToStreamAsync(JsonElement request, CancellationToken ct = default)
+            => throw new NotSupportedException();
+        public ValueTask SendAsync(JsonElement frame) => this.incoming.Writer.WriteAsync(frame);
+        public ValueTask DisposeAsync()
+        {
+            this.incoming.Writer.TryComplete();
+            this.outgoing.Writer.TryComplete();
+            return ValueTask.CompletedTask;
+        }
+    }
 
     private static async Task<(ControllableWebViewControl Web, Window Window)> ShowReadyBrowserAsync()
     {
@@ -1250,18 +1996,26 @@ public sealed class ChatOutputBrowserIntegrationTests
                 var order = await EvalAsync(web, """
                     (() => {
                       const group = document.querySelector('#running-items-container details.chat-tool-group');
-                      const body = group.querySelector('.chat-tool-group-body');
+                      const root = document.querySelector('#running-items-container');
+                      const texts = Array.from(root.querySelectorAll('.chat-text'));
                       return JSON.stringify({
-                        groups: document.querySelectorAll('#running-items-container details.chat-tool-group').length,
+                        groups: root.querySelectorAll('details.chat-tool-group').length,
                         open: group.open,
-                        items: body.querySelectorAll('details.chat-tool-group-item').length,
-                        text: body.textContent
+                        items: root.querySelectorAll('details.chat-tool-group-item').length,
+                        proseOutside: texts.every(t => !t.closest('details.chat-tool-group')),
+                        summaries: Array.from(root.querySelectorAll('details.chat-tool-group > summary'))
+                          .filter(s => !s.hidden).length,
+                        total: group.querySelector('.tool-count-badge').textContent,
+                        text: root.textContent
                       });
                     })()
                     """);
-                Assert.Contains("\\\"groups\\\":1", order, StringComparison.Ordinal);
+                Assert.Contains("\\\"groups\\\":2", order, StringComparison.Ordinal);
                 Assert.Contains("\\\"open\\\":true", order, StringComparison.Ordinal);
                 Assert.Contains("\\\"items\\\":2", order, StringComparison.Ordinal);
+                Assert.Contains("\\\"proseOutside\\\":true", order, StringComparison.Ordinal);
+                Assert.Contains("\\\"summaries\\\":1", order, StringComparison.Ordinal);
+                Assert.Contains("2 calls", order, StringComparison.Ordinal);
                 var read = order.IndexOf("read", StringComparison.Ordinal);
                 var between = order.IndexOf("between calls", StringComparison.Ordinal);
                 var beforeWrite = order.IndexOf("before write", StringComparison.Ordinal);
@@ -1295,12 +2049,14 @@ public sealed class ChatOutputBrowserIntegrationTests
                 };
                 var state = await EvalAsync(web, """
                     (() => {
-                      const group = document.querySelector('#running-items-container details.chat-tool-group');
-                      return JSON.stringify({ count: document.querySelectorAll('#running-items-container details.chat-tool-group').length,
-                        text: group?.textContent || '' });
+                      const root = document.querySelector('#running-items-container');
+                      return JSON.stringify({ count: root.querySelectorAll('details.chat-tool-group-item').length,
+                        proseOutside: !root.querySelector('.chat-text')?.closest('details.chat-tool-group-item'),
+                        text: root.textContent });
                     })()
                     """);
                 Assert.Contains("\\\"count\\\":1", state, StringComparison.Ordinal);
+                Assert.Contains("\\\"proseOutside\\\":true", state, StringComparison.Ordinal);
                 Assert.Contains("thinking", state, StringComparison.Ordinal);
                 Assert.Contains("read", state, StringComparison.Ordinal);
             }
@@ -1630,9 +2386,9 @@ public sealed class ChatOutputBrowserIntegrationTests
 
     private static ChatOutputHtmlModel CreateModel(
         ControllableWebViewControl web,
-        ObservableCollection<AgentChatHistoryItem> history,
-        ObservableCollection<AgentChatRunningItem>? running = null,
-        ObservableCollection<IRunningSubAgentDisplay>? subAgents = null)
+        IReadOnlyList<AgentChatHistoryItem> history,
+        IReadOnlyList<AgentChatRunningItem>? running = null,
+        IReadOnlyList<IRunningSubAgentDisplay>? subAgents = null)
         => new(
             history,
             running ?? [],

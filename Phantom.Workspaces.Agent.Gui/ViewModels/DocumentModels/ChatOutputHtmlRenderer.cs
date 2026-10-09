@@ -101,9 +101,8 @@ internal static class ChatOutputHtmlRenderer
             .Append(groupId).Append("\" data-sticky-base-level=\"1\">");
         builder.Append(RenderHeader(groupId, "assistant", timestamp, suppressRoleHeader));
         builder.Append("<div class=\"chat-contents\" id=\"").Append(ContentsContainerId(groupId)).Append("\">");
+        builder.Append("<div class=\"chat-tool-group-actions\" role=\"group\" aria-label=\"Tool group actions\"></div>");
         builder.Append("<details class=\"chat-content chat-tool-group\"");
-        // Run groups can contain substantive assistant text between calls; keep it visible by
-        // default while still allowing the user to collapse the group.
         if (assistantRunId is not null) builder.Append(" open");
         builder.Append(" id=\"").Append(ToolGroupDetailsId(groupId)).Append('"');
         if (assistantRunId is not null)
@@ -126,6 +125,20 @@ internal static class ChatOutputHtmlRenderer
 
     public static string ToolGroupDetailsId(string groupId) => $"{groupId}-details";
 
+    public static string RenderInlineToolSegment(string contentId, string runId,
+        IReadOnlyList<FunctionCallContent> calls, string bodyContent)
+    {
+        var groupId = contentId + "-segment";
+        return "<div class=\"chat-tool-segment\" id=\"" + contentId + "\">" +
+            "<div class=\"chat-tool-group-actions\" role=\"group\" aria-label=\"Tool group actions\"></div>" +
+            "<details class=\"chat-content chat-tool-group\" open id=\"" + contentId + "-details\" data-assistant-run-id=\"" +
+            HtmlEscape(runId) + "\">" +
+            RenderToolCallGroupSummary(groupId, calls.Select(call => call.Name ?? string.Empty)
+                .Distinct(StringComparer.Ordinal).ToList(), calls.Count) +
+            "<div class=\"chat-tool-group-body\" id=\"" + contentId + "-body\">" +
+            bodyContent + "</div></details></div>";
+    }
+
     /// <summary>
     /// Builds the <c>summary</c> element for a tool-call group. Always lists the unique tool names
     /// in first-seen order, formatted <c>tools (a, b)</c> (a single tool renders <c>tools (a)</c>),
@@ -135,7 +148,11 @@ internal static class ChatOutputHtmlRenderer
         IReadOnlyList<string>? pendingToolNames = null)
     {
         var builder = new StringBuilder();
-        builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"2\" id=\"").Append(ToolGroupSummaryId(groupId)).Append("\">");
+        builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"2\" id=\"")
+            .Append(ToolGroupSummaryId(groupId)).Append("\" data-segment-call-count=\"")
+            .Append(callCount).Append("\" data-segment-tool-names=\"")
+            .Append(HtmlEscape(JsonSerializer.Serialize(toolNames))).Append("\">");
+        builder.Append("<span class=\"tool-group-label\">");
 
         if (toolNames is { Count: > 0 })
         {
@@ -157,7 +174,7 @@ internal static class ChatOutputHtmlRenderer
             builder.Append("tools");
         }
 
-        builder.Append(" <span class=\"tool-count-badge\">").Append(callCount).Append(" calls</span>");
+        builder.Append("</span> <span class=\"tool-count-badge\">").Append(callCount).Append(" calls</span>");
         if (pendingToolNames is { Count: > 0 })
         {
             builder.Append(" <span class=\"tool-active-status\" role=\"status\" aria-live=\"polite\">")
@@ -528,6 +545,10 @@ internal static class ChatOutputHtmlRenderer
         if (string.Equals(roleLabel, "help", StringComparison.OrdinalIgnoreCase))
         {
             return "chat-help-message";
+        }
+        if (string.Equals(roleLabel, "system", StringComparison.OrdinalIgnoreCase))
+        {
+            return "chat-system-message";
         }
         return "chat-assistant-message";
     }

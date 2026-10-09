@@ -314,3 +314,46 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
                 d.Dispose();
     }
 }
+
+internal sealed class RemoteRunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposable
+{
+    private readonly IRunningSubAgent subAgent;
+    private IReadOnlyList<IRunningSubAgentDisplay> children;
+
+    public RemoteRunningSubAgentDisplay(IRunningSubAgent subAgent)
+    {
+        this.subAgent = subAgent;
+        this.children = subAgent.SubAgents.Select(child => (IRunningSubAgentDisplay)new RemoteRunningSubAgentDisplay(child))
+            .ToArray();
+        subAgent.CompletionStateChanged += this.OnSubAgentChanged;
+    }
+
+    public string AgentId => this.subAgent.AgentId;
+    public string DisplayName => this.subAgent.DisplayName;
+    public string Description => this.subAgent.Description;
+    public string Name => this.subAgent.Name;
+    public AgentChatCompletionState CompletionState => this.subAgent.CompletionState;
+    public IReadOnlyList<SubAgentActivityLine> RecentActivity => [];
+    public IReadOnlyList<IRunningSubAgentDisplay> SubAgents => this.children;
+
+    public event EventHandler? ActivityChanged { add { } remove { } }
+    public event EventHandler? CompletionStateChanged;
+
+    private void OnSubAgentChanged(object? sender, EventArgs e)
+    {
+        foreach (var child in this.children)
+            if (child is IDisposable disposable)
+                disposable.Dispose();
+        this.children = this.subAgent.SubAgents
+            .Select(child => (IRunningSubAgentDisplay)new RemoteRunningSubAgentDisplay(child)).ToArray();
+        this.CompletionStateChanged?.Invoke(this, e);
+    }
+
+    public void Dispose()
+    {
+        this.subAgent.CompletionStateChanged -= this.OnSubAgentChanged;
+        foreach (var child in this.children)
+            if (child is IDisposable disposable)
+                disposable.Dispose();
+    }
+}

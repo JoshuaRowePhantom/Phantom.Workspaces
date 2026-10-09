@@ -25,6 +25,31 @@ public sealed class ChatOutputHtmlRendererTests
         Assert.DoesNotContain("tool-active-indicator", completed);
         Assert.Contains("2 calls", completed);
     }
+
+    [Fact]
+    public void ChatOutput_GroupWithSuppressedRoleHeader_PlacesActionsBesideVisibleSummary()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallGroup("group", ["read"], 1,
+            "<div id=\"call\" data-inspect-target></div>", suppressRoleHeader: true);
+        var actions = html.IndexOf("class=\"chat-tool-group-actions\"", StringComparison.Ordinal);
+        var details = html.IndexOf("id=\"group-details\"", StringComparison.Ordinal);
+        var summary = html.IndexOf("id=\"group-summary\"", StringComparison.Ordinal);
+        Assert.True(actions > 0 && actions < details && details < summary);
+        Assert.Contains("aria-label=\"Tool group actions\"", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("<summary class=\"chat-collapsible-summary\"><button", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderInlineToolSegment_LeavesToolInOneStableAddressableBinding()
+    {
+        var html = ChatOutputHtmlRenderer.RenderInlineToolSegment("history-0-1", "run",
+            [new FunctionCallContent("c1", "read")], "<div>call payload</div>");
+        Assert.Contains("id=\"history-0-1\"", html);
+        Assert.Contains("id=\"history-0-1-details\"", html);
+        Assert.Contains("data-assistant-run-id=\"run\"", html);
+        Assert.Contains("data-segment-call-count=\"1\"", html);
+        Assert.Contains("call payload", html);
+    }
     [Fact]
     public void RenderCollapsible_EmitsDataStickyLevelOnSummary()
     {
@@ -530,9 +555,8 @@ public sealed class ChatOutputHtmlRendererTests
         // The model dedupes; the renderer lists whatever it is given. Verify a single entry renders once.
         var html = ChatOutputHtmlRenderer.RenderToolCallGroupSummary("grp-0", new[] { "powershell" }, 3);
 
-        var first = html.IndexOf("powershell", StringComparison.Ordinal);
-        var last = html.LastIndexOf("powershell", StringComparison.Ordinal);
-        Assert.Equal(first, last);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(
+            html, "<span class=\"tool-name\">powershell</span>").Cast<System.Text.RegularExpressions.Match>());
     }
 
     [Fact]
