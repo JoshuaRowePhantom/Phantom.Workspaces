@@ -9,7 +9,6 @@ namespace Phantom.Workspaces.ViewModels;
 
 public sealed class EntityWorkspaceTabViewModel : WorkspaceTabViewModel
 {
-    private readonly EntityCardViewResolver entityCardViewResolver = new();
     private readonly FieldEditorFactory? fieldEditorFactory;
     private readonly MainWindowViewModel? mainWindowViewModel;
     private EntityListNodeViewModel? entityCardNode;
@@ -43,8 +42,8 @@ public sealed class EntityWorkspaceTabViewModel : WorkspaceTabViewModel
                 this.Entity,
                 nameComponents,
                 JsonSerializer.Serialize(nameComponents),
-                cardViewName: this.entityCardViewResolver.ResolveViewName(this.Entity),
-                fieldEditorFactory: this.fieldEditorFactory);
+                fieldEditorFactory: this.fieldEditorFactory,
+                autoResolveCardView: true);
 
             // The card resolves its own shortcuts when given a shortcut context, so the single-entity
             // view shows action buttons without going through ViewEntityViewModel.InitializeAsync.
