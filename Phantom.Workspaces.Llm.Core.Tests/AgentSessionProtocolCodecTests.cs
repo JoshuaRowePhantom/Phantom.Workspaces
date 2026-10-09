@@ -319,6 +319,20 @@ public sealed class AgentSessionProtocolCodecTests
     }
 
     [Fact]
+    public void RoundTrip_StateOnlyIdleSubagentUpdate_PreservesNonrunningCompletionState()
+    {
+        var idle = JsonSerializer.SerializeToElement(new
+        {
+            AgentId = "child", CompletionState = AgentChatCompletionState.Succeeded,
+        }, Microsoft.Extensions.AI.AIJsonUtilities.DefaultOptions);
+        var update = RoundTrip(new SubagentsChangedEvent { Subagents = [idle] });
+        Assert.Equal("child", update.Subagents.Single().GetProperty("agentId").GetString());
+        Assert.Equal(AgentChatCompletionState.Succeeded,
+            update.Subagents.Single().GetProperty("completionState")
+                .Deserialize<AgentChatCompletionState>(AgentSessionProtocolCodec.Options));
+    }
+
+    [Fact]
     public void RoundTrip_ReplayResetSnapshot_PreservesReplacedCursor()
     {
         var epoch = Epoch();

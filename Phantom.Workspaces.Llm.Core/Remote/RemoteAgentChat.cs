@@ -543,8 +543,27 @@ public sealed class RemoteAgentChat : IAgentChat
 
     private void ReplaceSubagents(IReadOnlyList<JsonElement> values)
     {
-        this.subagents.Clear();
-        foreach (var value in values) this.subagents.Add(RemoteRunningSubagent.FromJson(value));
+        var desired = values.Select(RemoteRunningSubagent.FromJson).ToArray();
+        for (var index = 0; index < desired.Length; index++)
+        {
+            var incoming = desired[index];
+            var existingIndex = -1;
+            for (var search = index; search < this.subagents.Count; search++)
+            {
+                if (this.subagents[search].AgentId != incoming.AgentId) continue;
+                existingIndex = search;
+                break;
+            }
+            if (existingIndex < 0)
+                this.subagents.Insert(index, incoming);
+            else
+            {
+                if (existingIndex != index) this.subagents.Move(existingIndex, index);
+                ((RemoteRunningSubagent)this.subagents[index]).Update(incoming);
+            }
+        }
+        while (this.subagents.Count > desired.Length)
+            this.subagents.RemoveAt(this.subagents.Count - 1);
     }
 
     private void EnqueueLocalNote(string text, ChatRole role)
@@ -835,15 +854,28 @@ public sealed class RemoteAgentChat : IAgentChat
         }
     }
 
-    private sealed record RemoteRunningSubagent : IRunningSubAgent
+    private sealed class RemoteRunningSubagent : IRunningSubAgent
     {
-        public required string AgentId { get; init; }
-        public required string DisplayName { get; init; }
-        public required string Description { get; init; }
-        public string Name { get; init; } = string.Empty;
-        public AgentChatCompletionState CompletionState { get; init; }
-        public DateTime LastUpdatedAt { get; init; }
-        public IReadOnlyList<IRunningSubAgent> SubAgents { get; init; } = [];
+        public required string AgentId { get; set; }
+        public required string DisplayName { get; set; }
+        public required string Description { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public AgentChatCompletionState CompletionState { get; set; }
+        public DateTime LastUpdatedAt { get; set; }
+        public IReadOnlyList<IRunningSubAgent> SubAgents { get; set; } = [];
+        public event EventHandler? CompletionStateChanged;
+
+        internal void Update(RemoteRunningSubagent incoming)
+        {
+            this.DisplayName = incoming.DisplayName;
+            this.Description = incoming.Description;
+            this.Name = incoming.Name;
+            this.LastUpdatedAt = incoming.LastUpdatedAt;
+            this.SubAgents = incoming.SubAgents;
+            if (this.CompletionState == incoming.CompletionState) return;
+            this.CompletionState = incoming.CompletionState;
+            this.CompletionStateChanged?.Invoke(this, EventArgs.Empty);
+        }
 
         internal static RemoteRunningSubagent FromJson(JsonElement value)
             => JsonSerializer.Deserialize<RemoteRunningSubagent>(value.GetRawText(), AIJsonUtilities.DefaultOptions)

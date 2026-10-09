@@ -11,6 +11,27 @@ namespace Phantom.Workspaces.Agent.Gui.Tests;
 
 public sealed class RunningSubAgentsHtmlTransformerTests
 {
+    [Fact]
+    public void RunningSubAgentsHtmlTransformer_LastChildBecomesIdle_RemovesPanelWithoutDeletingChild()
+    {
+        var activity = new List<SubAgentActivityLine> { new(SubAgentActivityKind.AgentText, "previous answer") };
+        var child = new StubSubAgent("child", "Reusable child", AgentChatCompletionState.Running, activity: activity);
+        var children = new ObservableCollection<IRunningSubAgentDisplay> { child };
+        var sink = new RecordingSink();
+        using var transformer = new RunningSubAgentsHtmlTransformer(children, [], sink);
+        sink.Clear();
+        child.SetCompletionState(AgentChatCompletionState.Succeeded);
+        Assert.Contains(sink.Operations, op => op.Kind == "remove"
+            && op.Path == ChatOutputHtmlRenderer.SubAgentPanelInnerId);
+        Assert.DoesNotContain(sink.Operations, op => op.Kind == "update"
+            && op.Path == ChatOutputHtmlRenderer.SubAgentPanelSentinelId);
+        Assert.Same(child, Assert.Single(children));
+        sink.Clear();
+        child.SetCompletionState(AgentChatCompletionState.Running);
+        Assert.Contains(sink.Operations, op => op.Kind == "update"
+            && op.Content.Contains("previous answer", StringComparison.Ordinal));
+    }
+
     // ── Panel insertion ───────────────────────────────────────────────────────
 
     [Fact]

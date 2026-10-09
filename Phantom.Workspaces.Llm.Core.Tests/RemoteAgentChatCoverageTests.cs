@@ -13,6 +13,94 @@ namespace Phantom.Workspaces.Llm.Tests;
 public sealed partial class RemoteAgentChatTests
 {
     [Fact]
+    public async Task RemoteAgentChat_ReorderedChildrenRetainIdentityAndReceiveStateUpdates()
+    {
+        static JsonElement Child(string id, AgentChatCompletionState state) => JsonSerializer.SerializeToElement(new
+        {
+            AgentId = id, DisplayName = id, Description = "history", Name = id,
+            CompletionState = state, LastUpdatedAt = DateTime.UnixEpoch, SubAgents = Array.Empty<object>(),
+        }, AIJsonUtilities.DefaultOptions);
+        var transport = new TestTransport();
+        var attaching = RemoteAgentChat.AttachAsync(new RemoteAgentChatAttachOptions
+        {
+            Client = new RemoteAgentSessionClient(transport),
+            OpenRequest = AgentSessionProtocolCodecTests.Open(),
+            ForegroundScheduler = TaskScheduler.Default,
+        });
+        await transport.SendAsync(Frame(1, new SessionSnapshotEvent
+        {
+            Snapshot = AgentSessionProtocolCodecTests.Snapshot() with
+            {
+                Subagents = [Child("a", AgentChatCompletionState.Running), Child("b", AgentChatCompletionState.Running)],
+            },
+        }));
+        await using var chat = await attaching;
+        var a = chat.SubAgents[0];
+        var b = chat.SubAgents[1];
+        var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        a.CompletionStateChanged += (_, _) => changed.TrySetResult();
+        await transport.SendAsync(Frame(2, new SubagentsChangedEvent
+        {
+            Subagents = [Child("b", AgentChatCompletionState.Running), Child("a", AgentChatCompletionState.Succeeded)],
+        }));
+        await changed.Task;
+        Assert.Same(b, chat.SubAgents[0]);
+        Assert.Same(a, chat.SubAgents[1]);
+        Assert.Equal(AgentChatCompletionState.Succeeded, a.CompletionState);
+        Assert.Equal("history", a.Description);
+    }
+
+    [Fact]
+    public async Task RemoteAgentChat_IdleChildSnapshotAndUpdate_RemainsNonrunningAfterReconnect()
+    {
+        static JsonElement Child(AgentChatCompletionState state) => JsonSerializer.SerializeToElement(new
+        {
+            AgentId = "child", DisplayName = "Child", Description = "history",
+            Name = "child", CompletionState = state, LastUpdatedAt = DateTime.UnixEpoch,
+            SubAgents = Array.Empty<object>(),
+        }, AIJsonUtilities.DefaultOptions);
+        var transport = new TestTransport();
+        var attaching = RemoteAgentChat.AttachAsync(new RemoteAgentChatAttachOptions
+        {
+            Client = new RemoteAgentSessionClient(transport),
+            OpenRequest = AgentSessionProtocolCodecTests.Open(),
+            ForegroundScheduler = TaskScheduler.Default,
+        });
+        await transport.SendAsync(Frame(1, new SessionSnapshotEvent
+        {
+            Snapshot = AgentSessionProtocolCodecTests.Snapshot() with { Subagents = [Child(AgentChatCompletionState.Running)] },
+        }));
+        await using var chat = await attaching;
+        var original = Assert.Single(chat.SubAgents);
+        Assert.Equal(AgentChatCompletionState.Running, original.CompletionState);
+        var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        original.CompletionStateChanged += (_, _) =>
+        {
+            if (original.CompletionState == AgentChatCompletionState.Succeeded)
+                changed.TrySetResult();
+        };
+        await transport.SendAsync(Frame(2, new SubagentsChangedEvent
+        {
+            Subagents = [Child(AgentChatCompletionState.Succeeded)],
+        }));
+        await changed.Task;
+        Assert.Same(original, Assert.Single(chat.SubAgents));
+        Assert.Equal("history", Assert.Single(chat.SubAgents).Description);
+        var reloaded = Event(chat, nameof(chat.InformationChanged));
+        await transport.SendAsync(Frame(3, new SessionSnapshotEvent
+        {
+            Snapshot = AgentSessionProtocolCodecTests.Snapshot() with { Subagents = [Child(AgentChatCompletionState.Succeeded)] },
+        }));
+        await transport.SendAsync(Frame(4, new AgentInformationChangedEvent
+        {
+            Information = AgentSessionProtocolCodecTests.Snapshot().Information,
+        }));
+        await reloaded;
+        Assert.Same(original, Assert.Single(chat.SubAgents));
+        Assert.Equal(AgentChatCompletionState.Succeeded, Assert.Single(chat.SubAgents).CompletionState);
+    }
+
+    [Fact]
     public void AgentChatModal_InvalidIdentityTitleOrBody_RejectsInitialization()
     {
         static AgentChatModal Create(string id, string owner, string title, string body) => new()
