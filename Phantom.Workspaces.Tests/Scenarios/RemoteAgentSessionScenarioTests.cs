@@ -826,8 +826,14 @@ public sealed class RemoteAgentSessionScenarioTests
         var runtime = await fixture.RuntimeAsync(canonical, 0);
         var childResource = new TrackingOwnedProcess();
         Assert.IsType<AgentChat>(runtime.Chat).RegisterOwnedResource(childResource);
+        var parentRuntime = await fixture.RuntimeAsync("parent-stops", 0);
+        var parentTerminated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        parentRuntime.Terminated += (_, _) => parentTerminated.TrySetResult();
+        var childTerminated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        runtime.Terminated += (_, _) => childTerminated.TrySetResult();
 
         await parent.Chat.DetachAsync(TestContext.Current.CancellationToken);
+        await parentTerminated.Task.WaitAsync(TestContext.Current.CancellationToken);
         Assert.Null(await fixture.TryRuntimeAsync("parent-stops", 0));
         Assert.Same(runtime, await fixture.RuntimeAsync(canonical, 0));
         Assert.True(child.Chat.IsConnected);
@@ -835,6 +841,7 @@ public sealed class RemoteAgentSessionScenarioTests
 
         await child.Chat.DetachAsync(TestContext.Current.CancellationToken);
         await childResource.Disposed;
+        await childTerminated.Task.WaitAsync(TestContext.Current.CancellationToken);
         Assert.Null(await fixture.TryRuntimeAsync(canonical, 0));
     }
 
