@@ -883,15 +883,21 @@ public sealed class RemoteAgentChat : IAgentChat
 
         internal void Update(RemoteRunningSubagent incoming)
         {
+            var presentationChanged = this.DisplayName != incoming.DisplayName
+                || this.Description != incoming.Description
+                || this.Name != incoming.Name
+                || this.CompletionState != incoming.CompletionState
+                || !this.SubAgents.Select(child => (child.AgentId, child.DisplayName, child.CompletionState))
+                    .SequenceEqual(incoming.SubAgents.Select(child => (child.AgentId, child.DisplayName, child.CompletionState)));
             this.AgentSessionId = incoming.AgentSessionId;
             this.DisplayName = incoming.DisplayName;
             this.Description = incoming.Description;
             this.Name = incoming.Name;
             this.LastUpdatedAt = incoming.LastUpdatedAt;
             this.SubAgents = incoming.SubAgents;
-            if (this.CompletionState == incoming.CompletionState) return;
             this.CompletionState = incoming.CompletionState;
-            this.CompletionStateChanged?.Invoke(this, EventArgs.Empty);
+            if (presentationChanged)
+                this.CompletionStateChanged?.Invoke(this, EventArgs.Empty);
         }
 
         internal static RemoteRunningSubagent FromJson(JsonElement value)

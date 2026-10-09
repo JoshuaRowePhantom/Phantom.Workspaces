@@ -867,7 +867,10 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             foreach (var child in this.remoteChildren.Values.ToArray())
                 this.RemoveRemoteChild(child.Reference.AgentId);
             foreach (var display in this.remoteSubAgentDisplays.Values)
+            {
                 this.subAgentDisplayItems.Remove(display);
+                if (display is IDisposable disposable) disposable.Dispose();
+            }
             this.remoteSubAgentDisplays.Clear();
             foreach (var subAgent in this.agentChat.SubAgents)
                 this.AddSubAgentSlot(subAgent);
@@ -880,7 +883,10 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             {
                 this.RemoveRemoteChild(subAgent.AgentId);
                 if (this.remoteSubAgentDisplays.Remove(subAgent, out var display))
+                {
                     this.subAgentDisplayItems.Remove(display);
+                    if (display is IDisposable disposable) disposable.Dispose();
+                }
                 else
                     _ = this.RemoveSubAgentDetailContents(subAgent.AgentId);
             }
@@ -917,8 +923,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             var display = new RemoteRunningSubAgentDisplay(subAgent);
             this.remoteSubAgentDisplays.Add(subAgent, display);
             this.subAgentDisplayItems.Add(display);
-            if (subAgent is IRemoteSubagentReference remote && this.remoteChildResolver is not null)
-                this.AddRemoteChild(remote);
+            if (subAgent is IRemoteSubagentReference remoteReference && this.remoteChildResolver is not null)
+                this.AddRemoteChild(remoteReference);
             return;
         }
 
@@ -1104,6 +1110,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             CancellationTokenSource.CreateLinkedTokenSource(this.remoteChildrenLifetime.Token));
         slot.StatusHandler = (_, _) =>
         {
+            slot.Navigation.Name = remote.DisplayName;
             slot.Navigation.RefreshStatus();
             this.subAgentsTransformer.Refresh();
             this.subAgentsContainerDetail.NotifySubAgentUpdated();

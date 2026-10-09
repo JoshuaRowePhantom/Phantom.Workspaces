@@ -1325,8 +1325,18 @@ public sealed class ChatOutputBrowserIntegrationTests
                 await using (chat)
                 {
                     using var loggerFactory = new ObservableLoggerFactory();
-                    await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory,
-                        TaskScheduler.FromCurrentSynchronizationContext());
+                    await using var viewModel = new AgentViewModel(new AgentViewModelOptions
+                    {
+                        AgentChat = chat, DisplayName = "parent", Description = "",
+                        LoggerFactory = loggerFactory,
+                        ForegroundScheduler = TaskScheduler.FromCurrentSynchronizationContext(),
+                        RemoteChildResolver = (_, _, _) =>
+                            throw new InvalidOperationException("Child transcript should remain unopened."),
+                    });
+                    var childNavigation = Assert.Single(
+                        Assert.Single(viewModel.EditorItems).Children
+                            .Single(item => item.Id == "chat-sub-agents").Children);
+                    Assert.Equal("Background agent", childNavigation.Name);
                     using var model = CreateModel(web, chat.History, chat.RunningItems,
                         viewModel.SubAgentDisplays);
                     await model.HistoryLoaded;
@@ -1373,7 +1383,7 @@ public sealed class ChatOutputBrowserIntegrationTests
                         if (chat.History.Count == items.Length) promoted.TrySetResult();
                     };
                     var renamed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                    ((INotifyCollectionChanged)viewModel.SubAgentDisplays).CollectionChanged += (_, _) =>
+                    viewModel.SubAgentDisplays[0].CompletionStateChanged += (_, _) =>
                     {
                         if (viewModel.SubAgentDisplays.Count == 1 &&
                             viewModel.SubAgentDisplays[0].DisplayName == "Renamed child")
@@ -1384,6 +1394,10 @@ public sealed class ChatOutputBrowserIntegrationTests
                         Subagents = [renamedChild],
                     }));
                     await renamed.Task.WaitAsync(TimeSpan.FromSeconds(15));
+                    Assert.Same(childNavigation, Assert.Single(
+                        Assert.Single(viewModel.EditorItems).Children
+                            .Single(item => item.Id == "chat-sub-agents").Children));
+                    Assert.Equal("Renamed child", childNavigation.Name);
                     await transport.SendAsync(RemoteBrowserFrame(5, new StreamingCompletedEvent
                     {
                         RunId = "stream", Item = Json(items[^1]), Items = items.Select(Json).ToArray(),
