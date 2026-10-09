@@ -142,8 +142,10 @@ if (-not $NoBuild)
 }
 
 $runStart = Get-Date
-$rawOutput = & dotnet @dotnetArgs 2>&1
+# Preserve progress in the uploaded log even if CI terminates a long-running test host.
+& dotnet @dotnetArgs 2>&1 | Tee-Object -FilePath $TestResultsPath | Out-Null
 $dotnetExitCode = $LASTEXITCODE
+$rawOutput = Get-Content -Path $TestResultsPath
 
 # Write full dotnet output to log before TRX parsing
 $cleanOutput = $rawOutput | ForEach-Object {
