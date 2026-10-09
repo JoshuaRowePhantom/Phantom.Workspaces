@@ -454,7 +454,7 @@
         <Setter Property="Margin" Value="0,0,4,4" />
         <Setter Property="VerticalAlignment" Value="Center" />
     </Style>
-    <Style Selector="Border.status-badge > TextBlock.status-badge-text">
+    <Style Selector="Border.status-badge > :is(TextBlock).status-badge-text">
         <Setter Property="Foreground" Value="{DynamicResource Theme.Status.Foreground}" />
         <Setter Property="FontSize" Value="12" />
         <Setter Property="FontWeight" Value="SemiBold" />
@@ -1391,15 +1391,11 @@
         <Setter Property="ToolTip.Tip" Value="{Binding Content.TabViewModel.TabTooltip}" />
     </Style>
 
-    <Style Selector="Button.workspace-url-link">
-        <Setter Property="Background" Value="Transparent" />
-        <Setter Property="BorderThickness" Value="0" />
-        <Setter Property="Padding" Value="0" />
+    <Style Selector="controls|CopyableLinkTextBlock.workspace-url-link, controls|CopyableLinkTextBlock.workspace-entity-reference-link">
         <Setter Property="Foreground" Value="{DynamicResource SystemAccentColor}" />
         <Setter Property="Cursor" Value="Hand" />
-    </Style>
-    <Style Selector="Button.workspace-url-link:pointerover /template/ ContentPresenter">
-        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="TextDecorations" Value="Underline" />
     </Style>
 
     <!-- Issue #1120: shared pane-collapser toggle. Rounded box with white ">>"/"<<" chevron
@@ -1446,4 +1442,3 @@
     </Style>
 
 </Styles>
-

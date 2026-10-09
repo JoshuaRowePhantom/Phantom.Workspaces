@@ -4,7 +4,11 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
+using Avalonia.Input;
+using Avalonia.Input.Platform;
+using Avalonia.Input.Raw;
 using Avalonia.Layout;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -452,6 +456,287 @@ public sealed class EntityCardControlTests
                 .Where(t => t is not SafeSelectableTextBlock && t.Classes.Contains("workspace-field-read-value"))
                 .ToArray();
             Assert.Empty(plainReadValues);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityCardControl_GitWorktree_MouseSelectionAndCtrlC_CopiesEveryTextItem()
+    {
+        const string path = @"C:\repos\Phantom Workspaces\worktrees\20";
+        const string sha = "a1b2c3d4e5f678901234567890abcdef12345678";
+        var entity = new SubscribedEntityViewModel(BuildGitWorktreeSnapshotForTests());
+        var fields = new EntityFieldEditorViewModel[]
+        {
+            new StringFieldEditorViewModel("path", path),
+            new StringFieldEditorViewModel("branch", "fix/1624-copyable-card-text"),
+            new StringFieldEditorViewModel("head-commit", sha),
+            new StringFieldEditorViewModel("target-branch", "features"),
+        };
+        var vm = new EntityCardViewModel(entity, fields);
+        var card = new NavigationSpyCard { DataContext = vm };
+        var tree = new TreeView();
+        tree.Classes.Add("entity-card-tree");
+        tree.Items.Add(new TreeViewItem { Header = card });
+        var window = new Window { Content = tree, Width = 900, Height = 600 };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var textItems = window.GetVisualDescendants().OfType<SafeSelectableTextBlock>()
+                .Where(t => t.IsEffectivelyVisible &&
+                    (t.Classes.Contains("workspace-entity-title") ||
+                     t.Classes.Contains("muted") && !t.Classes.Contains("workspace-field-label") ||
+                     t.Classes.Contains("workspace-field-label") ||
+                     t.Classes.Contains("workspace-field-read-value")))
+                .ToArray();
+            Assert.Contains(textItems, t => t.Text == path);
+            Assert.Contains(textItems, t => t.Text == sha);
+            Assert.Contains(textItems, t => t.Text == "head-commit");
+
+            foreach (var item in textItems)
+            {
+                var expected = item.Text;
+                if (string.IsNullOrEmpty(expected))
+                    continue;
+
+                var origin = item.TranslatePoint(new Point(0, 0), window)!.Value;
+                var y = origin.Y + Math.Min(item.Bounds.Height / 2, 8);
+                window.MouseDown(new Point(origin.X + 1, y), MouseButton.Left);
+                window.MouseUp(new Point(origin.X + 1, y), MouseButton.Left);
+                Assert.Equal(0, card.ActivationCount);
+                window.MouseDown(new Point(origin.X + 1, y), MouseButton.Left);
+                window.MouseMove(new Point(origin.X + item.Bounds.Width + 10, y), RawInputModifiers.LeftMouseButton);
+                window.MouseUp(new Point(origin.X + item.Bounds.Width + 10, y), MouseButton.Left);
+                Assert.NotEmpty(item.SelectedText);
+                Assert.Equal(0, card.ActivationCount);
+                item.SelectAll();
+                window.KeyPress(Key.C, RawInputModifiers.Control, PhysicalKey.C, "c");
+                using var clipboardData = await window.Clipboard!.TryGetDataAsync();
+                Assert.NotNull(clipboardData);
+                Assert.Equal(expected, await clipboardData.TryGetTextAsync());
+            }
+
+            vm.SearchQuery = "worktree";
+            Dispatcher.UIThread.RunJobs();
+            var title = textItems.Single(t => t.Classes.Contains("workspace-entity-title"));
+            Assert.Contains(title.Inlines!.OfType<Avalonia.Controls.Documents.Run>(),
+                run => run.Background is not null);
+            title.Focus();
+            title.SelectAll();
+            window.KeyPress(Key.C, RawInputModifiers.Control, PhysicalKey.C, "c");
+            using (var highlightedCopy = await window.Clipboard!.TryGetDataAsync())
+            {
+                Assert.NotNull(highlightedCopy);
+                Assert.Equal("worktree, system-defined", await highlightedCopy.TryGetTextAsync());
+            }
+
+            var root = card.GetVisualDescendants().OfType<StackPanel>()
+                .Single(panel => panel.Classes.Contains("workspace-entity-card-content"));
+            var rootOrigin = root.TranslatePoint(new Point(0, 0), window)!.Value;
+            var emptySpace = new Point(rootOrigin.X + root.Bounds.Width - 3,
+                rootOrigin.Y + root.Bounds.Height - 3);
+            window.MouseDown(emptySpace, MouseButton.Left);
+            window.MouseUp(emptySpace, MouseButton.Left);
+            Assert.Equal(1, card.ActivationCount);
+
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    private sealed class NavigationSpyCard : EntityCardControl
+    {
+        public int ActivationCount { get; private set; }
+
+        internal override void ActivateCard() => this.ActivationCount++;
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityCardControl_ReferenceLink_DragCopiesText_ClickNavigates()
+    {
+        const string id = "a1b2c3d4-e5f6-4123-8123-123456789abc";
+        string? opened = null;
+        var editor = new EntityReferenceFieldEditorViewModel("related", id, Array.Empty<string>(), null,
+            value => opened = value);
+        var entity = new SubscribedEntityViewModel(BuildGitWorktreeSnapshotForTests());
+        var card = new NavigationSpyCard
+        {
+            DataContext = new EntityCardViewModel(entity, new EntityFieldEditorViewModel[] { editor }),
+        };
+        var window = new Window { Content = card, Width = 500, Height = 300 };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            var link = window.GetVisualDescendants().OfType<CopyableLinkTextBlock>()
+                .Single(t => t.Classes.Contains("workspace-entity-reference-link"));
+            Assert.Equal(id, link.Text);
+            Assert.True(link.Command!.CanExecute(null));
+            var origin = link.TranslatePoint(new Point(0, 0), window)!.Value;
+            var point = new Point(origin.X + 2, origin.Y + link.Bounds.Height / 2);
+
+            window.MouseDown(point, MouseButton.Left);
+            window.MouseUp(point, MouseButton.Left);
+            Assert.Equal(id, opened);
+            Assert.Equal(0, card.ActivationCount);
+            opened = null;
+
+            window.MouseDown(point, MouseButton.Left);
+            window.MouseMove(new Point(point.X + link.Bounds.Width, point.Y), RawInputModifiers.LeftMouseButton);
+            window.MouseUp(new Point(point.X + link.Bounds.Width, point.Y), MouseButton.Left);
+            Assert.NotEmpty(link.SelectedText);
+            Assert.Null(opened);
+            link.SelectAll();
+            window.KeyPress(Key.C, RawInputModifiers.Control, PhysicalKey.C, "c");
+            using (var data = await window.Clipboard!.TryGetDataAsync())
+            {
+                Assert.NotNull(data);
+                Assert.Equal(id, await data.TryGetTextAsync());
+            }
+
+            Assert.Null(opened);
+            link.Focus();
+            window.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, "\r");
+            Assert.Equal(id, opened);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityCardControl_ExternalUrlAndKey_CanBeSelectedAndCopied()
+    {
+        const string url = "https://example.com/full/path?query=value";
+        using var document = JsonDocument.Parse(
+            """{"entity-id":"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb","entity-types":["entity","external"],"names":[["externals","link"]],"display-name":{"default":"Link"},"urls":{"docs":"https://example.com/full/path?query=value"}}""");
+        var snapshot = new EntitySnapshot
+        {
+            EntityId = new EntityId(document.RootElement.GetProperty("entity-id").GetString()!),
+            ConcurrencyTag = new ConcurrencyTag("1"),
+            ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
+            Data = document.RootElement.Clone(),
+            Relationships = Array.Empty<EntitySnapshot>(),
+        };
+        var card = new NavigationSpyCard
+        {
+            DataContext = new EntityCardViewModel(new SubscribedEntityViewModel(snapshot), cardViewName: "external"),
+        };
+        var window = new Window { Content = card, Width = 220, Height = 300 };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            var link = window.GetVisualDescendants().OfType<CopyableLinkTextBlock>()
+                .Single(t => t.Classes.Contains("workspace-url-link"));
+            var key = window.GetVisualDescendants().OfType<SafeSelectableTextBlock>()
+                .Single(t => t.Text == "docs");
+            Assert.Equal(url, link.Text);
+            Assert.True(link.TextLayout.TextLines.Count > 1, "Long URLs must wrap without truncating the copied text.");
+            foreach (var item in new SafeSelectableTextBlock[] { key, link })
+            {
+                var origin = item.TranslatePoint(new Point(0, 0), window)!.Value;
+                var point = new Point(origin.X + 1, origin.Y + Math.Min(item.Bounds.Height / 2, 8));
+                window.MouseDown(point, MouseButton.Left);
+                window.MouseMove(new Point(point.X + item.Bounds.Width, point.Y), RawInputModifiers.LeftMouseButton);
+                window.MouseUp(new Point(point.X + item.Bounds.Width, point.Y), MouseButton.Left);
+                Assert.True(!string.IsNullOrEmpty(item.SelectedText),
+                    $"Could not select {item.Text} at {point} (bounds {item.Bounds}).");
+                item.SelectAll();
+                window.KeyPress(Key.C, RawInputModifiers.Control, PhysicalKey.C, "c");
+                using var data = await window.Clipboard!.TryGetDataAsync();
+                Assert.NotNull(data);
+                Assert.Equal(item.Text, await data.TryGetTextAsync());
+            }
+            Assert.Equal(0, card.ActivationCount);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityCardControl_MimeExpanderHeaderAndUrl_CopyWithoutOpeningOrCollapsing()
+    {
+        const string url = "https://example.com/attachment/full/path";
+        var entity = new SubscribedEntityViewModel(BuildGitWorktreeSnapshotForTests());
+        var editor = new PlainMimeAttachmentFieldEditorViewModel(
+            "attachment", "text/plain", "body", url);
+        var card = new NavigationSpyCard
+        {
+            DataContext = new EntityCardViewModel(entity, new EntityFieldEditorViewModel[] { editor }),
+        };
+        var window = new Window { Content = card, Width = 600, Height = 400 };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            var expander = window.GetVisualDescendants().OfType<Expander>()
+                .Single(e => e.Classes.Contains("workspace-field-expander"));
+            expander.IsExpanded = true;
+            Dispatcher.UIThread.RunJobs();
+            var values = window.GetVisualDescendants().OfType<SafeSelectableTextBlock>().ToArray();
+            var header = Assert.Single(values, t => t.Text == "attachment");
+            var urlText = Assert.Single(values, t => t.Text == url);
+            foreach (var item in new[] { header, urlText })
+            {
+                var origin = item.TranslatePoint(new Point(0, 0), window)!.Value;
+                var point = new Point(origin.X + 1, origin.Y + item.Bounds.Height / 2);
+                window.MouseDown(point, MouseButton.Left);
+                window.MouseMove(new Point(point.X + item.Bounds.Width, point.Y), RawInputModifiers.LeftMouseButton);
+                window.MouseUp(new Point(point.X + item.Bounds.Width, point.Y), MouseButton.Left);
+                Assert.NotEmpty(item.SelectedText);
+                item.SelectAll();
+                window.KeyPress(Key.C, RawInputModifiers.Control, PhysicalKey.C, "c");
+                using var data = await window.Clipboard!.TryGetDataAsync();
+                Assert.NotNull(data);
+                Assert.Equal(item.Text, await data.TryGetTextAsync());
+            }
+            Assert.True(expander.IsExpanded);
+            Assert.Equal(0, card.ActivationCount);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityCardControl_StatusBadge_MouseSelectionAndCtrlC_CopiesStatus()
+    {
+        var vm = new EntityCardViewModel(displayName: "Task", entityType: "task");
+        var badges = new StatusBadgesModel();
+        badges.SetBadges(new[] { new StatusBadgeModel("completed", "Theme.Status.Good", "status: completed") });
+        vm.SetStatusBadges(new StatusBadgesViewModel(badges));
+        var card = new NavigationSpyCard { DataContext = vm };
+        var window = new Window { Content = card, Width = 400, Height = 200 };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            var badge = window.GetVisualDescendants().OfType<SafeSelectableTextBlock>()
+                .Single(t => t.Classes.Contains("status-badge-text"));
+            var origin = badge.TranslatePoint(new Point(0, 0), window)!.Value;
+            var point = new Point(origin.X + 1, origin.Y + badge.Bounds.Height / 2);
+            window.MouseDown(point, MouseButton.Left);
+            window.MouseMove(new Point(point.X + badge.Bounds.Width, point.Y), RawInputModifiers.LeftMouseButton);
+            window.MouseUp(new Point(point.X + badge.Bounds.Width, point.Y), MouseButton.Left);
+            Assert.NotEmpty(badge.SelectedText);
+            badge.SelectAll();
+            window.KeyPress(Key.C, RawInputModifiers.Control, PhysicalKey.C, "c");
+            using var data = await window.Clipboard!.TryGetDataAsync();
+            Assert.NotNull(data);
+            Assert.Equal("completed", await data.TryGetTextAsync());
+            Assert.Equal(0, card.ActivationCount);
         }
         finally
         {

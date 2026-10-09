@@ -2,6 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.VisualTree;
+using Phantom.Workspaces.Gui.Shared.Controls;
 using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces.Controls;
@@ -35,6 +36,17 @@ public partial class EntityCardControl : UserControl
         if (e.Handled)
         {
             return;
+        }
+
+        // A tap on selectable content is for positioning the selection/caret, not opening
+        // another card (which would detach the focused control and discard its selection).
+        for (var visual = e.Source as Avalonia.Visual; visual is not null && visual != this; visual = visual.GetVisualParent())
+        {
+            if (visual is SelectableTextBlock or TextBox or Button or Expander)
+            {
+                e.Handled = true;
+                return;
+            }
         }
 
         ActivateCard();

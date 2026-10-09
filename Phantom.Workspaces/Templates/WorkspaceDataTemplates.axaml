@@ -156,11 +156,10 @@
               RowDefinitions="Auto,Auto">
             <controls:SafeSelectableTextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
             <!-- Read mode: navigable link to the referenced entity (resolved display name). -->
-            <Button Grid.Column="1" Grid.Row="0"
-                    Content="{Binding ResolvedDisplayName}"
+            <controls:CopyableLinkTextBlock Grid.Column="1" Grid.Row="0"
+                    Text="{Binding ResolvedDisplayName}"
                     ToolTip.Tip="{Binding TooltipText}"
                     Command="{Binding OpenCommand}"
-                    IsEnabled="{Binding CanOpen}"
                     Classes="workspace-entity-reference-link"
                     HorizontalAlignment="Left"
                     IsVisible="{Binding IsReadMode}" />
@@ -196,10 +195,9 @@
                           ItemsSource="{Binding Items}">
                 <ItemsControl.ItemTemplate>
                     <DataTemplate>
-                        <Button Content="{Binding DisplayName}"
+                        <controls:CopyableLinkTextBlock Text="{Binding DisplayName}"
                                 ToolTip.Tip="{Binding TooltipText}"
                                 Command="{Binding OpenCommand}"
-                                IsEnabled="{Binding CanOpen}"
                                 Classes="workspace-entity-reference-link"
                                 HorizontalAlignment="Left" />
                     </DataTemplate>
@@ -301,6 +299,11 @@
 
     <DataTemplate DataType="vm:PlainMimeAttachmentFieldEditorViewModel">
         <Expander Header="{Binding FieldName}" Classes="workspace-field-expander">
+            <Expander.HeaderTemplate>
+                <DataTemplate>
+                    <controls:SafeSelectableTextBlock Text="{Binding}" />
+                </DataTemplate>
+            </Expander.HeaderTemplate>
             <StackPanel Classes="workspace-mime-content">
                 <Grid Classes="workspace-field-row"
                       ColumnDefinitions="Auto,*">
@@ -354,6 +357,11 @@
             <Expander Header="{Binding FieldName}"
                       Classes="workspace-field-expander"
                       IsVisible="{Binding ShowChrome}">
+                <Expander.HeaderTemplate>
+                    <DataTemplate>
+                        <controls:SafeSelectableTextBlock Text="{Binding}" />
+                    </DataTemplate>
+                </Expander.HeaderTemplate>
                 <StackPanel Classes="workspace-mime-content">
                     <Grid Classes="workspace-field-row"
                           ColumnDefinitions="Auto,*">
@@ -438,12 +446,22 @@
 
     <DataTemplate DataType="vm:ArrayFieldEditorViewModel">
         <Expander Header="{Binding FieldName}" Classes="workspace-field-expander">
+            <Expander.HeaderTemplate>
+                <DataTemplate>
+                    <controls:SafeSelectableTextBlock Text="{Binding}" />
+                </DataTemplate>
+            </Expander.HeaderTemplate>
             <ItemsControl ItemsSource="{Binding Items}" Classes="workspace-field-items" />
         </Expander>
     </DataTemplate>
 
     <DataTemplate DataType="vm:ObjectFieldEditorViewModel">
         <Expander Header="{Binding FieldName}" Classes="workspace-field-expander">
+            <Expander.HeaderTemplate>
+                <DataTemplate>
+                    <controls:SafeSelectableTextBlock Text="{Binding}" />
+                </DataTemplate>
+            </Expander.HeaderTemplate>
             <ItemsControl ItemsSource="{Binding Fields}" Classes="workspace-field-items" />
         </Expander>
     </DataTemplate>
@@ -493,18 +511,17 @@
         <ItemsControl ItemsSource="{Binding Urls}">
             <ItemsControl.ItemTemplate>
                 <DataTemplate DataType="vm:ExternalUrlViewModel">
-                    <StackPanel Orientation="Horizontal" Spacing="4">
+                    <Grid ColumnDefinitions="Auto,*">
                         <controls:SafeSelectableTextBlock Text="{Binding Key}"
                                    IsVisible="{Binding ShowKey}"
                                    Classes="muted workspace-field-label" />
-                        <Button Content="{Binding Url}"
+                        <controls:CopyableLinkTextBlock Grid.Column="1"
+                                Text="{Binding Url}"
                                 Classes="workspace-url-link"
-                                Command="{Binding OpenCommand}"
-                                HorizontalAlignment="Left" />
-                    </StackPanel>
+                                Command="{Binding OpenCommand}" />
+                    </Grid>
                 </DataTemplate>
             </ItemsControl.ItemTemplate>
         </ItemsControl>
     </DataTemplate>
 </DataTemplates>
-
