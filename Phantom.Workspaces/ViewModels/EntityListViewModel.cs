@@ -8,6 +8,13 @@ public sealed class EntityListViewModel : ViewModelBase
 {
     public ObservableCollection<EntityListItemViewModel> Items { get; } = [];
 
+    public EntityListViewModel()
+    {
+        this.Items.CollectionChanged += (_, _) => this.RaisePropertyChanged(nameof(this.NodeCount));
+    }
+
+    public int NodeCount => this.Items.Count;
+
     /// <summary>
     /// Enumerates every node in tree order (matching the flat <see cref="Items"/> ordering by
     /// <c>Order</c>), yielding each node exactly once for find-cycling.
