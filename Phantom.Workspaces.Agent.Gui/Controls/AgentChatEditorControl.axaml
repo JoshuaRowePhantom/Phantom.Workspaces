@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:Phantom.Workspaces.Agent.Gui.ViewModels"
+             xmlns:llm="using:Phantom.Workspaces.Llm"
              xmlns:controls="using:Phantom.Workspaces.Agent.Gui.Controls"
              xmlns:converters="using:Phantom.Workspaces.Agent.Gui.Converters"
              xmlns:dock="using:Dock.Avalonia.Controls"
@@ -215,9 +216,9 @@
                 </DockPanel>
                 <ItemsControl ItemsSource="{Binding VisibleItems}">
                     <ItemsControl.ItemTemplate>
-                        <DataTemplate>
+                        <DataTemplate x:DataType="llm:IRunningSubAgent">
                             <Button Command="{Binding DataContext.OpenChildCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                    CommandParameter="{Binding AgentId}"
+                                    CommandParameter="{CompiledBinding AgentId}"
                                     Margin="0,2"
                                     HorizontalContentAlignment="Stretch">
                               <Border Classes="agent-surface compact">
@@ -226,24 +227,24 @@
                                                Text="✔"
                                                Classes="muted"
                                                VerticalAlignment="Center"
-                                               IsVisible="{Binding CompletionState, Converter={x:Static converters:CompletionStateConverters.IsSucceeded}}"/>
+                                               IsVisible="{CompiledBinding CompletionState, Converter={x:Static converters:CompletionStateConverters.IsSucceeded}}"/>
                                     <TextBlock DockPanel.Dock="Right"
                                                Text="✘"
                                                Classes="muted"
                                                VerticalAlignment="Center"
-                                               IsVisible="{Binding CompletionState, Converter={x:Static converters:CompletionStateConverters.IsFailed}}"/>
+                                               IsVisible="{CompiledBinding CompletionState, Converter={x:Static converters:CompletionStateConverters.IsFailed}}"/>
                                     <TextBlock DockPanel.Dock="Right"
                                                Text="⟳"
                                                VerticalAlignment="Center"
-                                               IsVisible="{Binding CompletionState, Converter={x:Static converters:CompletionStateConverters.IsRunning}}"/>
+                                               IsVisible="{CompiledBinding CompletionState, Converter={x:Static converters:CompletionStateConverters.IsRunning}}"/>
                                     <StackPanel VerticalAlignment="Center">
-                                        <TextBlock Text="{Binding DisplayName}"
+                                        <TextBlock Text="{CompiledBinding DisplayName}"
                                                    FontWeight="Bold"
                                                    TextTrimming="CharacterEllipsis"/>
-                                        <TextBlock Text="{Binding Description}"
+                                        <TextBlock Text="{CompiledBinding Description}"
                                                    Classes="muted"
                                                    TextTrimming="CharacterEllipsis"
-                                                   IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                                                   IsVisible="{CompiledBinding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
                                     </StackPanel>
                                 </DockPanel>
                               </Border>

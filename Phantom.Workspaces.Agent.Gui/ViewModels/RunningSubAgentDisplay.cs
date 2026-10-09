@@ -28,7 +28,7 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
     private readonly Func<AgentChatCompletionState> getCompletionState;
     private readonly AgentChatRunningItemCollection runningItems;
     private readonly INotifyCollectionChanged subAgentsSource;
-    private readonly Func<IRunningSubAgent, RunningSubAgentDisplay> childFactory;
+    private readonly Func<IRunningSubAgent, IRunningSubAgentDisplay> childFactory;
     private readonly List<SubAgentActivityLine> recentActivity = [];
     private readonly List<ActivityKey> recentActivityKeys = [];
     private readonly ObservableCollection<IRunningSubAgentDisplay> subAgentDisplayItems = [];
@@ -46,7 +46,7 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
             () => agentChat.CompletionState,
             agentChat.RunningItems,
             (INotifyCollectionChanged)agentChat.SubAgents,
-            subAgent => new RunningSubAgentDisplay((AgentChat)subAgent),
+            CreateChildDisplay,
             agentChat,
             name: agentChat.Name)
     {
@@ -100,7 +100,7 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
         Func<AgentChatCompletionState> getCompletionState,
         AgentChatRunningItemCollection runningItems,
         INotifyCollectionChanged subAgentsSource,
-        Func<IRunningSubAgent, RunningSubAgentDisplay> childFactory,
+        Func<IRunningSubAgent, IRunningSubAgentDisplay> childFactory,
         AgentChat? agentChat,
         string name = "")
     {
@@ -149,6 +149,14 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
     public event EventHandler? ActivityChanged;
 
     public event EventHandler? CompletionStateChanged;
+
+    private static IRunningSubAgentDisplay CreateChildDisplay(IRunningSubAgent subAgent)
+        => subAgent switch
+        {
+            AgentChat chat => new RunningSubAgentDisplay(chat),
+            SubAgent { AgentChat: { } chat } => new RunningSubAgentDisplay(chat),
+            _ => new RemoteRunningSubAgentDisplay(subAgent),
+        };
 
     private void OnRunningItemsChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {

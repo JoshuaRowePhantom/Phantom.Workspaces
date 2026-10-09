@@ -1553,6 +1553,7 @@ public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvid
             this.foregroundScheduler).Unwrap();
         childChat.agentId = agentId;
         childChat.parentAgent = this;
+        childChat.PublishInformation();
 
         AgentChat? toDispose = null;
         ISubAgentChat result;
@@ -1613,6 +1614,7 @@ public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvid
         if (string.IsNullOrEmpty(agentChat.agentId))
         {
             agentChat.agentId = agentChat.AgentSessionId;
+            agentChat.PublishInformation();
         }
 
         var sessionId = new AgentSessionId(agentChat.AgentSessionId);

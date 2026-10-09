@@ -35,6 +35,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private readonly Dictionary<IRunningSubAgent, IRunningSubAgentDisplay> remoteSubAgentDisplays =
         new(ReferenceEqualityComparer.Instance);
     private readonly ObservableCollection<AgentDetailDocumentItem> allDetailContents = [];
+    private AgentDetailDocumentItem? unavailableChildDocument;
     private readonly ObservableCollection<AgentSessionModalViewModel> modalSource = [];
     private readonly Dictionary<AgentViewModel, NotifyCollectionChangedEventHandler> subAgentDetailSubscriptions = new();
     private readonly Dictionary<AgentViewModel, PropertyChangedEventHandler> subAgentModalSubscriptions = new();
@@ -1000,6 +1001,9 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         // Use the AgentChat's AgentId, not the stub's AgentId (which may be the session ID for lazy stubs)
         this.subAgentsContainerDetail.AddSlot(subAgentChat.AgentId, subAgentViewModel, subAgentChat);
         this.RefreshModalProjection();
+        var root = this.RootView();
+        if (root.SelectedEditorItem?.Id == $"sub-agent-{subAgent.AgentId}")
+            root.NavigateToAgent(subAgentChat.AgentId);
     }
 
     private void AppendSubAgentDetailContents(AgentViewModel subAgentViewModel)
@@ -1502,7 +1506,26 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             this.StartRemoteChild(remote);
 
         subAgentsGroup.IsExpanded = true;
-        this.SelectedEditorItem = childItem ?? subAgentsGroup;
+        if (this.unavailableChildDocument is not null)
+        {
+            this.allDetailContents.Remove(this.unavailableChildDocument);
+            this.unavailableChildDocument = null;
+        }
+        if (childItem is null)
+        {
+            this.logger.LogWarning("Child transcript navigation target {AgentId} has no document", agentId);
+            var child = this.agentChat.SubAgents.FirstOrDefault(item => item.AgentId == agentId);
+            var name = child?.DisplayName ?? agentId;
+            var placeholder = new AgentChatPlaceholderDetailViewModel(
+                name, "Child transcript unavailable. The requested child has no transcript document.");
+            this.unavailableChildDocument = new AgentDetailDocumentItem(
+                $"{this.detailKeyPrefix}/unavailable-child", name, placeholder);
+            this.allDetailContents.Add(this.unavailableChildDocument);
+            this.SelectedEditorItem = new AgentEditorNavigationItemViewModel(
+                $"sub-agent-{agentId}", name, null, null, null, placeholder, []);
+            return;
+        }
+        this.SelectedEditorItem = childItem;
 
         // Ensure the container shows the requested sub-agent.
         this.subAgentsContainerDetail.ShowSubAgent(agentId);
