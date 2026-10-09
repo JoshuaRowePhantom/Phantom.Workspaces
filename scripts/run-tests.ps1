@@ -4,6 +4,8 @@ param(
     [Parameter()]
     [string[]] $TestNames,
     [Parameter()]
+    [string] $TestProject,
+    [Parameter()]
     [string] $PerTestHangTimeout = '90s',
     [Parameter()]
     [ValidateSet('full', 'fast')]
@@ -22,7 +24,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
-$solutionPath = Join-Path $repoRoot 'Phantom.Workspaces.slnx'
+$testTargetPath = if ($TestProject) { (Resolve-Path $TestProject).Path } else { Join-Path $repoRoot 'Phantom.Workspaces.slnx' }
 
 Set-Content -Path $TestResultsPath -Value '' -Encoding utf8
 
@@ -32,7 +34,7 @@ Get-ChildItem -Path $repoRoot -Filter '*.dmp' -Recurse -ErrorAction SilentlyCont
 
 $dotnetArgs = @(
     'test',
-    $solutionPath,
+    $testTargetPath,
     '--no-restore',
     '--nologo',
     # Serialize the whole solution test run onto a single MSBuild node (issue #1101). `dotnet test`
@@ -127,7 +129,7 @@ if ($filterClauses.Count -gt 0)
 # is set the projects are already built, so no restore is needed.
 if (-not $NoBuild)
 {
-    $restoreOutput = & dotnet restore $solutionPath --nologo 2>&1
+    $restoreOutput = & dotnet restore $testTargetPath --nologo 2>&1
     if ($LASTEXITCODE -ne 0)
     {
         $restoreOutput | ForEach-Object { $_.ToString() } | Set-Content -Path $TestResultsPath -Encoding utf8

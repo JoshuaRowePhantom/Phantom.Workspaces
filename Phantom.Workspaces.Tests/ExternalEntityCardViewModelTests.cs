@@ -251,7 +251,7 @@ public sealed class ExternalEntityCardViewModelTests
     }
 
     [AvaloniaFact]
-    public async Task ExternalCardTemplate_BoundButtonsShowErrorsAndPreserveLabels()
+    public async Task ExternalCardTemplate_CopyableLinksShowErrorsAndPreserveRouting()
     {
         var opener = new RecordingOpener { Fail = true };
         var card = ExternalEntityCardViewModel.Create(
@@ -263,9 +263,9 @@ public sealed class ExternalEntityCardViewModelTests
         try
         {
             Dispatcher.UIThread.RunJobs();
-            var buttons = window.GetVisualDescendants().OfType<Button>()
-                .Where(button => button.Classes.Contains("workspace-url-link")).ToArray();
-            Assert.Equal(3, buttons.Length);
+            var links = window.GetVisualDescendants().OfType<CopyableLinkTextBlock>()
+                .Where(link => link.Classes.Contains("workspace-url-link")).ToArray();
+            Assert.Equal(3, links.Length);
             Assert.All(card.Urls, url => Assert.True(url.ShowKey));
             var namedLabels = window.GetVisualDescendants().OfType<SafeSelectableTextBlock>()
                 .Where(label => label.Classes.Contains("workspace-field-label"))
@@ -273,13 +273,23 @@ public sealed class ExternalEntityCardViewModelTests
             Assert.Equal(3, namedLabels.Length);
             Assert.All(namedLabels, label => Assert.True(label.IsVisible));
             Assert.Equal(new[] { "default", "docs", "unsafe" }, namedLabels.Select(label => label.Text));
-            Assert.False(buttons[2].IsEnabled);
+            Assert.True(links[2].IsEnabled);
+            Assert.False(links[2].Command!.CanExecute(null));
+            links[2].Focus();
+            links[2].SelectAll();
+            window.KeyPress(Key.C, RawInputModifiers.Control, PhysicalKey.C, "c");
+            using (var copied = await window.Clipboard!.TryGetDataAsync())
+            {
+                Assert.NotNull(copied);
+                Assert.Equal("javascript:alert(1)", await copied.TryGetTextAsync());
+            }
+            Assert.Empty(opener.Requests);
             Assert.Contains(window.GetVisualDescendants().OfType<TextBlock>(),
                 text => text.IsVisible && text.Text == "Invalid or unsupported URL.");
 
-            Assert.Same(card.Urls[0].OpenCommand, buttons[0].Command);
-            var point = buttons[0].TranslatePoint(
-                new Point(buttons[0].Bounds.Width / 2, buttons[0].Bounds.Height / 2), window);
+            Assert.Same(card.Urls[0].OpenCommand, links[0].Command);
+            var point = links[0].TranslatePoint(
+                new Point(links[0].Bounds.Width / 2, links[0].Bounds.Height / 2), window);
             Assert.NotNull(point);
             window.MouseDown(point.Value, MouseButton.Left);
             window.MouseUp(point.Value, MouseButton.Left);
@@ -305,8 +315,8 @@ public sealed class ExternalEntityCardViewModelTests
             var label = Assert.Single(singleWindow.GetVisualDescendants().OfType<SafeSelectableTextBlock>(),
                 text => text.Classes.Contains("workspace-field-label"));
             Assert.False(label.IsVisible);
-            Assert.Equal("https://example.com", Assert.Single(singleWindow.GetVisualDescendants().OfType<Button>(),
-                button => button.Classes.Contains("workspace-url-link")).Content);
+            Assert.Equal("https://example.com", Assert.Single(singleWindow.GetVisualDescendants().OfType<CopyableLinkTextBlock>(),
+                link => link.Classes.Contains("workspace-url-link")).Text);
         }
         finally
         {

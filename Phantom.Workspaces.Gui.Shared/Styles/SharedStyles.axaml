@@ -11,6 +11,13 @@
     <StyleInclude Source="avares://Markdown.Avalonia.SyntaxHigh/StyleCollections/AppendixOfFluentTheme.axaml" />
 
     <Styles.Resources>
+        <DataTemplate x:Key="CopyableCardButtonContentTemplate">
+            <controls:CopyableLinkTextBlock Text="{Binding}"
+                                            Background="Transparent"
+                                            Command="{Binding $parent[Button].Command}"
+                                            CommandParameter="{Binding $parent[Button].CommandParameter}"
+                                            TextWrapping="Wrap" />
+        </DataTemplate>
         <!-- WorkspaceMarkdownView code styling resources (issue #1173). Values mirror the WebView
              chat-output-shell.html tokens (chat-font-family, chat-foreground, chat-tool-body-background).
              Brushes are aliased to Fluent-theme color keys so they swap with light/dark theming just
@@ -454,7 +461,7 @@
         <Setter Property="Margin" Value="0,0,4,4" />
         <Setter Property="VerticalAlignment" Value="Center" />
     </Style>
-    <Style Selector="Border.status-badge > TextBlock.status-badge-text">
+    <Style Selector="Border.status-badge > :is(TextBlock).status-badge-text">
         <Setter Property="Foreground" Value="{DynamicResource Theme.Status.Foreground}" />
         <Setter Property="FontSize" Value="12" />
         <Setter Property="FontWeight" Value="SemiBold" />
@@ -1391,15 +1398,12 @@
         <Setter Property="ToolTip.Tip" Value="{Binding Content.TabViewModel.TabTooltip}" />
     </Style>
 
-    <Style Selector="Button.workspace-url-link">
+    <Style Selector="controls|CopyableLinkTextBlock.workspace-url-link, controls|CopyableLinkTextBlock.workspace-entity-reference-link">
         <Setter Property="Background" Value="Transparent" />
-        <Setter Property="BorderThickness" Value="0" />
-        <Setter Property="Padding" Value="0" />
         <Setter Property="Foreground" Value="{DynamicResource SystemAccentColor}" />
         <Setter Property="Cursor" Value="Hand" />
-    </Style>
-    <Style Selector="Button.workspace-url-link:pointerover /template/ ContentPresenter">
-        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="TextDecorations" Value="Underline" />
     </Style>
 
     <!-- Issue #1120: shared pane-collapser toggle. Rounded box with white ">>"/"<<" chevron
@@ -1446,4 +1450,3 @@
     </Style>
 
 </Styles>
-

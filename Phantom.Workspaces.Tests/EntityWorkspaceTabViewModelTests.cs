@@ -100,9 +100,9 @@ public sealed class EntityWorkspaceTabViewModelTests : IAsyncDisposable
             Assert.Same(card, Assert.Single(window.GetVisualDescendants()
                 .OfType<EntityCardControl>()).DataContext);
             Assert.Equal("content", Assert.Single(card.FieldEditors).FieldName);
-            var link = Assert.Single(window.GetVisualDescendants().OfType<Button>(),
-                button => button.Classes.Contains("workspace-url-link"));
-            Assert.Equal(url, link.Content);
+            var link = Assert.Single(window.GetVisualDescendants().OfType<CopyableLinkTextBlock>(),
+                item => item.Classes.Contains("workspace-url-link"));
+            Assert.Equal(url, link.Text);
             Assert.NotNull(link.Command);
             Assert.Equal(markdown, Assert.Single(
                 window.GetVisualDescendants().OfType<WorkspaceMarkdownView>()).Markdown);
