@@ -709,7 +709,10 @@ public sealed class ChatOutputBrowserIntegrationTests
         {
             var (web, window) = await ShowReadyBrowserAsync();
             var messages = new List<string>();
-            web.JavaScriptMessageReceived += (_, body) => messages.Add(body);
+            web.JavaScriptMessageReceived += (_, body) =>
+            {
+                if (body.Contains("\"type\":\"inspect\"", StringComparison.Ordinal)) messages.Add(body);
+            };
             try
             {
                 var content = ChatOutputHtmlRenderer.RenderContent(
@@ -744,6 +747,7 @@ public sealed class ChatOutputBrowserIntegrationTests
                     + "c.querySelector(':scope > .usage-gutter-btn').click();"
                     + "return m.querySelector(':scope > .chat-header').hidden;})()");
                 Assert.Contains("true", activated, StringComparison.Ordinal);
+                await WaitForFrameSyncAsync(web);
                 Assert.Contains(messages, body => body.Contains("\"contentId\":\"suppressed-c0\"", StringComparison.Ordinal));
                 Assert.Contains(messages, body => body.Contains("\"contentId\":\"suppressed-usage\"", StringComparison.Ordinal)
                     && body.Contains("usage payload", StringComparison.Ordinal));
@@ -789,7 +793,10 @@ public sealed class ChatOutputBrowserIntegrationTests
         {
             var (web, window) = await ShowReadyBrowserAsync();
             var messages = new List<string>();
-            web.JavaScriptMessageReceived += (_, body) => messages.Add(body);
+            web.JavaScriptMessageReceived += (_, body) =>
+            {
+                if (body.Contains("\"type\":\"inspect\"", StringComparison.Ordinal)) messages.Add(body);
+            };
             try
             {
                 foreach (var id in new[] { "group-a", "group-b" })
@@ -812,6 +819,7 @@ public sealed class ChatOutputBrowserIntegrationTests
                     + "d.open=false;document.querySelector('#group-b .inspect-gutter-btn').click();"
                     + "document.querySelector('#group-b .usage-gutter-btn').click();return !d.open;})()");
                 Assert.Contains("true", state, StringComparison.Ordinal);
+                await WaitForFrameSyncAsync(web);
                 Assert.Contains(messages, m => m.Contains("\"contentId\":\"group-b-call\"", StringComparison.Ordinal));
                 Assert.Contains(messages, m => m.Contains("\"contentId\":\"group-b-usage\"", StringComparison.Ordinal));
                 Assert.DoesNotContain(messages, m => m.Contains("\"contentId\":\"group-a-call\"", StringComparison.Ordinal));
@@ -825,7 +833,10 @@ public sealed class ChatOutputBrowserIntegrationTests
         {
             var (web, window) = await ShowReadyBrowserAsync();
             var messages = new List<string>();
-            web.JavaScriptMessageReceived += (_, body) => messages.Add(body);
+            web.JavaScriptMessageReceived += (_, body) =>
+            {
+                if (body.Contains("\"type\":\"inspect\"", StringComparison.Ordinal)) messages.Add(body);
+            };
             try
             {
                 static AgentChatHistoryItem Call(string id) => new()
@@ -886,6 +897,7 @@ public sealed class ChatOutputBrowserIntegrationTests
                     })()
                     """);
                 Assert.Contains("true", activated, StringComparison.Ordinal);
+                await WaitForFrameSyncAsync(web);
                 Assert.Equal(4, messages.Count);
                 Assert.Equal(4, messages.Select(m => JsonDocument.Parse(m).RootElement.GetProperty("contentId").GetString())
                     .Distinct().Count());
@@ -903,6 +915,7 @@ public sealed class ChatOutputBrowserIntegrationTests
                       return 'clicked';
                     })()
                     """);
+                await WaitForFrameSyncAsync(web);
                 Assert.Equal(4, messages.Count);
                 Assert.Contains(messages, m => m.Contains("c3", StringComparison.Ordinal));
                 Assert.DoesNotContain(messages, m => m.Contains("c2", StringComparison.Ordinal));
@@ -924,7 +937,10 @@ public sealed class ChatOutputBrowserIntegrationTests
         {
             var (web, window) = await ShowReadyBrowserAsync();
             var messages = new List<string>();
-            web.JavaScriptMessageReceived += (_, body) => messages.Add(body);
+            web.JavaScriptMessageReceived += (_, body) =>
+            {
+                if (body.Contains("\"type\":\"inspect\"", StringComparison.Ordinal)) messages.Add(body);
+            };
             try
             {
                 static AgentChatHistoryItem Item(string secondCallId) => new()
@@ -966,6 +982,7 @@ public sealed class ChatOutputBrowserIntegrationTests
                     })()
                     """);
                 Assert.Contains("true,true", targetIds, StringComparison.Ordinal);
+                await WaitForFrameSyncAsync(web);
                 Assert.Equal(5, messages.Count(m => m.Contains("\"type\":\"inspect\"", StringComparison.Ordinal)));
                 Assert.Equal(5, messages.Select(m => System.Text.Json.JsonDocument.Parse(m))
                     .Select(json => json.RootElement.GetProperty("contentId").GetString()).Distinct().Count());
@@ -983,6 +1000,7 @@ public sealed class ChatOutputBrowserIntegrationTests
                     })()
                     """);
                 Assert.Contains("true", rebound, StringComparison.Ordinal);
+                await WaitForFrameSyncAsync(web);
                 Assert.Contains(messages, m => m.Contains("\"CallId\": \"c3\"", StringComparison.Ordinal)
                     || m.Contains("\\\"CallId\\\": \\\"c3\\\"", StringComparison.Ordinal));
 
@@ -1011,7 +1029,10 @@ public sealed class ChatOutputBrowserIntegrationTests
         {
             var (web, window) = await ShowReadyBrowserAsync();
             var messages = new List<string>();
-            web.JavaScriptMessageReceived += (_, body) => messages.Add(body);
+            web.JavaScriptMessageReceived += (_, body) =>
+            {
+                if (body.Contains("\"type\":\"inspect\"", StringComparison.Ordinal)) messages.Add(body);
+            };
             try
             {
                 var history = new ObservableCollection<AgentChatHistoryItem>
@@ -1066,6 +1087,7 @@ public sealed class ChatOutputBrowserIntegrationTests
                     })()
                     """);
                 Assert.Contains("true", focused, StringComparison.Ordinal);
+                await WaitForFrameSyncAsync(web);
                 Assert.Contains(messages, m => m.Contains("-result\"", StringComparison.Ordinal));
             }
             finally { window.Close(); }
