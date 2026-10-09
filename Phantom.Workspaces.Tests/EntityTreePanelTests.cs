@@ -223,6 +223,66 @@ public sealed class EntityTreePanelTests
     }
 
     [AvaloniaFact]
+    public void EntityCardTreeView_ThresholdChangesBeforeLoaded_PreserveVisibleAnchorAndEditorFocus()
+    {
+        var nodes = new ObservableCollection<TreeNode>(
+            Enumerable.Range(0, 99).Select(i => new TreeNode($"Node {i}")));
+        var inserted = new TreeNode("Tall item") { Height = 91 };
+        nodes.Insert(3, inserted);
+        var tree = CreateTree(nodes);
+        tree.ItemTemplate = new Avalonia.Controls.Templates.FuncTreeDataTemplate<TreeNode>(
+            (node, _) => new TextBox { Text = node.Name, Height = node.Height },
+            node => node.Children);
+        tree.Bind(EntityTreePanel.NodeCountProperty, new Binding("Count") { Source = nodes });
+        var window = new Window { Content = tree, Width = 400, Height = 240 };
+        try
+        {
+            window.Show();
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            var scroll = tree.GetVisualDescendants().OfType<ScrollViewer>().First();
+            var focusedNode = nodes[30];
+
+            void AssertImmediateTransition(Action change, Type expectedPanel)
+            {
+                var original = Assert.IsType<TreeViewItem>(tree.ContainerFromItem(focusedNode));
+                var editor = Assert.Single(original.GetVisualDescendants().OfType<TextBox>());
+                Assert.True(editor.Focus());
+                var screenY = Assert.NotNull(original.TranslatePoint(default, window)).Y;
+                Assert.InRange(screenY, 0, window.Bounds.Height);
+                bool loadedCallbackRan = false;
+                Avalonia.Threading.Dispatcher.UIThread.Post(
+                    () => loadedCallbackRan = true, Avalonia.Threading.DispatcherPriority.Loaded);
+
+                change();
+                // Offset invalidation from the panel swap can require a second synchronous
+                // layout pass; neither pass may rely on the queued Loaded restoration.
+                tree.UpdateLayout();
+                tree.UpdateLayout();
+                Assert.False(loadedCallbackRan);
+                Assert.IsType(expectedPanel, tree.ItemsPanelRoot);
+                var replacement = Assert.IsType<TreeViewItem>(tree.ContainerFromItem(focusedNode));
+                Assert.Equal(screenY, Assert.NotNull(replacement.TranslatePoint(default, window)).Y, 1);
+                Assert.True(Assert.Single(replacement.GetVisualDescendants().OfType<TextBox>()).IsFocused);
+            }
+
+            tree.ScrollIntoView(focusedNode);
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            var initialY = Assert.NotNull(
+                Assert.IsType<TreeViewItem>(tree.ContainerFromItem(focusedNode))
+                    .TranslatePoint(default, window)).Y;
+            scroll.Offset = new Vector(0, scroll.Offset.Y + initialY - 40);
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            AssertImmediateTransition(() => nodes.Remove(inserted), typeof(StackPanel));
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            AssertImmediateTransition(() => nodes.Insert(3, inserted), typeof(VirtualizingStackPanel));
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact]
     public void EntityCardTreeView_NestedEditorFocus_SurvivesBothPanelTransitions()
     {
         var nodes = new ObservableCollection<TreeNode>(
