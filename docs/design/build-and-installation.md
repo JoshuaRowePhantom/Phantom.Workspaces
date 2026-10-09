@@ -555,6 +555,20 @@ environments, and release outputs) the build/installation design requires. Items
   integration suite. Scheduled (e.g. nightly), on-demand, and **gated before release**. A
   self-hosted Docker-capable Windows runner is only needed if a test ever requires *Windows*
   containers specifically.
+  - The Windows job downloads the standalone Copilot CLI version matching `GitHub.Copilot.SDK`
+    (and verifies the release archive's SHA-256), then sets `COPILOT_CLI_PATH` for real BYOK
+    tests. The SDK-staged `copilot.exe` is a server-only runtime, not the interactive CLI.
+    When upgrading the SDK, update the pinned CLI version and archive hash together. The
+    Windows test run uses the approved harness's `-maxcpucount:1` MSBuild serialization so
+    resource-heavy CLI, process, and browser tests do not compete across test hosts.
+  - The Linux job needs a working Docker daemon. The MongoDB broker creates both the data
+    directory and its `configdb` bind-mount source before `docker create`; unlike Docker
+    Desktop on Windows, Linux Docker rejects a missing `--mount` source. Hosted CI pre-pulls
+    Atlas Local before starting the test host and uses a 10-minute per-test inactivity
+    watchdog for cold replica-set/search startup. The image's non-root user also needs write
+    access to the bind mounts: CI sets `TMPDIR` to a dedicated workspace-local directory with
+    an inherited ACL for that image's UID, including the per-test replica-set directories.
+    Local test-harness defaults are unchanged.
   - **Targeting on Linux:** the full suite also contains **Windows-only** tests (Avalonia GUI,
     the `StartupTaskService`/scheduled-task and junction/symlink integration tests). The
     `ubuntu-latest` job therefore runs the **cross-platform data-layer Docker tests** (e.g. via
