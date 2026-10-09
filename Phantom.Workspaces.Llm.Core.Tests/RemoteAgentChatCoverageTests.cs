@@ -13,6 +13,55 @@ namespace Phantom.Workspaces.Llm.Tests;
 public sealed partial class RemoteAgentChatTests
 {
     [Fact]
+    public async Task RemoteAgentChat_SubagentsSnapshot_ExposesStableChildIdentity()
+    {
+        var (transport, chat) = await AttachAsync();
+        await using (chat)
+        {
+            var first = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            ((INotifyCollectionChanged)chat.SubAgents).CollectionChanged += (_, _) => first.TrySetResult();
+            JsonElement Child(AgentChatCompletionState state) => JsonSerializer.SerializeToElement(new
+            {
+                AgentId = "alias", AgentSessionId = "canonical-session",
+                DisplayName = "Child", Description = "Child", Name = "child",
+                CompletionState = state, LastUpdatedAt = DateTime.UnixEpoch,
+                SubAgents = new[] { new {
+                    AgentId = "nested", AgentSessionId = "nested-session",
+                    DisplayName = "Nested", Description = "Nested", Name = "nested",
+                    CompletionState = AgentChatCompletionState.Running,
+                    LastUpdatedAt = DateTime.UnixEpoch, SubAgents = Array.Empty<object>(),
+                } },
+            }, AIJsonUtilities.DefaultOptions);
+            await transport.SendAsync(Frame(2, new SubagentsSnapshotEvent { Subagents = [Child(AgentChatCompletionState.Running)] }));
+            await first.Task;
+            var child = Assert.IsAssignableFrom<IRemoteSubagentReference>(Assert.Single(chat.SubAgents));
+            Assert.Equal("canonical-session", child.AgentSessionId);
+            Assert.Equal("nested-session",
+                Assert.IsAssignableFrom<IRemoteSubagentReference>(Assert.Single(child.SubAgents)).AgentSessionId);
+            var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            child.CompletionStateChanged += (_, _) => changed.TrySetResult();
+            await transport.SendAsync(Frame(3, new SubagentsChangedEvent { Subagents = [Child(AgentChatCompletionState.Succeeded)] }));
+            await changed.Task;
+            Assert.Same(child, Assert.Single(chat.SubAgents));
+            Assert.Equal(AgentChatCompletionState.Succeeded, child.CompletionState);
+            var replaced = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            ((INotifyCollectionChanged)chat.SubAgents).CollectionChanged += (_, _) => replaced.TrySetResult();
+            var successor = JsonSerializer.SerializeToElement(new
+            {
+                AgentId = "alias", AgentSessionId = "replacement-session",
+                DisplayName = "Child", Description = "Child", Name = "child",
+                CompletionState = AgentChatCompletionState.Running, LastUpdatedAt = DateTime.UnixEpoch,
+                SubAgents = Array.Empty<object>(),
+            }, AIJsonUtilities.DefaultOptions);
+            await transport.SendAsync(Frame(4, new SubagentsChangedEvent { Subagents = [successor] }));
+            await replaced.Task;
+            Assert.NotSame(child, Assert.Single(chat.SubAgents));
+            Assert.Equal("replacement-session",
+                Assert.IsAssignableFrom<IRemoteSubagentReference>(Assert.Single(chat.SubAgents)).AgentSessionId);
+        }
+    }
+
+    [Fact]
     public async Task RemoteAgentChat_ReorderedChildrenRetainIdentityAndReceiveStateUpdates()
     {
         static JsonElement Child(string id, AgentChatCompletionState state) => JsonSerializer.SerializeToElement(new

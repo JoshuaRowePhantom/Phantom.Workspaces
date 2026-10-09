@@ -242,6 +242,8 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
                 await attachment.ReleaseExplicitlyAsync().ConfigureAwait(false);
                 return;
             }
+            if (command is OpenSubagentCommand childCommand)
+                await this.AuthorizeSubagentAsync(peer, runtime, childCommand, ct).ConfigureAwait(false);
             var result = await runtime.ExecuteCommandOnceAsync(
                 command, token => this.ExecuteCommandAsync(runtime, command, token), ct).ConfigureAwait(false);
             await attachment.PublishAsync(result, command.CorrelationId, ct).ConfigureAwait(false);
@@ -364,7 +366,7 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
         };
     }
 
-    private async Task<RemoteSubagentDescriptor> OpenSubagentAsync(
+    private async Task<PersistedAgentSessionRuntimeIntent> ResolveChildIntentAsync(
         RemoteAgentSessionLease parent,
         OpenSubagentCommand command,
         CancellationToken ct)
@@ -372,22 +374,54 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
         var child = parent.Chat.SubAgents.FirstOrDefault(
             value => string.Equals(value.AgentId, command.AgentId, StringComparison.Ordinal))
             ?? throw new AgentSessionUnavailableException();
-        var childSessionId = child is SubAgent subagent
-            ? subagent.SessionId.Value
-            : child.AgentId;
+        var childSessionId = child switch
+        {
+            SubAgent subagent => subagent.SessionId.Value,
+            AgentChat chat => chat.AgentSessionId,
+            _ => throw new AgentSessionUnavailableException(),
+        };
         var intent = await this.runtimeFactory.LoadIntentAsync(childSessionId, ct).ConfigureAwait(false)
             ?? throw new AgentSessionUnavailableException();
+        if (intent.AgentSessionId != childSessionId)
+            throw new AgentSessionUnavailableException();
+        return intent;
+    }
+
+    private async Task AuthorizeSubagentAsync(
+        TransportPeerIdentity peer, RemoteAgentSessionLease parent,
+        OpenSubagentCommand command, CancellationToken ct)
+    {
+        var intent = await this.ResolveChildIntentAsync(parent, command, ct).ConfigureAwait(false);
+        if (!await this.AuthorizeAsync(peer, new AgentSessionOpenRequest
+        {
+            ProtocolVersion = 1,
+            AgentSessionId = intent.AgentSessionId,
+            ExpectedOwningProfileEntityId = intent.OwningProfileEntityId,
+            ExpectedOwnershipGeneration = intent.OwnershipGeneration,
+            OpenIntent = AgentSessionOpenIntent.Attach,
+            AttachmentToken = Guid.NewGuid().ToString("N"),
+            Capabilities = [],
+        }, AgentSessionAuthorizationOperation.Open, ct).ConfigureAwait(false))
+            throw new AgentSessionUnavailableException();
+    }
+
+    private async Task<RemoteSubagentDescriptor> OpenSubagentAsync(
+        RemoteAgentSessionLease parent, OpenSubagentCommand command, CancellationToken ct)
+    {
+        var intent = await this.ResolveChildIntentAsync(parent, command, ct).ConfigureAwait(false);
         var runtime = await this.runtimeRegistry.TryGetAsync(
             intent.AgentSessionId, intent.OwnershipGeneration, ct).ConfigureAwait(false)
             ?? await this.runtimeRegistry.GetOrStartAsync(
                 intent,
                 token => this.runtimeFactory.StartAsync(intent, token),
                 ct).ConfigureAwait(false);
+        if (!parent.TryKeepChildAlive(runtime))
+            throw new AgentSessionUnavailableException();
 
         return new RemoteSubagentDescriptor
         {
             AgentSessionId = intent.AgentSessionId,
-            AgentId = child.AgentId,
+            AgentId = command.AgentId,
             OwningProfileEntityId = intent.OwningProfileEntityId,
             OwnershipGeneration = intent.OwnershipGeneration,
             RuntimeEpoch = runtime.Epoch,

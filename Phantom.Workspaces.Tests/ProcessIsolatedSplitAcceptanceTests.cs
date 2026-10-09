@@ -40,12 +40,22 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
     public async Task SplitMode_WorkerStartupFails_DisplaysDetailedCauseOnCaller()
         => await RunSplitScenarioAsync(startupFailure: true);
 
-    private static async Task RunSplitScenarioAsync(bool startupFailure)
+    [Fact]
+    public async Task SplitMode_ProductionShortcut_RemoteChildTranscriptAndViewerReleaseCrossAuthenticatedProcesses()
+        => await RunSplitScenarioAsync(startupFailure: false, childAttachment: true);
+
+    [Fact]
+    public async Task SplitMode_ProductionShortcut_ChildTransportLossShowsRetryAndPreservesOwnerAcrossProcesses()
+        => await RunSplitScenarioAsync(startupFailure: false, childAttachment: true, childTransportFailure: true);
+
+    private static async Task RunSplitScenarioAsync(
+        bool startupFailure, bool childAttachment = false, bool childTransportFailure = false)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(90));
+        timeout.CancelAfter(TimeSpan.FromSeconds(childAttachment ? 180 : 90));
         var ct = timeout.Token;
-        var directory = Path.Combine(Path.GetTempPath(), "split-acceptance-" + Guid.NewGuid().ToString("N"));
+        var directory = Path.Combine(Directory.GetCurrentDirectory(),
+            "split-acceptance-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         var hubLogs = Path.Combine(directory, "hub-logs");
         var callerLogs = Path.Combine(directory, "caller-logs");
@@ -98,11 +108,13 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
             Assert.Contains("401", websocketError.Message, StringComparison.Ordinal);
 
             var callerUrl = $"http://127.0.0.1:{FreePort()}";
-            await using var caller = StartRole(startupFailure ? "caller-failure" : "caller",
+            await using var caller = StartRole(childAttachment ? "caller-child"
+                    : startupFailure ? "caller-failure" : "caller",
                 url, User, Caller, callerUrl, Worker,
                 Path.Combine(directory, "entities"), callerLogs);
             Assert.Equal("READY caller", await caller.NextLineAsync(ct));
-            await using var worker = StartRole(startupFailure ? "worker-failure" : "worker",
+            await using var worker = StartRole(childAttachment ? "worker-child"
+                    : startupFailure ? "worker-failure" : "worker",
                 url, User, Worker, callerUrl, Worker,
                 Path.Combine(directory, "entities"), workerLogs);
             Assert.Equal("READY worker", await worker.NextLineAsync(ct));
@@ -128,8 +140,31 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
             await caller.SendAsync("DROP", ct);
             Assert.Equal("DROPPED live", await caller.NextLineAsync(ct));
             Assert.Equal("TAB Loading", await caller.NextLineAsync(ct));
-            Assert.Equal("TAB Failed transport-choice", await caller.NextLineAsync(ct));
+            if (!childAttachment)
+                Assert.Equal("TAB Failed transport-choice", await caller.NextLineAsync(ct));
             Assert.Equal("TAB Ready remote", await caller.NextLineAsync(ct));
+            if (childAttachment)
+            {
+                await worker.SendAsync("PREPARE-CHILD", ct);
+                var childReady = await worker.NextLineAsync(ct);
+                Assert.StartsWith("CHILD ready ", childReady, StringComparison.Ordinal);
+                var childSessionId = childReady["CHILD ready ".Length..];
+                Assert.NotEqual(SessionId, childSessionId);
+                Assert.NotEqual("fixture-child", childSessionId);
+                Assert.True(Guid.TryParse(childSessionId, out _));
+                await caller.SendAsync(childTransportFailure ? "OPEN-CHILD-FAILURE" : "OPEN-CHILD", ct);
+                if (childTransportFailure)
+                {
+                    Assert.Equal($"CHILD failed {childSessionId} retryable no-slot no-parent-transcript",
+                        await caller.NextLineAsync(ct));
+                    await worker.SendAsync("VERIFY-CHILD " + childSessionId, ct);
+                    Assert.Equal($"CHILD owner {childSessionId} unchanged", await worker.NextLineAsync(ct));
+                    await caller.SendAsync("RETRY-CHILD", ct);
+                }
+                Assert.Equal($"CHILD rendered {childSessionId} viewer-1", await caller.NextLineAsync(ct));
+                Assert.Equal($"CHILD reopened {childSessionId} viewer-1", await caller.NextLineAsync(ct));
+                Assert.Equal("CHILD parent-alive", await caller.NextLineAsync(ct));
+            }
             Assert.Equal(startupFailure
                     ? "RESULT caller-ui startup-type-message-stack-inner"
                     : "RESULT persisted worker-response",
@@ -164,17 +199,20 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
             var workerFile = ReadProcessLog(workerLogs);
             var choices = Regex.Matches(callerFile,
                 @"Session loading; attempt ([0-9a-f]{32}); stage transport-choice; [^\r\n]*outcome started\.");
-            Assert.Equal(2, choices.Count);
-            var failedAttempt = choices[0].Groups[1].Value;
-            var retryAttempt = choices[1].Groups[1].Value;
-            Assert.NotEqual(failedAttempt, retryAttempt);
-            AssertOrdered(callerFile,
-                $"Session loading; attempt {failedAttempt}; stage service-initialization;",
-                $"Session loading; attempt {failedAttempt}; stage transport-choice;",
-                $"Session loading; attempt {failedAttempt}; stage transport-choice; elapsed-ms");
-            Assert.Matches(
-                $@"Session loading; attempt {failedAttempt}; stage transport-choice; elapsed-ms [^\r\n]*; reason stage-timeout\.",
-                callerFile);
+            Assert.Equal(childAttachment ? 1 : 2, choices.Count);
+            var retryAttempt = choices[^1].Groups[1].Value;
+            if (!childAttachment)
+            {
+                var failedAttempt = choices[0].Groups[1].Value;
+                Assert.NotEqual(failedAttempt, retryAttempt);
+                AssertOrdered(callerFile,
+                    $"Session loading; attempt {failedAttempt}; stage service-initialization;",
+                    $"Session loading; attempt {failedAttempt}; stage transport-choice;",
+                    $"Session loading; attempt {failedAttempt}; stage transport-choice; elapsed-ms");
+                Assert.Matches(
+                    $@"Session loading; attempt {failedAttempt}; stage transport-choice; elapsed-ms [^\r\n]*; reason stage-timeout\.",
+                    callerFile);
+            }
             AssertOrdered(callerFile,
                 $"Session loading; attempt {retryAttempt}; stage service-initialization;",
                 $"Session loading; attempt {retryAttempt}; stage transport-choice;",

@@ -83,6 +83,16 @@ public sealed class RemoteAgentChat : IAgentChat
     public AgentChatRunningItemCollection RunningItems { get; } = new();
     public IAgentInputQueues InputQueues => this.inputQueues;
     public ReadOnlyObservableCollection<IRunningSubAgent> SubAgents { get; }
+    public Task<RemoteSubagentDescriptor> OpenSubagentAsync(string agentId, CancellationToken ct = default)
+    {
+        this.ThrowIfDisposed();
+        if (!this.subagents.Any(child => child.AgentId == agentId))
+            throw new InvalidOperationException("The child is not present in this session.");
+        return this.client.OpenSubagentAsync(new OpenAgentSubagentRequest
+        {
+            AgentId = agentId, CommandId = Guid.NewGuid(),
+        }, ct);
+    }
     public ReadOnlyObservableCollection<AgentChatModal> Modals { get; }
     public ISlashCommandRegistry SlashCommands => this.slashCommands;
     public bool ContinueInBackground { get; private set; }
@@ -559,7 +569,11 @@ public sealed class RemoteAgentChat : IAgentChat
             else
             {
                 if (existingIndex != index) this.subagents.Move(existingIndex, index);
-                ((RemoteRunningSubagent)this.subagents[index]).Update(incoming);
+                var current = (RemoteRunningSubagent)this.subagents[index];
+                if (current.AgentSessionId != incoming.AgentSessionId)
+                    this.subagents[index] = incoming;
+                else
+                    current.Update(incoming);
             }
         }
         while (this.subagents.Count > desired.Length)
@@ -854,19 +868,22 @@ public sealed class RemoteAgentChat : IAgentChat
         }
     }
 
-    private sealed class RemoteRunningSubagent : IRunningSubAgent
+    private sealed class RemoteRunningSubagent : IRemoteSubagentReference
     {
-        public required string AgentId { get; set; }
+        public required string AgentId { get; init; }
+        public string AgentSessionId { get; set; } = string.Empty;
         public required string DisplayName { get; set; }
         public required string Description { get; set; }
         public string Name { get; set; } = string.Empty;
         public AgentChatCompletionState CompletionState { get; set; }
         public DateTime LastUpdatedAt { get; set; }
-        public IReadOnlyList<IRunningSubAgent> SubAgents { get; set; } = [];
+        [System.Text.Json.Serialization.JsonIgnore]
+        public IReadOnlyList<IRunningSubAgent> SubAgents { get; private set; } = [];
         public event EventHandler? CompletionStateChanged;
 
         internal void Update(RemoteRunningSubagent incoming)
         {
+            this.AgentSessionId = incoming.AgentSessionId;
             this.DisplayName = incoming.DisplayName;
             this.Description = incoming.Description;
             this.Name = incoming.Name;
@@ -878,8 +895,16 @@ public sealed class RemoteAgentChat : IAgentChat
         }
 
         internal static RemoteRunningSubagent FromJson(JsonElement value)
-            => JsonSerializer.Deserialize<RemoteRunningSubagent>(value.GetRawText(), AIJsonUtilities.DefaultOptions)
-               ?? throw new RemoteAgentProtocolException("Subagent payload was null.");
+        {
+            var child = JsonSerializer.Deserialize<RemoteRunningSubagent>(
+                value.GetRawText(), AIJsonUtilities.DefaultOptions)
+                ?? throw new RemoteAgentProtocolException("Subagent payload was null.");
+            child.SubAgents = (value.TryGetProperty("sub-agents", out var nested)
+                || value.TryGetProperty("subAgents", out nested))
+                    ? nested.EnumerateArray().Select(FromJson).ToArray()
+                    : [];
+            return child;
+        }
     }
 
     private sealed record RemoteRunningItemState

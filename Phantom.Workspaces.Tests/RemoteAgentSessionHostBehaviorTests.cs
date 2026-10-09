@@ -357,7 +357,7 @@ public sealed partial class RemoteAgentSessionHostTests
     public async Task OpenAsync_ChildSubagent_ReauthorizesMembership()
     {
         await using var fixture = new HostFixture();
-        fixture.Subagents.Add(new TestRunningSubagent("child"));
+        fixture.Subagents.Add(new SubAgent(new AgentSessionId("child"), null));
         var childIntent = Intent() with { AgentSessionId = "child" };
         await using var childRuntime = Runtime(background: true, sessionId: "child");
         fixture.Factory.Setup(value => value.LoadIntentAsync("child", It.IsAny<CancellationToken>()))
@@ -618,7 +618,7 @@ public sealed partial class RemoteAgentSessionHostTests
     public async Task OpenSubagentCommand_AuthorizedChild_StartsChildRuntimeAndReturnsAttachDescriptor()
     {
         await using var fixture = new HostFixture();
-        fixture.Subagents.Add(new TestRunningSubagent("child"));
+        fixture.Subagents.Add(new SubAgent(new AgentSessionId("child"), null));
         var childIntent = Intent() with { AgentSessionId = "child" };
         await using var childRuntime = Runtime(background: true, sessionId: "child");
         fixture.Factory.Setup(value => value.LoadIntentAsync("child", It.IsAny<CancellationToken>()))

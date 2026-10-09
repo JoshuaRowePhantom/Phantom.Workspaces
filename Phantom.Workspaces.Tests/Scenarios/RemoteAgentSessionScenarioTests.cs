@@ -3,18 +3,23 @@ using System.Collections.Specialized;
 using System.Text.Json;
 using System.Threading.Channels;
 using AgentSchema;
+using Avalonia.Headless.XUnit;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Time.Testing;
+using MongoDB.Bson;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
+using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Core.Manifest;
 using Phantom.Workspaces.Llm.Remote;
+using Phantom.Workspaces.Services.Logging;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.AgentSessions;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.Local;
+using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces.Tests.Scenarios;
 
@@ -40,12 +45,19 @@ public sealed class RemoteAgentSessionScenarioTests
             TestContext.Current.CancellationToken);
 
         await Task.WhenAll(firstReady, secondReady);
-        var ownerQueues = ((IAgentChat)await fixture.OwnerChatAsync("frames", 0)).InputQueues;
+        var runtime = await fixture.RuntimeAsync("frames", 0);
+        var highWaterMark = runtime.Replay.HighWaterMark;
+        await Task.WhenAll(
+            WaitForCursorAsync(first.Client, highWaterMark),
+            WaitForCursorAsync(second.Client, highWaterMark));
+        var ownerQueues = ((IAgentChat)runtime.Chat).InputQueues;
         AssertQueueStateEqual(first.Chat.InputQueues.Snapshot, second.Chat.InputQueues.Snapshot);
         AssertQueueStateEqual(ownerQueues.Snapshot, first.Chat.InputQueues.Snapshot);
         Assert.True(IsStrictlyIncreasing(firstSequences));
         Assert.True(IsStrictlyIncreasing(secondSequences));
-        Assert.Equal(first.Client.LastAppliedCursor, second.Client.LastAppliedCursor);
+        Assert.Equal(first.Client.LastAppliedCursor?.Epoch, second.Client.LastAppliedCursor?.Epoch);
+        Assert.True(first.Client.LastAppliedCursor?.Sequence >= highWaterMark);
+        Assert.True(second.Client.LastAppliedCursor?.Sequence >= highWaterMark);
     }
 
     [Fact]
@@ -671,18 +683,36 @@ public sealed class RemoteAgentSessionScenarioTests
         await using var parent = await fixture.OpenProxyAsync("parent", AgentSessionOpenIntent.Start);
         var parentRuntime = await fixture.RuntimeAsync("parent", 0);
         var parentOwner = Assert.IsType<AgentChat>(parentRuntime.Chat);
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => parent.Chat.OpenSubagentAsync("unknown-child", TestContext.Current.CancellationToken));
+        var childProjected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnChildChanged(object? sender, NotifyCollectionChangedEventArgs args)
+        {
+            if (parent.Chat.SubAgents.Any(child => child.AgentId == "child-agent"))
+                childProjected.TrySetResult();
+        }
+        ((INotifyCollectionChanged)parent.Chat.SubAgents).CollectionChanged += OnChildChanged;
         await parentOwner.GetOrCreateAsync(
             "child-agent",
             Definition("child"),
             "tool-call",
             TestContext.Current.CancellationToken);
-        await fixture.SeedAsync(Session("child-agent"));
-
-        var descriptor = await parent.Client.OpenSubagentAsync(new OpenAgentSubagentRequest
+        OnChildChanged(null, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
+        await childProjected.Task;
+        ((INotifyCollectionChanged)parent.Chat.SubAgents).CollectionChanged -= OnChildChanged;
+        var canonicalChildId = parentOwner.SubAgents.Single(child => child.AgentId == "child-agent") switch
         {
-            AgentId = "child-agent",
-            CommandId = Guid.NewGuid(),
-        }, TestContext.Current.CancellationToken);
+            SubAgent sub => sub.SessionId.Value,
+            AgentChat chat => chat.AgentSessionId,
+            _ => throw new InvalidOperationException("Missing canonical child identity."),
+        };
+        await fixture.SeedAsync(Session(canonicalChildId));
+
+        var descriptor = await parent.Chat.OpenSubagentAsync(
+            "child-agent", TestContext.Current.CancellationToken);
+        var repeated = await parent.Chat.OpenSubagentAsync(
+            "child-agent", TestContext.Current.CancellationToken);
+        Assert.Equal(descriptor.RuntimeEpoch, repeated.RuntimeEpoch);
         await using var child = await fixture.OpenProxyAsync(
             descriptor.AgentSessionId,
             AgentSessionOpenIntent.Attach,
@@ -698,16 +728,297 @@ public sealed class RemoteAgentSessionScenarioTests
             TestContext.Current.CancellationToken);
 
         Assert.Equal("child-agent", descriptor.AgentId);
+        Assert.Equal(canonicalChildId, descriptor.AgentSessionId);
         Assert.NotSame(parentRuntime, childRuntime);
         Assert.NotSame(parentOwner, childOwner);
         Assert.Equal("parent", parentRuntime.SessionId);
-        Assert.Equal("child-agent", childRuntime.SessionId);
+        Assert.Equal(canonicalChildId, childRuntime.SessionId);
         Assert.NotEqual(parentRuntime.SessionId, childRuntime.SessionId);
         Assert.DoesNotContain(parent.Chat.InputQueues.Snapshot.Queues, queue => queue.Name == "child-only");
 
         await child.Chat.DetachAsync(TestContext.Current.CancellationToken);
+        Assert.Same(childRuntime, await fixture.RuntimeAsync(canonicalChildId, 0));
+        Assert.False(childResource.IsDisposed);
+        await childRuntime.SetContinueInBackgroundAsync(true, TestContext.Current.CancellationToken);
+        await childRuntime.SetContinueInBackgroundAsync(false, TestContext.Current.CancellationToken);
+        Assert.Same(childRuntime, await fixture.RuntimeAsync(canonicalChildId, 0));
+        await parentRuntime.TryTerminateAsync(TestContext.Current.CancellationToken);
         await childResource.Disposed;
-        Assert.Null(await fixture.TryRuntimeAsync("child-agent", 0));
+        Assert.Null(await fixture.TryRuntimeAsync(canonicalChildId, 0));
+    }
+
+    [Fact]
+    public async Task RemoteSubagent_ChildAgentIdDiffersFromSessionId_AttachesCanonicalSession()
+    {
+        await using var fixture = await ScenarioFixture.CreateAsync(Session("parent-alias", background: true));
+        await using var parent = await fixture.OpenProxyAsync("parent-alias", AgentSessionOpenIntent.Start);
+        var owner = Assert.IsType<AgentChat>((await fixture.RuntimeAsync("parent-alias", 0)).Chat);
+        await owner.GetOrCreateAsync("child-alias", Definition("child"), "tool-call",
+            TestContext.Current.CancellationToken);
+        var canonical = Assert.IsType<AgentChat>(Assert.Single(owner.SubAgents)).AgentSessionId;
+        Assert.NotEqual("child-alias", canonical);
+        await fixture.SeedAsync(Session(canonical, background: true));
+
+        var descriptor = await parent.Client.OpenSubagentAsync(new OpenAgentSubagentRequest
+        {
+            AgentId = "child-alias", CommandId = Guid.NewGuid(),
+        }, TestContext.Current.CancellationToken);
+        await using var child = await fixture.OpenProxyAsync(
+            descriptor.AgentSessionId, AgentSessionOpenIntent.Attach,
+            descriptor.OwningProfileEntityId, descriptor.OwnershipGeneration);
+        Assert.Equal(canonical, descriptor.AgentSessionId);
+        Assert.Equal(canonical, child.Chat.Information.AgentSessionId);
+        Assert.Equal("child-alias", descriptor.AgentId);
+    }
+
+    [Fact]
+    public async Task RemoteSubagent_ParentAndChildViewers_CloseChildWithoutTerminatingOwner()
+    {
+        await using var fixture = await ScenarioFixture.CreateAsync(Session("parent-viewers", background: true));
+        await using var parent = await fixture.OpenProxyAsync("parent-viewers", AgentSessionOpenIntent.Start);
+        var parentRuntime = await fixture.RuntimeAsync("parent-viewers", 0);
+        var owner = Assert.IsType<AgentChat>(parentRuntime.Chat);
+        await owner.GetOrCreateAsync("child-viewer", Definition("child"), "tool-call",
+            TestContext.Current.CancellationToken);
+        var canonical = Assert.IsType<AgentChat>(Assert.Single(owner.SubAgents)).AgentSessionId;
+        await fixture.SeedAsync(Session(canonical));
+        var descriptor = await parent.Client.OpenSubagentAsync(new OpenAgentSubagentRequest
+        {
+            AgentId = "child-viewer", CommandId = Guid.NewGuid(),
+        }, TestContext.Current.CancellationToken);
+        var childRuntime = await fixture.RuntimeAsync(canonical, 0);
+        Assert.False(childRuntime.ContinueInBackground);
+        var childResource = new TrackingOwnedProcess();
+        Assert.IsType<AgentChat>(childRuntime.Chat).RegisterOwnedResource(childResource);
+        await using (var child = await fixture.OpenProxyAsync(
+            descriptor.AgentSessionId, AgentSessionOpenIntent.Attach,
+            descriptor.OwningProfileEntityId, descriptor.OwnershipGeneration))
+        {
+            Assert.NotSame(parentRuntime, await fixture.RuntimeAsync(canonical, 0));
+            Assert.True(parent.Chat.IsConnected);
+        }
+
+        Assert.Same(childRuntime, await fixture.RuntimeAsync(canonical, 0));
+        Assert.False(childRuntime.IsFenced);
+        Assert.False(childResource.IsDisposed);
+        Assert.Same(parentRuntime, await fixture.RuntimeAsync("parent-viewers", 0));
+        Assert.False(parentRuntime.IsFenced);
+        Assert.True(parent.Chat.IsConnected);
+    }
+
+    [Fact]
+    public async Task RemoteSubagent_ChildViewerRemainsAttachedAfterParentOwnerStops()
+    {
+        await using var fixture = await ScenarioFixture.CreateAsync(Session("parent-stops"));
+        await using var parent = await fixture.OpenProxyAsync(
+            "parent-stops", AgentSessionOpenIntent.Start);
+        var owner = await fixture.OwnerChatAsync("parent-stops", 0);
+        await owner.GetOrCreateAsync("surviving-child", Definition("child"), "tool-call",
+            TestContext.Current.CancellationToken);
+        var canonical = Assert.IsType<AgentChat>(Assert.Single(owner.SubAgents)).AgentSessionId;
+        await fixture.SeedAsync(Session(canonical));
+        await WaitForSubagentAsync(parent.Chat, "surviving-child");
+        var descriptor = await parent.Chat.OpenSubagentAsync(
+            "surviving-child", TestContext.Current.CancellationToken);
+        await using var child = await fixture.OpenProxyAsync(
+            canonical, AgentSessionOpenIntent.Attach,
+            descriptor.OwningProfileEntityId, descriptor.OwnershipGeneration);
+        var runtime = await fixture.RuntimeAsync(canonical, 0);
+        var childResource = new TrackingOwnedProcess();
+        Assert.IsType<AgentChat>(runtime.Chat).RegisterOwnedResource(childResource);
+        var parentRuntime = await fixture.RuntimeAsync("parent-stops", 0);
+        var parentTerminated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        parentRuntime.Terminated += (_, _) => parentTerminated.TrySetResult();
+        var childTerminated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        runtime.Terminated += (_, _) => childTerminated.TrySetResult();
+
+        await parent.Chat.DetachAsync(TestContext.Current.CancellationToken);
+        await parentTerminated.Task.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.Null(await fixture.TryRuntimeAsync("parent-stops", 0));
+        Assert.Same(runtime, await fixture.RuntimeAsync(canonical, 0));
+        Assert.True(child.Chat.IsConnected);
+        Assert.False(childResource.IsDisposed);
+
+        await child.Chat.DetachAsync(TestContext.Current.CancellationToken);
+        await childResource.Disposed;
+        await childTerminated.Task.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.Null(await fixture.TryRuntimeAsync(canonical, 0));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OpenSubagent_RestoredIdleOrCompletedChild_AttachReadsPersistedTranscript(bool completed)
+    {
+        await using var fixture = await ScenarioFixture.CreateAsync(Session("parent-history", background: true));
+        await fixture.EnableStoredAuthorizationAsync();
+        var restoredId = "restored-child-history";
+        if (completed)
+        {
+            await fixture.SeedAsync(Session(restoredId));
+            await fixture.PersistHistoryAsync(
+                restoredId, "child persisted question", "child persisted answer");
+            await fixture.Persistence.AddSubAgentLinkAsync(
+                "parent-history", restoredId, TestContext.Current.CancellationToken);
+        }
+        await using var parent = await fixture.OpenProxyAsync("parent-history", AgentSessionOpenIntent.Start);
+        var owner = await fixture.OwnerChatAsync("parent-history", 0);
+        string canonical;
+        string alias;
+        if (completed)
+        {
+            await owner.RestoreCompleted;
+            var restored = Assert.IsType<SubAgent>(Assert.Single(owner.SubAgents));
+            canonical = restored.SessionId.Value;
+            alias = ((IRunningSubAgent)restored).AgentId;
+            Assert.Equal(restoredId, canonical);
+        }
+        else
+        {
+            await owner.GetOrCreateAsync("child-history", Definition("child"), "tool-call",
+                TestContext.Current.CancellationToken);
+            var localChild = Assert.IsType<AgentChat>(Assert.Single(owner.SubAgents));
+            canonical = localChild.AgentSessionId;
+            alias = "child-history";
+            await fixture.SeedAsync(Session(canonical));
+            await fixture.PersistHistoryAsync(
+                canonical, "child persisted question", "child persisted answer");
+        }
+
+        await using var restoredParent = await fixture.OpenProxyAsync(
+            "parent-history", AgentSessionOpenIntent.Attach);
+        Assert.Equal(completed ? AgentChatCompletionState.Succeeded : AgentChatCompletionState.Running,
+            Assert.Single(restoredParent.Chat.SubAgents).CompletionState);
+        var descriptor = await restoredParent.Chat.OpenSubagentAsync(
+            alias, TestContext.Current.CancellationToken);
+        Assert.Equal(canonical, descriptor.AgentSessionId);
+        await using var child = await fixture.OpenProxyAsync(
+            descriptor.AgentSessionId, AgentSessionOpenIntent.Attach,
+            descriptor.OwningProfileEntityId, descriptor.OwnershipGeneration);
+        Assert.Equal(["child persisted question", "child persisted answer"], TextHistory(child.Chat));
+        Assert.DoesNotContain(restoredParent.Chat.History,
+            item => item.Contents.OfType<TextContent>().Any(
+                text => text.Text == "child persisted answer"));
+        Assert.Equal(completed ? AgentChatCompletionState.Succeeded : AgentChatCompletionState.Running,
+            Assert.Single(owner.SubAgents).CompletionState);
+    }
+
+    [AvaloniaFact]
+    public async Task ProductionComposition_RemoteChild_AttachesThroughRegistryAndDisplaysPersistedHistoryFailureAndViewerRelease()
+    {
+        await using var fixture = await ScenarioFixture.CreateAsync(Session("gui-parent", background: true));
+        await fixture.EnableStoredAuthorizationAsync();
+        await using var ownerViewer = await fixture.OpenProxyAsync("gui-parent", AgentSessionOpenIntent.Start);
+        var owner = await fixture.OwnerChatAsync("gui-parent", 0);
+        await owner.GetOrCreateAsync("gui-child", Definition("child"), "tool-call",
+            TestContext.Current.CancellationToken);
+        var canonical = Assert.IsType<AgentChat>(Assert.Single(owner.SubAgents)).AgentSessionId;
+        await fixture.SeedAsync(Session(canonical));
+        await fixture.PersistHistoryAsync(canonical, "real child question", "real child answer");
+
+        await using var parent = await fixture.OpenProxyAsync(
+            "gui-parent", AgentSessionOpenIntent.Attach,
+            foregroundScheduler: TaskScheduler.FromCurrentSynchronizationContext());
+        Assert.Single(parent.Chat.SubAgents);
+        await using var window = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await window.InitializeAsync();
+        var id = new EntityId();
+        var entity = await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(
+            MainWindowIntegrationTests.GetEntityBroker(window), id,
+            $$"""
+            {
+              "entity-id": "{{id}}",
+              "entity-types": ["entity", "agent-session"],
+              "names": [["tests", "agent-sessions", "gui-parent"]],
+              "display-name": { "default": "GUI Parent" },
+              "agent-session-id": "gui-parent",
+              "host-profile-entity-id": "{{ScenarioFixture.DefaultOwner}}"
+            }
+            """);
+        Assert.NotNull(entity);
+        var registry = fixture.CreateProfileTransportRegistry();
+        await using var handler = new OpenAgentSessionShortcutHandler(
+            new AgentSessionShortcutContext(),
+            MainWindowIntegrationTests.CreateLocalTrustedExecutorSelector(),
+            MainWindowIntegrationTests.CreateTestRunningAgentChatTable(),
+            new AgentSessionOwnerDecisionProvider(),
+            registry);
+        using var logger = new ObservableLoggerFactory();
+        var tab = new AgentSessionWorkspaceTabViewModel { Id = id.ToString(), Title = "GUI Parent", Entity = entity };
+        await using var view = handler.ComposeSessionAgentViewModel(new ComposeSessionAgentViewModelOptions
+        {
+            MainWindowViewModel = window,
+            AgentSessionEntity = entity,
+            Tab = tab,
+            AgentChat = parent.Chat,
+            LoggerFactory = logger,
+            ForegroundScheduler = TaskScheduler.FromCurrentSynchronizationContext(),
+        });
+
+        fixture.DeniedSessionId = canonical;
+        view.NavigateToAgent("gui-child");
+        await view.WaitForRemoteChildAsync("gui-child");
+        Assert.Equal("sub-agent-gui-child", view.SelectedEditorItem?.Id);
+        Assert.IsType<Phantom.Workspaces.Agent.Gui.ViewModels.AgentChatPlaceholderDetailViewModel>(
+            view.SelectedEditorItem?.DetailContent);
+        Assert.Null(await fixture.TryRuntimeAsync(canonical, 0));
+
+        fixture.DeniedSessionId = null;
+        view.NavigateToAgent(canonical);
+        await view.WaitForRemoteChildAsync("gui-child");
+        var slot = Assert.Single(view.SubAgentsContainer.Slots);
+        Assert.Same(slot.SubAgentViewModel.ConversationDetail, view.SelectedEditorItem?.DetailContent);
+        Assert.Equal(canonical, slot.SubAgentViewModel.AgentChat.Information.AgentSessionId);
+        Assert.Contains(slot.SubAgentViewModel.History,
+            item => item.Contents.OfType<TextContent>().Any(text => text.Text == "real child answer"));
+        Assert.DoesNotContain(view.History,
+            item => item.Contents.OfType<TextContent>().Any(text => text.Text == "real child answer"));
+        Assert.Equal(1, (await fixture.RuntimeAsync(canonical, 0)).ViewerCount);
+        Assert.Equal(ScenarioFixture.DefaultOwner, Assert.Single(fixture.ProfileConnections));
+
+        await view.DisposeViewResourcesAsync();
+        Assert.Equal(0, (await fixture.RuntimeAsync(canonical, 0)).ViewerCount);
+        Assert.False((await fixture.RuntimeAsync(canonical, 0)).IsFenced);
+        Assert.True(parent.Chat.IsConnected);
+    }
+
+    [Fact]
+    public async Task ProductionBoundary_UnauthenticatedTransport_CannotOpenRemoteSession()
+    {
+        await using var fixture = await ScenarioFixture.CreateAsync(Session("authenticated-parent"));
+        await using var anonymous = fixture.CreateUnauthenticatedTransport();
+        var failure = await Assert.ThrowsAsync<RemoteAgentStatusException>(() =>
+            RemoteAgentSessionClient.GetStatusAsync(new AgentSessionStatusRequest
+            {
+                Transport = anonymous,
+                OpenRequest = fixture.OpenRequest(
+                    "authenticated-parent", AgentSessionOpenIntent.Status,
+                    ScenarioFixture.DefaultOwner, 0, Guid.NewGuid().ToString("N")),
+            }, TestContext.Current.CancellationToken));
+        Assert.Equal("status-transport-failure", failure.ReasonCode);
+        Assert.Null(await fixture.TryRuntimeAsync("authenticated-parent", 0));
+    }
+
+    [Fact]
+    public async Task RemoteSubagent_UnauthorizedChild_DoesNotStartRuntime()
+    {
+        await using var fixture = await ScenarioFixture.CreateAsync(Session("parent-allowed", background: true));
+        await using var parent = await fixture.OpenProxyAsync("parent-allowed", AgentSessionOpenIntent.Start);
+        var owner = Assert.IsType<AgentChat>((await fixture.RuntimeAsync("parent-allowed", 0)).Chat);
+        await owner.GetOrCreateAsync("child-denied", Definition("child"), "tool-call",
+            TestContext.Current.CancellationToken);
+        var canonical = Assert.IsType<AgentChat>(Assert.Single(owner.SubAgents)).AgentSessionId;
+        await fixture.SeedAsync(Session(canonical));
+        fixture.DeniedSessionId = canonical;
+
+        var rejected = await Assert.ThrowsAsync<RemoteAgentSessionException>(async () =>
+            await parent.Client.OpenSubagentAsync(new OpenAgentSubagentRequest
+            {
+                AgentId = "child-denied", CommandId = Guid.NewGuid(),
+            }, TestContext.Current.CancellationToken));
+        Assert.Equal("unauthorized", rejected.Code);
+        Assert.Null(await fixture.TryRuntimeAsync(canonical, 0));
+        Assert.True(parent.Chat.IsConnected);
     }
 
     [Fact]
@@ -948,6 +1259,38 @@ public sealed class RemoteAgentSessionScenarioTests
         void Remove() => chat.InputQueues.Changed -= OnChanged;
     }
 
+    private static Task WaitForCursorAsync(RemoteAgentSessionClient client, long sequence)
+    {
+        var arrived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        client.FrameReceived += OnFrame;
+        if (client.LastAppliedCursor?.Sequence >= sequence)
+            arrived.TrySetResult();
+        return WaitAndUnsubscribeAsync(arrived.Task, Remove);
+
+        void OnFrame(object? sender, AgentSessionServerFrame frame)
+        {
+            if (frame.Sequence >= sequence) arrived.TrySetResult();
+        }
+
+        void Remove() => client.FrameReceived -= OnFrame;
+    }
+
+    private static Task WaitForSubagentAsync(RemoteAgentChat chat, string agentId)
+    {
+        var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ((INotifyCollectionChanged)chat.SubAgents).CollectionChanged += OnChanged;
+        OnChanged(null, default!);
+        return WaitAndUnsubscribeAsync(changed.Task, Remove);
+
+        void OnChanged(object? sender, NotifyCollectionChangedEventArgs args)
+        {
+            if (chat.SubAgents.Any(child => child.AgentId == agentId))
+                changed.TrySetResult();
+        }
+
+        void Remove() => ((INotifyCollectionChanged)chat.SubAgents).CollectionChanged -= OnChanged;
+    }
+
     private static Task WaitForHistoryCountAsync(IAgentChat chat, int count)
     {
         if (chat.History.Count >= count)
@@ -1186,6 +1529,7 @@ public sealed class RemoteAgentSessionScenarioTests
         private readonly RemoteAgentSessionRuntimeRegistry runtimes;
         private readonly AgentSessionTransportListener productionListener;
         private readonly TransportRegistry transportRegistry = new();
+        private readonly TransportPeerIdentityProvider peerIdentities = new();
         private readonly Dictionary<string, EntityId> sessionEntities = new(StringComparer.Ordinal);
         private readonly List<ReconnectableLocalTransport> transports = [];
 
@@ -1206,13 +1550,13 @@ public sealed class RemoteAgentSessionScenarioTests
                 Time,
                 new AgentServices { ChatClientOverride = this.Model });
             var host = new RemoteAgentSessionHost(
-                new AllowAllAuthorizer(),
+                new AllowAllAuthorizer(this),
                 this.runtimes,
                 runtimeFactory);
             this.productionListener = new AgentSessionTransportListener(
-                host,
-                new FixedPeerIdentityProvider());
-            this.Listener = new ObservableTransportListener(this.productionListener);
+                host, this.peerIdentities);
+            this.Listener = new ObservableTransportListener(
+                this.productionListener, this.peerIdentities);
             this.transportRegistry.Register(this.Listener);
         }
 
@@ -1221,6 +1565,70 @@ public sealed class RemoteAgentSessionScenarioTests
         internal DeterministicTestChatClient Model { get; } = new();
         internal InMemoryAgentPersistenceStore Persistence { get; }
         internal ObservableTransportListener Listener { get; }
+        internal string? DeniedSessionId { get; set; }
+        internal bool EnforceStoredAuthorization { get; private set; }
+        internal List<string> ProfileConnections { get; } = [];
+
+        internal ValueTask<AgentSessionAuthorizationDecision> AuthorizeStoredAsync(
+            TransportPeerIdentity peer, AgentSessionAuthorizationRequest request, CancellationToken ct)
+            => new AgentSessionAttachAuthorizer(this.data, this.runtimes)
+                .AuthorizeAsync(peer, request, ct);
+
+        internal async Task EnableStoredAuthorizationAsync()
+        {
+            using var profile = JsonDocument.Parse(
+                $$"""
+                {
+                  "entity-id": "{{DefaultOwner}}",
+                  "entity-types": ["entity", "user-computer-profile"],
+                  "names": [["tests", "scenario-owner"]],
+                  "user-entity-id": "{{DefaultOwner}}"
+                }
+                """);
+            var result = await this.data.UpdateAsync(new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown { Text = "Seed authenticated scenario owner" },
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = new EntityId(DefaultOwner),
+                        Data = profile.RootElement.Clone(),
+                        EntityChangeMode = EntityChangeMode.Replace,
+                    },
+                ],
+            }, TestContext.Current.CancellationToken);
+            Assert.Empty(Assert.Single(result.EntityResults).Errors);
+            this.EnforceStoredAuthorization = true;
+        }
+
+        internal ITransportFactoryRegistry CreateProfileTransportRegistry()
+        {
+            var factory = new TransportFactoryRegistry();
+            factory.Register(new ScenarioProfileTransportFactory(this));
+            return factory;
+        }
+
+        internal async Task PersistHistoryAsync(string sessionId, string question, string answer)
+        {
+            await this.Persistence.StoreAsync(new StoreRequestAgent
+            {
+                Agent = new PersistedAgent
+                {
+                    AgentSessionId = sessionId,
+                    AgentDefinitionJson = BsonDocument.Parse(Definition("child").ToJson()),
+                    AgentSessionJson = BsonDocument.Parse($$"""{"session-id":"{{sessionId}}"}"""),
+                },
+                NewMessages =
+                [
+                    new ChatMessage(ChatRole.User, question),
+                    new ChatMessage(ChatRole.Assistant, answer),
+                ],
+            }, TestContext.Current.CancellationToken);
+        }
 
         internal static async Task<ScenarioFixture> CreateAsync(params ScenarioSession[] sessions)
         {
@@ -1228,6 +1636,22 @@ public sealed class RemoteAgentSessionScenarioTests
             foreach (var session in sessions)
                 await fixture.SeedAsync(session);
             return fixture;
+        }
+
+        private sealed class ScenarioProfileTransportFactory(ScenarioFixture fixture) : ITransportFactory
+        {
+            public Task<ITransport?> ConnectToAsync(JsonElement descriptor, CancellationToken ct = default)
+            {
+                if (!descriptor.TryGetProperty("type", out var type)
+                    || type.GetString() != "user-computer-profile")
+                    return Task.FromResult<ITransport?>(null);
+                var owner = descriptor.GetProperty("entity-id").GetString()!;
+                fixture.ProfileConnections.Add(owner);
+                return Task.FromResult<ITransport?>(owner == ScenarioFixture.DefaultOwner
+                    ? fixture.CreateTransport() : null);
+            }
+
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         }
 
         internal async Task SeedAsync(ScenarioSession session)
@@ -1274,10 +1698,19 @@ public sealed class RemoteAgentSessionScenarioTests
 
         internal ReconnectableLocalTransport CreateTransport()
         {
-            var transport = new ReconnectableLocalTransport(this.transportRegistry);
+            var transport = new ReconnectableLocalTransport(
+                this.transportRegistry, channel => this.peerIdentities.SetIdentity(channel,
+                    new TransportPeerIdentity
+                    {
+                        AuthenticationScheme = "scenario-local",
+                        StablePeerId = "gui-client",
+                        UserEntityId = DefaultOwner,
+                    }));
             this.transports.Add(transport);
             return transport;
         }
+
+        internal LocalTransport CreateUnauthenticatedTransport() => new(this.transportRegistry);
 
         internal async Task<ProxyHandle> OpenProxyAsync(
             string sessionId,
@@ -1376,7 +1809,8 @@ public sealed class RemoteAgentSessionScenarioTests
         }
     }
 
-    private sealed class ReconnectableLocalTransport(TransportRegistry registry) : ITransport
+    private sealed class ReconnectableLocalTransport(
+        TransportRegistry registry, Action<IMessageChannel> authenticateServerChannel) : ITransport
     {
         private readonly object gate = new();
         private readonly List<LocalTransport> connections = [];
@@ -1391,7 +1825,7 @@ public sealed class RemoteAgentSessionScenarioTests
             lock (this.gate)
             {
                 ObjectDisposedException.ThrowIf(this.disposed, this);
-                connection = new LocalTransport(registry);
+                connection = new LocalTransport(registry, authenticateServerChannel);
                 this.connections.Add(connection);
             }
             var channel = await connection.ConnectToMessageChannelAsync(request, ct);
@@ -1427,7 +1861,8 @@ public sealed class RemoteAgentSessionScenarioTests
         }
     }
 
-    private sealed class ObservableTransportListener(AgentSessionTransportListener inner)
+    private sealed class ObservableTransportListener(
+        AgentSessionTransportListener inner, TransportPeerIdentityProvider peerIdentities)
         : ITransportListener
     {
         internal ObservableChannel LastChannel { get; private set; } = null!;
@@ -1436,6 +1871,8 @@ public sealed class RemoteAgentSessionScenarioTests
             JsonElement request, IMessageChannel channel, CancellationToken ct = default)
         {
             this.LastChannel = new ObservableChannel(channel);
+            peerIdentities.SetIdentity(
+                this.LastChannel, peerIdentities.GetRequiredIdentity(channel));
             return inner.OnChannelOpenAsync(request, this.LastChannel, ct);
         }
 
@@ -1622,25 +2059,20 @@ public sealed class RemoteAgentSessionScenarioTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
-    private sealed class AllowAllAuthorizer : IAgentSessionAttachAuthorizer
+    private sealed class AllowAllAuthorizer(ScenarioFixture fixture) : IAgentSessionAttachAuthorizer
     {
-        public ValueTask<AgentSessionAuthorizationDecision> AuthorizeAsync(
+        public async ValueTask<AgentSessionAuthorizationDecision> AuthorizeAsync(
             TransportPeerIdentity peer,
             AgentSessionAuthorizationRequest request,
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
-            return ValueTask.FromResult(new AgentSessionAuthorizationDecision { IsAllowed = true });
+            if (request.AgentSessionId == fixture.DeniedSessionId)
+                return new AgentSessionAuthorizationDecision { IsAllowed = false };
+            return fixture.EnforceStoredAuthorization
+                ? await fixture.AuthorizeStoredAsync(peer, request, ct)
+                : new AgentSessionAuthorizationDecision { IsAllowed = true };
         }
     }
 
-    private sealed class FixedPeerIdentityProvider : ITransportPeerIdentityProvider
-    {
-        public TransportPeerIdentity GetRequiredIdentity(IMessageChannel channel) => new()
-        {
-            AuthenticationScheme = "scenario",
-            StablePeerId = "gui-client",
-            UserEntityId = ScenarioFixture.DefaultOwner,
-        };
-    }
 }
