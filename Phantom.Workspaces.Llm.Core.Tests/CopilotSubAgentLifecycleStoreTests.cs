@@ -26,17 +26,120 @@ public sealed class CopilotSubAgentLifecycleStoreTests
     }
 
     [Fact]
-    public void CopilotSubAgentLifecycleStore_IdleThenRunningTask_KeepsChatActive()
+    public void CopilotSubAgentLifecycleStore_IdleThenRunningTask_ReactivatesSameChat()
     {
         var store = new CopilotSubAgentLifecycleStore();
         store.Apply(new("child", CopilotSubAgentLifecycleLayer.Invocation, "completed", InvocationToolCallId: "call"));
         store.Apply(new("child", CopilotSubAgentLifecycleLayer.Task, "idle", TaskId: "task"));
-        Assert.True(store.IsActive("child"));
+        Assert.False(store.IsActive("child"));
         store.Apply(new("child", CopilotSubAgentLifecycleLayer.Task, "running", TaskId: "task"));
         Assert.True(store.IsActive("child"));
         Assert.True(store.IsInvocationTerminal("call"));
         store.Apply(new("child", CopilotSubAgentLifecycleLayer.Task, "completed", TaskId: "task"));
         Assert.False(store.IsActive("child"));
+    }
+
+    [Fact]
+    public void CopilotSubAgentLifecycleStore_RunningThenIdleTask_MarksChatInactiveDespiteStaleInvocationAndSession()
+    {
+        var store = new CopilotSubAgentLifecycleStore();
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Session, "waiting", StatusRevision: 1));
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Invocation, "running", InvocationToolCallId: "call"));
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Task, "running", TaskId: "task", InvocationToolCallId: "call"));
+        Assert.True(store.IsActive("child"));
+        store.ReplaceTasks([new("child", CopilotSubAgentLifecycleLayer.Task, "idle",
+            TaskId: "task", InvocationToolCallId: "call")]);
+        Assert.False(store.IsActive("child"));
+        Assert.True(store.IsInvocationTerminal("call"));
+
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Invocation, "running", InvocationToolCallId: "new"));
+        Assert.True(store.IsActive("child"));
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Invocation, "completed", InvocationToolCallId: "new"));
+        Assert.False(store.IsActive("child"));
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Task, "running", TaskId: "other"));
+        Assert.True(store.IsActive("child"));
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Task, "completed", TaskId: "other"));
+        Assert.False(store.IsActive("child"));
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Session, "waiting", StatusRevision: 2));
+        Assert.False(store.IsActive("child"));
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Session, "attention", StatusRevision: 3));
+        Assert.False(store.IsActive("child"));
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Session, "working", StatusRevision: 4));
+        Assert.False(store.IsActive("child"));
+    }
+
+    [Fact]
+    public void CopilotSubAgentLifecycleStore_RegistryPollAfterIdle_DoesNotReactivateUntilNewWork()
+    {
+        var store = new CopilotSubAgentLifecycleStore();
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Session, "working", StatusRevision: 1));
+        store.ReplaceTasks([new("child", CopilotSubAgentLifecycleLayer.Task, "idle",
+            TaskId: "task", InvocationToolCallId: "call")]);
+        for (var revision = 2; revision <= 5; revision++)
+        {
+            store.Apply(new("child", CopilotSubAgentLifecycleLayer.Session,
+                revision % 2 == 0 ? "waiting" : "working", StatusRevision: revision));
+            Assert.False(store.IsActive("child"));
+        }
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Task, "running", TaskId: "task",
+            InvocationToolCallId: "call"));
+        Assert.True(store.IsActive("child"));
+        store.ReplaceTasks([new("child", CopilotSubAgentLifecycleLayer.Task, "idle",
+            TaskId: "task", InvocationToolCallId: "call")]);
+        Assert.False(store.IsActive("child"));
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Invocation, "running", InvocationToolCallId: "new"));
+        Assert.True(store.IsActive("child"));
+    }
+
+    [Fact]
+    public void CopilotSubAgentLifecycleStore_IdleThenEmptySnapshot_KeepsRegistrySuppressedUntilNewExecution()
+    {
+        var store = new CopilotSubAgentLifecycleStore();
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Session, "working", StatusRevision: 1));
+        store.ReplaceTasks([new("child", CopilotSubAgentLifecycleLayer.Task, "idle",
+            TaskId: "old", InvocationToolCallId: "old-call")]);
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Session, "waiting", StatusRevision: 2));
+        store.ReplaceTasks([]);
+        Assert.False(store.IsActive("child"));
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Session, "working", StatusRevision: 3));
+        Assert.False(store.IsActive("child"));
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Invocation, "running", InvocationToolCallId: "fresh"));
+        Assert.True(store.IsActive("child"));
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Invocation, "completed", InvocationToolCallId: "fresh"));
+        Assert.False(store.IsActive("child"));
+    }
+
+    [Theory]
+    [InlineData("failed")]
+    [InlineData("cancelled")]
+    public void CopilotSubAgentLifecycleStore_TerminalOutcomeSurvivesEmptySnapshotUntilNewExecution(string outcome)
+    {
+        var store = new CopilotSubAgentLifecycleStore();
+        store.ReplaceTasks([new("child", CopilotSubAgentLifecycleLayer.Task, outcome,
+            TaskId: "old", InvocationToolCallId: "old-call")]);
+        store.ReplaceTasks([]);
+        Assert.Equal(outcome, store.LastNonrunningTaskState("child"));
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Session, "working", StatusRevision: 10));
+        Assert.False(store.IsActive("child"));
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Task, "running", TaskId: "new",
+            InvocationToolCallId: "new-call"));
+        Assert.Null(store.LastNonrunningTaskState("child"));
+        Assert.True(store.IsActive("child"));
+    }
+
+    [Fact]
+    public void CopilotSubAgentLifecycleStore_TerminalOnlySnapshot_KeepsStaleWaitingSessionSuppressed()
+    {
+        var store = new CopilotSubAgentLifecycleStore();
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Session, "waiting", StatusRevision: 1));
+        store.ReplaceTasks([new("child", CopilotSubAgentLifecycleLayer.Task, "completed",
+            TaskId: "old", InvocationToolCallId: "old-call")]);
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Session, "waiting", StatusRevision: 2));
+        Assert.False(store.IsActive("child"));
+        store.ReplaceTasks([]);
+        Assert.False(store.IsActive("child"));
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Task, "running", TaskId: "fresh"));
+        Assert.True(store.IsActive("child"));
     }
 
     [Fact]

@@ -553,21 +553,31 @@ public sealed class RemoteAgentChat : IAgentChat
 
     private void ReplaceSubagents(IReadOnlyList<JsonElement> values)
     {
-        var next = values.Select(RemoteRunningSubagent.FromJson).ToArray();
-        for (var i = this.subagents.Count - 1; i >= 0; i--)
+        var desired = values.Select(RemoteRunningSubagent.FromJson).ToArray();
+        for (var index = 0; index < desired.Length; index++)
         {
-            if (!next.Any(child => child.AgentId == this.subagents[i].AgentId))
-                this.subagents.RemoveAt(i);
+            var incoming = desired[index];
+            var existingIndex = -1;
+            for (var search = index; search < this.subagents.Count; search++)
+            {
+                if (this.subagents[search].AgentId != incoming.AgentId) continue;
+                existingIndex = search;
+                break;
+            }
+            if (existingIndex < 0)
+                this.subagents.Insert(index, incoming);
+            else
+            {
+                if (existingIndex != index) this.subagents.Move(existingIndex, index);
+                var current = (RemoteRunningSubagent)this.subagents[index];
+                if (current.AgentSessionId != incoming.AgentSessionId)
+                    this.subagents[index] = incoming;
+                else
+                    current.Update(incoming);
+            }
         }
-        for (var i = 0; i < next.Length; i++)
-        {
-            var current = this.subagents.FirstOrDefault(child => child.AgentId == next[i].AgentId);
-            if (current is null) this.subagents.Insert(i, next[i]);
-            else if (current is RemoteRunningSubagent previous
-                && previous.AgentSessionId != next[i].AgentSessionId)
-                this.subagents[this.subagents.IndexOf(current)] = next[i];
-            else ((RemoteRunningSubagent)current).Update(next[i]);
-        }
+        while (this.subagents.Count > desired.Length)
+            this.subagents.RemoveAt(this.subagents.Count - 1);
     }
 
     private void EnqueueLocalNote(string text, ChatRole role)
@@ -862,21 +872,25 @@ public sealed class RemoteAgentChat : IAgentChat
     {
         public required string AgentId { get; init; }
         public string AgentSessionId { get; set; } = string.Empty;
-        public required string DisplayName { get; init; }
-        public required string Description { get; init; }
-        public string Name { get; init; } = string.Empty;
+        public required string DisplayName { get; set; }
+        public required string Description { get; set; }
+        public string Name { get; set; } = string.Empty;
         public AgentChatCompletionState CompletionState { get; set; }
         public DateTime LastUpdatedAt { get; set; }
         [System.Text.Json.Serialization.JsonIgnore]
         public IReadOnlyList<IRunningSubAgent> SubAgents { get; private set; } = [];
         public event EventHandler? CompletionStateChanged;
 
-        internal void Update(RemoteRunningSubagent next)
+        internal void Update(RemoteRunningSubagent incoming)
         {
-            this.AgentSessionId = next.AgentSessionId;
-            this.CompletionState = next.CompletionState;
-            this.LastUpdatedAt = next.LastUpdatedAt;
-            this.SubAgents = next.SubAgents;
+            this.AgentSessionId = incoming.AgentSessionId;
+            this.DisplayName = incoming.DisplayName;
+            this.Description = incoming.Description;
+            this.Name = incoming.Name;
+            this.LastUpdatedAt = incoming.LastUpdatedAt;
+            this.SubAgents = incoming.SubAgents;
+            if (this.CompletionState == incoming.CompletionState) return;
+            this.CompletionState = incoming.CompletionState;
             this.CompletionStateChanged?.Invoke(this, EventArgs.Empty);
         }
 
