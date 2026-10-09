@@ -424,6 +424,49 @@ public sealed class ExternalEntityCardViewModelTests
         Assert.Equal(EntityCardViewResolver.RawViewName, viewName);
     }
 
+    [AvaloniaFact]
+    public void EntityCardViewResolver_ExternalAndNote_ReturnsCompositeViewName()
+    {
+        var entity = new SubscribedEntityViewModel(MixedExternalNoteTestData.CreateSnapshot());
+        var resolver = new EntityCardViewResolver();
+
+        Assert.Equal("external-note", resolver.ResolveViewName(entity));
+        Assert.Equal(EntityCardViewResolver.RawViewName,
+            resolver.ResolveViewName(entity, EntityCardViewResolver.RawViewName));
+    }
+
+    [AvaloniaFact]
+    public async Task EntityWorkspaceTab_ExternalAndNote_LateRegisteredOpenerSurvivesSnapshotRefresh()
+    {
+        await using var owner = new MainWindowViewModel(new UnknownRepositorySource());
+        var entity = new SubscribedEntityViewModel(MixedExternalNoteTestData.CreateSnapshot());
+        var tab = new EntityWorkspaceTabViewModel(mainWindowViewModel: owner)
+        {
+            Id = "mixed-external-note-test",
+            Title = "Mixed external note",
+            Entity = entity,
+        };
+        var card = tab.EntityCardNode!.Card;
+        Assert.Equal("external-note", card.CardViewName);
+        Assert.True(card.ShowFieldEditors);
+        var initial = Assert.Single(card.ExternalCard!.Urls);
+        await ClickAsync(initial);
+        Assert.Contains("unavailable", initial.ErrorMessage);
+
+        var opener = new RecordingOpener();
+        owner.ApplicationServices.SetUrlOpener(opener);
+        await ClickAsync(initial);
+
+        entity.UpdateSnapshot(MixedExternalNoteTestData.CreateSnapshot(
+            url: "https://example.com/second", body: "# Second note"));
+        Assert.Equal("external-note", card.CardViewName);
+        Assert.True(card.ShowFieldEditors);
+        await ClickAsync(Assert.Single(card.ExternalCard!.Urls));
+
+        Assert.Equal(new[] { "https://example.com/first", "https://example.com/second" },
+            opener.Requests.Select(request => request.Url));
+    }
+
     private static EntitySnapshot CreateExternalEntity(string urlsJson)
     {
         var json = $$"""
@@ -449,5 +492,40 @@ public sealed class ExternalEntityCardViewModelTests
             Data = document.RootElement.Clone(),
             Relationships = Array.Empty<EntitySnapshot>(),
         };
+    }
+
+    internal static class MixedExternalNoteTestData
+    {
+        public static EntitySnapshot CreateSnapshot(
+            string types = "\"entity\", \"external\", \"note\"",
+            string url = "https://example.com/first",
+            string body = "# First note")
+        {
+            using var document = JsonDocument.Parse(
+                $$"""
+                {
+                  "entity-id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                  "entity-types": [{{types}}],
+                  "names": [["externals", "my-link"]],
+                  "display-name": { "default": "My Link" },
+                  "urls": { "default": {{JsonSerializer.Serialize(url)}} },
+                  "content": {
+                    "default": {
+                      "mime-type": "text/markdown",
+                      "content": { "text": {{JsonSerializer.Serialize(body)}} }
+                    }
+                  },
+                  "internal-metadata": "must never appear"
+                }
+                """);
+            return new EntitySnapshot
+            {
+                EntityId = new EntityId("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+                ConcurrencyTag = new ConcurrencyTag("1"),
+                ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, Guid.NewGuid().ToString()),
+                Data = document.RootElement.Clone(),
+                Relationships = Array.Empty<EntitySnapshot>(),
+            };
+        }
     }
 }

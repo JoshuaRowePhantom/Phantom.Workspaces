@@ -23,6 +23,44 @@ namespace Phantom.Workspaces.Tests;
 public sealed class EntityCardControlTests
 {
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityCardControl_ExternalAndNote_RendersLinksAndNoteMarkdown()
+    {
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(), TestContext.Current.CancellationToken);
+        var catalog = await EntityTypeViewCatalog.CreateAsync(broker);
+        var entity = new SubscribedEntityViewModel(
+            ExternalEntityCardViewModelTests.MixedExternalNoteTestData.CreateSnapshot(
+                types: "\"entity\", \"tool\", \"external\", \"note\""));
+        var vm = new EntityCardViewModel(
+            entity, cardViewName: new EntityCardViewResolver().ResolveViewName(entity),
+            fieldEditorFactory: new FieldEditorFactory(broker, catalog));
+        Assert.Empty(vm.FieldEditors);
+
+        var window = new Window { Content = new EntityCardControl { DataContext = vm } };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            await vm.FieldEditorsBuildTask;
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.True(vm.ShowFieldEditors);
+            Assert.Equal("content", Assert.Single(vm.FieldEditors).FieldName);
+            Assert.Single(window.GetVisualDescendants().OfType<Button>(),
+                button => button.Classes.Contains("workspace-url-link")
+                    && (string?)button.Content == "https://example.com/first");
+            Assert.Single(window.GetVisualDescendants().OfType<WorkspaceMarkdownView>(),
+                view => view.Markdown == "# First note");
+            Assert.DoesNotContain(window.GetVisualDescendants().OfType<TextBlock>(),
+                block => block.Text is { } text && text.Contains("must never appear", StringComparison.Ordinal));
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task EntityCardControl_ToolAndNote_RendersNoteMarkdown()
     {
         var card = new EntityCardControl { DataContext = await BuildToolNoteCardViewModelAsync() };

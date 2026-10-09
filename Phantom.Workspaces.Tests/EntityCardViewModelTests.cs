@@ -12,6 +12,60 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityCardViewModelTests : IAsyncDisposable
 {
+    [AvaloniaFact]
+    public async Task EntityCardViewModel_ExternalAndNote_SnapshotUpdateRefreshesLinksAndContent()
+    {
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(), TestContext.Current.CancellationToken);
+        var catalog = await EntityTypeViewCatalog.CreateAsync(broker);
+        var entity = new SubscribedEntityViewModel(ExternalEntityCardViewModelTests.MixedExternalNoteTestData.CreateSnapshot());
+        var card = new EntityCardViewModel(entity,
+            fieldEditorFactory: new FieldEditorFactory(broker, catalog),
+            autoResolveCardView: true);
+        Assert.Empty(card.FieldEditors);
+        card.EnsureFieldEditorsBuilt();
+        await card.FieldEditorsBuildTask;
+        Assert.Equal("content", Assert.Single(card.FieldEditors).FieldName);
+
+        entity.UpdateSnapshot(ExternalEntityCardViewModelTests.MixedExternalNoteTestData.CreateSnapshot(
+            url: "https://example.com/second", body: "# Second note"));
+        await card.FieldEditorsBuildTask;
+
+        Assert.Equal("external-note", card.CardViewName);
+        Assert.True(card.ShowFieldEditors);
+        Assert.Equal("https://example.com/second", Assert.Single(card.ExternalCard!.Urls).Url);
+        var editor = Assert.IsType<LocalizedMimeAttachmentFieldEditorViewModel>(Assert.Single(card.FieldEditors));
+        Assert.Equal("# Second note",
+            Assert.IsType<MarkdownMimeAttachmentFieldEditorViewModel>(editor.ActiveEditor).TextContent);
+
+        entity.UpdateSnapshot(ExternalEntityCardViewModelTests.MixedExternalNoteTestData.CreateSnapshot(
+            types: "\"entity\", \"note\""));
+        await card.FieldEditorsBuildTask;
+        Assert.Equal("raw", card.CardViewName);
+        Assert.Null(card.ExternalCard);
+        Assert.True(card.ShowFieldEditors);
+
+        entity.UpdateSnapshot(ExternalEntityCardViewModelTests.MixedExternalNoteTestData.CreateSnapshot());
+        await card.FieldEditorsBuildTask;
+        Assert.Equal("external-note", card.CardViewName);
+        Assert.NotNull(card.ExternalCard);
+        Assert.Equal("content", Assert.Single(card.FieldEditors).FieldName);
+    }
+
+    [AvaloniaFact]
+    public void EntityCardViewModel_ExplicitRaw_RemainsRawAfterTypeChange()
+    {
+        var entity = new SubscribedEntityViewModel(
+            ExternalEntityCardViewModelTests.MixedExternalNoteTestData.CreateSnapshot(
+                types: "\"entity\", \"note\""));
+        var card = new EntityCardViewModel(entity, cardViewName: EntityCardViewResolver.RawViewName);
+
+        entity.UpdateSnapshot(ExternalEntityCardViewModelTests.MixedExternalNoteTestData.CreateSnapshot());
+
+        Assert.Equal(EntityCardViewResolver.RawViewName, card.CardViewName);
+        Assert.Null(card.ExternalCard);
+    }
+
     private readonly MainWindowViewModel mainWindowViewModel;
 
     public EntityCardViewModelTests()
