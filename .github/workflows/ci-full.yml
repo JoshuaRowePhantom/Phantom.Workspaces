@@ -73,7 +73,11 @@ jobs:
         run: |
           dotnet test Phantom.Workspaces.slnx --no-restore --nologo -v minimal `
             -maxcpucount:1 `
-            --filter "Category!=SlowDocker & Category!=RequiresLocalConsole"
+            --filter "Category!=SlowDocker & Category!=RequiresLocalConsole" 2>&1 |
+            Tee-Object -FilePath scripts/test-results.log
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
 
       - name: Upload Windows test logs
         if: always()
