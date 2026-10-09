@@ -109,6 +109,14 @@ jobs:
         shell: pwsh
         run: .\scripts\run-tests.ps1 -Mode full -TestNames Phantom.Workspaces.Data.MongoDB.Tests -PerTestHangTimeout 10m
 
+      - name: Diagnose MongoDB container on failure
+        if: failure()
+        run: |
+          docker ps -a --filter name=pw-mongodb-test
+          docker inspect pw-mongodb-test --format '{{json .State}}' || true
+          docker logs --tail 150 pw-mongodb-test 2>&1 || true
+          free -h
+
       - name: Upload Linux test logs
         if: always()
         uses: actions/upload-artifact@v7
