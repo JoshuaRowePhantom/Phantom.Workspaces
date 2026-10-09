@@ -98,11 +98,16 @@ jobs:
       - name: Set up build
         uses: ./.github/actions/setup-build
 
+      # Pull before the test host starts: Atlas Local's cold image download can exceed the
+      # test harness's per-test inactivity watchdog on a fresh hosted runner.
+      - name: Pull MongoDB Atlas Local image
+        run: docker pull mongodb/mongodb-atlas-local:latest
+
       # Only the platform-agnostic data-layer Docker/Git integration tests run on
       # Linux; the Windows-only GUI/scheduled-task/junction tests run above.
       - name: Run Docker + Git integration tests
         shell: pwsh
-        run: .\scripts\run-tests.ps1 -Mode full -TestNames Phantom.Workspaces.Data.MongoDB.Tests
+        run: .\scripts\run-tests.ps1 -Mode full -TestNames Phantom.Workspaces.Data.MongoDB.Tests -PerTestHangTimeout 10m
 
       - name: Upload Linux test logs
         if: always()

@@ -561,7 +561,9 @@ environments, and release outputs) the build/installation design requires. Items
     When upgrading the SDK, update the pinned CLI version and archive hash together.
   - The Linux job needs a working Docker daemon. The MongoDB broker creates both the data
     directory and its `configdb` bind-mount source before `docker create`; unlike Docker
-    Desktop on Windows, Linux Docker rejects a missing `--mount` source.
+    Desktop on Windows, Linux Docker rejects a missing `--mount` source. Hosted CI pre-pulls
+    Atlas Local before starting the test host and uses a 10-minute per-test inactivity
+    watchdog for cold replica-set/search startup; local test-harness defaults are unchanged.
   - **Targeting on Linux:** the full suite also contains **Windows-only** tests (Avalonia GUI,
     the `StartupTaskService`/scheduled-task and junction/symlink integration tests). The
     `ubuntu-latest` job therefore runs the **cross-platform data-layer Docker tests** (e.g. via
