@@ -558,7 +558,9 @@ environments, and release outputs) the build/installation design requires. Items
   - The Windows job downloads the standalone Copilot CLI version matching `GitHub.Copilot.SDK`
     (and verifies the release archive's SHA-256), then sets `COPILOT_CLI_PATH` for real BYOK
     tests. The SDK-staged `copilot.exe` is a server-only runtime, not the interactive CLI.
-    When upgrading the SDK, update the pinned CLI version and archive hash together.
+    When upgrading the SDK, update the pinned CLI version and archive hash together. The
+    Windows test run uses the approved harness's `-maxcpucount:1` MSBuild serialization so
+    resource-heavy CLI, process, and browser tests do not compete across test hosts.
   - The Linux job needs a working Docker daemon. The MongoDB broker creates both the data
     directory and its `configdb` bind-mount source before `docker create`; unlike Docker
     Desktop on Windows, Linux Docker rejects a missing `--mount` source. Hosted CI pre-pulls

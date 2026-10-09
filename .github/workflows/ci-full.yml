@@ -72,6 +72,7 @@ jobs:
         shell: pwsh
         run: |
           dotnet test Phantom.Workspaces.slnx --no-restore --nologo -v minimal `
+            -maxcpucount:1 `
             --filter "Category!=SlowDocker & Category!=RequiresLocalConsole"
 
       - name: Upload Windows test logs

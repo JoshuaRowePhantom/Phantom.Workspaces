@@ -313,6 +313,7 @@ public sealed class ChatOutputByokEndToEndWebViewTests
 
                     // ---- Assert the DOM without any refresh/reload ---------------------------
                     parentBrowser.EndBatch();
+                    await WaitForDomTextAsync(parentBrowser, ["FINAL-REPLY", "hello world 1", "hello world 2"], timeout);
                     var parentDom = await EvalAsync(parentBrowser, "document.body.innerHTML");
                     Assert.Contains("FINAL-REPLY", parentDom, StringComparison.Ordinal);
                     Assert.Contains("hello world 1", parentDom, StringComparison.Ordinal);
@@ -321,6 +322,7 @@ public sealed class ChatOutputByokEndToEndWebViewTests
                     foreach (var (marker, expectedText, subBrowser) in subMarkers)
                     {
                         subBrowser.EndBatch();
+                        await WaitForDomTextAsync(subBrowser, [marker, expectedText], timeout);
                         var subDom = await EvalAsync(subBrowser, "document.body.innerHTML");
                         Assert.Contains(marker, subDom, StringComparison.Ordinal);
                         Assert.Contains(expectedText, subDom, StringComparison.Ordinal);
@@ -670,6 +672,47 @@ public sealed class ChatOutputByokEndToEndWebViewTests
         finally
         {
             ((INotifyCollectionChanged)chat.History).CollectionChanged -= OnChanged;
+        }
+    }
+
+    private static async Task WaitForDomTextAsync(
+        ControllableWebViewControl browser, string[] fragments, TimeSpan timeout)
+    {
+        var signal = $"dom-ready:{Guid.NewGuid():N}";
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnMessage(object? sender, string body)
+        {
+            if (body == signal)
+            {
+                ready.TrySetResult();
+            }
+        }
+
+        browser.JavaScriptMessageReceived += OnMessage;
+        try
+        {
+            await browser.InvokeScript($$"""
+                (function () {
+                    const fragments = {{System.Text.Json.JsonSerializer.Serialize(fragments)}};
+                    function check() {
+                        if (document.body && fragments.every(fragment => document.body.innerHTML.includes(fragment))) {
+                            window.chrome.webview.postMessage({{System.Text.Json.JsonSerializer.Serialize(signal)}});
+                            return true;
+                        }
+                        return false;
+                    }
+                    if (!check()) {
+                        new MutationObserver(function (mutations, observer) {
+                            if (check()) { observer.disconnect(); }
+                        }).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+                    }
+                }());
+                """);
+            await ready.Task.WaitAsync(timeout);
+        }
+        finally
+        {
+            browser.JavaScriptMessageReceived -= OnMessage;
         }
     }
 
