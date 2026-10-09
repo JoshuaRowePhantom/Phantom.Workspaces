@@ -92,6 +92,7 @@ public sealed class MongoDbConnectionBrokerSlowTests
         try
         {
             Directory.CreateDirectory(dataDirectory);
+            Directory.CreateDirectory(Path.Combine(dataDirectory, "configdb"));
 
             // Phase A: bring the node up with a STALE hostname so Atlas Local commits a persisted
             // replica-set config whose only member is the stale host, then remove the container while
