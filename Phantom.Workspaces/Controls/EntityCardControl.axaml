@@ -53,6 +53,7 @@
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
                                     <Button Content="{Binding Glyph}"
+                                            ContentTemplate="{StaticResource CopyableCardButtonContentTemplate}"
                                             ToolTip.Tip="{Binding Tooltip}"
                                              Classes="entity-card-action-button entity-card-interest-button"
                                              Classes.highlighted="{Binding IsActive}"
@@ -82,6 +83,7 @@
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
                         <Button Content="{Binding EditModeGlyph}"
+                                ContentTemplate="{StaticResource CopyableCardButtonContentTemplate}"
                                 ToolTip.Tip="Toggle edit mode"
                                 Classes="entity-card-action-button"
                                 IsVisible="{Binding ShowEditIndicator}"
@@ -98,6 +100,7 @@
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
                                     <Button Content="{Binding Shortcut.Label}"
+                                            ContentTemplate="{StaticResource CopyableCardButtonContentTemplate}"
                                             ToolTip.Tip="{Binding Shortcut.HoverText}"
                                             IsEnabled="{Binding IsEnabled}"
                                             Classes="entity-card-action-button"
@@ -108,16 +111,19 @@
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
                         <Button Content="{Binding JsonButtonText}"
+                                ContentTemplate="{StaticResource CopyableCardButtonContentTemplate}"
                                 Classes="entity-card-action-button"
                                 IsVisible="{Binding ShowJsonButton}"
                                 Command="{Binding ToggleJsonViewCommand}"
                                 Tapped="OnInteractiveChildTapped" />
                         <Button Content="💾"
+                                ContentTemplate="{StaticResource CopyableCardButtonContentTemplate}"
                                   Classes="entity-card-action-button"
                                 IsVisible="{Binding ShowEditActions}"
                                 Command="{Binding SaveEditModeCommand}"
                                 Tapped="OnInteractiveChildTapped" />
                         <Button Content="✖"
+                                ContentTemplate="{StaticResource CopyableCardButtonContentTemplate}"
                                  Classes="entity-card-action-button"
                                  IsVisible="{Binding ShowEditActions}"
                                  Command="{Binding DiscardEditModeCommand}"
@@ -140,5 +146,3 @@
                            Classes.workspace-validation-error="{Binding Validation.HasError}" />
     </StackPanel>
 </UserControl>
-
-

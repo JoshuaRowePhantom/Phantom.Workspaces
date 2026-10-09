@@ -11,6 +11,13 @@
     <StyleInclude Source="avares://Markdown.Avalonia.SyntaxHigh/StyleCollections/AppendixOfFluentTheme.axaml" />
 
     <Styles.Resources>
+        <DataTemplate x:Key="CopyableCardButtonContentTemplate">
+            <controls:CopyableLinkTextBlock Text="{Binding}"
+                                            Background="Transparent"
+                                            Command="{Binding $parent[Button].Command}"
+                                            CommandParameter="{Binding $parent[Button].CommandParameter}"
+                                            TextWrapping="Wrap" />
+        </DataTemplate>
         <!-- WorkspaceMarkdownView code styling resources (issue #1173). Values mirror the WebView
              chat-output-shell.html tokens (chat-font-family, chat-foreground, chat-tool-body-background).
              Brushes are aliased to Fluent-theme color keys so they swap with light/dark theming just
@@ -1392,6 +1399,7 @@
     </Style>
 
     <Style Selector="controls|CopyableLinkTextBlock.workspace-url-link, controls|CopyableLinkTextBlock.workspace-entity-reference-link">
+        <Setter Property="Background" Value="Transparent" />
         <Setter Property="Foreground" Value="{DynamicResource SystemAccentColor}" />
         <Setter Property="Cursor" Value="Hand" />
         <Setter Property="TextWrapping" Value="Wrap" />

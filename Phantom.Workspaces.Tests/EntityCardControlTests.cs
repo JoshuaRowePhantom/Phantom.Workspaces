@@ -559,6 +559,294 @@ public sealed class EntityCardControlTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityCardControl_ShortcutAndJsonButtonLabels_SelectCopyAndActivateOnce()
+    {
+        var entity = new SubscribedEntityViewModel(BuildGitWorktreeSnapshotForTests());
+        var vm = new EntityCardViewModel(entity);
+        var shortcut = new EntityShortcutViewModel
+        {
+            Shortcut = new Shortcut("Go", "Go"),
+            Entity = entity,
+            ShortcutManager = new ShortcutManager(),
+        };
+        object? invokedWith = null;
+        var calls = 0;
+        vm.SetShortcuts(new[] { shortcut }, new RelayCommand(parameter =>
+        {
+            invokedWith = parameter;
+            calls++;
+        }));
+        var card = new NavigationSpyCard { DataContext = vm };
+        var window = new Window { Content = card, Width = 500, Height = 250 };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            var labels = window.GetVisualDescendants().OfType<CopyableLinkTextBlock>().ToArray();
+            var shortcutLabel = Assert.Single(labels, t => t.Text == "Go");
+            var jsonLabel = Assert.Single(labels, t => t.Text == "{}");
+
+            ClickText(window, shortcutLabel);
+            Assert.Equal(1, calls);
+            Assert.Same(shortcut, invokedWith);
+            ClickText(window, jsonLabel);
+            Assert.True(vm.ShowRawJsonEditor);
+            Assert.Equal(0, card.ActivationCount);
+
+            await AssertMouseSelectAndCopyAsync(window, shortcutLabel);
+            Assert.Equal(1, calls);
+            await AssertMouseSelectAndCopyAsync(window, jsonLabel);
+            Assert.True(vm.ShowRawJsonEditor);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityCardControl_EditActionLabels_CopyAndRetainButtonCommands()
+    {
+        var vm = new EntityCardViewModel("Editable", "note",
+            new EntityFieldEditorViewModel[] { new StringFieldEditorViewModel("name", "value") });
+        var card = new NavigationSpyCard { DataContext = vm };
+        var window = new Window { Content = card, Width = 500, Height = 260 };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            var edit = window.GetVisualDescendants().OfType<CopyableLinkTextBlock>()
+                .Single(t => t.Text == "✎");
+            await AssertMouseSelectAndCopyAsync(window, edit);
+            Assert.False(vm.IsEditMode);
+            edit.ClearSelection();
+            edit.Focus();
+            window.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, "\r");
+            Assert.True(vm.IsEditMode);
+            await vm.Validation.UpdateAsync("{}");
+            vm.SaveEditModeCommand.RaiseCanExecuteChanged();
+            Dispatcher.UIThread.RunJobs();
+
+            var actions = window.GetVisualDescendants().OfType<CopyableLinkTextBlock>()
+                .Where(t => t.IsEffectivelyVisible && (t.Text is "💾" or "✖")).ToArray();
+            Assert.Equal(2, actions.Length);
+            foreach (var action in actions)
+            {
+                Assert.True(action.IsEffectivelyEnabled, $"Action {action.Text} is disabled");
+                await AssertMouseSelectAndCopyAsync(window, action);
+                Assert.True(vm.IsEditMode);
+            }
+
+            var discard = actions.Single(t => t.Text == "✖");
+            discard.ClearSelection();
+            discard.Focus();
+            window.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, "\r");
+            Assert.False(vm.IsEditMode);
+            Assert.Equal(0, card.ActivationCount);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    private static void ClickText(Window window, SafeSelectableTextBlock item)
+    {
+        var origin = item.TranslatePoint(new Point(0, 0), window)!.Value;
+        var point = new Point(origin.X + Math.Min(2, item.Bounds.Width / 2),
+            origin.Y + Math.Min(8, item.Bounds.Height / 2));
+        window.MouseMove(point);
+        window.MouseDown(point, MouseButton.Left);
+        window.MouseUp(point, MouseButton.Left);
+    }
+
+    private static async Task AssertMouseSelectAndCopyAsync(Window window, SafeSelectableTextBlock item)
+    {
+        var origin = item.TranslatePoint(new Point(0, 0), window)!.Value;
+        var start = new Point(origin.X + 1, origin.Y + Math.Min(8, item.Bounds.Height / 2));
+        var end = new Point(origin.X + item.Bounds.Width + 2, start.Y);
+        window.MouseMove(start);
+        window.MouseDown(start, MouseButton.Left);
+        window.MouseMove(end, RawInputModifiers.LeftMouseButton);
+        window.MouseUp(end, MouseButton.Left);
+        Assert.NotEmpty(item.SelectedText);
+        item.Focus();
+        item.SelectAll();
+        window.KeyPress(Key.C, RawInputModifiers.Control, PhysicalKey.C, "c");
+        using var data = await window.Clipboard!.TryGetDataAsync();
+        Assert.NotNull(data);
+        Assert.Equal(item.Text, await data.TryGetTextAsync());
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityCardControl_EntityListLink_MouseCopiesAndClickOpens()
+    {
+        const string id = "a1b2c3d4-e5f6-4123-8123-123456789abc";
+        string? opened = null;
+        var editor = new EntityListFieldEditorViewModel(
+            "related", new[] { id }, Array.Empty<string>(), null, value => opened = value);
+        editor.Items[0].DisplayName = "Referenced worktree";
+        var card = new NavigationSpyCard
+        {
+            DataContext = new EntityCardViewModel(
+                new SubscribedEntityViewModel(BuildGitWorktreeSnapshotForTests()),
+                new EntityFieldEditorViewModel[] { editor }),
+        };
+        var window = new Window { Content = card, Width = 550, Height = 300 };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            var link = window.GetVisualDescendants().OfType<CopyableLinkTextBlock>()
+                .Single(t => t.Text == "Referenced worktree");
+            ClickText(window, link);
+            Assert.Equal(id, opened);
+            opened = null;
+            await AssertMouseSelectAndCopyAsync(window, link);
+            Assert.Null(opened);
+            Assert.Equal(0, card.ActivationCount);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityCardControl_ArrayAndObjectHeaders_CopyWithoutTogglingExpanders()
+    {
+        var editors = new EntityFieldEditorViewModel[]
+        {
+            new ArrayFieldEditorViewModel("array-items", Array.Empty<EntityFieldEditorViewModel>()),
+            new ObjectFieldEditorViewModel("object-info", Array.Empty<EntityFieldEditorViewModel>()),
+        };
+        var card = new NavigationSpyCard
+        {
+            DataContext = new EntityCardViewModel(
+                new SubscribedEntityViewModel(BuildGitWorktreeSnapshotForTests()), editors),
+        };
+        var window = new Window { Content = card, Width = 500, Height = 350 };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            var expanders = window.GetVisualDescendants().OfType<Expander>()
+                .Where(e => e.Classes.Contains("workspace-field-expander")).ToArray();
+            Assert.Equal(2, expanders.Length);
+            foreach (var expander in expanders)
+            {
+                var label = expander.GetVisualDescendants().OfType<SafeSelectableTextBlock>()
+                    .Single(t => t.Text is "array-items" or "object-info");
+                await AssertMouseSelectAndCopyAsync(window, label);
+                Assert.False(expander.IsExpanded);
+            }
+            Assert.Equal(0, card.ActivationCount);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task EntityCardControl_MarkdownAttachment_HeaderAndRenderedContent_CopyWithMouse()
+    {
+        const string body = "Selectable markdown content";
+        var editor = new MarkdownMimeAttachmentFieldEditorViewModel(
+            "notes", "text/markdown", body, null);
+        var card = new NavigationSpyCard
+        {
+            DataContext = new EntityCardViewModel(
+                new SubscribedEntityViewModel(BuildGitWorktreeSnapshotForTests()),
+                new EntityFieldEditorViewModel[] { editor }),
+        };
+        var window = new Window { Content = card, Width = 600, Height = 420 };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            var expander = window.GetVisualDescendants().OfType<Expander>()
+                .Single(e => e.Classes.Contains("workspace-field-expander"));
+            var header = expander.GetVisualDescendants().OfType<SafeSelectableTextBlock>()
+                .Single(t => t.Text == "notes");
+            await AssertMouseSelectAndCopyAsync(window, header);
+            Assert.False(expander.IsExpanded);
+            expander.IsExpanded = true;
+            Dispatcher.UIThread.RunJobs();
+
+            var markdown = expander.GetVisualDescendants().OfType<WorkspaceMarkdownView>()
+                .Single(view => view.IsEffectivelyVisible && view.Markdown == body);
+            Assert.True(markdown.SelectionEnabled);
+            var text = markdown.GetVisualDescendants().OfType<Control>()
+                .First(t => t.GetType().Name == "CTextBlock" && t.Bounds.Width > 0);
+            var origin = text.TranslatePoint(new Point(0, 0), window)!.Value;
+            var start = new Point(origin.X + 2, origin.Y + Math.Min(8, text.Bounds.Height / 2));
+            var end = new Point(origin.X + text.Bounds.Width - 3, start.Y);
+            window.MouseMove(start);
+            window.MouseDown(start, MouseButton.Left);
+            window.MouseMove(end, RawInputModifiers.LeftMouseButton);
+            window.MouseUp(end, MouseButton.Left);
+            window.KeyPress(Key.C, RawInputModifiers.Control, PhysicalKey.C, "c");
+            using var data = await window.Clipboard!.TryGetDataAsync();
+            Assert.NotNull(data);
+            Assert.Equal(body, (await data.TryGetTextAsync())?.TrimEnd('\r', '\n'));
+            Assert.Equal(0, card.ActivationCount);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityCardControl_ReferenceSearchCandidate_MouseCopiesAndClickSelects()
+    {
+        const string id = "a1b2c3d4-e5f6-4123-8123-123456789abc";
+        var editor = new EntityReferenceFieldEditorViewModel("related", null, Array.Empty<string>(),
+            new CandidateSearch(new EntityReferenceCandidate(id, "Candidate worktree", "worktrees")));
+        var vm = new EntityCardViewModel(
+            new SubscribedEntityViewModel(BuildGitWorktreeSnapshotForTests()),
+            new EntityFieldEditorViewModel[] { editor });
+        vm.IsEditMode = true;
+        editor.SearchText = "worktree";
+        await editor.SearchAsync();
+        var card = new NavigationSpyCard { DataContext = vm };
+        var window = new Window { Content = card, Width = 550, Height = 350 };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            var button = window.GetVisualDescendants().OfType<Button>()
+                .Single(b => b.Classes.Contains("workspace-entity-reference-candidate"));
+            var label = button.GetVisualDescendants().OfType<CopyableLinkTextBlock>()
+                .Single(t => t.Text == "Candidate worktree");
+            await AssertMouseSelectAndCopyAsync(window, label);
+            Assert.Equal(string.Empty, editor.Value);
+            label.ClearSelection();
+            label.Focus();
+            window.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, "\r");
+            Assert.Equal(id, editor.Value);
+            Assert.Equal(0, card.ActivationCount);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    private sealed class CandidateSearch(EntityReferenceCandidate candidate) : IEntityReferenceSearch
+    {
+        public Task<IReadOnlyList<EntityReferenceCandidate>> SearchAsync(
+            string searchText, System.Collections.Generic.IReadOnlyCollection<string> entityTypes,
+            System.Threading.CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<EntityReferenceCandidate>>(new[] { candidate });
+
+        public Task<EntityReferenceCandidate?> ResolveAsync(
+            string entityId, System.Threading.CancellationToken cancellationToken = default)
+            => Task.FromResult<EntityReferenceCandidate?>(candidate);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task EntityCardControl_ReferenceLink_DragCopiesText_ClickNavigates()
     {
         const string id = "a1b2c3d4-e5f6-4123-8123-123456789abc";
@@ -641,6 +929,13 @@ public sealed class EntityCardControlTests
                 .Single(t => t.Text == "docs");
             Assert.Equal(url, link.Text);
             Assert.True(link.TextLayout.TextLines.Count > 1, "Long URLs must wrap without truncating the copied text.");
+            Assert.NotNull(link.Command);
+            var opened = 0;
+            // Replace the shell-launching command, not the rendered link, so activation is
+            // exercised without opening a real browser during the headless test.
+            link.Command = new RelayCommand(_ => opened++);
+            ClickText(window, link);
+            Assert.Equal(1, opened);
             foreach (var item in new SafeSelectableTextBlock[] { key, link })
             {
                 var origin = item.TranslatePoint(new Point(0, 0), window)!.Value;
@@ -656,6 +951,7 @@ public sealed class EntityCardControlTests
                 Assert.NotNull(data);
                 Assert.Equal(item.Text, await data.TryGetTextAsync());
             }
+            Assert.Equal(1, opened);
             Assert.Equal(0, card.ActivationCount);
         }
         finally

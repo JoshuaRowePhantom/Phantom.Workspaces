@@ -12,6 +12,9 @@ public class CopyableLinkTextBlock : SafeSelectableTextBlock
     public static readonly StyledProperty<ICommand?> CommandProperty =
         AvaloniaProperty.Register<CopyableLinkTextBlock, ICommand?>(nameof(Command));
 
+    public static readonly StyledProperty<object?> CommandParameterProperty =
+        AvaloniaProperty.Register<CopyableLinkTextBlock, object?>(nameof(CommandParameter));
+
     private Point? pressPosition;
     private bool dragged;
 
@@ -19,6 +22,12 @@ public class CopyableLinkTextBlock : SafeSelectableTextBlock
     {
         get => this.GetValue(CommandProperty);
         set => this.SetValue(CommandProperty, value);
+    }
+
+    public object? CommandParameter
+    {
+        get => this.GetValue(CommandParameterProperty);
+        set => this.SetValue(CommandParameterProperty, value);
     }
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
@@ -51,16 +60,19 @@ public class CopyableLinkTextBlock : SafeSelectableTextBlock
         this.pressPosition = null;
         base.OnPointerReleased(e);
 
-        if (activate && this.Command?.CanExecute(null) == true)
-            this.Command.Execute(null);
+        if (activate && this.Command?.CanExecute(this.CommandParameter) == true)
+        {
+            this.Command.Execute(this.CommandParameter);
+            e.Handled = true;
+        }
     }
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
-        if (!e.Handled && (e.Key is Key.Enter or Key.Space) && this.Command?.CanExecute(null) == true)
+        if (!e.Handled && (e.Key is Key.Enter or Key.Space) && this.Command?.CanExecute(this.CommandParameter) == true)
         {
-            this.Command.Execute(null);
+            this.Command.Execute(this.CommandParameter);
             e.Handled = true;
         }
     }

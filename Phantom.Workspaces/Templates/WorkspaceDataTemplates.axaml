@@ -177,6 +177,7 @@
                         <Button Command="{Binding SelectCommand}"
                                 ToolTip.Tip="{Binding Names}"
                                 Content="{Binding DisplayName}"
+                                ContentTemplate="{StaticResource CopyableCardButtonContentTemplate}"
                                 HorizontalAlignment="Stretch"
                                 HorizontalContentAlignment="Left"
                                 Classes="workspace-entity-reference-candidate" />
