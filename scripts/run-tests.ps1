@@ -3,8 +3,10 @@ param(
     [string] $TestResultsPath = (Join-Path $PSScriptRoot 'test-results.log'),
     [Parameter()]
     [string[]] $TestNames,
+    # The split-process child attachment scenarios allow 180s for authenticated GUI startup.
+    # Blame must outlast that explicit deadline so a slow run reports the real test failure.
     [Parameter()]
-    [string] $PerTestHangTimeout = '90s',
+    [string] $PerTestHangTimeout = '240s',
     [Parameter()]
     [ValidateSet('full', 'fast')]
     [string] $Mode = 'full',
