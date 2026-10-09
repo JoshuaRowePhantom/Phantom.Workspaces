@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 
 namespace Phantom.Workspaces.ViewModels;
@@ -58,6 +59,15 @@ public sealed class EntityWorkspaceTabViewModel : WorkspaceTabViewModel
         {
             this.SetProperty(ref this.entityCardNode, value);
         }
+    }
+
+    public override async ValueTask DisposeAsync()
+    {
+        if (this.entityCardNode is not null)
+        {
+            await this.entityCardNode.Card.DisposeAsync();
+        }
+        await base.DisposeAsync();
     }
 
     private static IReadOnlyList<string> ResolveNameComponents(

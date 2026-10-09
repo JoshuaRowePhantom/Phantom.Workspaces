@@ -629,6 +629,122 @@ public sealed class MainWindowViewModelTests
         Assert.Same(workspaceBVm, Assert.Single(entities, vm => vm.EntityId == workspaceB.ToString()));
     }
 
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task OpenViewTab_WhenQueryMembershipChanges_UpdatesTabAndPreservesSelection()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var broker = GetEntityBroker(viewModel);
+        var workspaceA = new EntityId("16220001-0000-4000-8000-000000000001");
+        var workspaceB = new EntityId("16220001-0000-4000-8000-000000000002");
+        var workspaceC = new EntityId("16220001-0000-4000-8000-000000000003");
+        var workspaceD = new EntityId("16220001-0000-4000-8000-000000000004");
+        await UpsertWorkspaceAsync(broker, workspaceA, "issue1622-a", "Issue1622 A");
+        await UpsertWorkspaceAsync(broker, workspaceB, "issue1622-b", "Issue1622 B");
+        var workspaces = Assert.Single(viewModel.TopLevelViews, view => view.Title == "Workspaces");
+        var originalSelection = viewModel.SelectedTopLevelView;
+        await viewModel.OpenViewTabAsync(workspaces.ViewEntity!);
+
+        var tab = Assert.IsType<ViewWorkspaceTabViewModel>(
+            Assert.Single(viewModel.SelectedWorkspacePane.Tabs, item => item.Id == workspaces.Id));
+        var entityA = Assert.Single(tab.Population.Entities, vm => vm.EntityId == workspaceA.ToString());
+        entityA.EntityCardNode.Card.IsSelected = true;
+        entityA.IsExpanded = false;
+        await UpsertWorkspaceAsync(broker, workspaceC, "issue1622-c", "Issue1622 C");
+        await WaitForEntityInCollectionAsync(tab.Population.Entities, workspaceC.ToString());
+        await UpsertWorkspaceAsync(broker, workspaceD, "issue1622-d", "Issue1622 D");
+        await WaitForEntityInCollectionAsync(tab.Population.Entities, workspaceD.ToString());
+
+        Assert.Same(entityA, Assert.Single(tab.Population.Entities, vm => vm.EntityId == workspaceA.ToString()));
+        Assert.True(entityA.EntityCardNode.Card.IsSelected);
+        Assert.False(entityA.IsExpanded);
+        Assert.Same(originalSelection, viewModel.SelectedTopLevelView);
+
+        viewModel.CloseTab(tab);
+        await tab.DisposeAsync();
+        Assert.True(tab.Population.CancellationToken.IsCancellationRequested);
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task OpenViewTab_ExpansionState_IsIndependentOfLeftView()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var workspaceId = new EntityId("16220003-0000-4000-8000-000000000001");
+        await UpsertWorkspaceAsync(GetEntityBroker(viewModel), workspaceId, "issue1622-expansion", "Expansion");
+        await SelectWorkspacesViewAsync(viewModel);
+        var workspaces = viewModel.SelectedTopLevelView;
+        var leftNode = Assert.Single(viewModel.CurrentViewPopulation.Entities,
+            node => node.EntityId == workspaceId.ToString());
+        leftNode.IsExpanded = true;
+        await viewModel.OpenViewTabAsync(workspaces.ViewEntity!);
+        var tab = Assert.IsType<ViewWorkspaceTabViewModel>(
+            Assert.Single(viewModel.SelectedWorkspacePane.Tabs, item => item.Id == workspaces.Id));
+        var tabNode = Assert.Single(tab.Population.Entities, node => node.EntityId == workspaceId.ToString());
+
+        tabNode.IsExpanded = true;
+        tabNode.IsExpanded = false;
+        await InvokeApplySelectedViewAsync(viewModel);
+        Assert.True(Assert.Single(viewModel.CurrentViewPopulation.Entities,
+            node => node.EntityId == workspaceId.ToString()).IsExpanded);
+        Assert.False(tabNode.IsExpanded);
+
+        viewModel.CurrentViewPopulation.Entities
+            .Single(node => node.EntityId == workspaceId.ToString()).IsExpanded = false;
+        await UpsertWorkspaceAsync(GetEntityBroker(viewModel),
+            new EntityId("16220003-0000-4000-8000-000000000002"), "issue1622-expansion-2", "Expansion 2");
+        Assert.False(tabNode.IsExpanded);
+        Assert.True(tab.Population.ExpandedEntityIds.TryGetValue(workspaceId.ToString(), out var tabExpanded));
+        Assert.False(tabExpanded);
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task OpenViewTab_Close_DetachesEntityAndQueryObservers_WithoutStoppingLeftView()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var broker = GetEntityBroker(viewModel);
+        var workspaceA = new EntityId("16220004-0000-4000-8000-000000000001");
+        var workspaceB = new EntityId("16220004-0000-4000-8000-000000000002");
+        var workspaceC = new EntityId("16220004-0000-4000-8000-000000000003");
+        await UpsertWorkspaceAsync(broker, workspaceA, "issue1622-listener-a", "Listener A");
+        await SelectWorkspacesViewAsync(viewModel);
+        var left = viewModel.CurrentViewPopulation;
+        var workspaces = viewModel.SelectedTopLevelView;
+        await viewModel.OpenViewTabAsync(workspaces.ViewEntity!);
+        var tab = Assert.IsType<ViewWorkspaceTabViewModel>(
+            Assert.Single(viewModel.SelectedWorkspacePane.Tabs, item => item.Id == workspaces.Id));
+        var tabNode = Assert.Single(tab.Population.Entities, node => node.EntityId == workspaceA.ToString());
+        var entity = tabNode.Entity;
+        var listenersWithTab = CountEntityListeners(entity);
+        Assert.True(tab.Population.QueryObserverCount > 0);
+        Assert.True(left.QueryObserverCount > 0);
+
+        await UpsertWorkspaceAsync(broker, workspaceB, "issue1622-listener-b", "Listener B");
+        await WaitForEntityInCollectionAsync(tab.Population.Entities, workspaceB.ToString());
+        await tab.Population.ReconcileGate.WaitAsync(TestContext.Current.CancellationToken);
+        tab.Population.ReconcileGate.Release();
+        Assert.Equal(listenersWithTab, CountEntityListeners(entity));
+
+        viewModel.CloseTab(tab);
+        await tab.DisposeAsync();
+        Assert.True(tab.Population.CancellationToken.IsCancellationRequested);
+        Assert.Equal(0, tab.Population.QueryObserverCount);
+        Assert.True(left.QueryObserverCount > 0);
+        Assert.True(CountEntityListeners(entity) < listenersWithTab);
+        await UpsertWorkspaceAsync(broker, workspaceC, "issue1622-listener-c", "Listener C");
+        await WaitForEntityInCollectionAsync(left.Entities, workspaceC.ToString());
+        Assert.DoesNotContain(tab.Population.Entities, node => node.EntityId == workspaceC.ToString());
+    }
+
+    private static int CountEntityListeners(SubscribedEntityViewModel entity)
+    {
+        var field = typeof(ViewModelBase).GetField("PropertyChanged",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        return (field!.GetValue(entity) as MulticastDelegate)?.GetInvocationList().Length ?? 0;
+    }
+
     [AvaloniaFact]
     public async Task ViewPopulation_NoMembershipChange_DoesNotMutateCollectionStructure()
     {

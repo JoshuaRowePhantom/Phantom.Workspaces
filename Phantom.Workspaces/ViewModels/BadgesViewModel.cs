@@ -20,6 +20,14 @@ public sealed class BadgesViewModel : ViewModelBase
 
     public ObservableCollection<BadgeModel> Badges { get; }
 
+    internal void Detach()
+    {
+        if (this.badgesModel.Badges is INotifyCollectionChanged notifyCollectionChanged)
+        {
+            notifyCollectionChanged.CollectionChanged -= this.OnBadgesChanged;
+        }
+    }
+
     private void OnBadgesChanged(
         object? sender,
         NotifyCollectionChangedEventArgs e)
