@@ -1,0 +1,59 @@
+<Project>
+  <UsingTask TaskName="HoldCopilotWrapperPrerequisiteLease"
+             TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <CacheRoot ParameterType="System.String" Required="true" />
+      <ProjectDirectory ParameterType="System.String" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System" />
+      <Using Namespace="System.IO" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        var project = Path.GetFullPath(ProjectDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var root = Path.GetFullPath(CacheRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (!Path.IsPathRooted(CacheRoot) ||
+            !StringComparer.OrdinalIgnoreCase.Equals(root, CacheRoot) ||
+            !root.StartsWith(project + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+            !StringComparer.OrdinalIgnoreCase.Equals(Path.GetFileName(root), "mxcw") ||
+            StringComparer.OrdinalIgnoreCase.Equals(Path.GetDirectoryName(root), project))
+            throw new InvalidOperationException("Prepared Copilot cache root must be canonical and owned by Install.Tests.");
+
+        var current = project;
+        var relativeBase = Path.GetDirectoryName(root).Substring(project.Length + 1);
+        foreach (var part in relativeBase.Split(Path.DirectorySeparatorChar))
+        {
+            current = Path.Combine(current, part);
+            if ((File.Exists(current) || Directory.Exists(current)) &&
+                (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidOperationException("Prepared Copilot cache path contains a reparse point: " + current);
+        }
+        if (Directory.Exists(root) &&
+            (File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidOperationException("Prepared Copilot cache root is a reparse point: " + root);
+
+        var baseDirectory = Path.GetDirectoryName(root);
+        Directory.CreateDirectory(baseDirectory);
+        var lockPath = Path.Combine(baseDirectory, "mxcw.lock");
+        if (File.Exists(lockPath) && (File.GetAttributes(lockPath) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidOperationException("Prepared Copilot cache lease is a reparse point: " + lockPath);
+        var engine = (Microsoft.Build.Framework.IBuildEngine4)BuildEngine;
+        var key = "CopilotWrapperPrerequisiteLease:" + lockPath.ToUpperInvariant();
+        if (engine.GetRegisteredTaskObject(key, Microsoft.Build.Framework.RegisteredTaskObjectLifetime.Build) == null)
+        {
+            // Build lifetime covers VSTest startup; the test host holds its own lease after loading.
+            var lease = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.Read, FileShare.Read);
+            try
+            {
+                engine.RegisterTaskObject(key, lease, Microsoft.Build.Framework.RegisteredTaskObjectLifetime.Build, false);
+            }
+            catch
+            {
+                lease.Dispose();
+                throw;
+            }
+        }
+      ]]></Code>
+    </Task>
+  </UsingTask>
+</Project>

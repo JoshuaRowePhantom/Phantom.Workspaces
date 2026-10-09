@@ -6,7 +6,7 @@ public sealed class CopilotWrapperPackagingTests
     [Fact]
     public void RuntimePayload_CommandUsesFocusedIsolatedNonReusableBuild()
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         var arguments = MxcRepositoryTestSupport.CreateCopilotRuntimePayloadArguments(
             "payload",
             "isolated-artifacts",
@@ -41,7 +41,7 @@ public sealed class CopilotWrapperPackagingTests
     [Fact]
     public async Task RuntimePayload_WinX64_IncludesSdkRuntimePairAndSidecars()
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         await using var payload = new MxcRepositoryTestSupport.TestDirectory(
             cleanupProgress: message => Console.WriteLine($"Copilot payload {message}"));
         await using var buildArtifacts = new MxcRepositoryTestSupport.TestDirectory(
@@ -106,7 +106,7 @@ public sealed class CopilotWrapperPackagingTests
     [Fact]
     public async Task RuntimePayload_MissingSdkRuntimeWrapper_FailsValidation()
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         await using var payload = CreateValidatorPayload(prerequisite);
         File.Delete(Path.Combine(payload.Path, "runtimes", "win-x64", "native", "copilot-runtime.exe"));
 
@@ -122,7 +122,7 @@ public sealed class CopilotWrapperPackagingTests
     [Fact]
     public async Task RuntimePayload_MissingSdkRuntimeNode_FailsValidation()
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         await using var payload = CreateValidatorPayload(prerequisite);
         File.Delete(Path.Combine(payload.Path, "runtimes", "win-x64", "native", "runtime.node"));
 
@@ -138,7 +138,7 @@ public sealed class CopilotWrapperPackagingTests
     [Fact]
     public async Task RuntimePayload_UnequalSdkRuntimePair_FailsPublish()
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         await using var source = new MxcRepositoryTestSupport.TestDirectory();
         await using var payload = new MxcRepositoryTestSupport.TestDirectory();
         var nativeSource = Path.Combine(source.Path, "runtimes", "win-x64", "native");
@@ -176,7 +176,7 @@ public sealed class CopilotWrapperPackagingTests
     [Fact]
     public async Task RuntimeZip_SdkRuntimePairPreserved_PassesValidation()
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         await using var payload = CreateValidatorPayload(prerequisite);
         await using var archive = new MxcRepositoryTestSupport.TestDirectory();
         var zip = Path.Combine(archive.Path, "release.zip");
@@ -198,7 +198,7 @@ public sealed class CopilotWrapperPackagingTests
     [Fact]
     public async Task RuntimeZip_ExtractedInstalledLayout_StartsRealSdkWithoutExplicitCredentials()
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         await using var payload = CreateValidatorPayload(prerequisite);
         CopyStagedSdkAssets(prerequisite, payload.Path);
         await using var archive = new MxcRepositoryTestSupport.TestDirectory();
@@ -220,7 +220,7 @@ public sealed class CopilotWrapperPackagingTests
     [Fact]
     public async Task InstalledPayload_SdkClientStartup_SucceedsFromCurrentNativeDirectory()
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         await using var payload = CreateValidatorPayload(prerequisite);
         CopyStagedSdkAssets(prerequisite, payload.Path);
 
@@ -318,7 +318,7 @@ public sealed class CopilotWrapperPackagingTests
     public async Task RuntimePayload_GitHubFinalCommand_AcceptedNativeExitIsClean(
         bool useNativeErrorPreference)
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         await using var payload = CreateValidatorPayload(prerequisite);
 
         var result = await InvokeValidatorAsGitHubStepAsync(
@@ -337,7 +337,7 @@ public sealed class CopilotWrapperPackagingTests
     [Fact]
     public async Task RuntimePayload_GitHubFinalCommand_UnexpectedNativeExitFails()
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         await using var payload = CreateValidatorPayload(prerequisite);
         File.Copy(
             Path.Combine(
@@ -360,7 +360,7 @@ public sealed class CopilotWrapperPackagingTests
     [Fact]
     public async Task RuntimePayload_GitHubFinalCommand_NativeLaunchFailureFails()
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         await using var payload = CreateValidatorPayload(prerequisite);
         await File.WriteAllTextAsync(
             Path.Combine(payload.Path, "runtimes", "win-x64", "native", "copilot.exe"),
@@ -380,7 +380,7 @@ public sealed class CopilotWrapperPackagingTests
     [Fact]
     public async Task RuntimePayload_GitHubFinalCommand_NonExecutablePeFailsBeforeLaunch()
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         await using var payload = CreateValidatorPayload(prerequisite);
         var executable = Path.Combine(
             payload.Path,
@@ -408,7 +408,7 @@ public sealed class CopilotWrapperPackagingTests
     [Fact]
     public async Task RuntimePayload_GitHubFinalCommand_NativeLaunchFailure_CompletesRepeatedlyWithoutHang()
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         var attempts = Enumerable.Range(0, 4).Select(async _ =>
         {
             await using var payload = CreateValidatorPayload(prerequisite);
@@ -446,7 +446,7 @@ public sealed class CopilotWrapperPackagingTests
     [Fact]
     public async Task RuntimePayload_MissingPreparedFingerprint_FailsClosed()
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         await using var payload = new MxcRepositoryTestSupport.TestDirectory();
         await using var buildArtifacts = new MxcRepositoryTestSupport.TestDirectory();
         await using var normalOutput = new MxcRepositoryTestSupport.TestDirectory();
@@ -482,7 +482,7 @@ public sealed class CopilotWrapperPackagingTests
     [Fact]
     public async Task RuntimePayload_WrongPreparedFingerprint_FailsClosed()
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         await using var payload = new MxcRepositoryTestSupport.TestDirectory();
         await using var buildArtifacts = new MxcRepositoryTestSupport.TestDirectory();
         await using var normalOutput = new MxcRepositoryTestSupport.TestDirectory();
@@ -521,7 +521,7 @@ public sealed class CopilotWrapperPackagingTests
     [Fact]
     public async Task RuntimePayload_TamperedPreparedPath_FailsClosed()
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         await using var payload = new MxcRepositoryTestSupport.TestDirectory();
         await using var buildArtifacts = new MxcRepositoryTestSupport.TestDirectory();
         await using var normalOutput = new MxcRepositoryTestSupport.TestDirectory();
@@ -550,7 +550,7 @@ public sealed class CopilotWrapperPackagingTests
     [Fact]
     public async Task RuntimePayload_TamperedPreparedHash_FailsClosed()
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         await using var payload = new MxcRepositoryTestSupport.TestDirectory();
         await using var buildArtifacts = new MxcRepositoryTestSupport.TestDirectory();
         await using var normalOutput = new MxcRepositoryTestSupport.TestDirectory();
@@ -575,7 +575,7 @@ public sealed class CopilotWrapperPackagingTests
     [Fact]
     public async Task RuntimePayload_TamperedSdkRuntimeWrapperHash_FailsClosed()
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         await using var payload = new MxcRepositoryTestSupport.TestDirectory();
         await using var artifacts = new MxcRepositoryTestSupport.TestDirectory();
         await using var normalOutput = new MxcRepositoryTestSupport.TestDirectory();
@@ -597,7 +597,7 @@ public sealed class CopilotWrapperPackagingTests
     [Fact]
     public async Task RuntimePayload_PreparedPropertiesWithoutTestOptIn_FailClosed()
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         await using var payload = new MxcRepositoryTestSupport.TestDirectory();
         await using var buildArtifacts = new MxcRepositoryTestSupport.TestDirectory();
         await using var normalOutput = new MxcRepositoryTestSupport.TestDirectory();
@@ -622,7 +622,7 @@ public sealed class CopilotWrapperPackagingTests
     [Fact]
     public async Task RuntimePayload_ProductionBuildRefusesPreparedOverride()
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         await using var payload = new MxcRepositoryTestSupport.TestDirectory();
         await using var buildArtifacts = new MxcRepositoryTestSupport.TestDirectory();
         await using var normalOutput = new MxcRepositoryTestSupport.TestDirectory();
@@ -647,7 +647,7 @@ public sealed class CopilotWrapperPackagingTests
     [Fact]
     public async Task RuntimePayload_ConcurrentMatchingAndMismatchedRids_AreIsolated()
     {
-        var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
+        using var prerequisite = MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite();
         await using var matchingPayload = new MxcRepositoryTestSupport.TestDirectory();
         await using var matchingArtifacts = new MxcRepositoryTestSupport.TestDirectory();
         await using var matchingNormalOutput = new MxcRepositoryTestSupport.TestDirectory();
