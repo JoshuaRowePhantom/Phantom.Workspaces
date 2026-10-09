@@ -1,4 +1,9 @@
 using Avalonia.Headless.XUnit;
+using Avalonia.Controls;
+using Avalonia.Controls.Templates;
+using Avalonia.Threading;
+using Avalonia.VisualTree;
+using Phantom.Workspaces.Templates;
 using System.Collections.Specialized;
 using System.Text.Json;
 using System.Threading;
@@ -11,6 +16,80 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityBrowserWorkspaceTabViewModelTests
 {
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task BrowserTemplate_ActualItemsCountBinding_SwitchesStyledPanelAtThreshold()
+    {
+        var broker = await CreateBrokerAsync();
+        var subscription = await broker.SubscribeGetAsync(new GetRequest
+        {
+            Entities = [new GetEntityRequest
+            {
+                EntityName = EntityName.Root,
+                EnumerateChildren = EnumerateChildrenAction.EnumerateSelf,
+            }],
+            Timestamps = [null],
+        }, TestContext.Current.CancellationToken);
+        var model = new EntityBrowserWorkspaceTabViewModel(broker, subscription)
+        {
+            Id = "browser-panel-test",
+            Title = "Browser",
+        };
+        // Freeze the broker-driven rebuild; this test mutates the real bound list deterministically.
+        await model.DisposeAsync();
+        var view = new EntityBrowserWorkspaceTabView { DataContext = model };
+        var tree = Assert.IsType<TreeView>(view.FindControl<TreeView>("BrowserTreeView"));
+        tree.ItemTemplate = new FuncDataTemplate<EntityListItemViewModel>(
+            (item, _) => new TextBlock { Text = item.ItemKey, Height = 25 });
+        var window = new Window { Content = view, Width = 400, Height = 320 };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            Assert.Same(tree, Assert.Single(view.GetVisualDescendants().OfType<TreeView>()));
+            model.EntityList.Items.Clear();
+            Assert.IsType<StackPanel>(tree.ItemsPanelRoot);
+            var first = new EntityListNodeViewModel("One", "entity", ["one"], "one");
+            model.EntityList.Items.Add(new EntityListItemViewModel(first, 0, 0, "one"));
+            Dispatcher.UIThread.RunJobs();
+            Assert.IsType<StackPanel>(tree.ItemsPanelRoot);
+            model.EntityList.Items.Clear();
+            window.Content = null;
+            for (int i = 0; i < 100; i++)
+            {
+                var node = new EntityListNodeViewModel($"Node {i}", "entity", [$"node-{i}"], $"node-{i}");
+                model.EntityList.Items.Add(new EntityListItemViewModel(node, i, 0, $"node-{i}"));
+            }
+            window.Content = view;
+            Dispatcher.UIThread.RunJobs();
+            Assert.Equal(100, model.EntityList.Items.Count);
+            Assert.Equal(100, model.EntityList.NodeCount);
+            Assert.Equal(100, Phantom.Workspaces.Controls.EntityTreePanel.GetNodeCount(tree));
+            Assert.IsType<VirtualizingStackPanel>(tree.ItemsPanelRoot);
+            model.EntityList.Items.RemoveAt(99);
+            Dispatcher.UIThread.RunJobs();
+            Assert.IsType<StackPanel>(tree.ItemsPanelRoot);
+            model.EntityList.ApplyFindFilter([], hideUnmatched: true);
+            Dispatcher.UIThread.RunJobs();
+            Assert.IsType<StackPanel>(tree.ItemsPanelRoot);
+
+            window.Content = null;
+            for (int i = 99; i < 1000; i++)
+            {
+                var node = new EntityListNodeViewModel($"Node {i}", "entity", [$"node-{i}"], $"node-{i}");
+                model.EntityList.Items.Add(new EntityListItemViewModel(node, i, 0, $"node-{i}"));
+            }
+            window.Content = view;
+            Dispatcher.UIThread.RunJobs();
+            Assert.Equal(1000, Phantom.Workspaces.Controls.EntityTreePanel.GetNodeCount(tree));
+            Assert.IsType<VirtualizingStackPanel>(tree.ItemsPanelRoot);
+            Assert.True(tree.ItemsPanelRoot!.Children.Count < 500);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
     [AvaloniaFact]
     public async Task BrowserList_TracksParentChildMetadataAndExpansion()
     {

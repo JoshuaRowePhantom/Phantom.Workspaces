@@ -223,6 +223,7 @@
                      scroll plus below-minimum horizontal scroll), and wraps content to the viewport. -->
                 <TreeView Grid.Row="1"
                           Classes="entity-card-tree entity-card-tree-entity entity-card-tree-sticky"
+                          controls:EntityTreePanel.NodeCount="{Binding CurrentViewPopulation.Entities.Count}"
                           HorizontalAlignment="Stretch"
                           ItemsSource="{Binding CurrentViewPopulation.RootEntities}">
                     <TreeView.Styles>
@@ -284,6 +285,5 @@
         </Popup>
     </Grid>
 </Window>
-
 
 
