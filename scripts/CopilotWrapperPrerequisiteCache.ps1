@@ -69,13 +69,22 @@ function Assert-PrerequisiteLayout {
 }
 
 function Open-PrerequisiteRootLease {
-    param([string] $ProjectDirectory)
+    param(
+        [string] $ProjectDirectory,
+        [string] $CacheRoot,
+        [switch] $Shared
+    )
 
-    $lockPath = Join-Path $ProjectDirectory 'obj\mxcw.lock'
+    $lockPath = Join-Path (Split-Path -Parent $CacheRoot) 'mxcw.lock'
     Assert-PrerequisiteOwnedPath $lockPath $ProjectDirectory | Out-Null
     New-Item -ItemType Directory -Path (Split-Path -Parent $lockPath) -Force | Out-Null
     try
     {
+        if ($Shared)
+        {
+            return [IO.File]::Open($lockPath, [IO.FileMode]::OpenOrCreate,
+                [IO.FileAccess]::Read, [IO.FileShare]::Read)
+        }
         return [IO.File]::Open($lockPath, [IO.FileMode]::OpenOrCreate,
             [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
     }

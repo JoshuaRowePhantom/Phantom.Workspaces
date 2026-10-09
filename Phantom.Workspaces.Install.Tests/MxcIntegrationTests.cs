@@ -1,8 +1,34 @@
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 
 namespace Phantom.Workspaces.Install.Tests;
+
+internal static class CopilotWrapperTestHostLease
+{
+    private static FileStream? lease;
+
+    [ModuleInitializer]
+    internal static void Start()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+        var pointer = Path.Combine(
+            AppContext.BaseDirectory, "copilot-wrapper-prerequisite.path");
+        if (!File.Exists(pointer))
+            return;
+        var cacheDirectory = File.ReadAllText(pointer).Trim();
+        lease = MxcRepositoryTestSupport.OpenCopilotWrapperPrerequisiteLease(cacheDirectory);
+        if (!string.Equals(cacheDirectory, File.ReadAllText(pointer).Trim(),
+                StringComparison.OrdinalIgnoreCase) || !Directory.Exists(cacheDirectory))
+        {
+            lease.Dispose();
+            lease = null;
+            throw new InvalidDataException("The prerequisite changed while the test host acquired its cache lease.");
+        }
+    }
+}
 
 [CollectionDefinition(Name, DisableParallelization = true)]
 public sealed class MxcIntegrationCollection
@@ -1366,6 +1392,12 @@ internal static class MxcRepositoryTestSupport
     [
         $"-p:NoBuild={noBuild.ToString().ToLowerInvariant()}",
         $"-p:UsePreparedCopilotPayloadForTests={usePreparedPayload.ToString().ToLowerInvariant()}",
+        .. !string.Equals(
+            Directory.GetParent(prerequisite.CacheDirectory)!.FullName,
+            Path.Combine(Root.FullName, "Phantom.Workspaces.Install.Tests", "obj", "mxcw"),
+            StringComparison.OrdinalIgnoreCase)
+            ? new[] { $"-p:PreparedCopilotPayloadCacheRoot={Directory.GetParent(prerequisite.CacheDirectory)!.FullName}" }
+            : Array.Empty<string>(),
         $"-p:PreparedCopilotPayloadDirectory={preparedDirectory ?? prerequisite.PreparedDirectory}",
         $"-p:PreparedCopilotPayloadFingerprint={preparedFingerprint ?? prerequisite.Manifest.CacheKey}",
         $"-p:PreparedCopilotPayloadConfiguration={prerequisite.Manifest.Configuration}",
@@ -1435,12 +1467,20 @@ internal static class MxcRepositoryTestSupport
 
     internal static CopilotWrapperPrerequisite LoadCopilotWrapperPrerequisite()
     {
-        var lease = File.Open(
-            Path.Combine(Root.FullName, "Phantom.Workspaces.Install.Tests", "obj", "mxcw.lock"),
-            FileMode.Open, FileAccess.Read, FileShare.Read);
+        var pathFile = Path.Combine(
+            AppContext.BaseDirectory, "copilot-wrapper-prerequisite.path");
+        return LoadCopilotWrapperPrerequisite(pathFile);
+    }
+
+    internal static CopilotWrapperPrerequisite LoadCopilotWrapperPrerequisite(string pathFile)
+    {
+        var cacheDirectory = File.ReadAllText(pathFile).Trim();
+        var lease = OpenCopilotWrapperPrerequisiteLease(cacheDirectory);
         try
         {
-            return LoadCopilotWrapperPrerequisiteCore(lease);
+            Assert.Equal(cacheDirectory, File.ReadAllText(pathFile).Trim(),
+                ignoreCase: true);
+            return LoadCopilotWrapperPrerequisiteCore(lease, cacheDirectory);
         }
         catch
         {
@@ -1450,15 +1490,8 @@ internal static class MxcRepositoryTestSupport
     }
 
     private static CopilotWrapperPrerequisite LoadCopilotWrapperPrerequisiteCore(
-        FileStream lease)
+        FileStream lease, string cacheDirectory)
     {
-        var pathFile = Path.Combine(
-            AppContext.BaseDirectory,
-            "copilot-wrapper-prerequisite.path");
-        Assert.True(
-            File.Exists(pathFile),
-            $"The pre-VSTest wrapper prerequisite path file is missing: '{pathFile}'.");
-        var cacheDirectory = File.ReadAllText(pathFile).Trim();
         var manifestPath = Path.Combine(cacheDirectory, "prerequisite.json");
         Assert.True(
             File.Exists(manifestPath),
@@ -1469,11 +1502,7 @@ internal static class MxcRepositoryTestSupport
         Assert.Equal(5, manifest.SchemaVersion);
         Assert.Matches("^[0-9a-f]{64}$", manifest.CacheKey);
         Assert.Matches("^[0-9a-f]{64}$", manifest.SourceFingerprint);
-        var expectedCacheRoot = Path.GetFullPath(Path.Combine(
-            Root.FullName,
-            "Phantom.Workspaces.Install.Tests",
-            "obj",
-            "mxcw"));
+        var expectedCacheRoot = GetOwnedPrerequisiteCacheRoot(cacheDirectory);
         Assert.Equal(
             expectedCacheRoot,
             Directory.GetParent(cacheDirectory)!.FullName,
@@ -1522,6 +1551,49 @@ internal static class MxcRepositoryTestSupport
             lease);
         prerequisite.AssertArtifactHashes();
         return prerequisite;
+    }
+
+    internal static string GetOwnedPrerequisiteCacheRoot(string cacheDirectory)
+    {
+        var project = Path.Combine(Root.FullName, "Phantom.Workspaces.Install.Tests");
+        var root = Directory.GetParent(cacheDirectory)?.FullName
+            ?? throw new InvalidDataException("The prerequisite cache directory has no parent.");
+        if (!Path.IsPathFullyQualified(cacheDirectory) ||
+            !string.Equals(Path.GetFullPath(cacheDirectory),
+                Path.TrimEndingDirectorySeparator(cacheDirectory),
+                StringComparison.OrdinalIgnoreCase) ||
+            !root.StartsWith(project + Path.DirectorySeparatorChar,
+                StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(Path.GetFileName(root), "mxcw",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException("The prerequisite cache root is not project-owned and canonical.");
+        }
+        var current = project;
+        foreach (var part in Path.GetRelativePath(project, root)
+                     .Split(Path.DirectorySeparatorChar))
+        {
+            current = Path.Combine(current, part);
+            if ((Directory.Exists(current) || File.Exists(current)) &&
+                (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new InvalidDataException(
+                    $"The prerequisite cache path contains a reparse point: '{current}'.");
+            }
+        }
+        return root;
+    }
+
+    internal static FileStream OpenCopilotWrapperPrerequisiteLease(string cacheDirectory)
+    {
+        var root = GetOwnedPrerequisiteCacheRoot(cacheDirectory);
+        var lockPath = Path.Combine(Directory.GetParent(root)!.FullName, "mxcw.lock");
+        if (File.Exists(lockPath) &&
+            (File.GetAttributes(lockPath) & FileAttributes.ReparsePoint) != 0)
+        {
+            throw new InvalidDataException($"The prerequisite lease is a reparse point: '{lockPath}'.");
+        }
+        return File.Open(lockPath, FileMode.Open, FileAccess.Read, FileShare.Read);
     }
 
     internal static string ComputeSha256(string path) =>

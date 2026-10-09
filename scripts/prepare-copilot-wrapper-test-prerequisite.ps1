@@ -361,10 +361,13 @@ finally
     $hasher.Dispose()
 }
 
-$rootLease = Open-PrerequisiteRootLease $ProjectDirectory
+$rootLease = Open-PrerequisiteRootLease $ProjectDirectory $CacheRoot -Shared
+$rootIdentity = [Convert]::ToHexString(
+    [Security.Cryptography.SHA256]::HashData(
+        [Text.Encoding]::UTF8.GetBytes($CacheRoot.ToUpperInvariant())))
 $mutex = [System.Threading.Mutex]::new(
     $false,
-    "Local\Phantom.Workspaces.CopilotWrapperPrerequisite.$sourceFingerprint")
+    "Local\Phantom.Workspaces.CopilotWrapperPrerequisite.$rootIdentity")
 $ownsMutex = $false
 $stagingDirectory = $null
 $productionIntermediateDirectory = $null

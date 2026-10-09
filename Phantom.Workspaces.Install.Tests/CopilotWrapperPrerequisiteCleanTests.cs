@@ -54,6 +54,24 @@ public sealed partial class CopilotWrapperNestedPublishTests
     }
 
     [Fact]
+    public async Task CopilotWrapperPrerequisite_CleanWhileTestHostActive_PreservesPointerAndCache()
+    {
+        var pointer = Path.Combine(
+            AppContext.BaseDirectory, "copilot-wrapper-prerequisite.path");
+        var cache = File.ReadAllText(pointer).Trim();
+        var result = await MxcRepositoryTestSupport.InvokeAsync(
+            "dotnet", "msbuild",
+            Path.Combine("Phantom.Workspaces.Install.Tests",
+                "Phantom.Workspaces.Install.Tests.csproj"),
+            "-target:CleanCopilotWrapperTestPrerequisite", "-nologo", "/nodeReuse:false");
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("in use", result.StandardOutput + result.StandardError,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(cache, File.ReadAllText(pointer).Trim());
+        Assert.True(File.Exists(Path.Combine(cache, "prerequisite.json")));
+    }
+
+    [Fact]
     public async Task CopilotWrapperPrerequisite_ReparsePoint_IsRejectedBeforeAnyDeletion()
     {
         using var fixture = new CacheCleanFixture();
@@ -66,7 +84,139 @@ public sealed partial class CopilotWrapperNestedPublishTests
         Assert.NotEqual(0, clean.ExitCode);
         Assert.True(File.Exists(fixture.PointerFile));
         Assert.True(File.Exists(fixture.OutsideFile));
+        fixture.AssertEntriesPresent();
         Directory.Delete(junction);
+    }
+
+    [Fact]
+    public async Task CopilotWrapperPrerequisite_ReparseRoot_IsRejectedBeforeAnyDeletion()
+    {
+        using var fixture = new CacheCleanFixture();
+        fixture.AddEntries();
+        var target = fixture.CacheRoot + "-outside";
+        Directory.Move(fixture.CacheRoot, target);
+        var junction = await MxcRepositoryTestSupport.InvokeAsync(
+            "cmd", "/c", "mklink", "/J", fixture.CacheRoot, target);
+        Assert.Equal(0, junction.ExitCode);
+        try
+        {
+            var result = await fixture.CleanProjectAsync();
+            Assert.NotEqual(0, result.ExitCode);
+            Assert.True(File.Exists(fixture.PointerFile));
+            Assert.True(File.Exists(Path.Combine(target, "aaaaaaaaaaaaaaaa",
+                "prepared", "phantom-copilot-wrapper.exe")));
+            fixture.AssertEntriesPresent();
+        }
+        finally
+        {
+            Directory.Delete(fixture.CacheRoot);
+            Directory.Move(target, fixture.CacheRoot);
+        }
+    }
+
+    [Fact]
+    public async Task CopilotWrapperPrerequisite_ReparseAncestor_IsRejectedBeforeAnyDeletion()
+    {
+        using var fixture = new CacheCleanFixture();
+        fixture.AddEntries();
+        var target = fixture.BaseDirectory + "-outside";
+        Directory.Move(fixture.BaseDirectory, target);
+        var junction = await MxcRepositoryTestSupport.InvokeAsync(
+            "cmd", "/c", "mklink", "/J", fixture.BaseDirectory, target);
+        Assert.Equal(0, junction.ExitCode);
+        try
+        {
+            var result = await fixture.CleanProjectAsync();
+            Assert.NotEqual(0, result.ExitCode);
+            Assert.True(File.Exists(fixture.PointerFile));
+            Assert.True(File.Exists(fixture.OutsideFile));
+            fixture.AssertEntriesPresent();
+        }
+        finally
+        {
+            Directory.Delete(fixture.BaseDirectory);
+            Directory.Move(target, fixture.BaseDirectory);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CopilotWrapperPrerequisite_DirectoryPointer_IsRejectedBeforeAnyDeletion(
+        bool copiedPointer)
+    {
+        using var fixture = new CacheCleanFixture();
+        fixture.AddEntries();
+        var pointer = copiedPointer ? fixture.CopiedPointerFile : fixture.PointerFile;
+        File.Delete(pointer);
+        Directory.CreateDirectory(pointer);
+        File.WriteAllText(Path.Combine(pointer, "outside.txt"), "untouched");
+        var result = await fixture.CleanProjectAsync();
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.True(Directory.Exists(fixture.CacheRoot));
+        Assert.True(File.Exists(Path.Combine(pointer, "outside.txt")));
+        Assert.True(File.Exists(fixture.OutsideFile));
+        fixture.AssertEntriesPresent();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CopilotWrapperPrerequisite_ReparsePointer_IsRejectedBeforeAnyDeletion(
+        bool copiedPointer)
+    {
+        using var fixture = new CacheCleanFixture();
+        fixture.AddEntries();
+        var pointer = copiedPointer ? fixture.CopiedPointerFile : fixture.PointerFile;
+        var external = Path.Combine(fixture.BaseDirectory, "outside-pointer");
+        Directory.CreateDirectory(external);
+        File.WriteAllText(Path.Combine(external, "untouched.txt"), "untouched");
+        File.Delete(pointer);
+        var junction = await MxcRepositoryTestSupport.InvokeAsync(
+            "cmd", "/c", "mklink", "/J", pointer, external);
+        Assert.Equal(0, junction.ExitCode);
+        try
+        {
+            var result = await fixture.CleanProjectAsync();
+            Assert.NotEqual(0, result.ExitCode);
+            Assert.True(Directory.Exists(fixture.CacheRoot));
+            Assert.True(File.Exists(Path.Combine(external, "untouched.txt")));
+            Assert.True(File.Exists(fixture.OutsideFile));
+            fixture.AssertEntriesPresent();
+        }
+        finally
+        {
+            Directory.Delete(pointer);
+        }
+    }
+
+    [Fact]
+    public async Task CopilotWrapperPrerequisite_UnexpectedRootEntry_IsRejectedBeforeAnyDeletion()
+    {
+        using var fixture = new CacheCleanFixture();
+        fixture.AddEntries();
+        var unrelated = Path.Combine(fixture.CacheRoot, "not-a-cache-entry.txt");
+        File.WriteAllText(unrelated, "untouched");
+        var result = await fixture.CleanProjectAsync();
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.True(File.Exists(unrelated));
+        Assert.True(File.Exists(fixture.PointerFile));
+        Assert.True(File.Exists(fixture.OutsideFile));
+        fixture.AssertEntriesPresent();
+    }
+
+    [Fact]
+    public async Task CopilotWrapperPrerequisite_UnownedCopiedOutput_IsRejectedBeforeAnyDeletion()
+    {
+        using var fixture = new CacheCleanFixture();
+        fixture.AddEntries();
+        using var external = new MxcRepositoryTestSupport.TestDirectory();
+        var result = await fixture.CleanWithOutDirAsync(external.Path);
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.True(Directory.Exists(fixture.CacheRoot));
+        Assert.True(File.Exists(fixture.PointerFile));
+        Assert.True(File.Exists(fixture.OutsideFile));
+        fixture.AssertEntriesPresent();
     }
 
     [Fact]
@@ -89,6 +239,7 @@ public sealed partial class CopilotWrapperNestedPublishTests
             Assert.NotEqual(0, result.ExitCode);
             Assert.True(File.Exists(fixture.PointerFile));
             Assert.True(File.Exists(fixture.OutsideFile));
+            fixture.AssertEntriesPresent();
         }
         finally
         {
@@ -115,6 +266,7 @@ public sealed partial class CopilotWrapperNestedPublishTests
     }
 
     [Fact]
+    [Trait("Category", "SlowLayout")]
     public async Task CopilotWrapperPrerequisite_CleanThenTest_RecreatesValidatedCache()
     {
         using var fixture = new CacheCleanFixture();
@@ -139,6 +291,19 @@ public sealed partial class CopilotWrapperNestedPublishTests
                 MxcRepositoryTestSupport.ComputeSha256(path));
         }
         Assert.Equal(cacheDirectory, File.ReadAllText(fixture.CopiedPointerFile).Trim());
+        using (var prerequisite =
+               MxcRepositoryTestSupport.LoadCopilotWrapperPrerequisite(
+                   fixture.CopiedPointerFile))
+        {
+            await using var payload = new MxcRepositoryTestSupport.TestDirectory();
+            await using var artifacts = new MxcRepositoryTestSupport.TestDirectory();
+            var publish = await MxcRepositoryTestSupport.InvokeAsync(
+                "dotnet", MxcRepositoryTestSupport.CreateCopilotWrapperPublishArguments(
+                    payload.Path, artifacts.Path, prerequisite));
+            Assert.True(publish.ExitCode == 0,
+                "Custom prerequisite publish failed:" + Environment.NewLine +
+                publish.StandardOutput + Environment.NewLine + publish.StandardError);
+        }
         Assert.Equal(0, (await fixture.CleanProjectAsync()).ExitCode);
         fixture.AssertRemoved();
     }
@@ -174,7 +339,7 @@ internal sealed class CacheCleanFixture : IDisposable
         CopiedPointerFile = Path.Combine(outputDirectory, "Debug", "net10.0",
             "copilot-wrapper-prerequisite.path");
         OutsideFile = Path.Combine(BaseDirectory, "untouched.txt");
-        LockFile = Path.Combine(projectDirectory, "obj", "mxcw.lock");
+        LockFile = Path.Combine(BaseDirectory, "mxcw.lock");
     }
 
     internal string BaseDirectory { get; }
@@ -200,6 +365,7 @@ internal sealed class CacheCleanFixture : IDisposable
         File.WriteAllText(PointerFile, Path.Combine(CacheRoot, "aaaaaaaaaaaaaaaa"));
         File.WriteAllText(CopiedPointerFile, Path.Combine(CacheRoot, "aaaaaaaaaaaaaaaa"));
         File.WriteAllText(OutsideFile, "untouched");
+        File.WriteAllText(LockFile, string.Empty);
     }
 
     private string[] Arguments(string entryPoint) =>
@@ -218,8 +384,21 @@ internal sealed class CacheCleanFixture : IDisposable
         MxcRepositoryTestSupport.InvokeAsync(
             "dotnet", Arguments("Phantom.Workspaces.slnx"));
 
+    internal Task<MxcRepositoryTestSupport.ProcessResult> CleanWithOutDirAsync(string outDir) =>
+        MxcRepositoryTestSupport.InvokeAsync("dotnet",
+            "clean", Path.Combine("Phantom.Workspaces.Install.Tests",
+                "Phantom.Workspaces.Install.Tests.csproj"),
+            "--nologo", "/nodeReuse:false",
+            $"-p:BaseIntermediateOutputPath=obj\\{name}\\",
+            $"-p:OutDir={outDir}{Path.DirectorySeparatorChar}");
+
     internal Task<MxcRepositoryTestSupport.ProcessResult> PrepareAsync() =>
         MxcRepositoryTestSupport.InvokeAsync("dotnet",
+            new MxcRepositoryTestSupport.InvocationOptions
+            {
+                Timeout = TimeSpan.FromMinutes(25),
+                StandardOutputObserver = line => Console.WriteLine(line)
+            },
             [
                 "msbuild",
                 Path.Combine("Phantom.Workspaces.Install.Tests",
@@ -234,6 +413,18 @@ internal sealed class CacheCleanFixture : IDisposable
         Assert.False(Directory.Exists(CacheRoot));
         Assert.False(File.Exists(PointerFile));
         Assert.False(File.Exists(CopiedPointerFile));
+    }
+
+    internal void AssertEntriesPresent()
+    {
+        foreach (var name in new[]
+        {
+            "aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb", "dddddddddddddddd.staging-123"
+        })
+        {
+            Assert.True(File.Exists(Path.Combine(CacheRoot, name, "prepared",
+                "phantom-copilot-wrapper.exe")));
+        }
     }
 
     public void Dispose()

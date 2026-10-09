@@ -1,4 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="..\scripts\CopilotWrapperPrerequisiteLease.targets" />
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -37,6 +38,9 @@
       <_CopilotWrapperPrerequisitePathFile>$([System.IO.Path]::GetFullPath('$(IntermediateOutputPath)copilot-wrapper-prerequisite.path', '$(MSBuildProjectDirectory)'))</_CopilotWrapperPrerequisitePathFile>
       <_CopilotWrapperPrerequisiteBase>$([System.IO.Path]::TrimEndingDirectorySeparator($([System.IO.Path]::GetFullPath('$(BaseIntermediateOutputPath)', '$(MSBuildProjectDirectory)'))))</_CopilotWrapperPrerequisiteBase>
     </PropertyGroup>
+    <HoldCopilotWrapperPrerequisiteLease
+        CacheRoot="$(_CopilotWrapperPrerequisiteCache)"
+        ProjectDirectory="$(MSBuildProjectDirectory)" />
     <Exec Command="pwsh -NoProfile -NonInteractive -File &quot;$(MSBuildProjectDirectory)\..\scripts\prepare-copilot-wrapper-test-prerequisite.ps1&quot; -RepositoryRoot &quot;$(MSBuildProjectDirectory)\..&quot; -ProjectDirectory &quot;$(MSBuildProjectDirectory)&quot; -BaseIntermediateOutputPath &quot;$(_CopilotWrapperPrerequisiteBase)&quot; -CacheRoot &quot;$(_CopilotWrapperPrerequisiteCache)&quot; -PathOutputFile &quot;$(_CopilotWrapperPrerequisitePathFile)&quot;"
           StandardOutputImportance="high"
           StandardErrorImportance="high" />

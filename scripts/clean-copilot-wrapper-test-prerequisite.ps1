@@ -10,7 +10,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'CopilotWrapperPrerequisiteCache.ps1')
 $root = Assert-PrerequisiteLayout `
     $ProjectDirectory $BaseIntermediateOutputPath $CacheRoot $PathOutputFile $CopiedPathFile
-$lease = Open-PrerequisiteRootLease $ProjectDirectory
+$lease = Open-PrerequisiteRootLease $ProjectDirectory $root
 try
 {
     # Preflight every deletion before removing even the first pointer or entry.
