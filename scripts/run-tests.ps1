@@ -3,6 +3,8 @@ param(
     [string] $TestResultsPath = (Join-Path $PSScriptRoot 'test-results.log'),
     [Parameter()]
     [string[]] $TestNames,
+    [Parameter()]
+    [string] $TestProject,
     # The split-process child attachment scenarios allow 180s for authenticated GUI startup.
     # Blame must outlast that explicit deadline so a slow run reports the real test failure.
     [Parameter()]
@@ -24,7 +26,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
-$solutionPath = Join-Path $repoRoot 'Phantom.Workspaces.slnx'
+$testTargetPath = if ($TestProject) { (Resolve-Path $TestProject).Path } else { Join-Path $repoRoot 'Phantom.Workspaces.slnx' }
 
 Set-Content -Path $TestResultsPath -Value '' -Encoding utf8
 
@@ -34,7 +36,7 @@ Get-ChildItem -Path $repoRoot -Filter '*.dmp' -Recurse -ErrorAction SilentlyCont
 
 $dotnetArgs = @(
     'test',
-    $solutionPath,
+    $testTargetPath,
     '--no-restore',
     '--nologo',
     # Serialize the whole solution test run onto a single MSBuild node (issue #1101). `dotnet test`
@@ -129,7 +131,7 @@ if ($filterClauses.Count -gt 0)
 # is set the projects are already built, so no restore is needed.
 if (-not $NoBuild)
 {
-    $restoreOutput = & dotnet restore $solutionPath --nologo 2>&1
+    $restoreOutput = & dotnet restore $testTargetPath --nologo 2>&1
     if ($LASTEXITCODE -ne 0)
     {
         $restoreOutput | ForEach-Object { $_.ToString() } | Set-Content -Path $TestResultsPath -Encoding utf8
@@ -140,8 +142,10 @@ if (-not $NoBuild)
 }
 
 $runStart = Get-Date
-$rawOutput = & dotnet @dotnetArgs 2>&1
+# Preserve progress in the uploaded log even if CI terminates a long-running test host.
+& dotnet @dotnetArgs 2>&1 | Tee-Object -FilePath $TestResultsPath | Out-Null
 $dotnetExitCode = $LASTEXITCODE
+$rawOutput = Get-Content -Path $TestResultsPath
 
 # Write full dotnet output to log before TRX parsing
 $cleanOutput = $rawOutput | ForEach-Object {

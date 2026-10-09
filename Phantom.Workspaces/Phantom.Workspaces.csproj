@@ -99,9 +99,10 @@
     <Error Condition="!Exists('$(PublishDir)runtimes\$(RuntimeIdentifier)\native\phantom-copilot-wrapper.exe')"
            Text="The Copilot MXC wrapper was not published as a loose file." />
   </Target>
+  <Import Project="..\scripts\CopilotWrapperPrerequisiteLease.targets" />
   <Target Name="ValidatePreparedCopilotPayload"
           BeforeTargets="PublishCopilotWrapperLoose;PublishCopilotRuntimeLoose;PublishMxcRuntimeLoose"
-          Condition="'$(UsePreparedCopilotPayloadForTests)' != '' Or '$(PreparedCopilotPayloadDirectory)' != '' Or '$(PreparedCopilotPayloadFingerprint)' != '' Or '$(PreparedCopilotPayloadConfiguration)' != '' Or '$(PreparedCopilotPayloadRuntimeIdentifier)' != '' Or '$(PreparedCopilotPayloadManifestSha256)' != '' Or '$(PreparedCopilotWrapperSha256)' != '' Or '$(PreparedCopilotCliSha256)' != '' Or '$(PreparedCopilotSdkWrapperSha256)' != '' Or '$(PreparedCopilotRuntimeSha256)' != '' Or '$(PreparedCopilotNodeSha256)' != '' Or '$(PreparedCopilotLicenseSha256)' != '' Or '$(PreparedMxcFfiSha256)' != '' Or '$(PreparedPlmSha256)' != '' Or '$(PreparedMxcLicenseSha256)' != '' Or '$(SimulateMissingCopilotWrapperChildOutputForTests)' != '' Or '$(UsePreparedCopilotPayload)' != '' Or '$(RequirePreparedCopilotWrapper)' != '' Or '$(CopilotWrapperPreparedExecutable)' != '' Or '$(CopilotWrapperPreparedConfiguration)' != '' Or '$(CopilotWrapperPreparedRuntimeIdentifier)' != ''">
+          Condition="'$(UsePreparedCopilotPayloadForTests)' != '' Or '$(PreparedCopilotPayloadCacheRoot)' != '' Or '$(PreparedCopilotPayloadDirectory)' != '' Or '$(PreparedCopilotPayloadFingerprint)' != '' Or '$(PreparedCopilotPayloadConfiguration)' != '' Or '$(PreparedCopilotPayloadRuntimeIdentifier)' != '' Or '$(PreparedCopilotPayloadManifestSha256)' != '' Or '$(PreparedCopilotWrapperSha256)' != '' Or '$(PreparedCopilotCliSha256)' != '' Or '$(PreparedCopilotSdkWrapperSha256)' != '' Or '$(PreparedCopilotRuntimeSha256)' != '' Or '$(PreparedCopilotNodeSha256)' != '' Or '$(PreparedCopilotLicenseSha256)' != '' Or '$(PreparedMxcFfiSha256)' != '' Or '$(PreparedPlmSha256)' != '' Or '$(PreparedMxcLicenseSha256)' != '' Or '$(SimulateMissingCopilotWrapperChildOutputForTests)' != '' Or '$(UsePreparedCopilotPayload)' != '' Or '$(RequirePreparedCopilotWrapper)' != '' Or '$(CopilotWrapperPreparedExecutable)' != '' Or '$(CopilotWrapperPreparedConfiguration)' != '' Or '$(CopilotWrapperPreparedRuntimeIdentifier)' != ''">
     <Error Condition="'$(UsePreparedCopilotPayload)' != '' Or '$(RequirePreparedCopilotWrapper)' != '' Or '$(CopilotWrapperPreparedExecutable)' != '' Or '$(CopilotWrapperPreparedConfiguration)' != '' Or '$(CopilotWrapperPreparedRuntimeIdentifier)' != ''"
            Text="Legacy prepared Copilot properties are unsafe and are not supported." />
     <Error Condition="'$(UsePreparedCopilotPayloadForTests)' != 'true'"
@@ -110,6 +111,13 @@
            Text="SimulateMissingCopilotWrapperChildOutputForTests only accepts true in prepared test mode." />
     <Error Condition="'$(NoBuild)' != 'true'"
            Text="Prepared Copilot payload inputs may only be used by a build-free target invocation with NoBuild=true." />
+    <PropertyGroup>
+      <_PreparedCopilotPayloadExpectedCacheRoot Condition="'$(PreparedCopilotPayloadCacheRoot)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\..\Phantom.Workspaces.Install.Tests\obj\mxcw'))</_PreparedCopilotPayloadExpectedCacheRoot>
+      <_PreparedCopilotPayloadExpectedCacheRoot Condition="'$(PreparedCopilotPayloadCacheRoot)' != ''">$(PreparedCopilotPayloadCacheRoot)</_PreparedCopilotPayloadExpectedCacheRoot>
+    </PropertyGroup>
+    <HoldCopilotWrapperPrerequisiteLease
+        CacheRoot="$(_PreparedCopilotPayloadExpectedCacheRoot)"
+        ProjectDirectory="$(MSBuildProjectDirectory)\..\Phantom.Workspaces.Install.Tests" />
     <Error Condition="'$(PreparedCopilotPayloadDirectory)' == '' Or !$([System.IO.Path]::IsPathFullyQualified('$(PreparedCopilotPayloadDirectory)')) Or !Exists('$(PreparedCopilotPayloadDirectory)')"
            Text="The prepared Copilot payload directory does not exist at '$(PreparedCopilotPayloadDirectory)'." />
     <Error Condition="'$(PreparedCopilotPayloadConfiguration)' != '$(Configuration)'"
@@ -122,7 +130,6 @@
       <_PreparedCopilotPayloadCacheDirectory>$([System.IO.Path]::GetDirectoryName('$(_PreparedCopilotPayloadCanonicalDirectory)'))</_PreparedCopilotPayloadCacheDirectory>
       <_PreparedCopilotPayloadCacheRoot>$([System.IO.Path]::GetDirectoryName('$(_PreparedCopilotPayloadCacheDirectory)'))</_PreparedCopilotPayloadCacheRoot>
       <_PreparedCopilotPayloadCacheName>$([System.IO.Path]::GetFileName('$(_PreparedCopilotPayloadCacheDirectory)'))</_PreparedCopilotPayloadCacheName>
-      <_PreparedCopilotPayloadExpectedCacheRoot>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\..\Phantom.Workspaces.Install.Tests\obj\mxcw'))</_PreparedCopilotPayloadExpectedCacheRoot>
       <_PreparedCopilotPayloadFingerprintFile>$(_PreparedCopilotPayloadCacheDirectory)\prerequisite.fingerprint</_PreparedCopilotPayloadFingerprintFile>
       <_PreparedCopilotPayloadManifestFile>$(_PreparedCopilotPayloadCacheDirectory)\prerequisite.json</_PreparedCopilotPayloadManifestFile>
       <_PreparedCopilotPayloadFingerprintPrefix Condition="$([System.String]::Copy('$(PreparedCopilotPayloadFingerprint)').Length) &gt;= 16">$([System.String]::Copy('$(PreparedCopilotPayloadFingerprint)').Substring(0, 16))</_PreparedCopilotPayloadFingerprintPrefix>

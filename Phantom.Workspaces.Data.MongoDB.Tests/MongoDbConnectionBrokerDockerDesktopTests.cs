@@ -87,6 +87,37 @@ public sealed class MongoDbConnectionBrokerDockerDesktopTests
     }
 
     [Fact]
+    public async Task EnsureContainerStarted_WhenCreatingContainer_CreatesBothBindMountSources()
+    {
+        var dataDirectory = Path.Combine(AppContext.BaseDirectory, "mongo-bind-mount-" + Guid.NewGuid().ToString("N"));
+        var connection = new MongoDbContainerConnectionDefinition
+        {
+            ContainerName = "phantom-mongo-test",
+            DataDirectory = dataDirectory,
+            DatabaseName = "test",
+            CollectionName = "test",
+            HostPort = 27017,
+        };
+        var engine = new FakeDockerEngine { UsableResult = true, FailFirstStart = true };
+        var broker = CreateBroker(engine, new FakeDockerDesktopLauncher(null), new FakeTimeProvider());
+
+        try
+        {
+            _ = await InvokeGetClientAndCatchAsync(broker, connection);
+
+            var definition = Assert.Single(engine.CreatedDefinitions);
+            Assert.All(definition.Mounts, mount => Assert.True(Directory.Exists(mount.Source), mount.Source));
+        }
+        finally
+        {
+            if (Directory.Exists(dataDirectory))
+            {
+                Directory.Delete(dataDirectory, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task EnsureContainerStarted_WhenDockerNotUsableAndDesktopInstalled_LaunchesDockerDesktop()
     {
         var engine = new FakeDockerEngine { UsableResult = false };

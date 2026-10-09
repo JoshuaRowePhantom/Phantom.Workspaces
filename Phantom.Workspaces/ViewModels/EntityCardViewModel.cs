@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using System.Windows.Input;
 using Avalonia.Threading;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Services;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -29,7 +30,9 @@ public sealed class EntityCardViewModel : ViewModelBase
 
     private readonly SubscribedEntityViewModel? entity;
     private readonly FieldEditorFactory? fieldEditorFactory;
-    private readonly string cardViewName;
+    private readonly Func<IUrlOpener?>? urlOpenerProvider;
+    private readonly bool autoResolveCardView;
+    private string cardViewName;
     private readonly string displayName;
     private readonly string entityType;
     private readonly JsonValidationViewModel validation;
@@ -46,6 +49,7 @@ public sealed class EntityCardViewModel : ViewModelBase
     private ShortcutManager? shortcutManager;
     private IReadOnlyList<EntityShortcutViewModel> shortcuts = Array.Empty<EntityShortcutViewModel>();
     private CancellationTokenSource? shortcutResolutionCts;
+    private int disposed;
     // Issue #1177: field editors are built lazily on first realization instead of eagerly in the
     // constructor. This flag guards EnsureFieldEditorsBuilt so the build is scheduled at most once,
     // and it also gates the snapshot-change rebuild so unrealized cards do not re-launch schema work
@@ -60,16 +64,40 @@ public sealed class EntityCardViewModel : ViewModelBase
     // browser can defer its own FieldTypeResolver-based schema work until the card is realized.
     private Func<CancellationToken, Task<IReadOnlyCollection<EntityFieldEditorViewModel>>>? lazyFieldEditorBuilder;
 
+    public override async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref this.disposed, 1) != 0)
+        {
+            return;
+        }
+
+        if (this.entity is not null)
+        {
+            this.entity.PropertyChanged -= this.OnEntityPropertyChanged;
+        }
+
+        this.shortcutResolutionCts?.Cancel();
+        await base.DisposeAsync();
+        this.shortcutResolutionCts?.Dispose();
+        this.shortcutResolutionCts = null;
+    }
+
     public EntityCardViewModel(
         SubscribedEntityViewModel entity,
         IReadOnlyCollection<EntityFieldEditorViewModel>? fieldEditors = null,
         string? cardViewName = null,
         IEntitySchemaComposer? schemaComposer = null,
-        FieldEditorFactory? fieldEditorFactory = null)
+        FieldEditorFactory? fieldEditorFactory = null,
+        Func<IUrlOpener?>? urlOpenerProvider = null,
+        bool autoResolveCardView = false)
     {
         this.entity = entity;
         this.fieldEditorFactory = fieldEditorFactory;
-        this.cardViewName = cardViewName ?? EntityCardViewResolver.RawViewName;
+        this.urlOpenerProvider = urlOpenerProvider;
+        this.autoResolveCardView = autoResolveCardView;
+        this.cardViewName = autoResolveCardView
+            ? new EntityCardViewResolver().ResolveViewName(entity)
+            : cardViewName ?? EntityCardViewResolver.RawViewName;
         this.displayName = entity.DisplayName;
         this.entityType = entity.EntityType;
         this.fieldEditors = fieldEditors ?? Array.Empty<EntityFieldEditorViewModel>();
@@ -90,7 +118,10 @@ public sealed class EntityCardViewModel : ViewModelBase
             _ => this.IsEditMode);
         this.ToggleJsonViewCommand = entity.ToggleRawJsonVisibilityCommand;
         this.DeleteEntityCommand = entity.DeleteEntityCommand;
-        this.externalCard = this.cardViewName == "external" ? ExternalEntityCardViewModel.Create(entity) : null;
+        this.externalCard = this.HasExternalPresentation
+            ? ExternalEntityCardViewModel.Create(entity, () => this.urlOpenerProvider?.Invoke()
+                ?? this.shortcutMainWindowViewModel?.ApplicationServices.UrlOpener)
+            : null;
         // Issue #1177: do NOT eagerly build field editors here. Realizing the card control triggers
         // EnsureFieldEditorsBuilt via EntityCardControl.OnAttachedToVisualTree, so off-screen cards
         // in a virtualized tree pay no schema/type-resolution cost.
@@ -174,6 +205,10 @@ public sealed class EntityCardViewModel : ViewModelBase
     public string EntityType => this.entity?.EntityType ?? this.entityType;
 
     public string CardViewName => this.cardViewName;
+
+    public bool ShowFieldEditors => this.cardViewName != "external";
+
+    private bool HasExternalPresentation => this.cardViewName is "external" or "external-note";
 
     public ExternalEntityCardViewModel? ExternalCard => this.externalCard;
 
@@ -581,15 +616,18 @@ public sealed class EntityCardViewModel : ViewModelBase
             return;
         }
 
-        // Issue #1164: pass every non-abstract entity type so the factory can compose per-type
-        // presentations (e.g. a tool+note entity contributes the note's content field via the note
-        // entity-type-view, not just the primary "tool" type).
-        var entityTypeNames = this.entity.NonAbstractEntityTypeNames;
+        // The mixed card shows the note's curated content alongside the URL card, not fields
+        // contributed by any other types on the entity.
+        var entityTypeNames = this.cardViewName == "external-note"
+            ? (IReadOnlyList<string>)["note"]
+            : this.entity.NonAbstractEntityTypeNames;
         var built = await this.fieldEditorFactory
             .BuildFieldEditorsAsync(entityData, entityTypeNames)
             .ConfigureAwait(true);
 
-        this.SetFieldEditors(built);
+        this.SetFieldEditors(this.cardViewName == "external-note"
+            ? built.Where(editor => editor.FieldName == "content").ToArray()
+            : built);
     }
 
     private void SetFieldEditorEditMode(
@@ -750,6 +788,19 @@ public sealed class EntityCardViewModel : ViewModelBase
 
         if (string.Equals(e.PropertyName, nameof(SubscribedEntityViewModel.Snapshot), StringComparison.Ordinal))
         {
+            if ((this.autoResolveCardView || this.cardViewName != EntityCardViewResolver.RawViewName)
+                && this.entity is not null)
+            {
+                var resolvedViewName = new EntityCardViewResolver().ResolveViewName(this.entity);
+                if (this.cardViewName != resolvedViewName)
+                {
+                    this.cardViewName = resolvedViewName;
+                    this.RaisePropertyChanged(nameof(this.CardViewName));
+                    this.RaisePropertyChanged(nameof(this.ShowFieldEditors));
+                    this.SetFieldEditors(Array.Empty<EntityFieldEditorViewModel>());
+                }
+            }
+
             this.RaisePropertyChanged(nameof(this.DisplayName));
             this.RaisePropertyChanged(nameof(this.EntityType));
             this.RaisePropertyChanged(nameof(this.EntityTypeLabels));
@@ -770,9 +821,13 @@ public sealed class EntityCardViewModel : ViewModelBase
                 }
             }
 
-            if (this.cardViewName == "external" && this.entity is not null)
+            if (this.entity is not null)
             {
-                this.externalCard = ExternalEntityCardViewModel.Create(this.entity);
+                this.externalCard = this.HasExternalPresentation
+                    ? ExternalEntityCardViewModel.Create(
+                        this.entity, () => this.urlOpenerProvider?.Invoke()
+                            ?? this.shortcutMainWindowViewModel?.ApplicationServices.UrlOpener)
+                    : null;
                 this.RaisePropertyChanged(nameof(this.ExternalCard));
             }
 

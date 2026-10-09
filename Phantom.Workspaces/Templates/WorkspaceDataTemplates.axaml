@@ -28,6 +28,39 @@
         </StackPanel>
     </DataTemplate>
 
+    <DataTemplate DataType="vm:ViewWorkspaceTabViewModel">
+        <Grid RowDefinitions="Auto,*">
+            <Border Grid.Row="0" Padding="12,8" BorderThickness="0,0,0,1" BorderBrush="Gray">
+                <DockPanel LastChildFill="True">
+                    <Button DockPanel.Dock="Right"
+                            Content="View definition / Edit definition"
+                            Command="{Binding EditDefinitionCommand}" />
+                    <TextBlock DockPanel.Dock="Left" Text="{Binding Definition.Title}" VerticalAlignment="Center" />
+                    <CheckBox DockPanel.Dock="Right" Content="Hide unmatched"
+                              Margin="8,0" IsChecked="{Binding HideUnmatched}" />
+                    <TextBox PlaceholderText="Find in view"
+                             Text="{Binding SearchText, Mode=TwoWay}"
+                             Margin="12,0" />
+                </DockPanel>
+            </Border>
+            <TreeView Grid.Row="1"
+                      Classes="entity-card-tree entity-card-tree-entity"
+                      ItemsSource="{Binding Population.RootEntities}">
+                <TreeView.Styles>
+                    <Style Selector="TreeViewItem" x:DataType="vm:ViewEntityViewModel">
+                        <Setter Property="IsVisible" Value="{Binding IsVisible}"/>
+                    </Style>
+                </TreeView.Styles>
+                <TreeView.ItemTemplate>
+                    <TreeDataTemplate x:DataType="vm:ViewEntityViewModel"
+                                      ItemsSource="{Binding Children}">
+                        <ContentControl Content="{Binding EntityCardNode}" />
+                    </TreeDataTemplate>
+                </TreeView.ItemTemplate>
+            </TreeView>
+        </Grid>
+    </DataTemplate>
+
     <!-- Issue #1066: the single-entity view reuses the same entity-card shell chrome as tree
          cards, hosted in a top-margined, horizontally centered ScrollViewer capped to ~1/3 of the
          pane width, and shares the #1064 two-regime scroll handling (content wraps to the capped
@@ -156,12 +189,12 @@
               RowDefinitions="Auto,Auto">
             <controls:SafeSelectableTextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
             <!-- Read mode: navigable link to the referenced entity (resolved display name). -->
-            <Button Grid.Column="1" Grid.Row="0"
-                    Content="{Binding ResolvedDisplayName}"
+            <controls:CopyableLinkTextBlock Grid.Column="1" Grid.Row="0"
+                    Text="{Binding ResolvedDisplayName}"
                     ToolTip.Tip="{Binding TooltipText}"
                     Command="{Binding OpenCommand}"
-                    IsEnabled="{Binding CanOpen}"
                     Classes="workspace-entity-reference-link"
+                    Classes.available="{Binding CanOpen}"
                     HorizontalAlignment="Left"
                     IsVisible="{Binding IsReadMode}" />
             <!-- Edit mode: search box plus candidate results. -->
@@ -178,6 +211,7 @@
                         <Button Command="{Binding SelectCommand}"
                                 ToolTip.Tip="{Binding Names}"
                                 Content="{Binding DisplayName}"
+                                ContentTemplate="{StaticResource CopyableCardButtonContentTemplate}"
                                 HorizontalAlignment="Stretch"
                                 HorizontalContentAlignment="Left"
                                 Classes="workspace-entity-reference-candidate" />
@@ -196,11 +230,11 @@
                           ItemsSource="{Binding Items}">
                 <ItemsControl.ItemTemplate>
                     <DataTemplate>
-                        <Button Content="{Binding DisplayName}"
+                        <controls:CopyableLinkTextBlock Text="{Binding DisplayName}"
                                 ToolTip.Tip="{Binding TooltipText}"
                                 Command="{Binding OpenCommand}"
-                                IsEnabled="{Binding CanOpen}"
                                 Classes="workspace-entity-reference-link"
+                                Classes.available="{Binding CanOpen}"
                                 HorizontalAlignment="Left" />
                     </DataTemplate>
                 </ItemsControl.ItemTemplate>
@@ -301,6 +335,11 @@
 
     <DataTemplate DataType="vm:PlainMimeAttachmentFieldEditorViewModel">
         <Expander Header="{Binding FieldName}" Classes="workspace-field-expander">
+            <Expander.HeaderTemplate>
+                <DataTemplate>
+                    <controls:SafeSelectableTextBlock Text="{Binding}" />
+                </DataTemplate>
+            </Expander.HeaderTemplate>
             <StackPanel Classes="workspace-mime-content">
                 <Grid Classes="workspace-field-row"
                       ColumnDefinitions="Auto,*">
@@ -354,6 +393,11 @@
             <Expander Header="{Binding FieldName}"
                       Classes="workspace-field-expander"
                       IsVisible="{Binding ShowChrome}">
+                <Expander.HeaderTemplate>
+                    <DataTemplate>
+                        <controls:SafeSelectableTextBlock Text="{Binding}" />
+                    </DataTemplate>
+                </Expander.HeaderTemplate>
                 <StackPanel Classes="workspace-mime-content">
                     <Grid Classes="workspace-field-row"
                           ColumnDefinitions="Auto,*">
@@ -438,12 +482,22 @@
 
     <DataTemplate DataType="vm:ArrayFieldEditorViewModel">
         <Expander Header="{Binding FieldName}" Classes="workspace-field-expander">
+            <Expander.HeaderTemplate>
+                <DataTemplate>
+                    <controls:SafeSelectableTextBlock Text="{Binding}" />
+                </DataTemplate>
+            </Expander.HeaderTemplate>
             <ItemsControl ItemsSource="{Binding Items}" Classes="workspace-field-items" />
         </Expander>
     </DataTemplate>
 
     <DataTemplate DataType="vm:ObjectFieldEditorViewModel">
         <Expander Header="{Binding FieldName}" Classes="workspace-field-expander">
+            <Expander.HeaderTemplate>
+                <DataTemplate>
+                    <controls:SafeSelectableTextBlock Text="{Binding}" />
+                </DataTemplate>
+            </Expander.HeaderTemplate>
             <ItemsControl ItemsSource="{Binding Fields}" Classes="workspace-field-items" />
         </Expander>
     </DataTemplate>
@@ -493,18 +547,23 @@
         <ItemsControl ItemsSource="{Binding Urls}">
             <ItemsControl.ItemTemplate>
                 <DataTemplate DataType="vm:ExternalUrlViewModel">
-                    <StackPanel Orientation="Horizontal" Spacing="4">
+                    <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto">
                         <controls:SafeSelectableTextBlock Text="{Binding Key}"
                                    IsVisible="{Binding ShowKey}"
                                    Classes="muted workspace-field-label" />
-                        <Button Content="{Binding Url}"
+                        <controls:CopyableLinkTextBlock Grid.Column="1"
+                                Text="{Binding Url}"
                                 Classes="workspace-url-link"
+                                Classes.available="{Binding IsSupported}"
                                 Command="{Binding OpenCommand}"
                                 HorizontalAlignment="Left" />
-                    </StackPanel>
+                        <controls:SafeSelectableTextBlock Grid.Row="1" Grid.Column="1"
+                                                          Text="{Binding ErrorMessage}"
+                                                          IsVisible="{Binding HasError}"
+                                                          Classes="muted" />
+                    </Grid>
                 </DataTemplate>
             </ItemsControl.ItemTemplate>
         </ItemsControl>
     </DataTemplate>
 </DataTemplates>
-

@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Tools;
@@ -95,48 +94,50 @@ public sealed class RunVsCodeTunnelToolTests
     }
 
     /// <summary>
-    /// A synchronous, manually-driven "wait between polls" seam. Each call to the delegate blocks
-    /// until <see cref="ReleaseOnePoll"/> is invoked from the test — no timing dependencies.
+    /// A manually-driven "wait between polls" seam. Tests observe the pending wait before
+    /// releasing it, so they cannot release a poll that the runner will never enter.
     /// </summary>
     private sealed class ManualPollGate
     {
-        private readonly ConcurrentQueue<TaskCompletionSource> pending = new();
-        private readonly ConcurrentQueue<TaskCompletionSource> releases = new();
         private readonly object gate = new();
+        private TaskCompletionSource? pending;
+        private TaskCompletionSource pollArrived = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public int PollCount { get; private set; }
+        public Task WaitForPollAsync()
+        {
+            lock (this.gate)
+            {
+                return this.pending is not null
+                    ? Task.CompletedTask
+                    : this.pollArrived.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            }
+        }
 
         public Task WaitAsync(CancellationToken cancellationToken)
         {
             lock (this.gate)
             {
-                this.PollCount++;
-                if (this.releases.TryDequeue(out var release))
+                var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                if (this.pending is not null)
                 {
-                    release.SetResult();
-                    return Task.CompletedTask;
+                    throw new InvalidOperationException("The previous poll has not been released.");
                 }
 
-                var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                this.pending.Enqueue(tcs);
+                this.pending = tcs;
+                this.pollArrived.TrySetResult();
                 cancellationToken.Register(() => tcs.TrySetCanceled(cancellationToken));
                 return tcs.Task;
             }
         }
 
-        public Task ReleaseOnePoll()
+        public void ReleaseOnePoll()
         {
             lock (this.gate)
             {
-                if (this.pending.TryDequeue(out var tcs))
-                {
-                    tcs.SetResult();
-                    return Task.CompletedTask;
-                }
-
-                var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                this.releases.Enqueue(release);
-                return release.Task;
+                var tcs = this.pending ?? throw new InvalidOperationException("No poll is pending.");
+                this.pending = null;
+                this.pollArrived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                tcs.SetResult();
             }
         }
     }
@@ -240,16 +241,17 @@ public sealed class RunVsCodeTunnelToolTests
         var runTask = tool.ExecuteAsync(this.Context());
 
         // First poll: status "running" then wait for tick.
-        await gate.ReleaseOnePoll();
+        await gate.WaitForPollAsync();
+        gate.ReleaseOnePoll();
         // Second poll: status "running" then wait for tick.
-        await gate.ReleaseOnePoll();
+        await gate.WaitForPollAsync();
 
         Assert.False(runTask.IsCompleted);
         Assert.True(statusCount >= 2);
 
         // Break the conjunction so ExecuteAsync can return.
         child.SimulateExit(0, "child died");
-        await gate.ReleaseOnePoll();
+        gate.ReleaseOnePoll();
 
         await runTask;
     }
@@ -546,13 +548,13 @@ public sealed class RunVsCodeTunnelToolTests
 
         // Release the grace period; the first status probe may now happen.
         graceGate.SetResult();
-        await pollGate.ReleaseOnePoll();
+        await pollGate.WaitForPollAsync();
 
         Assert.True(statusCount >= 1);
 
         // Let ExecuteAsync return.
         child.SimulateExit(0, "done");
-        await pollGate.ReleaseOnePoll();
+        pollGate.ReleaseOnePoll();
         await runTask;
     }
 
@@ -590,14 +592,14 @@ public sealed class RunVsCodeTunnelToolTests
         var runTask = tool.ExecuteAsync(this.Context());
 
         graceGate.SetResult();
-        await pollGate.ReleaseOnePoll();
+        await pollGate.WaitForPollAsync();
 
         // Tunnel reported running after the grace period, so the tool keeps blocking rather than
         // returning a spurious "not running" failure.
         Assert.False(runTask.IsCompleted);
 
         child.SimulateExit(0, "done");
-        await pollGate.ReleaseOnePoll();
+        pollGate.ReleaseOnePoll();
         await runTask;
     }
 
@@ -811,15 +813,16 @@ public sealed class RunVsCodeTunnelToolTests
 
         // A Connected status makes the tool treat the tunnel as up: it keeps blocking and does NOT
         // kill the child or emit the failure message.
-        await gate.ReleaseOnePoll();
-        await gate.ReleaseOnePoll();
+        await gate.WaitForPollAsync();
+        gate.ReleaseOnePoll();
+        await gate.WaitForPollAsync();
 
         Assert.False(runTask.IsCompleted);
         Assert.False(child.WasKilled);
 
         // Let ExecuteAsync return by having the child exit.
         child.SimulateExit(0, "done");
-        await gate.ReleaseOnePoll();
+        gate.ReleaseOnePoll();
         await runTask;
     }
 
@@ -870,8 +873,9 @@ public sealed class RunVsCodeTunnelToolTests
 
         var runTask = tool.ExecuteAsync(this.Context());
 
-        await gate.ReleaseOnePoll();
-        await gate.ReleaseOnePoll();
+        await gate.WaitForPollAsync();
+        gate.ReleaseOnePoll();
+        await gate.WaitForPollAsync();
 
         // The runner obtained status solely through the shared resolver and performed no
         // independent `code tunnel status` invocation.
@@ -879,7 +883,7 @@ public sealed class RunVsCodeTunnelToolTests
         Assert.DoesNotContain(cliCalls, c => c.Arguments.Contains("status"));
 
         child.SimulateExit(0, "done");
-        await gate.ReleaseOnePoll();
+        gate.ReleaseOnePoll();
         await runTask;
     }
 }

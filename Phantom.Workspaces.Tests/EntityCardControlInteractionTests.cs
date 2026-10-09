@@ -62,7 +62,7 @@ public sealed class EntityCardControlInteractionTests
     [AvaloniaFact(Timeout = 15_000)]
     public void EntityCardControl_WhenTappedOnBackground_OpensEntity()
     {
-        // A tap on a non-interactive area (e.g. the title TextBlock or empty card space) arrives
+        // A tap on a non-interactive area (e.g. empty card space) arrives
         // with Handled=false; the handler must activate the entity and claim the event.
         var card = new SpyEntityCardControl();
         var e = (TappedEventArgs)RuntimeHelpers.GetUninitializedObject(typeof(TappedEventArgs));

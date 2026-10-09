@@ -79,8 +79,11 @@ public sealed class ChatOutputHtmlStructuralInvariantsTests
         running.Remove(runningItem);
 
         var groupId = ChatOutputHtmlRenderer.ToolGroupId(0);
-        Assert.Contains(sink.Operations, op => op.Path == ChatOutputHtmlRenderer.ToolGroupSummaryId(groupId)
-            && op.Content.Contains("2 calls", StringComparison.Ordinal));
+        Assert.Contains(sink.Operations, op => op.Content.Contains($"id=\"{groupId}-details\"", StringComparison.Ordinal));
+        Assert.Contains(sink.Operations, op => op.Content.Contains("working", StringComparison.Ordinal)
+            && op.Path == groupId && op.Location == ChatOutputUpdateLocation.After);
+        Assert.Contains(sink.Operations, op => op.Content.Contains("write", StringComparison.Ordinal)
+            && op.Content.Contains("-group-2-details", StringComparison.Ordinal));
         Assert.DoesNotContain(sink.Operations, op => op.Path == ChatOutputHtmlRenderer.HistoryContainerId
             && op.Content.Contains("id=\"tool-group-1\"", StringComparison.Ordinal));
     }
@@ -107,14 +110,114 @@ public sealed class ChatOutputHtmlStructuralInvariantsTests
             new ObservableCollection<AgentChatRunningItem>(), () => true, reloadSink);
         await reload.HistoryLoaded;
         var html = string.Concat(reloadSink.Operations.Select(op => op.Content));
-        Assert.Single(Regex.Matches(html, "class=\"chat-content chat-tool-group\"").Cast<object>());
-        Assert.Contains("2 calls", html);
+        Assert.Equal(2, Regex.Matches(html, "class=\"chat-content chat-tool-group\"").Count);
         Assert.Contains("working", html);
         Assert.Contains("read", html);
         Assert.Contains("write", html);
         Assert.Contains("result", html);
-        Assert.Contains(liveSink.Operations, op => op.Path == ChatOutputHtmlRenderer.ToolGroupSummaryId(ChatOutputHtmlRenderer.ToolGroupId(0))
-            && op.Content.Contains("2 calls", StringComparison.Ordinal));
+        Assert.True(html.IndexOf("read", StringComparison.Ordinal) <
+            html.IndexOf("working", StringComparison.Ordinal));
+        Assert.True(html.IndexOf("working", StringComparison.Ordinal) <
+            html.IndexOf("write", StringComparison.Ordinal));
+        Assert.Contains(liveSink.Operations, op => op.Content.Contains("id=\"tool-group-0-details\"", StringComparison.Ordinal));
+        Assert.Contains(liveSink.Operations, op => op.Content.Contains("id=\"tool-group-3-details\"", StringComparison.Ordinal));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ChatOutput_HistoryReloadWithInterleavedSystemNotification_MatchesLiveDomOrder()
+    {
+        var items = new[]
+        {
+            ToolCallMessage("first_tool", "c1") with { AssistantRunId = "run" },
+            TextMessage(ChatRole.System, "agent idle") with { AssistantRunId = "run" },
+            ToolCallMessage("second_tool", "c2") with { AssistantRunId = "run" },
+            TextMessage(ChatRole.Assistant, "after tools") with { AssistantRunId = "run" },
+        };
+        var history = new ObservableCollection<AgentChatHistoryItem>();
+        var liveSink = new RecordingSink();
+        using var live = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, liveSink);
+        await live.HistoryLoaded;
+        foreach (var item in items) history.Add(item);
+
+        var reloadSink = new RecordingSink();
+        using var reload = new ChatOutputHtmlModel(new ObservableCollection<AgentChatHistoryItem>(items),
+            new ObservableCollection<AgentChatRunningItem>(), () => true, reloadSink);
+        await reload.HistoryLoaded;
+        var html = string.Concat(reloadSink.Operations.Select(op => op.Content));
+        Assert.True(html.IndexOf("first_tool(…)", StringComparison.Ordinal) <
+            html.IndexOf("agent idle", StringComparison.Ordinal));
+        Assert.True(html.IndexOf("agent idle", StringComparison.Ordinal) <
+            html.IndexOf("second_tool(…)", StringComparison.Ordinal));
+        Assert.Contains("chat-sender\">system", html);
+        Assert.Contains(liveSink.Operations, op => op.Content.Contains("agent idle", StringComparison.Ordinal)
+            && op.Path == "tool-group-0" && op.Location == ChatOutputUpdateLocation.After);
+        Assert.Contains(liveSink.Operations, op => op.Content.Contains("second_tool(…)", StringComparison.Ordinal)
+            && op.Path == "history-1" && op.Location == ChatOutputUpdateLocation.After);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ChatOutput_NotificationBeforeParentToolCall_ShowsSystemBeforeCallWithoutFalseReordering()
+    {
+        var items = new[]
+        {
+            TextMessage(ChatRole.System, "already idle") with { AssistantRunId = "run" },
+            ToolCallMessage("parent_task", "c1") with { AssistantRunId = "run" },
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(new ObservableCollection<AgentChatHistoryItem>(items),
+            new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+        var html = string.Concat(sink.Operations.Select(op => op.Content));
+        Assert.True(html.IndexOf("already idle", StringComparison.Ordinal) <
+            html.IndexOf("parent_task(…)", StringComparison.Ordinal));
+        Assert.Contains("chat-sender\">system", html);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ChatOutput_NotificationBetweenCallAndResult_KeepsResultAfterSystemInLiveAndReload()
+    {
+        var items = new[]
+        {
+            ToolCallMessage("parent_task", "c1") with { AssistantRunId = "run" },
+            TextMessage(ChatRole.System, "agent idle") with { AssistantRunId = "run" },
+            ToolResultMessage("c1") with { AssistantRunId = "run" },
+        };
+        var liveHistory = new ObservableCollection<AgentChatHistoryItem>();
+        var liveSink = new RecordingSink();
+        using var live = new ChatOutputHtmlModel(liveHistory, new ObservableCollection<AgentChatRunningItem>(), () => true, liveSink);
+        await live.HistoryLoaded;
+        foreach (var item in items) liveHistory.Add(item);
+        var reloadSink = new RecordingSink();
+        using var reload = new ChatOutputHtmlModel(new ObservableCollection<AgentChatHistoryItem>(items),
+            new ObservableCollection<AgentChatRunningItem>(), () => true, reloadSink);
+        await reload.HistoryLoaded;
+        foreach (var sink in new[] { liveSink, reloadSink })
+        {
+            var html = string.Concat(sink.Operations.Select(op => op.Content));
+            Assert.True(html.IndexOf("parent_task(…)", StringComparison.Ordinal) <
+                html.IndexOf("agent idle", StringComparison.Ordinal));
+            Assert.True(html.IndexOf("agent idle", StringComparison.Ordinal) <
+                html.IndexOf("tool result: c1", StringComparison.Ordinal));
+            Assert.Contains("result", html);
+        }
+        Assert.Contains(liveSink.Operations, op => op.Content.Contains("tool result: c1", StringComparison.Ordinal)
+            && op.Path == "history-1" && op.Location == ChatOutputUpdateLocation.After);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ChatOutput_ConsecutiveSystemNotifications_KeepVisibleRoleHeaders()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.System, "first idle"),
+            TextMessage(ChatRole.System, "second idle"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+        var html = string.Concat(sink.Operations.Select(op => op.Content));
+        Assert.Equal(2, Regex.Matches(html, "class=\"chat-sender\">system").Count);
+        Assert.Equal(2, Regex.Matches(html, "chat-system-message").Count);
     }
 
     /// <summary>

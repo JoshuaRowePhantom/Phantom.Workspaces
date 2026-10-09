@@ -131,6 +131,11 @@
       padding-left: 1.5em;
     }
 
+    .chat-system-message .chat-contents {
+      padding-left: 1.5em;
+      color: var(--chat-meta);
+    }
+
     .chat-help {
       white-space: pre-wrap;
       font-family: var(--chat-font-family);
@@ -321,6 +326,45 @@
       cursor: pointer;
       user-select: none;
       color: var(--chat-tool-summary);
+    }
+
+    .chat-contents:has(> .chat-tool-group-actions),
+    .chat-tool-segment {
+      position: relative;
+    }
+
+    .chat-tool-group-actions {
+      position: absolute;
+      right: 0;
+      top: 0;
+      z-index: 2;
+      display: flex;
+      align-items: center;
+      gap: 0.25em;
+    }
+
+    .chat-tool-group-actions + .chat-tool-group > summary {
+      padding-right: 4em;
+    }
+
+    .chat-tool-segment > .chat-tool-group-actions {
+      position: relative;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+      max-width: 100%;
+    }
+
+    .chat-tool-segment > .chat-tool-group-actions + .chat-tool-group > summary {
+      padding-right: 0;
+    }
+
+    .chat-tool-group-secondary > summary[hidden] {
+      display: none;
+    }
+
+    .chat-contents:has(> .chat-tool-group-secondary:not([open])) > .chat-tool-group-actions,
+    .chat-tool-segment:has(> .chat-tool-group-secondary) > .chat-tool-group-actions {
+      display: none;
     }
 
     .tool-count-badge {
@@ -611,17 +655,73 @@
     })();
   </script>
   <script>
-    /* Keep a run's expanded tools open when streaming content moves into history. */
+    /* A run's tool-only segments share one visible summary and collapse state. */
     (function () {
       var expandedRuns = new Map();
+      function reconcileRun(id) {
+        var groups = Array.from(document.querySelectorAll("details.chat-tool-group[data-assistant-run-id]"))
+          .filter(function (group) { return group.getAttribute("data-assistant-run-id") === id; });
+        if (!groups.length) { return; }
+        var names = [];
+        var count = 0;
+        groups.forEach(function (group, index) {
+          var summary = group.querySelector(":scope > summary");
+          if (!summary) { return; }
+          summary.hidden = index !== 0;
+          group.classList.toggle("chat-tool-group-secondary", index !== 0);
+          count += Number(summary.getAttribute("data-segment-call-count")) || 0;
+          try {
+            JSON.parse(summary.getAttribute("data-segment-tool-names") || "[]").forEach(function (name) {
+              if (!names.includes(name)) { names.push(name); }
+            });
+          } catch (_) { /* A malformed attribute must not break collapsing tools. */ }
+        });
+        var leader = groups[0].querySelector(":scope > summary");
+        if (!leader) { return; }
+        var title = names.length ? "tools (" + names.join(", ") + ")" : "tools";
+        var label = leader.querySelector(".tool-group-label");
+        if (label && label.textContent !== title) { label.textContent = title; }
+        var badge = leader.querySelector(".tool-count-badge");
+        if (badge && badge.textContent !== count + " calls") { badge.textContent = count + " calls"; }
+        groups.forEach(function (group) {
+          var message = group.closest(".chat-message");
+          if (message && typeof InlineToolSegmentGutter !== "undefined") {
+            InlineToolSegmentGutter.reconcile(message, "data-inspect-target",
+              "inspect-gutter-btn", "Open in inspector", "\u24d8");
+            InlineToolSegmentGutter.reconcile(message, "data-usage-inspect-target",
+              "usage-gutter-btn", "Open token usage details", "#");
+          }
+        });
+        var leaderHost = groups[0].previousElementSibling;
+        if (leaderHost && leaderHost.matches(".chat-tool-group-actions")) {
+          leaderHost.querySelectorAll("[data-segment-origin-id]").forEach(function (button) {
+            if (!document.getElementById(button.getAttribute("data-segment-origin-id"))) { button.remove(); }
+          });
+        }
+      }
       document.addEventListener("toggle", function (event) {
         var group = event.target;
         if (group.matches && group.matches("details.chat-tool-group[data-assistant-run-id]")) {
-          expandedRuns.set(group.getAttribute("data-assistant-run-id"), group.open);
+          var id = group.getAttribute("data-assistant-run-id");
+          expandedRuns.set(id, group.open);
+          document.querySelectorAll("details.chat-tool-group[data-assistant-run-id]").forEach(function (other) {
+            if (other !== group && other.getAttribute("data-assistant-run-id") === id) {
+              other.open = group.open;
+            }
+          });
         }
       }, true);
       new MutationObserver(function (mutations) {
+        var changed = new Set();
         mutations.forEach(function (mutation) {
+          mutation.removedNodes.forEach(function (node) {
+            if (node.nodeType !== 1) { return; }
+            var groups = node.matches("details.chat-tool-group[data-assistant-run-id]")
+              ? [node] : node.querySelectorAll("details.chat-tool-group[data-assistant-run-id]");
+            groups.forEach(function (group) {
+              changed.add(group.getAttribute("data-assistant-run-id"));
+            });
+          });
           mutation.addedNodes.forEach(function (node) {
             if (node.nodeType !== 1) { return; }
             var groups = node.matches("details.chat-tool-group[data-assistant-run-id]")
@@ -629,10 +729,97 @@
             groups.forEach(function (group) {
               var id = group.getAttribute("data-assistant-run-id");
               if (expandedRuns.has(id)) { group.open = expandedRuns.get(id); }
+              changed.add(id);
             });
+            var owningGroup = node.closest("details.chat-tool-group[data-assistant-run-id]");
+            if (owningGroup) { changed.add(owningGroup.getAttribute("data-assistant-run-id")); }
           });
         });
+        changed.forEach(reconcileRun);
       }).observe(document.body, { childList: true, subtree: true });
+    })();
+  </script>
+  <script>
+    var InlineToolSegmentGutter = (function () {
+      "use strict";
+
+      function reconcile(message, marker, buttonClass, label, glyph) {
+        var segments = Array.from(message.querySelectorAll(":scope > .chat-contents > .chat-tool-segment"));
+        var contents = message.querySelector(":scope > .chat-contents");
+        if (contents && contents.querySelector(":scope > details.chat-tool-group[data-assistant-run-id]")) {
+          segments.push(contents);
+        }
+        if (!segments.length) { return false; }
+        message.querySelectorAll(":scope > .chat-header ." + buttonClass +
+          ", :scope > .chat-contents > ." + buttonClass).forEach(function (button) { button.remove(); });
+
+        segments.forEach(function (segment) {
+          var group = segment.querySelector(":scope > details.chat-tool-group[data-assistant-run-id]");
+          var runId = group && group.getAttribute("data-assistant-run-id");
+          var leader = runId && Array.from(document.querySelectorAll("details.chat-tool-group[data-assistant-run-id]"))
+            .find(function (candidate) { return candidate.getAttribute("data-assistant-run-id") === runId; });
+          var host = leader && leader.previousElementSibling;
+          if (!host || !host.matches(".chat-tool-group-actions")) {
+            host = segment.querySelector(":scope > .chat-tool-group-actions");
+          }
+          if (!host) { return; }
+          var originId = segment.id;
+          document.querySelectorAll("." + buttonClass +
+            "[data-segment-origin-id=\"" + CSS.escape(originId) + "\"]").forEach(function (button) {
+            if (button.parentElement !== host) { button.remove(); }
+          });
+          segment.querySelectorAll(":scope > .chat-tool-group-actions > ." + buttonClass).forEach(function (button) {
+            if (!button.hasAttribute("data-segment-origin-id") || button.parentElement !== host) { button.remove(); }
+          });
+          var targets = Array.from(segment.querySelectorAll("[" + marker + "][id]"));
+          if (segment.matches(".chat-tool-segment")) {
+            for (var sibling = segment.nextElementSibling;
+                 sibling && !sibling.matches(".chat-tool-segment"); sibling = sibling.nextElementSibling) {
+              if (marker === "data-usage-inspect-target" ||
+                  sibling.matches(".chat-tool[data-inspect-target]")) {
+                if (sibling.matches("[" + marker + "][id]")) { targets.push(sibling); }
+                sibling.querySelectorAll("[" + marker + "][id]").forEach(function (target) { targets.push(target); });
+              }
+            }
+          }
+
+          var ids = new Set(targets.map(function (target) { return target.id; }));
+          host.querySelectorAll(":scope > ." + buttonClass +
+            "[data-segment-origin-id=\"" + CSS.escape(originId) + "\"]").forEach(function (button) {
+            if (!ids.has(button.getAttribute("data-segment-target-id"))) { button.remove(); }
+          });
+          targets.forEach(function (target) {
+            if (Array.from(host.querySelectorAll(":scope > ." + buttonClass +
+              "[data-segment-origin-id=\"" + CSS.escape(originId) + "\"]"))
+              .some(function (button) { return button.getAttribute("data-segment-target-id") === target.id; })) {
+              return;
+            }
+            var button = document.createElement("button");
+            button.type = "button";
+            button.className = "chat-affordance-btn " + buttonClass;
+            button.setAttribute("aria-label", label + " (" + target.id + ")");
+            button.setAttribute("data-segment-target-id", target.id);
+            button.setAttribute("data-segment-origin-id", originId);
+            button.textContent = glyph;
+            button.addEventListener("click", function (event) {
+              event.stopPropagation();
+              var current = document.getElementById(button.getAttribute("data-segment-target-id"));
+              var origin = document.getElementById(button.getAttribute("data-segment-origin-id"));
+              if (!current || !origin || !origin.closest(".chat-message").contains(current)) { return; }
+              if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
+                window.chrome.webview.postMessage(JSON.stringify({
+                  type: "inspect", contentId: current.id,
+                  contentJson: current.getAttribute("data-details-target") || ""
+                }));
+              }
+            });
+            host.appendChild(button);
+          });
+        });
+        return true;
+      }
+
+      return { reconcile: reconcile };
     })();
   </script>
   <script>
@@ -672,6 +859,8 @@
       }
 
       function reconcile(message) {
+        if (InlineToolSegmentGutter.reconcile(message, "data-inspect-target",
+          "inspect-gutter-btn", "Open in inspector", "\u24d8")) { return; }
         var targetId = message.getAttribute("data-message-inspect-target");
         var target = targetId ? document.getElementById(targetId) : null;
         if (!target || !message.contains(target) || !target.hasAttribute("data-inspect-target")) {
@@ -686,9 +875,13 @@
         var header = message.querySelector(":scope > .chat-header");
         var meta = header && header.querySelector(":scope > .chat-meta");
         if (!meta) { return; }
-        var host = header.hidden ? message.querySelector(":scope > .chat-contents") : meta;
+        var host = header.hidden
+          ? message.querySelector(":scope > .chat-contents > .chat-tool-group-actions")
+            || message.querySelector(":scope > .chat-contents > .chat-tool-segment > .chat-tool-group-actions")
+            || message.querySelector(":scope > .chat-contents")
+          : meta;
         if (!host) { return; }
-        var existing = message.querySelector(":scope > .chat-header .inspect-gutter-btn, :scope > .chat-contents > .inspect-gutter-btn");
+        var existing = message.querySelector(":scope > .chat-header .inspect-gutter-btn, :scope > .chat-contents > .inspect-gutter-btn, :scope > .chat-contents > .chat-tool-group-actions > .inspect-gutter-btn, :scope > .chat-contents > .chat-tool-segment > .chat-tool-group-actions > .inspect-gutter-btn");
         if (!target) {
           if (existing) { existing.remove(); }
           return;
@@ -749,6 +942,8 @@
       }
 
       function reconcile(message) {
+        if (InlineToolSegmentGutter.reconcile(message, "data-usage-inspect-target",
+          "usage-gutter-btn", "Open token usage details", "#")) { return; }
         var targetId = message.getAttribute("data-message-usage-target");
         var marker = targetId ? document.getElementById(targetId) : null;
         if (!marker || !message.contains(marker) || !marker.hasAttribute("data-usage-inspect-target")) {
@@ -763,9 +958,13 @@
         var header = message.querySelector(":scope > .chat-header");
         var meta = header && header.querySelector(":scope > .chat-meta");
         if (!meta) { return; }
-        var host = header.hidden ? message.querySelector(":scope > .chat-contents") : meta;
+        var host = header.hidden
+          ? message.querySelector(":scope > .chat-contents > .chat-tool-group-actions")
+            || message.querySelector(":scope > .chat-contents > .chat-tool-segment > .chat-tool-group-actions")
+            || message.querySelector(":scope > .chat-contents")
+          : meta;
         if (!host) { return; }
-        var existing = message.querySelector(":scope > .chat-header .usage-gutter-btn, :scope > .chat-contents > .usage-gutter-btn");
+        var existing = message.querySelector(":scope > .chat-header .usage-gutter-btn, :scope > .chat-contents > .usage-gutter-btn, :scope > .chat-contents > .chat-tool-group-actions > .usage-gutter-btn, :scope > .chat-contents > .chat-tool-segment > .chat-tool-group-actions > .usage-gutter-btn");
         if (!marker) {
           if (existing) { existing.remove(); }
           return;

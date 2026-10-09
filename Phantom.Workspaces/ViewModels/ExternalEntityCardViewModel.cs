@@ -1,28 +1,32 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
+using System.Threading.Tasks;
+using Phantom.Workspaces.Services;
 
 namespace Phantom.Workspaces.ViewModels;
 
-public sealed class ExternalUrlViewModel
+public sealed class ExternalUrlViewModel : ViewModelBase
 {
-    public ExternalUrlViewModel(string key, string url, bool showKey)
+    private readonly Func<IUrlOpener?>? urlOpenerProvider;
+    private string? errorMessage;
+
+    public ExternalUrlViewModel(string key, string url, bool showKey, Func<IUrlOpener?>? urlOpenerProvider = null)
     {
         this.Key = key;
         this.Url = url;
         this.ShowKey = showKey;
-        this.OpenCommand = new RelayCommand(_ =>
+        this.urlOpenerProvider = urlOpenerProvider;
+        this.IsSupported = IsSupportedUrl(url);
+        if (!this.IsSupported)
         {
-            try
-            {
-                Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
-            }
-            catch (Exception)
-            {
-                // Best-effort: if the URL cannot be opened, silently ignore.
-            }
-        });
+            this.ErrorMessage = "Invalid or unsupported URL.";
+        }
+
+        this.OpenCommand = new AsyncRelayCommand(
+            _ => this.OpenAsync(),
+            _ => this.IsSupported,
+            allowConcurrentExecutions: false);
     }
 
     public string Key { get; }
@@ -31,7 +35,59 @@ public sealed class ExternalUrlViewModel
 
     public bool ShowKey { get; }
 
-    public RelayCommand OpenCommand { get; }
+    public bool IsSupported { get; }
+
+    public AsyncRelayCommand OpenCommand { get; }
+
+    public string? ErrorMessage
+    {
+        get => this.errorMessage;
+        private set
+        {
+            if (this.SetProperty(ref this.errorMessage, value))
+            {
+                this.RaisePropertyChanged(nameof(this.HasError));
+            }
+        }
+    }
+
+    public bool HasError => this.ErrorMessage is not null;
+
+    private static bool IsSupportedUrl(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url, UriKind.Absolute, out var uri)
+            || !uri.IsWellFormedOriginalString())
+        {
+            return false;
+        }
+
+        return uri.Scheme switch
+        {
+            "http" or "https" => !string.IsNullOrEmpty(uri.Host) && string.IsNullOrEmpty(uri.UserInfo),
+            "mailto" or "tel" => !string.IsNullOrWhiteSpace(url[(uri.Scheme.Length + 1)..]),
+            _ => false,
+        };
+    }
+
+    private async Task OpenAsync()
+    {
+        try
+        {
+            var opener = this.urlOpenerProvider?.Invoke();
+            if (opener is null)
+            {
+                this.ErrorMessage = "URL opener is unavailable.";
+                return;
+            }
+
+            await opener.OpenAsync(new OpenUrlRequest(this.Url));
+            this.ErrorMessage = null;
+        }
+        catch (Exception ex)
+        {
+            this.ErrorMessage = $"Failed to open URL: {ex.Message}";
+        }
+    }
 }
 
 public sealed class ExternalEntityCardViewModel : ViewModelBase
@@ -46,12 +102,14 @@ public sealed class ExternalEntityCardViewModel : ViewModelBase
     /// <summary>
     /// Builds an <see cref="ExternalEntityCardViewModel"/> from the URL map carried by an external entity.
     /// </summary>
-    public static ExternalEntityCardViewModel Create(SubscribedEntityViewModel entity)
+    public static ExternalEntityCardViewModel Create(
+        SubscribedEntityViewModel entity,
+        Func<IUrlOpener?>? urlOpenerProvider = null)
     {
         var urlMap = OpenExternalEntityShortcutHandler.ParseUrls(entity);
         bool suppressKey = urlMap.Count == 1 && urlMap.ContainsKey("default");
         var urls = urlMap
-            .Select(kvp => new ExternalUrlViewModel(kvp.Key, kvp.Value, showKey: !suppressKey))
+            .Select(kvp => new ExternalUrlViewModel(kvp.Key, kvp.Value, showKey: !suppressKey, urlOpenerProvider))
             .ToArray();
         return new ExternalEntityCardViewModel(urls);
     }

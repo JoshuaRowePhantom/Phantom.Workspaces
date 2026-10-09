@@ -12,6 +12,7 @@ namespace Phantom.Workspaces.ViewModels;
 public sealed class ViewEntityViewModel : ViewModelBase
 {
     private readonly EntityListNodeViewModel entityCardNode;
+    private readonly MainWindowViewModel owner;
     private bool hasTraversedChildren;
     private bool isExpanded = true;
     private IBrush? childRailBrush;
@@ -26,6 +27,7 @@ public sealed class ViewEntityViewModel : ViewModelBase
         bool isParentContext = false,
         FieldEditorFactory? fieldEditorFactory = null)
     {
+        this.owner = mainWindowViewModel;
         this.Entity = entity;
         this.Badges = new BadgesViewModel(entity.Badges);
         this.StatusBadges = new StatusBadgesViewModel(entity.StatusBadges);
@@ -54,6 +56,21 @@ public sealed class ViewEntityViewModel : ViewModelBase
         // which the tree node's card shortcuts are populated.
         await this.entityCardNode.Card.ResolveShortcutsAsync();
         this.RaisePropertyChanged(nameof(this.HasShortcuts));
+    }
+
+    internal void DetachEntityUpdates()
+    {
+        this.Entity.PropertyChanged -= this.OnEntityPropertyChanged;
+        this.Badges.Detach();
+        this.StatusBadges.Detach();
+    }
+
+    public override async ValueTask DisposeAsync()
+    {
+        this.DetachEntityUpdates();
+        this.owner.UnregisterCardNode(this.Entity, this.entityCardNode);
+        await this.entityCardNode.Card.DisposeAsync();
+        await base.DisposeAsync();
     }
 
     public SubscribedEntityViewModel Entity { get; }
@@ -199,6 +216,10 @@ public sealed class ViewEntityViewModel : ViewModelBase
             || string.Equals(e.PropertyName, nameof(SubscribedEntityViewModel.DisplayName), System.StringComparison.Ordinal)
             || string.Equals(e.PropertyName, nameof(SubscribedEntityViewModel.EntityType), System.StringComparison.Ordinal))
         {
+            if (string.Equals(e.PropertyName, nameof(SubscribedEntityViewModel.Snapshot), System.StringComparison.Ordinal))
+            {
+                this.owner.ProjectEntityBadges(this.Entity);
+            }
             this.RefreshFromEntity();
         }
     }
