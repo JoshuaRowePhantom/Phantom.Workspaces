@@ -395,6 +395,10 @@ public sealed class ChatOutputByokEndToEndWebViewTests
             mainFinalTurn.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "FINAL-REPLY: hello world 1."));
             mainFinalTurn.Complete();
 
+            // The completed background task queues one system notification turn after
+            // the final reply, as in the two-subagent exchange above.
+            main.Client.EnqueueStreamingResponse().Complete();
+
             var subOne = server.AddConversation(
                 "sub-one",
                 request => request.AnyMessageContains("user", "SUBAGENT-ONE"));
