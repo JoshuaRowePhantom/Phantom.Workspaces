@@ -112,6 +112,11 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
                 "daemon-shade-first-result",
                 ct);
 
+            // The owner advances its queue revision while consuming the first turn.
+            // Wait for that snapshot to reach the remote client before submitting a
+            // second compare-and-swap queue command.
+            await WaitForQueueRevisionAsync(sourceChat, ownerChat, ct);
+
             var secondProjected = WaitForAssistantAsync(
                 sourceChat,
                 "daemon-shade-restored-result");
@@ -212,6 +217,33 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
                 CommandId = Guid.NewGuid(),
             },
             cancellationToken);
+
+    private static async Task WaitForQueueRevisionAsync(
+        RemoteAgentChat remote,
+        AgentChat owner,
+        CancellationToken cancellationToken)
+    {
+        var ownerQueues = ((IAgentChat)owner).InputQueues;
+        var completion = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        remote.InputQueues.Changed += OnChanged;
+        try
+        {
+            OnChanged(null, EventArgs.Empty);
+            await completion.Task.WaitAsync(cancellationToken);
+            Assert.Equal(ownerQueues.Snapshot.Revision, remote.InputQueues.Snapshot.Revision);
+        }
+        finally
+        {
+            remote.InputQueues.Changed -= OnChanged;
+        }
+
+        void OnChanged(object? sender, EventArgs args)
+        {
+            if (remote.InputQueues.Snapshot.Revision >= ownerQueues.Snapshot.Revision)
+                completion.TrySetResult();
+        }
+    }
 
     private static void EnqueueSessionToolCall(
         ConversationClient conversation,
