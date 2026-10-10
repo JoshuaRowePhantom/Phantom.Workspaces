@@ -8,6 +8,16 @@ namespace Phantom.Workspaces.Data.Tests;
 
 public sealed class ProcessRunnerTests
 {
+    [Fact]
+    public async Task RunProcessAsync_CommandInterpreterArgumentsWithArgumentList_RejectsAmbiguousInvocation()
+    {
+        await Assert.ThrowsAsync<ArgumentException>(() => ProcessRunner.RunProcessAsync(
+            new RunProcessParameters("cmd.exe", ["/c", "exit", "0"])
+            {
+                CommandInterpreterArguments = "/c exit 42",
+            }));
+    }
+
     // -----------------------------------------------------------------------
     // Basic result capture
     // -----------------------------------------------------------------------

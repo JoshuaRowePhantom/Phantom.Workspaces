@@ -29,6 +29,12 @@ public sealed record RunProcessParameters(
     TimeSpan? Timeout = null,
     IReadOnlyDictionary<string, string>? EnvironmentVariables = null)
 {
+    /// <summary>
+    /// Pre-encoded command-interpreter arguments, when CRT argument quoting is not appropriate.
+    /// Must not be combined with <see cref="Arguments"/>.
+    /// </summary>
+    public string? CommandInterpreterArguments { get; init; }
+
     internal ProcessRunnerWindowsTestOptions? WindowsTestOptions { get; init; }
 }
 
@@ -114,6 +120,8 @@ public static class ProcessRunner
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(parameters);
+        if (parameters.CommandInterpreterArguments is not null && parameters.Arguments.Count != 0)
+            throw new ArgumentException("Command-interpreter arguments cannot be combined with an argument list.", nameof(parameters));
 
         if (parameters.KillOnClose == KillOnCloseAction.KillTree && OperatingSystem.IsWindows())
             return await RunWindowsContainedAsync(parameters, cancellationToken).ConfigureAwait(false);
@@ -132,7 +140,9 @@ public static class ProcessRunner
             startInfo.WorkingDirectory = parameters.WorkingDirectory;
         }
 
-        foreach (var arg in parameters.Arguments)
+        if (parameters.CommandInterpreterArguments is { } interpreterArguments)
+            startInfo.Arguments = interpreterArguments;
+        else foreach (var arg in parameters.Arguments)
         {
             startInfo.ArgumentList.Add(arg);
         }
@@ -312,7 +322,11 @@ public static class ProcessRunner
             };
             var commandLine = new StringBuilder();
             AppendWindowsArgument(commandLine, parameters.Command);
-            foreach (var argument in parameters.Arguments)
+            if (parameters.CommandInterpreterArguments is { } interpreterArguments)
+            {
+                commandLine.Append(' ').Append(interpreterArguments);
+            }
+            else foreach (var argument in parameters.Arguments)
             {
                 commandLine.Append(' ');
                 AppendWindowsArgument(commandLine, argument);

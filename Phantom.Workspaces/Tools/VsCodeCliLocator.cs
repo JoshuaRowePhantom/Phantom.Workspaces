@@ -63,40 +63,65 @@ internal static class VsCodeCliLocator
         return null;
     }
 
-    internal static ProcessStartInfo BuildProcessStartInfo(string cliPath, string arguments)
+    internal static ProcessStartInfo BuildProcessStartInfo(string cliPath, IReadOnlyList<string> arguments)
     {
-        if (OperatingSystem.IsWindows() && cliPath.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase))
-        {
-            return new ProcessStartInfo("cmd.exe", $"/c \"{cliPath}\" {arguments}")
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
-        }
-
-        return new ProcessStartInfo(cliPath, arguments)
+        var parameters = BuildRunProcessParameters(cliPath, arguments);
+        var startInfo = new ProcessStartInfo(parameters.Command)
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        if (parameters.CommandInterpreterArguments is { } commandLine)
+            startInfo.Arguments = commandLine;
+        else
+            foreach (var argument in parameters.Arguments)
+                startInfo.ArgumentList.Add(argument);
+        if (parameters.EnvironmentVariables is not null)
+            foreach (var (key, value) in parameters.EnvironmentVariables)
+                startInfo.Environment[key] = value;
+        return startInfo;
     }
 
     internal static RunProcessParameters BuildRunProcessParameters(
         string cliPath,
-        string arguments,
+        IReadOnlyList<string> arguments,
         TimeSpan? timeout = null,
         IReadOnlyDictionary<string, string>? environmentVariables = null)
     {
-        var argTokens = arguments.Split(' ');
         if (OperatingSystem.IsWindows() && cliPath.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase))
         {
-            return new RunProcessParameters("cmd.exe", ["/c", cliPath, ..argTokens], Timeout: timeout, EnvironmentVariables: environmentVariables);
+            var environment = environmentVariables is null
+                ? new Dictionary<string, string>()
+                : new Dictionary<string, string>(environmentVariables);
+            var prefix = "PHANTOM_CODE_" + Guid.NewGuid().ToString("N");
+            var operands = new[] { cliPath }.Concat(arguments).ToArray();
+            var references = new List<string>();
+            for (var index = 0; index < operands.Length; index++)
+            {
+                var operand = operands[index];
+                if (operand.IndexOfAny(['"', '\r', '\n', '\0']) >= 0)
+                    throw new ArgumentException("Windows CLI operands cannot contain quotes or control characters.", nameof(arguments));
+                if (operand.Length == 0)
+                {
+                    references.Add("\"\"");
+                    continue;
+                }
+                var name = $"{prefix}_{index}";
+                // cmd expands environment references once, inside quotes. Keep user text out of
+                // the shell syntax, disable delayed expansion, and retain CRT trailing slashes
+                // when a CLI batch shim forwards %* to its executable.
+                var trailingSlashes = operand.Length - operand.TrimEnd('\\').Length;
+                environment[name] = operand + new string('\\', trailingSlashes);
+                references.Add($"\"%{name}%\"");
+            }
+            return new RunProcessParameters("cmd.exe", [], Timeout: timeout, EnvironmentVariables: environment)
+            {
+                CommandInterpreterArguments = "/d /v:off /s /c \"" + string.Join(' ', references) + "\"",
+            };
         }
 
-        return new RunProcessParameters(cliPath, argTokens, Timeout: timeout, EnvironmentVariables: environmentVariables);
+        return new RunProcessParameters(cliPath, arguments, Timeout: timeout, EnvironmentVariables: environmentVariables);
     }
 }

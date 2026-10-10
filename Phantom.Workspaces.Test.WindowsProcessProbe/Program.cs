@@ -17,6 +17,12 @@ const uint SemNoGpFaultErrorBox = 0x0002;
 NativeMethods.SetErrorMode(
     NativeMethods.GetErrorMode() | SemFailCriticalErrors | SemNoGpFaultErrorBox);
 
+if (args.Length >= 1 && args[0] == "--echo-argv")
+{
+    Console.WriteLine(JsonSerializer.Serialize(args[1..]));
+    return 0;
+}
+
 if (args.Length >= 2 && args[0] == "--child-exit")
 {
     Console.WriteLine("PROBE_READY");

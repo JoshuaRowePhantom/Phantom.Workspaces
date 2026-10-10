@@ -169,7 +169,7 @@ public sealed class OpenInVsCodeShortcutHandler : ShortcutHandler
         {
             await invoker.RunAsync(
                 cliPath,
-                path,
+                [path],
                 operationDescription: $"open {path}",
                 VsCodeCliReporting.LogAndReportOnFailure,
                 cancellationToken: CancellationToken.None).ConfigureAwait(false);

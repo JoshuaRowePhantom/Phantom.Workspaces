@@ -53,13 +53,14 @@ public sealed class VsCodeCliInvoker
 
     public async Task<VsCodeCliResult> RunAsync(
         string cliPath,
-        string arguments,
+        IReadOnlyList<string> arguments,
         string operationDescription,
         VsCodeCliReporting reporting,
         IReadOnlyDictionary<string, string>? environmentVariables = null,
         TimeSpan? timeout = null,
         CancellationToken cancellationToken = default)
     {
+        var displayArguments = string.Join(' ', arguments);
         var parameters = VsCodeCliLocator.BuildRunProcessParameters(
             cliPath, arguments, timeout, environmentVariables);
 
@@ -85,7 +86,7 @@ public sealed class VsCodeCliInvoker
             this.TryNotify(
                 operationDescription,
                 heading: $"VS Code CLI timed out: {operationDescription}",
-                description: $"'code {arguments}' timed out after {parameters.Timeout}.\n{ex.Message}",
+                description: $"'code {displayArguments}' timed out after {parameters.Timeout}.\n{ex.Message}",
                 interesting: true,
                 reporting,
                 reportOnSuccess: false);
@@ -101,15 +102,15 @@ public sealed class VsCodeCliInvoker
             this.TryNotify(
                 operationDescription,
                 heading: "VS Code CLI not found",
-                description: $"Could not launch 'code {arguments}': {ex.Message}\nEnsure the VS Code 'code' CLI is installed and on your PATH.",
+                description: $"Could not launch 'code {displayArguments}': {ex.Message}\nEnsure the VS Code 'code' CLI is installed and on your PATH.",
                 interesting: true,
                 reporting,
                 reportOnSuccess: false);
             throw;
         }
 
-        this.LogOutcome(operationDescription, parameters.Command, arguments, processResult);
-        this.ReportOutcome(operationDescription, arguments, processResult, reporting);
+        this.LogOutcome(operationDescription, parameters.Command, displayArguments, processResult);
+        this.ReportOutcome(operationDescription, displayArguments, processResult, reporting);
 
         return new VsCodeCliResult(processResult.ExitCode, processResult.StandardOut, processResult.StandardError);
     }

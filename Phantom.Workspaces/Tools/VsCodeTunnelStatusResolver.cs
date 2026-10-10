@@ -37,7 +37,7 @@ public sealed class VsCodeTunnelStatusResolver : IVsCodeTunnelStatusResolver
         {
             result = await this.invoker.RunAsync(
                 cliPath,
-                "tunnel status",
+                ["tunnel", "status"],
                 operationDescription: "vscode tunnel status",
                 VsCodeCliReporting.LogOnly,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
