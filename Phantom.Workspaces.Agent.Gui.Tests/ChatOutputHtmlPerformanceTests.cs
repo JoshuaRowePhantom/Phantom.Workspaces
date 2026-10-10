@@ -126,6 +126,61 @@ public sealed class ChatOutputHtmlPerformanceTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void ToolPayload_InformationalOnlyChanges_UpdateInspectorPayload()
+    {
+        var call = new FunctionCallContent("call", "read");
+        var source = new AgentChatHistoryItem { Role = ChatRole.Assistant, Contents = [call] };
+        var sink = new Sink();
+        var model = new ChatMessageHtmlModel(0, "message", source, () => true, sink);
+
+        call.InformationalOnly = true;
+        model.Update(source with { Contents = [call] });
+        Assert.Contains("\"InformationalOnly\": true", System.Net.WebUtility.HtmlDecode(Assert.Single(sink.Updates).Html));
+        sink.Updates.Clear();
+        call.InformationalOnly = false;
+        model.Refresh();
+        Assert.DoesNotContain("\"InformationalOnly\": true", System.Net.WebUtility.HtmlDecode(Assert.Single(sink.Updates).Html));
+        Assert.Equal(3, model.ToolBindingRenderCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ToolPayload_AnnotationsAddedMutatedRemoved_UpdateInspectorAndRestoreReuse(bool annotateResult)
+    {
+        var call = new FunctionCallContent("call", "read");
+        var result = new FunctionResultContent("call", "done");
+        AIContent annotated = annotateResult ? result : call;
+        var source = new AgentChatHistoryItem { Role = ChatRole.Assistant, Contents = [call, result] };
+        var sink = new Sink();
+        var model = new ChatMessageHtmlModel(0, "message", source, () => true, sink);
+        var annotation = new CitationAnnotation { Title = "citation-before" };
+
+        annotated.Annotations = [annotation];
+        model.Update(source with { Contents = [call, result] });
+        Assert.Contains("citation-before", Assert.Single(sink.Updates).Html);
+        sink.Updates.Clear();
+        annotation.Title = "citation-after";
+        model.Refresh();
+        var mutation = Assert.Single(sink.Updates).Html;
+        Assert.Contains("citation-after", mutation);
+        Assert.DoesNotContain("citation-before", mutation);
+        sink.Updates.Clear();
+        annotated.Annotations.Clear();
+        model.Refresh();
+        Assert.DoesNotContain("citation-after", Assert.Single(sink.Updates).Html);
+        sink.Updates.Clear();
+        annotated.Annotations = null;
+        model.Refresh();
+        Assert.Single(sink.Updates);
+        var renders = model.ToolBindingRenderCount;
+        sink.Updates.Clear();
+        model.Update(source with { Contents = [call, result, new TextContent("text delta")] });
+        Assert.Equal(renders, model.ToolBindingRenderCount);
+        Assert.Single(sink.Updates);
+    }
+
+    [Fact]
     public void ToolPayload_LargeCompletedJson_TextDeltaSkipsPayloadFormatting()
     {
         var message = MixedMessage("call", "partial", result: "{\"output\":\"" + new string('x', 65536) + "\"}");
