@@ -2247,9 +2247,10 @@ public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvid
             {
                 (TextContent ta, TextContent tb) => ta.Text == tb.Text,
                 (TextReasoningContent ra, TextReasoningContent rb) => ra.Text == rb.Text,
-                (FunctionCallContent ca, FunctionCallContent cb) =>
-                    ca.CallId == cb.CallId && ca.Name == cb.Name,
-                (FunctionResultContent ra, FunctionResultContent rb) => ra.CallId == rb.CallId,
+                // Coalescing retains the original tool contents for stable updates. IDs/names
+                // are not payload versions: a new tool content must reach the renderer.
+                (FunctionCallContent, FunctionCallContent) => ReferenceEquals(a, b),
+                (FunctionResultContent, FunctionResultContent) => ReferenceEquals(a, b),
                 (ErrorContent ea, ErrorContent eb) => ea.Message == eb.Message,
                 _ => false,
             };

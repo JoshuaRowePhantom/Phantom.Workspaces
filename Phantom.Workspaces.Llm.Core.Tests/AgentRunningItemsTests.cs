@@ -11,6 +11,31 @@ public sealed class AgentRunningItemsTests
         => new() { Role = ChatRole.Assistant, Contents = [new TextContent(text)] };
 
     [Fact]
+    public void SyncItems_ThousandsOfStableRunningItems_DoesNotReplaceUnchangedItems()
+    {
+        var items = Enumerable.Range(0, 3000).Select(index => MakeItem($"message-{index}")).ToArray();
+        var manager = new AgentRunningItems(new AgentChatRunningItemCollection());
+        var running = manager.Create(items);
+        var notifications = 0;
+        running.Items.CollectionChanged += (_, _) => notifications++;
+        manager.Update(running, items);
+        Assert.Equal(0, notifications);
+        Assert.Equal(items, running.Items);
+    }
+
+    [Fact]
+    public void SyncItems_ClearingThousandsOfItems_PublishesOneReset()
+    {
+        var manager = new AgentRunningItems(new AgentChatRunningItemCollection());
+        var running = manager.Create(Enumerable.Range(0, 3000).Select(index => MakeItem($"message-{index}")).ToArray());
+        var actions = new List<NotifyCollectionChangedAction>();
+        running.Items.CollectionChanged += (_, change) => actions.Add(change.Action);
+        manager.Update(running, []);
+        Assert.Empty(running.Items);
+        Assert.Equal([NotifyCollectionChangedAction.Reset], actions);
+    }
+
+    [Fact]
     public void SyncItems_DoesNotFireReplace_WhenItemIsReferenceEqual()
     {
         var outer = new AgentChatRunningItemCollection();

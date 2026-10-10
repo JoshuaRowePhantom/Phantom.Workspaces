@@ -83,6 +83,18 @@ internal abstract class CollectionTransformer<TSource, TTarget> : IDisposable
     /// </summary>
     protected virtual void OnRemoved(TTarget target) { }
 
+    protected virtual void ResetTarget()
+    {
+        for (int index = this.target.Count - 1; index >= 0; index--)
+        {
+            var removed = this.target[index];
+            this.target.RemoveAt(index);
+            this.OnRemoveAt(index, removed);
+            this.OnRemoved(removed);
+            DisposeIfNeeded(removed);
+        }
+    }
+
     protected IReadOnlyList<TSource> Source => this.source;
 
     protected IList<TTarget> Target => this.target;
@@ -163,14 +175,7 @@ internal abstract class CollectionTransformer<TSource, TTarget> : IDisposable
                break;
 
           case NotifyCollectionChangedAction.Reset:
-               for (int i = this.target.Count - 1; i >= 0; i--)
-               {
-                   var removed = this.target[i];
-                   this.target.RemoveAt(i);
-                   this.OnRemoveAt(i, removed);
-                   this.OnRemoved(removed);
-                   DisposeIfNeeded(removed);
-               }
+               this.ResetTarget();
                for (int i = 0; i < this.source.Count; i++)
                {
                    var target = this.Create(this.source[i]);

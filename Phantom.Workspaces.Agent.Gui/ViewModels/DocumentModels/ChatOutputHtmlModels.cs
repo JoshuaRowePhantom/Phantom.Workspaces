@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Threading;
@@ -24,7 +25,102 @@ namespace Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 /// </summary>
 internal sealed class ChatMessageHtmlModel
 {
-    private sealed record ContentBinding(string Key, string ElementId, string Html, bool IsUsageInspect = false);
+    private sealed record ContentBinding(
+        string Key,
+        string ElementId,
+        string Html,
+        bool IsUsageInspect = false,
+        ToolBindingSnapshot? ToolSnapshot = null);
+
+    // Snapshot only immutable leaves. Unknown mutable objects deliberately render again rather
+    // than treating a stable object reference or CallId as a payload version.
+    private sealed record ToolPayloadSnapshot(
+        string? CallId,
+        string? Name,
+        KeyValuePair<string, object?>[]? Arguments,
+        KeyValuePair<string, object?>[]? CallProperties,
+        bool HasResult,
+        object? Result,
+        KeyValuePair<string, object?>[]? ResultProperties)
+    {
+        public static ToolPayloadSnapshot? Capture(
+            FunctionCallContent call,
+            FunctionResultContent? result)
+        {
+            if (call.GetType() != typeof(FunctionCallContent) ||
+                result is not null && result.GetType() != typeof(FunctionResultContent) ||
+                !CanSnapshot(call.Arguments) ||
+                !CanSnapshot(call.AdditionalProperties) ||
+                !IsImmutable(result?.Result) ||
+                !CanSnapshot(result?.AdditionalProperties))
+                return null;
+
+            return new(
+                call.CallId,
+                call.Name,
+                call.Arguments?.ToArray(),
+                call.AdditionalProperties?.ToArray(),
+                result is not null,
+                result?.Result,
+                result?.AdditionalProperties?.ToArray());
+        }
+
+        public bool Matches(FunctionCallContent call, FunctionResultContent? result)
+            => call.GetType() == typeof(FunctionCallContent) &&
+               (result is null || result.GetType() == typeof(FunctionResultContent)) &&
+               this.CallId == call.CallId &&
+               this.Name == call.Name &&
+               MatchesDictionary(this.Arguments, call.Arguments) &&
+               MatchesDictionary(this.CallProperties, call.AdditionalProperties) &&
+               this.HasResult == (result is not null) &&
+               IsImmutable(result?.Result) &&
+               Equals(this.Result, result?.Result) &&
+               MatchesDictionary(this.ResultProperties, result?.AdditionalProperties);
+
+        private static bool IsImmutable(object? value)
+            => value is null or string or bool or char or byte or sbyte or short or ushort or
+                int or uint or long or ulong or float or double or decimal or Guid or
+                DateTime or DateTimeOffset or TimeSpan or JsonElement;
+
+        private static bool CanSnapshot(IEnumerable<KeyValuePair<string, object?>>? values)
+            => values is null || values.All(pair => IsImmutable(pair.Value));
+
+        private static bool MatchesDictionary(
+            KeyValuePair<string, object?>[]? snapshot,
+            IDictionary<string, object?>? values)
+        {
+            if (snapshot is null || values is null)
+                return snapshot is null && values is null;
+            if (snapshot.Length != values.Count)
+                return false;
+            foreach (var pair in snapshot)
+                if (!values.TryGetValue(pair.Key, out var value) ||
+                    !IsImmutable(value) || !Equals(pair.Value, value))
+                    return false;
+            return true;
+        }
+    }
+
+    private sealed record ToolBindingSnapshot(string Placement, ToolPayloadSnapshot[] Payloads)
+    {
+        public bool Matches(
+            string placement,
+            IReadOnlyList<FunctionCallContent> calls,
+            IReadOnlyDictionary<string, FunctionResultContent>? results)
+        {
+            if (this.Placement != placement || this.Payloads.Length != calls.Count)
+                return false;
+            for (var index = 0; index < calls.Count; index++)
+            {
+                FunctionResultContent? result = null;
+                if (calls[index].CallId is { } callId)
+                    results?.TryGetValue(callId, out result);
+                if (!this.Payloads[index].Matches(calls[index], result))
+                    return false;
+            }
+            return true;
+        }
+    }
 
     private readonly IChatOutputHtmlSink sink;
     private readonly Func<bool> isReasoningVisible;
@@ -71,6 +167,8 @@ internal sealed class ChatMessageHtmlModel
 
     /// <summary>The source item this model currently renders.</summary>
     public AgentChatHistoryItem Source => this.source;
+
+    internal int ToolBindingRenderCount { get; private set; }
 
     /// <summary>Set once the message element has been inserted into the DOM by its transformer.</summary>
     public bool IsInserted { get; set; }
@@ -322,8 +420,8 @@ internal sealed class ChatMessageHtmlModel
                     }
 
                     var flatKey = "flat:" + string.Join("\x02", flatKeyParts);
-                    var flatHtml = ChatOutputHtmlRenderer.RenderToolGroup(flatContentId, new[] { firstCall }, resultLookup);
-                    newBindings.Add(new ContentBinding(flatKey, flatContentId, flatHtml));
+                    newBindings.Add(this.GetToolBinding(
+                        newBindings.Count, flatKey, flatContentId, "flat", [firstCall], resultLookup));
                     contentIndex++;
                     continue;
                 }
@@ -355,11 +453,9 @@ internal sealed class ChatMessageHtmlModel
                     this.source.Role == ChatRole.Assistant &&
                     this.source.Contents.Any(item => item is not FunctionCallContent)
                     ? runId : null;
-                var groupHtml = mixedRunId is not null
-                    ? ChatOutputHtmlRenderer.RenderInlineToolSegment(elementId, mixedRunId, calls,
-                        ChatOutputHtmlRenderer.RenderToolGroup(elementId + "-tool", calls, resultLookup))
-                    : ChatOutputHtmlRenderer.RenderToolGroup(elementId, calls, resultLookup);
-                newBindings.Add(new ContentBinding(groupKey, elementId, groupHtml));
+                newBindings.Add(this.GetToolBinding(
+                    newBindings.Count, groupKey, elementId, "group:" + mixedRunId,
+                    calls, resultLookup, mixedRunId));
                 continue;
             }
 
@@ -396,6 +492,39 @@ internal sealed class ChatMessageHtmlModel
         this.renderedRoleLabel = roleLabel;
     }
 
+    private ContentBinding GetToolBinding(
+        int index,
+        string key,
+        string elementId,
+        string placement,
+        IReadOnlyList<FunctionCallContent> calls,
+        IReadOnlyDictionary<string, FunctionResultContent>? results,
+        string? mixedRunId = null)
+    {
+        if (index < this.bindings.Count &&
+            this.bindings[index] is { } previous &&
+            previous.ElementId == elementId &&
+            previous.ToolSnapshot?.Matches(placement, calls, results) == true)
+            return previous;
+
+        var snapshots = new List<ToolPayloadSnapshot>(calls.Count);
+        foreach (var call in calls)
+        {
+            FunctionResultContent? result = null;
+            if (call.CallId is { } callId)
+                results?.TryGetValue(callId, out result);
+            if (ToolPayloadSnapshot.Capture(call, result) is { } snapshot)
+                snapshots.Add(snapshot);
+        }
+        var html = mixedRunId is not null
+            ? ChatOutputHtmlRenderer.RenderInlineToolSegment(elementId, mixedRunId, calls,
+                ChatOutputHtmlRenderer.RenderToolGroup(elementId + "-tool", calls, results))
+            : ChatOutputHtmlRenderer.RenderToolGroup(elementId, calls, results);
+        this.ToolBindingRenderCount++;
+        return new(key, elementId, html, ToolSnapshot: snapshots.Count == calls.Count
+            ? new ToolBindingSnapshot(placement, snapshots.ToArray()) : null);
+    }
+
     private bool HasAdjacentCallForResult(int resultIndex, string callId)
     {
         for (var i = resultIndex - 1; i >= 0; i--)
@@ -423,7 +552,8 @@ internal sealed class ChatMessageHtmlModel
         {
             if (index < this.bindings.Count)
             {
-                if (!visibilityChanged && this.bindings[index].Key == newBindings[index].Key)
+                if (!visibilityChanged && this.bindings[index].Key == newBindings[index].Key &&
+                    this.bindings[index].Html == newBindings[index].Html)
                 {
                     continue;
                 }
@@ -630,9 +760,21 @@ internal sealed class ToolCallGroupHtmlModel
 /// </summary>
 internal sealed class RenderSlot
 {
-    public RenderSlot(ChatMessageHtmlModel model) => this.Model = model;
+    public RenderSlot(ChatMessageHtmlModel model)
+    {
+        this.Model = model;
+        foreach (var call in model.Source.Contents.OfType<FunctionCallContent>())
+            if (call.CallId is { } callId)
+                this.RegisteredCallIds.Add(callId);
+    }
 
     public ChatMessageHtmlModel Model { get; }
+
+    internal HashSet<string> RegisteredCallIds { get; } = new(StringComparer.Ordinal);
+
+    internal string? RoleAfter { get; set; }
+
+    internal ToolCallGroupHtmlModel? HeaderGroupAfter { get; set; }
 
     /// <summary>Non-null when this item has been merged into a tool-call group.</summary>
     public ToolCallGroupHtmlModel? Group { get; set; }
@@ -678,6 +820,10 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
     private readonly HashSet<string> suppressedRunIds = new(StringComparer.Ordinal);
     private int nextCreateIndex;
 
+    internal long CallIndexRemovalVisits { get; private set; }
+
+    internal long HeaderReconciliationVisits { get; private set; }
+
     public ChatMessageHtmlTransformer(
         IReadOnlyList<AgentChatHistoryItem> source,
         List<RenderSlot> target,
@@ -720,6 +866,8 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
                 this.suppressedRunIds.Add(id);
             }
         }
+        if (target.Count > 0)
+            this.ReconcileRoleHeaders();
 
         // Preloaded slots (from the Phase B render plan) are already in `target` and in the DOM.
         // When the buffered events captured during loading are supplied, replaying them applies
@@ -780,7 +928,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         {
             target.Model.Update(sourceItem);
 
-            if (ContainsFunctionCalls(oldSource) || ContainsFunctionCalls(sourceItem))
+            if (!HaveSameToolComposition(oldSource, sourceItem))
             {
                 this.RemoveCallIdsFromIndex(target);
                 this.AddCallIdsToIndex(sourceItem, target);
@@ -826,7 +974,9 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
             this.AddCallIdsToIndex(slot.Model.Source, slot);
         }
         this.ClassifyAndInsert(index, slot);
-        this.ReconcileRoleHeaders();
+        // An ungrouped tail append cannot change any preceding role boundary. Mid-list
+        // edits and group promotion still use the full structural reconciliation.
+        this.ReconcileRoleHeaders(index == this.Target.Count - 1 && slot.Group is null ? index : 0);
     }
 
     protected override void OnRemoveAt(int index, RenderSlot slot)
@@ -883,6 +1033,22 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         }
 
         this.ReconcileRoleHeaders();
+    }
+
+    protected override void ResetTarget()
+    {
+        // A reset removes the whole old region. Do not rebuild every shrinking group or
+        // reconcile headers for intermediate states that can never be displayed.
+        var removedIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var slot in this.Target)
+        {
+            this.RemoveCallIdsFromIndex(slot);
+            if (slot.HasDomElement && removedIds.Add(slot.Group?.GroupId ?? slot.Model.ElementId))
+                this.sink.RemoveContent(slot.Group?.GroupId ?? slot.Model.ElementId);
+            slot.Model.IsInserted = false;
+        }
+        this.Target.Clear();
+        this.suppressedRunIds.Clear();
     }
 
     public override void Dispose()
@@ -1288,22 +1454,28 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
             if (content is FunctionCallContent call && call.CallId is not null)
             {
                 this.sharedSlotByCallId[call.CallId] = slot;
+                slot.RegisteredCallIds.Add(call.CallId);
             }
         }
     }
 
     private void RemoveCallIdsFromIndex(RenderSlot slot)
     {
-        var keysToRemove = this.sharedSlotByCallId
-            .Where(kvp => ReferenceEquals(kvp.Value, slot))
-            .Select(kvp => kvp.Key)
-            .ToList();
-
-        foreach (var key in keysToRemove)
+        foreach (var key in slot.RegisteredCallIds)
         {
-            this.sharedSlotByCallId.Remove(key);
+            this.CallIndexRemovalVisits++;
+            if (this.sharedSlotByCallId.TryGetValue(key, out var owner) &&
+                ReferenceEquals(owner, slot))
+                this.sharedSlotByCallId.Remove(key);
         }
+        slot.RegisteredCallIds.Clear();
     }
+
+    private static bool HaveSameToolComposition(AgentChatHistoryItem previous, AgentChatHistoryItem current)
+        => previous.Contents.OfType<FunctionCallContent>().Select(call => (call.CallId, call.Name))
+               .SequenceEqual(current.Contents.OfType<FunctionCallContent>().Select(call => (call.CallId, call.Name))) &&
+           previous.Contents.OfType<FunctionResultContent>().Select(result => result.CallId)
+               .SequenceEqual(current.Contents.OfType<FunctionResultContent>().Select(result => result.CallId));
 
     private static bool ContainsFunctionCalls(AgentChatHistoryItem item)
     {
@@ -1457,13 +1629,16 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
     /// consistent with the invariant. Non-DOM slots (result-only injections, no-visible-content
     /// messages) and grouped non-leader slots are skipped (they never own a role header). See #1222.
     /// </summary>
-    private void ReconcileRoleHeaders()
+    private void ReconcileRoleHeaders(int startIndex = 0)
     {
-        string? previousRole = null;
-        ToolCallGroupHtmlModel? previousGroupOwner = null;
-        for (var i = 0; i < this.Target.Count; i++)
+        var previousRole = startIndex > 0 ? this.Target[startIndex - 1].RoleAfter : null;
+        var previousGroupOwner = startIndex > 0 ? this.Target[startIndex - 1].HeaderGroupAfter : null;
+        for (var i = startIndex; i < this.Target.Count; i++)
         {
+            this.HeaderReconciliationVisits++;
             var slot = this.Target[i];
+            slot.RoleAfter = previousRole;
+            slot.HeaderGroupAfter = previousGroupOwner;
             if (!slot.HasDomElement)
             {
                 continue;
@@ -1480,6 +1655,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
 
                 g.SetSuppressRoleHeader(true, emit: slot.Model.IsInserted);
                 previousGroupOwner = g;
+                slot.HeaderGroupAfter = g;
                 continue;
             }
 
@@ -1498,6 +1674,8 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
             previousGroupOwner = null;
 
             previousRole = effectiveRole;
+            slot.RoleAfter = effectiveRole;
+            slot.HeaderGroupAfter = null;
         }
     }
 
