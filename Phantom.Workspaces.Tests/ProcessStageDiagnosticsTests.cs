@@ -160,4 +160,52 @@ public sealed class ProcessStageDiagnosticsTests
             return ValueTask.CompletedTask;
         }
     }
+
+        [Theory]
+        [InlineData("caller-gui-initialization")]
+        [InlineData("caller-persisted-session-query")]
+        public async Task ResultValidationFailure_IsLatchedInsideLifetimeBeforeGuiTaskPropagation(string stage)
+        {
+            var clock = new FakeTimeProvider();
+            var lines = new List<string>();
+            var cleanupLines = new List<string>();
+            var diagnostics = new ProcessStageDiagnostics(lines.Add, clock);
+            var cleanup = new ProcessStageDiagnostics(cleanupLines.Add, clock);
+            var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            async Task RunGuiAsync()
+            {
+                await using var lifetime = new DiagnosticAsyncLifetime(
+                    new ClockAdvancingDisposable(clock), cleanup, "caller-window-shutdown");
+                try
+                {
+                    var result = await diagnostics.RunAsync(stage, () =>
+                    {
+                        clock.Advance(TimeSpan.FromMilliseconds(17));
+                        return Task.FromResult(Array.Empty<string>());
+                    });
+                    if (stage == "caller-gui-initialization")
+                    {
+                        if (result.Contains("fixture-profile") != true)
+                            throw new InvalidOperationException("Profile mismatch.");
+                    }
+                    else
+                        _ = result.Single();
+                }
+                catch (Exception error)
+                {
+                    diagnostics.Fail(error);
+                    throw;
+                }
+            }
+
+            try { await RunGuiAsync(); }
+            catch (Exception error) { finished.SetException(error); }
+            await Assert.ThrowsAsync<InvalidOperationException>(() => finished.Task);
+            diagnostics.Fail(new InvalidOperationException());
+            Assert.Single(lines, line => line.Contains($"failed {stage} elapsed-ms 17"));
+            Assert.DoesNotContain(lines, line => line.Contains("completed " + stage));
+            Assert.DoesNotContain(lines, line => line.Contains("caller-gui-finish"));
+            Assert.Contains(cleanupLines, line => line.Contains("completed caller-window-shutdown elapsed-ms 5000"));
+        }
 }

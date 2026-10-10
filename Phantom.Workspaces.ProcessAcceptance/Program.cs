@@ -120,6 +120,8 @@ internal static class Program
             TaskScheduler.Default));
         await using var factoryLifetime = new DiagnosticAsyncLifetime(
             factory, cleanup, "worker-chat-factory-shutdown");
+        try
+        {
         var chats = new RunningAgentChatTable(factory);
         var clock = new FakeTimeProvider(DateTimeOffset.UtcNow);
         var hub = new ReverseHttpClientTransportFactory(
@@ -226,6 +228,12 @@ internal static class Program
             diagnostics.Fail(error);
             throw;
         }
+        }
+        catch (Exception error)
+        {
+            diagnostics.Fail(error);
+            throw;
+        }
     }
 
     private static async Task<string> PrepareChildAsync(
@@ -314,16 +322,20 @@ internal static class Program
         bool startupFailure, bool childAttachment, CancellationToken ct)
     {
         reportStage("caller-live-ingress");
-        var liveHub = new ReverseHttpServerTransportFactory(
+        var liveHub = diagnostics.Run("caller-live-ingress", () => new ReverseHttpServerTransportFactory(
             new ReverseConnectionStatusRegistry(), requireAuthenticatedRelays: true,
-            hubProfileEntityId: session.UserComputerProfileEntityId);
+            hubProfileEntityId: session.UserComputerProfileEntityId));
         await using var liveHubLifetime = new DiagnosticAsyncLifetime(
             liveHub, cleanup, "caller-live-hub-shutdown");
+        try
+        {
         var listeners = new TransportRegistry();
         listeners.Register(liveHub);
-        var server = new HttpServerTransportFactory(listeners);
+        var server = diagnostics.Run("caller-live-ingress", () => new HttpServerTransportFactory(listeners));
         await using var serverLifetime = new DiagnosticAsyncLifetime(
             server, cleanup, "caller-live-transport-server-shutdown");
+        try
+        {
         var builder = WebApplication.CreateBuilder();
         builder.Logging.ClearProviders();
         builder.Logging.AddProvider(new ForwardingLoggerProvider(loggerFactory));
@@ -333,6 +345,8 @@ internal static class Program
         var app = builder.Build();
         await using var appLifetime = new DiagnosticAsyncLifetime(
             app, cleanup, "caller-live-web-app-shutdown");
+        try
+        {
         app.UseWebSockets();
         app.Use(async (context, next) =>
         {
@@ -382,8 +396,26 @@ internal static class Program
             }
         });
         Dispatcher.UIThread.MainLoop(loop.Token);
-        await diagnostics.RunAsync("caller-gui-finish", () => finished.Task.WaitAsync(ct));
+        await finished.Task.WaitAsync(ct);
         diagnostics.Complete();
+        }
+        catch (Exception error)
+        {
+            diagnostics.Fail(error);
+            throw;
+        }
+        }
+        catch (Exception error)
+        {
+            diagnostics.Fail(error);
+            throw;
+        }
+        }
+        catch (Exception error)
+        {
+            diagnostics.Fail(error);
+            throw;
+        }
     }
 
     private static async Task RunCallerTabAsync(
@@ -398,6 +430,8 @@ internal static class Program
             TaskScheduler.FromCurrentSynchronizationContext()));
         await using var factoryLifetime = new DiagnosticAsyncLifetime(
             factory, cleanup, "caller-chat-factory-shutdown");
+        try
+        {
         var provider = new TransportFactoryRegistryProvider();
         var chats = new RunningAgentChatTable(
             factory, AgentSessionRuntimeContextFactory.FromProvider(provider));
@@ -417,6 +451,8 @@ internal static class Program
             services));
         await using var windowLifetime = new DiagnosticAsyncLifetime(
             window, cleanup, "caller-window-shutdown");
+        try
+        {
         reportStage("caller-gui-initialization");
         await diagnostics.RunAsync("caller-gui-initialization", () => window.InitializeAsync());
         if (window.EntityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId
@@ -533,7 +569,7 @@ internal static class Program
         if (startupFailure)
         {
             await VerifyRemoteStartupFailureInCallerUiAsync(
-                window, workerProfile, loggerFactory, reportStage, ct);
+                window, workerProfile, loggerFactory, reportStage, diagnostics, ct);
             diagnostics.Complete();
             return;
         }
@@ -569,6 +605,18 @@ internal static class Program
                 completed.TrySetResult();
         }
         diagnostics.Complete();
+        }
+        catch (Exception error)
+        {
+            diagnostics.Fail(error);
+            throw;
+        }
+        }
+        catch (Exception error)
+        {
+            diagnostics.Fail(error);
+            throw;
+        }
         }
         catch (Exception error)
         {
@@ -684,7 +732,7 @@ internal static class Program
 
     private static async Task VerifyRemoteStartupFailureInCallerUiAsync(
         MainWindowViewModel window, EntityId workerProfile, ILoggerFactory loggerFactory,
-        Action<string> reportStage, CancellationToken ct)
+        Action<string> reportStage, ProcessStageDiagnostics diagnostics, CancellationToken ct)
     {
         using var descriptor = JsonDocument.Parse(JsonSerializer.Serialize(new Dictionary<string, string>
         {
@@ -707,6 +755,8 @@ internal static class Program
         await using var factory = new AgentChatFactory(
             new InMemoryAgentPersistenceStore(), services,
             TaskScheduler.FromCurrentSynchronizationContext());
+        try
+        {
         var chats = new RunningAgentChatTable(factory);
         var definition = PhantomAgentSchema.AgentDefinitionFromJson(
             """
@@ -721,6 +771,8 @@ internal static class Program
             AgentServices = services,
             EntityName = "Synthetic split startup",
         }, ct);
+        try
+        {
         using var uiLogs = new Phantom.Workspaces.Agent.Gui.ObservableLoggerFactory();
         await using var ui = new Phantom.Workspaces.Agent.Gui.ViewModels.AgentViewModel(
             new Phantom.Workspaces.Agent.Gui.ViewModels.AgentViewModelOptions
@@ -758,9 +810,26 @@ internal static class Program
                 throw new InvalidOperationException("Caller chat UI did not display the detailed worker cause.");
             Console.WriteLine("RESULT caller-ui startup-type-message-stack-inner");
         }
+        catch (Exception error)
+        {
+            diagnostics.Fail(error);
+            throw;
+        }
         finally
         {
             historyChanges.CollectionChanged -= OnHistoryChanged;
+        }
+        }
+        catch (Exception error)
+        {
+            diagnostics.Fail(error);
+            throw;
+        }
+        }
+        catch (Exception error)
+        {
+            diagnostics.Fail(error);
+            throw;
         }
     }
 
