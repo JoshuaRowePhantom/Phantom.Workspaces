@@ -4195,11 +4195,15 @@ public sealed class MainWindowIntegrationTests
                 .Single(window => !ReferenceEquals(window, mainWindow));
             Window? activatedWindow = null;
             viewModel.WireWindowActivation(window => activatedWindow = window);
+            var focusRequests = 0;
+            tab.FocusPrimaryControlRequested += (_, _) => focusRequests++;
 
             var navigated = await viewModel.NavigateToNotificationTabAsync(tab.Id);
+            Dispatcher.UIThread.RunJobs();
 
             Assert.True(navigated);
             Assert.Same(floatingWindow, activatedWindow);
+            Assert.True(focusRequests > 0, "Navigation must request focus in the floating tab's primary control.");
         }
         finally
         {

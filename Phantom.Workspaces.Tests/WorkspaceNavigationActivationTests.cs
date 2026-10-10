@@ -14,6 +14,30 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class WorkspaceNavigationActivationTests
 {
+    [AvaloniaTheory(Timeout = 20_000)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Navigate_PendingFallbackWorkspaceClosed_ReturnsFalseWithoutInvalidatingIterator(bool staleHint)
+    {
+        await using var vm = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await vm.InitializeAsync();
+        var house = await OpenWorkspaceAsync(vm, "House");
+        Assert.IsType<WorkspaceContentDock>(
+            MainWindowIntegrationTests.FindDocumentDockIn(house.ContentLayout!)!).ItemsSource = null;
+        var agent = new AgentSessionWorkspaceTabViewModel { Id = "closing-fallback-agent", Title = "Agent" };
+        house.Tabs.Add(agent);
+        var other = await OpenWorkspaceAsync(vm, "Phantom.Workspaces");
+        var navigation = vm.ActivateTabByRequestAsync(new NavigationRequest(
+            UiPath.ForTab(staleHint ? other.Id : null, agent.Id)));
+        Assert.False(navigation.IsCompleted);
+
+        await vm.RemoveWorkspacePaneAsync(house);
+
+        Assert.False(await navigation);
+        Assert.DoesNotContain(house, vm.WorkspacePanes);
+        Assert.Same(other, vm.SelectedWorkspacePane);
+    }
+
     [AvaloniaTheory(Timeout = 30_000)]
     [InlineData("notification")]
     [InlineData("missing-hint")]
