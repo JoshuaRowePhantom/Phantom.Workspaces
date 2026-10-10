@@ -1245,8 +1245,24 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             if (entry.Key is null) return;
             // AgentChat raises this notification while holding its running-item writer gate.
             var currentItems = entry.Key.Items.ToImmutableArray();
+            this.runningItemSnapshots.TryGetValue(entry.Key, out var previousItems);
             this.runningItemSnapshots[entry.Key] = currentItems;
-            if (args.OldItems is not null)
+            if (args.Action == NotifyCollectionChangedAction.Reset)
+            {
+                // Reset does not carry OldItems. Release suppression from the prior snapshot
+                // before subsequent history promotion, and publish any already-promoted items.
+                var retained = currentItems.ToHashSet(ReferenceEqualityComparer.Instance);
+                var released = new HashSet<AgentChatHistoryItem>(ReferenceEqualityComparer.Instance);
+                if (!previousItems.IsDefault)
+                    foreach (var oldItem in previousItems)
+                        if (!retained.Contains(oldItem) && this.runningHistoryItems.Remove(oldItem))
+                            released.Add(oldItem);
+                if (released.Count > 0 && this.history is not null)
+                    foreach (var historyItem in this.history)
+                        if (released.Contains(historyItem))
+                            this.PublishHistoryItemUnderLock(historyItem);
+            }
+            else if (args.OldItems is not null)
             {
                 foreach (AgentChatHistoryItem oldItem in args.OldItems)
                 {
