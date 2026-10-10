@@ -10,6 +10,7 @@ public sealed class ProcessStageDiagnostics(
     private long started;
     private bool failed;
     public bool HasFailure => this.failed;
+    private readonly HashSet<Exception> failures = new(ReferenceEqualityComparer.Instance);
 
     public void Report(string nextStage)
     {
@@ -36,12 +37,20 @@ public sealed class ProcessStageDiagnostics(
 
     public void Fail(Exception error)
     {
+        this.failures.Add(error);
         if (this.failed)
             return;
         this.failed = true;
         write($"STAGE {this.clock.GetUtcNow():O} failed {this.stage ?? "none"} elapsed-ms "
             + $"{this.clock.GetElapsedTime(this.started).TotalMilliseconds:F0} exception-type {error.GetType().Name}");
         this.stage = null;
+    }
+
+    public void CaptureFailure(Exception error, ProcessStageDiagnostics cleanup)
+    {
+        if (this.failed || cleanup.failures.Contains(error))
+            return;
+        this.Fail(error);
     }
 
     public T Run<T>(string operation, Func<T> action)

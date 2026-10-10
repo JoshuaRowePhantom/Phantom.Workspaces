@@ -93,10 +93,9 @@ internal static class Program
         }
         catch (Exception error)
         {
-            if (!cleanup.HasFailure || diagnostics.HasFailure)
-                diagnostics.Fail(error);
+            diagnostics.CaptureFailure(error, cleanup);
             // No raw exceptions: endpoint, profile, and request contents may be embedded in them.
-            Console.Error.WriteLine("FAIL " + (cleanup.HasFailure ? "cleanup" : stage) + " " + error.GetType().Name + " at "
+            Console.Error.WriteLine("FAIL " + (!diagnostics.HasFailure && cleanup.HasFailure ? "cleanup" : stage) + " " + error.GetType().Name + " at "
                 + error.TargetSite?.DeclaringType?.Name + "." + error.TargetSite?.Name);
             return 1;
         }
@@ -225,13 +224,13 @@ internal static class Program
         }
         catch (Exception error)
         {
-            diagnostics.Fail(error);
+            diagnostics.CaptureFailure(error, cleanup);
             throw;
         }
         }
         catch (Exception error)
         {
-            diagnostics.Fail(error);
+            diagnostics.CaptureFailure(error, cleanup);
             throw;
         }
     }
@@ -401,19 +400,19 @@ internal static class Program
         }
         catch (Exception error)
         {
-            diagnostics.Fail(error);
+            diagnostics.CaptureFailure(error, cleanup);
             throw;
         }
         }
         catch (Exception error)
         {
-            diagnostics.Fail(error);
+            diagnostics.CaptureFailure(error, cleanup);
             throw;
         }
         }
         catch (Exception error)
         {
-            diagnostics.Fail(error);
+            diagnostics.CaptureFailure(error, cleanup);
             throw;
         }
     }
@@ -569,7 +568,7 @@ internal static class Program
         if (startupFailure)
         {
             await VerifyRemoteStartupFailureInCallerUiAsync(
-                window, workerProfile, loggerFactory, reportStage, diagnostics, ct);
+                window, workerProfile, loggerFactory, reportStage, diagnostics, cleanup, ct);
             diagnostics.Complete();
             return;
         }
@@ -608,19 +607,19 @@ internal static class Program
         }
         catch (Exception error)
         {
-            diagnostics.Fail(error);
+            diagnostics.CaptureFailure(error, cleanup);
             throw;
         }
         }
         catch (Exception error)
         {
-            diagnostics.Fail(error);
+            diagnostics.CaptureFailure(error, cleanup);
             throw;
         }
         }
         catch (Exception error)
         {
-            diagnostics.Fail(error);
+            diagnostics.CaptureFailure(error, cleanup);
             throw;
         }
     }
@@ -732,7 +731,8 @@ internal static class Program
 
     private static async Task VerifyRemoteStartupFailureInCallerUiAsync(
         MainWindowViewModel window, EntityId workerProfile, ILoggerFactory loggerFactory,
-        Action<string> reportStage, ProcessStageDiagnostics diagnostics, CancellationToken ct)
+        Action<string> reportStage, ProcessStageDiagnostics diagnostics, ProcessStageDiagnostics cleanup,
+        CancellationToken ct)
     {
         using var descriptor = JsonDocument.Parse(JsonSerializer.Serialize(new Dictionary<string, string>
         {
@@ -812,7 +812,7 @@ internal static class Program
         }
         catch (Exception error)
         {
-            diagnostics.Fail(error);
+            diagnostics.CaptureFailure(error, cleanup);
             throw;
         }
         finally
@@ -822,13 +822,13 @@ internal static class Program
         }
         catch (Exception error)
         {
-            diagnostics.Fail(error);
+            diagnostics.CaptureFailure(error, cleanup);
             throw;
         }
         }
         catch (Exception error)
         {
-            diagnostics.Fail(error);
+            diagnostics.CaptureFailure(error, cleanup);
             throw;
         }
     }

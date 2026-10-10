@@ -152,6 +152,89 @@ public sealed class ProcessStageDiagnosticsTests
         Assert.DoesNotContain(lines, line => line.Contains("completed caller-window-construction"));
     }
 
+    [Theory]
+    [InlineData("caller", false)]
+    [InlineData("worker", false)]
+    [InlineData("caller", true)]
+    [InlineData("worker", true)]
+    public async Task NestedOwnershipGuards_ClassifyCleanupExceptionsWithoutReplacingOperationalFailure(
+        string role, bool operationFails)
+    {
+        var clock = new FakeTimeProvider();
+        var operations = new List<string>();
+        var cleanups = new List<string>();
+        var diagnostics = new ProcessStageDiagnostics(operations.Add, clock);
+        var cleanup = new ProcessStageDiagnostics(cleanups.Add, clock);
+        var operationalError = new InvalidOperationException("operational failure");
+        var innerCleanupError = new IOException("inner cleanup failure");
+        var outerCleanupError = new IOException("outer cleanup failure");
+        async Task RunNestedAsync()
+        {
+            await using var outer = new DiagnosticAsyncLifetime(
+                new ThrowingDisposable(clock, outerCleanupError), cleanup, role + "-outer-shutdown");
+            try
+            {
+                await using var inner = new DiagnosticAsyncLifetime(
+                    new ThrowingDisposable(clock, innerCleanupError), cleanup, role + "-inner-shutdown");
+                try
+                {
+                    diagnostics.Report(role + "-initialization");
+                    clock.Advance(TimeSpan.FromMilliseconds(17));
+                    if (operationFails)
+                        throw operationalError;
+                    diagnostics.Complete();
+                }
+                catch (Exception error)
+                {
+                    diagnostics.CaptureFailure(error, cleanup);
+                    throw;
+                }
+            }
+            catch (Exception error)
+            {
+                diagnostics.CaptureFailure(error, cleanup);
+                throw;
+            }
+        }
+        var error = await Assert.ThrowsAsync<IOException>(() => RunNestedAsync());
+        Assert.Same(outerCleanupError, error);
+        diagnostics.CaptureFailure(error, cleanup);
+        if (operationFails)
+        {
+            Assert.Single(operations, line => line.Contains($"failed {role}-initialization elapsed-ms 17"));
+            Assert.DoesNotContain(operations, line => line.Contains("completed " + role + "-initialization"));
+        }
+        else
+        {
+            Assert.False(diagnostics.HasFailure);
+            Assert.DoesNotContain(operations, line => line.Contains(" failed "));
+            Assert.Single(operations, line => line.Contains($"completed {role}-initialization elapsed-ms 17"));
+        }
+        Assert.Contains(cleanups, line => line.Contains($"failed {role}-inner-shutdown elapsed-ms 5000"));
+        Assert.DoesNotContain(operations, line => line.Contains("failed none"));
+    }
+
+    [Fact]
+    public void EarlierCleanupFailure_DoesNotMisclassifyADifferentOperationalException()
+    {
+        var operations = new List<string>();
+        var diagnostics = new ProcessStageDiagnostics(operations.Add);
+        var cleanup = new ProcessStageDiagnostics(_ => { });
+        cleanup.Fail(new IOException());
+        diagnostics.Report("caller-profile-validation");
+        diagnostics.CaptureFailure(new InvalidOperationException(), cleanup);
+        Assert.Contains(operations, line => line.Contains("failed caller-profile-validation"));
+    }
+
+    private sealed class ThrowingDisposable(FakeTimeProvider clock, Exception error) : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync()
+        {
+            clock.Advance(TimeSpan.FromSeconds(5));
+            return ValueTask.FromException(error);
+        }
+    }
+
     private sealed class ClockAdvancingDisposable(FakeTimeProvider clock) : IAsyncDisposable
     {
         public ValueTask DisposeAsync()
