@@ -17,6 +17,8 @@ public sealed class ProcessStageDiagnostics(
             return;
         if (!Regex.IsMatch(nextStage, @"\A[a-zA-Z0-9.-]+\z"))
             throw new ArgumentException("Stage must be a diagnostic identifier.", nameof(nextStage));
+        if (nextStage == this.stage)
+            return;
         Complete();
         this.stage = nextStage;
         this.started = this.clock.GetTimestamp();

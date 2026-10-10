@@ -134,6 +134,24 @@ public sealed class ProcessStageDiagnosticsTests
         Assert.True(File.Exists(Path.Combine(fixture, "entities", ".git", "logs", "HEAD")));
     }
 
+    [Fact]
+    public void GuardedOperation_DoesNotFalselyCompleteOrResetAnAlreadyStartedStage()
+    {
+        var clock = new FakeTimeProvider();
+        var lines = new List<string>();
+        var diagnostics = new ProcessStageDiagnostics(lines.Add, clock);
+        diagnostics.Report("caller-window-construction");
+        clock.Advance(TimeSpan.FromMilliseconds(50));
+        Assert.Throws<InvalidOperationException>(() => diagnostics.Run<object>("caller-window-construction", () =>
+        {
+            clock.Advance(TimeSpan.FromMilliseconds(17));
+            throw new InvalidOperationException();
+        }));
+        Assert.Single(lines, line => line.Contains("started caller-window-construction"));
+        Assert.Single(lines, line => line.Contains("failed caller-window-construction elapsed-ms 67"));
+        Assert.DoesNotContain(lines, line => line.Contains("completed caller-window-construction"));
+    }
+
     private sealed class ClockAdvancingDisposable(FakeTimeProvider clock) : IAsyncDisposable
     {
         public ValueTask DisposeAsync()
