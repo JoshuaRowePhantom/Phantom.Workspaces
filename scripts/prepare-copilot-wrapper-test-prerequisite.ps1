@@ -452,11 +452,12 @@ try
                 "-p:ArtifactsPath=$dotnetArtifactsDirectory"
                 "-p:CopilotWrapperPublishIntermediateRoot=$productionIntermediateDirectory\"
             )
-            $publishLog = @(& dotnet @publishArguments 2>&1)
-            $publishLog | Write-Host
-            if ($LASTEXITCODE -ne 0)
+            $publishResult = & (Join-Path $PSScriptRoot 'Invoke-StreamingNativeProcess.ps1') `
+                -FileName dotnet -ProcessArguments $publishArguments
+            $publishLog = $publishResult.Output
+            if ($publishResult.ExitCode -ne 0)
             {
-                throw "The real production Release publish failed with exit code $LASTEXITCODE."
+                throw "The real production Release publish failed with exit code $($publishResult.ExitCode)."
             }
 
             $appAssemblySource = Join-Path `
