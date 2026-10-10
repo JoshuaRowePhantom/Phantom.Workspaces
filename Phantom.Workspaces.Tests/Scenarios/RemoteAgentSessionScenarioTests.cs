@@ -572,8 +572,7 @@ public sealed class RemoteAgentSessionScenarioTests
             item => item.Role == ChatRole.User
                 && item.Contents.OfType<TextContent>().Any(
                     content => content.Text.Contains(prompt, StringComparison.Ordinal)));
-        Assert.Contains(
-            history,
+        Assert.Single(history,
             item => item.Role == ChatRole.Assistant
                 && item.Contents.OfType<TextContent>().Any(content => content.Text == answer));
         Assert.Empty(proxy.Chat.RunningItems);
@@ -1319,7 +1318,7 @@ public sealed class RemoteAgentSessionScenarioTests
         ((INotifyCollectionChanged)chat.History).CollectionChanged += OnChanged;
         if (Contains())
             Complete();
-        return completion.Task;
+        return WaitAndUnsubscribeAsync(completion.Task, Remove);
 
         bool Contains() => chat.History.Any(
             item => item.Contents.OfType<TextContent>().Any(
@@ -1333,10 +1332,10 @@ public sealed class RemoteAgentSessionScenarioTests
 
         void Complete()
         {
-            ((INotifyCollectionChanged)chat.History).CollectionChanged -= OnChanged;
             completion.TrySetResult();
         }
 
+        void Remove() => ((INotifyCollectionChanged)chat.History).CollectionChanged -= OnChanged;
     }
 
     private static Task WaitForPersistedTextAsync(
@@ -1465,7 +1464,7 @@ public sealed class RemoteAgentSessionScenarioTests
     {
         try
         {
-            await task.WaitAsync(TestContext.Current.CancellationToken);
+            await task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
         }
         finally
         {

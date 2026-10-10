@@ -1291,6 +1291,55 @@ public sealed partial class RemoteAgentSessionHostTests
         Assert.Contains("streaming-completed", types);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OwnerStreamingLifecycle_BulkClearPublishesPromotedHistoryExactlyOnce(bool promoteBeforeClear)
+    {
+        await using var fixture = new HostFixture();
+        await using var attachment = await fixture.Host.OpenAsync(fixture.Request(AgentSessionOpenIntent.Attach));
+        await fixture.Channel.Output.ReadAsync(TestContext.Current.CancellationToken);
+        var manager = new AgentRunningItems(fixture.RunningItems);
+        var answers = new[]
+        {
+            new AgentChatHistoryItem { Role = ChatRole.Assistant, Contents = [new TextContent("first-answer")] },
+            new AgentChatHistoryItem { Role = ChatRole.Assistant, Contents = [new TextContent("second-answer")] },
+        };
+        var running = manager.Create(answers[1], answers[0]);
+        var history = Assert.IsType<AgentChatHistoryCollection>(fixture.Chat.Object.History);
+        if (promoteBeforeClear)
+            foreach (var answer in answers)
+                history.Add(answer);
+        manager.Update(running, []);
+        if (!promoteBeforeClear)
+            foreach (var answer in answers)
+                history.Add(answer);
+        manager.Remove(running);
+        await fixture.Runtime.PublishAsync(new SessionTerminalEvent
+        {
+            Reason = "regression-barrier",
+            CompletionState = JsonSerializer.SerializeToElement(new { completed = true }),
+        });
+
+        var frames = new List<AgentSessionServerFrame>();
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        cancellation.CancelAfter(TimeSpan.FromSeconds(30));
+        while (true)
+        {
+            var frame = AgentSessionProtocolCodec.DeserializeFrame(await fixture.Channel.Output.ReadAsync(cancellation.Token));
+            if (frame.Type == "session-terminal")
+                break;
+            frames.Add(frame);
+        }
+        var appended = frames.Where(frame => frame.Type == "history-appended").ToArray();
+        Assert.Equal(2, appended.Length);
+        Assert.Contains("first-answer", appended[0].Payload.GetRawText());
+        Assert.Contains("second-answer", appended[1].Payload.GetRawText());
+        AssertOrdered(frames);
+        Assert.Contains(frames, frame => frame.Type == "streaming-updated");
+        Assert.Contains(frames, frame => frame.Type == "streaming-completed");
+    }
+
     [Fact]
     public async Task CaptureSnapshot_RunningItemRegistrationLag_AssignsStableRunId()
     {
