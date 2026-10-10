@@ -32,8 +32,8 @@ public sealed class WorkspacePaneEnvironment
     /// <summary>True while the given pane is still a live member of <c>WorkspacePanes</c>.</summary>
     public required Func<WorkspacePaneViewModel, bool> IsPaneLive { get; init; }
 
-    /// <summary>Makes the given pane the selected workspace pane.</summary>
-    public required Action<WorkspacePaneViewModel> SelectPane { get; init; }
+    /// <summary>Activates the pane's outer dock document; returns false when it cannot be shown.</summary>
+    public required Func<WorkspacePaneViewModel, bool> SelectPane { get; init; }
 
     /// <summary>
     /// Runs window-global MRU navigation after the pane closes its active tab (consults the single

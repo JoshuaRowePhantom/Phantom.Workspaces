@@ -8692,7 +8692,7 @@ public sealed class MainWindowIntegrationTests
 
         // Switch back to pane A so the notification for tabInPaneB will be unread
         var paneA = viewModel.WorkspacePanes.First(p => !string.Equals(p.Id, workspaceBId.ToString(), StringComparison.Ordinal));
-        viewModel.SelectedWorkspacePane = paneA;
+        ActivateWorkspacePaneAtIndex(viewModel, viewModel.WorkspacePanes.IndexOf(paneA).ToString());
 
         viewModel.NotificationService.Notify(new Notification(
             new TabDescriptor { TabId = "notif-cross-pane-tab" },
@@ -8703,6 +8703,8 @@ public sealed class MainWindowIntegrationTests
 
         Assert.Same(paneB, viewModel.SelectedWorkspacePane);
         Assert.Equal("notif-cross-pane-tab", (GetDocumentDock(viewModel)!.ActiveDockable as WorkspaceDocument)?.Id);
+        var paneDocument = GetDockFactoryAs<WorkspaceDockFactory>(viewModel).GetPaneDocument(paneB.Id)!;
+        Assert.Same(paneDocument, ((IDock)paneDocument.Owner!).ActiveDockable);
         Assert.True(Assert.Single(
             viewModel.NotificationService.Notifications,
             entry => entry.TabKey == "notif-cross-pane-tab").IsRead);
@@ -10825,7 +10827,7 @@ public sealed class MainWindowIntegrationTests
         await viewModel.OpenTabAsync(tabInB);
 
         var paneA = viewModel.WorkspacePanes.Single(p => string.Equals(p.Id, workspaceAId.ToString(), StringComparison.Ordinal));
-        viewModel.SelectedWorkspacePane = paneA;
+        ActivateWorkspacePaneAtIndex(viewModel, viewModel.WorkspacePanes.IndexOf(paneA).ToString());
 
         await viewModel.ActivateTabByRequestAsync(new Phantom.Workspaces.Services.Navigation.NavigationRequest(UiPath.ForTab(workspaceBId.ToString(), "1157-tab-in-b")));
         await Dispatcher.UIThread.InvokeAsync(() => { });
@@ -10834,6 +10836,8 @@ public sealed class MainWindowIntegrationTests
         var documentDock = GetDocumentDock(viewModel);
         Assert.NotNull(documentDock);
         Assert.Equal("1157-tab-in-b", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
+        var paneDocument = GetDockFactoryAs<WorkspaceDockFactory>(viewModel).GetPaneDocument(paneB.Id)!;
+        Assert.Same(paneDocument, ((IDock)paneDocument.Owner!).ActiveDockable);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -10907,7 +10911,7 @@ public sealed class MainWindowIntegrationTests
         await viewModel.OpenTabAsync(tabInB);
 
         var paneA = viewModel.WorkspacePanes.Single(p => string.Equals(p.Id, workspaceAId.ToString(), StringComparison.Ordinal));
-        viewModel.SelectedWorkspacePane = paneA;
+        ActivateWorkspacePaneAtIndex(viewModel, viewModel.WorkspacePanes.IndexOf(paneA).ToString());
 
         viewModel.NotificationService.Notify(new Notification(
             new TabDescriptor { TabId = "1157-notif-tab-in-b", WorkspaceId = workspaceBId.ToString() },
@@ -10923,6 +10927,8 @@ public sealed class MainWindowIntegrationTests
         var documentDock = GetDocumentDock(viewModel);
         Assert.NotNull(documentDock);
         Assert.Equal("1157-notif-tab-in-b", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
+        var paneDocument = GetDockFactoryAs<WorkspaceDockFactory>(viewModel).GetPaneDocument(paneB.Id)!;
+        Assert.Same(paneDocument, ((IDock)paneDocument.Owner!).ActiveDockable);
     }
 
     [AvaloniaFact(Timeout = 15_000)]

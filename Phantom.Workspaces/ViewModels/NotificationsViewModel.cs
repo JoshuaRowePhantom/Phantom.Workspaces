@@ -161,7 +161,7 @@ public sealed class NotificationsViewModel : TransientPopupViewModel, IDisposabl
     private NotificationRowViewModel CreateRow(NotificationEntry entry)
     {
         var tabKey = entry.TabKey;
-        var navigateCmd = new RelayCommand(async _ =>
+        var navigateCmd = new AsyncRelayCommand(async _ =>
         {
             this.TriggerFadeClose();
             await this.navigator.NavigateAsync(

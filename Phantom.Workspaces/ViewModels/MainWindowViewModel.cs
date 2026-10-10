@@ -2597,8 +2597,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
             if (targetPane is not null && targetPane.ContentLayout is not null)
             {
-                this.SelectedWorkspacePane = targetPane;
-                if (await targetPane.NavigateToDocumentTabAsync(documentTabId, deferIfAbsent: openedJustNow))
+                var knownTab = targetPane.OwnsDocumentTab(documentTabId)
+                    || targetPane.Tabs.Any(t => string.Equals(t.Id, documentTabId, StringComparison.Ordinal));
+                if ((knownTab || (openedJustNow && !targetPane.Populated.IsCompleted))
+                    && this.SelectAndActivateWorkspacePane(targetPane)
+                    && await targetPane.NavigateToDocumentTabAsync(documentTabId, deferIfAbsent: openedJustNow))
                 {
                     return true;
                 }
@@ -2609,19 +2612,36 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         // Fall back to asking each pane whether it owns the document tab id.
         foreach (var pane in this.WorkspacePanes)
         {
-            if (!pane.OwnsDocumentTab(documentTabId) || pane.ContentLayout is null)
+            if ((!pane.OwnsDocumentTab(documentTabId)
+                    && !pane.Tabs.Any(t => string.Equals(t.Id, documentTabId, StringComparison.Ordinal)))
+                || pane.ContentLayout is null)
             {
                 continue;
             }
 
-            this.SelectedWorkspacePane = pane;
-            if (await pane.NavigateToDocumentTabAsync(documentTabId))
+            if (this.SelectAndActivateWorkspacePane(pane)
+                && await pane.NavigateToDocumentTabAsync(documentTabId))
             {
                 return true;
             }
         }
 
         return false;
+    }
+
+    private bool SelectAndActivateWorkspacePane(WorkspacePaneViewModel pane)
+    {
+        var document = this.dockFactory.GetPaneDocument(pane.Id);
+        if (document?.Owner is not IDock owner || owner.VisibleDockables?.Contains(document) != true)
+        {
+            return false;
+        }
+
+        this.SelectedWorkspacePane = pane;
+        if (!ReferenceEquals(owner.ActiveDockable, document))
+            this.dockFactory.SetActiveDockable(document);
+        this.dockFactory.SetFocusedDockable(owner, document);
+        return ReferenceEquals(owner.ActiveDockable, document);
     }
 
     internal async Task RemoveWorkspacePaneAsync(WorkspacePaneViewModel pane)
@@ -4705,7 +4725,17 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             if (doc.TabViewModel is { } focusTab)
             {
                 Dispatcher.UIThread.Post(
-                    () => focusTab.RequestFocusPrimaryControl(),
+                    () =>
+                    {
+                        // Older queued focus requests must not steal focus back into another
+                        // region after cross-workspace navigation selects its final document.
+                        if (ownerPane is not null
+                            && ReferenceEquals(this.SelectedWorkspacePane, ownerPane)
+                            && ReferenceEquals(ownerPane.ContentLayout?.FocusedDockable, doc))
+                        {
+                            focusTab.RequestFocusPrimaryControl();
+                        }
+                    },
                     Avalonia.Threading.DispatcherPriority.Input);
             }
         }
@@ -4797,7 +4827,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             NavigationHistory = this.navigationHistoryService,
             TabFactory = this,
             IsPaneLive = pane => this.WorkspacePanes.Contains(pane),
-            SelectPane = pane => this.SelectedWorkspacePane = pane,
+            SelectPane = this.SelectAndActivateWorkspacePane,
             RunMruNavigationAfterActiveClose = this.RunMruNavigationAfterActiveClose,
         };
 

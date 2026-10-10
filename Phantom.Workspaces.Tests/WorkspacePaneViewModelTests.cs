@@ -2100,13 +2100,16 @@ public sealed class WorkspacePaneViewModelTests
         Assert.NotNull(contentDock);
         await MainWindowIntegrationTests.WaitForWorkspaceTabAsync(contentDock!, "first-tab");
 
-        // Request navigation to a tab that does not yet exist, with deferIfAbsent.
-        var deferredResult = await pane.NavigateToDocumentTabAsync("deferred-tab", deferIfAbsent: true);
-        Assert.True(deferredResult); // deferred activation installed
-
-        // Now add the tab; the deferred activation should fire and activate it.
+        // Pause the real generator to separate tab population from document materialization.
+        var sourceDock = Assert.IsType<WorkspaceContentDock>(contentDock);
+        sourceDock.ItemsSource = null;
         var deferredTab = new WebViewModel("https://deferred.example.com") { Id = "deferred-tab", Title = "Deferred" };
-        await viewModel.OpenTabAsync(deferredTab);
+        pane.Tabs.Add(deferredTab);
+        var deferredResult = pane.NavigateToDocumentTabAsync("deferred-tab", deferIfAbsent: true);
+        Assert.False(deferredResult.IsCompleted);
+
+        sourceDock.ItemsSource = pane.Tabs;
+        Assert.True(await deferredResult);
         await MainWindowIntegrationTests.WaitForWorkspaceTabAsync(contentDock!, "deferred-tab");
         await Dispatcher.UIThread.InvokeAsync(() => { });
 
