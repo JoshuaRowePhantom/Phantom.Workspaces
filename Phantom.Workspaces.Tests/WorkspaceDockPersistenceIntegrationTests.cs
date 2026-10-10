@@ -22,6 +22,58 @@ namespace Phantom.Workspaces.Tests;
 /// </summary>
 public sealed class WorkspaceDockPersistenceIntegrationTests
 {
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task NotificationNavigate_RestoredInactiveSplitWorkspace_ActivatesCanonicalOuterAndOwningInnerDock()
+    {
+        await using var vm = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await vm.InitializeAsync();
+        var id = new EntityId(Guid.NewGuid());
+        var layout = MultiRegionRestoreTestSupport.BuildTwoRegionDockLayoutJson(
+            "nav-left", "nav-left-tab", "https://left.example.com",
+            "nav-right", "nav-right-tab", "https://right.example.com");
+        await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(vm.EntityBroker, id, $$"""
+            {"entity-id":"{{id.Value}}","entity-types":["entity","workspace"],
+             "display-name":{"default":"House Restored"},"dock-layout":{{layout}},"regions":[]}
+            """);
+        await vm.OpenWorkspaceAsync(new GetEntityRequest { EntityId = id });
+        var house = vm.WorkspacePanes.Single(p => p.Id == id.ToString());
+        await house.Populated;
+        var canonical = Assert.IsType<WorkspaceDocument>(house.GetDocumentForTab("nav-right-tab"));
+        var owner = Assert.IsAssignableFrom<IDock>(canonical.Owner);
+        Assert.Equal("nav-right", owner.Id);
+        var other = await WorkspaceNavigationActivationTests.OpenWorkspaceAsync(vm, "Phantom.Workspaces");
+        var factory = WorkspaceNavigationActivationTests.GetFactory(vm);
+        var window = new MainWindow(vm);
+        window.Show();
+        try
+        {
+            factory.SetActiveDockable(factory.GetPaneDocument(other.Id)!);
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            vm.NotificationService.Notify(new Phantom.Workspaces.Services.Notifications.Notification(
+                new Phantom.Workspaces.Services.Notifications.TabDescriptor
+                {
+                    TabId = canonical.Id, WorkspaceId = house.Id,
+                },
+                "Restored", "ready", DateTime.UtcNow,
+                Phantom.Workspaces.Services.Notifications.RunningState.Idle,
+                Phantom.Workspaces.Services.Notifications.NotificationState.Interesting));
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            var row = Assert.Single(vm.NotificationsViewModel!.Rows, r => r.TabKey == canonical.Id);
+            row.NavigateCommand.Execute(null);
+            await Assert.IsType<AsyncRelayCommand>(row.NavigateCommand).LastExecutionTask!;
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+            WorkspaceNavigationActivationTests.AssertVisibleTarget(window, vm, house, canonical);
+            Assert.Same(canonical, house.GetDocumentForTab(canonical.Id));
+            Assert.Single(DockLayoutCanonicalizer.CollectAllDockables(house.ContentLayout!)
+                .OfType<WorkspaceDocument>(), d => d.Id == canonical.Id);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
     [AvaloniaFact(Timeout = 20_000)]
     public async Task WorkspaceDockFactory_GetDocumentForTab_AfterRestoreOfBloatedTree_ReturnsSingleCanonicalInstance()
     {

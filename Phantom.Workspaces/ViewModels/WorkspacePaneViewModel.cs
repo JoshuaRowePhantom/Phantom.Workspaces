@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Dock.Model.Controls;
 using Dock.Model.Core;
 using Dock.Model.Mvvm.Controls;
@@ -35,10 +36,12 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
     /// false-positive against a prior owner's entry.
     /// </summary>
     private readonly Dictionary<string, WorkspaceDocument> documentsByTabId = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, TaskCompletionSource<WorkspaceDocument?>> pendingNavigation = new(StringComparer.Ordinal);
 
     private readonly List<(WorkspaceTabViewModel tab, System.ComponentModel.PropertyChangedEventHandler tabHandler)> subscribedTabs = [];
     private readonly List<(IStatusItem tabStatus, System.ComponentModel.PropertyChangedEventHandler handler)> subscribedTabStatuses = [];
     private readonly TaskCompletionSource populatedTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource disposedTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public WorkspacePaneViewModel(
         SubscribedEntityViewModel entity,
@@ -181,6 +184,11 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
                 }
             }
         }
+        if (e.OldItems is not null)
+        {
+            foreach (var tab in e.OldItems.OfType<WorkspaceTabViewModel>())
+                this.pendingNavigation.GetValueOrDefault(tab.Id)?.TrySetResult(null);
+        }
 
         this.ResubscribeToTabs();
         this.RecomputeAnyTabIsRunning();
@@ -242,6 +250,13 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
     /// </summary>
     internal void SignalPopulated(Exception? error = null)
     {
+        foreach (var (tabId, completion) in this.pendingNavigation)
+        {
+            if (error is not null)
+                completion.TrySetException(error);
+            else if (!this.Tabs.Any(t => string.Equals(t.Id, tabId, StringComparison.Ordinal)))
+                completion.TrySetResult(null);
+        }
         if (error is not null)
         {
             this.populatedTcs.TrySetException(error);
@@ -275,6 +290,7 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
         {
             locator[tabId] = () => this.documentsByTabId.GetValueOrDefault(tabId);
         }
+        this.pendingNavigation.GetValueOrDefault(tabId)?.TrySetResult(document);
     }
 
     /// <summary>Removes the document registration for the given tab id from this pane's registry.</summary>
@@ -291,77 +307,113 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
     /// THIS pane's registry and activates + focuses it within this pane's own
     /// <see cref="ContentLayout"/>. If the tab is not yet materialized but is present in
     /// <see cref="Tabs"/> (or <paramref name="deferIfAbsent"/> is set because the pane was just
-    /// opened and is still hydrating), installs a deferred activation hook and returns true.
+    /// opened and is still hydrating), waits for materialization before reporting success.
     /// Returns false when the document tab id is unknown to this pane.
     /// </summary>
-    public Task<bool> NavigateToDocumentTabAsync(string documentTabId, bool deferIfAbsent = false)
+    public async Task<bool> NavigateToDocumentTabAsync(string documentTabId, bool deferIfAbsent = false)
     {
         if (this.ContentLayout is null)
         {
-            return Task.FromResult(false);
+            return false;
         }
 
         var doc = this.GetDocumentForTab(documentTabId);
         if (doc is not null)
         {
-            var documentDock = FindDocumentDock(this.ContentLayout);
-            this.environment?.DockFactory.SetActiveDockable(doc);
-            if (documentDock is not null)
-            {
-                this.environment?.DockFactory.SetFocusedDockable(documentDock, doc);
-            }
-            return Task.FromResult(true);
+            if (!await this.RealizeVisiblePaneAsync(doc))
+                return false;
+            return this.ActivateMaterializedDocument(documentTabId);
         }
 
         var inTabs = this.Tabs.Any(t => string.Equals(t.Id, documentTabId, StringComparison.Ordinal));
-        if (inTabs || deferIfAbsent)
+        if (inTabs || (deferIfAbsent && !this.Populated.IsCompleted))
         {
-            this.InstallDeferredActivation(documentTabId);
-            return Task.FromResult(true);
+            if (!this.pendingNavigation.TryGetValue(documentTabId, out var completion))
+            {
+                completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                this.pendingNavigation.Add(documentTabId, completion);
+            }
+            try
+            {
+                // Registration occurs while Dock is preparing its container. Resume on the UI
+                // context after preparation so Owner and VisibleDockables are already wired.
+                var materialized = await completion.Task;
+                if (materialized is null)
+                    return false;
+                if (!await this.RealizeVisiblePaneAsync(materialized))
+                    return false;
+                return this.ActivateMaterializedDocument(documentTabId);
+            }
+            finally
+            {
+                this.pendingNavigation.Remove(documentTabId);
+            }
         }
-
-        return Task.FromResult(false);
+        return false;
     }
 
-    /// <summary>
-    /// #1341: deferred activation (formerly <c>MainWindowViewModel.ActivateTabWhenLoaded</c>).
-    /// Subscribes to this pane's <see cref="Tabs"/> and activates the document tab once it
-    /// materializes. Fires exactly once.
-    /// </summary>
-    private void InstallDeferredActivation(string documentTabId)
+    private async Task<bool> RealizeVisiblePaneAsync(WorkspaceDocument document)
     {
-        void OnTabsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+        if (this.environment is null || document.Owner is not IDock owner
+            || owner.VisibleDockables?.Contains(document) != true)
+            return false;
+        var topLevels = this.environment.DockFactory.DockControls
+            .OfType<global::Dock.Avalonia.Controls.DockControl>()
+            .Select(Avalonia.Controls.TopLevel.GetTopLevel).OfType<Avalonia.Controls.TopLevel>().Distinct().ToArray();
+        if (topLevels.Length == 0)
+            return !this.disposedTcs.Task.IsCompleted;
+        bool IsRealized() => topLevels.Any(topLevel => topLevel.GetVisualDescendants()
+            .OfType<global::Dock.Avalonia.Controls.DocumentTabStrip>()
+            .Any(strip => strip.IsVisible && ReferenceEquals(strip.DataContext, document.Owner)
+                && strip.Bounds.Width > 0 && strip.Items.Contains(document)));
+        if (IsRealized())
+            return true;
+        // Outer activation can create a fresh nested DockControl. Wait for its actual target
+        // strip, not merely the root bounds: initial primary-strip binding can still steal
+        // focus while the remaining split region is being realized.
+        var realized = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var removed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        NotifyCollectionChangedEventHandler tabsChanged = (_, _) =>
         {
-            var tab = this.Tabs.FirstOrDefault(t => string.Equals(t.Id, documentTabId, StringComparison.Ordinal));
-            if (tab is null) return;
-
-            this.Tabs.CollectionChanged -= OnTabsCollectionChanged;
-            this.ActivateMaterializedDocument(documentTabId);
+            if (!this.Tabs.Any(tab => string.Equals(tab.Id, document.Id, StringComparison.Ordinal)))
+                removed.TrySetResult();
+        };
+        EventHandler updated = (_, _) =>
+        {
+            if (IsRealized())
+                realized.TrySetResult();
+        };
+        foreach (var topLevel in topLevels)
+            topLevel.LayoutUpdated += updated;
+        this.Tabs.CollectionChanged += tabsChanged;
+        try
+        {
+            foreach (var topLevel in topLevels)
+                topLevel.UpdateLayout();
+            updated(null, EventArgs.Empty);
+            return await Task.WhenAny(realized.Task, removed.Task, this.disposedTcs.Task) == realized.Task;
         }
-
-        this.Tabs.CollectionChanged += OnTabsCollectionChanged;
-
-        // Race-condition guard: check again after subscribing.
-        var existing = this.Tabs.FirstOrDefault(t => string.Equals(t.Id, documentTabId, StringComparison.Ordinal));
-        if (existing is not null)
+        finally
         {
-            this.Tabs.CollectionChanged -= OnTabsCollectionChanged;
-            this.ActivateMaterializedDocument(documentTabId);
+            foreach (var topLevel in topLevels)
+                topLevel.LayoutUpdated -= updated;
+            this.Tabs.CollectionChanged -= tabsChanged;
         }
     }
 
-    private void ActivateMaterializedDocument(string documentTabId)
+    private bool ActivateMaterializedDocument(string documentTabId)
     {
         var doc = this.GetDocumentForTab(documentTabId);
-        if (doc is null || this.ContentLayout is null) return;
-
-        var documentDock = FindDocumentDock(this.ContentLayout);
-        this.environment?.SelectPane(this);
-        this.environment?.DockFactory.SetActiveDockable(doc);
-        if (documentDock is not null)
+        if (doc?.Owner is not IDock documentDock
+            || documentDock.VisibleDockables?.Contains(doc) != true
+            || this.ContentLayout is null || this.environment is null
+            || !this.environment.SelectPane(this))
         {
-            this.environment?.DockFactory.SetFocusedDockable(documentDock, doc);
+            return false;
         }
+        this.environment.DockFactory.SetActiveDockable(doc);
+        this.environment.DockFactory.SetFocusedDockable(documentDock, doc);
+        return ReferenceEquals(documentDock.ActiveDockable, doc);
     }
 
     // ── #1341: close-active-tab / cycle (per-pane) ────────────────────────────
@@ -903,6 +955,10 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
     /// </summary>
     public override async ValueTask DisposeAsync()
     {
+        this.disposedTcs.TrySetResult();
+        foreach (var completion in this.pendingNavigation.Values)
+            completion.TrySetResult(null);
+        this.pendingNavigation.Clear();
         var snapshot = this.Tabs.ToArray();
         this.Tabs.Clear();
 
