@@ -73,4 +73,73 @@ public sealed class ProcessStageDiagnosticsTests
             ProcessStageDiagnostics.DescribeActiveStartup(
                 lines.Append("STARTUP 2026-10-10T01:00:09Z completed git-commit elapsed-ms 6000 thread 8"), now));
     }
+
+    [Theory]
+    [InlineData("caller-window-construction")]
+    [InlineData("worker-transport-start")]
+    [InlineData("caller-gui-initialization")]
+    public async Task OperationalFailure_IsCapturedBeforeCleanupAndCannotBeOverwritten(string stage)
+    {
+        var clock = new FakeTimeProvider();
+        var operations = new List<string>();
+        var cleanups = new List<string>();
+        var diagnostics = new ProcessStageDiagnostics(operations.Add, clock);
+        var cleanup = new ProcessStageDiagnostics(cleanups.Add, clock);
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await using var lifetime = new DiagnosticAsyncLifetime(
+                new ClockAdvancingDisposable(clock), cleanup, "shutdown");
+            if (stage.EndsWith("construction", StringComparison.Ordinal))
+                diagnostics.Run<object>(stage, () =>
+                {
+                    clock.Advance(TimeSpan.FromMilliseconds(17));
+                    throw new InvalidOperationException();
+                });
+            else
+                await diagnostics.RunAsync(stage, () =>
+                {
+                    clock.Advance(TimeSpan.FromMilliseconds(17));
+                    return Task.FromException(new InvalidOperationException());
+                });
+        });
+        diagnostics.Fail(new InvalidOperationException());
+        diagnostics.Complete();
+        Assert.Single(operations, line => line.Contains($"failed {stage} elapsed-ms 17"));
+        Assert.DoesNotContain(operations, line => line.Contains("completed " + stage));
+        Assert.DoesNotContain(operations, line => line.Contains("shutdown"));
+        Assert.Contains(cleanups, line => line.Contains("completed shutdown elapsed-ms 5000"));
+    }
+
+    [Fact]
+    public void RetainedArtifacts_ContainOnlySanitizedRoleLogsNotEntityDocumentsOrGitHistory()
+    {
+        var fixture = ProcessStageDiagnostics.GetFixtureDirectory(AppContext.BaseDirectory);
+        var artifact = Path.Combine(Path.GetDirectoryName(fixture)!, "diagnostics-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(fixture, "caller-logs"));
+        Directory.CreateDirectory(Path.Combine(fixture, "entities", ".git", "logs"));
+        File.WriteAllText(Path.Combine(fixture, "caller-logs", "process.log"),
+            "private-user private-machine credential-secret");
+        File.WriteAllText(Path.Combine(fixture, "entities", "private.json"), "private-user private-machine");
+        File.WriteAllText(Path.Combine(fixture, "entities", ".git", "logs", "HEAD"), "private-user private-machine");
+        ProcessStageDiagnostics.RetainRoleLogs(fixture, artifact,
+            "private-user", "private-machine", "credential-secret");
+
+        var log = Assert.Single(Directory.EnumerateFiles(artifact, "*", SearchOption.AllDirectories));
+        Assert.Equal(Path.Combine(artifact, "caller-logs", "process.log"), log);
+        var retained = File.ReadAllText(log);
+        Assert.DoesNotContain("private-user", retained);
+        Assert.DoesNotContain("private-machine", retained);
+        Assert.DoesNotContain("credential-secret", retained);
+        Assert.True(File.Exists(Path.Combine(fixture, "entities", "private.json")));
+        Assert.True(File.Exists(Path.Combine(fixture, "entities", ".git", "logs", "HEAD")));
+    }
+
+    private sealed class ClockAdvancingDisposable(FakeTimeProvider clock) : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync()
+        {
+            clock.Advance(TimeSpan.FromSeconds(5));
+            return ValueTask.CompletedTask;
+        }
+    }
 }

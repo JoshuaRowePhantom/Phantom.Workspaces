@@ -61,7 +61,6 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
         var callerLogs = Path.Combine(directory, "caller-logs");
         var workerLogs = Path.Combine(directory, "worker-logs");
         var roles = new List<RoleProcess>();
-        var succeeded = false;
         var sensitiveValues = new List<string>
         {
             ProcessAcceptanceCredentials.Token, Environment.UserName, Environment.MachineName,
@@ -265,30 +264,20 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
             foreach (var role in roles)
                 TestContext.Current.TestOutputHelper?.WriteLine(ProcessStageDiagnostics.Sanitize(
                     role.DiagnosticOutput, sensitiveValues.ToArray()));
-            succeeded = true;
         }
         catch (Exception error)
         {
+            var artifactDirectory = Path.Combine(Path.GetDirectoryName(directory)!,
+                "diagnostics-" + Guid.NewGuid().ToString("N"));
+            ProcessStageDiagnostics.RetainRoleLogs(directory, artifactDirectory, sensitiveValues.ToArray());
             foreach (var role in roles)
-                File.WriteAllText(Path.Combine(directory, role.Role + "-protocol.log"),
+                File.WriteAllText(Path.Combine(artifactDirectory, role.Role + "-protocol.log"),
                     ProcessStageDiagnostics.Sanitize(role.DiagnosticOutput, sensitiveValues.ToArray()));
-            foreach (var log in Directory.EnumerateFiles(directory, "*.log", SearchOption.AllDirectories))
-                File.WriteAllText(log, ProcessStageDiagnostics.Sanitize(
-                    File.ReadAllText(log), sensitiveValues.ToArray()));
             throw new InvalidOperationException(
-                $"Split process scenario failed; retained sanitized logs: {directory}\n"
+                $"Split process scenario failed; sanitized diagnostic files only: {artifactDirectory}\n"
                 + ProcessStageDiagnostics.Sanitize(
                     string.Join("\n", roles.Select(role => role.DiagnosticOutput))
                     + "\n" + error, sensitiveValues.ToArray()));
-        }
-        finally
-        {
-            if (succeeded)
-            {
-                foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
-                    File.SetAttributes(file, FileAttributes.Normal);
-                Directory.Delete(directory, recursive: true);
-            }
         }
     }
 
