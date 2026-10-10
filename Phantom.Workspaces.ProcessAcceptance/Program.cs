@@ -47,6 +47,13 @@ internal static class Program
         using var loggerFactory = LoggingBootstrap.CreateLoggerFactory(
             new LogDirectoryProvider(new WorkspacesConfiguration { LogDirectory = args[8] }, null));
         var stage = "bootstrap";
+        var diagnostics = new ProcessStageDiagnostics(Console.Error.WriteLine);
+        void ReportStage(string value)
+        {
+            stage = value;
+            diagnostics.Report(value);
+        }
+        ReportStage(stage);
         try
         {
             var profile = new EntityId(args[3]);
@@ -63,15 +70,17 @@ internal static class Program
             var startupFailure = args[0].EndsWith("-failure", StringComparison.Ordinal);
             if (args[0].StartsWith("worker", StringComparison.Ordinal))
                 await RunWorkerAsync(data, session, args[4], args[1], args[5],
-                    loggerFactory, value => stage = value, startupFailure, args[0] == "worker-child", timeout.Token);
+                    loggerFactory, ReportStage, startupFailure, args[0] == "worker-child", timeout.Token);
             else
                 await RunCallerAsync(session, args[4], args[1], args[5],
-                    new EntityId(args[6]), args[7], loggerFactory, value => stage = value,
+                    new EntityId(args[6]), args[7], loggerFactory, ReportStage,
                     startupFailure, args[0] == "caller-child", timeout.Token);
+            diagnostics.Complete();
             return 0;
         }
         catch (Exception error)
         {
+            diagnostics.Fail(error);
             // No raw exceptions: endpoint, profile, and request contents may be embedded in them.
             Console.Error.WriteLine("FAIL " + stage + " " + error.GetType().Name + " at "
                 + error.TargetSite?.DeclaringType?.Name + "." + error.TargetSite?.Name);
@@ -90,10 +99,12 @@ internal static class Program
         response.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "worker-response"));
         response.Complete();
         var persistence = new InMemoryAgentPersistenceStore();
-        await using var factory = new AgentChatFactory(
+        var factory = new AgentChatFactory(
             persistence,
             new AgentServices { ChatClientOverride = chatClient },
             TaskScheduler.Default);
+        await using var factoryLifetime = new DiagnosticAsyncLifetime(
+            factory, reportStage, "worker-chat-factory-shutdown");
         var chats = new RunningAgentChatTable(factory);
         var clock = new FakeTimeProvider(DateTimeOffset.UtcNow);
         var hub = new ReverseHttpClientTransportFactory(
@@ -121,7 +132,7 @@ internal static class Program
             if (status.Persisted == "true")
                 livePublished.TrySetResult();
         };
-        await using var composition = new WorkspacesTransportComposition(
+        var composition = new WorkspacesTransportComposition(
             data, session, loggerFactory, [hub, liveHub],
             agentServices: new AgentServices
             {
@@ -129,6 +140,8 @@ internal static class Program
                 CopilotClientFactory = startupFailure ? new FailingFixtureCopilotFactory() : null,
             },
             runningAgentChats: chats);
+        await using var compositionLifetime = new DiagnosticAsyncLifetime(
+            composition, reportStage, "worker-transport-composition-shutdown");
         await composition.StartAsync(ct);
         string? preparedChildId = null;
         reportStage("worker-route-publication");
@@ -139,6 +152,7 @@ internal static class Program
         Console.WriteLine("READY worker");
         while (true)
         {
+            reportStage("worker-command-read");
             var command = await Console.In.ReadLineAsync(ct);
             if (command == "STOP" || command is null)
                 break;
@@ -275,19 +289,25 @@ internal static class Program
         bool startupFailure, bool childAttachment, CancellationToken ct)
     {
         reportStage("caller-live-ingress");
-        await using var liveHub = new ReverseHttpServerTransportFactory(
+        var liveHub = new ReverseHttpServerTransportFactory(
             new ReverseConnectionStatusRegistry(), requireAuthenticatedRelays: true,
             hubProfileEntityId: session.UserComputerProfileEntityId);
+        await using var liveHubLifetime = new DiagnosticAsyncLifetime(
+            liveHub, reportStage, "caller-live-hub-shutdown");
         var listeners = new TransportRegistry();
         listeners.Register(liveHub);
-        await using var server = new HttpServerTransportFactory(listeners);
+        var server = new HttpServerTransportFactory(listeners);
+        await using var serverLifetime = new DiagnosticAsyncLifetime(
+            server, reportStage, "caller-live-transport-server-shutdown");
         var builder = WebApplication.CreateBuilder();
         builder.Logging.ClearProviders();
         builder.Logging.AddProvider(new ForwardingLoggerProvider(loggerFactory));
         builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
         builder.Logging.AddFilter("Microsoft.Hosting.Lifetime", LogLevel.Warning);
         builder.WebHost.UseUrls(listenUrl);
-        await using var app = builder.Build();
+        var app = builder.Build();
+        await using var appLifetime = new DiagnosticAsyncLifetime(
+            app, reportStage, "caller-live-web-app-shutdown");
         app.UseWebSockets();
         app.Use(async (context, next) =>
         {
@@ -306,6 +326,7 @@ internal static class Program
             throw new InvalidOperationException("Caller live registration was not established.");
         reportStage("caller-live-loss");
         await liveHub.DisconnectRegistrationAsync(workerProfile.ToString());
+        reportStage("caller-live-server-stop");
         await app.StopAsync(ct);
         Console.WriteLine("DROPPED live");
 
@@ -313,6 +334,7 @@ internal static class Program
         AppBuilder.Configure<FixtureApplication>()
             .UseHeadless(new AvaloniaHeadlessPlatformOptions())
             .SetupWithoutStarting();
+        reportStage("caller-gui-dispatch");
         using var loop = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Dispatcher.UIThread.Post(async () =>
@@ -335,6 +357,7 @@ internal static class Program
         });
         Dispatcher.UIThread.MainLoop(loop.Token);
         await finished.Task.WaitAsync(ct);
+        reportStage("caller-live-ingress-dispose");
     }
 
     private static async Task RunCallerTabAsync(
@@ -342,9 +365,12 @@ internal static class Program
         ILoggerFactory loggerFactory, Action<string> reportStage,
         EntityId workerProfile, bool startupFailure, bool childAttachment, CancellationToken ct)
     {
-        await using var factory = new AgentChatFactory(
+        reportStage("caller-gui-services-bootstrap");
+        var factory = new AgentChatFactory(
             new InMemoryAgentPersistenceStore(), new AgentServices(),
             TaskScheduler.FromCurrentSynchronizationContext());
+        await using var factoryLifetime = new DiagnosticAsyncLifetime(
+            factory, reportStage, "caller-chat-factory-shutdown");
         var provider = new TransportFactoryRegistryProvider();
         var chats = new RunningAgentChatTable(
             factory, AgentSessionRuntimeContextFactory.FromProvider(provider));
@@ -357,10 +383,13 @@ internal static class Program
             SkipStartupWorkspace = true,
             UserComputerProfileOverride = "fixture-caller",
         };
-        await using var window = new MainWindowViewModel(
+        reportStage("caller-window-construction");
+        var window = new MainWindowViewModel(
             new LocalGitRepositorySource(repositoryPath), configuration,
             new ProfileStore(Path.Combine(Path.GetDirectoryName(repositoryPath)!, "caller-profile.json")),
             services);
+        await using var windowLifetime = new DiagnosticAsyncLifetime(
+            window, reportStage, "caller-window-shutdown");
         reportStage("caller-gui-initialization");
         await window.InitializeAsync();
         if (window.EntityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId
@@ -386,7 +415,8 @@ internal static class Program
         var stalled = childAttachment ? null : new OneShotStalledProfileRegistry(registry);
         var failedChildTransport = childAttachment ? new OneShotFailedChildRegistry(registry) : null;
         var clock = new FakeTimeProvider();
-        await using var handler = new OpenAgentSessionShortcutHandler(
+        reportStage("caller-shortcut-construction");
+        var handler = new OpenAgentSessionShortcutHandler(
             new AgentSessionShortcutContext(
                 userComputerProfileOverride: "fixture-caller",
                 persistenceStoreCache: services.AgentPersistenceStoreCache),
@@ -396,6 +426,8 @@ internal static class Program
             loadingDeadline: TimeSpan.FromSeconds(90),
             timeProvider: clock,
             stageDeadline: TimeSpan.FromSeconds(45));
+        await using var handlerLifetime = new DiagnosticAsyncLifetime(
+            handler, reportStage, "caller-shortcut-shutdown");
         reportStage("caller-tab-open");
         if (!await handler.Handle(window, Shortcut.Open, entity))
             throw new InvalidOperationException("Session shortcut did not open a tab.");

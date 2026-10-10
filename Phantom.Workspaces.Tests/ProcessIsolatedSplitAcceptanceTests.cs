@@ -54,12 +54,20 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(childAttachment ? 180 : 90));
         var ct = timeout.Token;
-        var directory = Path.Combine(Directory.GetCurrentDirectory(),
-            "split-acceptance-" + Guid.NewGuid().ToString("N"));
+        // Git's indexed entity paths must not inherit the deep test binary output path.
+        var directory = ProcessStageDiagnostics.GetFixtureDirectory(AppContext.BaseDirectory);
         Directory.CreateDirectory(directory);
         var hubLogs = Path.Combine(directory, "hub-logs");
         var callerLogs = Path.Combine(directory, "caller-logs");
         var workerLogs = Path.Combine(directory, "worker-logs");
+        var roles = new List<RoleProcess>();
+        var succeeded = false;
+        var sensitiveValues = new List<string>
+        {
+            ProcessAcceptanceCredentials.Token, Environment.UserName, Environment.MachineName,
+            SessionId, "fixture-prompt", "worker-response", directory,
+            User.ToString(), Caller.ToString(), Worker.ToString(), Manifest.ToString(), Hub.ToString(),
+        };
         try
         {
             using var hubLoggerFactory = LoggingBootstrap.CreateLoggerFactory(
@@ -108,16 +116,20 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
             Assert.Contains("401", websocketError.Message, StringComparison.Ordinal);
 
             var callerUrl = $"http://127.0.0.1:{FreePort()}";
+            sensitiveValues.Add(url);
+            sensitiveValues.Add(callerUrl);
             await using var caller = StartRole(childAttachment ? "caller-child"
                     : startupFailure ? "caller-failure" : "caller",
                 url, User, Caller, callerUrl, Worker,
                 Path.Combine(directory, "entities"), callerLogs);
-            Assert.Equal("READY caller", await caller.NextLineAsync(ct));
+            roles.Add(caller);
+            Assert.Equal("READY caller", await caller.NextLineAsync(ct, "READY caller"));
             await using var worker = StartRole(childAttachment ? "worker-child"
                     : startupFailure ? "worker-failure" : "worker",
                 url, User, Worker, callerUrl, Worker,
                 Path.Combine(directory, "entities"), workerLogs);
-            Assert.Equal("READY worker", await worker.NextLineAsync(ct));
+            roles.Add(worker);
+            Assert.Equal("READY worker", await worker.NextLineAsync(ct, "READY worker"));
             Assert.True(reverse.IsRegistered(Worker.ToString()));
             var store = new DataAccessReachabilityRouteStore(data);
             var routes = await store.GetRoutesAsync(Worker, ct);
@@ -131,18 +143,18 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
 
             // Advance the worker's lease timer; the production renewal loop must update Git.
             await worker.SendAsync("RENEW", ct);
-            Assert.Equal("RENEWED", await worker.NextLineAsync(ct));
+            Assert.Equal("RENEWED", await worker.NextLineAsync(ct, "RENEWED"));
             route = Assert.Single(await store.GetRoutesAsync(Worker, ct),
                 item => item.Descriptor.GetProperty("hub-urls")[0].GetString()?.TrimEnd('/') == url.TrimEnd('/'));
             Assert.True(route.ExpiresAt > before);
             Assert.True(reverse.IsRegistered(Worker.ToString()));
 
             await caller.SendAsync("DROP", ct);
-            Assert.Equal("DROPPED live", await caller.NextLineAsync(ct));
-            Assert.Equal("TAB Loading", await caller.NextLineAsync(ct));
+            Assert.Equal("DROPPED live", await caller.NextLineAsync(ct, "DROPPED live"));
+            Assert.Equal("TAB Loading", await caller.NextLineAsync(ct, "TAB Loading"));
             if (!childAttachment)
-                Assert.Equal("TAB Failed transport-choice", await caller.NextLineAsync(ct));
-            Assert.Equal("TAB Ready remote", await caller.NextLineAsync(ct));
+                Assert.Equal("TAB Failed transport-choice", await caller.NextLineAsync(ct, "TAB Failed transport-choice"));
+            Assert.Equal("TAB Ready remote", await caller.NextLineAsync(ct, "TAB Ready remote"));
             if (childAttachment)
             {
                 await worker.SendAsync("PREPARE-CHILD", ct);
@@ -156,7 +168,7 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
                 if (childTransportFailure)
                 {
                     Assert.Equal($"CHILD failed {childSessionId} retryable no-slot no-parent-transcript",
-                        await caller.NextLineAsync(ct));
+                        await caller.NextLineAsync(ct, "caller result"));
                     await worker.SendAsync("VERIFY-CHILD " + childSessionId, ct);
                     Assert.Equal($"CHILD owner {childSessionId} unchanged", await worker.NextLineAsync(ct));
                     await caller.SendAsync("RETRY-CHILD", ct);
@@ -250,12 +262,33 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
                 foreach (var identifier in new[] { User, Caller, Worker, Manifest, Hub, sessionEntityId })
                     Assert.DoesNotContain(identifier.ToString(), log, StringComparison.OrdinalIgnoreCase);
             }
+            foreach (var role in roles)
+                TestContext.Current.TestOutputHelper?.WriteLine(ProcessStageDiagnostics.Sanitize(
+                    role.DiagnosticOutput, sensitiveValues.ToArray()));
+            succeeded = true;
+        }
+        catch (Exception error)
+        {
+            foreach (var role in roles)
+                File.WriteAllText(Path.Combine(directory, role.Role + "-protocol.log"),
+                    ProcessStageDiagnostics.Sanitize(role.DiagnosticOutput, sensitiveValues.ToArray()));
+            foreach (var log in Directory.EnumerateFiles(directory, "*.log", SearchOption.AllDirectories))
+                File.WriteAllText(log, ProcessStageDiagnostics.Sanitize(
+                    File.ReadAllText(log), sensitiveValues.ToArray()));
+            throw new InvalidOperationException(
+                $"Split process scenario failed; retained sanitized logs: {directory}\n"
+                + ProcessStageDiagnostics.Sanitize(
+                    string.Join("\n", roles.Select(role => role.DiagnosticOutput))
+                    + "\n" + error, sensitiveValues.ToArray()));
         }
         finally
         {
-            foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
-                File.SetAttributes(file, FileAttributes.Normal);
-            Directory.Delete(directory, recursive: true);
+            if (succeeded)
+            {
+                foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
+                    File.SetAttributes(file, FileAttributes.Normal);
+                Directory.Delete(directory, recursive: true);
+            }
         }
     }
 
@@ -356,11 +389,39 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
     {
         private readonly Process process;
         private readonly List<string> output = [];
+        private readonly List<string> errors = [];
+        private readonly Task drainError;
+        private string waiting = "none";
+        private string lastCommand = "none";
+        private long waitStarted;
+        internal string Role { get; }
+        internal string DiagnosticOutput
+        {
+            get
+            {
+                lock (this.errors)
+                {
+                    var lastStage = this.errors.LastOrDefault(line => line.StartsWith("STAGE ", StringComparison.Ordinal));
+                    var fields = lastStage?.Split(' ');
+                    var activeStage = fields is { Length: >= 4 } && fields[2] == "started"
+                        && DateTimeOffset.TryParse(fields[1], out var start)
+                        ? $"{fields[3]}; active elapsed-ms {(DateTimeOffset.UtcNow - start).TotalMilliseconds:F0}"
+                        : "none";
+                    return $"Role {this.Role}; awaiting {this.waiting}; last completed protocol marker "
+                        + $"{this.output.LastOrDefault() ?? "none"}\n"
+                        + $"Active child stage {activeStage}\n"
+                        + $"Last sent command {this.lastCommand}; wait elapsed-ms "
+                        + $"{(this.waiting == "none" ? 0 : Stopwatch.GetElapsedTime(this.waitStarted).TotalMilliseconds):F0}\n"
+                        + string.Join("\n", this.errors);
+                }
+            }
+        }
         internal string CapturedOutput => string.Join("\n", this.output);
         internal string CapturedError { get; private set; } = "";
 
         internal RoleProcess(string role, params string[] args)
         {
+            this.Role = role;
             var info = new ProcessStartInfo("dotnet")
             {
                 UseShellExecute = false,
@@ -374,29 +435,53 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
             foreach (var arg in args)
                 info.ArgumentList.Add(arg);
             this.process = Process.Start(info) ?? throw new InvalidOperationException("Child process did not start.");
+            this.drainError = this.DrainErrorAsync();
         }
 
-        internal async Task<string> NextLineAsync(CancellationToken ct)
+        private async Task DrainErrorAsync()
         {
+            while (await this.process.StandardError.ReadLineAsync() is { } line)
+            {
+                lock (this.errors)
+                    this.errors.Add(line);
+            }
+        }
+
+        internal async Task<string> NextLineAsync(CancellationToken ct, string expected = "next stdout protocol line")
+        {
+            this.waiting = expected;
+            this.waitStarted = Stopwatch.GetTimestamp();
             var line = await this.process.StandardOutput.ReadLineAsync(ct);
             if (line is null)
-                throw new InvalidOperationException($"Child exited before expected stage: {await this.process.StandardError.ReadToEndAsync(ct)}");
+            {
+                await this.drainError;
+                throw new InvalidOperationException($"Child exited before expected stage: {this.DiagnosticOutput}");
+            }
             this.output.Add(line);
+            this.waiting = "none";
             return line;
         }
 
         internal async Task SendAsync(string command, CancellationToken ct)
         {
+            this.waiting = "stdin command write";
+            this.waitStarted = Stopwatch.GetTimestamp();
             await this.process.StandardInput.WriteLineAsync(command.AsMemory(), ct);
             await this.process.StandardInput.FlushAsync(ct);
+            this.lastCommand = command;
+            this.waiting = "none";
         }
 
         internal async Task<int> WaitForExitAsync(CancellationToken ct)
         {
+            this.waiting = "process shutdown";
+            this.waitStarted = Stopwatch.GetTimestamp();
             await this.process.WaitForExitAsync(ct);
-            this.CapturedError = await this.process.StandardError.ReadToEndAsync(ct);
+            await this.drainError;
+            this.CapturedError = string.Join("\n", this.errors);
             if (this.process.ExitCode != 0)
                 throw new InvalidOperationException("Child failed at " + this.CapturedError);
+            this.waiting = "none";
             return this.process.ExitCode;
         }
 
@@ -407,6 +492,7 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
                 this.process.Kill(entireProcessTree: true);
                 await this.process.WaitForExitAsync();
             }
+            await this.drainError;
             this.process.Dispose();
         }
     }
