@@ -114,6 +114,14 @@ public sealed class AgentRunningItems
 
     private static bool SyncItems(ObservableCollection<AgentChatHistoryItem> target, IReadOnlyList<AgentChatHistoryItem> source)
     {
+        if (source.Count == 0)
+        {
+            if (target.Count == 0)
+                return false;
+            target.Clear();
+            return true;
+        }
+
         var changed = false;
         for (var index = 0; index < source.Count; index++)
         {
