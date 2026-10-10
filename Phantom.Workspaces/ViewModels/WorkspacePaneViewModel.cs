@@ -312,7 +312,8 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
     /// </summary>
     public async Task<bool> NavigateToDocumentTabAsync(string documentTabId, bool deferIfAbsent = false)
     {
-        if (this.ContentLayout is null)
+        if (this.ContentLayout is null || this.disposedTcs.Task.IsCompleted
+            || this.environment?.IsPaneLive(this) != true)
         {
             return false;
         }
@@ -355,7 +356,8 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
     private async Task<bool> RealizeVisiblePaneAsync(WorkspaceDocument document)
     {
         if (this.environment is null || document.Owner is not IDock owner
-            || owner.VisibleDockables?.Contains(document) != true)
+            || owner.VisibleDockables?.Contains(document) != true
+            || this.disposedTcs.Task.IsCompleted || !this.environment.IsPaneLive(this))
             return false;
         var topLevels = this.environment.DockFactory.DockControls
             .OfType<global::Dock.Avalonia.Controls.DockControl>()
@@ -407,6 +409,7 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
         if (doc?.Owner is not IDock documentDock
             || documentDock.VisibleDockables?.Contains(doc) != true
             || this.ContentLayout is null || this.environment is null
+            || this.disposedTcs.Task.IsCompleted || !this.environment.IsPaneLive(this)
             || !this.environment.SelectPane(this))
         {
             return false;
