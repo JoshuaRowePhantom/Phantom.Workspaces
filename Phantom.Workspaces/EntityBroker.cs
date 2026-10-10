@@ -92,6 +92,7 @@ public sealed class EntityBroker
         CancellationToken cancellationToken = default,
         string? userComputerProfileOverride = null)
     {
+        using var startup = RepositoryStartupDiagnostics.Start("broker-initialization");
         var repository = await EntityRepository.CreateAsync(
             new EntityRepositoryInitializationOptions
             {
@@ -100,9 +101,13 @@ public sealed class EntityBroker
             },
             cancellationToken);
 
-        var broker = new EntityBroker(repository);
-        await broker.InitializeAsync(cancellationToken);
-        broker.InterestCatalog = await InterestCatalog.CreateAsync(broker, cancellationToken);
+        EntityBroker broker;
+        using (RepositoryStartupDiagnostics.Start("broker-construction"))
+            broker = new EntityBroker(repository);
+        using (RepositoryStartupDiagnostics.Start("broker-initialize"))
+            await broker.InitializeAsync(cancellationToken);
+        using (RepositoryStartupDiagnostics.Start("broker-interest-catalog"))
+            broker.InterestCatalog = await InterestCatalog.CreateAsync(broker, cancellationToken);
         return broker;
     }
 

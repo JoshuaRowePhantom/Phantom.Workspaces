@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Diagnostics;
 using Avalonia;
 using Avalonia.Headless;
 using Avalonia.Threading;
@@ -44,6 +45,17 @@ internal static class Program
             "worker" or "caller" or "worker-failure" or "caller-failure" or "worker-child" or "caller-child"))
             return 2;
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        using var startupListener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == RepositoryStartupDiagnostics.SourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+            ActivityStarted = activity => Console.Error.WriteLine(
+                $"STARTUP {activity.StartTimeUtc:O} started {activity.OperationName} thread {Environment.CurrentManagedThreadId}"),
+            ActivityStopped = activity => Console.Error.WriteLine(
+                $"STARTUP {DateTimeOffset.UtcNow:O} completed {activity.OperationName} elapsed-ms {activity.Duration.TotalMilliseconds:F0}"
+                + $" thread {Environment.CurrentManagedThreadId}"),
+        };
+        ActivitySource.AddActivityListener(startupListener);
         using var loggerFactory = LoggingBootstrap.CreateLoggerFactory(
             new LogDirectoryProvider(new WorkspacesConfiguration { LogDirectory = args[8] }, null));
         var stage = "bootstrap";

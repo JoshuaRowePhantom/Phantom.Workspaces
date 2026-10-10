@@ -59,6 +59,29 @@ public sealed class ProcessStageDiagnostics(
         }
         throw new InvalidOperationException("Fixture repository root was not found.");
     }
+
+    public static string DescribeActiveStartup(IEnumerable<string> lines, DateTimeOffset now)
+    {
+        var active = new List<(string Stage, DateTimeOffset Started)>();
+        foreach (var line in lines)
+        {
+            var fields = line.Split(' ');
+            if (fields.Length < 4 || fields[0] != "STARTUP"
+                || !DateTimeOffset.TryParse(fields[1], out var timestamp)
+                || !Regex.IsMatch(fields[3], @"\A[a-zA-Z0-9.-]+\z"))
+                continue;
+            if (fields[2] == "started")
+                active.Add((fields[3], timestamp));
+            else if (fields[2] == "completed")
+            {
+                var index = active.FindLastIndex(stage => stage.Stage == fields[3]);
+                if (index >= 0)
+                    active.RemoveAt(index);
+            }
+        }
+        return active.Count == 0 ? "none"
+            : $"{active[^1].Stage}; active elapsed-ms {(now - active[^1].Started).TotalMilliseconds:F0}";
+    }
 }
 
 internal sealed class DiagnosticAsyncLifetime(

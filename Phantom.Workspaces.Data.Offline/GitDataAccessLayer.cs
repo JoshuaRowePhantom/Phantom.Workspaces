@@ -50,12 +50,15 @@ public sealed class GitDataAccessLayer : IDataAccessLayer
         GetRequest request,
         CancellationToken cancellationToken = default)
     {
-        var result = await this.filesystemDataAccessLayer.GetAsync(request, cancellationToken).ConfigureAwait(false);
+        GetResult result;
+        using (RepositoryStartupDiagnostics.Start("git-filesystem-get"))
+            result = await this.filesystemDataAccessLayer.GetAsync(request, cancellationToken).ConfigureAwait(false);
         if (request.Entities.Count == 0)
         {
             return result;
         }
 
+        using var lookup = RepositoryStartupDiagnostics.Start("git-deleted-snapshot-lookup");
         var batches = result.Batches.ToList();
         for (var batchIndex = 0; batchIndex < batches.Count; batchIndex++)
         {
@@ -154,7 +157,8 @@ public sealed class GitDataAccessLayer : IDataAccessLayer
         UpdateRequest request,
         CancellationToken cancellationToken = default)
     {
-        await this.updateSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+        using (RepositoryStartupDiagnostics.Start("git-update-lock"))
+            await this.updateSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             return await this.UpdateCoreAsync(request, cancellationToken).ConfigureAwait(false);
@@ -174,18 +178,29 @@ public sealed class GitDataAccessLayer : IDataAccessLayer
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            using var repository = new Repository(this.RepositoryPath);
+            using var update = RepositoryStartupDiagnostics.Start("git-update");
+            Repository repository;
+            using (RepositoryStartupDiagnostics.Start("git-open-repository"))
+                repository = new Repository(this.RepositoryPath);
+            using var repositoryLifetime = repository;
             var hasRemote = repository.Network.Remotes["origin"] is not null;
-            this.ResetBeforeUpdate(repository, hasRemote);
+            using (RepositoryStartupDiagnostics.Start("git-reset-before-update"))
+                this.ResetBeforeUpdate(repository, hasRemote);
 
-            var updateResult = await this.filesystemDataAccessLayer.UpdateAsync(request, cancellationToken).ConfigureAwait(false);
+            UpdateResult updateResult;
+            using (RepositoryStartupDiagnostics.Start("git-filesystem-update"))
+                updateResult = await this.filesystemDataAccessLayer.UpdateAsync(request, cancellationToken).ConfigureAwait(false);
             if (updateResult.EntityResults.Any(entityResult => entityResult.UpdateState == UpdateState.Failed))
             {
                 return updateResult;
             }
 
-            Commands.Stage(repository, "*");
-            if (!repository.RetrieveStatus().IsDirty)
+            using (RepositoryStartupDiagnostics.Start("git-stage-files"))
+                Commands.Stage(repository, "*");
+            bool isDirty;
+            using (RepositoryStartupDiagnostics.Start("git-read-status"))
+                isDirty = repository.RetrieveStatus().IsDirty;
+            if (!isDirty)
             {
                 return updateResult;
             }
@@ -194,7 +209,8 @@ public sealed class GitDataAccessLayer : IDataAccessLayer
             var commitMessage = string.IsNullOrWhiteSpace(request.UpdateMetadata.Comment.Text)
                 ? "Update entities"
                 : request.UpdateMetadata.Comment.Text;
-            repository.Commit(commitMessage, signature, signature);
+            using (RepositoryStartupDiagnostics.Start("git-commit"))
+                repository.Commit(commitMessage, signature, signature);
 
             if (!hasRemote)
             {

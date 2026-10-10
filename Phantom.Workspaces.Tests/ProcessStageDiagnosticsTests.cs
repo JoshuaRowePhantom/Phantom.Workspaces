@@ -55,4 +55,22 @@ public sealed class ProcessStageDiagnosticsTests
         Assert.True(File.Exists(Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(path))!,
             "Phantom.Workspaces.slnx")));
     }
+
+    [Fact]
+    public void DeadlineDiagnostic_ReportsDeepestUncompletedStartupOperation()
+    {
+        var now = DateTimeOffset.Parse("2026-10-10T01:00:10Z");
+        var lines = new[]
+        {
+            "STARTUP 2026-10-10T01:00:00Z started schema-update thread 8",
+            "STARTUP 2026-10-10T01:00:01Z started git-filesystem-update thread 8",
+            "STARTUP 2026-10-10T01:00:02Z completed git-filesystem-update elapsed-ms 1000 thread 8",
+            "STARTUP 2026-10-10T01:00:03Z started git-commit thread 8",
+        };
+        Assert.Equal("git-commit; active elapsed-ms 7000",
+            ProcessStageDiagnostics.DescribeActiveStartup(lines, now));
+        Assert.Equal("schema-update; active elapsed-ms 10000",
+            ProcessStageDiagnostics.DescribeActiveStartup(
+                lines.Append("STARTUP 2026-10-10T01:00:09Z completed git-commit elapsed-ms 6000 thread 8"), now));
+    }
 }

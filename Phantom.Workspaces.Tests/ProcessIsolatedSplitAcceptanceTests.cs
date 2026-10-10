@@ -410,6 +410,7 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
                     return $"Role {this.Role}; awaiting {this.waiting}; last completed protocol marker "
                         + $"{this.output.LastOrDefault() ?? "none"}\n"
                         + $"Active child stage {activeStage}\n"
+                        + $"Active repository startup stage {ProcessStageDiagnostics.DescribeActiveStartup(this.errors, DateTimeOffset.UtcNow)}\n"
                         + $"Last sent command {this.lastCommand}; wait elapsed-ms "
                         + $"{(this.waiting == "none" ? 0 : Stopwatch.GetElapsedTime(this.waitStarted).TotalMilliseconds):F0}\n"
                         + string.Join("\n", this.errors);
