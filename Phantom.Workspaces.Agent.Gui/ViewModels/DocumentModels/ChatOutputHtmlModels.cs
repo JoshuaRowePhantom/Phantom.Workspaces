@@ -37,6 +37,7 @@ internal sealed class ChatMessageHtmlModel
     private sealed record ToolPayloadSnapshot(
         string? CallId,
         string? Name,
+        bool InformationalOnly,
         KeyValuePair<string, object?>[]? Arguments,
         KeyValuePair<string, object?>[]? CallProperties,
         bool HasResult,
@@ -47,8 +48,12 @@ internal sealed class ChatMessageHtmlModel
             FunctionCallContent call,
             FunctionResultContent? result)
         {
+            // Annotation objects are mutable and serialize into inspector data. Even an empty
+            // annotation list differs from null, so annotated contents cannot reuse this snapshot.
             if (call.GetType() != typeof(FunctionCallContent) ||
                 result is not null && result.GetType() != typeof(FunctionResultContent) ||
+                call.Annotations is not null ||
+                result?.Annotations is not null ||
                 !CanSnapshot(call.Arguments) ||
                 !CanSnapshot(call.AdditionalProperties) ||
                 !IsImmutable(result?.Result) ||
@@ -58,6 +63,7 @@ internal sealed class ChatMessageHtmlModel
             return new(
                 call.CallId,
                 call.Name,
+                call.InformationalOnly,
                 call.Arguments?.ToArray(),
                 call.AdditionalProperties?.ToArray(),
                 result is not null,
@@ -68,8 +74,11 @@ internal sealed class ChatMessageHtmlModel
         public bool Matches(FunctionCallContent call, FunctionResultContent? result)
             => call.GetType() == typeof(FunctionCallContent) &&
                (result is null || result.GetType() == typeof(FunctionResultContent)) &&
+               call.Annotations is null &&
+               result?.Annotations is null &&
                this.CallId == call.CallId &&
                this.Name == call.Name &&
+               this.InformationalOnly == call.InformationalOnly &&
                MatchesDictionary(this.Arguments, call.Arguments) &&
                MatchesDictionary(this.CallProperties, call.AdditionalProperties) &&
                this.HasResult == (result is not null) &&
