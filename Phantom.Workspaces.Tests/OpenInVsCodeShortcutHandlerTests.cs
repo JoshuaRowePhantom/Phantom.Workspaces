@@ -156,6 +156,97 @@ public sealed class OpenInVsCodeShortcutHandlerTests
     // ---- Handle ------------------------------------------------------------------------------
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task Handle_LocalEntity_PathWithSpaces_RunsCodeWithSinglePathArgument()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+        const string path = @"C:\Work Folders\Example Repo";
+        var json = System.Text.Json.Nodes.JsonNode.Parse(
+            """{"entity-types":["entity","git-worktree","filesystem-path"]}""")!;
+        json["path"] = path;
+        var entity = new SubscribedEntityViewModel(MakeSnapshot(json.ToJsonString()));
+        RunProcessParameters? received = null;
+        var handler = new OpenInVsCodeShortcutHandler(
+            cliLocator: () => "code.exe",
+            processRunner: (parameters, _) =>
+            {
+                received = parameters;
+                return Task.FromResult(new ProcessResult(0, "", "", ""));
+            },
+            urlLauncher: null);
+
+        Assert.True(await handler.Handle(viewModel, Shortcut.VsCode, entity));
+        Assert.Equal(path, Assert.Single(Assert.IsType<RunProcessParameters>(received).Arguments));
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task Handle_LocalEntity_CmdCliAndPathWithSpaces_OpensRequestedFolder()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var directory = System.IO.Path.Combine(
+            Environment.CurrentDirectory, "argv receiver " + Guid.NewGuid().ToString("N"));
+        System.IO.Directory.CreateDirectory(directory);
+        try
+        {
+            var cli = System.IO.Path.Combine(directory, "code.cmd");
+            var output = new System.IO.DirectoryInfo(AppContext.BaseDirectory);
+            var receiver = System.IO.Path.GetFullPath(System.IO.Path.Combine(
+                AppContext.BaseDirectory, @"..\..\..\..\Phantom.Workspaces.Test.WindowsProcessProbe\bin",
+                output.Parent!.Name, output.Name, "Phantom.Workspaces.Test.WindowsProcessProbe.exe"));
+            Assert.True(System.IO.File.Exists(receiver));
+            await System.IO.File.WriteAllTextAsync(cli,
+                $"@echo off\r\n\"{receiver}\" --echo-argv %*\r\n");
+            await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+            await viewModel.InitializeAsync();
+            foreach (var path in new[]
+            {
+                @"C:\Work Folders\Example Repo",
+                @"C:\Work & Folders\(Example) ^ Repo ! %PATH%",
+                @"C:\Work Folders\Trailing\",
+                @"C:\中文 Folders\Repo & echo INJECTED",
+            })
+            {
+                var json = System.Text.Json.Nodes.JsonNode.Parse(
+                    """{"entity-types":["entity","git-worktree","filesystem-path"]}""")!;
+                json["path"] = path;
+                var entity = new SubscribedEntityViewModel(MakeSnapshot(json.ToJsonString()));
+                ProcessResult? result = null;
+                var handler = new OpenInVsCodeShortcutHandler(
+                    cliLocator: () => cli,
+                    processRunner: async (parameters, ct) =>
+                    {
+                        result = await ProcessRunner.RunProcessAsync(parameters, ct);
+                        var contained = await ProcessRunner.RunProcessAsync(
+                            parameters with { KillOnClose = KillOnCloseAction.KillTree }, ct);
+                        Assert.Equal(0, contained.ExitCode);
+                        Assert.Equal(result.StandardOut, contained.StandardOut);
+                        return result;
+                    },
+                    urlLauncher: null);
+
+                Assert.True(await handler.Handle(viewModel, Shortcut.VsCode, entity));
+                Assert.NotNull(result);
+                Assert.True(result.ExitCode == 0, result.StandardError);
+                var argv = JsonSerializer.Deserialize<string[]>(result.StandardOut);
+                Assert.Equal(path, Assert.Single(Assert.IsType<string[]>(argv)));
+            }
+
+            var invoker = new Phantom.Workspaces.Tools.VsCodeCliInvoker();
+            var tunnel = await invoker.RunAsync(cli, ["tunnel", "status", ""],
+                "argv regression", Phantom.Workspaces.Tools.VsCodeCliReporting.LogOnly,
+                cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Equal(0, tunnel.ExitCode);
+            Assert.Equal(["tunnel", "status", ""], Assert.IsType<string[]>(JsonSerializer.Deserialize<string[]>(tunnel.StandardOut)));
+        }
+        finally
+        {
+            System.IO.Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task Handle_LocalEntity_RunsCodeWithPath()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -378,4 +469,3 @@ public sealed class OpenInVsCodeShortcutHandlerTests
         return Assert.IsType<EntityBroker>(entityBrokerProperty!.GetValue(viewModel));
     }
 }
-

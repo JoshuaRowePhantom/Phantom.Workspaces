@@ -41,7 +41,7 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
     private readonly Func<string?> tokenResolver;
     private readonly VsCodeCliInvoker cliInvoker;
     private readonly IVsCodeTunnelStatusResolver tunnelStatusResolver;
-    private readonly VsCodeTunnelProcessLauncher processLauncher;
+    private readonly VsCodeTunnelProcessLauncher? processLauncher;
     private readonly Func<CancellationToken, Task> waitBetweenPollsAsync;
     private readonly Func<CancellationToken, Task> initialStatusCheckDelayAsync;
 
@@ -74,7 +74,7 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
             ?? new VsCodeCliInvoker(notificationService: notificationService, logger: this.logger);
         this.tunnelStatusResolver = tunnelStatusResolver
             ?? new VsCodeTunnelStatusResolver(invoker: this.cliInvoker, logger: this.logger);
-        this.processLauncher = processLauncher ?? DefaultProcessLauncher;
+        this.processLauncher = processLauncher;
         this.waitBetweenPollsAsync = waitBetweenPollsAsync
             ?? (ct => Task.Delay(TimeSpan.FromSeconds(15), ct));
         this.initialStatusCheckDelayAsync = initialStatusCheckDelayAsync
@@ -104,7 +104,9 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
         IVsCodeTunnelChildProcess child;
         try
         {
-            child = this.processLauncher(cliPath, arguments);
+            child = this.processLauncher is null
+                ? LaunchProcess(cliPath, ["tunnel", "--accept-server-license-terms", "--name", tunnelName])
+                : this.processLauncher(cliPath, arguments);
         }
         catch (Exception ex)
         {
@@ -218,7 +220,7 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
         var env = new Dictionary<string, string> { ["VSCODE_CLI_ACCESS_TOKEN"] = token };
         var loginResult = await this.RunCliAsync(
             cliPath,
-            "tunnel user login --provider github",
+            ["tunnel", "user", "login", "--provider", "github"],
             env,
             VsCodeCliReporting.LogAndReportOnFailure,
             cancellationToken).ConfigureAwait(false);
@@ -262,43 +264,30 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
 
     private async Task<VsCodeCliResult> RunCliAsync(
         string cliPath,
-        string arguments,
+        IReadOnlyList<string> arguments,
         IReadOnlyDictionary<string, string>? environmentVariables,
         VsCodeCliReporting reporting,
         CancellationToken cancellationToken)
     {
         if (this.cliRunner is not null)
         {
-            var (output, exitCode) = await this.cliRunner(cliPath, arguments, environmentVariables, cancellationToken).ConfigureAwait(false);
+            var (output, exitCode) = await this.cliRunner(cliPath, string.Join(' ', arguments), environmentVariables, cancellationToken).ConfigureAwait(false);
             return new VsCodeCliResult(exitCode, output, string.Empty);
         }
 
         return await this.cliInvoker.RunAsync(
             cliPath,
             arguments,
-            operationDescription: $"vscode {arguments}",
+            operationDescription: $"vscode {string.Join(' ', arguments)}",
             reporting,
             environmentVariables,
             CliOperationTimeout,
             cancellationToken).ConfigureAwait(false);
     }
 
-    private static IVsCodeTunnelChildProcess DefaultProcessLauncher(string cliPath, string arguments)
+    private static IVsCodeTunnelChildProcess LaunchProcess(string cliPath, IReadOnlyList<string> arguments)
     {
-        var parameters = VsCodeCliLocator.BuildRunProcessParameters(
-            cliPath, arguments, timeout: null, environmentVariables: null);
-
-        var psi = new ProcessStartInfo(parameters.Command)
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        foreach (var arg in parameters.Arguments)
-        {
-            psi.ArgumentList.Add(arg);
-        }
+        var psi = VsCodeCliLocator.BuildProcessStartInfo(cliPath, arguments);
 
         var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
         process.Start();

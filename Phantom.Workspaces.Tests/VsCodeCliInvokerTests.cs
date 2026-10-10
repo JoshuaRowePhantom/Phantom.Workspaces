@@ -46,7 +46,7 @@ public sealed class VsCodeCliInvokerTests
 
         var result = await invoker.RunAsync(
             "code",
-            "tunnel status",
+            ["tunnel", "status"],
             operationDescription: "vscode tunnel status",
             VsCodeCliReporting.LogOnly, cancellationToken: TestContext.Current.CancellationToken);
 
@@ -70,7 +70,7 @@ public sealed class VsCodeCliInvokerTests
 
         await invoker.RunAsync(
             "code",
-            "tunnel status",
+            ["tunnel", "status"],
             operationDescription: "vscode tunnel status",
             VsCodeCliReporting.LogOnly, cancellationToken: TestContext.Current.CancellationToken);
 
@@ -90,7 +90,7 @@ public sealed class VsCodeCliInvokerTests
 
         await invoker.RunAsync(
             "code",
-            "tunnel status",
+            ["tunnel", "status"],
             operationDescription: "vscode tunnel status",
             VsCodeCliReporting.LogAndReportOnFailure, cancellationToken: TestContext.Current.CancellationToken);
 
@@ -112,7 +112,7 @@ public sealed class VsCodeCliInvokerTests
 
         await invoker.RunAsync(
             "code",
-            "tunnel status",
+            ["tunnel", "status"],
             operationDescription: "vscode tunnel status",
             VsCodeCliReporting.LogAndReportOnFailure, cancellationToken: TestContext.Current.CancellationToken);
 
@@ -133,7 +133,7 @@ public sealed class VsCodeCliInvokerTests
 
         var invokeTask = invoker.RunAsync(
             "code",
-            "tunnel status",
+            ["tunnel", "status"],
             operationDescription: "vscode tunnel status",
             VsCodeCliReporting.LogOnly, cancellationToken: TestContext.Current.CancellationToken);
 
