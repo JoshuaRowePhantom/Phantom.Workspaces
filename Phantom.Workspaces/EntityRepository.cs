@@ -60,8 +60,11 @@ public sealed class EntityRepository
         ArgumentNullException.ThrowIfNull(options);
         cancellationToken.ThrowIfCancellationRequested();
 
+        using var startup = RepositoryStartupDiagnostics.Start("repository-initialization");
         var repositorySource = options.RepositorySource;
-        var underlyingDataAccessLayer = await CreateUnderlyingDataAccessLayerAsync(repositorySource, cancellationToken).ConfigureAwait(false);
+        IDataAccessLayer underlyingDataAccessLayer;
+        using (RepositoryStartupDiagnostics.Start("repository-underlying-layer"))
+            underlyingDataAccessLayer = await CreateUnderlyingDataAccessLayerAsync(repositorySource, cancellationToken).ConfigureAwait(false);
         var isWebSource = repositorySource is WebRepositorySource or DevTunnelNameRepositorySource;
         IDataAccessLayer innerDataAccessLayer;
         if (isWebSource)
@@ -83,14 +86,17 @@ public sealed class EntityRepository
                 await mongoDbDataAccessLayer.MigrateAsync().ConfigureAwait(false);
             }
 
-            await EnsureSeedDataIfNeededAsync(innerDataAccessLayer, cancellationToken).ConfigureAwait(false);
+            using (RepositoryStartupDiagnostics.Start("repository-schema-population"))
+                await EnsureSeedDataIfNeededAsync(innerDataAccessLayer, cancellationToken).ConfigureAwait(false);
         }
 
         var coreDataAccessLayer = new ScheduleDataAccessLayer(innerDataAccessLayer);
-        var workspaceEntitySession = await WorkspaceEntitySessionBootstrapper.InitializeAsync(
-            coreDataAccessLayer,
-            options.UserComputerProfileOverride,
-            cancellationToken).ConfigureAwait(false);
+        WorkspaceEntitySession workspaceEntitySession;
+        using (RepositoryStartupDiagnostics.Start("repository-session-bootstrap"))
+            workspaceEntitySession = await WorkspaceEntitySessionBootstrapper.InitializeAsync(
+                coreDataAccessLayer,
+                options.UserComputerProfileOverride,
+                cancellationToken).ConfigureAwait(false);
         var repository = new EntityRepository(repositorySource, coreDataAccessLayer, workspaceEntitySession);
         return repository;
     }

@@ -8,11 +8,17 @@ public sealed class ProcessStageDiagnostics(
     private readonly TimeProvider clock = timeProvider ?? TimeProvider.System;
     private string? stage;
     private long started;
+    private bool failed;
+    public bool HasFailure => this.failed;
 
     public void Report(string nextStage)
     {
+        if (this.failed)
+            return;
         if (!Regex.IsMatch(nextStage, @"\A[a-zA-Z0-9.-]+\z"))
             throw new ArgumentException("Stage must be a diagnostic identifier.", nameof(nextStage));
+        if (nextStage == this.stage)
+            return;
         Complete();
         this.stage = nextStage;
         this.started = this.clock.GetTimestamp();
@@ -29,8 +35,35 @@ public sealed class ProcessStageDiagnostics(
     }
 
     public void Fail(Exception error)
-        => write($"STAGE {this.clock.GetUtcNow():O} failed {this.stage ?? "none"} elapsed-ms "
+    {
+        if (this.failed)
+            return;
+        this.failed = true;
+        write($"STAGE {this.clock.GetUtcNow():O} failed {this.stage ?? "none"} elapsed-ms "
             + $"{this.clock.GetElapsedTime(this.started).TotalMilliseconds:F0} exception-type {error.GetType().Name}");
+        this.stage = null;
+    }
+
+    public T Run<T>(string operation, Func<T> action)
+    {
+        this.Report(operation);
+        try { return action(); }
+        catch (Exception error) { this.Fail(error); throw; }
+    }
+
+    public async Task RunAsync(string operation, Func<Task> action)
+    {
+        this.Report(operation);
+        try { await action(); }
+        catch (Exception error) { this.Fail(error); throw; }
+    }
+
+    public async Task<T> RunAsync<T>(string operation, Func<Task<T>> action)
+    {
+        this.Report(operation);
+        try { return await action(); }
+        catch (Exception error) { this.Fail(error); throw; }
+    }
 
     public static string Sanitize(string text, params string[] sensitiveValues)
     {
@@ -57,17 +90,66 @@ public sealed class ProcessStageDiagnostics(
                 return Path.Combine(directory.FullName, "TestResults", "split-" + Guid.NewGuid().ToString("N"));
             directory = directory.Parent;
         }
+
         throw new InvalidOperationException("Fixture repository root was not found.");
+    }
+
+    public static void RetainRoleLogs(string fixtureDirectory, string artifactDirectory, params string[] sensitiveValues)
+    {
+        Directory.CreateDirectory(artifactDirectory);
+        foreach (var role in new[] { "caller", "worker", "hub" })
+        {
+            var source = Path.Combine(fixtureDirectory, role + "-logs");
+            if (!Directory.Exists(source))
+                continue;
+            foreach (var file in Directory.EnumerateFiles(source, "*.log", SearchOption.AllDirectories))
+            {
+                var destination = Path.Combine(artifactDirectory, role + "-logs", Path.GetRelativePath(source, file));
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                File.WriteAllText(destination, Sanitize(File.ReadAllText(file), sensitiveValues));
+            }
+        }
+    }
+
+    public static string DescribeActiveStartup(IEnumerable<string> lines, DateTimeOffset now)
+    {
+        var active = new List<(string Stage, DateTimeOffset Started)>();
+        foreach (var line in lines)
+        {
+            var fields = line.Split(' ');
+            if (fields.Length < 4 || fields[0] != "STARTUP"
+                || !DateTimeOffset.TryParse(fields[1], out var timestamp)
+                || !Regex.IsMatch(fields[3], @"\A[a-zA-Z0-9.-]+\z"))
+                continue;
+            if (fields[2] == "started")
+                active.Add((fields[3], timestamp));
+            else if (fields[2] == "completed")
+            {
+                var index = active.FindLastIndex(stage => stage.Stage == fields[3]);
+                if (index >= 0)
+                    active.RemoveAt(index);
+            }
+        }
+        return active.Count == 0 ? "none"
+            : $"{active[^1].Stage}; active elapsed-ms {(now - active[^1].Started).TotalMilliseconds:F0}";
     }
 }
 
-internal sealed class DiagnosticAsyncLifetime(
-    IAsyncDisposable inner, Action<string> reportStage, string stage) : IAsyncDisposable
+public sealed class DiagnosticAsyncLifetime(
+    IAsyncDisposable inner, ProcessStageDiagnostics cleanup, string stage) : IAsyncDisposable
 {
     public async ValueTask DisposeAsync()
     {
-        reportStage(stage);
-        await inner.DisposeAsync();
-        reportStage(stage + "-complete");
+        cleanup.Report(stage);
+        try
+        {
+            await inner.DisposeAsync();
+            cleanup.Complete();
+        }
+        catch (Exception error)
+        {
+            cleanup.Fail(error);
+            throw;
+        }
     }
 }

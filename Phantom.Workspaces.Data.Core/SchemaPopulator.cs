@@ -26,11 +26,18 @@ public sealed class SchemaPopulator
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        using var population = RepositoryStartupDiagnostics.Start("schema-population");
         var errors = new List<UpdateError>();
-        var rawChanges = this.LoadEntityChanges(errors, cancellationToken).ToArray();
-        var changes = await this.ApplyCurrentConcurrencyTagsAsync(rawChanges, cancellationToken).ConfigureAwait(false);
+        EntityChange[] rawChanges;
+        using (RepositoryStartupDiagnostics.Start("schema-load-embedded-resources"))
+            rawChanges = this.LoadEntityChanges(errors, cancellationToken).ToArray();
+        IReadOnlyCollection<EntityChange> changes;
+        using (RepositoryStartupDiagnostics.Start("schema-read-concurrency-tags"))
+            changes = await this.ApplyCurrentConcurrencyTagsAsync(rawChanges, cancellationToken).ConfigureAwait(false);
 
-        var updateResult = await this.dataAccessLayer.UpdateAsync(
+        UpdateResult updateResult;
+        using (RepositoryStartupDiagnostics.Start("schema-update"))
+            updateResult = await this.dataAccessLayer.UpdateAsync(
             new UpdateRequest
             {
                 UpdateMetadata = new UpdateMetadata
@@ -43,7 +50,7 @@ public sealed class SchemaPopulator
                 },
                 Changes = changes,
             },
-            cancellationToken).ConfigureAwait(false);
+                cancellationToken).ConfigureAwait(false);
 
         foreach (var entityResult in updateResult.EntityResults)
         {
