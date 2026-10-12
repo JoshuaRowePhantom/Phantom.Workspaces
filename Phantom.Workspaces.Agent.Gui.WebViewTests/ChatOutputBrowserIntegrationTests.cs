@@ -1996,6 +1996,203 @@ public sealed class ChatOutputBrowserIntegrationTests
         });
 
     [Fact]
+    public Task RunningItem_AssistantReplyAfterReadAgentResult_IsVisible()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                var runningItem = new AgentChatRunningItem { AssistantRunId = "parent-run" };
+                using var model = CreateModel(web, [], new ObservableCollection<AgentChatRunningItem> { runningItem });
+                await model.HistoryLoaded;
+                runningItem.Items.Add(ToolCallItem("read_agent", "c1") with { AssistantRunId = runningItem.AssistantRunId });
+                runningItem.Items.Add(new AgentChatHistoryItem
+                {
+                    Role = ChatRole.Tool,
+                    Contents = [new FunctionResultContent("c1", "child still working")],
+                });
+                foreach (var placeholder in new AgentChatHistoryItem[]
+                {
+                    new() { Role = ChatRole.Assistant },
+                    TextItem(""),
+                    TextItem(" \r\n "),
+                })
+                {
+                    var index = runningItem.Items.Count;
+                    runningItem.Items.Add(placeholder with { AssistantRunId = runningItem.AssistantRunId });
+                    var messageId = ChatOutputHtmlRenderer.RunningMessageId(
+                        ChatOutputHtmlRenderer.RunningItemId(model.GenerationId, 0), index);
+                    Assert.Equal("true", await EvalAsync(web, $"document.getElementById('{messageId}') === null"));
+                    runningItem.Items[index] = TextItem("Yes, reruns are still running.") with { AssistantRunId = runningItem.AssistantRunId };
+                    await AssertVisibleReplyAsync(web, messageId, "Yes, reruns are still running.");
+                    runningItem.Items[index] = TextItem("Yes, reruns are still running. Continued.") with { AssistantRunId = runningItem.AssistantRunId };
+                    await AssertVisibleReplyAsync(web, messageId, "Continued.");
+                }
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task ChatOutput_ActiveRunCompletesAfterPlaceholderReply_ShowsReplyExactlyOnce()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                var history = new ObservableCollection<AgentChatHistoryItem>();
+                var run = new AgentChatRunningItem { AssistantRunId = "parent-run" };
+                var running = new ObservableCollection<AgentChatRunningItem> { run };
+                using var model = CreateModel(web, history, running);
+                await model.HistoryLoaded;
+                run.Items.Add(TextItem("") with { AssistantRunId = run.AssistantRunId });
+                history.Add(TextItem("") with { AssistantRunId = run.AssistantRunId });
+                var reply = TextItem("Parent reply after placeholder.") with { AssistantRunId = run.AssistantRunId };
+                run.Items[0] = reply;
+                var messageId = ChatOutputHtmlRenderer.RunningMessageId(
+                    ChatOutputHtmlRenderer.RunningItemId(model.GenerationId, 0), 0);
+                await AssertVisibleReplyAsync(web, messageId, "Parent reply");
+                history[0] = reply;
+                Assert.Equal("\"1\"", await EvalAsync(web,
+                    "Array.from(document.querySelectorAll('.chat-text')).filter(element => element.textContent.includes('Parent reply after placeholder.')).length.toString()"));
+                run.Items.Clear();
+                running.Remove(run);
+                await AssertVisibleReplyAsync(web, ChatOutputHtmlRenderer.MessageId(0), "Parent reply");
+                Assert.Equal("\"1\"", await EvalAsync(web,
+                    "Array.from(document.querySelectorAll('.chat-text')).filter(element => element.textContent.includes('Parent reply after placeholder.')).length.toString()"));
+                Assert.Equal("\"1\"", await EvalAsync(web, "document.querySelectorAll('.chat-sender').length.toString()"));
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    private static async Task AssertVisibleReplyAsync(
+        ControllableWebViewControl web,
+        string messageId,
+        string text)
+    {
+        var state = await EvalAsync(web, $$"""
+            (() => {
+              const message = document.getElementById('{{messageId}}');
+              const content = message && message.querySelector('.chat-text');
+              return JSON.stringify({
+                visible: !!content && content.getClientRects().length > 0 &&
+                  getComputedStyle(content).visibility === 'visible',
+                text: content && content.textContent
+              });
+            })()
+            """);
+        Assert.Contains("\\\"visible\\\":true", state, StringComparison.Ordinal);
+        Assert.Contains(text, state, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public Task RunningPlaceholderBetweenCalls_BecomesVisibleAtEncounterPosition()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                var run = new AgentChatRunningItem { AssistantRunId = "parent-run" };
+                using var model = CreateModel(web, [], new ObservableCollection<AgentChatRunningItem> { run });
+                await model.HistoryLoaded;
+                run.Items.Add(ToolCallItem("first_tool", "c1") with { AssistantRunId = run.AssistantRunId });
+                run.Items.Add(TextItem("") with { AssistantRunId = run.AssistantRunId });
+                run.Items.Add(ToolCallItem("second_tool", "c2") with { AssistantRunId = run.AssistantRunId });
+                run.Items[1] = TextItem("intervening parent reply") with { AssistantRunId = run.AssistantRunId };
+                var messageId = ChatOutputHtmlRenderer.RunningMessageId(
+                    ChatOutputHtmlRenderer.RunningItemId(model.GenerationId, 0), 1);
+                await AssertVisibleReplyAsync(web, messageId, "intervening parent reply");
+                var runId = ChatOutputHtmlRenderer.RunningItemId(model.GenerationId, 0);
+                var firstCallId = ChatOutputHtmlRenderer.ContentId(ChatOutputHtmlRenderer.RunningMessageId(runId, 0), 0);
+                var secondCallId = ChatOutputHtmlRenderer.ContentId(ChatOutputHtmlRenderer.RunningMessageId(runId, 2), 0);
+                Assert.Equal("true", await EvalAsync(web, $$"""
+                    (() => {
+                      const first = document.getElementById('{{firstCallId}}');
+                      const reply = document.getElementById('{{messageId}}');
+                      const second = document.getElementById('{{secondCallId}}');
+                      return first.textContent.includes('first_tool') && second.textContent.includes('second_tool') &&
+                        !!(first.compareDocumentPosition(reply) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+                        !!(reply.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
+                    })()
+                    """));
+                Assert.Equal("\"2\"", await EvalAsync(web, "document.querySelectorAll('details.chat-tool-group').length.toString()"));
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task RunningDescendantCommandFailure_WithExistingWrapper_RepairsWithoutDuplicateIds()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                var running = new ObservableCollection<AgentChatRunningItem>();
+                using var model = CreateModel(web, [], running);
+                await model.HistoryLoaded;
+                for (var index = 0; index < 3; index++)
+                {
+                    var run = new AgentChatRunningItem();
+                    run.Items.Add(TextItem($"sibling reply {index}"));
+                    running.Add(run);
+                }
+                var order = await EvalAsync(web, "Array.from(document.querySelectorAll('.chat-running-item')).map(element => element.id).join(',')");
+                var runId = ChatOutputHtmlRenderer.RunningItemId(model.GenerationId, 1);
+                var messageId = ChatOutputHtmlRenderer.RunningMessageId(runId, 0);
+                foreach (var failedPath in new[]
+                {
+                    ChatOutputHtmlRenderer.ContentsContainerId(messageId),
+                    ChatOutputHtmlRenderer.ContentId(messageId, 0),
+                })
+                {
+                    var failure = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    void OnMessage(object? sender, string body)
+                    {
+                        using var document = JsonDocument.Parse(body);
+                        var message = document.RootElement;
+                        if (message.TryGetProperty("type", out var type) &&
+                            type.GetString() == "commandFailed" &&
+                            message.GetProperty("path").GetString() == failedPath)
+                        {
+                            model.NotifyInsertionFailed(failedPath);
+                            failure.TrySetResult();
+                        }
+                    }
+                    web.JavaScriptMessageReceived += OnMessage;
+                    try
+                    {
+                        await EvalAsync(web, $"document.getElementById('{failedPath}').remove();'removed'");
+                        web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(failedPath, "append", "<span>lost payload</span>"));
+                        web.FlushPendingMessages();
+                        await failure.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                        await AssertVisibleReplyAsync(web, messageId, "sibling reply 1");
+                        running[1].Items[0] = TextItem("sibling reply 1 continued");
+                        await AssertVisibleReplyAsync(web, messageId, "continued");
+                        Assert.Equal(order, await EvalAsync(web, "Array.from(document.querySelectorAll('.chat-running-item')).map(element => element.id).join(',')"));
+                        Assert.Equal("true", await EvalAsync(web,
+                            "(() => {const ids = Array.from(document.querySelectorAll('[id]')).map(element => element.id); return ids.length === new Set(ids).size;})()"));
+                    }
+                    finally
+                    {
+                        web.JavaScriptMessageReceived -= OnMessage;
+                    }
+                }
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
     public Task ToolRun_InterleavedTextAndMixedCalls_KeepEncounterOrderInLiveBrowser()
         => this.fixture.InvokeAsync(async () =>
         {

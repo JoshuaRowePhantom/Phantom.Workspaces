@@ -52,6 +52,90 @@ public sealed class ChatOutputHtmlStructuralInvariantsTests
         => new() { Role = ChatRole.Tool, Contents = [new FunctionResultContent(callId, "result")] };
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task ChatOutput_PlaceholderBetweenGroupedCallsReceivesText_PreservesEncounterOrder()
+    {
+        var item = new AgentChatRunningItem { AssistantRunId = "parent-run" };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel([], new ObservableCollection<AgentChatRunningItem> { item }, () => true, sink);
+        await model.HistoryLoaded;
+        item.Items.Add(ToolCallMessage("read", "c1") with { AssistantRunId = item.AssistantRunId });
+        item.Items.Add(new AgentChatHistoryItem { Role = ChatRole.Assistant, AssistantRunId = item.AssistantRunId });
+        item.Items.Add(ToolCallMessage("write", "c2") with { AssistantRunId = item.AssistantRunId });
+        item.Items.Add(ToolResultMessage("c1"));
+        item.Items.Add(ToolResultMessage("c2"));
+        var root = MiniDom.CreateShellRoot();
+        ReplayOperations(root, sink);
+        sink.Operations.Clear();
+        item.Items[1] = TextMessage(ChatRole.Assistant, "parent reply") with { AssistantRunId = item.AssistantRunId };
+        ReplayOperations(root, sink);
+        var runId = ChatOutputHtmlRenderer.RunningItemId(model.GenerationId, 0);
+        var ids = root.AllIds().ToList();
+        Assert.True(ids.IndexOf(runId + "-group-0") < ids.IndexOf(runId + "-msg-1"));
+        Assert.True(ids.IndexOf(runId + "-msg-1") < ids.IndexOf(runId + "-group-2"));
+        Assert.Equal(ids.Count, ids.Distinct().Count());
+        Assert.Contains(sink.Operations, operation => operation.Content.Contains("result", StringComparison.Ordinal));
+        sink.Operations.Clear();
+        item.Items[1] = TextMessage(ChatRole.Assistant, " ") with { AssistantRunId = item.AssistantRunId };
+        ReplayOperations(root, sink);
+        Assert.Null(root.FindById(runId + "-msg-1"));
+        Assert.Null(root.FindById(runId + "-group-2"));
+        Assert.NotNull(root.FindById(ChatOutputHtmlRenderer.ContentId(runId + "-msg-2", 0)));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ChatOutput_DescendantRepairWithExistingWrapper_PreservesUniqueIdsAndSiblingOrder()
+    {
+        var running = new ObservableCollection<AgentChatRunningItem>();
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel([], running, () => true, sink);
+        await model.HistoryLoaded;
+        for (var index = 0; index < 3; index++)
+        {
+            var item = new AgentChatRunningItem();
+            item.Items.Add(TextMessage(ChatRole.Assistant, $"reply {index}"));
+            running.Add(item);
+        }
+        var root = MiniDom.CreateShellRoot();
+        ReplayOperations(root, sink);
+        var before = root.AllIds().ToList();
+        foreach (var index in new[] { 1, 0, 2 })
+        {
+            sink.Operations.Clear();
+            var runId = ChatOutputHtmlRenderer.RunningItemId(model.GenerationId, index);
+            var contentId = ChatOutputHtmlRenderer.ContentId(ChatOutputHtmlRenderer.RunningMessageId(runId, 0), 0);
+            root.RemoveById(contentId);
+            model.NotifyInsertionFailed(contentId);
+            ReplayOperations(root, sink);
+            Assert.Equal(before, root.AllIds().ToList());
+            Assert.DoesNotContain(sink.Operations, operation =>
+                operation.Kind == "remove" && operation.Path != runId);
+            sink.Operations.Clear();
+            running[index].Items[0] = TextMessage(ChatRole.Assistant, "repaired streaming");
+            ReplayOperations(root, sink);
+            Assert.Equal(before, root.AllIds().ToList());
+        }
+    }
+
+    private static void ReplayOperations(MiniDom root, RecordingSink sink)
+    {
+        foreach (var operation in sink.Operations)
+        {
+            if (operation.Kind == "remove")
+            {
+                root.RemoveById(operation.Path);
+            }
+            else if (operation.Kind == "update")
+            {
+                var target = root.FindById(operation.Path);
+                Assert.True(target is not null, $"Missing DOM owner '{operation.Path}'.");
+                target!.Apply(operation.Location, MiniDom.ParseFragment(operation.Content));
+            }
+            var ids = root.AllIds().ToList();
+            Assert.Equal(ids.Count, ids.Distinct().Count());
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ChatOutput_SameRunPromotedAcrossHistoryAndRunning_UsesOneStableToolGroup()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>();

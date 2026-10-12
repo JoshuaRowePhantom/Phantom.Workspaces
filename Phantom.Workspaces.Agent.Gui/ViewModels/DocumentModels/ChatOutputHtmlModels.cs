@@ -349,7 +349,26 @@ internal sealed class ChatMessageHtmlModel
 
     public void Refresh() => this.Render(emit: true);
 
-    internal void Render(bool emit)
+    internal bool UpdateForReplacement(
+        AgentChatHistoryItem newSource,
+        bool hasDomElement)
+    {
+        var wasEmpty = this.ProducesNoVisibleContent;
+        this.source = newSource;
+        this.Render(emit: hasDomElement, deferVisibilityTransition: true);
+        return wasEmpty != this.ProducesNoVisibleContent;
+    }
+
+    internal bool OwnsElement(string path)
+        => path == this.ElementId ||
+           path == ChatOutputHtmlRenderer.ContentsContainerId(this.ElementId) ||
+           path == ChatOutputHtmlRenderer.HeaderId(this.ElementId) ||
+           this.bindings.Any(binding => path == binding.ElementId ||
+               path.StartsWith(binding.ElementId + "-", StringComparison.Ordinal));
+
+    internal void Render(
+        bool emit,
+        bool deferVisibilityTransition = false)
     {
         var includeReasoning = this.isReasoningVisible();
         var reasoningChanged = !this.hasRendered || includeReasoning != this.lastReasoningVisible;
@@ -489,7 +508,9 @@ internal sealed class ChatMessageHtmlModel
             contentIndex++;
         }
 
-        if (emit)
+        // The transformer must create/remove the message owner before diffing descendants
+        // when a transparent placeholder changes visibility.
+        if (emit && (!deferVisibilityTransition || (this.bindings.Count == 0) == (newBindings.Count == 0)))
         {
             this.EmitDiff(newBindings, roleLabel, visibilityChanged);
         }
@@ -935,7 +956,19 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
 
         if (this.Categorize(oldSource) == this.Categorize(sourceItem))
         {
-            target.Model.Update(sourceItem);
+            if (target.Model.UpdateForReplacement(sourceItem, target.HasDomElement))
+            {
+                var replacementIndex = this.Target.IndexOf(target);
+                var previous = this.FindPreviousDomSlot(replacementIndex);
+                var rebuildStart = previous is null ? replacementIndex : this.Target.IndexOf(previous);
+                if (previous?.Group is { } previousGroup)
+                {
+                    // Transparent result/placeholder slots can lie between group members.
+                    rebuildStart = this.Target.IndexOf(this.Target.First(slot => ReferenceEquals(slot.Group, previousGroup)));
+                }
+                this.RebuildFrom(rebuildStart);
+                return;
+            }
 
             if (!HaveSameToolComposition(oldSource, sourceItem))
             {
@@ -1012,9 +1045,15 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
     {
         // Moves cannot be expressed as a safe local DOM operation once grouping is involved;
         // rebuild this transformer's whole container region from the (already reordered) target.
+        this.RebuildFrom(0);
+    }
+
+    private void RebuildFrom(int start)
+    {
         var removedTopLevelIds = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var existing in this.Target)
+        for (var index = start; index < this.Target.Count; index++)
         {
+            var existing = this.Target[index];
             if (!existing.HasDomElement)
             {
                 continue;
@@ -1027,8 +1066,10 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
             }
         }
 
-        foreach (var existing in this.Target)
+        for (var index = start; index < this.Target.Count; index++)
         {
+            var existing = this.Target[index];
+            this.RemoveCallIdsFromIndex(existing);
             existing.Group = null;
             existing.IsTopLevelFirstGroupMember = false;
             existing.HasDomElement = false;
@@ -1036,8 +1077,12 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
             existing.Model.SetIsInsideMessageLevelToolGroup(false, emit: false);
         }
 
-        for (var index = 0; index < this.Target.Count; index++)
+        for (var index = start; index < this.Target.Count; index++)
         {
+            if (this.isRunActive?.Invoke(this.Target[index].Model.Source.AssistantRunId) != true)
+            {
+                this.AddCallIdsToIndex(this.Target[index].Model.Source, this.Target[index]);
+            }
             this.ClassifyAndInsert(index, this.Target[index]);
         }
 
@@ -1897,12 +1942,14 @@ internal sealed class RunningChatItemHtmlModel : IDisposable
 
     /// <summary>
     /// Re-establishes the insertion point after a DOM failure by discarding the current transformer,
-    /// clearing message slots, and re-inserting the container via <c>Append</c> into
-    /// <paramref name="containerPath"/> — a location that is always reachable (the persistent
-    /// running-items region). Activates a fresh inner transformer so subsequent streaming chunks
-    /// arrive into the newly-placed contents div.
+    /// clearing message slots, removing any surviving wrapper, and inserting at the same
+    /// sibling position. Activates a fresh transformer so subsequent streaming chunks arrive
+    /// into the newly-placed contents div without duplicate wrapper ids.
     /// </summary>
-    public void ReInsert(string containerPath)
+    public void ReInsert(
+        string containerPath,
+        string? previousElementId = null,
+        string? nextElementId = null)
     {
         if (!this.IsActive)
         {
@@ -1913,10 +1960,22 @@ internal sealed class RunningChatItemHtmlModel : IDisposable
         this.transformer?.Dispose();
         this.transformer = null;
         this.messageSlots.Clear();
-        this.sink.UpdateContent(containerPath, ChatOutputUpdateLocation.Append, this.BuildHtml());
+        this.sink.RemoveContent(this.ElementId);
+        this.sink.UpdateContent(
+            previousElementId ?? nextElementId ?? containerPath,
+            previousElementId is not null ? ChatOutputUpdateLocation.After :
+                nextElementId is not null ? ChatOutputUpdateLocation.Before : ChatOutputUpdateLocation.Append,
+            this.BuildHtml());
         this.IsInserted = true;
         this.Activate();
     }
+
+    internal bool OwnsElement(string path)
+        => path == this.ElementId ||
+           path == ChatOutputHtmlRenderer.RunningItemContentsId(this.ElementId) ||
+           this.messageSlots.Any(slot => slot.Model.OwnsElement(path) ||
+               slot.Group is { } group &&
+               (path == group.GroupId || path.StartsWith(group.GroupId + "-", StringComparison.Ordinal)));
 
     public void Dispose()
     {
@@ -2684,8 +2743,8 @@ public sealed class ChatOutputHtmlModel : IDisposable
     /// <summary>
     /// Called when the browser reports that a DOM command targeting
     /// <paramref name="failedPath"/> was silently dropped because the element did not exist.
-    /// Running items recover by re-appending the affected container into the persistent
-    /// running-items region via <see cref="RunningChatItemHtmlModel.ReInsert"/>; history-side
+    /// Running items recover by rebuilding the affected container at its sibling position
+    /// via <see cref="RunningChatItemHtmlModel.ReInsert"/>; history-side
     /// failures recover through <see cref="ChatMessageHtmlTransformer.RepairFailedElement"/>,
     /// which re-emits the affected slot and the rest of the history tail from a still-valid
     /// anchor (or the persistent history container).
@@ -2697,12 +2756,15 @@ public sealed class ChatOutputHtmlModel : IDisposable
             return;
         }
 
-        foreach (var model in this.runningModels)
+        for (var index = 0; index < this.runningModels.Count; index++)
         {
-            if (model.ElementId == failedPath ||
-                ChatOutputHtmlRenderer.RunningItemContentsId(model.ElementId) == failedPath)
+            var model = this.runningModels[index];
+            if (model.OwnsElement(failedPath))
             {
-                model.ReInsert(ChatOutputHtmlRenderer.RunningContainerId);
+                model.ReInsert(
+                    ChatOutputHtmlRenderer.RunningContainerId,
+                    index > 0 ? this.runningModels[index - 1].ElementId : null,
+                    index + 1 < this.runningModels.Count ? this.runningModels[index + 1].ElementId : null);
                 return;
             }
         }
