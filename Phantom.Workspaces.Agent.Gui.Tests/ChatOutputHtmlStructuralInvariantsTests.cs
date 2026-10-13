@@ -93,6 +93,47 @@ public sealed class ChatOutputHtmlStructuralInvariantsTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task ResultOwnership_MultipleRemovalsKeepDomFlagsGroupsAndOrderConsistent()
+    {
+        var item = new AgentChatRunningItem { AssistantRunId = "parent-run" };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel([], new ObservableCollection<AgentChatRunningItem> { item }, () => true, sink);
+        await model.HistoryLoaded;
+        item.Items.Add(ToolCallMessage("read", "c1") with { AssistantRunId = item.AssistantRunId });
+        item.Items.Add(TextMessage(ChatRole.Assistant, "prose"));
+        item.Items.Add(ToolResultMessage("c1") with { AssistantRunId = item.AssistantRunId });
+        item.Items.Add(ToolCallMessage("write", "c2") with { AssistantRunId = item.AssistantRunId });
+        item.Items.Add(ToolResultMessage("c2") with { AssistantRunId = item.AssistantRunId });
+        var root = MiniDom.CreateShellRoot();
+        ReplayOperations(root, sink);
+        var runId = ChatOutputHtmlRenderer.RunningItemId(model.GenerationId, 0);
+        var firstResultId = ChatOutputHtmlRenderer.ContentId(runId + "-msg-0", 0) + "-result";
+        var secondResultId = ChatOutputHtmlRenderer.ContentId(runId + "-msg-3", 0) + "-result";
+        Assert.NotNull(root.FindById(runId + "-msg-2"));
+        sink.Operations.Clear();
+        item.Items.RemoveAt(1);
+        ReplayOperations(root, sink);
+        Assert.Null(root.FindById(runId + "-msg-2"));
+        Assert.NotNull(root.FindById(firstResultId));
+        Assert.NotNull(root.FindById(secondResultId));
+        Assert.Null(root.FindById(runId + "-group-3"));
+        sink.Operations.Clear();
+        item.Items.RemoveAt(3);
+        ReplayOperations(root, sink);
+        Assert.Null(root.FindById(runId + "-msg-2"));
+        Assert.NotNull(root.FindById(firstResultId));
+        Assert.Null(root.FindById(secondResultId));
+        sink.Operations.Clear();
+        item.Items.RemoveAt(0);
+        ReplayOperations(root, sink);
+        Assert.NotNull(root.FindById(runId + "-msg-2"));
+        Assert.Null(root.FindById(firstResultId));
+        var ids = root.AllIds().ToList();
+        Assert.True(ids.IndexOf(runId + "-msg-2") < ids.IndexOf(runId + "-group-3"));
+        Assert.Equal(ids.Count, ids.Distinct().Count());
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ChatOutput_DescendantRepairWithExistingWrapper_PreservesUniqueIdsAndSiblingOrder()
     {
         var running = new ObservableCollection<AgentChatRunningItem>();

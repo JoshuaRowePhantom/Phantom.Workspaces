@@ -2229,6 +2229,56 @@ public sealed class ChatOutputBrowserIntegrationTests
         });
 
     [Fact]
+    public Task ResultOwnership_MultipleRemovalsKeepExactlyOnceResultsAndEncounterOrder()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                var run = new AgentChatRunningItem { AssistantRunId = "parent-run" };
+                using var model = CreateModel(web, [], new ObservableCollection<AgentChatRunningItem> { run });
+                await model.HistoryLoaded;
+                run.Items.Add(ToolCallItem("first_tool", "c1") with { AssistantRunId = run.AssistantRunId });
+                run.Items.Add(TextItem("prose"));
+                run.Items.Add(new() { Role = ChatRole.Tool, AssistantRunId = run.AssistantRunId, Contents = [new FunctionResultContent("c1", "first-result-marker")] });
+                run.Items.Add(ToolCallItem("second_tool", "c2") with { AssistantRunId = run.AssistantRunId });
+                run.Items.Add(new() { Role = ChatRole.Tool, AssistantRunId = run.AssistantRunId, Contents = [new FunctionResultContent("c2", "second-result-marker")] });
+                var runId = ChatOutputHtmlRenderer.RunningItemId(model.GenerationId, 0);
+                var firstCallId = ChatOutputHtmlRenderer.ContentId(ChatOutputHtmlRenderer.RunningMessageId(runId, 0), 0);
+                var secondCallId = ChatOutputHtmlRenderer.ContentId(ChatOutputHtmlRenderer.RunningMessageId(runId, 3), 0);
+                var firstResultMessageId = ChatOutputHtmlRenderer.RunningMessageId(runId, 2);
+                run.Items.RemoveAt(1);
+                Assert.Equal("\"1\"", await EvalAsync(web,
+                    "Array.from(document.querySelectorAll('pre')).filter(element => element.textContent.includes('first-result-marker')).length.toString()"));
+                Assert.Equal("true", await EvalAsync(web, $$"""
+                    !document.getElementById('{{firstResultMessageId}}') &&
+                    document.querySelectorAll('details.chat-tool-group').length === 1 &&
+                    document.querySelectorAll('.chat-tool-result').length === 2 &&
+                    !!(document.getElementById('{{firstCallId}}').compareDocumentPosition(
+                        document.getElementById('{{secondCallId}}')) & Node.DOCUMENT_POSITION_FOLLOWING)
+                    """));
+                run.Items.RemoveAt(3);
+                Assert.Equal("\"1\"", await EvalAsync(web,
+                    "Array.from(document.querySelectorAll('pre')).filter(element => element.textContent.includes('first-result-marker')).length.toString()"));
+                Assert.DoesNotContain("second-result-marker", await EvalAsync(web, "document.getElementById('running-items-container').textContent"), StringComparison.Ordinal);
+                run.Items.RemoveAt(0);
+                Assert.Equal("\"1\"", await EvalAsync(web,
+                    "Array.from(document.querySelectorAll('pre')).filter(element => element.textContent.includes('first-result-marker')).length.toString()"));
+                Assert.Equal("true", await EvalAsync(web, $$"""
+                    document.querySelectorAll('.chat-tool-result').length === 0 &&
+                    !!(document.getElementById('{{firstResultMessageId}}').compareDocumentPosition(
+                        document.getElementById('{{secondCallId}}')) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+                    (() => { const ids = Array.from(document.querySelectorAll('[id]')).map(element => element.id);
+                      return ids.length === new Set(ids).size; })()
+                    """));
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
     public Task RunningDescendantCommandFailure_WithExistingWrapper_RepairsWithoutDuplicateIds()
         => this.fixture.InvokeAsync(async () =>
         {
