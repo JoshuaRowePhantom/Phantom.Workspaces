@@ -2129,6 +2129,106 @@ public sealed class ChatOutputBrowserIntegrationTests
         });
 
     [Fact]
+    public Task PlaceholderReply_ResultOwnershipRemainsExactlyOnceAcrossBoundaryChanges()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                var run = new AgentChatRunningItem { AssistantRunId = "parent-run" };
+                using var model = CreateModel(web, [], new ObservableCollection<AgentChatRunningItem> { run });
+                await model.HistoryLoaded;
+                run.Items.Add(ToolCallItem("read_agent", "c1") with { AssistantRunId = run.AssistantRunId });
+                run.Items.Add(TextItem("") with { AssistantRunId = run.AssistantRunId });
+                run.Items.Add(new AgentChatHistoryItem
+                {
+                    Role = ChatRole.Tool,
+                    AssistantRunId = run.AssistantRunId,
+                    Contents = [new FunctionResultContent("c1", "original-result-marker")],
+                });
+                var runId = ChatOutputHtmlRenderer.RunningItemId(model.GenerationId, 0);
+                var replyId = ChatOutputHtmlRenderer.RunningMessageId(runId, 1);
+                var resultId = ChatOutputHtmlRenderer.RunningMessageId(runId, 2);
+                run.Items[1] = TextItem("parent reply") with { AssistantRunId = run.AssistantRunId };
+                await AssertVisibleReplyAsync(web, replyId, "parent reply");
+                Assert.Equal("\"1\"", await EvalAsync(web,
+                    "Array.from(document.querySelectorAll('pre')).filter(element => element.textContent.includes('original-result-marker')).length.toString()"));
+                Assert.Equal("true", await EvalAsync(web, $$"""
+                    !!(document.getElementById('{{replyId}}').compareDocumentPosition(
+                        document.getElementById('{{resultId}}')) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+                    document.querySelectorAll('.chat-tool-result').length === 0
+                    """));
+                run.Items[2] = new AgentChatHistoryItem
+                {
+                    Role = ChatRole.Tool,
+                    AssistantRunId = run.AssistantRunId,
+                    Contents = [new FunctionResultContent("c1", "replacement-result-marker")],
+                };
+                Assert.Equal("\"1\"", await EvalAsync(web,
+                    "Array.from(document.querySelectorAll('pre')).filter(element => element.textContent.includes('replacement-result-marker')).length.toString()"));
+                Assert.DoesNotContain("original-result-marker", await EvalAsync(web, "document.getElementById('running-items-container').textContent"), StringComparison.Ordinal);
+                run.Items[1] = TextItem(" ") with { AssistantRunId = run.AssistantRunId };
+                Assert.Equal("\"1\"", await EvalAsync(web,
+                    "Array.from(document.querySelectorAll('pre')).filter(element => element.textContent.includes('replacement-result-marker')).length.toString()"));
+                Assert.Equal("true", await EvalAsync(web, $$"""
+                    !document.getElementById('{{replyId}}') && !document.getElementById('{{resultId}}') &&
+                    document.querySelectorAll('.chat-tool-result').length === 1
+                    """));
+                run.Items[1] = TextItem("reply again") with { AssistantRunId = run.AssistantRunId };
+                await AssertVisibleReplyAsync(web, replyId, "reply again");
+                Assert.Equal("\"1\"", await EvalAsync(web,
+                    "Array.from(document.querySelectorAll('pre')).filter(element => element.textContent.includes('replacement-result-marker')).length.toString()"));
+                run.Items.RemoveAt(2);
+                Assert.DoesNotContain("result-marker", await EvalAsync(web, "document.getElementById('running-items-container').textContent"), StringComparison.Ordinal);
+                run.Items[1] = TextItem("") with { AssistantRunId = run.AssistantRunId };
+                run.Items.Add(new AgentChatHistoryItem
+                {
+                    Role = ChatRole.Tool,
+                    AssistantRunId = run.AssistantRunId,
+                    Contents = [new FunctionResultContent("c1", "reinjected-result-marker")],
+                });
+                Assert.Equal("\"1\"", await EvalAsync(web,
+                    "Array.from(document.querySelectorAll('pre')).filter(element => element.textContent.includes('reinjected-result-marker')).length.toString()"));
+                Assert.Equal("\"1\"", await EvalAsync(web, "document.querySelectorAll('.chat-tool-result').length.toString()"));
+                run.Items[2] = new AgentChatHistoryItem
+                {
+                    Role = ChatRole.Tool,
+                    AssistantRunId = run.AssistantRunId,
+                    Contents = [new FunctionResultContent("c1", "updated-injected-result-marker")],
+                };
+                Assert.Equal("\"1\"", await EvalAsync(web,
+                    "Array.from(document.querySelectorAll('pre')).filter(element => element.textContent.includes('updated-injected-result-marker')).length.toString()"));
+                Assert.DoesNotContain("reinjected-result-marker", await EvalAsync(web, "document.getElementById('running-items-container').textContent"), StringComparison.Ordinal);
+                run.Items[2] = new AgentChatHistoryItem
+                {
+                    Role = ChatRole.Tool,
+                    AssistantRunId = run.AssistantRunId,
+                    Contents = [new FunctionResultContent("unmatched", "unmatched-result-marker")],
+                };
+                Assert.Equal("\"1\"", await EvalAsync(web,
+                    "Array.from(document.querySelectorAll('pre')).filter(element => element.textContent.includes('unmatched-result-marker')).length.toString()"));
+                Assert.Equal("\"0\"", await EvalAsync(web, "document.querySelectorAll('.chat-tool-result').length.toString()"));
+                Assert.DoesNotContain("updated-injected-result-marker", await EvalAsync(web, "document.getElementById('running-items-container').textContent"), StringComparison.Ordinal);
+                run.Items[2] = new AgentChatHistoryItem
+                {
+                    Role = ChatRole.Tool,
+                    AssistantRunId = run.AssistantRunId,
+                    Contents = [new FunctionResultContent("c1", "matched-again-result-marker")],
+                };
+                Assert.Equal("\"1\"", await EvalAsync(web,
+                    "Array.from(document.querySelectorAll('pre')).filter(element => element.textContent.includes('matched-again-result-marker')).length.toString()"));
+                Assert.Equal("\"1\"", await EvalAsync(web, "document.querySelectorAll('.chat-tool-result').length.toString()"));
+                Assert.DoesNotContain("unmatched-result-marker", await EvalAsync(web, "document.getElementById('running-items-container').textContent"), StringComparison.Ordinal);
+                run.Items.RemoveAt(2);
+                Assert.DoesNotContain("result-marker", await EvalAsync(web, "document.getElementById('running-items-container').textContent"), StringComparison.Ordinal);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
     public Task RunningDescendantCommandFailure_WithExistingWrapper_RepairsWithoutDuplicateIds()
         => this.fixture.InvokeAsync(async () =>
         {

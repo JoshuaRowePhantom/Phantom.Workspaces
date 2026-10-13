@@ -1067,6 +1067,69 @@ public sealed class ChatOutputHtmlModelTests
     public Task ChatOutput_RunningMessageContentsCommandFails_RepairsOwningRunningItem()
         => this.AssertRunningDescendantRecovery(contentBinding: false);
 
+    [Fact]
+    public void PlaceholderReply_ReconcilesSupplementalResultOwnershipAcrossVisibilityChanges()
+    {
+        var source = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("read_agent", "c1"),
+            TextMessage(ChatRole.Assistant, ""),
+            new() { Role = ChatRole.Tool, Contents = [new FunctionResultContent("c1", "original result")] },
+        };
+        var slots = new List<RenderSlot>();
+        using var transformer = MakeLiveTransformer(source, slots, new RecordingSink(), []);
+        Assert.True(slots[0].Model.HasResultForCall("c1"));
+        Assert.False(slots[2].HasDomElement);
+        var callModel = slots[0].Model;
+        source[1] = TextMessage(ChatRole.Assistant, "parent reply");
+        Assert.Same(callModel, slots[0].Model);
+        Assert.False(slots[0].Model.HasResultForCall("c1"));
+        Assert.True(slots[2].HasDomElement);
+        source[2] = new() { Role = ChatRole.Tool, Contents = [new FunctionResultContent("c1", "replacement result")] };
+        Assert.False(slots[0].Model.HasResultForCall("c1"));
+        source[1] = TextMessage(ChatRole.Assistant, "");
+        Assert.True(slots[0].Model.HasResultForCall("c1"));
+        Assert.False(slots[2].HasDomElement);
+        Assert.Contains("replacement result", slots[0].Model.BuildHtml(), StringComparison.Ordinal);
+        Assert.DoesNotContain("original result", slots[0].Model.BuildHtml(), StringComparison.Ordinal);
+        source[2] = new() { Role = ChatRole.Tool, Contents = [new FunctionResultContent("c1", "updated injected result")] };
+        Assert.Contains("updated injected result", slots[0].Model.BuildHtml(), StringComparison.Ordinal);
+        Assert.DoesNotContain("replacement result", slots[0].Model.BuildHtml(), StringComparison.Ordinal);
+        source.RemoveAt(2);
+        Assert.False(slots[0].Model.HasResultForCall("c1"));
+        Assert.DoesNotContain("updated injected result", slots[0].Model.BuildHtml(), StringComparison.Ordinal);
+        source[1] = TextMessage(ChatRole.Assistant, "another reply");
+        source[1] = TextMessage(ChatRole.Assistant, "");
+        source.Add(new() { Role = ChatRole.Tool, Contents = [new FunctionResultContent("c1", "new result")] });
+        Assert.True(slots[0].Model.HasResultForCall("c1"));
+        Assert.False(slots[2].HasDomElement);
+        source.RemoveAt(2);
+        Assert.False(slots[0].Model.HasResultForCall("c1"));
+    }
+
+    [Fact]
+    public void PlaceholderReply_ResultReplacementReclassifiesChangedCallOwnership()
+    {
+        var source = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("read_agent", "c1"),
+            TextMessage(ChatRole.Assistant, ""),
+            new() { Role = ChatRole.Tool, Contents = [new FunctionResultContent("c1", "original result")] },
+        };
+        var slots = new List<RenderSlot>();
+        using var transformer = MakeLiveTransformer(source, slots, new RecordingSink(), []);
+        source[1] = TextMessage(ChatRole.Assistant, "parent reply");
+        source[1] = TextMessage(ChatRole.Assistant, "");
+        Assert.True(slots[0].Model.HasResultForCall("c1"));
+        source[2] = new() { Role = ChatRole.Tool, Contents = [new FunctionResultContent("unmatched", "unmatched result")] };
+        Assert.False(slots[0].Model.HasResultForCall("c1"));
+        Assert.True(slots[2].HasDomElement);
+        source[2] = new() { Role = ChatRole.Tool, Contents = [new FunctionResultContent("c1", "matched again")] };
+        Assert.True(slots[0].Model.HasResultForCall("c1"));
+        Assert.False(slots[2].HasDomElement);
+        Assert.DoesNotContain("original result", slots[0].Model.BuildHtml(), StringComparison.Ordinal);
+    }
+
     [AvaloniaFact(Timeout = 15_000)]
     public Task ChatOutput_RunningContentCommandFails_RepairsOwningRunningItem()
         => this.AssertRunningDescendantRecovery(contentBinding: true);
