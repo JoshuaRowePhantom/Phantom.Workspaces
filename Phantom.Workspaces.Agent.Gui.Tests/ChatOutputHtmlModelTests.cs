@@ -1108,6 +1108,61 @@ public sealed class ChatOutputHtmlModelTests
     }
 
     [Fact]
+    public void ResultOwnership_MultipleRemovalsReclassifySurvivingResults()
+    {
+        var source = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("read_agent", "c1"),
+            TextMessage(ChatRole.Assistant, "prose"),
+            new() { Role = ChatRole.Tool, Contents = [new FunctionResultContent("c1", "first result")] },
+            ToolCallMessage("read_agent", "c2"),
+            new() { Role = ChatRole.Tool, Contents = [new FunctionResultContent("c2", "second result")] },
+        };
+        var slots = new List<RenderSlot>();
+        using var transformer = MakeLiveTransformer(source, slots, new RecordingSink(), []);
+        Assert.True(slots[2].HasDomElement);
+        Assert.False(slots[4].HasDomElement);
+        source.RemoveAt(1);
+        Assert.False(slots[1].HasDomElement);
+        Assert.False(slots[1].Model.IsInserted);
+        Assert.True(slots[0].Model.HasResultForCall("c1"));
+        source.RemoveAt(3);
+        Assert.False(slots[1].HasDomElement);
+        Assert.True(slots[0].Model.HasResultForCall("c1"));
+        Assert.False(slots[2].Model.HasResultForCall("c2"));
+        source.RemoveAt(0);
+        Assert.True(slots[0].HasDomElement);
+        Assert.True(slots[0].Model.IsInserted);
+    }
+
+    [Fact]
+    public void ResultOwnership_InsertionAndCallReplacementReclassifySurvivingResults()
+    {
+        var source = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("read_agent", "c1"),
+            new() { Role = ChatRole.Tool, Contents = [new FunctionResultContent("c1", "first result")] },
+        };
+        var slots = new List<RenderSlot>();
+        using var transformer = MakeLiveTransformer(source, slots, new RecordingSink(), []);
+        var callModel = slots[0].Model;
+        source.Insert(1, TextMessage(ChatRole.Assistant, "barrier"));
+        Assert.False(callModel.HasResultForCall("c1"));
+        Assert.True(slots[2].HasDomElement);
+        source.RemoveAt(1);
+        Assert.True(callModel.HasResultForCall("c1"));
+        Assert.False(slots[1].HasDomElement);
+        source[0] = ToolCallMessage("read_agent", "different-call");
+        Assert.False(slots[0].Model.HasResultForCall("c1"));
+        Assert.True(slots[1].HasDomElement);
+        source[0] = TextMessage(ChatRole.Assistant, "no call");
+        Assert.True(slots[1].HasDomElement);
+        source[0] = ToolCallMessage("read_agent", "c1");
+        Assert.True(slots[0].Model.HasResultForCall("c1"));
+        Assert.False(slots[1].HasDomElement);
+    }
+
+    [Fact]
     public void PlaceholderReply_ResultReplacementReclassifiesChangedCallOwnership()
     {
         var source = new ObservableCollection<AgentChatHistoryItem>

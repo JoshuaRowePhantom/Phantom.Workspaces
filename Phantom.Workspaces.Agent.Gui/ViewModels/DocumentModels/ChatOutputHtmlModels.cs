@@ -857,6 +857,10 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         Normal,
     }
 
+    private sealed record SupplementalResultPlan(
+        Dictionary<RenderSlot, Dictionary<string, FunctionResultContent>> ResultsByOwner,
+        int FirstChangedResultIndex);
+
     private readonly IChatOutputHtmlSink sink;
     private readonly Func<bool> isReasoningVisible;
     private readonly string containerPath;
@@ -978,38 +982,14 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         if (this.Categorize(oldSource) == this.Categorize(sourceItem))
         {
             var visibilityChanged = target.Model.UpdateForReplacement(sourceItem, target.HasDomElement);
-            var resultOwnershipChanged = IsToolResultOnlyItem(sourceItem) &&
-                (!HaveSameToolComposition(oldSource, sourceItem) ||
-                 oldSource.AssistantRunId != sourceItem.AssistantRunId);
-            if (visibilityChanged || resultOwnershipChanged)
+            var toolCompositionChanged = !HaveSameToolComposition(oldSource, sourceItem);
+            var resultRunChanged = IsToolResultOnlyItem(sourceItem) &&
+                oldSource.AssistantRunId != sourceItem.AssistantRunId;
+            if (visibilityChanged || toolCompositionChanged || resultRunChanged)
             {
                 var replacementIndex = this.Target.IndexOf(target);
-                var previous = this.FindPreviousDomSlot(replacementIndex);
-                var rebuildStart = previous is null ? replacementIndex : this.Target.IndexOf(previous);
-                if (previous?.Group is { } previousGroup)
-                {
-                    // Transparent result/placeholder slots can lie between group members.
-                    rebuildStart = this.Target.IndexOf(this.Target.First(slot => ReferenceEquals(slot.Group, previousGroup)));
-                }
-                this.RebuildFrom(rebuildStart);
+                this.RebuildFrom(this.GetRebuildStart(replacementIndex));
                 return;
-            }
-
-            if (!HaveSameToolComposition(oldSource, sourceItem))
-            {
-                this.RemoveCallIdsFromIndex(target);
-                this.AddCallIdsToIndex(sourceItem, target);
-
-                // If this slot is a member of a message-level tool group and its tool-call
-                // composition may have changed (added/removed/renamed calls), refresh the outer
-                // group's summary so the `tools (…)` label and call-count badge stay accurate
-                // (issue #1123). The member is already rendered in "grouped-member" flat mode
-                // (flag set at join time), so the member's own DOM re-render above never emits
-                // a nested content-level wrapper.
-                if (target.Group is { } enclosingGroup)
-                {
-                    enclosingGroup.RefreshSummary();
-                }
             }
 
             // A result-only message whose results are injected has no DOM element; keep the matched
@@ -1029,13 +1009,19 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
             return;
         }
 
-        // Structural category changed (e.g. tool-call ↔ text): rebuild locally as removal + insert.
+        // Structural category changes can alter ownership of later results and tool groups.
         var index = this.Target.IndexOf(target);
         this.RebuildForReplace(index, target, sourceItem);
     }
 
     protected override void OnInsert(int index, RenderSlot slot)
     {
+        if (index < this.Target.Count - 1)
+        {
+            this.RebuildFrom(this.GetRebuildStart(index));
+            return;
+        }
+
         if (this.isRunActive?.Invoke(slot.Model.Source.AssistantRunId) != true)
         {
             this.AddCallIdsToIndex(slot.Model.Source, slot);
@@ -1050,23 +1036,38 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
     {
         this.RemoveCallIdsFromIndex(slot);
 
-        if (!slot.HasDomElement)
+        if (slot.HasDomElement)
         {
-            if (IsToolResultOnlyItem(slot.Model.Source))
+            if (slot.Group is { } group)
             {
-                this.ReconcileSupplementalResults();
+                this.RebuildGroupAfterRemoval(group, slot);
             }
-            return;
+            else
+            {
+                this.sink.RemoveContent(slot.Model.ElementId);
+            }
         }
 
-        if (slot.Group is { } group)
+        var plan = this.PlanSupplementalResults();
+        var previous = this.FindPreviousDomSlot(index);
+        var next = this.FindNextDomSlot(index - 1);
+        var joinsCallSegments = slot.HasDomElement && !IsRunToolCallItem(slot.Model.Source) &&
+            previous is not null && next is not null &&
+            IsRunToolCallItem(previous.Model.Source) && IsRunToolCallItem(next.Model.Source) &&
+            previous.Model.Source.AssistantRunId == next.Model.Source.AssistantRunId;
+        if (joinsCallSegments)
         {
-            this.RebuildGroupAfterRemoval(group, slot);
-            this.ReconcileRoleHeaders();
+            this.RebuildFrom(this.GetRebuildStart(index), plan);
             return;
         }
 
-        this.sink.RemoveContent(slot.Model.ElementId);
+        if (plan.FirstChangedResultIndex < this.Target.Count)
+        {
+            this.RebuildFrom(this.GetRebuildStart(plan.FirstChangedResultIndex), plan);
+            return;
+        }
+
+        this.ApplySupplementalResults(plan);
         this.ReconcileRoleHeaders();
     }
 
@@ -1077,8 +1078,19 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         this.RebuildFrom(0);
     }
 
-    private void RebuildFrom(int start)
+    private void RebuildFrom(int start, SupplementalResultPlan? plan = null)
     {
+        plan ??= this.PlanSupplementalResults();
+        if (plan.FirstChangedResultIndex < start)
+        {
+            start = this.GetRebuildStart(plan.FirstChangedResultIndex);
+        }
+
+        if (start < this.Target.Count && this.Target[start].Group is { } containingGroup)
+        {
+            start = this.Target.IndexOf(this.Target.First(slot => ReferenceEquals(slot.Group, containingGroup)));
+        }
+
         var removedTopLevelIds = new HashSet<string>(StringComparer.Ordinal);
         for (var index = start; index < this.Target.Count; index++)
         {
@@ -1106,7 +1118,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
             existing.Model.SetIsInsideMessageLevelToolGroup(false, emit: false);
         }
 
-        this.ReconcileSupplementalResults();
+        this.ApplySupplementalResults(plan);
         for (var index = start; index < this.Target.Count; index++)
         {
             if (this.isRunActive?.Invoke(this.Target[index].Model.Source.AssistantRunId) != true)
@@ -1119,13 +1131,27 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         this.ReconcileRoleHeaders();
     }
 
-    private void ReconcileSupplementalResults()
+    private int GetRebuildStart(int index)
     {
-        // Reclassify result ownership in encounter order without relying on the DOM flags
-        // cleared by a rebuild. A standalone result itself blocks later cross-message pairing.
+        var previous = this.FindPreviousDomSlot(index);
+        if (previous is null)
+        {
+            return index;
+        }
+
+        return previous.Group is { } group
+            ? this.Target.IndexOf(this.Target.First(slot => ReferenceEquals(slot.Group, group)))
+            : this.Target.IndexOf(previous);
+    }
+
+    private SupplementalResultPlan PlanSupplementalResults()
+    {
+        // Plan ownership before changing bindings or DOM flags. Any result whose owner changes
+        // must join the structural rebuild; a standalone result blocks later pairing.
         var calls = new Dictionary<string, (RenderSlot Slot, int Index)>(StringComparer.Ordinal);
         var resultsByOwner = new Dictionary<RenderSlot, Dictionary<string, FunctionResultContent>>();
         var lastVisibleBoundary = -1;
+        var firstChangedResultIndex = this.Target.Count;
         for (var index = 0; index < this.Target.Count; index++)
         {
             var slot = this.Target[index];
@@ -1160,6 +1186,10 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
                 }
                 if (matches.Count > 0)
                 {
+                    if (slot.HasDomElement)
+                    {
+                        firstChangedResultIndex = Math.Min(firstChangedResultIndex, index);
+                    }
                     foreach (var (owner, result) in matches)
                     {
                         if (!resultsByOwner.TryGetValue(owner, out var results))
@@ -1171,6 +1201,11 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
                     }
                     continue;
                 }
+
+                if (!slot.HasDomElement && !slot.Model.ProducesNoVisibleContent)
+                {
+                    firstChangedResultIndex = Math.Min(firstChangedResultIndex, index);
+                }
             }
 
             if (!slot.Model.ProducesNoVisibleContent && !IsRunToolCallItem(source))
@@ -1179,9 +1214,14 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
             }
         }
 
+        return new SupplementalResultPlan(resultsByOwner, firstChangedResultIndex);
+    }
+
+    private void ApplySupplementalResults(SupplementalResultPlan plan)
+    {
         foreach (var slot in this.Target)
         {
-            resultsByOwner.TryGetValue(slot, out var results);
+            plan.ResultsByOwner.TryGetValue(slot, out var results);
             if (slot.Model.ReconcileSupplementalResults(results) && slot.Model.IsInserted)
             {
                 slot.Group?.RefreshSummary();
@@ -1230,31 +1270,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         if (first < 0) return;
         this.suppressedRunIds.RemoveWhere(id => this.isRunActive?.Invoke(id) != true);
 
-        var removed = new HashSet<string>(StringComparer.Ordinal);
-        for (var i = first; i < this.Target.Count; i++)
-        {
-            var slot = this.Target[i];
-            if (slot.HasDomElement && removed.Add(slot.Group?.GroupId ?? slot.Model.ElementId))
-            {
-                this.sink.RemoveContent(slot.Group?.GroupId ?? slot.Model.ElementId);
-            }
-            this.RemoveCallIdsFromIndex(slot);
-            slot.Group = null;
-            slot.IsTopLevelFirstGroupMember = false;
-            slot.HasDomElement = true;
-            slot.Model.IsInserted = false;
-            slot.Model.SetIsInsideMessageLevelToolGroup(false, emit: false);
-        }
-        for (var index = first; index < this.Target.Count; index++)
-        {
-            var slot = this.Target[index];
-            if (this.isRunActive?.Invoke(slot.Model.Source.AssistantRunId) != true)
-            {
-                this.AddCallIdsToIndex(slot.Model.Source, slot);
-            }
-            this.ClassifyAndInsert(index, slot);
-        }
-        this.ReconcileRoleHeaders();
+        this.RebuildFrom(first);
     }
 
     /// <summary>
@@ -1453,12 +1469,10 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
             this.sink,
             this.toolFactory,
             this.statusSink,
-            this.resolveSubAgentId));
+            this.resolveSubAgentId)) { HasDomElement = false };
         this.Target[index] = fresh;
 
-        this.AddCallIdsToIndex(newItem, fresh);
-        this.ClassifyAndInsert(index, fresh);
-        this.ReconcileRoleHeaders();
+        this.RebuildFrom(this.GetRebuildStart(index));
     }
 
     /// <summary>
@@ -1503,38 +1517,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
             }
         }
 
-        var removedTopLevelIds = new HashSet<string>(StringComparer.Ordinal);
-        for (var i = repairStart; i < this.Target.Count; i++)
-        {
-            var slot = this.Target[i];
-            if (!slot.HasDomElement)
-            {
-                continue;
-            }
-
-            var topLevelId = slot.Group?.GroupId ?? slot.Model.ElementId;
-            if (removedTopLevelIds.Add(topLevelId))
-            {
-                this.sink.RemoveContent(topLevelId);
-            }
-        }
-
-        for (var i = repairStart; i < this.Target.Count; i++)
-        {
-            var slot = this.Target[i];
-            slot.Group = null;
-            slot.IsTopLevelFirstGroupMember = false;
-            slot.HasDomElement = false;
-            slot.Model.IsInserted = false;
-            slot.Model.SetIsInsideMessageLevelToolGroup(false, emit: false);
-        }
-
-        for (var i = repairStart; i < this.Target.Count; i++)
-        {
-            this.ClassifyAndInsert(i, this.Target[i]);
-        }
-
-        this.ReconcileRoleHeaders();
+        this.RebuildFrom(repairStart);
         return true;
     }
 
