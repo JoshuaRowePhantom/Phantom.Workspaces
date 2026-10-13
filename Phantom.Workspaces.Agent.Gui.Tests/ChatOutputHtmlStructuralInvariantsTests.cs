@@ -74,12 +74,22 @@ public sealed class ChatOutputHtmlStructuralInvariantsTests
         Assert.True(ids.IndexOf(runId + "-msg-1") < ids.IndexOf(runId + "-group-2"));
         Assert.Equal(ids.Count, ids.Distinct().Count());
         Assert.Contains(sink.Operations, operation => operation.Content.Contains("result", StringComparison.Ordinal));
+        Assert.Null(root.FindById(ChatOutputHtmlRenderer.ContentId(runId + "-msg-0", 0) + "-result"));
+        Assert.Null(root.FindById(ChatOutputHtmlRenderer.ContentId(runId + "-msg-2", 0) + "-result"));
+        Assert.NotNull(root.FindById(ChatOutputHtmlRenderer.ContentId(runId + "-msg-3", 0)));
+        Assert.NotNull(root.FindById(ChatOutputHtmlRenderer.ContentId(runId + "-msg-4", 0)));
+        Assert.True(ids.IndexOf(runId + "-msg-1") < ids.IndexOf(runId + "-msg-3"));
+        Assert.True(ids.IndexOf(runId + "-msg-3") < ids.IndexOf(runId + "-msg-4"));
         sink.Operations.Clear();
         item.Items[1] = TextMessage(ChatRole.Assistant, " ") with { AssistantRunId = item.AssistantRunId };
         ReplayOperations(root, sink);
         Assert.Null(root.FindById(runId + "-msg-1"));
         Assert.Null(root.FindById(runId + "-group-2"));
         Assert.NotNull(root.FindById(ChatOutputHtmlRenderer.ContentId(runId + "-msg-2", 0)));
+        Assert.NotNull(root.FindById(ChatOutputHtmlRenderer.ContentId(runId + "-msg-0", 0) + "-result"));
+        Assert.NotNull(root.FindById(ChatOutputHtmlRenderer.ContentId(runId + "-msg-2", 0) + "-result"));
+        Assert.Null(root.FindById(runId + "-msg-3"));
+        Assert.Null(root.FindById(runId + "-msg-4"));
     }
 
     [AvaloniaFact(Timeout = 15_000)]

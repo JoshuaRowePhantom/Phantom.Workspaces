@@ -287,10 +287,31 @@ internal sealed class ChatMessageHtmlModel
             return;
         }
 
+        if (this.supplementalResults?.TryGetValue(result.CallId, out var previous) == true &&
+            ReferenceEquals(previous, result))
+        {
+            return;
+        }
+
         this.supplementalResults ??= new Dictionary<string, FunctionResultContent>(StringComparer.Ordinal);
         this.supplementalResults[result.CallId] = result;
 
         this.Render(emit: this.IsInserted);
+    }
+
+    internal bool ReconcileSupplementalResults(Dictionary<string, FunctionResultContent>? results)
+    {
+        if ((this.supplementalResults?.Count ?? 0) == (results?.Count ?? 0) &&
+            (results is null || results.All(result =>
+                this.supplementalResults?.TryGetValue(result.Key, out var previous) == true &&
+                ReferenceEquals(previous, result.Value))))
+        {
+            return false;
+        }
+
+        this.supplementalResults = results;
+        this.Render(emit: this.IsInserted);
+        return true;
     }
 
     /// <summary>Builds the full message element for initial insertion from the current bindings.</summary>
@@ -956,7 +977,11 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
 
         if (this.Categorize(oldSource) == this.Categorize(sourceItem))
         {
-            if (target.Model.UpdateForReplacement(sourceItem, target.HasDomElement))
+            var visibilityChanged = target.Model.UpdateForReplacement(sourceItem, target.HasDomElement);
+            var resultOwnershipChanged = IsToolResultOnlyItem(sourceItem) &&
+                (!HaveSameToolComposition(oldSource, sourceItem) ||
+                 oldSource.AssistantRunId != sourceItem.AssistantRunId);
+            if (visibilityChanged || resultOwnershipChanged)
             {
                 var replacementIndex = this.Target.IndexOf(target);
                 var previous = this.FindPreviousDomSlot(replacementIndex);
@@ -1027,6 +1052,10 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
 
         if (!slot.HasDomElement)
         {
+            if (IsToolResultOnlyItem(slot.Model.Source))
+            {
+                this.ReconcileSupplementalResults();
+            }
             return;
         }
 
@@ -1077,6 +1106,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
             existing.Model.SetIsInsideMessageLevelToolGroup(false, emit: false);
         }
 
+        this.ReconcileSupplementalResults();
         for (var index = start; index < this.Target.Count; index++)
         {
             if (this.isRunActive?.Invoke(this.Target[index].Model.Source.AssistantRunId) != true)
@@ -1087,6 +1117,76 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         }
 
         this.ReconcileRoleHeaders();
+    }
+
+    private void ReconcileSupplementalResults()
+    {
+        // Reclassify result ownership in encounter order without relying on the DOM flags
+        // cleared by a rebuild. A standalone result itself blocks later cross-message pairing.
+        var calls = new Dictionary<string, (RenderSlot Slot, int Index)>(StringComparer.Ordinal);
+        var resultsByOwner = new Dictionary<RenderSlot, Dictionary<string, FunctionResultContent>>();
+        var lastVisibleBoundary = -1;
+        for (var index = 0; index < this.Target.Count; index++)
+        {
+            var slot = this.Target[index];
+            var source = slot.Model.Source;
+            if (this.isRunActive?.Invoke(source.AssistantRunId) == true)
+            {
+                continue;
+            }
+
+            foreach (var call in source.Contents.OfType<FunctionCallContent>())
+            {
+                if (call.CallId is { } callId)
+                {
+                    calls[callId] = (slot, index);
+                }
+            }
+
+            if (IsToolResultOnlyItem(source))
+            {
+                var matches = new List<(RenderSlot Owner, FunctionResultContent Result)>();
+                foreach (var result in source.Contents.Cast<FunctionResultContent>())
+                {
+                    if (result.CallId is null || !calls.TryGetValue(result.CallId, out var call) ||
+                        call.Index >= index || lastVisibleBoundary > call.Index ||
+                        source.AssistantRunId is not null && call.Slot.Model.Source.AssistantRunId is not null &&
+                        source.AssistantRunId != call.Slot.Model.Source.AssistantRunId)
+                    {
+                        matches.Clear();
+                        break;
+                    }
+                    matches.Add((call.Slot, result));
+                }
+                if (matches.Count > 0)
+                {
+                    foreach (var (owner, result) in matches)
+                    {
+                        if (!resultsByOwner.TryGetValue(owner, out var results))
+                        {
+                            results = new Dictionary<string, FunctionResultContent>(StringComparer.Ordinal);
+                            resultsByOwner.Add(owner, results);
+                        }
+                        results[result.CallId!] = result;
+                    }
+                    continue;
+                }
+            }
+
+            if (!slot.Model.ProducesNoVisibleContent && !IsRunToolCallItem(source))
+            {
+                lastVisibleBoundary = index;
+            }
+        }
+
+        foreach (var slot in this.Target)
+        {
+            resultsByOwner.TryGetValue(slot, out var results);
+            if (slot.Model.ReconcileSupplementalResults(results) && slot.Model.IsInserted)
+            {
+                slot.Group?.RefreshSummary();
+            }
+        }
     }
 
     protected override void ResetTarget()
