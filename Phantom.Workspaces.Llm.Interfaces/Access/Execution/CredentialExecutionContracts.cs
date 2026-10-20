@@ -60,6 +60,8 @@ internal sealed record CredentialExecutionReady<TResult> : CredentialExecutionOu
 }
 internal sealed record CredentialExecutionInteractionRequired<TResult> : CredentialExecutionOutcome<TResult>
     where TResult : IAccessResult;
+internal sealed record CredentialExecutionRenewalRequired<TResult> : CredentialExecutionOutcome<TResult>
+    where TResult : IAccessResult;
 internal sealed record CredentialExecutionMissing<TResult> : CredentialExecutionOutcome<TResult>
     where TResult : IAccessResult;
 internal sealed record CredentialExecutionDenied<TResult> : CredentialExecutionOutcome<TResult>

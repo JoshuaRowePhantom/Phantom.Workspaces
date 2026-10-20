@@ -64,6 +64,8 @@ public sealed class SensitiveValueLease : IAsyncDisposable
     private readonly TaskCompletionSource disposal = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int disposed;
 
+    internal CredentialAccountIdentifier? AccountIdentifier => this.binding.Request.Credential.AccountIdentifier;
+
     public SensitiveValueLease(
         ReadOnlyMemory<char> material,
         CredentialLeaseBinding binding,

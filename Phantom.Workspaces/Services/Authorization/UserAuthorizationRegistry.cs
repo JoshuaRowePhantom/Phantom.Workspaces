@@ -52,8 +52,10 @@ public sealed class UserAuthorizationRegistry : IUserAuthorizationRegistry
 
             if (!snapshot.CanAct)
             {
+                File.AppendAllText(@"C:\dev\Phantom.Workspaces-Skills\test-debug.log", $"DEBUG ActAsync: CanAct check failed. snapshot.CanAct={snapshot.CanAct}, State={snapshot.State}, Revision={snapshot.Revision}{Environment.NewLine}");
                 throw new UserAuthorizationActionRejectedException(UserAuthorizationActionRejection.Inert);
             }
+
 
             var memory = action is ApplyUserAuthorizationAction apply ? apply.Memory : snapshot.SelectedMemory;
             var source = action is ApplyUserAuthorizationAction selection ? selection.Source : snapshot.SelectedSource;
@@ -169,6 +171,7 @@ public sealed class UserAuthorizationRegistry : IUserAuthorizationRegistry
                 SourceOptions = Array.AsReadOnly(sources.ToArray()),
                 PrimaryAction = selected.Usability == CredentialSourceUsability.Usable
                     ? UserAuthorizationPrimaryActionKind.Allow : UserAuthorizationPrimaryActionKind.Perform,
+                CanAct = row.Snapshot.CanAct,
             };
             row.Snapshot = updated;
         }
@@ -195,14 +198,16 @@ public sealed class UserAuthorizationRegistry : IUserAuthorizationRegistry
                 row.Snapshot.Revision != expectedRevision ||
                 row.Snapshot.State is UserAuthorizationState.Completed or UserAuthorizationState.Denied or UserAuthorizationState.Cancelled)
             {
+                File.AppendAllText(@"C:\dev\Phantom.Workspaces-Skills\test-debug.log", $"DEBUG Complete: Rejected. disposed={this.disposed}, hasRow={this.rows.TryGetValue(identifier, out _)}, expectedRevision={expectedRevision}{Environment.NewLine}");
                 return false;
             }
 
+            var newCanAct = state is UserAuthorizationState.Failed or UserAuthorizationState.RenewalNeeded;
             updated = row.Snapshot with
             {
                 Revision = expectedRevision + 1,
                 State = state,
-                CanAct = state is UserAuthorizationState.Failed or UserAuthorizationState.RenewalNeeded,
+                CanAct = newCanAct,
                 PrimaryAction = state switch
                 {
                     UserAuthorizationState.Failed => UserAuthorizationPrimaryActionKind.Retry,
@@ -212,6 +217,7 @@ public sealed class UserAuthorizationRegistry : IUserAuthorizationRegistry
                 SafeStatus = Status(state),
             };
             row.Snapshot = updated;
+            File.AppendAllText(@"C:\dev\Phantom.Workspaces-Skills\test-debug.log", $"DEBUG Complete: Success. State={state}, CanAct={newCanAct}, newRevision={expectedRevision + 1}{Environment.NewLine}");
             if (state != UserAuthorizationState.RenewalNeeded)
             {
                 row.Completion.TrySetResult(Completion(updated));

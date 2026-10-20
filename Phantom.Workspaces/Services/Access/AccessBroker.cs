@@ -269,7 +269,6 @@ internal sealed class AccessBroker : IAccessBroker
                     await unpublished.Result.DisposeAsync().ConfigureAwait(false);
                 }
 
-                cancellation.Token.ThrowIfCancellationRequested();
                 var state = outcome switch
                 {
                     AccessSucceeded<TResult> => UserAuthorizationState.Completed,
@@ -278,6 +277,7 @@ internal sealed class AccessBroker : IAccessBroker
                     _ => UserAuthorizationState.Failed,
                 };
                 var accepted = this.registry.Complete(identifier, revision, state);
+
                 if (accepted && renewalSources is not null)
                 {
                     var snapshot = this.registry.GetSnapshot().SingleOrDefault(snapshot => snapshot.Identifier == identifier);
@@ -287,12 +287,19 @@ internal sealed class AccessBroker : IAccessBroker
                     }
                 }
 
-                if (!accepted || !completion.TrySetResult(outcome))
+                var awaitingRenewal = outcome is AccessReacquisitionRequired<TResult> { AwaitExplicitRenewal: true };
+                File.AppendAllText(@"C:\dev\Phantom.Workspaces-Skills\test-debug.log", $"DEBUG Broker: accepted={accepted}, awaitingRenewal={awaitingRenewal}, state={state}{Environment.NewLine}");
+                if (!accepted || (!awaitingRenewal && !completion.TrySetResult(outcome)))
                 {
+                    File.AppendAllText(@"C:\dev\Phantom.Workspaces-Skills\test-debug.log", $"DEBUG Broker: Entering if block. TrySetResult may have failed.{Environment.NewLine}");
                     if (outcome is AccessSucceeded<TResult> succeeded)
                     {
                         await succeeded.Result.DisposeAsync().ConfigureAwait(false);
                     }
+                }
+                else
+                {
+                    File.AppendAllText(@"C:\dev\Phantom.Workspaces-Skills\test-debug.log", $"DEBUG Broker: Not entering if block. Result should be set.{Environment.NewLine}");
                 }
 
                 if (state is UserAuthorizationState.Completed or UserAuthorizationState.Denied)
@@ -304,7 +311,7 @@ internal sealed class AccessBroker : IAccessBroker
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {
             var snapshot = this.registry.GetSnapshot().SingleOrDefault(snapshot => snapshot.Identifier == identifier);
-            if (snapshot is not null)
+            if (snapshot is not null && snapshot.State is not (UserAuthorizationState.Completed or UserAuthorizationState.Denied or UserAuthorizationState.Cancelled or UserAuthorizationState.RenewalNeeded))
             {
                 this.registry.Complete(identifier, snapshot.Revision, UserAuthorizationState.Cancelled);
             }
@@ -720,6 +727,8 @@ internal sealed class AccessBroker : IAccessBroker
             CredentialExecutionDenied<TResult> => new AccessDenied<TResult> { Reason = AccessDenialReason.PolicyDenied },
             CredentialExecutionMissing<TResult> or CredentialExecutionInteractionRequired<TResult> =>
                 new AccessReacquisitionRequired<TResult> { RequestIdentifier = identifier },
+            CredentialExecutionRenewalRequired<TResult> =>
+                new AccessReacquisitionRequired<TResult> { RequestIdentifier = identifier, AwaitExplicitRenewal = true },
             CredentialExecutionFailed<TResult> failed => Failure<TResult>(failed.ErrorCode, failed.CanRetry),
             _ => throw new InvalidOperationException("Unsupported executor outcome."),
         };

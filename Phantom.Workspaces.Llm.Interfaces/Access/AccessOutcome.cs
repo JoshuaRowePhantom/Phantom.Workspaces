@@ -58,6 +58,7 @@ public sealed record AccessReacquisitionRequired<TResult> : AccessOutcome<TResul
     where TResult : IAccessResult
 {
     public required UserAuthorizationRequestIdentifier RequestIdentifier { get; init; }
+    internal bool AwaitExplicitRenewal { get; init; }
 }
 
 public sealed record AccessFailed<TResult> : AccessOutcome<TResult>

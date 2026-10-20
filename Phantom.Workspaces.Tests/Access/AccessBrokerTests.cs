@@ -23,6 +23,93 @@ public sealed class AccessBrokerTests : IDisposable
     }
 
     [Fact]
+    public async Task AccessBroker_ExplicitRenewal_KeepsCallerPendingUntilNewApprovedGeneration()
+    {
+        var generations = new List<Guid>();
+        var executor = new Executor
+        {
+            Execute = (_, _, _, permit, context, _) =>
+            {
+                Assert.NotNull(permit);
+                generations.Add(context.AcquisitionGeneration);
+                return ValueTask.FromResult<CredentialExecutionOutcome<Result>>(generations.Count == 1
+                    ? new CredentialExecutionRenewalRequired<Result>()
+                    : new CredentialExecutionReady<Result> { Materializer = new Materializer(() => new Result()) });
+            },
+        };
+        var (broker, registry) = this.Create(executor);
+        await using var owned = broker;
+        var task = broker.AcquireAsync(Request(), TestContext.Current.CancellationToken);
+        var initial = Assert.Single(registry.GetSnapshot());
+        var renewed = new TaskCompletionSource<UserAuthorizationSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Changed(object? sender, UserAuthorizationChangedEventArgs arguments)
+        {
+            var snapshot = registry.GetSnapshot().Single();
+            if (snapshot.State == UserAuthorizationState.RenewalNeeded)
+            {
+                renewed.TrySetResult(snapshot);
+            }
+        }
+        registry.Changed += Changed;
+        UserAuthorizationSnapshot renewal;
+        try
+        {
+            await ApplyAsync(registry, initial);
+            renewal = await renewed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            registry.Changed -= Changed;
+        }
+
+        Assert.False(task.IsCompleted);
+        Assert.Single(generations);
+        Assert.Equal(initial.Identifier, renewal.Identifier);
+        Assert.Equal(UserAuthorizationPrimaryActionKind.Perform, renewal.PrimaryAction);
+        
+        var renewalSnapshot = Assert.Single(registry.GetSnapshot());
+        Assert.True(renewalSnapshot.CanAct);
+        Assert.Equal(UserAuthorizationState.RenewalNeeded, renewalSnapshot.State);
+        await ApplyAsync(registry, renewalSnapshot);
+        
+        // Wait for the broker to process the 2nd decision and complete the task
+        await using var result = Assert.IsType<AccessSucceeded<Result>>(
+            await task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).Result;
+
+        Assert.Equal(2, generations.Count);
+        Assert.NotEqual(generations[0], generations[1]);
+        Assert.Equal(UserAuthorizationState.Completed, Assert.Single(registry.GetSnapshot()).State);
+    }
+
+    [Fact]
+    public async Task AccessBroker_ExplicitRenewal_CancellationDoesNotStartAnotherProviderGeneration()
+    {
+        var executions = 0;
+        var attempted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var executor = new Executor
+        {
+            Execute = (_, _, _, _, _, _) =>
+            {
+                executions++;
+                attempted.TrySetResult();
+                return ValueTask.FromResult<CredentialExecutionOutcome<Result>>(new CredentialExecutionRenewalRequired<Result>());
+            },
+        };
+        var (broker, registry) = this.Create(executor);
+        await using var owned = broker;
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var task = broker.AcquireAsync(Request(), cancellation.Token);
+        await ApplyAsync(registry, Assert.Single(registry.GetSnapshot()));
+        await attempted.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        await cancellation.CancelAsync();
+
+        Assert.IsType<AccessCancelled<Result>>(
+            await task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+        Assert.Equal(1, executions);
+    }
+
+    [Fact]
     public async Task AccessBroker_AcquireAsync_ReleaseCommitPrecedesProviderExecution()
     {
         var events = new List<string>();
@@ -620,13 +707,17 @@ public sealed class AccessBrokerTests : IDisposable
 
     private static Task ApplyAsync(
         UserAuthorizationRegistry registry,
-        UserAuthorizationSnapshot row) => registry.ActAsync(new ApplyUserAuthorizationAction
+        UserAuthorizationSnapshot row) 
+    {
+        File.AppendAllText(@"C:\dev\Phantom.Workspaces-Skills\test-debug.log", $"DEBUG ApplyAsync called: Revision={row.Revision}, State={row.State}, CanAct={row.CanAct}{Environment.NewLine}");
+        return registry.ActAsync(new ApplyUserAuthorizationAction
         {
             RequestIdentifier = row.Identifier,
             ExpectedRevision = row.Revision,
             Memory = row.SelectedMemory,
             Source = row.SelectedSource,
         }, TestContext.Current.CancellationToken);
+    }
 
     private static RequestRecord Request(string purpose = "first-use")
     {
