@@ -101,26 +101,35 @@ internal sealed class EntraCredentialSession : IEntraCredentialSession
 
     internal static IEntraCredentialSession Create(EntraCredentialAccessRequest configuration)
     {
+        var credential = new InteractiveBrowserCredential(CreateBrowserOptions(configuration));
+        return new EntraCredentialSession(
+            configuration,
+            credential,
+            new BrowserTokenAcquirer(credential, configuration));
+    }
+
+    private static InteractiveBrowserCredentialOptions CreateBrowserOptions(
+        EntraCredentialAccessRequest configuration,
+        AuthenticationRecord? authenticationRecord = null)
+    {
         if (!EntraInteractiveCredentialFactory.TryParseAuthority(
             configuration.Authority.Value.AbsoluteUri, out var authorityHost, out var tenantIdentifier))
         {
             throw new ArgumentException("An absolute Entra authority is required.");
         }
 
-        var credential = new InteractiveBrowserCredential(new InteractiveBrowserCredentialOptions
+        return new InteractiveBrowserCredentialOptions
         {
             AuthorityHost = authorityHost,
             TenantId = tenantIdentifier,
             ClientId = configuration.Client.Value,
+            AuthenticationRecord = authenticationRecord,
+            DisableAutomaticAuthentication = authenticationRecord is not null,
             TokenCachePersistenceOptions = new TokenCachePersistenceOptions
             {
                 Name = "phantom-access-entra:" + configuration.CreateLogicalIdentifier().Digest,
             },
-        });
-        return new EntraCredentialSession(
-            configuration,
-            credential,
-            new BrowserTokenAcquirer(credential, configuration.Scopes.Select(scope => scope.Value).ToArray()));
+        };
     }
 
     public ValueTask<EntraCacheInspection> InspectCacheAsync(
@@ -309,22 +318,52 @@ internal sealed class EntraCredentialSession : IEntraCredentialSession
         }
     }
 
-    private sealed class BrowserTokenAcquirer(
-        InteractiveBrowserCredential credential,
-        string[] scopes) : IEntraTokenAcquirer
+    internal sealed class BrowserTokenAcquirer : IEntraTokenAcquirer
     {
+        private readonly InteractiveBrowserCredential selectionCredential;
+        private readonly EntraCredentialAccessRequest configuration;
+        private readonly Func<InteractiveBrowserCredentialOptions, InteractiveBrowserCredential> credentialFactory;
+        private readonly SemaphoreSlim selectionGate = new(1, 1);
+
+        internal BrowserTokenAcquirer(
+            InteractiveBrowserCredential selectionCredential,
+            EntraCredentialAccessRequest configuration,
+            Func<InteractiveBrowserCredentialOptions, InteractiveBrowserCredential>? credentialFactory = null)
+        {
+            this.selectionCredential = selectionCredential;
+            this.configuration = configuration;
+            this.credentialFactory = credentialFactory ?? (options => new InteractiveBrowserCredential(options));
+        }
+
         public async ValueTask<EntraAcquiredToken> AcquireAsync(CancellationToken cancellationToken)
         {
-            var context = new TokenRequestContext(scopes);
-            var account = await credential.AuthenticateAsync(context, cancellationToken).ConfigureAwait(false);
-            var token = await credential.GetTokenAsync(context, cancellationToken).ConfigureAwait(false);
-            return new EntraAcquiredToken
+            await this.selectionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
             {
-                Token = token,
-                AccountIdentifier = CredentialIdentityFactory.CreateAccountIdentifier(
-                    CredentialProviderKind.Entra,
-                    account.HomeAccountId),
-            };
+                var context = new TokenRequestContext(this.configuration.Scopes.Select(scope => scope.Value).ToArray());
+                var account = await this.selectionCredential.AuthenticateAsync(context, cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (string.IsNullOrWhiteSpace(account.HomeAccountId))
+                {
+                    throw new AuthenticationFailedException("The provider did not identify a stable account.");
+                }
+
+                // Selection credentials are mutable. Only a separate, pinned, noninteractive
+                // credential may obtain the token whose identity is finalized from this record.
+                var credential = this.credentialFactory(CreateBrowserOptions(this.configuration, account));
+                var token = await credential.GetTokenAsync(context, cancellationToken).ConfigureAwait(false);
+                return new EntraAcquiredToken
+                {
+                    Token = token,
+                    AccountIdentifier = CredentialIdentityFactory.CreateAccountIdentifier(
+                        CredentialProviderKind.Entra,
+                        account.HomeAccountId),
+                };
+            }
+            finally
+            {
+                this.selectionGate.Release();
+            }
         }
     }
 }
