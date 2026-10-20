@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Runtime.Versioning;
+using System.Runtime.InteropServices;
 using System.Security;
 using Meziantou.Framework.Win32;
 
@@ -21,6 +22,7 @@ public sealed class WindowsCredentialManagerSecretStore : IPlatformSecretStore
     private const int ErrorNotFound = 1168;
 
     private readonly string targetPrefix;
+    private readonly IWindowsCredentialNameNativeApi nativeNames;
 
     /// <summary>
     /// Creates a store that reads and writes credentials under <paramref name="targetPrefix"/>.
@@ -28,8 +30,16 @@ public sealed class WindowsCredentialManagerSecretStore : IPlatformSecretStore
     /// touch a user's real credentials.
     /// </summary>
     public WindowsCredentialManagerSecretStore(string? targetPrefix = null)
+        : this(targetPrefix ?? DefaultTargetPrefix, new WindowsCredentialNameNativeApi())
     {
-        this.targetPrefix = targetPrefix ?? DefaultTargetPrefix;
+    }
+
+    internal WindowsCredentialManagerSecretStore(
+        string targetPrefix,
+        IWindowsCredentialNameNativeApi nativeNames)
+    {
+        this.targetPrefix = targetPrefix;
+        this.nativeNames = nativeNames;
     }
 
     /// <inheritdoc />
@@ -98,23 +108,75 @@ public sealed class WindowsCredentialManagerSecretStore : IPlatformSecretStore
         ArgumentNullException.ThrowIfNull(prefix);
         ct.ThrowIfCancellationRequested();
 
-        var filter = this.targetPrefix + prefix + "*";
-#pragma warning disable CA1416
+        var targetNamePrefix = this.targetPrefix + prefix;
+        var credentials = this.nativeNames.Enumerate(targetNamePrefix + "*", out var count);
+        if (credentials == IntPtr.Zero)
+        {
+            return Task.FromResult<IReadOnlyList<string>>([]);
+        }
         try
         {
-            var names = CredentialManager.EnumerateCredentials(filter)
-                .Select(credential => credential.ApplicationName)
-                .Where(applicationName => applicationName.StartsWith(this.targetPrefix, StringComparison.Ordinal))
-                .Select(applicationName => applicationName[this.targetPrefix.Length..])
-                .ToArray();
-
+            var names = new List<string>();
+            for (var index = 0; index < count; index++)
+            {
+                ct.ThrowIfCancellationRequested();
+                var credential = Marshal.ReadIntPtr(credentials, checked(index * IntPtr.Size));
+                // CREDENTIALW begins with two DWORDs followed by TargetName on both Windows architectures.
+                // Do not marshal the structure: its other pointers include CredentialBlob and user identity.
+                var targetName = Marshal.PtrToStringUni(Marshal.ReadIntPtr(credential, 8));
+                if (targetName?.StartsWith(targetNamePrefix, StringComparison.Ordinal) == true)
+                {
+                    names.Add(targetName[this.targetPrefix.Length..]);
+                }
+            }
             return Task.FromResult<IReadOnlyList<string>>(names);
         }
-        catch (Win32Exception ex) when (ex.NativeErrorCode == ErrorNotFound)
+        finally
         {
-            return Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+            this.nativeNames.Free(credentials);
         }
-#pragma warning restore CA1416
+    }
+
+    internal interface IWindowsCredentialNameNativeApi
+    {
+        IntPtr Enumerate(
+            string filter,
+            out uint count);
+
+        void Free(IntPtr credentials);
+    }
+
+    [SupportedOSPlatform("windows")]
+    internal sealed class WindowsCredentialNameNativeApi : IWindowsCredentialNameNativeApi
+    {
+        public IntPtr Enumerate(
+            string filter,
+            out uint count)
+        {
+            if (CredEnumerate(filter, 0, out count, out var credentials))
+            {
+                return credentials;
+            }
+            var error = Marshal.GetLastWin32Error();
+            if (error == 1168)
+            {
+                return IntPtr.Zero;
+            }
+            throw new Win32Exception(error);
+        }
+
+        public void Free(IntPtr credentials) => CredFree(credentials);
+
+        [DllImport("advapi32.dll", EntryPoint = "CredEnumerateW", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CredEnumerate(
+            string filter,
+            uint flags,
+            out uint count,
+            out IntPtr credentials);
+
+        [DllImport("advapi32.dll")]
+        private static extern void CredFree(IntPtr credentials);
     }
 
     private static SecureString ToSecureString(string value)
