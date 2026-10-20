@@ -251,6 +251,43 @@ public sealed class EntraCredentialSessionTests
             await session.ExecuteAsync(request, context, CancellationToken.None)).CommittedGeneration;
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EntraCredentialSession_UnpinnedRequestCannotCommitAnotherAccountUnderRetainedAccountProof(
+        bool deleteMaterial)
+    {
+        var request = Request();
+        Assert.Null(request.Credential.AccountIdentifier);
+        var acquirer = new Acquirer();
+        var approvedAccount = acquirer.Account;
+        await using var session = new EntraCredentialSession(request, new ForbiddenCredential(), acquirer);
+        var original = await AcquireAsync(session, request);
+        if (deleteMaterial)
+        {
+            Assert.Equal(CredentialGenerationInvalidationOutcome.Invalidated,
+                await session.InvalidateGenerationAsync(original, CancellationToken.None));
+        }
+
+        var before = await session.InspectGenerationAsync(CancellationToken.None);
+        var inspection = await session.InspectCacheAsync(request, CancellationToken.None);
+        Assert.Equal(approvedAccount, inspection.AcquisitionKey.Account);
+        acquirer.Account = CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.Entra, "another-provider-account");
+        using var gate = new SemaphoreSlim(1, 1);
+        var context = new ProviderAcquisitionCommitContext(
+            () => true,
+            CancellationToken.None,
+            gate,
+            Permit(inspection.AcquisitionKey).BindExecution(() => true));
+        var failure = Assert.IsType<ProviderAcquisitionFailed>(
+            await session.ExecuteAsync(request, context, CancellationToken.None));
+        Assert.Equal(AccessErrorCode.IdentityMismatch, failure.ErrorCode);
+        Assert.Null(context.CommittedGeneration);
+        Assert.Equal(before, await session.InspectGenerationAsync(CancellationToken.None));
+        Assert.Equal(approvedAccount, (await session.InspectCacheAsync(request, CancellationToken.None)).AccountIdentifier);
+        Assert.Equal(2, acquirer.Calls);
+    }
+
     internal static EntraCredentialAccessRequest Request()
     {
         var requestor = CredentialIdentityFactory.CreateRequestorIdentifier(AccessRequestorKind.Application, "test");
@@ -298,7 +335,7 @@ public sealed class EntraCredentialSessionTests
         internal int Calls { get; private set; }
         internal Exception? Failure { get; set; }
         internal DateTimeOffset ExpiresOn { get; set; } = DateTimeOffset.UtcNow.AddHours(1);
-        internal CredentialAccountIdentifier Account { get; } =
+        internal CredentialAccountIdentifier Account { get; set; } =
             CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.Entra, "stable-test-account");
         internal Func<CancellationToken, ValueTask>? BeforeAcquire { get; set; }
 

@@ -156,8 +156,9 @@ internal sealed class EntraCredentialSession : IEntraCredentialSession
         CancellationToken cancellationToken)
     {
         this.ValidateConfiguration(request);
+        var acquisitionKey = this.CreateAcquisitionKey(request);
         if (Volatile.Read(ref this.disposed) != 0 ||
-            !commitContext.InteractionPermit.AuthorizesProvider(CredentialExecutorKind.Entra, this.CreateAcquisitionKey(request)))
+            !commitContext.InteractionPermit.AuthorizesProvider(CredentialExecutorKind.Entra, acquisitionKey))
         {
             return new ProviderAcquisitionDenied();
         }
@@ -173,7 +174,7 @@ internal sealed class EntraCredentialSession : IEntraCredentialSession
                 return new ProviderAcquisitionFailed { ErrorCode = AccessErrorCode.ProviderFailure };
             }
 
-            if (request.Credential.AccountIdentifier is { } expected && expected != acquired.AccountIdentifier)
+            if (acquisitionKey.Account is { } expected && expected != acquired.AccountIdentifier)
             {
                 return new ProviderAcquisitionFailed { ErrorCode = AccessErrorCode.IdentityMismatch };
             }
