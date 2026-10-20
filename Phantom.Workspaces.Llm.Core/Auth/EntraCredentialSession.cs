@@ -13,6 +13,7 @@ internal sealed record EntraCacheInspection
     public required CredentialSourceIdentifier SourceIdentifier { get; init; }
     public required ProviderAcquisitionKey AcquisitionKey { get; init; }
     public CredentialGenerationInspection? Generation { get; init; }
+    public CredentialAccountIdentifier? AccountIdentifier { get; init; }
 }
 
 internal sealed class EntraCachedMaterial : IDisposable
@@ -40,6 +41,15 @@ internal interface IEntraTokenAcquirer
     ValueTask<EntraAcquiredToken> AcquireAsync(CancellationToken cancellationToken);
 }
 
+internal abstract record EntraGenerationUseOutcome<TResult>;
+
+internal sealed record EntraGenerationUseSucceeded<TResult> : EntraGenerationUseOutcome<TResult>
+{
+    public required TResult Result { get; init; }
+}
+
+internal sealed record EntraGenerationUseUnavailable<TResult> : EntraGenerationUseOutcome<TResult>;
+
 internal interface IEntraCredentialSession : ICredentialGenerationCache, IAsyncDisposable
 {
     ValueTask<EntraCacheInspection> InspectCacheAsync(
@@ -54,6 +64,11 @@ internal interface IEntraCredentialSession : ICredentialGenerationCache, IAsyncD
     ValueTask<EntraCachedMaterial?> CopyGenerationAsync(
         CredentialMaterialGenerationIdentifier generation,
         CancellationToken cancellationToken);
+
+    ValueTask<EntraGenerationUseOutcome<TResult>> UseGenerationAsync<TResult>(
+        CredentialMaterialGenerationIdentifier generation,
+        Func<ReadOnlyMemory<char>, CancellationToken, ValueTask<TResult>> operation,
+        CancellationToken cancellationToken);
 }
 
 internal sealed class EntraCredentialSession : IEntraCredentialSession
@@ -63,6 +78,9 @@ internal sealed class EntraCredentialSession : IEntraCredentialSession
     private readonly LogicalCredentialIdentifier logicalIdentifier;
     private readonly CredentialSourceIdentifier sourceIdentifier;
     private readonly TimeProvider timeProvider;
+    private readonly SemaphoreSlim useGate = new(1, 1);
+    private readonly CancellationTokenSource lifetime = new();
+    private readonly TaskCompletionSource disposal = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int disposed;
 
     internal EntraCredentialSession(
@@ -118,6 +136,7 @@ internal sealed class EntraCredentialSession : IEntraCredentialSession
             LogicalIdentifier = this.logicalIdentifier,
             SourceIdentifier = this.sourceIdentifier,
             Generation = generation,
+            AccountIdentifier = this.provider.InspectBrokerAccount(),
             AcquisitionKey = this.CreateAcquisitionKey(request),
         });
     }
@@ -202,18 +221,80 @@ internal sealed class EntraCredentialSession : IEntraCredentialSession
         return ValueTask.FromResult(this.provider.CopyBrokerGeneration(generation));
     }
 
-    public ValueTask DisposeAsync()
+    public async ValueTask<EntraGenerationUseOutcome<TResult>> UseGenerationAsync<TResult>(
+        CredentialMaterialGenerationIdentifier generation,
+        Func<ReadOnlyMemory<char>, CancellationToken, ValueTask<TResult>> operation,
+        CancellationToken cancellationToken)
     {
-        Interlocked.Exchange(ref this.disposed, 1);
-        this.provider.DisposeBrokerCache();
-        return ValueTask.CompletedTask;
+        cancellationToken.ThrowIfCancellationRequested();
+        if (Volatile.Read(ref this.disposed) != 0)
+        {
+            return new EntraGenerationUseUnavailable<TResult>();
+        }
+
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, this.lifetime.Token);
+        await this.useGate.WaitAsync(cancellation.Token).ConfigureAwait(false);
+        try
+        {
+            cancellation.Token.ThrowIfCancellationRequested();
+            using var material = this.provider.CopyBrokerGeneration(generation);
+            if (material is null || material.Inspection.ExpiresOn is not { } expiresOn ||
+                this.timeProvider.GetUtcNow() >= expiresOn)
+            {
+                return new EntraGenerationUseUnavailable<TResult>();
+            }
+
+            var result = await operation(material.Token, cancellation.Token).ConfigureAwait(false);
+            cancellation.Token.ThrowIfCancellationRequested();
+            return new EntraGenerationUseSucceeded<TResult> { Result = result };
+        }
+        finally
+        {
+            this.useGate.Release();
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref this.disposed, 1) != 0)
+        {
+            await this.disposal.Task.ConfigureAwait(false);
+            return;
+        }
+
+        try
+        {
+            try
+            {
+                await this.lifetime.CancelAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                await this.useGate.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    this.provider.DisposeBrokerCache();
+                }
+                finally
+                {
+                    this.useGate.Release();
+                }
+            }
+
+            this.disposal.TrySetResult();
+        }
+        catch (Exception exception)
+        {
+            this.disposal.TrySetException(exception);
+            throw;
+        }
     }
 
     private ProviderAcquisitionKey CreateAcquisitionKey(EntraCredentialAccessRequest request) => new()
     {
         Configuration = this.logicalIdentifier,
         Source = this.sourceIdentifier,
-        Account = request.Credential.AccountIdentifier,
+        Account = request.Credential.AccountIdentifier ?? this.provider.InspectBrokerAccount(),
         Protocol = ProviderProtocolKind.Sdk,
     };
 

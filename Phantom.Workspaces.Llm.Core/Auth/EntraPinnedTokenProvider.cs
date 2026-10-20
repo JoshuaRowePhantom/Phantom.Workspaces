@@ -34,6 +34,7 @@ public sealed class EntraPinnedTokenProvider
     private AccessToken? cachedToken;
     private readonly object generationGate = new();
     private EntraCachedMaterial? brokerGeneration;
+    private CredentialAccountIdentifier? brokerAccountIdentifier;
     private bool brokerCacheDisposed;
 
     internal CredentialGenerationInspection? InspectBrokerGeneration()
@@ -41,6 +42,14 @@ public sealed class EntraPinnedTokenProvider
         lock (this.generationGate)
         {
             return this.brokerGeneration?.Inspection;
+        }
+    }
+
+    internal CredentialAccountIdentifier? InspectBrokerAccount()
+    {
+        lock (this.generationGate)
+        {
+            return this.brokerAccountIdentifier;
         }
     }
 
@@ -79,6 +88,7 @@ public sealed class EntraPinnedTokenProvider
 
             this.brokerGeneration.Dispose();
             this.brokerGeneration = null;
+            // Deleting token material must not erase the verified account pin for renewal.
             return CredentialGenerationInvalidationOutcome.Invalidated;
         }
     }
@@ -94,6 +104,7 @@ public sealed class EntraPinnedTokenProvider
                 ObjectDisposedException.ThrowIf(this.brokerCacheDisposed, this);
                 this.brokerGeneration?.Dispose();
                 this.brokerGeneration = material.Copy();
+                this.brokerAccountIdentifier = material.Inspection.AccountIdentifier;
             }
 
             return ValueTask.CompletedTask;
@@ -106,6 +117,7 @@ public sealed class EntraPinnedTokenProvider
             this.brokerCacheDisposed = true;
             this.brokerGeneration?.Dispose();
             this.brokerGeneration = null;
+            this.brokerAccountIdentifier = null;
         }
     }
 

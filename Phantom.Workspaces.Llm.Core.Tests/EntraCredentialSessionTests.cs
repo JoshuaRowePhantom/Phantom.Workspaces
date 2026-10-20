@@ -1,5 +1,6 @@
 using Azure.Core;
 using Azure.Identity;
+using Microsoft.Extensions.Time.Testing;
 using Phantom.Workspaces.Llm.Auth;
 using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Llm.Interfaces.Access.Execution;
@@ -106,6 +107,149 @@ public sealed class EntraCredentialSessionTests
 
     internal static ProviderInteractionPermit Permit(ProviderAcquisitionKey key) =>
         new(new() { Value = Guid.NewGuid() }, 1, CredentialExecutorKind.Entra, Guid.NewGuid(), key, () => true);
+
+    [Fact]
+    public async Task EntraCredentialSession_PrivateUse_ZeroesBorrowedMemoryOnReturnAndException()
+    {
+        var request = Request();
+        var acquirer = new Acquirer();
+        await using var session = new EntraCredentialSession(request, new ForbiddenCredential(), acquirer);
+        var generation = await AcquireAsync(session, request);
+        ReadOnlyMemory<char> observed = default;
+        var outcome = await session.UseGenerationAsync(generation, (material, _) =>
+        {
+            observed = material;
+            Assert.Equal("private-token", new string(material.Span));
+            return ValueTask.FromResult(material.Length);
+        }, CancellationToken.None);
+        Assert.Equal("private-token".Length, Assert.IsType<EntraGenerationUseSucceeded<int>>(outcome).Result);
+        Assert.All(observed.ToArray(), character => Assert.Equal('\0', character));
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await session.UseGenerationAsync<int>(generation, (material, _) =>
+            {
+                observed = material;
+                throw new InvalidOperationException("callback failed");
+            }, CancellationToken.None));
+        Assert.All(observed.ToArray(), character => Assert.Equal('\0', character));
+        Assert.Equal(1, acquirer.Calls);
+    }
+
+    [Fact]
+    public async Task EntraCredentialSession_PrivateUse_CancellationZeroesMemoryWithoutDeletingCache()
+    {
+        var request = Request();
+        var acquirer = new Acquirer();
+        await using var session = new EntraCredentialSession(request, new ForbiddenCredential(), acquirer);
+        var generation = await AcquireAsync(session, request);
+        using var cancellation = new CancellationTokenSource();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ReadOnlyMemory<char> observed = default;
+        var pending = session.UseGenerationAsync<int>(generation, async (material, cancellationToken) =>
+        {
+            observed = material;
+            started.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return 1;
+        }, cancellation.Token).AsTask();
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        Assert.All(observed.ToArray(), character => Assert.Equal('\0', character));
+        Assert.True(await session.IsCurrentGenerationAsync(generation, CancellationToken.None));
+        Assert.Equal(1, acquirer.Calls);
+    }
+
+    [Fact]
+    public async Task EntraCredentialSession_PrivateUse_DisposalCancelsAndWaitsForCallbackCleanup()
+    {
+        var request = Request();
+        await using var session = new EntraCredentialSession(request, new ForbiddenCredential(), new Acquirer());
+        var generation = await AcquireAsync(session, request);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ReadOnlyMemory<char> observed = default;
+        var pending = session.UseGenerationAsync<int>(generation, async (material, cancellationToken) =>
+        {
+            observed = material;
+            using var registration = cancellationToken.Register(() => cancelled.TrySetResult());
+            started.TrySetResult();
+            await finish.Task;
+            return 1;
+        }, CancellationToken.None).AsTask();
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var disposal = session.DisposeAsync().AsTask();
+        await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.False(disposal.IsCompleted);
+        finish.TrySetResult();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        await disposal.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.All(observed.ToArray(), character => Assert.Equal('\0', character));
+        Assert.IsType<EntraGenerationUseUnavailable<int>>(await session.UseGenerationAsync<int>(
+            generation, (_, _) => throw new InvalidOperationException("Disposed session cannot run."), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task EntraCredentialSession_PrivateUse_RotationNeverSubstitutesCurrentGeneration()
+    {
+        var request = Request();
+        var acquirer = new Acquirer();
+        await using var session = new EntraCredentialSession(request, new ForbiddenCredential(), acquirer);
+        var generation = await AcquireAsync(session, request);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ReadOnlyMemory<char> observed = default;
+        var pending = session.UseGenerationAsync<int>(generation, async (material, _) =>
+        {
+            observed = material;
+            started.TrySetResult();
+            await finish.Task;
+            Assert.Equal("private-token", new string(material.Span));
+            return material.Length;
+        }, CancellationToken.None).AsTask();
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var replacement = await AcquireAsync(session, request);
+        Assert.NotEqual(generation, replacement);
+        finish.TrySetResult();
+        Assert.IsType<EntraGenerationUseSucceeded<int>>(await pending.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.All(observed.ToArray(), character => Assert.Equal('\0', character));
+        Assert.IsType<EntraGenerationUseUnavailable<int>>(await session.UseGenerationAsync<int>(
+            generation, (_, _) => throw new InvalidOperationException("A stale receipt cannot read a replacement."), CancellationToken.None));
+        Assert.IsType<EntraGenerationUseSucceeded<int>>(await session.UseGenerationAsync(
+            replacement, (material, _) => ValueTask.FromResult(material.Length), CancellationToken.None));
+        Assert.Equal(2, acquirer.Calls);
+    }
+
+    [Fact]
+    public async Task EntraCredentialSession_PrivateUse_ExactExpiryAndPreCancellationCannotRunCallback()
+    {
+        var request = Request();
+        var clock = new FakeTimeProvider(DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
+        var acquirer = new Acquirer { ExpiresOn = clock.GetUtcNow().AddHours(1) };
+        await using var session = new EntraCredentialSession(request, new ForbiddenCredential(), acquirer, clock);
+        var generation = await AcquireAsync(session, request);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            await session.UseGenerationAsync<int>(
+                generation, (_, _) => throw new InvalidOperationException("Cancelled use cannot run."), cancellation.Token));
+        clock.Advance(TimeSpan.FromHours(1));
+        Assert.IsType<EntraGenerationUseUnavailable<int>>(await session.UseGenerationAsync<int>(
+            generation, (_, _) => throw new InvalidOperationException("Expired use cannot run."), CancellationToken.None));
+        Assert.Equal(1, acquirer.Calls);
+    }
+
+    private static async Task<CredentialMaterialGenerationIdentifier> AcquireAsync(
+        IEntraCredentialSession session,
+        EntraCredentialAccessRequest request)
+    {
+        var inspection = await session.InspectCacheAsync(request, CancellationToken.None);
+        using var gate = new SemaphoreSlim(1, 1);
+        var context = new ProviderAcquisitionCommitContext(
+            () => true, CancellationToken.None, gate, Permit(inspection.AcquisitionKey).BindExecution(() => true));
+        return Assert.IsType<ProviderAcquisitionSucceeded>(
+            await session.ExecuteAsync(request, context, CancellationToken.None)).CommittedGeneration;
+    }
 
     internal static EntraCredentialAccessRequest Request()
     {

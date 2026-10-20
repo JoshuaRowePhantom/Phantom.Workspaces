@@ -283,6 +283,148 @@ public sealed class EntraCredentialAccessExecutorTests
         }
     }
 
+    [Fact]
+    public async Task EntraExecutor_CacheAdministration_ListsAllOwnedSessionsWithoutProviderWork()
+    {
+        var clock = new FakeTimeProvider(DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
+        var acquirer = new Acquirer { ExpiresOn = clock.GetUtcNow().AddHours(1) };
+        await using var executor = new EntraCredentialAccessExecutor(
+            configuration => new EntraCredentialSession(configuration, new ForbiddenCredential(), acquirer, clock),
+            clock);
+        ICredentialCacheAdministration administration = executor;
+        Assert.Empty(await administration.ListAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(0, acquirer.Calls);
+        var firstRequest = CreateRequest();
+        var secondDraft = firstRequest with { CachePartition = new() { Value = "second-partition" } };
+        var secondRequest = secondDraft with
+        {
+            Credential = secondDraft.Credential with { LogicalIdentifier = secondDraft.CreateLogicalIdentifier() },
+            Sources = [secondDraft.Sources[0] with { Identifier = secondDraft.CreateSourceIdentifier() }],
+        };
+        var first = executor.GetSession(firstRequest);
+        var second = executor.GetSession(secondRequest);
+        Assert.Same(first, executor.GetSession(firstRequest));
+        Assert.NotSame(first, second);
+        Assert.Empty(await administration.ListAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(0, acquirer.Calls);
+        var firstGeneration = await CommitSessionAsync(first, firstRequest);
+        var secondGeneration = await CommitSessionAsync(second, secondRequest);
+        var descriptors = await administration.ListAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(2, descriptors.Count);
+        Assert.Contains(descriptors, descriptor =>
+            descriptor.Generation == firstGeneration && descriptor.SourceIdentifier == firstRequest.CreateSourceIdentifier());
+        Assert.Contains(descriptors, descriptor =>
+            descriptor.Generation == secondGeneration && descriptor.SourceIdentifier == secondRequest.CreateSourceIdentifier());
+        Assert.Equal(descriptors, await administration.ListAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(2, acquirer.Calls);
+        var safeMetadata = JsonSerializer.Serialize(descriptors);
+        Assert.DoesNotContain("private-token", safeMetadata);
+        Assert.DoesNotContain("stable-test-account", safeMetadata);
+    }
+
+    [Fact]
+    public async Task EntraExecutor_CacheAdministration_StaleDeleteCannotClearReplacementOrReleaseMemory()
+    {
+        await using var fixture = new Fixture();
+        await using var first = await fixture.AcquireAsync(ReleaseMemoryScopeKind.AllUses);
+        ICredentialCacheAdministration administration = fixture.Executor;
+        var oldDescriptor = Assert.Single(await administration.ListAsync(TestContext.Current.CancellationToken));
+        var replacement = await CommitSessionAsync(fixture.Session, fixture.Request);
+        var currentDescriptor = Assert.Single(await administration.ListAsync(TestContext.Current.CancellationToken));
+        Assert.NotEqual(oldDescriptor.Identifier, currentDescriptor.Identifier);
+        Assert.Equal(replacement, currentDescriptor.Generation);
+        var failure = await Assert.ThrowsAsync<CredentialAdministrationException>(async () =>
+            await administration.DeleteAsync(oldDescriptor.Identifier, TestContext.Current.CancellationToken));
+        Assert.Equal(CredentialAdministrationFailure.NoLongerCurrent, failure.Failure);
+        Assert.True(await fixture.Session.IsCurrentGenerationAsync(replacement, TestContext.Current.CancellationToken));
+        await using var current = Assert.IsType<AccessSucceeded<EntraCredentialAccessResult>>(
+            await fixture.Broker.AcquireAsync(fixture.Request, TestContext.Current.CancellationToken)).Result;
+        Assert.IsType<SensitiveValueUseSucceeded<int>>(
+            await current.AccessToken.UseAsync((material, _) => ValueTask.FromResult(material.Length), TestContext.Current.CancellationToken));
+        await administration.DeleteAsync(currentDescriptor.Identifier, TestContext.Current.CancellationToken);
+        Assert.Empty(await administration.ListAsync(TestContext.Current.CancellationToken));
+        Assert.Single(await fixture.Policy.ListAsync(TestContext.Current.CancellationToken));
+        Assert.IsType<SensitiveValueUseReacquisitionRequired<int>>(
+            await current.AccessToken.UseAsync<int>(
+                (_, _) => throw new InvalidOperationException("Deleted cache generation cannot be used."),
+                TestContext.Current.CancellationToken));
+        Assert.IsType<EntraGenerationUseUnavailable<int>>(await fixture.Session.UseGenerationAsync<int>(
+            replacement, (_, _) => throw new InvalidOperationException("Deleted private generation cannot be used."),
+            TestContext.Current.CancellationToken));
+        Assert.Equal(2, fixture.Acquirer.Calls);
+    }
+
+    [Fact]
+    public async Task EntraExecutor_DeletedCacheLeaseRenewal_PreservesFinalizedAccount()
+    {
+        await using var fixture = new Fixture();
+        await using var result = await fixture.AcquireAsync(ReleaseMemoryScopeKind.AllUses);
+        ICredentialCacheAdministration administration = fixture.Executor;
+        var descriptor = Assert.Single(await administration.ListAsync(TestContext.Current.CancellationToken));
+        var approvedAccount = fixture.Acquirer.Account;
+        await administration.DeleteAsync(descriptor.Identifier, TestContext.Current.CancellationToken);
+        var required = Assert.IsType<SensitiveValueUseReacquisitionRequired<int>>(
+            await result.AccessToken.UseAsync<int>(
+                (_, _) => throw new InvalidOperationException("Deleted material cannot run."),
+                TestContext.Current.CancellationToken));
+        var row = fixture.Registry.GetSnapshot().Single(snapshot => snapshot.Identifier == required.RequestIdentifier);
+        Assert.Equal(UserAuthorizationPrimaryActionKind.Perform, row.PrimaryAction);
+        fixture.Acquirer.Account = CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.Entra, "another-account");
+        var failed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.Registry.Changed += (_, _) =>
+        {
+            if (fixture.Registry.GetSnapshot().Any(snapshot =>
+                snapshot.Identifier == required.RequestIdentifier && snapshot.State == UserAuthorizationState.Failed))
+            {
+                failed.TrySetResult();
+            }
+        };
+        await fixture.ApplyAsync(row);
+        await failed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        Assert.Null(await fixture.Session.InspectGenerationAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(UserAuthorizationState.Failed,
+            fixture.Registry.GetSnapshot().Single(snapshot => snapshot.Identifier == required.RequestIdentifier).State);
+        Assert.All(await fixture.Policy.ListAsync(TestContext.Current.CancellationToken),
+            memory => Assert.Equal(approvedAccount, memory.AccountIdentifier));
+        Assert.Equal(2, fixture.Acquirer.Calls);
+    }
+
+    [Fact]
+    public async Task EntraExecutor_CacheAdministration_CancelledUnknownAndDisposedDeletesAreSafe()
+    {
+        await using var fixture = new Fixture();
+        await using var result = await fixture.AcquireAsync(ReleaseMemoryScopeKind.AllUses);
+        ICredentialCacheAdministration administration = fixture.Executor;
+        var descriptor = Assert.Single(await administration.ListAsync(TestContext.Current.CancellationToken));
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            await administration.DeleteAsync(descriptor.Identifier, cancellation.Token));
+        Assert.True(await fixture.Session.IsCurrentGenerationAsync(descriptor.Generation, TestContext.Current.CancellationToken));
+        var missing = await Assert.ThrowsAsync<CredentialAdministrationException>(async () =>
+            await administration.DeleteAsync(new() { Value = Guid.NewGuid() }, TestContext.Current.CancellationToken));
+        Assert.Equal(CredentialAdministrationFailure.Unavailable, missing.Failure);
+        await fixture.Executor.DisposeAsync();
+        var disposed = await Assert.ThrowsAsync<CredentialAdministrationException>(async () =>
+            await administration.DeleteAsync(descriptor.Identifier, TestContext.Current.CancellationToken));
+        Assert.Equal(CredentialAdministrationFailure.Unavailable, disposed.Failure);
+    }
+
+    private static async Task<CredentialMaterialGenerationIdentifier> CommitSessionAsync(
+        IEntraCredentialSession session,
+        EntraCredentialAccessRequest request)
+    {
+        var inspection = await session.InspectCacheAsync(request, TestContext.Current.CancellationToken);
+        var permit = new ProviderInteractionPermit(
+            new() { Value = Guid.NewGuid() }, 1, CredentialExecutorKind.Entra, Guid.NewGuid(),
+            inspection.AcquisitionKey, () => true);
+        using var gate = new SemaphoreSlim(1, 1);
+        var context = new ProviderAcquisitionCommitContext(
+            () => true, TestContext.Current.CancellationToken, gate, permit.BindExecution(() => true));
+        return Assert.IsType<ProviderAcquisitionSucceeded>(
+            await session.ExecuteAsync(request, context, TestContext.Current.CancellationToken)).CommittedGeneration;
+    }
+
     private sealed class TrackingCoordinator : IProviderAcquisitionCoordinator
     {
         private readonly ProviderAcquisitionCoordinator coordinator = new();

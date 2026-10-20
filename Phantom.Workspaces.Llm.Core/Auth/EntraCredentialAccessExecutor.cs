@@ -5,11 +5,13 @@ namespace Phantom.Workspaces.Llm.Auth;
 
 internal sealed class EntraCredentialAccessExecutor :
     ICredentialAccessExecutor<EntraCredentialAccessRequest, EntraCredentialAccessResult>,
+    ICredentialCacheAdministration,
     IAsyncDisposable
 {
     private readonly Func<EntraCredentialAccessRequest, IEntraCredentialSession> sessionFactory;
     private readonly Dictionary<LogicalCredentialIdentifier, IEntraCredentialSession> sessions = new();
     private readonly object sessionGate = new();
+    private readonly Dictionary<CredentialCacheIdentifier, CacheTarget> cacheTargets = new();
     private readonly TimeProvider timeProvider;
     private bool disposed;
 
@@ -22,6 +24,71 @@ internal sealed class EntraCredentialAccessExecutor :
     }
 
     public CredentialExecutorKind Kind => CredentialExecutorKind.Entra;
+
+    public async ValueTask<IReadOnlyList<CredentialCacheDescriptor>> ListAsync(CancellationToken cancellationToken = default)
+    {
+        KeyValuePair<LogicalCredentialIdentifier, IEntraCredentialSession>[] owned;
+        lock (this.sessionGate)
+        {
+            this.ThrowIfAdministrationUnavailable();
+            owned = this.sessions.ToArray();
+        }
+
+        var descriptors = new List<CredentialCacheDescriptor>();
+        foreach (var (configuration, session) in owned)
+        {
+            var generation = await session.InspectGenerationAsync(cancellationToken).ConfigureAwait(false);
+            if (generation is null)
+            {
+                continue;
+            }
+
+            var identifier = new CredentialCacheIdentifier { Value = generation.Generation.Value };
+            var source = CredentialIdentityFactory.CreateSourceIdentifier(CredentialProviderKind.Entra, configuration.Digest);
+            lock (this.sessionGate)
+            {
+                this.ThrowIfAdministrationUnavailable();
+                this.cacheTargets[identifier] = new CacheTarget(session, generation.Generation);
+            }
+
+            descriptors.Add(new CredentialCacheDescriptor
+            {
+                Identifier = identifier,
+                Provider = CredentialProviderKind.Entra,
+                Kind = CredentialKind.AccessToken,
+                Generation = generation.Generation,
+                SourceIdentifier = source,
+                ExpiresOn = generation.ExpiresOn,
+            });
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return descriptors;
+    }
+
+    public async ValueTask DeleteAsync(
+        CredentialCacheIdentifier identifier,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        CacheTarget target;
+        lock (this.sessionGate)
+        {
+            this.ThrowIfAdministrationUnavailable();
+            if (!this.cacheTargets.TryGetValue(identifier, out target!))
+            {
+                throw new CredentialAdministrationException(CredentialAdministrationFailure.Unavailable);
+            }
+        }
+
+        var outcome = await target.Cache.InvalidateGenerationAsync(target.Generation, cancellationToken).ConfigureAwait(false);
+        if (outcome != CredentialGenerationInvalidationOutcome.Invalidated)
+        {
+            throw new CredentialAdministrationException(outcome == CredentialGenerationInvalidationOutcome.NoLongerCurrent
+                ? CredentialAdministrationFailure.NoLongerCurrent
+                : CredentialAdministrationFailure.Unavailable);
+        }
+    }
 
     internal ICredentialGenerationCache? FindCache(
         LogicalCredentialIdentifier configuration,
@@ -51,7 +118,7 @@ internal sealed class EntraCredentialAccessExecutor :
         return new CredentialInspection
         {
             InspectionIdentifier = Guid.NewGuid(),
-            Credential = request.Credential with { AccountIdentifier = request.Credential.AccountIdentifier ?? generation?.AccountIdentifier },
+            Credential = request.Credential with { AccountIdentifier = request.Credential.AccountIdentifier ?? cache.AccountIdentifier },
             Sources = [source with
             {
                 Usability = this.IsUsable(generation) &&
@@ -64,7 +131,7 @@ internal sealed class EntraCredentialAccessExecutor :
             {
                 [source.Identifier] = cache.AcquisitionKey with
                 {
-                    Account = request.Credential.AccountIdentifier ?? generation?.AccountIdentifier,
+                    Account = request.Credential.AccountIdentifier ?? cache.AccountIdentifier,
                 },
             },
             CachedGenerations = generation is null
@@ -179,6 +246,7 @@ internal sealed class EntraCredentialAccessExecutor :
             this.disposed = true;
             owned = this.sessions.Values.ToArray();
             this.sessions.Clear();
+            this.cacheTargets.Clear();
         }
 
         foreach (var session in owned)
@@ -191,7 +259,15 @@ internal sealed class EntraCredentialAccessExecutor :
         generation?.AccountIdentifier is not null &&
         generation.ExpiresOn is { } expiresOn && this.timeProvider.GetUtcNow() < expiresOn;
 
-    private IEntraCredentialSession GetSession(EntraCredentialAccessRequest request)
+    private void ThrowIfAdministrationUnavailable()
+    {
+        if (this.disposed)
+        {
+            throw new CredentialAdministrationException(CredentialAdministrationFailure.Unavailable);
+        }
+    }
+
+    internal IEntraCredentialSession GetSession(EntraCredentialAccessRequest request)
     {
         lock (this.sessionGate)
         {
@@ -206,6 +282,10 @@ internal sealed class EntraCredentialAccessExecutor :
             return session;
         }
     }
+
+    private sealed record CacheTarget(
+        ICredentialGenerationCache Cache,
+        CredentialMaterialGenerationIdentifier Generation);
 
     private sealed class AcquisitionOperation(
         EntraCredentialAccessRequest request,
