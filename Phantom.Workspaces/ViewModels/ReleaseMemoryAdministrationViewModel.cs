@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.Input;
@@ -21,9 +22,11 @@ public abstract class AdministrationViewModel<TDescriptor> : ViewModelBase where
     protected AdministrationViewModel()
     {
         this.Items = new(this.items);
-        this.RefreshCommand = new ToolkitAsyncRelayCommand(() => this.RefreshAsync(), () => !this.IsBusy && !this.disposed);
+        this.RefreshCommand = new ToolkitAsyncRelayCommand(
+            cancellationToken => this.RefreshAsync(cancellationToken),
+            () => !this.IsBusy && !this.disposed);
         this.RemoveCommand = new AsyncRelayCommand<TDescriptor>(
-            item => item is null ? Task.CompletedTask : this.RemoveAsync(item),
+            (item, cancellationToken) => item is null ? Task.CompletedTask : this.RemoveAsync(item, cancellationToken),
             item => !this.IsBusy && !this.disposed && item is not null && this.items.Contains(item));
     }
 
@@ -107,5 +110,5 @@ public sealed class ReleaseMemoryAdministrationViewModel : AdministrationViewMod
     protected override ValueTask RemoveCoreAsync(ReleaseMemoryDescriptor descriptor, CancellationToken cancellationToken) =>
         this.Administration.ForgetAsync(descriptor.Identifier, cancellationToken);
     protected override bool IsExpectedFailure(Exception exception) =>
-        exception is IOException or UnauthorizedAccessException;
+        exception is IOException or UnauthorizedAccessException or JsonException;
 }

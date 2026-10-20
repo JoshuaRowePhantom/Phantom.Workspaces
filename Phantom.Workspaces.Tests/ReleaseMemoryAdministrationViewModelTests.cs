@@ -31,6 +31,31 @@ public sealed class ReleaseMemoryAdministrationViewModelTests
             this.Items.RemoveAll(item => item.Identifier == identifier);
             return ValueTask.CompletedTask;
         }
+
+    }
+
+    private sealed class ControlledAdministration : IReleaseMemoryAdministration
+    {
+        private readonly TaskCompletionSource continuation = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public required IReleaseMemoryAdministration Inner { get; init; }
+        public bool HoldList { get; set; }
+        public TaskCompletionSource ListEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async ValueTask<IReadOnlyList<ReleaseMemoryDescriptor>> ListAsync(
+            CancellationToken cancellationToken = default)
+        {
+            if (this.HoldList)
+            {
+                this.ListEntered.TrySetResult();
+                await this.continuation.Task.WaitAsync(cancellationToken);
+            }
+            return await this.Inner.ListAsync(cancellationToken);
+        }
+
+        public ValueTask ForgetAsync(
+            ReleaseMemoryIdentifier identifier,
+            CancellationToken cancellationToken = default) =>
+            this.Inner.ForgetAsync(identifier, cancellationToken);
     }
 
     [Fact]
@@ -71,6 +96,53 @@ public sealed class ReleaseMemoryAdministrationViewModelTests
             Assert.Equal(ReleaseAuthorizationValidation.AuthorizationRequired,
                 await policy.ValidateAsync(authorization.Identifier, request, TestContext.Current.CancellationToken));
             await viewModel.DisposeAsync();
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) { Directory.Delete(directory, recursive: true); }
+        }
+    }
+
+    [Theory]
+    [InlineData("{\"version\":1,\"records\":[unexpected-json-marker]}")]
+    [InlineData("{\"version\":99,\"records\":[]}")]
+    public async Task RealMalformedOrUnsupportedStoreUsesSafeStatusAndCommandCanCancelAndRetry(
+        string document)
+    {
+        var directory = Path.Combine(Environment.CurrentDirectory, ".access-ui-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(directory);
+            var path = Path.Combine(directory, "memory.json");
+            await File.WriteAllTextAsync(path, document, TestContext.Current.CancellationToken);
+            await using var policy = new ReleaseAuthorizationPolicy(new ReleaseMemoryStore(path));
+            var administration = new ControlledAdministration
+            {
+                Inner = new ReleaseMemoryAdministration { Policy = policy },
+            };
+            await using var viewModel = new ReleaseMemoryAdministrationViewModel { Administration = administration };
+            await viewModel.RefreshCommand.ExecuteAsync(null);
+            Assert.Equal("Operation unavailable. Refresh and try again.", viewModel.SafeStatus);
+            Assert.False(viewModel.IsBusy);
+            Assert.True(viewModel.RefreshCommand.CanExecute(null));
+            Assert.Empty(viewModel.Items);
+
+            await File.WriteAllTextAsync(path, "{\"version\":1,\"records\":[]}", TestContext.Current.CancellationToken);
+            administration.HoldList = true;
+            var pending = viewModel.RefreshCommand.ExecuteAsync(null);
+            await administration.ListEntered.Task.WaitAsync(TestContext.Current.CancellationToken);
+            Assert.True(viewModel.RefreshCommand.CanBeCanceled);
+            viewModel.RefreshCommand.Cancel();
+            await pending;
+            Assert.Equal("Operation cancelled.", viewModel.SafeStatus);
+            Assert.False(viewModel.IsBusy);
+            Assert.True(viewModel.RefreshCommand.CanExecute(null));
+
+            administration.HoldList = false;
+            await viewModel.RefreshCommand.ExecuteAsync(null);
+            Assert.Equal("List updated.", viewModel.SafeStatus);
+            Assert.Empty(viewModel.Items);
+            Assert.True(viewModel.RefreshCommand.CanExecute(null));
         }
         finally
         {
