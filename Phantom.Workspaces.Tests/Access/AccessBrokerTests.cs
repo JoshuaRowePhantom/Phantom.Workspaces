@@ -482,6 +482,133 @@ public sealed class AccessBrokerTests : IDisposable
             Assert.Single(await broker.Policy.ListAsync(TestContext.Current.CancellationToken)).Scope);
     }
 
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    public async Task AccessBroker_RememberedFallback_RejectsChangedAccountOrLogicalPins(
+        bool pinRequestAccount,
+        bool changeAccount)
+    {
+        var account = CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.StoredSecret, "account-a");
+        var request = Request();
+        request = request with
+        {
+            Credential = request.Credential with { AccountIdentifier = pinRequestAccount ? account : null },
+        };
+        var original = request.Credential with { AccountIdentifier = account };
+        var changed = changeAccount
+            ? original with { AccountIdentifier = CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.StoredSecret, "account-b") }
+            : original with { LogicalIdentifier = new() { Digest = new string('e', 64) } };
+        var inspections = 0;
+        var executions = 0;
+        var materializations = 0;
+        var executor = new Executor
+        {
+            IsUsable = () => true,
+            RefineInspection = inspection => inspection with { Credential = ++inspections == 1 ? original : changed },
+            Execute = (_, _, _, _, _, _) => ValueTask.FromResult<CredentialExecutionOutcome<Result>>(
+                ++executions == 1
+                    ? new CredentialExecutionMissing<Result>()
+                    : new CredentialExecutionReady<Result>
+                    {
+                        Materializer = new Materializer(() =>
+                        {
+                            materializations++;
+                            return new Result();
+                        }),
+                    }),
+        };
+        var (broker, registry) = this.Create(executor);
+        await using var owned = broker;
+        await RememberAsync(broker, request, original);
+        var task = broker.AcquireAsync(request, TestContext.Current.CancellationToken);
+        var row = registry.GetSnapshot().SingleOrDefault();
+        if (row is not null)
+        {
+            await ApplyAsync(registry, row);
+        }
+
+        var failed = Assert.IsType<AccessFailed<Result>>(await task);
+        Assert.Equal(AccessErrorCode.IdentityMismatch, failed.ErrorCode);
+        Assert.Equal(1, executions);
+        Assert.Equal(0, materializations);
+        Assert.Empty(registry.GetSnapshot());
+        var memory = Assert.Single(await broker.Policy.ListAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(original.LogicalIdentifier, memory.LogicalIdentifier);
+        Assert.Equal(account, memory.AccountIdentifier);
+    }
+
+    [Fact]
+    public async Task AccessBroker_RememberedFallback_MissingSelectedSourceRetainsActionableRowWithoutSwitching()
+    {
+        var request = Request();
+        var selected = request.Sources[0];
+        var alternative = selected with
+        {
+            Identifier = new() { Digest = new string('e', 64) },
+            Usability = CredentialSourceUsability.Usable,
+        };
+        request = request with { Sources = new[] { selected, alternative } };
+        var inspections = 0;
+        var executions = 0;
+        var executor = new Executor
+        {
+            IsUsable = () => true,
+            RefineInspection = inspection => ++inspections == 1
+                ? inspection
+                : inspection with { Sources = new[] { alternative } },
+            Execute = (_, inspection, _, _, _, _) =>
+            {
+                executions++;
+                Assert.Equal(selected.Identifier, inspection.SelectedSource);
+                return ValueTask.FromResult<CredentialExecutionOutcome<Result>>(new CredentialExecutionMissing<Result>());
+            },
+        };
+        var (broker, registry) = this.Create(executor);
+        await using var owned = broker;
+        await RememberAsync(broker, request, request.Credential);
+        var task = broker.AcquireAsync(request, TestContext.Current.CancellationToken);
+        var row = Assert.Single(registry.GetSnapshot());
+        Assert.False(task.IsCompleted);
+        Assert.Equal(selected.Identifier, row.SelectedSource);
+        Assert.Equal(CredentialSourceUsability.Missing,
+            row.SourceOptions.Single(source => source.Identifier == selected.Identifier).Usability);
+        Assert.True(row.CanAct);
+        await ApplyAsync(registry, row);
+        var required = Assert.IsType<AccessReacquisitionRequired<Result>>(await task);
+        Assert.Equal(row.Identifier, required.RequestIdentifier);
+        var renewal = Assert.Single(registry.GetSnapshot());
+        Assert.Equal(UserAuthorizationState.RenewalNeeded, renewal.State);
+        Assert.Equal(selected.Identifier, renewal.SelectedSource);
+        Assert.Equal(CredentialSourceUsability.Missing,
+            renewal.SourceOptions.Single(source => source.Identifier == selected.Identifier).Usability);
+        Assert.True(renewal.CanAct);
+        Assert.Equal(1, executions);
+        Assert.Single(await broker.Policy.ListAsync(TestContext.Current.CancellationToken));
+    }
+
+    private static async Task RememberAsync(
+        AccessBroker broker,
+        RequestRecord request,
+        CredentialReference credential)
+    {
+        await broker.Policy.CommitAsync(new ReleasePolicyDecision
+        {
+            Request = new()
+            {
+                RequestIdentifier = new() { Value = Guid.NewGuid() },
+                RequestGeneration = 1,
+                Credential = credential,
+                SourceIdentifier = request.Sources[0].Identifier,
+                RequestorIdentifier = request.Requestor.Identifier,
+                Use = request.Use,
+            },
+            Scope = ReleaseMemoryScopeKind.AllUses,
+        }, TestContext.Current.CancellationToken);
+    }
+
     private (AccessBroker Broker, UserAuthorizationRegistry Registry) Create(Executor executor)
     {
         var policy = new ReleaseAuthorizationPolicy(new ReleaseMemoryStore(Path.Combine(this.directory, $"{Guid.NewGuid():N}.json")));
@@ -640,6 +767,7 @@ public sealed class AccessBrokerTests : IDisposable
         public required Func<RequestRecord, CredentialInspection, ReleaseAuthorization, ProviderInteractionPermit?, ICredentialExecutionContext,
             CancellationToken, ValueTask<CredentialExecutionOutcome<Result>>> Execute { get; init; }
         public Func<bool> IsUsable { get; init; } = () => false;
+        public Func<CredentialInspection, CredentialInspection> RefineInspection { get; init; } = inspection => inspection;
         public CredentialExecutorKind Kind => CredentialExecutorKind.OAuth;
 
         public ValueTask<CredentialInspection> InspectAsync(
@@ -650,7 +778,7 @@ public sealed class AccessBrokerTests : IDisposable
             {
                 Usability = this.IsUsable() ? CredentialSourceUsability.Usable : CredentialSourceUsability.AcquisitionRequired,
             };
-            return ValueTask.FromResult(new CredentialInspection
+            return ValueTask.FromResult(this.RefineInspection(new CredentialInspection
             {
                 InspectionIdentifier = Guid.NewGuid(),
                 Credential = request.Credential,
@@ -664,7 +792,7 @@ public sealed class AccessBrokerTests : IDisposable
                         Protocol = ProviderProtocolKind.OAuth,
                     },
                 },
-            });
+            }));
         }
 
         public ValueTask<CredentialExecutionOutcome<Result>> ExecuteAsync(

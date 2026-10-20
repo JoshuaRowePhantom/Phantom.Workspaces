@@ -105,13 +105,13 @@ internal sealed class AccessBroker : IAccessBroker
     {
         var inspection = await executor.InspectAsync(request, cancellationToken).ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
-        if (!SameCredential(request.Credential, inspection.Credential) || inspection.Sources.Count == 0 ||
-            inspection.Sources.Any(source => !request.Sources.Any(allowed => allowed.Identifier == source.Identifier)))
+        if (!IsValidInspection(request, inspection, request.Credential) || inspection.Sources.Count == 0)
         {
             return Failure<TResult>(AccessErrorCode.IdentityMismatch);
         }
 
         var identifier = new UserAuthorizationRequestIdentifier { Value = Guid.NewGuid() };
+        var pinnedCredential = inspection.Credential;
         CredentialSourceChoiceDescriptor selected = inspection.Sources[0];
         ReleaseMemoryScopeKind? selectedMemory = null;
         foreach (var source in inspection.Sources)
@@ -132,6 +132,13 @@ internal sealed class AccessBroker : IAccessBroker
                     }
 
                     inspection = await executor.InspectAsync(request, cancellationToken).ConfigureAwait(false);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!IsValidInspection(request, inspection, pinnedCredential))
+                    {
+                        return Failure<TResult>(AccessErrorCode.IdentityMismatch);
+                    }
+
+                    inspection = PreserveSelectedSource(inspection, source);
                     selected = inspection.Sources.Single(option => option.Identifier == source.Identifier);
                     break;
                 }
@@ -156,7 +163,7 @@ internal sealed class AccessBroker : IAccessBroker
     {
         this.registry.Add(CreateSnapshot(request, inspection.Sources, selectedSource, identifier, selectedMemory));
         var completion = new TaskCompletionSource<AccessOutcome<TResult>>(TaskCreationOptions.RunContinuationsAsynchronously);
-        this.pendingInspections[identifier] = new PendingInspection<TRequest, TResult>(request, executor);
+        this.pendingInspections[identifier] = new PendingInspection<TRequest, TResult>(request, executor, inspection.Credential);
         var worker = this.RunCredentialRowAsync(request, executor, inspection, identifier, chain, completion, cancellationToken);
         ObserveLate(worker);
         return completion.Task;
@@ -190,13 +197,21 @@ internal sealed class AccessBroker : IAccessBroker
                 }
 
                 AccessOutcome<TResult> outcome;
+                IReadOnlyList<CredentialSourceChoiceDescriptor>? renewalSources = null;
                 try
                 {
                     var inspection = await executor.InspectAsync(request, cancellation.Token).ConfigureAwait(false);
                     var source = inspection.Sources.SingleOrDefault(option => option.Identifier == decision.Source);
-                    if (!SameCredential(initialInspection.Credential, inspection.Credential) || source is null)
+                    if (!IsValidInspection(request, inspection, initialInspection.Credential))
                     {
                         outcome = Failure<TResult>(AccessErrorCode.IdentityMismatch);
+                    }
+                    else if (source is null)
+                    {
+                        var selected = initialInspection.Sources.SingleOrDefault(option => option.Identifier == decision.Source)
+                            ?? request.Sources.Single(option => option.Identifier == decision.Source);
+                        renewalSources = PreserveSelectedSource(inspection, selected).Sources;
+                        outcome = new AccessReacquisitionRequired<TResult> { RequestIdentifier = identifier };
                     }
                     else if (source.Usability != CredentialSourceUsability.Usable &&
                         decision.PrimaryAction != UserAuthorizationPrimaryActionKind.Perform)
@@ -263,6 +278,15 @@ internal sealed class AccessBroker : IAccessBroker
                     _ => UserAuthorizationState.Failed,
                 };
                 var accepted = this.registry.Complete(identifier, revision, state);
+                if (accepted && renewalSources is not null)
+                {
+                    var snapshot = this.registry.GetSnapshot().SingleOrDefault(snapshot => snapshot.Identifier == identifier);
+                    if (snapshot is not null)
+                    {
+                        this.registry.UpdateSources(identifier, snapshot.Revision, renewalSources);
+                    }
+                }
+
                 if (!accepted || !completion.TrySetResult(outcome))
                 {
                     if (outcome is AccessSucceeded<TResult> succeeded)
@@ -382,12 +406,15 @@ internal sealed class AccessBroker : IAccessBroker
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref this.disposed) != 0, this);
         var inspection = await executor.InspectAsync(request, cancellationToken).ConfigureAwait(false);
-        if (!SameCredential(previousInspection.Credential, inspection.Credential) ||
-            !inspection.Sources.Any(source => source.Identifier == selectedSource))
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!IsValidInspection(request, inspection, previousInspection.Credential))
         {
             throw new ReleaseIdentityMismatchException();
         }
 
+        inspection = PreserveSelectedSource(
+            inspection,
+            previousInspection.Sources.Single(source => source.Identifier == selectedSource));
         var identifier = new UserAuthorizationRequestIdentifier { Value = Guid.NewGuid() };
         var task = this.StartCredentialRow(
             request, executor, inspection, selectedSource, identifier, chain, this.lifetime.Token, selectedMemory);
@@ -720,6 +747,34 @@ internal sealed class AccessBroker : IAccessBroker
         expected.Provider == actual.Provider && expected.Kind == actual.Kind &&
         (expected.AccountIdentifier is null || expected.AccountIdentifier == actual.AccountIdentifier);
 
+    private static bool IsValidInspection<TResult>(
+        CredentialAccessRequest<TResult> request,
+        CredentialInspection inspection,
+        CredentialReference pinnedCredential)
+        where TResult : ICredentialAccessResult =>
+        SameCredential(request.Credential, inspection.Credential) &&
+        SameCredential(pinnedCredential, inspection.Credential) &&
+        inspection.Sources.All(source => request.Sources.Any(allowed => allowed.Identifier == source.Identifier));
+
+    private static CredentialInspection PreserveSelectedSource(
+        CredentialInspection inspection,
+        CredentialSourceChoiceDescriptor selected)
+    {
+        if (inspection.Sources.Any(source => source.Identifier == selected.Identifier))
+        {
+            return inspection;
+        }
+
+        return inspection with
+        {
+            Sources = inspection.Sources.Append(selected with { Usability = CredentialSourceUsability.Missing }).ToArray(),
+            AcquisitionKeys = inspection.AcquisitionKeys.Where(entry => entry.Key != selected.Identifier)
+                .ToDictionary(entry => entry.Key, entry => entry.Value),
+            CachedGenerations = inspection.CachedGenerations.Where(entry => entry.Key != selected.Identifier)
+                .ToDictionary(entry => entry.Key, entry => entry.Value),
+        };
+    }
+
     private static UserAuthorizationSnapshot CreateSnapshot<TResult>(
         AccessRequest<TResult> request,
         IReadOnlyList<CredentialSourceChoiceDescriptor> sources,
@@ -781,12 +836,17 @@ internal sealed class AccessBroker : IAccessBroker
 
     private sealed class PendingInspection<TRequest, TResult>(
         TRequest request,
-        ICredentialAccessExecutor<TRequest, TResult> executor) : IPendingInspection
+        ICredentialAccessExecutor<TRequest, TResult> executor,
+        CredentialReference pinnedCredential) : IPendingInspection
         where TRequest : CredentialAccessRequest<TResult>
         where TResult : ICredentialAccessResult
     {
-        public async ValueTask<IReadOnlyList<CredentialSourceChoiceDescriptor>> InspectAsync(CancellationToken cancellationToken) =>
-            (await executor.InspectAsync(request, cancellationToken).ConfigureAwait(false)).Sources
-                .Where(source => request.Sources.Any(allowed => allowed.Identifier == source.Identifier)).ToArray();
+        public async ValueTask<IReadOnlyList<CredentialSourceChoiceDescriptor>> InspectAsync(CancellationToken cancellationToken)
+        {
+            var inspection = await executor.InspectAsync(request, cancellationToken).ConfigureAwait(false);
+            return IsValidInspection(request, inspection, pinnedCredential)
+                ? inspection.Sources
+                : request.Sources.Select(source => source with { Usability = CredentialSourceUsability.Missing }).ToArray();
+        }
     }
 }
