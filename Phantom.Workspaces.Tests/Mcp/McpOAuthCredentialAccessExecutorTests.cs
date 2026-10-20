@@ -246,6 +246,114 @@ public sealed class McpOAuthCredentialAccessExecutorTests
     }
 
     [Fact]
+    public async Task McpOAuthExecutor_AccountSwitchAfterRenewal_RejectsRememberedAccountAndOldGeneration()
+    {
+        await using var fixture = new Fixture();
+        fixture.Server.Subject = "principal-A";
+        var request = fixture.Request() with
+        {
+            Use = fixture.Request().Use with { MemoryScopes = [ReleaseMemoryScopeKind.AllUses] },
+        };
+        var first = fixture.Broker.AcquireAsync(request, TestContext.Current.CancellationToken);
+        await fixture.AllowAsync();
+        await using var original = Assert.IsType<AccessSucceeded<McpCredentialUseResult>>(
+            await first.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken)).Result;
+        var accountA = CredentialIdentityFactory.CreateAccountIdentifier(
+            CredentialProviderKind.McpOAuth, $"{fixture.Configuration.AuthorizationServer.AbsoluteUri}\nprincipal-A");
+        var cache = fixture.Executor.GetGenerationCache(fixture.Configuration.Identifier);
+        var originalGeneration = (await cache.InspectGenerationAsync(TestContext.Current.CancellationToken))!.Generation;
+        Assert.Equal(CredentialGenerationInvalidationOutcome.Invalidated,
+            await cache.InvalidateGenerationAsync(originalGeneration, TestContext.Current.CancellationToken));
+
+        fixture.Server.Subject = "principal-B";
+        fixture.Server.AccessToken = "private-renewed-access";
+        var pinnedRequest = request with { Credential = request.Credential with { AccountIdentifier = accountA } };
+        var renewal = fixture.Broker.AcquireAsync(pinnedRequest, TestContext.Current.CancellationToken);
+        var renewalRow = await fixture.WaitForPendingAsync(renewal);
+        Assert.Equal(UserAuthorizationPrimaryActionKind.Perform, renewalRow.PrimaryAction);
+        Assert.Equal(1, fixture.Browser.OpenCount);
+        await fixture.AllowAsync(renewalRow);
+        var switched = Assert.IsType<AccessFailed<McpCredentialUseResult>>(
+            await renewal.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken));
+        Assert.Equal(AccessErrorCode.IdentityMismatch, switched.ErrorCode);
+        var rotatedGeneration = (await cache.InspectGenerationAsync(TestContext.Current.CancellationToken))!.Generation;
+        Assert.NotEqual(originalGeneration, rotatedGeneration);
+        Assert.IsType<CredentialUseReacquisitionRequired<int>>(await original.Use.UseAsync<int>(
+            _ => throw new InvalidOperationException("An old account/generation must not execute."),
+            TestContext.Current.CancellationToken));
+
+        var accountB = CredentialIdentityFactory.CreateAccountIdentifier(
+            CredentialProviderKind.McpOAuth, $"{fixture.Configuration.AuthorizationServer.AbsoluteUri}\nprincipal-B");
+        var existingRows = fixture.Registry.GetSnapshot().Select(row => row.Identifier).ToHashSet();
+        var otherAccount = fixture.Broker.AcquireAsync(request with
+        {
+            Credential = request.Credential with { AccountIdentifier = accountB },
+        }, TestContext.Current.CancellationToken);
+        var accountBRow = await fixture.WaitForPendingAsync(otherAccount, existingRows);
+        Assert.Equal(UserAuthorizationPrimaryActionKind.Allow, accountBRow.PrimaryAction);
+        Assert.False(otherAccount.IsCompleted);
+        await fixture.AllowAsync(accountBRow);
+        await using var allowedB = Assert.IsType<AccessSucceeded<McpCredentialUseResult>>(
+            await otherAccount.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken)).Result;
+        Assert.IsType<CredentialUseSucceeded<int>>(await allowedB.Use.UseAsync(
+            _ => ValueTask.FromResult(1), TestContext.Current.CancellationToken));
+        Assert.Equal(2, fixture.Browser.OpenCount);
+        Assert.Equal(2, fixture.Server.TokenRequests);
+    }
+
+    [Fact]
+    public async Task McpOAuthExecutor_SamePrincipalRenewal_RotatesMaterialWithoutChangingAccount()
+    {
+        await using var fixture = new Fixture();
+        fixture.Server.Subject = "principal-A";
+        var request = fixture.Request();
+        var first = fixture.Broker.AcquireAsync(request, TestContext.Current.CancellationToken);
+        await fixture.AllowAsync();
+        await using var original = Assert.IsType<AccessSucceeded<McpCredentialUseResult>>(
+            await first.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken)).Result;
+        var inspection = await fixture.Executor.InspectAsync(request, TestContext.Current.CancellationToken);
+        var account = inspection.Credential.AccountIdentifier;
+        Assert.NotNull(account);
+        var cache = fixture.Executor.GetGenerationCache(fixture.Configuration.Identifier);
+        var oldGeneration = (await cache.InspectGenerationAsync(TestContext.Current.CancellationToken))!.Generation;
+        await cache.InvalidateGenerationAsync(oldGeneration, TestContext.Current.CancellationToken);
+        fixture.Server.AccessToken = "private-same-account-renewed";
+        var renewal = fixture.Broker.AcquireAsync(request with
+        {
+            Credential = request.Credential with { AccountIdentifier = account },
+        }, TestContext.Current.CancellationToken);
+        var row = await fixture.WaitForPendingAsync(renewal);
+        Assert.Equal(UserAuthorizationPrimaryActionKind.Perform, row.PrimaryAction);
+        Assert.Equal(1, fixture.Browser.OpenCount);
+        await fixture.AllowAsync(row);
+        await using var renewed = Assert.IsType<AccessSucceeded<McpCredentialUseResult>>(
+            await renewal.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken)).Result;
+        var after = await fixture.Executor.InspectAsync(request, TestContext.Current.CancellationToken);
+        Assert.Equal(account, after.Credential.AccountIdentifier);
+        Assert.NotEqual(oldGeneration, (await cache.InspectGenerationAsync(TestContext.Current.CancellationToken))!.Generation);
+        Assert.IsType<CredentialUseReacquisitionRequired<int>>(await original.Use.UseAsync<int>(
+            _ => throw new InvalidOperationException("A renewed token cannot be substituted into an old lease."),
+            TestContext.Current.CancellationToken));
+        Assert.IsType<CredentialUseSucceeded<int>>(await renewed.Use.UseAsync(
+            _ => ValueTask.FromResult(1), TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task McpOAuthExecutor_MissingStablePrincipal_ReturnsTypedFailureWithoutFinalization()
+    {
+        await using var fixture = new Fixture();
+        fixture.Server.Subject = null;
+        var acquisition = fixture.Broker.AcquireAsync(fixture.Request(), TestContext.Current.CancellationToken);
+        await fixture.AllowAsync();
+        var outcome = Assert.IsType<AccessFailed<McpCredentialUseResult>>(
+            await acquisition.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken));
+        Assert.Equal(AccessErrorCode.ProviderFailure, outcome.ErrorCode);
+        Assert.DoesNotContain("finalize", fixture.Events);
+        Assert.Equal(UserAuthorizationState.Failed, Assert.Single(fixture.Registry.GetSnapshot()).State);
+        Assert.Equal(1, fixture.Server.TokenRequests);
+    }
+
+    [Fact]
     public async Task McpOAuthExecutor_DeniedRow_PerformsNoMaterialOrProviderWork()
     {
         await using var fixture = new Fixture();
@@ -263,6 +371,8 @@ public sealed class McpOAuthCredentialAccessExecutorTests
 
     private sealed class Fixture : IAsyncDisposable
     {
+        private readonly string releaseMemoryDirectory = Path.Combine(
+            Environment.CurrentDirectory, ".mcp-oauth-executor-tests", Guid.NewGuid().ToString("N"));
         internal List<string> Events { get; } = [];
         internal Store Store { get; }
         internal Server Server { get; }
@@ -309,7 +419,8 @@ public sealed class McpOAuthCredentialAccessExecutorTests
             {
                 executors.Add<StoredSecretAccessRequest, StoredSecretAccessResult>(new StoredSecretAccessExecutor(this.SecretSource));
             }
-            this.Broker = new AccessBroker(new RecordingPolicy(this.Events), executors, this.Acquisitions, this.Registry);
+            this.Broker = new AccessBroker(new RecordingPolicy(this.Events,
+                Path.Combine(this.releaseMemoryDirectory, "release-memory.json")), executors, this.Acquisitions, this.Registry);
         }
 
         internal McpOAuthCredentialUseRequest Request(string purpose = "first")
@@ -360,18 +471,23 @@ public sealed class McpOAuthCredentialAccessExecutorTests
             }, TestContext.Current.CancellationToken);
         }
 
-        internal async Task<UserAuthorizationSnapshot> WaitForPendingAsync(Task acquisition)
+        internal async Task<UserAuthorizationSnapshot> WaitForPendingAsync(
+            Task acquisition,
+            IReadOnlySet<UserAuthorizationRequestIdentifier>? excluded = null)
         {
             var pending = new TaskCompletionSource<UserAuthorizationSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
+            bool Matches(UserAuthorizationSnapshot snapshot) =>
+                snapshot.State == UserAuthorizationState.Pending &&
+                (excluded is null || !excluded.Contains(snapshot.Identifier));
             void Refresh(object? sender, UserAuthorizationChangedEventArgs arguments)
             {
-                var row = this.Registry.GetSnapshot().FirstOrDefault(snapshot => snapshot.State == UserAuthorizationState.Pending);
+                var row = this.Registry.GetSnapshot().FirstOrDefault(Matches);
                 if (row is not null) { pending.TrySetResult(row); }
             }
             this.Registry.Changed += Refresh;
             try
             {
-                var row = this.Registry.GetSnapshot().FirstOrDefault(snapshot => snapshot.State == UserAuthorizationState.Pending);
+                var row = this.Registry.GetSnapshot().FirstOrDefault(Matches);
                 if (row is not null) { return row; }
                 var completed = await Task.WhenAny(pending.Task, acquisition)
                     .WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
@@ -384,7 +500,14 @@ public sealed class McpOAuthCredentialAccessExecutorTests
             }
         }
 
-        public ValueTask DisposeAsync() => this.Broker.DisposeAsync();
+        public async ValueTask DisposeAsync()
+        {
+            await this.Broker.DisposeAsync();
+            if (Directory.Exists(this.releaseMemoryDirectory))
+            {
+                Directory.Delete(this.releaseMemoryDirectory, recursive: true);
+            }
+        }
 
         private static Uri RedirectUri()
         {
@@ -452,6 +575,8 @@ public sealed class McpOAuthCredentialAccessExecutorTests
 
     private sealed class Server(List<string> events)
     {
+        internal string AccessToken { get; set; } = "private-access";
+        internal string? Subject { get; set; } = "private-stable-account";
         internal int TokenRequests { get; private set; }
         internal bool SawVerifier { get; private set; }
         internal bool SawClientSecret { get; private set; }
@@ -473,16 +598,23 @@ public sealed class McpOAuthCredentialAccessExecutorTests
                 var form = System.Web.HttpUtility.ParseQueryString(await request.Content!.ReadAsStringAsync(cancellationToken));
                 this.SawVerifier = !string.IsNullOrEmpty(form["code_verifier"]);
                 this.SawClientSecret = form["client_secret"] == "private-client-secret";
-                return Json("""{"access_token":"private-access","refresh_token":"private-refresh","token_type":"Bearer","expires_in":3600,"scope":"read"}""");
+                return Json(JsonSerializer.Serialize(new
+                {
+                    access_token = this.AccessToken,
+                    refresh_token = "private-refresh",
+                    token_type = "Bearer",
+                    expires_in = 3600,
+                    scope = "read",
+                }));
             }
             if (uri.AbsolutePath == "/userinfo")
             {
-                Assert.Equal("private-access", request.Headers.Authorization?.Parameter);
-                return Json("""{"sub":"private-stable-account"}""");
+                Assert.Equal(this.AccessToken, request.Headers.Authorization?.Parameter);
+                return Json(JsonSerializer.Serialize(new { sub = this.Subject }));
             }
             if (uri.AbsolutePath == "/mcp")
             {
-                if (request.Headers.Authorization?.Parameter != "private-access")
+                if (request.Headers.Authorization?.Parameter != this.AccessToken)
                 {
                     var unauthorized = new HttpResponseMessage(HttpStatusCode.Unauthorized);
                     unauthorized.Headers.WwwAuthenticate.Add(new AuthenticationHeaderValue("Bearer",
@@ -574,15 +706,21 @@ public sealed class McpOAuthCredentialAccessExecutorTests
         }
     }
 
-    private sealed class RecordingPolicy(List<string> events) : IReleaseAuthorizationPolicy, IAsyncDisposable
+    private sealed class RecordingPolicy : IReleaseAuthorizationPolicy, IAsyncDisposable
     {
-        private readonly ReleaseAuthorizationPolicy policy = new(new ReleaseMemoryStore());
+        private readonly List<string> events;
+        private readonly ReleaseAuthorizationPolicy policy;
+        internal RecordingPolicy(List<string> events, string filePath)
+        {
+            this.events = events;
+            this.policy = new ReleaseAuthorizationPolicy(new ReleaseMemoryStore(filePath));
+        }
         public ValueTask<ReleasePolicyEvaluation> EvaluateAsync(ReleasePolicyRequest request, CancellationToken cancellationToken) =>
             this.policy.EvaluateAsync(request, cancellationToken);
         public async ValueTask<ReleaseAuthorization> CommitAsync(ReleasePolicyDecision decision, CancellationToken cancellationToken)
         {
             var result = await this.policy.CommitAsync(decision, cancellationToken);
-            events.Add("release");
+            this.events.Add("release");
             return result;
         }
         public ValueTask<ReleaseAuthorizationValidation> ValidateAsync(ReleaseAuthorizationIdentifier identifier, ReleasePolicyRequest request, CancellationToken cancellationToken) =>
@@ -590,7 +728,7 @@ public sealed class McpOAuthCredentialAccessExecutorTests
         public async ValueTask FinalizeCredentialIdentityAsync(ReleaseAuthorizationIdentifier identifier, ResolvedCredentialIdentity identity, CancellationToken cancellationToken)
         {
             await this.policy.FinalizeCredentialIdentityAsync(identifier, identity, cancellationToken);
-            events.Add("finalize");
+            this.events.Add("finalize");
         }
         public ValueTask<IReadOnlyList<ReleaseMemoryDescriptor>> ListAsync(CancellationToken cancellationToken) => this.policy.ListAsync(cancellationToken);
         public ValueTask ForgetAsync(ReleaseMemoryIdentifier identifier, CancellationToken cancellationToken) => this.policy.ForgetAsync(identifier, cancellationToken);
