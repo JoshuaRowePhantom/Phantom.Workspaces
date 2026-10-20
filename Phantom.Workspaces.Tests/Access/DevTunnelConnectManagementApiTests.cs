@@ -71,6 +71,35 @@ public sealed class DevTunnelConnectManagementApiTests
     }
 
     [Fact]
+    public async Task ManagementApi_SdkWrapped401_IsRenewal()
+    {
+        var tunnel = Tunnel(null);
+        var management = Client(tunnel);
+        management.Setup(client => client.GetTunnelAsync(tunnel, It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new UnauthorizedAccessException("unsafe service detail",
+                new HttpRequestException("unsafe response", null, HttpStatusCode.Unauthorized)));
+        Assert.IsType<DevTunnelConnectManagementUnauthorized>(await new DevTunnelConnectManagementApi(_ => management.Object)
+            .MintAsync(Descriptor(), DevTunnelIdentityScheme.GitHub, "identity", TestContext.Current.CancellationToken));
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Forbidden)]
+    [InlineData(HttpStatusCode.TooManyRequests)]
+    public async Task ManagementApi_SdkPermissionAndThrottleErrors_AreFailuresNotRenewal(HttpStatusCode status)
+    {
+        var tunnel = Tunnel(null);
+        var management = Client(tunnel);
+        var httpError = new HttpRequestException("unsafe service detail", null, status);
+        Exception sdkError = status == HttpStatusCode.Forbidden
+            ? new UnauthorizedAccessException("unsafe service detail", httpError)
+            : new InvalidOperationException("unsafe service detail", httpError);
+        management.Setup(client => client.GetTunnelAsync(tunnel, It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(sdkError);
+        Assert.IsType<DevTunnelConnectManagementFailed>(await new DevTunnelConnectManagementApi(_ => management.Object)
+            .MintAsync(Descriptor(), DevTunnelIdentityScheme.GitHub, "identity", TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task ManagementApi_Management401_IsTypedRenewalNotSilentRetry()
     {
         var tunnel = Tunnel(null);

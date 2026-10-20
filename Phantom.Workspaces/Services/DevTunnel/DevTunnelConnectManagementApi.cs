@@ -76,9 +76,18 @@ internal sealed class DevTunnelConnectManagementApi
         {
             return new DevTunnelConnectManagementUnauthorized();
         }
-        catch (UnauthorizedAccessException)
+        catch (UnauthorizedAccessException exception) when (
+            exception.InnerException is HttpRequestException { StatusCode: HttpStatusCode.Unauthorized })
         {
             return new DevTunnelConnectManagementUnauthorized();
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return new DevTunnelConnectManagementFailed { ErrorCode = AccessErrorCode.ProviderFailure };
+        }
+        catch (InvalidOperationException exception) when (exception.InnerException is HttpRequestException)
+        {
+            return new DevTunnelConnectManagementFailed { ErrorCode = AccessErrorCode.ProviderFailure };
         }
         catch (HttpRequestException)
         {
