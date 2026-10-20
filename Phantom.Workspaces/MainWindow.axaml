@@ -109,7 +109,7 @@
                     <Button Classes="settings-gear top-right"
                             Content="🤫"
                             ToolTip.Tip="Memorized secrets and credentials"
-                            Click="OnOpenCredentialManagerClicked" />
+                            Click="OnOpenAccessAdministrationClicked" />
 
                     <Panel VerticalAlignment="Stretch"
                            IsVisible="{Binding RunningAgentBrain, Converter={x:Static ObjectConverters.IsNotNull}}">

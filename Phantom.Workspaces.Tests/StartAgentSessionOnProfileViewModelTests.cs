@@ -205,7 +205,8 @@ public sealed class StartAgentSessionOnProfileViewModelTests
     {
         var applicationServices = processLoggerFactory is null ? null : new ApplicationServices(
             MainWindowIntegrationTests.CreateTestRunningAgentChatTable(),
-            new AgentPersistenceStoreCache(), processLoggerFactory);
+            new AgentPersistenceStoreCache(), processLoggerFactory,
+            accessBroker: Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>());
         var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel(
             applicationServices: applicationServices);
         await viewModel.InitializeAsync();

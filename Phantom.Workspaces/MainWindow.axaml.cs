@@ -5,7 +5,7 @@ using Avalonia;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Phantom.Workspaces.Services;
-using Phantom.Workspaces.Services.Secrets;
+using Phantom.Workspaces.Services.Access;
 using Phantom.Workspaces.Templates;
 using Phantom.Workspaces.ViewModels;
 using Phantom.Workspaces.ViewModels.Configuration;
@@ -14,6 +14,18 @@ namespace Phantom.Workspaces;
 
 public partial class MainWindow : Window
 {
+    private AccessHostServices? accessHost;
+
+    public void AttachAccessHost(AccessHostServices host, AuthorizationRequestsPopupViewModel popup)
+    {
+        if (!ReferenceEquals(host.AuthorizationRows, popup.Rows))
+        {
+            throw new ArgumentException("The popup must use the process authorization rows.", nameof(popup));
+        }
+        this.accessHost = host;
+        this.AttachAuthorizationRequests(popup);
+    }
+
     public void AttachAuthorizationRequests(AuthorizationRequestsPopupViewModel popup)
     {
         popup.Rows.SetPresentationMode(AuthorizationRowsPresentationMode.Runtime);
@@ -54,7 +66,8 @@ public partial class MainWindow : Window
         InitializeComponent();
         AddDockDataTemplates();
         this.DataContext = viewModel;
-        viewModel.OpenCredentialManagerRequested += this.OnOpenCredentialManagerRequested;
+        viewModel.OpenAccessAdministrationRequested += this.OnOpenAccessAdministrationRequested;
+        this.Closed += (_, _) => viewModel.OpenAccessAdministrationRequested -= this.OnOpenAccessAdministrationRequested;
         this.AddHandler(InputElement.KeyDownEvent, this.OnPreviewKeyDown, RoutingStrategies.Tunnel);
         this.AddHandler(InputElement.KeyUpEvent, this.OnPreviewKeyUp, RoutingStrategies.Tunnel);
         this.Deactivated += (_, _) =>
@@ -256,42 +269,48 @@ public partial class MainWindow : Window
         scheduledTasksViewModel.Dispose();
     }
 
-    private void OnOpenCredentialManagerClicked(
+    private void OnOpenAccessAdministrationClicked(
         object? sender,
         RoutedEventArgs e)
     {
         if (this.DataContext is MainWindowViewModel viewModel)
         {
-            viewModel.OpenCredentialManagerCommand.Execute(null);
+            viewModel.OpenAccessAdministrationCommand.Execute(null);
         }
     }
 
-    private async void OnOpenCredentialManagerRequested()
+    private async void OnOpenAccessAdministrationRequested()
     {
-        await this.OpenCredentialManagerAsync();
+        await this.OpenAccessAdministrationAsync();
     }
 
-    /// <summary>The most recently opened credential-manager dialog window (test observation, #1267).</summary>
-    internal CredentialManagerDialogWindow? LastCredentialManagerDialog { get; private set; }
+    /// <summary>The most recently opened access-administration window.</summary>
+    internal AccessAdministrationWindow? LastAccessAdministrationWindow { get; private set; }
 
-    private async Task OpenCredentialManagerAsync()
+    private async Task OpenAccessAdministrationAsync()
     {
         if (this.DataContext is not MainWindowViewModel viewModel)
         {
             return;
         }
 
-        var services = viewModel.ApplicationServices;
-        var managerViewModel = new CredentialManagerDialogViewModel(
-            services.AllowedSecretsStore,
-            services.PlatformSecretStore,
-            services.CredentialPicker,
-            new SecretMemoryEnumerator(services.AllowedSecretsStore, services.PlatformSecretStore));
-        await managerViewModel.LoadAsync();
-
-        var window = new CredentialManagerDialogWindow(managerViewModel);
-        this.LastCredentialManagerDialog = window;
-        await window.ShowDialog(this);
+        var host = this.accessHost ?? throw new InvalidOperationException("The process access host has not been attached.");
+        if (this.LastAccessAdministrationWindow is { } existing)
+        {
+            existing.Activate();
+            return;
+        }
+        await using var window = new AccessAdministrationWindow(host);
+        this.LastAccessAdministrationWindow = window;
+        try
+        {
+            await window.RefreshAsync();
+            if (!window.IsDisposed) { await window.ShowDialog(this); }
+        }
+        finally
+        {
+            this.LastAccessAdministrationWindow = null;
+        }
     }
 
     private void OnPreviewKeyUp(object? sender, KeyEventArgs e)

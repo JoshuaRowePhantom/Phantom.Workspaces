@@ -170,7 +170,8 @@ public sealed class AgentManifestLaunchpadViewModelTests
         ILoggerFactory? processFactory = null)
     {
         var applicationServices = processFactory is null ? null : new ApplicationServices(
-            CreateTestRunningAgentChatTable(), new AgentPersistenceStoreCache(), processFactory);
+            CreateTestRunningAgentChatTable(), new AgentPersistenceStoreCache(), processFactory,
+            accessBroker: Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>());
         var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel(
             applicationServices: applicationServices);
         await viewModel.InitializeAsync();

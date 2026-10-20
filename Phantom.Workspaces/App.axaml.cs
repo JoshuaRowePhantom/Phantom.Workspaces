@@ -12,6 +12,7 @@ using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Services.Access;
 using Phantom.Workspaces.Services.Secrets;
 using Phantom.Workspaces.Services.Updates;
 using Phantom.Workspaces.Templates;
@@ -25,6 +26,14 @@ public partial class App : Application
     private TrayIconController? trayIconController;
     private UpdateController? updateController;
     private bool isExiting;
+    private AccessHostServices? accessHost;
+    private MainWindowViewModel? runtimeViewModel;
+    private MainWindow? runtimeWindow;
+    private AuthorizationRequestsPopupViewModel? authorizationPopup;
+    private AgentChatFactory? agentChatFactory;
+    private ILoggerFactory? processLoggerFactory;
+    private Task? shutdownTask;
+    private bool shutdownCompleted;
 
     /// <summary>
     /// The live update controller for the running, installed application, or <c>null</c> when
@@ -131,11 +140,7 @@ public partial class App : Application
         Microsoft.Extensions.Logging.ILoggerFactory loggerFactory,
         ApplicationServices applicationServices)
     {
-        void RequestShutdown() => Dispatcher.UIThread.Post(() =>
-        {
-            this.isExiting = true;
-            desktop.Shutdown();
-        });
+        void RequestShutdown() => Dispatcher.UIThread.Post(() => this.RequestShutdown(desktop));
 
         var updateCapability = UpdateControllerFactory.TryCreate(configuration, RequestShutdown, loggerFactory);
         this.updateController = updateCapability.Controller;
@@ -155,11 +160,6 @@ public partial class App : Application
         this.updateController.StartPeriodicChecks();
         this.InstallCloseToTray(mainWindow, configuration);
 
-        desktop.Exit += (_, _) =>
-        {
-            this.trayIconController?.Dispose();
-            this.updateController?.Dispose();
-        };
     }
 
     private void InstallCloseToTray(Window mainWindow, WorkspacesConfiguration configuration)
@@ -224,7 +224,30 @@ public partial class App : Application
                 return;
             }
 
-            var loadingViewModel = new LoadingWindowViewModel { AuthorizationRows = null! };
+            var persistenceService = CommandLineOptions.TryGetConfigurationFilePath(Program.StartupArguments, out var configurationFilePath)
+                ? new ConfigurationPersistenceService(configurationFilePath!)
+                : new ConfigurationPersistenceService();
+            var configuration = persistenceService.ConfigurationExists()
+                ? await persistenceService.LoadAsync()
+                : null;
+            IPlatformSecretStore platformStore = OperatingSystem.IsWindows()
+                ? new WindowsCredentialManagerSecretStore()
+                : new NullPlatformSecretStore();
+            this.accessHost = CreateAccessHostBeforeStartup(new AccessHostOptions
+            {
+                PlatformSecretStore = platformStore,
+                Dispatch = action => Dispatcher.UIThread.Post(action),
+            });
+            try
+            {
+            desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            desktop.ShutdownRequested += (_, arguments) =>
+            {
+                if (this.shutdownCompleted) { return; }
+                arguments.Cancel = true;
+                this.RequestShutdown(desktop);
+            };
+            var loadingViewModel = new LoadingWindowViewModel { AuthorizationRows = this.accessHost.AuthorizationRows };
             var loadingWindow = new LoadingWindow(loadingViewModel);
             desktop.MainWindow = loadingWindow;
 
@@ -234,21 +257,13 @@ public partial class App : Application
             WireSingleInstanceActivation(desktop);
 
             loadingViewModel.StatusText = "Reading startup configuration.";
-            var persistenceService = CommandLineOptions.TryGetConfigurationFilePath(Program.StartupArguments, out var configurationFilePath)
-                ? new ConfigurationPersistenceService(configurationFilePath!)
-                : new ConfigurationPersistenceService();
-            
-            var configuration = persistenceService.ConfigurationExists()
-                ? await persistenceService.LoadAsync()
-                : null;
-            
             var repositorySource = configuration is not null
                 ? configuration.ToRepositorySource()
                 : await ResolveStartupRepositorySourceAsync(desktop, loadingWindow, persistenceService);
                 
             if (repositorySource is null)
             {
-                desktop.Shutdown();
+                this.RequestShutdown(desktop);
                 return;
             }
 
@@ -263,6 +278,7 @@ public partial class App : Application
                 configuration ?? new WorkspacesConfiguration(),
                 configurationFilePath);
             var loggerFactory = Services.Logging.LoggingBootstrap.CreateLoggerFactory(logDirectoryProvider);
+            this.processLoggerFactory = loggerFactory;
 
             // #1373: install the process-wide ambient docker logger factory so the production
             // MongoDbConnectionBroker default path (used by the persistence/edit-store factories)
@@ -277,16 +293,6 @@ public partial class App : Application
             var agentPersistenceStoreCache = new AgentPersistenceStoreCache();
             var agentPersistenceStore = await agentPersistenceStoreCache.GetOrCreateAsync(repositorySource);
             var foregroundScheduler = SynchronizationContextTaskScheduler.FromCurrent();
-
-            IPlatformSecretStore platformStore;
-            if (OperatingSystem.IsWindows())
-            {
-                platformStore = new WindowsCredentialManagerSecretStore();
-            }
-            else
-            {
-                platformStore = new NullPlatformSecretStore();
-            }
 
             var allowedSecretsStore = new AllowedSecretsStore(new AllowedSecretsStoreConfiguration());
             var hwndProvider = new AvaloniaHwndProvider();
@@ -312,8 +318,12 @@ public partial class App : Application
             var mcpOAuthOptions = Services.Mcp.McpOAuthComposition.CreateOptions(secretProvider, platformStore, loggerFactory);
             var agentChatFactory = new AgentChatFactory(
                 agentPersistenceStore,
-                Services.AgentServicesComposition.ComposeHostServices(secretProvider, mcpOAuthOptions, loggerFactory),
+                Services.AgentServicesComposition.ComposeHostServices(secretProvider, mcpOAuthOptions, loggerFactory) with
+                {
+                    AccessBroker = this.accessHost.Broker,
+                },
                 foregroundScheduler);
+            this.agentChatFactory = agentChatFactory;
             var transportFactoryRegistryProvider = new Services.TransportFactoryRegistryProvider();
             var applicationServices = new ApplicationServices(
                 new RunningAgentChatTable(
@@ -322,6 +332,7 @@ public partial class App : Application
                     loggerFactory.CreateLogger<RunningAgentChatTable>()),
                 agentPersistenceStoreCache,
                 loggerFactory,
+                accessBroker: this.accessHost.Broker,
                 logDirectoryProvider: logDirectoryProvider,
                 configurationPersistence: persistenceService,
                 secretProvider: secretProvider,
@@ -331,6 +342,7 @@ public partial class App : Application
                 mcpOAuthOptions: mcpOAuthOptions,
                 transportFactoryRegistryProvider: transportFactoryRegistryProvider);
             var viewModel = new MainWindowViewModel(repositorySource, configuration, applicationServices: applicationServices);
+            this.runtimeViewModel = viewModel;
 
             // #1172: register the canonical URL opener now that MainWindowViewModel exists
             // (it implements IWorkspaceTabService). The TopLevel accessor is late-bound to
@@ -353,24 +365,102 @@ public partial class App : Application
                 initializeAsync: () => viewModel.InitializeAsync(),
                 setStatus: msg => loadingViewModel.StatusText = msg,
                 onFaultDelay: () => Task.Delay(5000), // Give user time to read the error
-                shutdown: () => desktop.Shutdown(),
+                shutdown: () => this.RequestShutdown(desktop),
                 postInitialize: () =>
                 {
                     loadingViewModel.StatusText = "Opening main window.";
                     var mainWindow = new MainWindow(viewModel);
+                    this.runtimeWindow = mainWindow;
+                    this.authorizationPopup = new AuthorizationRequestsPopupViewModel
+                    {
+                        Rows = this.accessHost.AuthorizationRows,
+                    };
+                    mainWindow.AttachAccessHost(this.accessHost, this.authorizationPopup);
                     viewModel.WireWindowFocus(() => RestoreMainWindow(mainWindow));
                     mainWindow.Icon = TrayIconImageFactory.Create(updateAvailable: false);
                     desktop.MainWindow = mainWindow;
                     mainWindow.Show();
                     this.WireTrayAndUpdates(desktop, mainWindow, configuration ?? new WorkspacesConfiguration(), loggerFactory, applicationServices);
+                    mainWindow.Closing += (_, arguments) =>
+                    {
+                        if (this.shutdownCompleted || arguments.Cancel) { return; }
+                        arguments.Cancel = true;
+                        this.RequestShutdown(desktop);
+                    };
                 },
                 closeSplash: () => loadingWindow.Close());
 
             _ = succeeded;
             return;
+            }
+            catch (Exception startupFailure)
+            {
+                try
+                {
+                    await (this.shutdownTask ??= this.ShutdownCoreAsync());
+                }
+                catch (Exception cleanupFailure)
+                {
+                    throw new AggregateException("Startup and cleanup did not complete cleanly.", startupFailure, cleanupFailure);
+                }
+                finally
+                {
+                    this.shutdownCompleted = true;
+                    desktop.Shutdown();
+                }
+
+                throw;
+            }
         }
 
         base.OnFrameworkInitializationCompleted();
+    }
+
+    internal static AccessHostServices CreateAccessHostBeforeStartup(AccessHostOptions options) =>
+        AccessHostServices.Create(options);
+
+    private async void RequestShutdown(IClassicDesktopStyleApplicationLifetime desktop)
+    {
+        this.isExiting = true;
+        try
+        {
+            await (this.shutdownTask ??= this.ShutdownCoreAsync());
+        }
+        catch (AggregateException failure)
+        {
+            this.processLoggerFactory?.CreateLogger<App>().LogError(
+                "Application cleanup failed in {FailureCount} components.", failure.Flatten().InnerExceptions.Count);
+        }
+        finally
+        {
+            this.shutdownCompleted = true;
+            desktop.Shutdown();
+        }
+    }
+
+    private async Task ShutdownCoreAsync()
+    {
+        var failures = new System.Collections.Generic.List<Exception>();
+        async Task CleanAsync(Func<ValueTask> cleanup)
+        {
+            try { await cleanup(); }
+            catch (Exception exception) { failures.Add(exception); }
+        }
+
+        if (this.runtimeWindow?.LastAccessAdministrationWindow is { } administration)
+        {
+            await CleanAsync(administration.DisposeAsync);
+        }
+        if (this.authorizationPopup is not null) { await CleanAsync(this.authorizationPopup.DisposeAsync); }
+        if (this.accessHost is not null) { await CleanAsync(this.accessHost.DisposeAsync); }
+        if (this.runtimeViewModel is not null) { await CleanAsync(this.runtimeViewModel.DisposeAsync); }
+        if (this.agentChatFactory is not null) { await CleanAsync(this.agentChatFactory.DisposeAsync); }
+        await CleanAsync(() => { this.trayIconController?.Dispose(); return ValueTask.CompletedTask; });
+        await CleanAsync(() => { this.updateController?.Dispose(); return ValueTask.CompletedTask; });
+        if (failures.Count > 0)
+        {
+            throw new AggregateException("Application shutdown did not complete cleanly.", failures);
+        }
     }
 
     /// <summary>

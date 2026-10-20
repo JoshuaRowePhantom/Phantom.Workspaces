@@ -93,6 +93,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private readonly Services.ApplicationServices applicationServices;
     private readonly Microsoft.Extensions.Logging.ILoggerFactory loggerFactory;
     private readonly bool ownsLoggerFactory;
+    private Services.Access.AccessHostServices? ownedAccessHost;
     private readonly Services.Logging.ILogDirectoryProvider? logDirectoryProvider;
     private readonly global::Phantom.Workspaces.Configuration.ConfigurationPersistenceService? configurationPersistence;
 
@@ -117,7 +118,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         ProfileStore? profileStore = null,
         ApplicationServices? applicationServices = null)
     {
-        var services = applicationServices ?? CreateDefaultApplicationServices();
+        var services = applicationServices ?? CreateDefaultApplicationServices(out this.ownedAccessHost);
         this.applicationServices = services;
         this.ownsLoggerFactory = applicationServices is null;
         this.loggerFactory = services.LoggerFactory;
@@ -161,7 +162,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.NavigateBackCommand = new RelayCommand(_ => this.OnNavigateBack());
         this.NavigateForwardCommand = new RelayCommand(_ => this.OnNavigateForward());
         this.DuplicateBrowserTabCommand = new RelayCommand(async _ => await this.DuplicateBrowserTabAsync());
-        this.OpenCredentialManagerCommand = new RelayCommand(_ => this.OpenCredentialManagerRequested?.Invoke());
+        this.OpenAccessAdministrationCommand = new RelayCommand(_ => this.OpenAccessAdministrationRequested?.Invoke());
         var agentSessionShortcutContext = new AgentSessionShortcutContext(
             userComputerProfileOverride: configuration?.UserComputerProfileOverride,
             persistenceStoreCache: services.AgentPersistenceStoreCache);
@@ -218,21 +219,27 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             action => Dispatcher.UIThread.Post(action));
     }
 
-    private static ApplicationServices CreateDefaultApplicationServices()
+    private static ApplicationServices CreateDefaultApplicationServices(out Services.Access.AccessHostServices accessHost)
     {
         var agentPersistenceStoreCache = new AgentPersistenceStoreCache();
         var agentPersistenceStore = AgentPersistenceStoreFactory.CreateInMemory();
         var loggerFactory = Services.Logging.HostFileLoggerFactory.Create(
             Services.Logging.HostLogDirectoryResolver.Resolve(AppContext.BaseDirectory));
+        accessHost = Services.Access.AccessHostServices.Create(new Services.Access.AccessHostOptions
+        {
+            PlatformSecretStore = new Llm.Secrets.NullPlatformSecretStore(),
+            Dispatch = action => Dispatcher.UIThread.Post(action),
+        });
         var agentChatFactory = new AgentChatFactory(
             agentPersistenceStore,
-            new AgentServices { LoggerFactory = loggerFactory },
+            new AgentServices { LoggerFactory = loggerFactory, AccessBroker = accessHost.Broker },
             TaskScheduler.Current);
         var registryProvider = new TransportFactoryRegistryProvider();
         return new ApplicationServices(
             new RunningAgentChatTable(agentChatFactory, AgentSessionRuntimeContextFactory.FromProvider(registryProvider)),
             agentPersistenceStoreCache,
             loggerFactory,
+            accessBroker: accessHost.Broker,
             transportFactoryRegistryProvider: registryProvider);
     }
 
@@ -271,12 +278,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     /// <summary>
     /// Opens the credential/memorized-secrets manager dialog (#1267). Exposed as a command so the
     /// 🤫 top-right button and any keyboard binding open the same dialog through one path; the
-    /// view raises the actual window via <see cref="OpenCredentialManagerRequested"/>.
+    /// view raises the actual window via <see cref="OpenAccessAdministrationRequested"/>.
     /// </summary>
-    public RelayCommand OpenCredentialManagerCommand { get; }
+    public RelayCommand OpenAccessAdministrationCommand { get; }
 
-    /// <summary>Raised when <see cref="OpenCredentialManagerCommand"/> is invoked.</summary>
-    public event Action? OpenCredentialManagerRequested;
+    /// <summary>Raised when <see cref="OpenAccessAdministrationCommand"/> is invoked.</summary>
+    public event Action? OpenAccessAdministrationRequested;
 
     /// <summary>
     /// Find (Ctrl-F) session over the active View's <see cref="ViewPopulationViewModel"/>. The population
@@ -729,9 +736,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             new Tools.VsCodeTunnelDiscoveryTool(
                 notificationService: this.notificationService,
                 logger: this.loggerFactory.CreateLogger<Tools.VsCodeTunnelDiscoveryTool>()),
-            .. (this.applicationServices.AccessBroker is { } accessBroker
-                ? new Tools.IWorkspaceTool[] { new Tools.RunVsCodeTunnelTool(accessBroker) }
-                : Array.Empty<Tools.IWorkspaceTool>()),
+            new Tools.RunVsCodeTunnelTool(this.applicationServices.AccessBroker),
             new Tools.GitHub.GitHubWorkItemDiscoveryTool(),
             new Tools.AzureDevOps.AzureDevOpsWorkItemDiscoveryTool(),
         ]);
@@ -4980,6 +4985,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         await base.DisposeAsync();
+        if (this.ownedAccessHost is not null)
+        {
+            await this.ownedAccessHost.DisposeAsync();
+        }
         if (this.ownsLoggerFactory)
             this.loggerFactory.Dispose();
     }

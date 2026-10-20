@@ -15,6 +15,7 @@ public sealed class ApplicationServices
         IRunningAgentChatTable runningAgentChats,
         IAgentPersistenceStoreCache agentPersistenceStoreCache,
         ILoggerFactory loggerFactory,
+        IAccessBroker accessBroker,
         IUpdateController? updateController = null,
         ILogDirectoryProvider? logDirectoryProvider = null,
         ConfigurationPersistenceService? configurationPersistence = null,
@@ -26,7 +27,6 @@ public sealed class ApplicationServices
         TransportFactoryRegistryProvider? transportFactoryRegistryProvider = null,
         string? updateUnavailableReason = null,
         ITransportFactory? outboundHttpTransportFactory = null,
-        IAccessBroker? accessBroker = null,
         Func<AccessPresentationScope>? accessPresentationScope = null)
     {
         this.RunningAgentChats = runningAgentChats;
@@ -53,7 +53,7 @@ public sealed class ApplicationServices
         this.TransportFactoryRegistryProvider =
             transportFactoryRegistryProvider ?? new TransportFactoryRegistryProvider();
         this.OutboundHttpTransportFactory = outboundHttpTransportFactory;
-        this.AccessBroker = accessBroker;
+        this.AccessBroker = accessBroker ?? throw new ArgumentNullException(nameof(accessBroker));
         this.AccessPresentationScope = accessPresentationScope;
     }
 
@@ -88,7 +88,7 @@ public sealed class ApplicationServices
 
     public IRunningAgentChatTable RunningAgentChats { get; }
 
-    public IAccessBroker? AccessBroker { get; }
+    public IAccessBroker AccessBroker { get; }
     public Func<AccessPresentationScope>? AccessPresentationScope { get; }
     internal Func<RemoteAuthentication?, IAccessBroker, Func<AccessPresentationScope>,
         DevTunnel.IDevTunnelHostService>? DevTunnelHostServiceFactory { get; init; }

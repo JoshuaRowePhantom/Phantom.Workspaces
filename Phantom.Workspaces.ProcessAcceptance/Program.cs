@@ -434,8 +434,15 @@ internal static class Program
         var provider = new TransportFactoryRegistryProvider();
         var chats = new RunningAgentChatTable(
             factory, AgentSessionRuntimeContextFactory.FromProvider(provider));
+        await using var accessHost = Phantom.Workspaces.Services.Access.AccessHostServices.Create(
+            new Phantom.Workspaces.Services.Access.AccessHostOptions
+            {
+                PlatformSecretStore = new Phantom.Workspaces.Llm.Secrets.NullPlatformSecretStore(),
+                Dispatch = action => Avalonia.Threading.Dispatcher.UIThread.Post(action),
+            });
         var services = new ApplicationServices(
             chats, new AgentPersistenceStoreCache(), loggerFactory,
+            accessBroker: accessHost.Broker,
             transportFactoryRegistryProvider: provider,
             outboundHttpTransportFactory: new FixtureAuthenticatedHttpFactory(dataEndpoint));
         var configuration = new WorkspacesConfiguration

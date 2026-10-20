@@ -574,7 +574,8 @@ public sealed class OpenAgentSessionShortcutHandlerTests
             new AgentServices(),
             SynchronizationContextTaskScheduler.FromCurrent());
         var table = new RunningAgentChatTable(runningChatFactory, spyRuntimeFactory);
-        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache(), Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache(), Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+            accessBroker: Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>());
         await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
 
@@ -686,7 +687,8 @@ public sealed class OpenAgentSessionShortcutHandlerTests
             new AgentServices(),
             SynchronizationContextTaskScheduler.FromCurrent());
         var table = new RunningAgentChatTable(runningChatFactory, spyRuntimeFactory);
-        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache(), process);
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache(), process,
+            accessBroker: Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>());
         await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
 

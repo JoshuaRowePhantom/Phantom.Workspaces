@@ -23,6 +23,7 @@ public sealed class AgentServicesCompositionTests
             MainWindowIntegrationTests.CreateTestRunningAgentChatTable(),
             new AgentPersistenceStoreCache(),
             NullLoggerFactory.Instance,
+            accessBroker: Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>(),
             credentialPicker: new NullCredentialPicker(),
             allowedSecretsStore: new AllowedSecretsStore(new AllowedSecretsStoreConfiguration()),
             platformSecretStore: new NullPlatformSecretStore(),

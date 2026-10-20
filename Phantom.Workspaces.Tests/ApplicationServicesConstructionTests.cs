@@ -13,7 +13,8 @@ public sealed class ApplicationServicesConstructionTests
         var services = new ApplicationServices(
             null!,
             new AgentPersistenceStoreCache(),
-            NullLoggerFactory.Instance);
+            NullLoggerFactory.Instance,
+            accessBroker: Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>());
 
         Assert.NotNull(services.SecretProvider);
         Assert.NotNull(services.CredentialPicker);
@@ -35,6 +36,7 @@ public sealed class ApplicationServicesConstructionTests
             null!,
             new AgentPersistenceStoreCache(),
             NullLoggerFactory.Instance,
+            accessBroker: Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>(),
             secretProvider: secretProvider,
             credentialPicker: credentialPicker,
             allowedSecretsStore: allowedSecretsStore,
@@ -50,7 +52,8 @@ public sealed class ApplicationServicesConstructionTests
     public void ApplicationServices_StartupUpdateCapability_PropagatesUnavailableReason()
     {
         var services = new ApplicationServices(
-            null!, new AgentPersistenceStoreCache(), NullLoggerFactory.Instance);
+            null!, new AgentPersistenceStoreCache(), NullLoggerFactory.Instance,
+            accessBroker: Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>());
 
         services.SetUpdateCapability(null, "Installed update layout is broken; reinstall.");
 

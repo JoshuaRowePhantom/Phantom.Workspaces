@@ -153,6 +153,7 @@ public sealed class MainWindowIntegrationTests
             CreateTestRunningAgentChatTable(),
             new AgentPersistenceStoreCache(),
             Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+            accessBroker: Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>(),
             configurationPersistence: store,
             updateUnavailableReason: "Installed update layout is broken; reinstall.");
 
@@ -385,27 +386,29 @@ public sealed class MainWindowIntegrationTests
     // in the TopRightBar (the earlier attempt in DockDataTemplates.axaml never rendered).
 
     [AvaloniaFact(Timeout = 15_000)]
-    public async Task MainWindow_ShushButton_OpensCredentialManagerDialog()
+    public async Task MainWindow_ShushButton_OpensRealAccessAdministration()
     {
-        // Issue #1267: clicking the 🤫 top-right button opens the credential-manager dialog. Wire
-        // hermetic secret services so LoadAsync never touches the real credential store / filesystem.
-        var tempAllowedPath = Path.Combine(
-            Path.GetTempPath(),
-            "Phantom.Workspaces.Tests",
-            Guid.NewGuid().ToString("N"),
-            "allowed-secrets.json");
+        await using var accessHost = Services.Access.AccessHostServices.Create(new Services.Access.AccessHostOptions
+        {
+            PlatformSecretStore = new NullPlatformSecretStore(),
+            Dispatch = action => action(),
+            ReleaseMemoryFilePath = Path.Combine(Environment.CurrentDirectory, ".nonexistent-access-admin", "release-memory.json"),
+        });
         var services = new ApplicationServices(
             CreateTestRunningAgentChatTable(),
             new AgentPersistenceStoreCache(),
             Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+            accessBroker: accessHost.Broker,
             credentialPicker: new NullCredentialPicker(),
-            allowedSecretsStore: new AllowedSecretsStore(new AllowedSecretsStoreConfiguration { Path = tempAllowedPath }),
+            allowedSecretsStore: new AllowedSecretsStore(new AllowedSecretsStoreConfiguration()),
             platformSecretStore: new NullPlatformSecretStore());
 
         await using var viewModel = CreateTestMainWindowViewModel(applicationServices: services);
         await viewModel.InitializeAsync();
 
         var window = new MainWindow(viewModel);
+        await using var popup = new AuthorizationRequestsPopupViewModel { Rows = accessHost.AuthorizationRows };
+        window.AttachAccessHost(accessHost, popup);
         window.Show();
         try
         {
@@ -417,15 +420,15 @@ public sealed class MainWindowIntegrationTests
 
             shushButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
 
-            for (var i = 0; i < 20 && window.LastCredentialManagerDialog is null; i++)
+            for (var i = 0; i < 20 && window.LastAccessAdministrationWindow is null; i++)
             {
                 await Dispatcher.UIThread.InvokeAsync(() => { });
                 Dispatcher.UIThread.RunJobs();
             }
 
-            var dialog = window.LastCredentialManagerDialog;
+            var dialog = window.LastAccessAdministrationWindow;
             Assert.NotNull(dialog);
-            Assert.IsType<CredentialManagerDialogViewModel>(dialog!.DataContext);
+            Assert.IsType<TabControl>(dialog!.Content);
 
             dialog.Close();
             Dispatcher.UIThread.RunJobs();
@@ -7374,7 +7377,8 @@ public sealed class MainWindowIntegrationTests
     {
         var innerTable = CreateTestRunningAgentChatTable();
         var table = new RecordingRunningAgentChatTable(innerTable);
-        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache(), Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache(), Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+            accessBroker: Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>());
         await using var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
         await using var lifetime = new ViewModelLifetime();
@@ -7437,7 +7441,8 @@ public sealed class MainWindowIntegrationTests
             SynchronizationContextTaskScheduler.FromCurrent());
         var innerTable = new RunningAgentChatTable(factory);
         var table = new RecordingRunningAgentChatTable(innerTable);
-        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache(), Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache(), Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+            accessBroker: Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>());
         var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
 
@@ -9760,7 +9765,8 @@ public sealed class MainWindowIntegrationTests
     public async Task OpenAgentSessionShortcutHandler_OpenSameSession_AcrossTwoWorkspacePanes_NavigatesToExistingTab()
     {
         var table = CreateTestRunningAgentChatTable();
-        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache(), Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache(), Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+            accessBroker: Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>());
         await using var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
 
@@ -9848,7 +9854,8 @@ public sealed class MainWindowIntegrationTests
     public async Task AgentSessionWorkspaceTabViewModel_DisposeWithLease_ReleasesChat_OnLastDispose()
     {
         var table = CreateTestRunningAgentChatTable();
-        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache(), Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache(), Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+            accessBroker: Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>());
         await using var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
 
@@ -9955,7 +9962,8 @@ public sealed class MainWindowIntegrationTests
     public async Task RunningAgentChatTable_Refresh_DoesNotThrow_WhenSessionRemovedConcurrently()
     {
         var table = CreateTestRunningAgentChatTable();
-        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache(), Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache(), Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+            accessBroker: Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>());
         await using var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
 
@@ -10037,7 +10045,8 @@ public sealed class MainWindowIntegrationTests
     public async Task RunningAgentBrain_WithRunningAgentTab_IsAnyRunning()
     {
         var table = CreateTestRunningAgentChatTable();
-        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache(), Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache(), Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+            accessBroker: Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>());
         await using var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
 
@@ -10083,7 +10092,8 @@ public sealed class MainWindowIntegrationTests
     public async Task RunningAgentBrain_WithRunningAgentTab_HasRowWithWorkspaceAndTabTitles()
     {
         var table = CreateTestRunningAgentChatTable();
-        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache(), Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache(), Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+            accessBroker: Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>());
         await using var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
 
@@ -10150,7 +10160,8 @@ public sealed class MainWindowIntegrationTests
     public async Task RunningAgentBrain_Activate_FocusesTab()
     {
         var table = CreateTestRunningAgentChatTable();
-        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache(), Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache(), Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+            accessBroker: Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>());
         await using var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
 
@@ -10213,7 +10224,8 @@ public sealed class MainWindowIntegrationTests
     public async Task RunningAgentBrain_RowActivateCommand_WhenTabIsInNonSelectedPane_SwitchesWorkspacePane()
     {
         var table = CreateTestRunningAgentChatTable();
-        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache(), Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache(), Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+            accessBroker: Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>());
         await using var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
 
@@ -10328,7 +10340,8 @@ public sealed class MainWindowIntegrationTests
         // switch to (and focus) the owning pane before activating the tab — not focus the
         // tab in the currently-selected pane.
         var table = CreateTestRunningAgentChatTable();
-        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache(), Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache(), Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+            accessBroker: Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>());
         await using var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
         var brain = viewModel.RunningAgentBrain;
@@ -10403,7 +10416,8 @@ public sealed class MainWindowIntegrationTests
         // workspace pane and focus it — never routing the agent into the currently-selected
         // pane by mistake.
         var fakeTable = new BrainFakeRunningAgentChatTable();
-        var appServices = new ApplicationServices(fakeTable, new AgentPersistenceStoreCache(), Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
+        var appServices = new ApplicationServices(fakeTable, new AgentPersistenceStoreCache(), Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+            accessBroker: Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>());
         await using var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
         var brain = viewModel.RunningAgentBrain;
@@ -10471,7 +10485,8 @@ public sealed class MainWindowIntegrationTests
         // #1135: When the agent tab lives in the currently-selected pane, activating the
         // brain row focuses the tab without switching workspaces or opening extra panes.
         var table = CreateTestRunningAgentChatTable();
-        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache(), Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache(), Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+            accessBroker: Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>());
         await using var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
         var brain = viewModel.RunningAgentBrain;
@@ -11588,7 +11603,8 @@ public sealed class MainWindowIntegrationTests
     public async Task TryStartAutoResumeAsync_WithMatchingLocalSession_AcquiresLeaseAndEnqueuesResumePrompt()
     {
         var table = CreateTestRunningAgentChatTable();
-        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache(), Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache(), Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+            accessBroker: Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>());
         await using var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
 

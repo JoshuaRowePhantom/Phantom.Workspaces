@@ -310,6 +310,7 @@ public sealed class AgentSessionShortcutContextTests
             MainWindowIntegrationTests.CreateTestRunningAgentChatTable(),
             new AgentPersistenceStoreCache(),
             Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+            accessBroker: Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>(),
             credentialPicker: new NullCredentialPicker(),
             allowedSecretsStore: new AllowedSecretsStore(new AllowedSecretsStoreConfiguration()),
             platformSecretStore: new NullPlatformSecretStore(),

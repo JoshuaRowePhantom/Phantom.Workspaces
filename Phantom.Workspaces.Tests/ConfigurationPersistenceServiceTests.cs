@@ -45,6 +45,7 @@ public sealed class ConfigurationPersistenceServiceTests
                 MainWindowIntegrationTests.CreateTestRunningAgentChatTable(),
                 new AgentPersistenceStoreCache(),
                 Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+                accessBroker: Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>(),
                 configurationPersistence: service);
             Assert.Same(service, applicationServices.ConfigurationStore);
         }
