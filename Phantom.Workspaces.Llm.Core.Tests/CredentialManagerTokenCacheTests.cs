@@ -141,8 +141,8 @@ public sealed class CredentialManagerTokenCacheTests
         Assert.Null(loaded);
         Assert.Contains(logger.Entries, entry =>
             entry.Level == LogLevel.Debug
-            && entry.Message.Contains("interactive login", StringComparison.OrdinalIgnoreCase)
-            && entry.Message.Contains(ServerName, StringComparison.Ordinal));
+            && entry.Message.Contains("interactive login", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(logger.Entries, entry => entry.Message.Contains(ServerName, StringComparison.Ordinal));
     }
 
     [Fact]

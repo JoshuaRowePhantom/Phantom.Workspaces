@@ -1,8 +1,12 @@
+using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using System.Security;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using ModelContextProtocol.Authentication;
+using Phantom.Workspaces.Llm.Interfaces.Access;
+using Phantom.Workspaces.Llm.Interfaces.Access.Execution;
 using Phantom.Workspaces.Llm.Secrets;
 
 namespace Phantom.Workspaces.Llm.Auth;
@@ -22,19 +26,22 @@ namespace Phantom.Workspaces.Llm.Auth;
 /// process boundary as a <see cref="SecureString"/>, marshalled via
 /// <see cref="SecureStringMarshal.Use{T}(SecureString, System.Func{string, T})"/> exactly like the
 /// rest of the secret store; the plaintext lifetime is bounded to the marshalling delegate.
+/// The private cache record persists its exact material generation with the tokens. Safe in-process
+/// metadata is shared by store/partition; cold-start inspection remains unknown until an authorized
+/// read or acquisition, rather than opening Credential Manager during metadata inspection.
 /// </remarks>
-public sealed class CredentialManagerTokenCache : ITokenCache
+public sealed class CredentialManagerTokenCache : ITokenCache, ICredentialGenerationCache
 {
+    private static readonly ConditionalWeakTable<IPlatformSecretStore, ConcurrentDictionary<string, CachePartition>> partitions = new();
     private readonly IPlatformSecretStore store;
     private readonly string key;
-    private readonly string cacheKey;
     private readonly ILogger logger;
+    private readonly CachePartition partition;
 
     /// <summary>
     /// Creates a cache that persists <paramref name="cacheKey"/>'s tokens through
     /// <paramref name="store"/> under the caller-supplied <paramref name="keyPrefix"/> namespace. The
-    /// optional <paramref name="logger"/> records cache hits/misses at Debug — only the cache key is
-    /// ever logged, never a token value (#1446/#1408 redaction).
+    /// optional <paramref name="logger"/> records only safe cache outcomes at Debug.
     /// </summary>
     public CredentialManagerTokenCache(IPlatformSecretStore store, string keyPrefix, string cacheKey, ILogger? logger = null)
     {
@@ -43,8 +50,9 @@ public sealed class CredentialManagerTokenCache : ITokenCache
         ArgumentException.ThrowIfNullOrEmpty(cacheKey);
 
         this.store = store;
-        this.cacheKey = cacheKey;
         this.key = keyPrefix + cacheKey;
+        this.partition = partitions.GetValue(store, _ => new(StringComparer.Ordinal))
+            .GetOrAdd(this.key, _ => new CachePartition());
         this.logger = logger ?? NullLogger<CredentialManagerTokenCache>.Instance;
     }
 
@@ -69,50 +77,207 @@ public sealed class CredentialManagerTokenCache : ITokenCache
             : null;
 
     /// <inheritdoc />
-    public async ValueTask StoreTokensAsync(TokenContainer tokens, CancellationToken cancellationToken)
+    public ValueTask StoreTokensAsync(TokenContainer tokens, CancellationToken cancellationToken) =>
+        this.WriteGenerationAsync(tokens, new() { Value = Guid.NewGuid() }, false, cancellationToken);
+
+    internal ValueTask StoreGenerationAsync(
+        TokenContainer tokens,
+        CredentialMaterialGenerationIdentifier generation,
+        CancellationToken cancellationToken) =>
+        this.WriteGenerationAsync(tokens, generation, true, cancellationToken);
+
+    internal async ValueTask ReserveGenerationAsync(
+        CredentialMaterialGenerationIdentifier generation,
+        CancellationToken cancellationToken)
+    {
+        await this.partition.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            this.partition.PendingGeneration = generation;
+        }
+        finally
+        {
+            this.partition.Gate.Release();
+        }
+    }
+
+    private async ValueTask WriteGenerationAsync(
+        TokenContainer tokens,
+        CredentialMaterialGenerationIdentifier generation,
+        bool requiresReservation,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(tokens);
+        var metadata = Metadata(tokens, generation);
+        await this.partition.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (requiresReservation && this.partition.PendingGeneration != generation)
+            {
+                throw new InvalidOperationException("OAuth cache generation was superseded.");
+            }
 
-        var json = JsonSerializer.Serialize(tokens);
-        var secret = ToSecureString(json);
-        await this.store.WriteAsync(this.key, secret, cancellationToken).ConfigureAwait(false);
-
-        // Redaction (#1446/#1408): record only that tokens were cached and for which caller — never
-        // the serialized token value, access/refresh token, or scope values.
-        this.logger.LogDebug(
-            "Stored OAuth tokens in the persistent cache for '{CacheKey}'.", this.cacheKey);
+            this.partition.PendingGeneration = generation;
+            // A failed platform write may have changed the stored bytes. Never keep the old
+            // generation valid across an attempted replacement, even when that write fails.
+            this.partition.Metadata = null;
+            using var secret = ToSecureString(JsonSerializer.Serialize(new CachedTokens
+            {
+                Generation = generation,
+                Tokens = tokens,
+            }));
+            await this.store.WriteAsync(this.key, secret, cancellationToken).ConfigureAwait(false);
+            this.partition.Metadata = metadata;
+            this.logger.LogDebug("Stored OAuth tokens in the persistent cache.");
+        }
+        finally
+        {
+            this.partition.Gate.Release();
+        }
     }
 
     /// <inheritdoc />
     public async ValueTask<TokenContainer?> GetTokensAsync(CancellationToken cancellationToken)
     {
-        var secret = await this.store.ReadAsync(this.key, cancellationToken).ConfigureAwait(false);
+        await this.partition.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await this.ReadTokensAsync(null, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            this.partition.Gate.Release();
+        }
+    }
+
+    internal async ValueTask<TokenContainer?> GetGenerationTokensAsync(
+        CredentialMaterialGenerationIdentifier generation,
+        CancellationToken cancellationToken)
+    {
+        await this.partition.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return this.partition.Metadata?.Generation == generation
+                ? await this.ReadTokensAsync(generation, cancellationToken).ConfigureAwait(false)
+                : null;
+        }
+        finally
+        {
+            this.partition.Gate.Release();
+        }
+    }
+
+    private async ValueTask<TokenContainer?> ReadTokensAsync(
+        CredentialMaterialGenerationIdentifier? expectedGeneration,
+        CancellationToken cancellationToken)
+    {
+        using var secret = await this.store.ReadAsync(this.key, cancellationToken).ConfigureAwait(false);
         if (secret is null)
         {
-            // A cache miss means there is no stored refresh token, so a fresh interactive login is
-            // required. Only the cache key is logged (#1446/#1408).
-            this.logger.LogDebug(
-                "No cached OAuth tokens for '{CacheKey}'; interactive login is required.",
-                this.cacheKey);
+            this.partition.Metadata = null;
+            this.logger.LogDebug("No cached OAuth tokens; interactive login is required.");
             return null;
         }
 
-        this.logger.LogDebug(
-            "Loaded cached OAuth tokens for '{CacheKey}' (cache hit).", this.cacheKey);
+        this.logger.LogDebug("Loaded cached OAuth tokens (cache hit).");
 
-        return Phantom.Workspaces.Llm.Secrets.SecureStringMarshal.Use(
-            secret, json => JsonSerializer.Deserialize<TokenContainer>(json));
+        this.partition.Metadata = null;
+        var cached = Phantom.Workspaces.Llm.Secrets.SecureStringMarshal.Use(
+            secret, json => JsonSerializer.Deserialize<CachedTokens>(json));
+        this.partition.Metadata = cached is null ? null : Metadata(cached.Tokens, cached.Generation);
+        return cached is not null && (expectedGeneration is null || cached.Generation == expectedGeneration)
+            ? cached.Tokens
+            : null;
     }
 
     /// <summary>
     /// Removes this caller's cached tokens (sign-out / invalidation). A subsequent
     /// <see cref="GetTokensAsync"/> returns null.
     /// </summary>
-    public Task ClearAsync(CancellationToken cancellationToken)
-        => this.store.DeleteAsync(this.key, cancellationToken);
+    public async Task ClearAsync(CancellationToken cancellationToken)
+    {
+        await this.partition.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            this.partition.Metadata = null;
+            this.partition.PendingGeneration = null;
+            await this.store.DeleteAsync(this.key, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            this.partition.Gate.Release();
+        }
+    }
+
+    async ValueTask<CredentialGenerationInspection?> ICredentialGenerationCache.InspectGenerationAsync(
+        CancellationToken cancellationToken)
+    {
+        await this.partition.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            // Cold-start metadata is deliberately unknown; inspection never reads stored material.
+            return this.partition.Metadata;
+        }
+        finally
+        {
+            this.partition.Gate.Release();
+        }
+    }
+
+    async ValueTask<bool> ICredentialGenerationValidator.IsCurrentGenerationAsync(
+        CredentialMaterialGenerationIdentifier generation,
+        CancellationToken cancellationToken)
+    {
+        var metadata = await ((ICredentialGenerationCache)this).InspectGenerationAsync(cancellationToken).ConfigureAwait(false);
+        return metadata?.Generation == generation &&
+            (metadata.ExpiresOn is null || metadata.ExpiresOn > DateTimeOffset.UtcNow);
+    }
+
+    async ValueTask<CredentialGenerationInvalidationOutcome> ICredentialGenerationCache.InvalidateGenerationAsync(
+        CredentialMaterialGenerationIdentifier generation,
+        CancellationToken cancellationToken)
+    {
+        await this.partition.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (this.partition.Metadata is null)
+            {
+                return CredentialGenerationInvalidationOutcome.Missing;
+            }
+            if (this.partition.Metadata.Generation != generation)
+            {
+                return CredentialGenerationInvalidationOutcome.NoLongerCurrent;
+            }
+
+            // Check the generation in the authoritative private record too. Another owner may have
+            // replaced the platform entry since this process last published safe metadata.
+            if (await this.ReadTokensAsync(generation, cancellationToken).ConfigureAwait(false) is null)
+            {
+                return this.partition.Metadata is null
+                    ? CredentialGenerationInvalidationOutcome.Missing
+                    : CredentialGenerationInvalidationOutcome.NoLongerCurrent;
+            }
+
+            this.partition.Metadata = null;
+            await this.store.DeleteAsync(this.key, cancellationToken).ConfigureAwait(false);
+            return CredentialGenerationInvalidationOutcome.Invalidated;
+        }
+        finally
+        {
+            this.partition.Gate.Release();
+        }
+    }
 
     private static bool IsPersistent(IPlatformSecretStore? store)
         => store is not null and not NullPlatformSecretStore;
+
+    private static CredentialGenerationInspection Metadata(
+        TokenContainer tokens,
+        CredentialMaterialGenerationIdentifier generation) => new()
+        {
+            Generation = generation,
+            ExpiresOn = tokens.ExpiresIn is { } seconds ? tokens.ObtainedAt.AddSeconds(seconds) : null,
+        };
 
     private static SecureString ToSecureString(string value)
     {
@@ -124,5 +289,18 @@ public sealed class CredentialManagerTokenCache : ITokenCache
 
         secure.MakeReadOnly();
         return secure;
+    }
+
+    private sealed class CachePartition
+    {
+        internal SemaphoreSlim Gate { get; } = new(1, 1);
+        internal CredentialGenerationInspection? Metadata { get; set; }
+        internal CredentialMaterialGenerationIdentifier? PendingGeneration { get; set; }
+    }
+
+    private sealed record CachedTokens
+    {
+        public required CredentialMaterialGenerationIdentifier Generation { get; init; }
+        public required TokenContainer Tokens { get; init; }
     }
 }
