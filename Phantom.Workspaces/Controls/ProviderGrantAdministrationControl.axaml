@@ -1,0 +1,25 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Phantom.Workspaces.ViewModels"
+             xmlns:access="using:Phantom.Workspaces.Llm.Interfaces.Access"
+             x:Class="Phantom.Workspaces.Controls.ProviderGrantAdministrationControl"
+             x:DataType="vm:ProviderGrantAdministrationViewModel">
+    <StackPanel Spacing="8">
+        <TextBlock Text="Revocable provider grants" FontWeight="Bold" />
+        <TextBlock Text="Revoke contacts the provider, then clears affected local caches. Release memory is retained." TextWrapping="Wrap" />
+        <Button Content="Refresh" Command="{Binding RefreshCommand}" />
+        <TextBlock Text="{Binding SafeStatus}" AutomationProperties.LiveSetting="Polite" />
+        <ItemsControl ItemsSource="{Binding Items}">
+            <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="access:ProviderGrantDescriptor">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Text="{Binding SafeDisplayName}" />
+                        <Button Grid.Column="1" Content="Revoke"
+                                Command="{Binding $parent[UserControl].((vm:ProviderGrantAdministrationViewModel)DataContext).RemoveCommand}"
+                                CommandParameter="{Binding}" />
+                    </Grid>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+    </StackPanel>
+</UserControl>
