@@ -10,6 +10,27 @@ using Phantom.Workspaces.Llm.Interfaces.Access.Execution;
 
 namespace Phantom.Workspaces.Services.Access;
 
+internal sealed record GitHubPrivateCredentialRequest
+{
+    public required CredentialSourceKind Source { get; init; }
+    public CredentialAccountIdentifier? AccountIdentifier { get; init; }
+}
+
+internal abstract record GitHubPrivateCredentialUseOutcome<TResult>;
+internal sealed record GitHubPrivateCredentialUseSucceeded<TResult> : GitHubPrivateCredentialUseOutcome<TResult>
+{
+    public required TResult Result { get; init; }
+    public required CredentialMaterialGenerationIdentifier Generation { get; init; }
+    public required CredentialAccountIdentifier AccountIdentifier { get; init; }
+}
+internal sealed record GitHubPrivateCredentialUseDenied<TResult> : GitHubPrivateCredentialUseOutcome<TResult>;
+internal sealed record GitHubPrivateCredentialUseCancelled<TResult> : GitHubPrivateCredentialUseOutcome<TResult>;
+internal sealed record GitHubPrivateCredentialUseFailed<TResult> : GitHubPrivateCredentialUseOutcome<TResult>
+{
+    public required AccessErrorCode ErrorCode { get; init; }
+    public required bool CanRetry { get; init; }
+}
+
 internal sealed class GitHubCredentialMaterial : IDisposable
 {
     public required char[] Material { get; init; }
@@ -160,6 +181,101 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
     }
 
     internal ICredentialGenerationCache GetGenerationCache(CredentialSourceIdentifier source) => this.GetCache(source);
+
+    internal async ValueTask<GitHubPrivateCredentialUseOutcome<TResult>> UsePrivateAsync<TResult>(
+        GitHubPrivateCredentialRequest request,
+        ICredentialExecutionContext context,
+        ProviderInteractionPermit parentGenerationPermit,
+        Func<string, CancellationToken, ValueTask<TResult>> operation,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (context.PolicyRequest?.Credential is not { Provider: CredentialProviderKind.DevTunnel, Kind: CredentialKind.ConnectToken } ||
+            !parentGenerationPermit.BelongsToGeneration(context.RequestIdentifier, context.Revision, context.AcquisitionGeneration) ||
+            request.Source is not (CredentialSourceKind.Environment or CredentialSourceKind.GitHubCli))
+        {
+            return new GitHubPrivateCredentialUseDenied<TResult>();
+        }
+
+        var source = GitHubCredentialAccessRequest.CreateSource(request.Source);
+        var cache = this.GetCache(source.Identifier);
+        if (request.Source == CredentialSourceKind.Environment && !this.source.EnvironmentExists())
+        {
+            cache.Clear();
+        }
+        var metadata = await cache.InspectGenerationAsync(cancellationToken).ConfigureAwait(false);
+        if (metadata is null)
+        {
+            var key = new ProviderAcquisitionKey
+            {
+                Configuration = GitHubCredentialAccessRequest.CreateLogicalIdentifier(),
+                Source = source.Identifier,
+                Account = request.AccountIdentifier ?? metadata?.AccountIdentifier,
+                Protocol = ProviderProtocolKind.Cli,
+            };
+            var acquisition = await context.ExecutePrivateProviderDependencyAsync(
+                new Acquisition(this, cache, request.Source, key, context),
+                parentGenerationPermit,
+                cancellationToken).ConfigureAwait(false);
+            if (acquisition is not ProviderAcquisitionSucceeded committed)
+            {
+                return acquisition switch
+                {
+                    ProviderAcquisitionDenied => new GitHubPrivateCredentialUseDenied<TResult>(),
+                    ProviderAcquisitionCancelled or ProviderAcquisitionShuttingDown => new GitHubPrivateCredentialUseCancelled<TResult>(),
+                    ProviderAcquisitionFailed failed => new GitHubPrivateCredentialUseFailed<TResult> { ErrorCode = failed.ErrorCode, CanRetry = true },
+                    _ => new GitHubPrivateCredentialUseFailed<TResult> { ErrorCode = AccessErrorCode.InvalidGeneration, CanRetry = true },
+                };
+            }
+            metadata = await cache.InspectGenerationAsync(cancellationToken).ConfigureAwait(false);
+            if (metadata is null || metadata.Generation != committed.CommittedGeneration)
+            {
+                return new GitHubPrivateCredentialUseFailed<TResult> { ErrorCode = AccessErrorCode.InvalidGeneration, CanRetry = true };
+            }
+        }
+
+        if (!parentGenerationPermit.BelongsToGeneration(context.RequestIdentifier, context.Revision, context.AcquisitionGeneration))
+        {
+            return new GitHubPrivateCredentialUseDenied<TResult>();
+        }
+        if (request.AccountIdentifier is { } account && metadata.AccountIdentifier != account)
+        {
+            return new GitHubPrivateCredentialUseFailed<TResult> { ErrorCode = AccessErrorCode.IdentityMismatch, CanRetry = false };
+        }
+
+        using var snapshot = cache.Copy();
+        if (snapshot is null || snapshot.Generation != metadata.Generation ||
+            !await cache.IsCurrentGenerationAsync(snapshot.Generation, cancellationToken).ConfigureAwait(false))
+        {
+            return new GitHubPrivateCredentialUseFailed<TResult> { ErrorCode = AccessErrorCode.InvalidGeneration, CanRetry = true };
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+        return new GitHubPrivateCredentialUseSucceeded<TResult>
+        {
+            Result = await operation(new string(snapshot.Material), cancellationToken).ConfigureAwait(false),
+            Generation = snapshot.Generation,
+            AccountIdentifier = snapshot.Account,
+        };
+    }
+
+    internal async ValueTask<IReadOnlyDictionary<CredentialSourceIdentifier, CredentialGenerationInspection>> InspectCachedGenerationsAsync(CancellationToken cancellationToken)
+    {
+        KeyValuePair<CredentialSourceIdentifier, GenerationCache>[] snapshot;
+        lock (this.gate)
+        {
+            ObjectDisposedException.ThrowIf(this.disposed, this);
+            snapshot = this.caches.ToArray();
+        }
+        var generations = new Dictionary<CredentialSourceIdentifier, CredentialGenerationInspection>();
+        foreach (var entry in snapshot)
+        {
+            if (await entry.Value.InspectGenerationAsync(cancellationToken).ConfigureAwait(false) is { } generation)
+            {
+                generations.Add(entry.Key, generation);
+            }
+        }
+        return generations;
+    }
 
     public ValueTask DisposeAsync()
     {
