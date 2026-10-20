@@ -188,12 +188,7 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
 
     private static string DescribeResolution(VsCodeTunnelResolution resolution)
     {
-        if (resolution.CliResult is { } cli)
-        {
-            return $"(exit {cli.ExitCode}).\n{cli.StandardOut}";
-        }
-
-        return $"(VS Code CLI could not be launched: {resolution.CliLaunchError}).";
+        return $"({resolution.Outcome}).";
     }
 
     // #1356: surface the child's captured stdout (where `code tunnel` prints the tunnel URL and

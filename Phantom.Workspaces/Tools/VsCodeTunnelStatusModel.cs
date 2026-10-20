@@ -42,8 +42,6 @@ internal sealed record VsCodeTunnelDaemonStatus
     [JsonPropertyName("last_disconnected_at")]
     public string? LastDisconnectedAt { get; init; }
 
-    [JsonPropertyName("last_fail_reason")]
-    public string? LastFailReason { get; init; }
 }
 
 [JsonSourceGenerationOptions(PropertyNameCaseInsensitive = true)]

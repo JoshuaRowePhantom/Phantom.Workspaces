@@ -67,21 +67,14 @@ public sealed class VsCodeTunnelDiscoveryTool : IWorkspaceTool
             return WorkspaceToolExecutionResult.Failure($"Failed to run 'code tunnel status': {ex.Message}");
         }
 
-        if (resolution.CliResult is null)
+        if (resolution.Outcome is VsCodeTunnelOutcome.CommandFailed or VsCodeTunnelOutcome.InvalidStatus or VsCodeTunnelOutcome.Cancelled)
         {
             return WorkspaceToolExecutionResult.Failure(
-                $"VS Code CLI ('code') not found or not runnable: {resolution.CliLaunchError}");
+                $"VS Code tunnel discovery: {resolution.Outcome}.");
         }
 
         if (resolution.Status is null)
         {
-            var cli = resolution.CliResult;
-            if (cli.ExitCode != 0)
-            {
-                return WorkspaceToolExecutionResult.Failure(
-                    $"'code tunnel status' failed (exit {cli.ExitCode}).\nStdout:\n{cli.StandardOut}\nStderr:\n{cli.StandardError}");
-            }
-
             // No tunnel currently running — do not upsert a stale entity. Report this as a
             // failure (#1355) so callers can distinguish "tunnel discovered" from "no tunnel
             // found"; a missing tunnel must not be treated as a successful discovery.

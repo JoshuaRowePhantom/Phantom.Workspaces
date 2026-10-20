@@ -115,6 +115,21 @@ public sealed class VsCodeCliInvoker
         return new VsCodeCliResult(processResult.ExitCode, processResult.StandardOut, processResult.StandardError);
     }
 
+    internal async Task<TResult> ProbeAsync<TResult>(
+        string cliPath,
+        IReadOnlyList<string> arguments,
+        Func<int, string, string, TResult> reduce,
+        CancellationToken cancellationToken)
+    {
+        var parameters = VsCodeCliLocator.BuildRunProcessParameters(
+            cliPath,
+            arguments,
+            TimeSpan.FromSeconds(30),
+            environmentVariables: null);
+        var result = await this.processRunner(parameters, cancellationToken).ConfigureAwait(false);
+        return reduce(result.ExitCode, result.StandardOut, result.StandardError);
+    }
+
     private void LogOutcome(string operationDescription, string command, string arguments, ProcessResult result)
     {
         if (result.ExitCode != 0)

@@ -58,10 +58,12 @@ public sealed class VsCodeTunnelDiscoveryToolTests : IDisposable
         }
 
         public FakeStatusResolver(VsCodeTunnelStatus? status)
-            : this((_, _) => Task.FromResult(new VsCodeTunnelResolution(
-                status,
-                new VsCodeCliResult(0, string.Empty, string.Empty),
-                CliLaunchError: null)))
+            : this((_, _) => Task.FromResult(new VsCodeTunnelResolution
+            {
+                Status = status,
+                Outcome = status is null ? VsCodeTunnelOutcome.NotRunning : status.IsConnected
+                    ? VsCodeTunnelOutcome.Ready : VsCodeTunnelOutcome.RunningDisconnected,
+            }))
         {
         }
 
@@ -213,10 +215,10 @@ public sealed class VsCodeTunnelDiscoveryToolTests : IDisposable
     [Fact]
     public async Task Discovery_CliMissing_ReturnsFailureWithoutThrowing()
     {
-        var resolver = new FakeStatusResolver(new VsCodeTunnelResolution(
-            Status: null,
-            CliResult: null,
-            CliLaunchError: "The system cannot find the file specified"));
+        var resolver = new FakeStatusResolver(new VsCodeTunnelResolution
+        {
+            Outcome = VsCodeTunnelOutcome.CommandFailed,
+        });
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var tool = new VsCodeTunnelDiscoveryTool(
             new FakeExecutionContextProvider(),
@@ -284,10 +286,11 @@ public sealed class VsCodeTunnelDiscoveryToolTests : IDisposable
         var executeTask = tool.ExecuteAsync(this.Context(dataAccessLayer));
         Assert.False(executeTask.IsCompleted);
 
-        tcs.SetResult(new VsCodeTunnelResolution(
-            new VsCodeTunnelStatus("late", "https://vscode.dev/tunnel/late", true),
-            new VsCodeCliResult(0, string.Empty, string.Empty),
-            CliLaunchError: null));
+        tcs.SetResult(new VsCodeTunnelResolution
+        {
+            Status = new VsCodeTunnelStatus("late", "https://vscode.dev/tunnel/late", true),
+            Outcome = VsCodeTunnelOutcome.Ready,
+        });
         var result = await executeTask;
         Assert.True(result.IsSuccess);
     }
@@ -353,10 +356,10 @@ public sealed class VsCodeTunnelDiscoveryToolTests : IDisposable
     [Fact]
     public async Task VsCodeTunnelDiscoveryTool_TunnelStatusNonZeroExit_FailureResultContainsCliOutput()
     {
-        var resolver = new FakeStatusResolver(new VsCodeTunnelResolution(
-            Status: null,
-            CliResult: new VsCodeCliResult(2, "some stdout marker", "some stderr marker"),
-            CliLaunchError: null));
+        var resolver = new FakeStatusResolver(new VsCodeTunnelResolution
+        {
+            Outcome = VsCodeTunnelOutcome.CommandFailed,
+        });
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var tool = new VsCodeTunnelDiscoveryTool(
             new FakeExecutionContextProvider(),
@@ -473,13 +476,14 @@ public sealed class VsCodeTunnelDiscoveryToolTests : IDisposable
     public async Task VsCodeTunnelDiscoveryTool_TunnelDiscovered_ResultContentExcludesRawCliOutput()
     {
         var logger = new TestLogger<VsCodeTunnelDiscoveryTool>();
-        var resolver = new FakeStatusResolver(new VsCodeTunnelResolution(
-            Status: new VsCodeTunnelStatus(
+        var resolver = new FakeStatusResolver(new VsCodeTunnelResolution
+        {
+            Outcome = VsCodeTunnelOutcome.Ready,
+            Status = new VsCodeTunnelStatus(
                 TunnelName: "cli-reported-name",
                 TunnelUrl: "https://vscode.dev/tunnel/cli-reported-name",
                 IsConnected: true),
-            CliResult: new VsCodeCliResult(0, "RAW-STDOUT-MARKER", "RAW-STDERR-MARKER"),
-            CliLaunchError: null));
+        });
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var tool = new VsCodeTunnelDiscoveryTool(
             new FakeExecutionContextProvider(),

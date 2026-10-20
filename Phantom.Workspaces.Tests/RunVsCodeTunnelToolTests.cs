@@ -160,18 +160,19 @@ public sealed class RunVsCodeTunnelToolTests
         }
 
         public static FakeStatusResolver Running() =>
-            new((_, _) => Task.FromResult(new VsCodeTunnelResolution(
-                new VsCodeTunnelStatus("daemon", "https://vscode.dev/tunnel/daemon", true),
-                new VsCodeCliResult(0, "{\"tunnel\":{\"name\":\"daemon\",\"tunnel\":\"Connected\"}}", string.Empty),
-                CliLaunchError: null)));
+            new((_, _) => Task.FromResult(new VsCodeTunnelResolution
+            {
+                Status = new VsCodeTunnelStatus("daemon", "https://vscode.dev/tunnel/daemon", true),
+                Outcome = VsCodeTunnelOutcome.Ready,
+            }));
 
         public static FakeStatusResolver NotRunning(
             int exitCode = 0,
             string stdout = "{\"tunnel\":null,\"service_installed\":false}") =>
-            new((_, _) => Task.FromResult(new VsCodeTunnelResolution(
-                Status: null,
-                new VsCodeCliResult(exitCode, stdout, string.Empty),
-                CliLaunchError: null)));
+            new((_, _) => Task.FromResult(new VsCodeTunnelResolution
+            {
+                Outcome = exitCode == 0 ? VsCodeTunnelOutcome.NotRunning : VsCodeTunnelOutcome.CommandFailed,
+            }));
 
         public Task<VsCodeTunnelResolution> ResolveAsync(string cliPath, CancellationToken cancellationToken)
         {
@@ -222,10 +223,11 @@ public sealed class RunVsCodeTunnelToolTests
         var resolver = new FakeStatusResolver((_, _) =>
         {
             Interlocked.Increment(ref statusCount);
-            return Task.FromResult(new VsCodeTunnelResolution(
-                new VsCodeTunnelStatus("daemon", "https://vscode.dev/tunnel/daemon", true),
-                new VsCodeCliResult(0, string.Empty, string.Empty),
-                CliLaunchError: null));
+            return Task.FromResult(new VsCodeTunnelResolution
+            {
+                Status = new VsCodeTunnelStatus("daemon", "https://vscode.dev/tunnel/daemon", true),
+                Outcome = VsCodeTunnelOutcome.Ready,
+            });
         });
 
         var tool = new RunVsCodeTunnelTool(
@@ -524,10 +526,11 @@ public sealed class RunVsCodeTunnelToolTests
         var resolver = new FakeStatusResolver((_, _) =>
         {
             Interlocked.Increment(ref statusCount);
-            return Task.FromResult(new VsCodeTunnelResolution(
-                new VsCodeTunnelStatus("daemon", "https://vscode.dev/tunnel/daemon", true),
-                new VsCodeCliResult(0, string.Empty, string.Empty),
-                CliLaunchError: null));
+            return Task.FromResult(new VsCodeTunnelResolution
+            {
+                Status = new VsCodeTunnelStatus("daemon", "https://vscode.dev/tunnel/daemon", true),
+                Outcome = VsCodeTunnelOutcome.Ready,
+            });
         });
 
         var tool = new RunVsCodeTunnelTool(
@@ -569,10 +572,11 @@ public sealed class RunVsCodeTunnelToolTests
         {
             // The status probe must never run before the grace period completes.
             Assert.True(graceCompleted);
-            return Task.FromResult(new VsCodeTunnelResolution(
-                new VsCodeTunnelStatus("daemon", "https://vscode.dev/tunnel/daemon", true),
-                new VsCodeCliResult(0, string.Empty, string.Empty),
-                CliLaunchError: null));
+            return Task.FromResult(new VsCodeTunnelResolution
+            {
+                Status = new VsCodeTunnelStatus("daemon", "https://vscode.dev/tunnel/daemon", true),
+                Outcome = VsCodeTunnelOutcome.Ready,
+            });
         });
 
         var tool = new RunVsCodeTunnelTool(

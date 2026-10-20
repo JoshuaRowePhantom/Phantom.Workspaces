@@ -1,119 +1,91 @@
 using System.ComponentModel;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Phantom.Workspaces.Tools;
 
-/// <summary>
-/// Default <see cref="IVsCodeTunnelStatusResolver"/>. This is the single component responsible for
-/// invoking <c>code tunnel status</c> and parsing its result; both <see cref="RunVsCodeTunnelTool"/>
-/// and <see cref="VsCodeTunnelDiscoveryTool"/> obtain tunnel status exclusively through it so they
-/// can never disagree about liveness/health. <c>code tunnel status</c> takes no arguments (the
-/// <c>--output json</c> flag is unsupported and errors with exit 2) and always prints a single-line
-/// JSON object to stdout. Liveness is derived from the strongly-typed, source-generated
-/// <see cref="VsCodeTunnelStatusOutput"/>: the tunnel is RUNNING iff the outer <c>tunnel</c> member
-/// is non-null, and CONNECTED iff the inner <c>tunnel</c> health string equals <c>"Connected"</c>.
-/// The full CLI result (exit code, stdout, stderr) is always returned via
-/// <see cref="VsCodeTunnelResolution"/> so the caller can surface it to the user on failure.
-/// </summary>
 public sealed class VsCodeTunnelStatusResolver : IVsCodeTunnelStatusResolver
 {
     private readonly VsCodeCliInvoker invoker;
-    private readonly ILogger logger;
 
     public VsCodeTunnelStatusResolver(
         VsCodeCliInvoker? invoker = null,
         ILogger? logger = null)
     {
-        this.logger = logger ?? NullLogger.Instance;
-        this.invoker = invoker ?? new VsCodeCliInvoker(notificationService: null, logger: this.logger);
+        this.invoker = invoker ?? new VsCodeCliInvoker();
     }
 
-    public async Task<VsCodeTunnelResolution> ResolveAsync(string cliPath, CancellationToken cancellationToken)
+    public async Task<VsCodeTunnelResolution> ResolveAsync(
+        string cliPath,
+        CancellationToken cancellationToken)
     {
-        VsCodeCliResult result;
         try
         {
-            result = await this.invoker.RunAsync(
+            return await this.invoker.ProbeAsync(
                 cliPath,
                 ["tunnel", "status"],
-                operationDescription: "vscode tunnel status",
-                VsCodeCliReporting.LogOnly,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
+                static (exitCode, standardOutput, _) => exitCode == 0
+                    ? ParseStatus(standardOutput)
+                    : new VsCodeTunnelResolution { Outcome = VsCodeTunnelOutcome.CommandFailed },
+                cancellationToken).ConfigureAwait(false);
         }
-        catch (Win32Exception ex)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            return new VsCodeTunnelResolution(Status: null, CliResult: null, CliLaunchError: ex.Message);
+            return new VsCodeTunnelResolution { Outcome = VsCodeTunnelOutcome.Cancelled };
         }
-
-        var status = ParseStatus(result.StandardOut);
-        return new VsCodeTunnelResolution(status, result, CliLaunchError: null);
+        catch (Exception exception) when (exception is Win32Exception or TimeoutException or InvalidOperationException)
+        {
+            return new VsCodeTunnelResolution { Outcome = VsCodeTunnelOutcome.CommandFailed };
+        }
     }
 
-    /// <summary>
-    /// Parses <c>code tunnel status</c> stdout into a <see cref="VsCodeTunnelStatus"/>. Returns
-    /// <see langword="null"/> when no tunnel daemon is running (outer <c>tunnel</c> member is null)
-    /// or the output cannot be parsed as the expected JSON object.
-    /// </summary>
-    internal static VsCodeTunnelStatus? ParseStatus(string? stdout)
+    internal static VsCodeTunnelResolution ParseStatus(string? standardOutput)
     {
-        if (!TryDeserialize(stdout, out var output) || output?.Tunnel is null)
+        if (string.IsNullOrWhiteSpace(standardOutput))
         {
-            return null;
-        }
-
-        var daemon = output.Tunnel;
-        var name = string.IsNullOrWhiteSpace(daemon.Name) ? string.Empty : daemon.Name!;
-        var url = string.IsNullOrEmpty(name)
-            ? "https://vscode.dev/tunnel/"
-            : $"https://vscode.dev/tunnel/{name}";
-        var isConnected = string.Equals(daemon.Tunnel, "Connected", StringComparison.OrdinalIgnoreCase);
-
-        return new VsCodeTunnelStatus(name, url, isConnected, daemon.LastFailReason);
-    }
-
-    private static bool TryDeserialize(string? stdout, out VsCodeTunnelStatusOutput? output)
-    {
-        output = null;
-        if (string.IsNullOrWhiteSpace(stdout))
-        {
-            return false;
-        }
-
-        foreach (var line in stdout.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
-        {
-            var trimmed = line.Trim();
-            if (!trimmed.StartsWith("{", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            if (TryDeserializeObject(trimmed, out output))
-            {
-                return true;
-            }
-        }
-
-        return TryDeserializeObject(stdout.Trim(), out output);
-    }
-
-    private static bool TryDeserializeObject(string json, out VsCodeTunnelStatusOutput? output)
-    {
-        output = null;
-        if (!json.StartsWith("{", StringComparison.Ordinal))
-        {
-            return false;
+            return new VsCodeTunnelResolution { Outcome = VsCodeTunnelOutcome.InvalidStatus };
         }
 
         try
         {
-            output = JsonSerializer.Deserialize(json, VsCodeTunnelStatusJsonContext.Default.VsCodeTunnelStatusOutput);
-            return output is not null;
+            using var document = JsonDocument.Parse(standardOutput);
+            if (document.RootElement.ValueKind != JsonValueKind.Object
+                || !document.RootElement.TryGetProperty("tunnel", out var tunnel))
+            {
+                return new VsCodeTunnelResolution { Outcome = VsCodeTunnelOutcome.InvalidStatus };
+            }
+
+            if (tunnel.ValueKind == JsonValueKind.Null)
+            {
+                return new VsCodeTunnelResolution { Outcome = VsCodeTunnelOutcome.NotRunning };
+            }
+
+            if (tunnel.ValueKind != JsonValueKind.Object
+                || !tunnel.TryGetProperty("tunnel", out var health)
+                || health.ValueKind != JsonValueKind.String)
+            {
+                return new VsCodeTunnelResolution { Outcome = VsCodeTunnelOutcome.InvalidStatus };
+            }
+
+            var connected = string.Equals(health.GetString(), "Connected", StringComparison.OrdinalIgnoreCase);
+            var name = tunnel.TryGetProperty("name", out var nameElement)
+                && nameElement.ValueKind == JsonValueKind.String
+                ? nameElement.GetString() ?? string.Empty
+                : string.Empty;
+            if (name.Any(character => !char.IsAsciiLetterOrDigit(character) && character != '-'))
+            {
+                return new VsCodeTunnelResolution { Outcome = VsCodeTunnelOutcome.InvalidStatus };
+            }
+
+            return new VsCodeTunnelResolution
+            {
+                Outcome = connected ? VsCodeTunnelOutcome.Ready : VsCodeTunnelOutcome.RunningDisconnected,
+                Status = new VsCodeTunnelStatus(name, $"https://vscode.dev/tunnel/{name}", connected),
+            };
         }
         catch (JsonException)
         {
-            return false;
+            return new VsCodeTunnelResolution { Outcome = VsCodeTunnelOutcome.InvalidStatus };
         }
     }
 }
