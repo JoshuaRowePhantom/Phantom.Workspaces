@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
@@ -535,9 +536,69 @@ internal sealed class McpOAuthCredentialAccessExecutor :
             {
                 throw new InvalidOperationException("MCP credential use is outside its approved operation.");
             }
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", new string(this.token));
             using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, scope.Cancellation.Token);
-            return await this.client.SendAsync(request, cancellation.Token).ConfigureAwait(false);
+            using var outgoing = CopyRequest(request);
+            outgoing.Headers.Authorization = new AuthenticationHeaderValue("Bearer", new string(this.token));
+            try
+            {
+                var response = await this.client.SendAsync(outgoing, cancellation.Token).ConfigureAwait(false);
+                response.RequestMessage = CopyRequest(request);
+                return response;
+            }
+            finally
+            {
+                outgoing.Headers.Authorization = null;
+            }
+        }
+
+        private static HttpRequestMessage CopyRequest(HttpRequestMessage original)
+        {
+            var copy = new HttpRequestMessage(original.Method, original.RequestUri)
+            {
+                Version = original.Version,
+                VersionPolicy = original.VersionPolicy,
+                Content = original.Content is null ? null : new BorrowedContent(original.Content),
+            };
+            foreach (var header in original.Headers)
+            {
+                if (!string.Equals(header.Key, "Authorization", StringComparison.OrdinalIgnoreCase))
+                {
+                    copy.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                }
+            }
+            foreach (var option in original.Options)
+            {
+                copy.Options.Set(new HttpRequestOptionsKey<object?>(option.Key), option.Value);
+            }
+            return copy;
+        }
+
+        private sealed class BorrowedContent : HttpContent
+        {
+            private readonly HttpContent original;
+
+            internal BorrowedContent(HttpContent original)
+            {
+                this.original = original;
+                foreach (var header in original.Headers)
+                {
+                    this.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                }
+            }
+
+            protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
+                this.original.CopyToAsync(stream);
+
+            protected override Task SerializeToStreamAsync(
+                Stream stream,
+                TransportContext? context,
+                CancellationToken cancellationToken) => this.original.CopyToAsync(stream, cancellationToken);
+
+            protected override bool TryComputeLength(out long length)
+            {
+                length = this.original.Headers.ContentLength ?? 0;
+                return this.original.Headers.ContentLength is not null;
+            }
         }
         public ValueTask DisposeAsync()
         {

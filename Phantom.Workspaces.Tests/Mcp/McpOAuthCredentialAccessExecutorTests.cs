@@ -17,7 +17,7 @@ using Phantom.Workspaces.Services.Mcp;
 
 namespace Phantom.Workspaces.Tests.Mcp;
 
-public sealed class McpOAuthCredentialAccessExecutorTests
+public sealed partial class McpOAuthCredentialAccessExecutorTests
 {
     [Fact]
     public async Task McpOAuthExecutor_FirstUse_CommitsReleaseBeforeBrowser()
@@ -384,7 +384,10 @@ public sealed class McpOAuthCredentialAccessExecutorTests
         internal UserAuthorizationRegistry Registry { get; } = new();
         internal ObservedAcquisitions Acquisitions { get; } = new();
 
-        internal Fixture(bool confidential = false, bool cycle = false)
+        internal Fixture(
+            bool confidential = false,
+            bool cycle = false,
+            Func<Server, HttpMessageHandler>? createHttpHandler = null)
         {
             this.Store = new Store(this.Events);
             this.Server = new Server(this.Events);
@@ -406,7 +409,7 @@ public sealed class McpOAuthCredentialAccessExecutorTests
                 Source = new() { Digest = new string('b', 64) },
                 Cache = new CredentialManagerTokenCache(this.Store, "mcp-oauth:", "private-cache"),
                 CreateRedirectUri = RedirectUri,
-                CreateHttpHandler = () => new Handler(this.Server),
+                CreateHttpHandler = () => createHttpHandler?.Invoke(this.Server) ?? new Handler(this.Server),
             };
             this.Executor = new McpOAuthCredentialAccessExecutor([this.Configuration], this.Browser);
             var executors = new CredentialAccessExecutorRegistry();
