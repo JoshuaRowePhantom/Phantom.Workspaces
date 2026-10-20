@@ -8,6 +8,7 @@ internal sealed record ProviderAcquisitionSucceeded : ProviderAcquisitionOutcome
 internal sealed record ProviderAcquisitionDenied : ProviderAcquisitionOutcome;
 internal sealed record ProviderAcquisitionCancelled : ProviderAcquisitionOutcome;
 internal sealed record ProviderAcquisitionShuttingDown : ProviderAcquisitionOutcome;
+internal sealed record ProviderAcquisitionRenewalRequired : ProviderAcquisitionOutcome;
 internal sealed record ProviderAcquisitionFailed : ProviderAcquisitionOutcome
 {
     public required AccessErrorCode ErrorCode { get; init; }
