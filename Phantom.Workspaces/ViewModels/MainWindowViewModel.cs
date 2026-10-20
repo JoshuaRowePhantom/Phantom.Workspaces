@@ -717,9 +717,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             new Tools.VsCodeTunnelDiscoveryTool(
                 notificationService: this.notificationService,
                 logger: this.loggerFactory.CreateLogger<Tools.VsCodeTunnelDiscoveryTool>()),
-            new Tools.RunVsCodeTunnelTool(
-                notificationService: this.notificationService,
-                logger: this.loggerFactory.CreateLogger<Tools.RunVsCodeTunnelTool>()),
+            .. (this.applicationServices.AccessBroker is { } accessBroker
+                ? new Tools.IWorkspaceTool[] { new Tools.RunVsCodeTunnelTool(accessBroker) }
+                : Array.Empty<Tools.IWorkspaceTool>()),
             new Tools.GitHub.GitHubWorkItemDiscoveryTool(),
             new Tools.AzureDevOps.AzureDevOpsWorkItemDiscoveryTool(),
         ]);

@@ -38,6 +38,7 @@ public sealed class VsCodeTunnelProcessEvidenceTests
     [InlineData("HTTP 401", false)]
     [InlineData("HTTP 4010 Unauthorized", false)]
     [InlineData("last_fail_reason: 401 Unauthorized", false)]
+    [InlineData("{\"last_fail_reason\":\"HTTP 401 Unauthorized\"}", false)]
     [InlineData("not authorized; exit 401", false)]
     public async Task UnauthorizedFallback_RequiresOneStrictRecord(
         string record,

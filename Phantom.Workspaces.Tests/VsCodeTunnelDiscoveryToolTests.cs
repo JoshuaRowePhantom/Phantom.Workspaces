@@ -228,7 +228,7 @@ public sealed class VsCodeTunnelDiscoveryToolTests : IDisposable
 
         Assert.False(result.IsSuccess);
         Assert.NotNull(result.ErrorMessage);
-        Assert.Contains("VS Code CLI", result.ErrorMessage);
+        Assert.Contains("CommandFailed", result.ErrorMessage);
         var entity = await GetEntityByNameAsync(dataAccessLayer, ExpectedEntityName);
         Assert.Null(entity);
     }
@@ -354,7 +354,7 @@ public sealed class VsCodeTunnelDiscoveryToolTests : IDisposable
     // ---- #1206: logging + reporting ---------------------------------------------------------
 
     [Fact]
-    public async Task VsCodeTunnelDiscoveryTool_TunnelStatusNonZeroExit_FailureResultContainsCliOutput()
+    public async Task VsCodeTunnelDiscoveryTool_TunnelStatusNonZeroExit_FailureResultContainsOnlySafeOutcome()
     {
         var resolver = new FakeStatusResolver(new VsCodeTunnelResolution
         {
@@ -369,9 +369,7 @@ public sealed class VsCodeTunnelDiscoveryToolTests : IDisposable
 
         Assert.False(result.IsSuccess);
         Assert.NotNull(result.ErrorMessage);
-        Assert.Contains("some stdout marker", result.ErrorMessage);
-        Assert.Contains("some stderr marker", result.ErrorMessage);
-        Assert.Contains("exit 2", result.ErrorMessage);
+        Assert.Equal("VS Code tunnel discovery: CommandFailed.", result.ErrorMessage);
     }
 
     [Fact]
@@ -421,9 +419,7 @@ public sealed class VsCodeTunnelDiscoveryToolTests : IDisposable
 
         Assert.True(result.IsSuccess);
         Assert.NotNull(result.ResultContent);
-        Assert.Contains("cli-reported-name", result.ResultContent);
-        Assert.Contains("https://vscode.dev/tunnel/cli-reported-name", result.ResultContent);
-        Assert.Contains("True", result.ResultContent);
+        Assert.Equal("VS Code tunnel discovery: Ready.", result.ResultContent);
     }
 
     [Fact]
@@ -445,7 +441,7 @@ public sealed class VsCodeTunnelDiscoveryToolTests : IDisposable
         Assert.Contains(
             logger.Entries,
             e => e.Level == LogLevel.Information
-                && e.Message.Contains("cli-reported-name")
+                && e.Message.Contains("Ready")
                 && e.Message == result.ResultContent);
     }
 

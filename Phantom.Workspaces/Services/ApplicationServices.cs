@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Llm.Secrets;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Services.Secrets;
 using Phantom.Workspaces.Services.Logging;
 using Phantom.Workspaces.Services.Updates;
@@ -24,7 +25,8 @@ public sealed class ApplicationServices
         object? mcpOAuthOptions = null,
         TransportFactoryRegistryProvider? transportFactoryRegistryProvider = null,
         string? updateUnavailableReason = null,
-        ITransportFactory? outboundHttpTransportFactory = null)
+        ITransportFactory? outboundHttpTransportFactory = null,
+        IAccessBroker? accessBroker = null)
     {
         this.RunningAgentChats = runningAgentChats;
         this.AgentPersistenceStoreCache = agentPersistenceStoreCache;
@@ -50,6 +52,7 @@ public sealed class ApplicationServices
         this.TransportFactoryRegistryProvider =
             transportFactoryRegistryProvider ?? new TransportFactoryRegistryProvider();
         this.OutboundHttpTransportFactory = outboundHttpTransportFactory;
+        this.AccessBroker = accessBroker;
     }
 
     internal static (ISecretProvider SecretProvider, ICredentialPicker CredentialPicker, IAllowedSecretsStore AllowedSecretsStore, IPlatformSecretStore PlatformSecretStore) CreateDefaultSecretServices()
@@ -82,6 +85,8 @@ public sealed class ApplicationServices
     }
 
     public IRunningAgentChatTable RunningAgentChats { get; }
+
+    public IAccessBroker? AccessBroker { get; }
 
     public IAgentPersistenceStoreCache AgentPersistenceStoreCache { get; }
 

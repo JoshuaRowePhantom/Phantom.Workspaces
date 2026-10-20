@@ -2,6 +2,8 @@ using System.ComponentModel;
 using System.Threading;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Tools;
+using Microsoft.Extensions.Logging;
+using Moq;
 using Xunit;
 
 namespace Phantom.Workspaces.Tests;
@@ -58,5 +60,19 @@ public sealed class VsCodeTunnelStatusResolverTests
         var invoker = new VsCodeCliInvoker(processRunner: (_, token) => Task.FromCanceled<ProcessResult>(token));
         var result = await new VsCodeTunnelStatusResolver(invoker).ResolveAsync("code", cancellation.Token);
         Assert.Equal(VsCodeTunnelOutcome.Cancelled, result.Outcome);
+    }
+
+    [Fact]
+    public async Task TunnelStatus_ProbeNeverLogsRawPayloadOrFailureException()
+    {
+        var logger = new Mock<ILogger>(MockBehavior.Strict);
+        var invoker = new VsCodeCliInvoker(
+            logger: logger.Object,
+            processRunner: (_, _) => Task.FromResult(new ProcessResult(
+                1, "private-device-code", "https://private-device-uri", "private-account")));
+        var result = await new VsCodeTunnelStatusResolver(invoker).ResolveAsync("code", CancellationToken.None);
+        Assert.Equal(VsCodeTunnelOutcome.CommandFailed, result.Outcome);
+        Assert.DoesNotContain("private", result.ToString());
+        logger.VerifyNoOtherCalls();
     }
 }

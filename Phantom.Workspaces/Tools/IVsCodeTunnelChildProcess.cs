@@ -29,7 +29,7 @@ public interface IVsCodeTunnelChildProcess : IDisposable
 
 public delegate IVsCodeTunnelChildProcess VsCodeTunnelProcessLauncher(
     string cliPath,
-    string arguments);
+    IReadOnlyList<string> arguments);
 
 internal sealed class ProcessBackedVsCodeTunnelChildProcess : IVsCodeTunnelChildProcess
 {
@@ -168,7 +168,8 @@ internal sealed class ProcessBackedVsCodeTunnelChildProcess : IVsCodeTunnelChild
             var normalized = Regex.Replace(record, @"\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1B]*(?:\x07|\x1B\\))", string.Empty);
             normalized = new string(normalized.Where(character => !char.IsControl(character) || character == '\t').ToArray());
             normalized = Regex.Replace(normalized, @"\s+", " ");
-            if (Regex.IsMatch(normalized, @"\bHTTP(?:/\d+(?:\.\d+)?)?\s+(?:(?:status(?:\s+code)?|response)(?:\s+client\s+error)?\s*[:=(]?\s*)?401\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
+            if (!Regex.IsMatch(normalized, @"\blast_fail_reason\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
+                && Regex.IsMatch(normalized, @"\bHTTP(?:/\d+(?:\.\d+)?)?\s+(?:(?:status(?:\s+code)?|response)(?:\s+client\s+error)?\s*[:=(]?\s*)?401\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
                 && Regex.IsMatch(normalized, @"\bUnauthorized\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
             {
                 Interlocked.Or(ref this.flags, 4);

@@ -1,5 +1,13 @@
+using System.Diagnostics;
 using System.Text.Json;
-using Microsoft.Extensions.Logging;
+using System.Threading.Channels;
+using Moq;
+using Phantom.Workspaces.Data.Offline;
+using Phantom.Workspaces.Llm.Interfaces.Access;
+using Phantom.Workspaces.Llm.Interfaces.Access.Execution;
+using Phantom.Workspaces.Llm.Interfaces.Authorization;
+using Phantom.Workspaces.Services.Access;
+using Phantom.Workspaces.Services.Authorization;
 using Phantom.Workspaces.Tools;
 using Xunit;
 
@@ -7,896 +15,345 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class RunVsCodeTunnelToolTests
 {
-    private sealed class FakeExecutionContextProvider : ICurrentExecutionContextProvider
+    [Theory]
+    [InlineData("github", "github")]
+    [InlineData("microsoft", "microsoft")]
+    public async Task AuthenticationRequiredBeforePerform_DoesNotLaunchLoginOrHost(
+        string provider,
+        string expectedArgument)
     {
-        public string ComputerName => "test-machine";
-        public string UserName => "test-user";
-        public string OperatingSystemName => "windows";
-        public string HomeDirectoryPath => "C:/Users/test-user";
+        await using var harness = new Harness { HasStoredCredential = false };
+        harness.Children.Enqueue(Child.Completed(connected: true));
+        var execution = harness.Tool.ExecuteAsync(Context(provider));
+        var row = await harness.WaitForPendingRowAsync();
+        Assert.Empty(harness.Logins);
+        Assert.Empty(harness.Hosts);
+        await VsCodeTunnelAuthorizationTests.PerformAsync(harness.Registry, row);
+        var result = await execution;
+        Assert.True(result.IsSuccess);
+        Assert.Equal(expectedArgument, Assert.Single(harness.Logins).ArgumentList.Last());
+        Assert.Single(harness.Hosts);
+        Assert.All(harness.ChildrenStarted, child => Assert.True(child.Disposed && child.Drained));
+        harness.Policy.VerifyNoOtherCalls();
     }
 
-    private sealed record CliCall(string CliPath, string Arguments, IReadOnlyDictionary<string, string>? EnvironmentVariables);
-
-    private sealed record SpawnCall(string CliPath, string Arguments);
-
-    private sealed class FakeChildProcess : IVsCodeTunnelChildProcess
+    [Fact]
+    public async Task UserShowRecognizedCredential_IsPresenceGuardOnly()
     {
-        private bool hasExited;
-        private int exitCode;
-        private string capturedStandardError = string.Empty;
-        private string capturedStandardOutput = string.Empty;
+        await using var harness = new Harness { PresenceProvider = "microsoft" };
+        harness.Children.Enqueue(Child.Completed(tokenError: true));
+        var execution = harness.Tool.ExecuteAsync(Context("github"));
+        var row = await harness.WaitForPendingRowAsync();
+        Assert.Contains("GitHub", row.SourceOptions.Single().SafeDisplayName);
+        Assert.Empty(harness.Logins);
+        await DenyAsync(harness.Registry, row);
+        var result = await execution;
+        Assert.False(result.IsSuccess);
+        Assert.Contains("AuthenticationRequired", result.ErrorMessage);
+        Assert.Single(harness.Hosts);
+    }
 
-        public bool WasKilled { get; private set; }
-        public bool WasDisposed { get; private set; }
+    [Fact]
+    public async Task AuthenticationSucceeded_RestartsExactlyOnce()
+    {
+        await using var harness = new Harness();
+        harness.Children.Enqueue(Child.Completed(tokenError: true));
+        harness.Children.Enqueue(Child.Completed(connected: true));
+        var execution = harness.Tool.ExecuteAsync(Context());
+        await VsCodeTunnelAuthorizationTests.PerformAsync(harness.Registry, await harness.WaitForPendingRowAsync());
+        var result = await execution;
+        Assert.True(result.IsSuccess);
+        Assert.Equal(2, harness.Hosts.Count);
+        Assert.Single(harness.Logins);
+        Assert.All(harness.Hosts, arguments =>
+            Assert.Equal(new[] { "tunnel", "--accept-server-license-terms", "--name", "test-host" }, arguments));
+    }
 
-        public bool HasExited => this.hasExited;
-        public int ExitCode => this.exitCode;
-        public string CapturedStandardError => this.capturedStandardError;
-        public string CapturedStandardOutput => this.capturedStandardOutput;
-        public VsCodeTunnelProcessEvidence Evidence => new() { ConnectedSeen = false, TokenErrorSeen = false };
-        public Task<VsCodeTunnelProcessCompletion> WaitForExitAndDrainAsync(CancellationToken cancellationToken) =>
-            Task.FromResult(new VsCodeTunnelProcessCompletion
-            {
-                ExitCode = this.exitCode,
-                ConnectedSeen = false,
-                TokenErrorSeen = false,
-                UnauthorizedHttp401Seen = false,
-            });
+    [Fact]
+    public async Task AuthenticationRecurs_DoesNotAutoLoginLoop()
+    {
+        await using var harness = new Harness();
+        harness.Children.Enqueue(Child.Completed(tokenError: true));
+        harness.Children.Enqueue(Child.Completed(unauthorized: true));
+        var execution = harness.Tool.ExecuteAsync(Context());
+        await VsCodeTunnelAuthorizationTests.PerformAsync(harness.Registry, await harness.WaitForPendingRowAsync());
+        var renewal = await harness.WaitForPendingRowAsync();
+        Assert.Equal(2, harness.Hosts.Count);
+        Assert.Single(harness.Logins);
+        Assert.Equal(UserAuthorizationPrimaryActionKind.Perform, renewal.PrimaryAction);
+        await DenyAsync(harness.Registry, renewal);
+        Assert.False((await execution).IsSuccess);
+        Assert.Equal(2, harness.Hosts.Count);
+        Assert.Single(harness.Logins);
+    }
 
-        public void SimulateStandardOutput(string capturedStandardOutput)
+    [Fact]
+    public async Task ProcessExitBeforeFinalDiagnostic_WaitsForFullDrainBeforeAuthentication()
+    {
+        await using var harness = new Harness();
+        var child = new Child { HasExited = true };
+        harness.Children.Enqueue(child);
+        var execution = harness.Tool.ExecuteAsync(Context());
+        await child.WaitStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.Empty(harness.Registry.GetSnapshot());
+        Assert.False(execution.IsCompleted);
+        child.Completion.SetResult(Completion(unauthorized: true));
+        var row = await harness.WaitForPendingRowAsync();
+        Assert.True(child.Disposed);
+        Assert.True(child.Drained);
+        await DenyAsync(harness.Registry, row);
+        Assert.Contains("AuthenticationRequired", (await execution).ErrorMessage);
+    }
+
+    [Theory]
+    [InlineData("401 Unauthorized")]
+    [InlineData("HTTP 401\nUnauthorized")]
+    [InlineData("last_fail_reason: 401 Unauthorized")]
+    [InlineData("{\"last_fail_reason\":\"HTTP 401 Unauthorized\"}")]
+    [InlineData("failed with exit code 401")]
+    public async Task WeakEvidence_NeverRequestsAuthentication(string record)
+    {
+        await using var harness = new Harness();
+        var reducer = new ProcessBackedVsCodeTunnelChildProcess.EvidenceReducer();
+        await ProcessBackedVsCodeTunnelChildProcess.DrainAsync(new System.IO.StringReader(record), reducer.AcceptRecord);
+        harness.Children.Enqueue(Child.Completed(reducer.Complete(1)));
+        var result = await harness.Tool.ExecuteAsync(Context());
+        Assert.False(result.IsSuccess);
+        Assert.Contains("NotRunning", result.ErrorMessage);
+        Assert.Empty(harness.Registry.GetSnapshot());
+        Assert.Empty(harness.Logins);
+    }
+
+    [Theory]
+    [InlineData(true, true, true, true, VsCodeTunnelOutcome.NotRunning, VsCodeTunnelOutcome.Cancelled)]
+    [InlineData(false, true, true, true, VsCodeTunnelOutcome.NotRunning, VsCodeTunnelOutcome.Ready)]
+    [InlineData(false, false, true, true, VsCodeTunnelOutcome.Ready, VsCodeTunnelOutcome.AuthenticationRequired)]
+    [InlineData(false, false, false, true, VsCodeTunnelOutcome.Ready, VsCodeTunnelOutcome.AuthenticationRequired)]
+    [InlineData(false, false, false, false, VsCodeTunnelOutcome.NotRunning, VsCodeTunnelOutcome.NotRunning)]
+    [InlineData(false, false, false, false, VsCodeTunnelOutcome.Ready, VsCodeTunnelOutcome.Ready)]
+    [InlineData(false, false, false, false, VsCodeTunnelOutcome.RunningDisconnected, VsCodeTunnelOutcome.RunningDisconnected)]
+    [InlineData(false, false, false, false, VsCodeTunnelOutcome.InvalidStatus, VsCodeTunnelOutcome.InvalidStatus)]
+    [InlineData(false, false, false, false, VsCodeTunnelOutcome.CommandFailed, VsCodeTunnelOutcome.CommandFailed)]
+    public void EvidenceClassification_UsesRequiredPrecedence(
+        bool cancelled,
+        bool connected,
+        bool tokenError,
+        bool unauthorized,
+        VsCodeTunnelOutcome status,
+        VsCodeTunnelOutcome expected)
+    {
+        var outcome = RunVsCodeTunnelTool.Classify(
+            cancelled,
+            new VsCodeTunnelResolution { Outcome = status },
+            new VsCodeTunnelProcessEvidence { ConnectedSeen = connected, TokenErrorSeen = tokenError },
+            Completion(connected, tokenError, unauthorized));
+        Assert.Equal(expected, outcome);
+    }
+
+    [Fact]
+    public async Task Cancellation_KillsDrainsThenDisposesHost()
+    {
+        using var cancellation = new CancellationTokenSource();
+        await using var harness = new Harness { Status = VsCodeTunnelOutcome.Ready };
+        var child = new Child();
+        harness.Children.Enqueue(child);
+        var polling = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tool = harness.CreateTool(async token =>
         {
-            this.capturedStandardOutput = capturedStandardOutput;
+            polling.TrySetResult();
+            await Task.Delay(Timeout.Infinite, token);
+        });
+        var context = Context() with { CancellationToken = cancellation.Token };
+        var execution = tool.ExecuteAsync(context);
+        await polling.Task.WaitAsync(TestContext.Current.CancellationToken);
+        cancellation.Cancel();
+        var result = await execution;
+        Assert.Contains("Cancelled", result.ErrorMessage);
+        Assert.True(child.Killed);
+        Assert.True(child.Drained);
+        Assert.True(child.Disposed);
+    }
+
+    [Fact]
+    public void HostStart_EnablesMachineEvidenceWithoutCredentialInjection()
+    {
+        var start = RunVsCodeTunnelTool.BuildHostStartInfo(
+            "code.exe",
+            ["tunnel", "--accept-server-license-terms", "--name", "host with spaces"]);
+        Assert.Equal("1", start.Environment["VSCODE_CLI_MACHINE_STATUS"]);
+        Assert.False(start.Environment.ContainsKey("VSCODE_CLI_ACCESS_TOKEN"));
+        Assert.Equal("host with spaces", start.ArgumentList.Last());
+        Assert.True(start.RedirectStandardOutput);
+        Assert.True(start.RedirectStandardError);
+    }
+
+    [Fact]
+    public async Task CommandFailure_NeverEchoesRawOutputOrException()
+    {
+        var broker = new Mock<IAccessBroker>(MockBehavior.Strict);
+        var invoker = new VsCodeCliInvoker(processRunner: (_, _) => throw new InvalidOperationException("private-device-url"));
+        var tool = new RunVsCodeTunnelTool(
+            broker.Object,
+            defaultCliPathResolver: () => "code",
+            cliInvoker: invoker);
+        var result = await tool.ExecuteAsync(Context());
+        Assert.Equal("VS Code tunnel: CommandFailed.", result.ErrorMessage);
+        Assert.DoesNotContain("private", result.ToString());
+        broker.VerifyNoOtherCalls();
+    }
+
+    private static WorkspaceToolExecutionContext Context(string provider = "github") =>
+        WorkspaceToolExecutionContextTestFactory.Create(
+            new InMemoryDataAccessLayer(),
+            JsonSerializer.Serialize(new Dictionary<string, object>
+            {
+                ["entity-types"] = new[] { "entity", "tool" },
+                ["tool-type"] = "run-vscode-tunnel",
+                ["provider"] = provider,
+                ["cli-path"] = "code.exe",
+                ["tunnel-name"] = "test-host",
+            }));
+
+    private static Task DenyAsync(
+        UserAuthorizationRegistry registry,
+        UserAuthorizationSnapshot row) => registry.ActAsync(new DenyUserAuthorizationAction
+        {
+            RequestIdentifier = row.Identifier,
+            ExpectedRevision = row.Revision,
+        }, TestContext.Current.CancellationToken);
+
+    private static VsCodeTunnelProcessCompletion Completion(
+        bool connected = false,
+        bool tokenError = false,
+        bool unauthorized = false) => new()
+        {
+            ExitCode = 0,
+            ConnectedSeen = connected,
+            TokenErrorSeen = tokenError,
+            UnauthorizedHttp401Seen = unauthorized,
+        };
+
+    private sealed class Child : IVsCodeTunnelChildProcess
+    {
+        public bool HasExited { get; set; }
+        public bool Killed { get; private set; }
+        public bool Drained { get; private set; }
+        public bool Disposed { get; private set; }
+        public TaskCompletionSource WaitStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<VsCodeTunnelProcessCompletion> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public VsCodeTunnelProcessEvidence Evidence { get; } = new() { ConnectedSeen = false, TokenErrorSeen = false };
+
+        internal static Child Completed(
+            bool connected = false,
+            bool tokenError = false,
+            bool unauthorized = false) => Completed(RunVsCodeTunnelToolTests.Completion(connected, tokenError, unauthorized));
+
+        internal static Child Completed(VsCodeTunnelProcessCompletion completion)
+        {
+            var child = new Child { HasExited = true };
+            child.Completion.SetResult(completion);
+            return child;
         }
 
-        public void SimulateExit(int exitCode, string capturedStandardError, string? capturedStandardOutput = null)
+        public async Task<VsCodeTunnelProcessCompletion> WaitForExitAndDrainAsync(CancellationToken cancellationToken)
         {
-            this.exitCode = exitCode;
-            this.capturedStandardError = capturedStandardError;
-            if (capturedStandardOutput is not null)
-            {
-                this.capturedStandardOutput = capturedStandardOutput;
-            }
-
-            this.hasExited = true;
+            this.WaitStarted.TrySetResult();
+            var result = await this.Completion.Task.WaitAsync(cancellationToken);
+            this.Drained = true;
+            return result;
         }
 
         public void Kill()
         {
-            this.WasKilled = true;
-            if (!this.hasExited)
+            this.Killed = true;
+            if (!this.HasExited)
             {
-                this.hasExited = true;
-                this.exitCode = -1;
+                this.HasExited = true;
+                this.Completion.TrySetResult(RunVsCodeTunnelToolTests.Completion());
             }
         }
 
         public void Dispose()
         {
-            this.WasDisposed = true;
+            Assert.True(this.Drained);
+            this.Disposed = true;
         }
     }
 
-    private WorkspaceToolExecutionContext Context(
-        string? cliPath = null,
-        string? tunnelName = null)
+    private sealed class Harness : IAsyncDisposable
     {
-        var props = new List<string>
+        private readonly Channel<bool> changed = Channel.CreateUnbounded<bool>();
+        private readonly VsCodeCliInvoker invoker;
+        private readonly FakeStatusResolver resolver;
+        internal Mock<IReleaseAuthorizationPolicy> Policy { get; } = new(MockBehavior.Strict);
+        internal UserAuthorizationRegistry Registry { get; } = new();
+        internal AccessBroker Broker { get; }
+        internal RunVsCodeTunnelTool Tool { get; }
+        internal Queue<Child> Children { get; } = new();
+        internal List<Child> ChildrenStarted { get; } = [];
+        internal List<IReadOnlyList<string>> Hosts { get; } = [];
+        internal List<ProcessStartInfo> Logins { get; } = [];
+        internal bool HasStoredCredential { get; set; } = true;
+        internal string PresenceProvider { get; set; } = "github";
+        internal VsCodeTunnelOutcome Status { get; set; } = VsCodeTunnelOutcome.NotRunning;
+
+        public Harness()
         {
-            "\"entity-types\": [\"entity\", \"tool\"]",
-            "\"tool-type\": \"run-vscode-tunnel\"",
-        };
-
-        if (cliPath is not null)
-        {
-            props.Add($"\"{RunVsCodeTunnelTool.CliPathProperty}\": {JsonSerializer.Serialize(cliPath)}");
-        }
-
-        if (tunnelName is not null)
-        {
-            props.Add($"\"{RunVsCodeTunnelTool.TunnelNameProperty}\": {JsonSerializer.Serialize(tunnelName)}");
-        }
-
-        var toolJson = "{" + string.Join(", ", props) + "}";
-        return WorkspaceToolExecutionContextTestFactory.Create(
-            new Phantom.Workspaces.Data.Offline.InMemoryDataAccessLayer(),
-            toolJson);
-    }
-
-    /// <summary>
-    /// A manually-driven "wait between polls" seam. Tests observe the pending wait before
-    /// releasing it, so they cannot release a poll that the runner will never enter.
-    /// </summary>
-    private sealed class ManualPollGate
-    {
-        private readonly object gate = new();
-        private TaskCompletionSource? pending;
-        private TaskCompletionSource pollArrived = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public Task WaitForPollAsync()
-        {
-            lock (this.gate)
+            this.Registry.Changed += (_, _) => this.changed.Writer.TryWrite(true);
+            this.resolver = new FakeStatusResolver(() => this.Status);
+            this.invoker = new VsCodeCliInvoker(processRunner: (parameters, _) =>
             {
-                return this.pending is not null
-                    ? Task.CompletedTask
-                    : this.pollArrived.Task.WaitAsync(TimeSpan.FromSeconds(30));
-            }
-        }
-
-        public Task WaitAsync(CancellationToken cancellationToken)
-        {
-            lock (this.gate)
-            {
-                var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                if (this.pending is not null)
+                Assert.Equal(new[] { "tunnel", "user", "show" }, parameters.Arguments);
+                var output = this.HasStoredCredential ? "logged in with provider " + this.PresenceProvider : "not logged in";
+                return Task.FromResult(new ProcessResult(this.HasStoredCredential ? 0 : 1, output, "private-device-artifact", output));
+            });
+            var executor = new VsCodeTunnelCliAuthorizationExecutor(
+                this.invoker,
+                this.resolver,
+                new VsCodeTunnelInteractiveLoginLauncher((startInfo, _) =>
                 {
-                    throw new InvalidOperationException("The previous poll has not been released.");
-                }
+                    this.Logins.Add(startInfo);
+                    this.HasStoredCredential = true;
+                    return Task.FromResult(0);
+                }));
+            var executors = new CredentialAccessExecutorRegistry();
+            executors.AddCompletion<CliOwnedAuthorizationRequest, AuthorizationCompletedAccessResult>(executor);
+            this.Broker = new AccessBroker(this.Policy.Object, executors, new ProviderAcquisitionCoordinator(), this.Registry);
+            this.Tool = this.CreateTool();
+        }
 
-                this.pending = tcs;
-                this.pollArrived.TrySetResult();
-                cancellationToken.Register(() => tcs.TrySetCanceled(cancellationToken));
-                return tcs.Task;
+        internal RunVsCodeTunnelTool CreateTool(Func<CancellationToken, Task>? wait = null) => new(
+            this.Broker,
+            cliInvoker: this.invoker,
+            tunnelStatusResolver: this.resolver,
+            processLauncher: (_, arguments) =>
+            {
+                this.Hosts.Add(arguments);
+                var child = this.Children.Dequeue();
+                this.ChildrenStarted.Add(child);
+                return child;
+            },
+            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
+            waitBetweenPollsAsync: wait ?? (_ => throw new InvalidOperationException("Unexpected poll.")));
+
+        internal async Task<UserAuthorizationSnapshot> WaitForPendingRowAsync()
+        {
+            while (true)
+            {
+                var row = this.Registry.GetSnapshot().FirstOrDefault(row => row.State == UserAuthorizationState.Pending);
+                if (row is not null)
+                    return row;
+                await this.changed.Reader.ReadAsync(TestContext.Current.CancellationToken);
             }
         }
 
-        public void ReleaseOnePoll()
-        {
-            lock (this.gate)
-            {
-                var tcs = this.pending ?? throw new InvalidOperationException("No poll is pending.");
-                this.pending = null;
-                this.pollArrived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                tcs.SetResult();
-            }
-        }
+        public ValueTask DisposeAsync() => this.Broker.DisposeAsync();
     }
 
-    // ---- Expected Tests -------------------------------------------------------------------
-
-    /// <summary>
-    /// A fake <see cref="IVsCodeTunnelStatusResolver"/>: the runner obtains tunnel status
-    /// exclusively through this shared component (never by invoking the CLI itself).
-    /// </summary>
-    private sealed class FakeStatusResolver : IVsCodeTunnelStatusResolver
+    private sealed class FakeStatusResolver(Func<VsCodeTunnelOutcome> outcome) : IVsCodeTunnelStatusResolver
     {
-        private readonly Func<string, CancellationToken, Task<VsCodeTunnelResolution>> handler;
-
-        public int InvocationCount { get; private set; }
-
-        public FakeStatusResolver(Func<string, CancellationToken, Task<VsCodeTunnelResolution>> handler)
-        {
-            this.handler = handler;
-        }
-
-        public static FakeStatusResolver Running() =>
-            new((_, _) => Task.FromResult(new VsCodeTunnelResolution
-            {
-                Status = new VsCodeTunnelStatus("daemon", "https://vscode.dev/tunnel/daemon", true),
-                Outcome = VsCodeTunnelOutcome.Ready,
-            }));
-
-        public static FakeStatusResolver NotRunning(
-            int exitCode = 0,
-            string stdout = "{\"tunnel\":null,\"service_installed\":false}") =>
-            new((_, _) => Task.FromResult(new VsCodeTunnelResolution
-            {
-                Outcome = exitCode == 0 ? VsCodeTunnelOutcome.NotRunning : VsCodeTunnelOutcome.CommandFailed,
-            }));
-
-        public Task<VsCodeTunnelResolution> ResolveAsync(string cliPath, CancellationToken cancellationToken)
-        {
-            this.InvocationCount++;
-            return this.handler(cliPath, cancellationToken);
-        }
-    }
-
-    [Fact]
-    public async Task RunVsCodeTunnelTool_SpawnsCodeTunnelDirectly_NotServiceInstall()
-    {
-        var calls = new List<CliCall>();
-        var spawns = new List<SpawnCall>();
-        var child = new FakeChildProcess();
-        child.SimulateExit(0, string.Empty); // exit immediately so ExecuteAsync returns
-
-        var tool = new RunVsCodeTunnelTool(
-            new FakeExecutionContextProvider(),
-            (cli, args, env, _) =>
-            {
-                calls.Add(new CliCall(cli, args, env));
-                return Task.FromResult(("running", 0));
-            },
-            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
-            defaultCliPathResolver: () => "code",
-            tokenResolver: () => null,
-            processLauncher: (cli, args) =>
-            {
-                spawns.Add(new SpawnCall(cli, args));
-                return child;
-            });
-
-        await tool.ExecuteAsync(this.Context());
-
-        Assert.Single(spawns);
-        Assert.StartsWith("tunnel --accept-server-license-terms --name ", spawns[0].Arguments);
-        Assert.DoesNotContain(calls, c => c.Arguments.Contains("service install"));
-        Assert.DoesNotContain(calls, c => c.Arguments.Contains("service uninstall"));
-        Assert.DoesNotContain(calls, c => c.Arguments.Contains("service status"));
-    }
-
-    [Fact]
-    public async Task RunVsCodeTunnelTool_ChildAliveAndStatusRunning_BlocksUntilConditionBreaks()
-    {
-        var gate = new ManualPollGate();
-        var statusCount = 0;
-        var child = new FakeChildProcess();
-        var resolver = new FakeStatusResolver((_, _) =>
-        {
-            Interlocked.Increment(ref statusCount);
-            return Task.FromResult(new VsCodeTunnelResolution
-            {
-                Status = new VsCodeTunnelStatus("daemon", "https://vscode.dev/tunnel/daemon", true),
-                Outcome = VsCodeTunnelOutcome.Ready,
-            });
-        });
-
-        var tool = new RunVsCodeTunnelTool(
-            new FakeExecutionContextProvider(),
-            (cli, args, env, ct) => Task.FromResult((string.Empty, 0)),
-            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
-            defaultCliPathResolver: () => "code",
-            tokenResolver: () => null,
-            tunnelStatusResolver: resolver,
-            processLauncher: (_, _) => child,
-            waitBetweenPollsAsync: gate.WaitAsync);
-
-        var runTask = tool.ExecuteAsync(this.Context());
-
-        // First poll: status "running" then wait for tick.
-        await gate.WaitForPollAsync();
-        gate.ReleaseOnePoll();
-        // Second poll: status "running" then wait for tick.
-        await gate.WaitForPollAsync();
-
-        Assert.False(runTask.IsCompleted);
-        Assert.True(statusCount >= 2);
-
-        // Break the conjunction so ExecuteAsync can return.
-        child.SimulateExit(0, "child died");
-        gate.ReleaseOnePoll();
-
-        await runTask;
-    }
-
-    [Fact]
-    public async Task RunVsCodeTunnelTool_ChildExits_ReturnsFailureWithCliOutput()
-    {
-        var child = new FakeChildProcess();
-        child.SimulateExit(42, "child-stderr-marker");
-
-        var tool = new RunVsCodeTunnelTool(
-            new FakeExecutionContextProvider(),
-            (cli, args, env, _) => Task.FromResult(("tunnel is running", 0)),
-            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
-            defaultCliPathResolver: () => "code",
-            tokenResolver: () => null,
-            processLauncher: (_, _) => child);
-
-        var result = await tool.ExecuteAsync(this.Context());
-
-        Assert.False(result.IsSuccess);
-        Assert.NotNull(result.ErrorMessage);
-        Assert.Contains("42", result.ErrorMessage);
-        Assert.Contains("child-stderr-marker", result.ErrorMessage);
-    }
-
-    [Fact]
-    public async Task RunVsCodeTunnelTool_StatusStopsReportingRunning_ReturnsAndKillsChild()
-    {
-        var child = new FakeChildProcess();
-        var tool = new RunVsCodeTunnelTool(
-            new FakeExecutionContextProvider(),
-            (cli, args, env, _) => Task.FromResult((string.Empty, 0)),
-            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
-            defaultCliPathResolver: () => "code",
-            tokenResolver: () => null,
-            tunnelStatusResolver: FakeStatusResolver.NotRunning(),
-            processLauncher: (_, _) => child);
-
-        var result = await tool.ExecuteAsync(this.Context());
-
-        Assert.True(result.IsSuccess);
-        Assert.True(child.WasKilled);
-    }
-
-    [Fact]
-    public async Task RunVsCodeTunnelTool_StatusNonZeroExit_TreatedAsNotRunning()
-    {
-        var child = new FakeChildProcess();
-        var tool = new RunVsCodeTunnelTool(
-            new FakeExecutionContextProvider(),
-            (cli, args, env, _) => Task.FromResult((string.Empty, 0)),
-            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
-            defaultCliPathResolver: () => "code",
-            tokenResolver: () => null,
-            // Resolver reports no running tunnel (e.g. nonzero exit / error) → not running.
-            tunnelStatusResolver: FakeStatusResolver.NotRunning(exitCode: 7, stdout: "error: unexpected argument"),
-            processLauncher: (_, _) => child);
-
-        var result = await tool.ExecuteAsync(this.Context());
-
-        Assert.True(result.IsSuccess);
-        Assert.True(child.WasKilled);
-    }
-
-    [Fact]
-    public async Task RunVsCodeTunnelTool_WithGitHubToken_InvokesLoginProviderGitHubWithTokenEnvVar_BeforeSpawn()
-    {
-        var events = new List<string>();
-        var child = new FakeChildProcess();
-        child.SimulateExit(0, string.Empty);
-        CliCall? loginCall = null;
-
-        var tool = new RunVsCodeTunnelTool(
-            new FakeExecutionContextProvider(),
-            (cli, args, env, _) =>
-            {
-                if (args == "tunnel user login --provider github")
-                {
-                    loginCall = new CliCall(cli, args, env);
-                    events.Add("login");
-                }
-                return Task.FromResult(("running", 0));
-            },
-            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
-            defaultCliPathResolver: () => "code",
-            tokenResolver: () => "gh-token-xyz",
-            processLauncher: (_, _) =>
-            {
-                events.Add("spawn");
-                return child;
-            });
-
-        await tool.ExecuteAsync(this.Context());
-
-        Assert.NotNull(loginCall);
-        Assert.NotNull(loginCall!.EnvironmentVariables);
-        Assert.True(loginCall.EnvironmentVariables!.ContainsKey("VSCODE_CLI_ACCESS_TOKEN"));
-        Assert.Equal("gh-token-xyz", loginCall.EnvironmentVariables["VSCODE_CLI_ACCESS_TOKEN"]);
-        Assert.DoesNotContain("gh-token-xyz", loginCall.Arguments);
-        Assert.Equal(["login", "spawn"], events);
-    }
-
-    [Fact]
-    public async Task RunVsCodeTunnelTool_WithoutGitHubToken_SkipsLoginAndStillSpawns()
-    {
-        var calls = new List<CliCall>();
-        var child = new FakeChildProcess();
-        child.SimulateExit(0, string.Empty);
-        var spawned = false;
-
-        var tool = new RunVsCodeTunnelTool(
-            new FakeExecutionContextProvider(),
-            (cli, args, env, _) =>
-            {
-                calls.Add(new CliCall(cli, args, env));
-                return Task.FromResult(("running", 0));
-            },
-            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
-            defaultCliPathResolver: () => "code",
-            tokenResolver: () => null,
-            processLauncher: (_, _) => { spawned = true; return child; });
-
-        var result = await tool.ExecuteAsync(this.Context());
-
-        Assert.True(spawned);
-        Assert.DoesNotContain(calls, c => c.Arguments.Contains("user login"));
-        // Result is failure because the fake child exited immediately, but that's not the point:
-        // the assertion here is on login-skip + spawn-still-happened.
-        _ = result;
-    }
-
-    [Fact]
-    public async Task RunVsCodeTunnelTool_LoginNonZeroExit_LogsWarningAndStillSpawns()
-    {
-        var testLogger = new TestLogger<RunVsCodeTunnelTool>();
-        var child = new FakeChildProcess();
-        child.SimulateExit(0, string.Empty);
-        var spawned = false;
-
-        var tool = new RunVsCodeTunnelTool(
-            new FakeExecutionContextProvider(),
-            (cli, args, env, _) =>
-            {
-                if (args == "tunnel user login --provider github")
-                    return Task.FromResult(("insufficient_scope", 1));
-                return Task.FromResult(("running", 0));
-            },
-            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
-            defaultCliPathResolver: () => "code",
-            tokenResolver: () => "some-token",
-            processLauncher: (_, _) => { spawned = true; return child; },
-            logger: testLogger);
-
-        await tool.ExecuteAsync(this.Context());
-
-        Assert.True(spawned);
-        Assert.Contains(testLogger.Entries, e => e.Level == LogLevel.Warning);
-    }
-
-    [Fact]
-    public async Task RunVsCodeTunnelTool_CancellationRequested_KillsChildAndReturns()
-    {
-        using var cts = new CancellationTokenSource();
-        var gate = new ManualPollGate();
-        var child = new FakeChildProcess();
-        var tool = new RunVsCodeTunnelTool(
-            new FakeExecutionContextProvider(),
-            (cli, args, env, _) => Task.FromResult((string.Empty, 0)),
-            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
-            defaultCliPathResolver: () => "code",
-            tokenResolver: () => null,
-            tunnelStatusResolver: FakeStatusResolver.Running(),
-            processLauncher: (_, _) => child,
-            waitBetweenPollsAsync: gate.WaitAsync);
-
-        var runTask = tool.ExecuteAsync(this.Context() with { CancellationToken = cts.Token });
-
-        // Let the first poll happen and enter the wait.
-        // Cancel before releasing the wait — this causes WaitAsync to throw OperationCanceledException.
-        cts.Cancel();
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await runTask);
-        Assert.True(child.WasKilled);
-    }
-
-    [Fact]
-    public async Task RunVsCodeTunnelTool_TunnelNameOverride_PassedToCodeTunnelSpawn()
-    {
-        SpawnCall? spawn = null;
-        var child = new FakeChildProcess();
-        child.SimulateExit(0, string.Empty);
-
-        var tool = new RunVsCodeTunnelTool(
-            new FakeExecutionContextProvider(),
-            (cli, args, env, _) => Task.FromResult(("running", 0)),
-            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
-            defaultCliPathResolver: () => "code",
-            tokenResolver: () => null,
-            processLauncher: (cli, args) => { spawn = new SpawnCall(cli, args); return child; });
-
-        await tool.ExecuteAsync(this.Context(tunnelName: "my-custom-tunnel"));
-
-        Assert.NotNull(spawn);
-        Assert.Contains("--name my-custom-tunnel", spawn!.Arguments);
-    }
-
-    [Fact]
-    public async Task RunVsCodeTunnelTool_TunnelNameDefault_UsesMachineName()
-    {
-        SpawnCall? spawn = null;
-        var child = new FakeChildProcess();
-        child.SimulateExit(0, string.Empty);
-
-        var tool = new RunVsCodeTunnelTool(
-            new FakeExecutionContextProvider(),
-            (cli, args, env, _) => Task.FromResult(("running", 0)),
-            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
-            defaultCliPathResolver: () => "code",
-            tokenResolver: () => null,
-            processLauncher: (cli, args) => { spawn = new SpawnCall(cli, args); return child; });
-
-        await tool.ExecuteAsync(this.Context());
-
-        Assert.NotNull(spawn);
-        Assert.Contains("--name test-machine", spawn!.Arguments);
-    }
-
-    [Fact]
-    public void RunVsCodeTunnelTool_DefaultScheduleFrequency_IsOneMinute()
-    {
-        Assert.Equal(TimeSpan.FromMinutes(1), RunVsCodeTunnelTool.DefaultScheduleFrequency);
-    }
-
-    [Fact]
-    public async Task RunVsCodeTunnelTool_CliNotFound_ReturnsFailure()
-    {
-        var loginCalled = false;
-        var spawned = false;
-
-        var tool = new RunVsCodeTunnelTool(
-            new FakeExecutionContextProvider(),
-            (cli, args, env, _) =>
-            {
-                if (args.Contains("login")) loginCalled = true;
-                return Task.FromResult(("", 0));
-            },
-            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
-            defaultCliPathResolver: () => null,
-            tokenResolver: () => "token",
-            processLauncher: (_, _) => { spawned = true; return new FakeChildProcess(); });
-
-        var result = await tool.ExecuteAsync(this.Context());
-
-        Assert.False(result.IsSuccess);
-        Assert.NotNull(result.ErrorMessage);
-        Assert.False(loginCalled);
-        Assert.False(spawned);
-    }
-
-    // ---- #1240: initial grace period before first status probe -----------------------------
-
-    [Fact]
-    public async Task RunVsCodeTunnelTool_WaitsGracePeriodBeforeFirstStatusCheck()
-    {
-        var graceGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var pollGate = new ManualPollGate();
-        var statusCount = 0;
-        var child = new FakeChildProcess();
-        var resolver = new FakeStatusResolver((_, _) =>
-        {
-            Interlocked.Increment(ref statusCount);
-            return Task.FromResult(new VsCodeTunnelResolution
-            {
-                Status = new VsCodeTunnelStatus("daemon", "https://vscode.dev/tunnel/daemon", true),
-                Outcome = VsCodeTunnelOutcome.Ready,
-            });
-        });
-
-        var tool = new RunVsCodeTunnelTool(
-            new FakeExecutionContextProvider(),
-            (cli, args, env, _) => Task.FromResult((string.Empty, 0)),
-            initialStatusCheckDelayAsync: _ => graceGate.Task,
-            defaultCliPathResolver: () => "code",
-            tokenResolver: () => null,
-            tunnelStatusResolver: resolver,
-            processLauncher: (_, _) => child,
-            waitBetweenPollsAsync: pollGate.WaitAsync);
-
-        var runTask = tool.ExecuteAsync(this.Context());
-
-        // The grace delay is still pending, so no status probe has been issued yet.
-        Assert.Equal(0, statusCount);
-        Assert.False(runTask.IsCompleted);
-
-        // Release the grace period; the first status probe may now happen.
-        graceGate.SetResult();
-        await pollGate.WaitForPollAsync();
-
-        Assert.True(statusCount >= 1);
-
-        // Let ExecuteAsync return.
-        child.SimulateExit(0, "done");
-        pollGate.ReleaseOnePoll();
-        await runTask;
-    }
-
-    [Fact]
-    public async Task RunVsCodeTunnelTool_TunnelUpAfterGracePeriod_ReportsRunning()
-    {
-        var graceGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var graceCompleted = false;
-        var pollGate = new ManualPollGate();
-        var child = new FakeChildProcess();
-        var resolver = new FakeStatusResolver((_, _) =>
-        {
-            // The status probe must never run before the grace period completes.
-            Assert.True(graceCompleted);
-            return Task.FromResult(new VsCodeTunnelResolution
-            {
-                Status = new VsCodeTunnelStatus("daemon", "https://vscode.dev/tunnel/daemon", true),
-                Outcome = VsCodeTunnelOutcome.Ready,
-            });
-        });
-
-        var tool = new RunVsCodeTunnelTool(
-            new FakeExecutionContextProvider(),
-            (cli, args, env, _) => Task.FromResult((string.Empty, 0)),
-            initialStatusCheckDelayAsync: async _ =>
-            {
-                await graceGate.Task;
-                graceCompleted = true;
-            },
-            defaultCliPathResolver: () => "code",
-            tokenResolver: () => null,
-            tunnelStatusResolver: resolver,
-            processLauncher: (_, _) => child,
-            waitBetweenPollsAsync: pollGate.WaitAsync);
-
-        var runTask = tool.ExecuteAsync(this.Context());
-
-        graceGate.SetResult();
-        await pollGate.WaitForPollAsync();
-
-        // Tunnel reported running after the grace period, so the tool keeps blocking rather than
-        // returning a spurious "not running" failure.
-        Assert.False(runTask.IsCompleted);
-
-        child.SimulateExit(0, "done");
-        pollGate.ReleaseOnePoll();
-        await runTask;
-    }
-
-    [Fact]
-    public async Task RunVsCodeTunnelTool_StatusStillFailsAfterGracePeriod_ReturnsNotRunning()
-    {
-        var child = new FakeChildProcess();
-
-        var tool = new RunVsCodeTunnelTool(
-            new FakeExecutionContextProvider(),
-            (cli, args, env, _) => Task.FromResult((string.Empty, 0)),
-            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
-            defaultCliPathResolver: () => "code",
-            tokenResolver: () => null,
-            tunnelStatusResolver: FakeStatusResolver.NotRunning(),
-            processLauncher: (_, _) => child);
-
-        var result = await tool.ExecuteAsync(this.Context());
-
-        Assert.True(result.IsSuccess);
-        Assert.True(child.WasKilled);
-        Assert.NotNull(result.ResultContent);
-        Assert.Contains("no longer reports the tunnel as running", result.ResultContent);
-    }
-
-    [Fact]
-    public async Task RunVsCodeTunnelTool_ChildExitsDuringGracePeriod_ReturnsFailureWithCliOutput()
-    {
-        var graceGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var child = new FakeChildProcess();
-
-        var tool = new RunVsCodeTunnelTool(
-            new FakeExecutionContextProvider(),
-            (cli, args, env, _) => Task.FromResult(("tunnel is running", 0)),
-            initialStatusCheckDelayAsync: _ => graceGate.Task,
-            defaultCliPathResolver: () => "code",
-            tokenResolver: () => null,
-            processLauncher: (_, _) => child);
-
-        var runTask = tool.ExecuteAsync(this.Context());
-
-        // Simulate the child crashing during the warm-up window, then release the grace delay.
-        child.SimulateExit(17, "crash-during-warmup");
-        graceGate.SetResult();
-
-        var result = await runTask;
-
-        Assert.False(result.IsSuccess);
-        Assert.NotNull(result.ErrorMessage);
-        Assert.Contains("17", result.ErrorMessage);
-        Assert.Contains("crash-during-warmup", result.ErrorMessage);
-    }
-
-    [Fact]
-    public async Task RunVsCodeTunnelTool_CancellationDuringGracePeriod_KillsChildAndReturns()
-    {
-        using var cts = new CancellationTokenSource();
-        var child = new FakeChildProcess();
-
-        var tool = new RunVsCodeTunnelTool(
-            new FakeExecutionContextProvider(),
-            (cli, args, env, _) => Task.FromResult(("tunnel is running", 0)),
-            initialStatusCheckDelayAsync: ct =>
-            {
-                var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                ct.Register(() => tcs.TrySetCanceled(ct));
-                return tcs.Task;
-            },
-            defaultCliPathResolver: () => "code",
-            tokenResolver: () => null,
-            processLauncher: (_, _) => child);
-
-        var runTask = tool.ExecuteAsync(this.Context() with { CancellationToken = cts.Token });
-
-        // Cancel while parked in the grace delay.
-        cts.Cancel();
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await runTask);
-        Assert.True(child.WasKilled);
-    }
-
-    [Fact]
-    public void RunVsCodeTunnelTool_DefaultInitialGracePeriod_IsTenSeconds()
-    {
-        Assert.Equal(TimeSpan.FromSeconds(10), RunVsCodeTunnelTool.DefaultInitialStatusCheckDelay);
-    }
-
-    [Fact]
-    public async Task RunVsCodeTunnelTool_NeverInvokesTunnelServiceSubcommands()
-    {
-        var calls = new List<CliCall>();
-        var child = new FakeChildProcess();
-        child.SimulateExit(0, string.Empty);
-
-        var tool = new RunVsCodeTunnelTool(
-            new FakeExecutionContextProvider(),
-            (cli, args, env, _) =>
-            {
-                calls.Add(new CliCall(cli, args, env));
-                return Task.FromResult(("running", 0));
-            },
-            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
-            defaultCliPathResolver: () => "code",
-            tokenResolver: () => "token",
-            processLauncher: (_, _) => child);
-
-        await tool.ExecuteAsync(this.Context());
-
-        Assert.DoesNotContain(calls, c => c.Arguments.Contains("tunnel service install"));
-        Assert.DoesNotContain(calls, c => c.Arguments.Contains("tunnel service uninstall"));
-        Assert.DoesNotContain(calls, c => c.Arguments.Contains("tunnel service status"));
-    }
-
-    // ---- #1356: child-process stdout is captured and surfaced --------------------------------
-
-    [Fact]
-    public async Task RunVsCodeTunnelTool_ChildWritesToStdout_CapturedStandardOutputContainsIt()
-    {
-        var child = new FakeChildProcess();
-        child.SimulateExit(1, "some-stderr", "some-stdout-marker");
-
-        var tool = new RunVsCodeTunnelTool(
-            new FakeExecutionContextProvider(),
-            (cli, args, env, _) => Task.FromResult(("tunnel is running", 0)),
-            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
-            defaultCliPathResolver: () => "code",
-            tokenResolver: () => null,
-            processLauncher: (_, _) => child);
-
-        var result = await tool.ExecuteAsync(this.Context());
-
-        // The child's stdout is accumulated (not discarded) and surfaced in the result.
-        Assert.Contains("some-stdout-marker", child.CapturedStandardOutput);
-        Assert.False(result.IsSuccess);
-        Assert.NotNull(result.ErrorMessage);
-        Assert.Contains("some-stdout-marker", result.ErrorMessage);
-    }
-
-    [Fact]
-    public async Task RunVsCodeTunnelTool_ChildWritesTunnelUrlToStdout_UrlIsSurfacedInResultOrLog()
-    {
-        const string tunnelUrl = "https://vscode.dev/tunnel/my-machine/abc123";
-        var testLogger = new TestLogger<RunVsCodeTunnelTool>();
-        var child = new FakeChildProcess();
-        child.SimulateExit(0, string.Empty, tunnelUrl);
-
-        var tool = new RunVsCodeTunnelTool(
-            new FakeExecutionContextProvider(),
-            (cli, args, env, _) => Task.FromResult(("tunnel is running", 0)),
-            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
-            defaultCliPathResolver: () => "code",
-            tokenResolver: () => null,
-            processLauncher: (_, _) => child,
-            logger: testLogger);
-
-        var result = await tool.ExecuteAsync(this.Context());
-
-        var surfacedInResult = result.ErrorMessage?.Contains(tunnelUrl) == true
-            || result.ResultContent?.Contains(tunnelUrl) == true;
-        var surfacedInLog = testLogger.Entries.Any(e => e.Message.Contains(tunnelUrl));
-        Assert.True(surfacedInResult || surfacedInLog);
-    }
-
-    [Fact]
-    public async Task RunVsCodeTunnelTool_ChildWritesToStdoutAndStderr_BothAreCapturedIndependently()
-    {
-        var child = new FakeChildProcess();
-        child.SimulateExit(3, "stderr-only-marker", "stdout-only-marker");
-
-        var tool = new RunVsCodeTunnelTool(
-            new FakeExecutionContextProvider(),
-            (cli, args, env, _) => Task.FromResult(("tunnel is running", 0)),
-            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
-            defaultCliPathResolver: () => "code",
-            tokenResolver: () => null,
-            processLauncher: (_, _) => child);
-
-        var result = await tool.ExecuteAsync(this.Context());
-
-        // Buffers are independent — neither contains the other's content.
-        Assert.Equal("stdout-only-marker", child.CapturedStandardOutput);
-        Assert.Equal("stderr-only-marker", child.CapturedStandardError);
-        Assert.DoesNotContain("stderr-only-marker", child.CapturedStandardOutput);
-        Assert.DoesNotContain("stdout-only-marker", child.CapturedStandardError);
-
-        // Both are surfaced in the failure message.
-        Assert.NotNull(result.ErrorMessage);
-        Assert.Contains("stdout-only-marker", result.ErrorMessage);
-        Assert.Contains("stderr-only-marker", result.ErrorMessage);
-    }
-
-    // ---- #1359: schema-correct status via the shared resolver --------------------------------
-
-    [Fact]
-    public async Task RunVsCodeTunnelTool_StatusReportsConnected_TreatsTunnelAsUpAndDoesNotKill()
-    {
-        var gate = new ManualPollGate();
-        var child = new FakeChildProcess();
-
-        var tool = new RunVsCodeTunnelTool(
-            new FakeExecutionContextProvider(),
-            (cli, args, env, _) => Task.FromResult((string.Empty, 0)),
-            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
-            defaultCliPathResolver: () => "code",
-            tokenResolver: () => null,
-            tunnelStatusResolver: FakeStatusResolver.Running(),
-            processLauncher: (_, _) => child,
-            waitBetweenPollsAsync: gate.WaitAsync);
-
-        var runTask = tool.ExecuteAsync(this.Context());
-
-        // A Connected status makes the tool treat the tunnel as up: it keeps blocking and does NOT
-        // kill the child or emit the failure message.
-        await gate.WaitForPollAsync();
-        gate.ReleaseOnePoll();
-        await gate.WaitForPollAsync();
-
-        Assert.False(runTask.IsCompleted);
-        Assert.False(child.WasKilled);
-
-        // Let ExecuteAsync return by having the child exit.
-        child.SimulateExit(0, "done");
-        gate.ReleaseOnePoll();
-        await runTask;
-    }
-
-    [Fact]
-    public async Task RunVsCodeTunnelTool_StatusTunnelNull_ReportsNotRunning()
-    {
-        var child = new FakeChildProcess();
-
-        var tool = new RunVsCodeTunnelTool(
-            new FakeExecutionContextProvider(),
-            (cli, args, env, _) => Task.FromResult((string.Empty, 0)),
-            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
-            defaultCliPathResolver: () => "code",
-            tokenResolver: () => null,
-            // {"tunnel":null,...} → not running.
-            tunnelStatusResolver: FakeStatusResolver.NotRunning(),
-            processLauncher: (_, _) => child);
-
-        var result = await tool.ExecuteAsync(this.Context());
-
-        Assert.True(result.IsSuccess);
-        Assert.True(child.WasKilled);
-        Assert.NotNull(result.ResultContent);
-        Assert.Contains("no longer reports the tunnel as running", result.ResultContent);
-    }
-
-    [Fact]
-    public async Task RunVsCodeTunnelTool_ObtainsStatusOnlyViaSharedComponent_DoesNotInvokeCliDirectly()
-    {
-        var gate = new ManualPollGate();
-        var cliCalls = new List<CliCall>();
-        var child = new FakeChildProcess();
-        var resolver = FakeStatusResolver.Running();
-
-        var tool = new RunVsCodeTunnelTool(
-            new FakeExecutionContextProvider(),
-            (cli, args, env, _) =>
-            {
-                cliCalls.Add(new CliCall(cli, args, env));
-                return Task.FromResult((string.Empty, 0));
-            },
-            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
-            defaultCliPathResolver: () => "code",
-            tokenResolver: () => null,
-            tunnelStatusResolver: resolver,
-            processLauncher: (_, _) => child,
-            waitBetweenPollsAsync: gate.WaitAsync);
-
-        var runTask = tool.ExecuteAsync(this.Context());
-
-        await gate.WaitForPollAsync();
-        gate.ReleaseOnePoll();
-        await gate.WaitForPollAsync();
-
-        // The runner obtained status solely through the shared resolver and performed no
-        // independent `code tunnel status` invocation.
-        Assert.True(resolver.InvocationCount >= 1);
-        Assert.DoesNotContain(cliCalls, c => c.Arguments.Contains("status"));
-
-        child.SimulateExit(0, "done");
-        gate.ReleaseOnePoll();
-        await runTask;
+        public Task<VsCodeTunnelResolution> ResolveAsync(
+            string cliPath,
+            CancellationToken cancellationToken) => Task.FromResult(new VsCodeTunnelResolution { Outcome = outcome() });
     }
 }

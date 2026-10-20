@@ -1,271 +1,288 @@
 using System.Diagnostics;
 using System.Text.Json;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
-using Phantom.Workspaces.Services.Notifications;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 
 namespace Phantom.Workspaces.Tools;
 
-/// <summary>
-/// A built-in scheduled tool that keeps a VS Code dev tunnel alive on the target machine. It
-/// spawns <c>code tunnel --accept-server-license-terms --name &lt;name&gt;</c> directly (never
-/// the Windows-service subcommands) and does not return from <see cref="ExecuteAsync"/> until the
-/// tunnel is no longer up. "Up" is a conjunction of two conditions: the spawned child process is
-/// still alive AND <c>code tunnel status</c> continues to report the tunnel as running. Combined
-/// with the 1-minute default schedule cadence, this reduces to: block for the entire lifetime of
-/// the tunnel; the next scheduled tick simply re-spawns after either the child dies or
-/// <c>code tunnel status</c> stops reporting the tunnel as running.
-/// </summary>
 public sealed class RunVsCodeTunnelTool : IWorkspaceTool
 {
-    /// <summary>Optional tool-entity property overriding the VS Code CLI executable path.</summary>
     public const string CliPathProperty = "cli-path";
-
-    /// <summary>Optional tool-entity property overriding the tunnel name (defaults to hostname).</summary>
     public const string TunnelNameProperty = "tunnel-name";
-
-    /// <summary>
-    /// Default recurrence frequency materialised for a <c>run-vscode-tunnel</c> tool-relationship
-    /// schedule participant. Because <see cref="ExecuteAsync"/> blocks for the tunnel's entire
-    /// lifetime, this only governs how quickly a dead tunnel is re-spawned.
-    /// </summary>
+    public const string ProviderProperty = "provider";
     public static TimeSpan DefaultScheduleFrequency { get; } = TimeSpan.FromMinutes(1);
+    public static TimeSpan DefaultInitialStatusCheckDelay { get; } = TimeSpan.FromSeconds(10);
 
-    /// <summary>Timeout for the (fast) login and status sub-invocations.</summary>
-    private static readonly TimeSpan CliOperationTimeout = TimeSpan.FromMinutes(5);
-
+    private readonly IAccessBroker accessBroker;
     private readonly ICurrentExecutionContextProvider currentExecutionContextProvider;
-    private readonly ILogger<RunVsCodeTunnelTool> logger;
-    private readonly Func<string, string, IReadOnlyDictionary<string, string>?, CancellationToken, Task<(string Output, int ExitCode)>>? cliRunner;
     private readonly Func<string?> defaultCliPathResolver;
-    private readonly Func<string?> tokenResolver;
     private readonly VsCodeCliInvoker cliInvoker;
     private readonly IVsCodeTunnelStatusResolver tunnelStatusResolver;
-    private readonly VsCodeTunnelProcessLauncher? processLauncher;
+    private readonly VsCodeTunnelProcessLauncher processLauncher;
     private readonly Func<CancellationToken, Task> waitBetweenPollsAsync;
     private readonly Func<CancellationToken, Task> initialStatusCheckDelayAsync;
 
-    /// <summary>
-    /// Default grace period awaited once after spawning <c>code tunnel</c> and before the first
-    /// <c>code tunnel status</c> liveness probe, giving the freshly-spawned tunnel a chance to
-    /// authenticate and register before the first check races its startup.
-    /// </summary>
-    public static TimeSpan DefaultInitialStatusCheckDelay { get; } = TimeSpan.FromSeconds(10);
-
     public RunVsCodeTunnelTool(
+        IAccessBroker accessBroker,
         ICurrentExecutionContextProvider? currentExecutionContextProvider = null,
-        Func<string, string, IReadOnlyDictionary<string, string>?, CancellationToken, Task<(string Output, int ExitCode)>>? cliRunner = null,
         Func<string?>? defaultCliPathResolver = null,
-        Func<string?>? tokenResolver = null,
-        INotificationService? notificationService = null,
         VsCodeCliInvoker? cliInvoker = null,
         IVsCodeTunnelStatusResolver? tunnelStatusResolver = null,
         VsCodeTunnelProcessLauncher? processLauncher = null,
         Func<CancellationToken, Task>? waitBetweenPollsAsync = null,
-        Func<CancellationToken, Task>? initialStatusCheckDelayAsync = null,
-        ILogger<RunVsCodeTunnelTool>? logger = null)
+        Func<CancellationToken, Task>? initialStatusCheckDelayAsync = null)
     {
+        this.accessBroker = accessBroker;
         this.currentExecutionContextProvider = currentExecutionContextProvider ?? new CurrentExecutionContextProvider();
-        this.logger = logger ?? NullLogger<RunVsCodeTunnelTool>.Instance;
-        this.cliRunner = cliRunner;
-        this.defaultCliPathResolver = defaultCliPathResolver ?? (() => VsCodeCliLocator.ResolveDefaultCliPath());
-        this.tokenResolver = tokenResolver ?? (() => Phantom.Workspaces.Llm.GitHubAuthTokenResolver.Resolve(this.logger));
-        this.cliInvoker = cliInvoker
-            ?? new VsCodeCliInvoker(notificationService: notificationService, logger: this.logger);
-        this.tunnelStatusResolver = tunnelStatusResolver
-            ?? new VsCodeTunnelStatusResolver(invoker: this.cliInvoker, logger: this.logger);
-        this.processLauncher = processLauncher;
-        this.waitBetweenPollsAsync = waitBetweenPollsAsync
-            ?? (ct => Task.Delay(TimeSpan.FromSeconds(15), ct));
-        this.initialStatusCheckDelayAsync = initialStatusCheckDelayAsync
-            ?? (ct => Task.Delay(DefaultInitialStatusCheckDelay, ct));
+        this.defaultCliPathResolver = defaultCliPathResolver ?? VsCodeCliLocator.ResolveDefaultCliPath;
+        this.cliInvoker = cliInvoker ?? new VsCodeCliInvoker();
+        this.tunnelStatusResolver = tunnelStatusResolver ?? new VsCodeTunnelStatusResolver(this.cliInvoker);
+        this.processLauncher = processLauncher ?? LaunchProcess;
+        this.waitBetweenPollsAsync = waitBetweenPollsAsync ?? (token => Task.Delay(TimeSpan.FromSeconds(15), token));
+        this.initialStatusCheckDelayAsync = initialStatusCheckDelayAsync ?? (token => Task.Delay(DefaultInitialStatusCheckDelay, token));
     }
 
     public string ToolType => "run-vscode-tunnel";
 
     public async Task<WorkspaceToolExecutionResult> ExecuteAsync(WorkspaceToolExecutionContext context)
     {
-        ArgumentNullException.ThrowIfNull(context);
-
-        var cliPath = this.ResolveCliPath(context.Tool.Data);
-        if (string.IsNullOrWhiteSpace(cliPath))
-        {
-            return WorkspaceToolExecutionResult.Failure("VS Code `code` CLI not found.");
-        }
-
-        var tunnelName = this.ResolveTunnelName(context.Tool.Data);
-
-        // Best-effort GitHub pre-login. Never fatal.
-        await this.TryLoginAsync(cliPath, context.CancellationToken).ConfigureAwait(false);
-
-        // Spawn the long-lived child process directly. From this point on we own it for the
-        // entire lifetime of ExecuteAsync — there is no cross-tick registry.
-        var arguments = $"tunnel --accept-server-license-terms --name {tunnelName}";
-        IVsCodeTunnelChildProcess child;
         try
         {
-            child = this.processLauncher is null
-                ? LaunchProcess(cliPath, ["tunnel", "--accept-server-license-terms", "--name", tunnelName])
-                : this.processLauncher(cliPath, arguments);
-        }
-        catch (Exception ex)
-        {
-            this.logger.LogError(ex, "Failed to spawn `code tunnel`: {Message}", ex.Message);
-            return WorkspaceToolExecutionResult.Failure(
-                $"Failed to spawn `code tunnel`: {ex.Message}");
-        }
-
-        try
-        {
-            // Give the freshly-spawned `code tunnel` a chance to authenticate and register before
-            // the first liveness probe, so the first `code tunnel status` call does not race
-            // startup and spuriously report "not running".
-            await this.initialStatusCheckDelayAsync(context.CancellationToken).ConfigureAwait(false);
-
-            while (!context.CancellationToken.IsCancellationRequested)
+            var cliPath = ReadProperty(context.Tool.Data, CliPathProperty) ?? this.defaultCliPathResolver();
+            if (string.IsNullOrWhiteSpace(cliPath))
             {
-                if (child.HasExited)
-                {
-                    var completion = await child.WaitForExitAndDrainAsync(context.CancellationToken).ConfigureAwait(false);
-                    return WorkspaceToolExecutionResult.Failure(
-                        $"`code tunnel` exited with code {completion.ExitCode}.");
-                }
-
-                // Obtain tunnel status EXCLUSIVELY through the shared status component. The runner
-                // must not invoke `code tunnel status` or parse its output itself, so runner and
-                // discovery can never disagree about liveness/health. A non-null Status means the
-                // tunnel daemon is running (outer `tunnel` member is an object); a null Status means
-                // it is genuinely not running (or the CLI could not be launched / errored).
-                var resolution = await this.tunnelStatusResolver
-                    .ResolveAsync(cliPath, context.CancellationToken)
-                    .ConfigureAwait(false);
-
-                if (resolution.Status is null)
-                {
-                    child.Kill();
-                    return new WorkspaceToolExecutionResult
-                    {
-                        ResultContent =
-                            "`code tunnel status` no longer reports the tunnel as running "
-                            + DescribeResolution(resolution),
-                    };
-                }
-
-                await this.waitBetweenPollsAsync(context.CancellationToken).ConfigureAwait(false);
+                return Failure(VsCodeTunnelOutcome.CommandFailed);
             }
 
-            child.Kill();
-            context.CancellationToken.ThrowIfCancellationRequested();
-            return new WorkspaceToolExecutionResult { ResultContent = "cancelled" };
+            var provider = ReadProperty(context.Tool.Data, ProviderProperty) switch
+            {
+                null or "github" => VsCodeTunnelProvider.GitHub,
+                "microsoft" => VsCodeTunnelProvider.Microsoft,
+                _ => (VsCodeTunnelProvider?)null,
+            };
+            if (provider is null)
+            {
+                return Failure(VsCodeTunnelOutcome.CommandFailed);
+            }
+
+            var request = new VsCodeTunnelStartRequest
+            {
+                CliPath = cliPath,
+                TunnelName = ReadProperty(context.Tool.Data, TunnelNameProperty) ?? this.currentExecutionContextProvider.ComputerName,
+                Provider = provider.Value,
+                Requestor = new AccessRequestor
+                {
+                    Identifier = CredentialIdentityFactory.CreateRequestorIdentifier(
+                        AccessRequestorKind.Tool,
+                        context.Tool.EntityId.ToString()),
+                    Kind = AccessRequestorKind.Tool,
+                    SafeDisplayName = "VS Code tunnel",
+                },
+            };
+            var status = await this.tunnelStatusResolver.ResolveAsync(cliPath, context.CancellationToken).ConfigureAwait(false);
+            if (status.Outcome is VsCodeTunnelOutcome.CommandFailed or VsCodeTunnelOutcome.InvalidStatus or VsCodeTunnelOutcome.Cancelled)
+            {
+                return Failure(status.Outcome);
+            }
+
+            var presence = await this.ProbePresenceAsync(cliPath, context.CancellationToken).ConfigureAwait(false);
+            if (presence == VsCodeTunnelOutcome.CommandFailed)
+            {
+                return Failure(presence);
+            }
+
+            if (presence == VsCodeTunnelOutcome.AuthenticationRequired
+                && !await this.AuthorizeAsync(request, requiresRenewal: false, context.CancellationToken).ConfigureAwait(false))
+            {
+                return Failure(VsCodeTunnelOutcome.AuthenticationRequired);
+            }
+
+            var outcome = await this.RunHostAsync(request, context.CancellationToken).ConfigureAwait(false);
+            if (outcome != VsCodeTunnelOutcome.AuthenticationRequired)
+            {
+                return Result(outcome);
+            }
+
+            if (!await this.AuthorizeAsync(request, requiresRenewal: true, context.CancellationToken).ConfigureAwait(false))
+            {
+                return Failure(VsCodeTunnelOutcome.AuthenticationRequired);
+            }
+
+            outcome = await this.RunHostAsync(request, context.CancellationToken).ConfigureAwait(false);
+            if (outcome == VsCodeTunnelOutcome.AuthenticationRequired)
+            {
+                // Keep an actionable Perform row, but never automatically run another login
+                // or restart this host again. A later explicit action is a new generation.
+                await this.AuthorizeAsync(request, requiresRenewal: true, context.CancellationToken).ConfigureAwait(false);
+                return Failure(VsCodeTunnelOutcome.AuthenticationRequired);
+            }
+
+            return Result(outcome);
         }
         catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
         {
-            child.Kill();
-            throw;
+            return Failure(VsCodeTunnelOutcome.Cancelled);
         }
         catch (Exception)
         {
-            child.Kill();
-            throw;
+            return Failure(VsCodeTunnelOutcome.CommandFailed);
+        }
+    }
+
+    private async Task<bool> AuthorizeAsync(
+        VsCodeTunnelStartRequest request,
+        bool requiresRenewal,
+        CancellationToken cancellationToken)
+    {
+        var lineage = new CredentialUseLineage();
+        var outcome = await this.accessBroker.AcquireAsync(new CliOwnedAuthorizationRequest
+        {
+            CliPath = request.CliPath,
+            Kind = request.Provider == VsCodeTunnelProvider.GitHub
+                ? CliOwnedAuthorizationKind.VsCodeTunnelGitHub : CliOwnedAuthorizationKind.VsCodeTunnelMicrosoft,
+            RequiresRenewal = requiresRenewal,
+            Requestor = request.Requestor,
+            PresentationScope = AccessPresentationScope.Runtime,
+            Use = new CredentialUseDescriptor
+            {
+                Fingerprint = CredentialIdentityFactory.CreateUseFingerprint(
+                    CredentialUseKind.Completion,
+                    lineage,
+                    request.Requestor.Identifier,
+                    "renew-vscode-tunnel"),
+                Kind = CredentialUseKind.Completion,
+                Lineage = lineage,
+                SafeDisplayName = "Renew VS Code tunnel authentication",
+                MemoryScopes = [],
+            },
+        }, cancellationToken).ConfigureAwait(false);
+        if (outcome is not AccessSucceeded<AuthorizationCompletedAccessResult> succeeded)
+        {
+            return false;
+        }
+
+        await succeeded.Result.DisposeAsync().ConfigureAwait(false);
+        var status = await this.tunnelStatusResolver.ResolveAsync(request.CliPath, cancellationToken).ConfigureAwait(false);
+        return status.Outcome is VsCodeTunnelOutcome.NotRunning or VsCodeTunnelOutcome.Ready or VsCodeTunnelOutcome.RunningDisconnected
+            && await this.ProbePresenceAsync(request.CliPath, cancellationToken).ConfigureAwait(false) == VsCodeTunnelOutcome.Ready;
+    }
+
+    private Task<VsCodeTunnelOutcome> ProbePresenceAsync(
+        string cliPath,
+        CancellationToken cancellationToken) => this.cliInvoker.ProbeAsync(
+            cliPath,
+            ["tunnel", "user", "show"],
+            static (exitCode, output, _) => VsCodeTunnelCliAuthorizationExecutor.ReducePresence(exitCode, output),
+            cancellationToken);
+
+    private async Task<VsCodeTunnelOutcome> RunHostAsync(
+        VsCodeTunnelStartRequest request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var child = this.processLauncher(
+            request.CliPath,
+            ["tunnel", "--accept-server-license-terms", "--name", request.TunnelName]);
+        try
+        {
+            await this.initialStatusCheckDelayAsync(cancellationToken).ConfigureAwait(false);
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (child.HasExited || (child.Evidence.TokenErrorSeen && !child.Evidence.ConnectedSeen))
+                {
+                    if (!child.HasExited)
+                    {
+                        child.Kill();
+                    }
+
+                    var completion = await child.WaitForExitAndDrainAsync(cancellationToken).ConfigureAwait(false);
+                    var finalStatus = await this.tunnelStatusResolver.ResolveAsync(request.CliPath, cancellationToken).ConfigureAwait(false);
+                    return Classify(cancellationToken.IsCancellationRequested, finalStatus, child.Evidence, completion);
+                }
+
+                var status = await this.tunnelStatusResolver.ResolveAsync(request.CliPath, cancellationToken).ConfigureAwait(false);
+                var outcome = Classify(cancellationToken.IsCancellationRequested, status, child.Evidence, completion: null);
+                if (outcome is not (VsCodeTunnelOutcome.Ready or VsCodeTunnelOutcome.RunningDisconnected))
+                {
+                    child.Kill();
+                    var completion = await child.WaitForExitAndDrainAsync(cancellationToken).ConfigureAwait(false);
+                    return Classify(cancellationToken.IsCancellationRequested, status, child.Evidence, completion);
+                }
+
+                await this.waitBetweenPollsAsync(cancellationToken).ConfigureAwait(false);
+            }
         }
         finally
         {
             child.Kill();
             await child.WaitForExitAndDrainAsync(CancellationToken.None).ConfigureAwait(false);
-            child.Dispose();
         }
     }
 
-    private static string DescribeResolution(VsCodeTunnelResolution resolution)
+    internal static VsCodeTunnelOutcome Classify(
+        bool cancellationRequested,
+        VsCodeTunnelResolution status,
+        VsCodeTunnelProcessEvidence evidence,
+        VsCodeTunnelProcessCompletion? completion)
     {
-        return $"({resolution.Outcome}).";
+        if (cancellationRequested || status.Outcome == VsCodeTunnelOutcome.Cancelled)
+            return VsCodeTunnelOutcome.Cancelled;
+        if (evidence.ConnectedSeen || completion?.ConnectedSeen == true)
+            return VsCodeTunnelOutcome.Ready;
+        if (evidence.TokenErrorSeen || completion?.TokenErrorSeen == true)
+            return VsCodeTunnelOutcome.AuthenticationRequired;
+        if (completion?.UnauthorizedHttp401Seen == true)
+            return VsCodeTunnelOutcome.AuthenticationRequired;
+        if (status.Outcome == VsCodeTunnelOutcome.NotRunning)
+            return VsCodeTunnelOutcome.NotRunning;
+        if (status.Outcome == VsCodeTunnelOutcome.Ready)
+            return VsCodeTunnelOutcome.Ready;
+        if (status.Outcome == VsCodeTunnelOutcome.RunningDisconnected)
+            return VsCodeTunnelOutcome.RunningDisconnected;
+        if (status.Outcome == VsCodeTunnelOutcome.InvalidStatus)
+            return VsCodeTunnelOutcome.InvalidStatus;
+        return VsCodeTunnelOutcome.CommandFailed;
     }
 
-    private async Task TryLoginAsync(string cliPath, CancellationToken cancellationToken)
-    {
-        var token = this.tokenResolver();
-        if (string.IsNullOrWhiteSpace(token))
-        {
-            this.logger.LogInformation(
-                "No GitHub token available; skipping `code tunnel user login --provider github` "
-                + "and relying on cached CLI credentials.");
-            return;
-        }
+    private static WorkspaceToolExecutionResult Result(VsCodeTunnelOutcome outcome) =>
+        outcome == VsCodeTunnelOutcome.Ready
+            ? WorkspaceToolExecutionResult.Success() with { ResultContent = "VS Code tunnel: Ready." }
+            : Failure(outcome);
 
-        var env = new Dictionary<string, string> { ["VSCODE_CLI_ACCESS_TOKEN"] = token };
-        var loginResult = await this.RunCliAsync(
-            cliPath,
-            ["tunnel", "user", "login", "--provider", "github"],
-            env,
-            VsCodeCliReporting.LogAndReportOnFailure,
-            cancellationToken).ConfigureAwait(false);
+    private static WorkspaceToolExecutionResult Failure(VsCodeTunnelOutcome outcome) =>
+        WorkspaceToolExecutionResult.Failure($"VS Code tunnel: {outcome}.");
 
-        if (loginResult.ExitCode != 0)
-        {
-            this.logger.LogWarning(
-                "`code tunnel user login --provider github` exited {ExitCode}: {Output}",
-                loginResult.ExitCode,
-                loginResult.StandardOut);
-        }
-    }
+    private static string? ReadProperty(JsonElement? data, string propertyName) =>
+        data is { ValueKind: JsonValueKind.Object } value
+        && value.TryGetProperty(propertyName, out var property)
+        && property.ValueKind == JsonValueKind.String
+        && !string.IsNullOrWhiteSpace(property.GetString())
+            ? property.GetString() : null;
 
-    private string ResolveTunnelName(JsonElement? toolData)
-    {
-        if (toolData is JsonElement toolDataValue
-            && toolDataValue.ValueKind == JsonValueKind.Object
-            && toolDataValue.TryGetProperty(TunnelNameProperty, out var nameElement)
-            && nameElement.ValueKind == JsonValueKind.String
-            && !string.IsNullOrWhiteSpace(nameElement.GetString()))
-        {
-            return nameElement.GetString()!;
-        }
-
-        return this.currentExecutionContextProvider.ComputerName;
-    }
-
-    private string? ResolveCliPath(JsonElement? toolData)
-    {
-        if (toolData is JsonElement toolDataValue
-            && toolDataValue.ValueKind == JsonValueKind.Object
-            && toolDataValue.TryGetProperty(CliPathProperty, out var pathElement)
-            && pathElement.ValueKind == JsonValueKind.String
-            && !string.IsNullOrWhiteSpace(pathElement.GetString()))
-        {
-            return pathElement.GetString();
-        }
-
-        return this.defaultCliPathResolver();
-    }
-
-    private async Task<VsCodeCliResult> RunCliAsync(
+    internal static ProcessStartInfo BuildHostStartInfo(
         string cliPath,
-        IReadOnlyList<string> arguments,
-        IReadOnlyDictionary<string, string>? environmentVariables,
-        VsCodeCliReporting reporting,
-        CancellationToken cancellationToken)
+        IReadOnlyList<string> arguments)
     {
-        if (this.cliRunner is not null)
-        {
-            var (output, exitCode) = await this.cliRunner(cliPath, string.Join(' ', arguments), environmentVariables, cancellationToken).ConfigureAwait(false);
-            return new VsCodeCliResult(exitCode, output, string.Empty);
-        }
-
-        return await this.cliInvoker.RunAsync(
-            cliPath,
-            arguments,
-            operationDescription: $"vscode {string.Join(' ', arguments)}",
-            reporting,
-            environmentVariables,
-            CliOperationTimeout,
-            cancellationToken).ConfigureAwait(false);
+        var startInfo = VsCodeCliLocator.BuildProcessStartInfo(cliPath, arguments);
+        startInfo.Environment["VSCODE_CLI_MACHINE_STATUS"] = "1";
+        startInfo.Environment.Remove("VSCODE_CLI_ACCESS_TOKEN");
+        return startInfo;
     }
 
-    private static IVsCodeTunnelChildProcess LaunchProcess(string cliPath, IReadOnlyList<string> arguments)
+    private static IVsCodeTunnelChildProcess LaunchProcess(
+        string cliPath,
+        IReadOnlyList<string> arguments)
     {
-        var psi = VsCodeCliLocator.BuildProcessStartInfo(cliPath, arguments);
-
-        var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
-        process.Start();
-        return new ProcessBackedVsCodeTunnelChildProcess(process);
+        var process = new Process { StartInfo = BuildHostStartInfo(cliPath, arguments) };
+        try
+        {
+            process.Start();
+            return new ProcessBackedVsCodeTunnelChildProcess(process);
+        }
+        catch
+        {
+            process.Dispose();
+            throw;
+        }
     }
 }

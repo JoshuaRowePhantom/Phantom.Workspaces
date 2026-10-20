@@ -1,4 +1,3 @@
-using System.ComponentModel;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
@@ -10,11 +9,9 @@ namespace Phantom.Workspaces.Tools;
 
 /// <summary>
 /// A built-in scheduled tool that discovers any active VS Code dev tunnel for the current
-/// user/machine by invoking <c>code tunnel status</c> and parsing its stdout, then upserts a
-/// single <c>vscode-tunnel</c> entity under the user-computer-profile. All CLI invocations are
-/// routed through the shared <see cref="VsCodeCliInvoker"/> so stdout/stderr/exit code are
-/// logged and surfaced to the user on failure. When the CLI reports that no tunnel is running
-/// the tool does not upsert any entity.
+/// user/machine through the output-free status resolver, then upserts a single
+/// <c>vscode-tunnel</c> entity under the user-computer-profile. Results and logs contain
+/// only safe outcomes. No entity is upserted when the CLI reports no running tunnel.
 /// </summary>
 public sealed class VsCodeTunnelDiscoveryTool : IWorkspaceTool
 {
@@ -57,14 +54,14 @@ public sealed class VsCodeTunnelDiscoveryTool : IWorkspaceTool
                 .ResolveAsync(cliPath, context.CancellationToken)
                 .ConfigureAwait(false);
         }
-        catch (Win32Exception ex)
+        catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
         {
             return WorkspaceToolExecutionResult.Failure(
-                $"VS Code CLI ('code') not found or not runnable: {ex.Message}");
+                "VS Code tunnel discovery: Cancelled.");
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            return WorkspaceToolExecutionResult.Failure($"Failed to run 'code tunnel status': {ex.Message}");
+            return WorkspaceToolExecutionResult.Failure("VS Code tunnel discovery: CommandFailed.");
         }
 
         if (resolution.Outcome is VsCodeTunnelOutcome.CommandFailed or VsCodeTunnelOutcome.InvalidStatus or VsCodeTunnelOutcome.Cancelled)
@@ -106,10 +103,7 @@ public sealed class VsCodeTunnelDiscoveryTool : IWorkspaceTool
             },
             context.CancellationToken).ConfigureAwait(false);
 
-        var summary =
-            $"VS Code tunnel discovery: tunnel running "
-            + $"(Name={resolution.Status.TunnelName}, Url={resolution.Status.TunnelUrl}, "
-            + $"IsConnected={resolution.Status.IsConnected}).";
+        var summary = $"VS Code tunnel discovery: {resolution.Outcome}.";
         this.logger.LogInformation("{Summary}", summary);
         return WorkspaceToolExecutionResult.Success() with { ResultContent = summary };
     }

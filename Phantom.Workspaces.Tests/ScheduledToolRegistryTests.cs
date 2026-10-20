@@ -75,7 +75,7 @@ public sealed class ScheduledToolRegistryTests
             new Phantom.Workspaces.Tools.GitWorkspaceUpdateTool(),
             new Phantom.Workspaces.Tools.CopilotSessionDiscoveryTool(),
             new Phantom.Workspaces.Tools.VsCodeTunnelDiscoveryTool(),
-            new Phantom.Workspaces.Tools.RunVsCodeTunnelTool(),
+            new Phantom.Workspaces.Tools.RunVsCodeTunnelTool(new Moq.Mock<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>(Moq.MockBehavior.Strict).Object),
             new Phantom.Workspaces.Tools.GitHub.GitHubWorkItemDiscoveryTool(),
             new Phantom.Workspaces.Tools.AzureDevOps.AzureDevOpsWorkItemDiscoveryTool(),
             new Phantom.Workspaces.Tools.EntityClassifierTool(new NoopEntityClassifierAgentRunner()),
