@@ -38,10 +38,12 @@ internal interface IDevTunnelConnectMintSession : IAsyncDisposable
 
 internal sealed class DevTunnelConnectCredentialAccessExecutor :
     ICredentialAccessExecutor<DevTunnelConnectCredentialAccessRequest, DevTunnelConnectCredentialAccessResult>,
+    ICredentialCacheAdministration,
     IAsyncDisposable
 {
     private readonly object gate = new();
     private readonly Dictionary<CacheKey, GenerationCache> caches = [];
+    private readonly Dictionary<CredentialCacheIdentifier, (GenerationCache Cache, CredentialMaterialGenerationIdentifier Generation)> administrationEntries = [];
     private readonly HashSet<UserAuthorizationRequestIdentifier> awaitingRenewal = [];
     private readonly IDevTunnelConnectMintSession session;
     private readonly IUserAuthorizationRegistry registry;
@@ -61,6 +63,59 @@ internal sealed class DevTunnelConnectCredentialAccessExecutor :
     }
 
     public CredentialExecutorKind Kind => CredentialExecutorKind.DevTunnelConnect;
+
+    public async ValueTask<IReadOnlyList<CredentialCacheDescriptor>> ListAsync(CancellationToken cancellationToken = default)
+    {
+        KeyValuePair<CacheKey, GenerationCache>[] entries;
+        lock (this.gate)
+        {
+            ObjectDisposedException.ThrowIf(this.disposed, this);
+            entries = this.caches.ToArray();
+        }
+        var result = new List<CredentialCacheDescriptor>();
+        foreach (var entry in entries)
+        {
+            var metadata = await entry.Value.InspectGenerationAsync(cancellationToken).ConfigureAwait(false);
+            if (metadata is null)
+            {
+                continue;
+            }
+            var identifier = new CredentialCacheIdentifier { Value = metadata.Generation.Value };
+            lock (this.gate)
+            {
+                ObjectDisposedException.ThrowIf(this.disposed, this);
+                this.administrationEntries[identifier] = (entry.Value, metadata.Generation);
+            }
+            result.Add(new CredentialCacheDescriptor
+            {
+                Identifier = identifier,
+                Provider = CredentialProviderKind.DevTunnel,
+                Kind = CredentialKind.ConnectToken,
+                Generation = metadata.Generation,
+                SourceIdentifier = entry.Key.Source,
+                ExpiresOn = metadata.ExpiresOn,
+            });
+        }
+        return result;
+    }
+
+    public async ValueTask DeleteAsync(CredentialCacheIdentifier identifier, CancellationToken cancellationToken = default)
+    {
+        (GenerationCache Cache, CredentialMaterialGenerationIdentifier Generation) entry;
+        lock (this.gate)
+        {
+            ObjectDisposedException.ThrowIf(this.disposed, this);
+            if (!this.administrationEntries.TryGetValue(identifier, out entry))
+            {
+                throw new CredentialAdministrationException(CredentialAdministrationFailure.Unavailable);
+            }
+        }
+        var outcome = await entry.Cache.InvalidateGenerationAsync(entry.Generation, cancellationToken).ConfigureAwait(false);
+        if (outcome != CredentialGenerationInvalidationOutcome.Invalidated)
+        {
+            throw new CredentialAdministrationException(CredentialAdministrationFailure.NoLongerCurrent);
+        }
+    }
 
     public async ValueTask<CredentialInspection> InspectAsync(
         DevTunnelConnectCredentialAccessRequest request,
@@ -315,6 +370,7 @@ internal sealed class DevTunnelConnectCredentialAccessExecutor :
                     cache.Clear();
                 }
                 this.caches.Clear();
+                this.administrationEntries.Clear();
                 this.awaitingRenewal.Clear();
             }
             await this.session.DisposeAsync().ConfigureAwait(false);

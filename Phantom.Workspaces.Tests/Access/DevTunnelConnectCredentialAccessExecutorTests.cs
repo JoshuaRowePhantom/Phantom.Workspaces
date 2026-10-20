@@ -174,6 +174,29 @@ public sealed class DevTunnelConnectCredentialAccessExecutorTests
     }
 
     [Fact]
+    public async Task ConnectExecutor_AdministrationEnumeratesMetadataAndRejectsStaleDelete()
+    {
+        await using var fixture = new Fixture();
+        await using var first = await fixture.AcquireAsync();
+        var originalMemory = Assert.Single(await fixture.Policy.ListAsync(TestContext.Current.CancellationToken));
+        var descriptor = Assert.Single(await fixture.Executor.ListAsync(TestContext.Current.CancellationToken));
+        Assert.DoesNotContain("private connect material", JsonSerializer.Serialize(descriptor));
+        Assert.DoesNotContain(fixture.Session.Endpoint.Host, JsonSerializer.Serialize(descriptor));
+        await fixture.Executor.DeleteAsync(descriptor.Identifier, TestContext.Current.CancellationToken);
+        Assert.Equal(originalMemory, Assert.Single(await fixture.Policy.ListAsync(TestContext.Current.CancellationToken)));
+        await using var replacement = await fixture.AcquireAsync();
+
+        var error = await Assert.ThrowsAsync<CredentialAdministrationException>(() =>
+            fixture.Executor.DeleteAsync(descriptor.Identifier, TestContext.Current.CancellationToken).AsTask());
+        Assert.Equal(CredentialAdministrationFailure.NoLongerCurrent, error.Failure);
+        Assert.IsType<SensitiveValueUseReacquisitionRequired<int>>(await first.ConnectToken!.UseAsync<int>(
+            (_, _) => throw new InvalidOperationException(), TestContext.Current.CancellationToken));
+        Assert.IsType<SensitiveValueUseSucceeded<int>>(await replacement.ConnectToken!.UseAsync(
+            (_, _) => ValueTask.FromResult(42), TestContext.Current.CancellationToken));
+        Assert.Contains(originalMemory, await fixture.Policy.ListAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task ConnectExecutor_AnonymousUsesNoMintIdentityOrInventedAccount()
     {
         await using var fixture = new Fixture(anonymous: true);
