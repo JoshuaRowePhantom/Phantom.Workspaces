@@ -1,0 +1,54 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Phantom.Workspaces.ViewModels"
+             xmlns:access="using:Phantom.Workspaces.Llm.Interfaces.Access"
+             x:Class="Phantom.Workspaces.Controls.AuthorizationRequestRowsControl"
+             x:DataType="vm:AuthorizationRequestRowsViewModel">
+    <Grid RowDefinitions="Auto,*">
+        <Grid ColumnDefinitions="2*,*,*,2*" Margin="4">
+            <TextBlock Text="Use" FontWeight="Bold" />
+            <TextBlock Grid.Column="1" Text="Memory" FontWeight="Bold" />
+            <TextBlock Grid.Column="2" Text="Source" FontWeight="Bold" />
+            <TextBlock Grid.Column="3" Text="Actions" FontWeight="Bold" />
+        </Grid>
+        <ScrollViewer Grid.Row="1" MaxHeight="360">
+            <ItemsControl ItemsSource="{Binding Rows}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:AuthorizationRequestRowViewModel">
+                        <Grid ColumnDefinitions="2*,*,*,2*" Margin="4,8">
+                            <StackPanel>
+                                <TextBlock Text="{Binding UseDisplayName}" TextWrapping="Wrap" />
+                                <TextBlock Text="{Binding SafeStatus}" TextWrapping="Wrap"
+                                           AutomationProperties.LiveSetting="Polite" />
+                            </StackPanel>
+                            <ComboBox Grid.Column="1" ItemsSource="{Binding MemoryOptions}"
+                                      SelectedItem="{Binding SelectedMemoryOption, Mode=TwoWay}"
+                                      IsEnabled="{Binding CanAct}" AutomationProperties.Name="Release memory scope">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="access:ReleaseMemoryOptionDescriptor">
+                                        <TextBlock Text="{Binding SafeDisplayName}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                            <ComboBox Grid.Column="2" ItemsSource="{Binding SourceOptions}"
+                                      SelectedItem="{Binding SelectedSourceOption, Mode=TwoWay}"
+                                      IsEnabled="{Binding CanAct}" AutomationProperties.Name="Credential source">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="access:CredentialSourceChoiceDescriptor">
+                                        <TextBlock Text="{Binding SafeDisplayName}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                            <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="4">
+                                <Button Content="{Binding PrimaryActionLabel}" Command="{Binding ApplyCommand}"
+                                        AutomationProperties.Name="{Binding PrimaryActionLabel}" />
+                                <Button Content="Deny" Command="{Binding DenyCommand}" />
+                                <Button Content="Cancel" Command="{Binding CancelCommand}" />
+                            </StackPanel>
+                        </Grid>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

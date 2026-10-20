@@ -1,10 +1,11 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:Phantom.Workspaces.ViewModels"
+        xmlns:controls="using:Phantom.Workspaces.Controls"
         x:Class="Phantom.Workspaces.LoadingWindow"
         x:DataType="vm:LoadingWindowViewModel"
-        Width="420"
-        Height="180"
+        Width="900"
+        Height="400"
         MinWidth="360"
         MinHeight="160"
         CanResize="False"
@@ -12,7 +13,7 @@
         WindowStartupLocation="CenterScreen"
         ShowInTaskbar="False"
         Title="Starting Phantom.Workspaces">
-    <Grid RowDefinitions="Auto,Auto,*"
+    <Grid RowDefinitions="Auto,Auto,Auto,*"
           Margin="24">
         <TextBlock Classes="heading"
                    Text="Starting Phantom.Workspaces..." />
@@ -23,5 +24,8 @@
                    Margin="0,14,0,0"
                    Text="{Binding StatusText}"
                    TextWrapping="Wrap" />
+        <controls:AuthorizationRequestRowsControl Grid.Row="3" Margin="0,14,0,0"
+                                                 IsBootstrap="True"
+                                                 DataContext="{Binding AuthorizationRows}" />
     </Grid>
 </Window>

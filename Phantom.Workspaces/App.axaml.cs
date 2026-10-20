@@ -224,7 +224,7 @@ public partial class App : Application
                 return;
             }
 
-            var loadingViewModel = new LoadingWindowViewModel();
+            var loadingViewModel = new LoadingWindowViewModel { AuthorizationRows = null! };
             var loadingWindow = new LoadingWindow(loadingViewModel);
             desktop.MainWindow = loadingWindow;
 

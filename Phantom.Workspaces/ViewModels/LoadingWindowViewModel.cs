@@ -2,6 +2,8 @@ namespace Phantom.Workspaces.ViewModels;
 
 public sealed class LoadingWindowViewModel : ViewModelBase
 {
+    public required AuthorizationRequestRowsViewModel AuthorizationRows { get; init; }
+
     private string statusText = "Loading workspace data and initializing services.";
 
     public string StatusText
