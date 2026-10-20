@@ -23,6 +23,34 @@ public sealed class AccessBrokerTests : IDisposable
     }
 
     [Fact]
+    public async Task AccessBroker_Disposal_PreservesEveryCleanupFailureAndRejectsNewRequests()
+    {
+        var registry = new UserAuthorizationRegistry();
+        var executors = new CredentialAccessExecutorRegistry();
+        var policy = new Mock<IReleaseAuthorizationPolicy>();
+        var ownedPolicy = policy.As<IAsyncDisposable>();
+        ownedPolicy.Setup(value => value.DisposeAsync())
+            .Returns(() => ValueTask.FromException(new IOException("policy")));
+        var coordinator = new FaultingCoordinator();
+        var executor = new Executor
+        {
+            Execute = (_, _, _, _, _, _) => throw new InvalidOperationException("Must not execute."),
+            Dispose = () => ValueTask.FromException(new InvalidOperationException("executor")),
+        };
+        executors.Add<RequestRecord, Result>(executor);
+        var broker = new AccessBroker(policy.Object, executors, coordinator, registry);
+
+        var failure = await Assert.ThrowsAsync<AggregateException>(() => broker.DisposeAsync().AsTask());
+        Assert.Equal(3, failure.Flatten().InnerExceptions.Count);
+        var repeated = await Assert.ThrowsAsync<AggregateException>(() => broker.DisposeAsync().AsTask());
+        Assert.Same(failure, repeated);
+        ownedPolicy.Verify(value => value.DisposeAsync(), Times.Once);
+        Assert.Equal(1, coordinator.DisposalCount);
+        Assert.IsType<AccessShuttingDown<Result>>(await broker.AcquireAsync(Request(), TestContext.Current.CancellationToken));
+        Assert.Empty(registry.GetSnapshot());
+    }
+
+    [Fact]
     public async Task AccessBroker_ExplicitRenewal_KeepsCallerPendingUntilNewApprovedGeneration()
     {
         var generations = new List<Guid>();
@@ -1305,6 +1333,21 @@ public sealed class AccessBrokerTests : IDisposable
 
     private sealed record RequestRecord : CredentialAccessRequest<Result>;
 
+    private sealed class FaultingCoordinator : IProviderAcquisitionCoordinator
+    {
+        public int DisposalCount { get; private set; }
+        public ValueTask<ProviderAcquisitionOutcome> ExecuteOrJoinAsync(
+            IProviderAcquisitionOperation operation,
+            ProviderInteractionPermit permit,
+            CancellationToken cancellationToken) => throw new InvalidOperationException("Must not execute.");
+
+        public ValueTask DisposeAsync()
+        {
+            this.DisposalCount++;
+            return ValueTask.FromException(new InvalidOperationException("coordinator"));
+        }
+    }
+
     private sealed class Result : ICredentialAccessResult
     {
         public SensitiveValueLease? Lease { get; init; }
@@ -1405,13 +1448,15 @@ public sealed class AccessBrokerTests : IDisposable
         }
     }
 
-    private sealed class Executor : ICredentialAccessExecutor<RequestRecord, Result>
+    private sealed class Executor : ICredentialAccessExecutor<RequestRecord, Result>, IAsyncDisposable
     {
         public required Func<RequestRecord, CredentialInspection, ReleaseAuthorization, ProviderInteractionPermit?, ICredentialExecutionContext,
             CancellationToken, ValueTask<CredentialExecutionOutcome<Result>>> Execute { get; init; }
         public Func<bool> IsUsable { get; init; } = () => false;
         public Func<CredentialInspection, CredentialInspection> RefineInspection { get; init; } = inspection => inspection;
         public CredentialExecutorKind Kind { get; init; } = CredentialExecutorKind.OAuth;
+        public Func<ValueTask> Dispose { get; init; } = () => ValueTask.CompletedTask;
+        public ValueTask DisposeAsync() => this.Dispose();
 
         public ValueTask<CredentialInspection> InspectAsync(
             RequestRecord request,

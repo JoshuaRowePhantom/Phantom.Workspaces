@@ -13,6 +13,7 @@ internal sealed class AccessBroker : IAccessBroker
     private readonly CredentialAccessExecutorRegistry executors;
     private readonly UserAuthorizationRegistry registry;
     private readonly CancellationTokenSource lifetime = new();
+    private readonly object lifetimeGate = new();
     private readonly ConcurrentDictionary<UserAuthorizationRequestIdentifier, IPendingInspection> pendingInspections = new();
     private readonly ConcurrentDictionary<UserAuthorizationRequestIdentifier, ExecutionGeneration> activeExecutions = new();
     private readonly TaskCompletionSource disposal = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -44,12 +45,18 @@ internal sealed class AccessBroker : IAccessBroker
         CancellationToken cancellationToken)
         where TResult : IAccessResult
     {
-        if (Volatile.Read(ref this.disposed) != 0)
+        CancellationTokenSource cancellation;
+        lock (this.lifetimeGate)
         {
-            return new AccessShuttingDown<TResult>();
+            if (Volatile.Read(ref this.disposed) != 0)
+            {
+                return new AccessShuttingDown<TResult>();
+            }
+
+            cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, this.lifetime.Token);
         }
 
-        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, this.lifetime.Token);
+        using var ownedCancellation = cancellation;
         var task = this.DispatchSafeAsync(request, chain, cancellation.Token);
         try
         {
@@ -614,54 +621,41 @@ internal sealed class AccessBroker : IAccessBroker
             return;
         }
 
-        try
+        var failures = new List<Exception>();
+        await CleanupAsync(() => new ValueTask(this.lifetime.CancelAsync()), failures).ConfigureAwait(false);
+        await CleanupAsync(this.registry.DisposeAsync, failures).ConfigureAwait(false);
+        await CleanupAsync(this.Coordinator.DisposeAsync, failures).ConfigureAwait(false);
+        await CleanupAsync(this.executors.DisposeAsync, failures).ConfigureAwait(false);
+        this.pendingInspections.Clear();
+        this.activeExecutions.Clear();
+        if (this.Policy is IAsyncDisposable disposablePolicy)
         {
-            try
-            {
-                await this.lifetime.CancelAsync().ConfigureAwait(false);
-            }
-            finally
-            {
-                await this.DisposeOwnedServicesAsync().ConfigureAwait(false);
-            }
+            await CleanupAsync(disposablePolicy.DisposeAsync, failures).ConfigureAwait(false);
+        }
 
-            this.disposal.TrySetResult();
-        }
-        catch (Exception exception)
+        lock (this.lifetimeGate)
         {
-            this.disposal.TrySetException(exception);
-            throw;
+            this.lifetime.Dispose();
         }
+        if (failures.Count > 0)
+        {
+            var failure = new AggregateException("Access shutdown did not complete cleanly.", failures);
+            this.disposal.TrySetException(failure);
+            throw failure;
+        }
+
+        this.disposal.TrySetResult();
     }
 
-    private async ValueTask DisposeOwnedServicesAsync()
+    private static async ValueTask CleanupAsync(Func<ValueTask> cleanup, List<Exception> failures)
     {
         try
         {
-            await this.registry.DisposeAsync().ConfigureAwait(false);
+            await cleanup().ConfigureAwait(false);
         }
-        finally
+        catch (Exception exception)
         {
-            try
-            {
-                await this.Coordinator.DisposeAsync().ConfigureAwait(false);
-            }
-            finally
-            {
-                try
-                {
-                    await this.executors.DisposeAsync().ConfigureAwait(false);
-                }
-                finally
-                {
-                    this.pendingInspections.Clear();
-                    this.activeExecutions.Clear();
-                    if (this.Policy is IAsyncDisposable disposablePolicy)
-                    {
-                        await disposablePolicy.DisposeAsync().ConfigureAwait(false);
-                    }
-                }
-            }
+            failures.Add(exception);
         }
     }
 
