@@ -1,146 +1,113 @@
 using AgentSchema;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 
 namespace Phantom.Workspaces.Llm.Secrets;
 
-/// <summary>
-/// Scans an agent definition for secret placeholders, requests the corresponding secret
-/// retrievers, and rewrites the definition to opaque reference tokens only.
-/// </summary>
 public sealed class AgentDefinitionSecretMaterializer
 {
-    private readonly SecretUsageScanner scanner;
-    private readonly AgentManifestSecretUseMemoryFactory memoryFactory;
-    private readonly IPlatformSecretStore? platformSecretStore;
-
-    public AgentDefinitionSecretMaterializer(
-        SecretUsageScanner? scanner = null,
-        AgentManifestSecretUseMemoryFactory? memoryFactory = null,
-        IPlatformSecretStore? platformSecretStore = null)
-    {
-        this.scanner = scanner ?? new SecretUsageScanner();
-        this.memoryFactory = memoryFactory ?? new AgentManifestSecretUseMemoryFactory();
-        this.platformSecretStore = platformSecretStore;
-    }
+    private readonly SecretUsageScanner scanner = new();
 
     public async Task<MaterializedAgentDefinition> MaterializeAsync(
         AgentDefinition definition,
-        ISecretProvider secretProvider,
-        CancellationToken ct,
-        AgentManifest? manifest = null,
-        string? agentSessionId = null)
+        IAccessBroker accessBroker,
+        CredentialUseLineage lineage,
+        CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(definition);
-        ArgumentNullException.ThrowIfNull(secretProvider);
-
-        var usages = this.scanner.Scan(definition);
-        if (usages.Count == 0)
-        {
-            return new MaterializedAgentDefinition(definition, SecretPlaceholderResolver.Empty);
-        }
-
-        var lineage = AgentManifestSecretUseMemoryFactory.CreateLineage(manifest, definition, agentSessionId);
-
-        var credentialNames = await this.EnumerateCredentialNamesAsync(ct).ConfigureAwait(false);
-        var requests = usages
-            .Select(usage => this.BuildRequest(lineage, usage, credentialNames))
-            .ToArray();
-
-        var result = await secretProvider.RequestSecretsAsync(requests, ct).ConfigureAwait(false);
-        if (result is null)
-        {
-            throw new SecretMaterializationRefusedException("Secret materialization was refused.");
-        }
-
-        var requestedNames = usages.Select(usage => usage.SecretName).ToHashSet(StringComparer.Ordinal);
-        var relevantFailures = result.FailedSecrets
-            .Where(failure => requestedNames.Contains(failure.SecretName))
-            .ToArray();
-        if (relevantFailures.Length > 0)
-        {
-            throw new SecretMaterializationFailedException(
-                $"Failed to materialize {relevantFailures.Length} secret(s): "
-                + string.Join(", ", relevantFailures.Select(f => f.SecretName).Distinct(StringComparer.Ordinal)),
-                relevantFailures);
-        }
-
-        var retrieversByName = result.AcquiredSecrets
-            .GroupBy(retriever => retriever.SecretName, StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
-
         var resolver = new SecretPlaceholderResolver();
-        var usageToHandle = new Dictionary<SecretUsage, string>();
-        foreach (var usage in usages)
+        var handles = new Dictionary<SecretUsage, string>(ReferenceEqualityComparer.Instance);
+        try
         {
-            if (!retrieversByName.TryGetValue(usage.SecretName, out var retriever))
+            var usages = this.scanner.Scan(definition);
+            for (var occurrence = 0; occurrence < usages.Count; occurrence++)
             {
-                throw new SecretMaterializationFailedException(
-                    $"Failed to materialize secret '{usage.SecretName}'.",
-                    [new SecretRequestFailure(usage.SecretName, "Secret was not acquired", SecretRequestFailureReason.Other)]);
+                var usage = usages[occurrence];
+                var outcome = await accessBroker.AcquireAsync(CreateRequest(usage, lineage, occurrence), cancellationToken).ConfigureAwait(false);
+                if (outcome is AccessDenied<StoredSecretAccessResult> or AccessCancelled<StoredSecretAccessResult>)
+                {
+                    throw new SecretMaterializationRefusedException("Credential use was not authorized.");
+                }
+                if (outcome is not AccessSucceeded<StoredSecretAccessResult> succeeded)
+                {
+                    throw new SecretMaterializationFailedException(
+                        "A required credential is unavailable.",
+                        [new SecretRequestFailure(usage.SecretName, "Credential access is required.", SecretRequestFailureReason.Other)]);
+                }
+                var handle = Guid.NewGuid().ToString("N");
+                resolver.Register($"${{SECRET:{handle}}}", succeeded.Result);
+                handles.Add(usage, handle);
             }
-
-            var handle = Guid.NewGuid().ToString("N");
-            var token = $"${{SECRET:{handle}}}";
-            resolver.Register(token, retriever);
-            usageToHandle[usage] = handle;
+            this.scanner.RewritePlaceholders(definition, handles);
+            return new MaterializedAgentDefinition { Definition = definition, Resolver = resolver };
         }
-
-        this.scanner.RewritePlaceholders(definition, usageToHandle);
-        return new MaterializedAgentDefinition(definition, resolver);
-    }
-
-    private async Task<IReadOnlyList<string>> EnumerateCredentialNamesAsync(CancellationToken ct)
-    {
-        if (this.platformSecretStore is null)
+        catch
         {
-            return [];
+            await resolver.DisposeAsync().ConfigureAwait(false);
+            throw;
         }
-
-        return await this.platformSecretStore.EnumerateNamesAsync(string.Empty, ct).ConfigureAwait(false);
     }
 
-    private SecretRequest BuildRequest(
-        AgentManifestSecretUseMemoryFactory.SecretUseLineage lineage,
+    private static StoredSecretAccessRequest CreateRequest(
         SecretUsage usage,
-        IReadOnlyList<string> credentialNames)
+        CredentialUseLineage lineage,
+        int occurrence)
     {
-        var credentialSources = credentialNames
-            .Select(name => new CredentialStoreSecretSource(name))
-            .Cast<SecretSource>()
-            .ToArray();
-        var candidateSources = credentialSources
-            .Concat([new GitHubLoginSecretSource(), new AwsLoginSecretSource(), new AzureLoginSecretSource()])
-            .ToArray();
-
-        var defaultSource = ChooseDefaultSource(usage.SecretName, credentialSources);
-        return new SecretRequest(
-            usage.SecretName,
-            usage.JsonPath,
-            this.memoryFactory.Build(lineage, usage.SecretName, usage.JsonPath),
-            defaultSource,
-            candidateSources);
-    }
-
-    private static SecretSource? ChooseDefaultSource(string secretName, IReadOnlyList<SecretSource> credentialSources)
-    {
-        if (secretName.Contains("Github", StringComparison.OrdinalIgnoreCase)
-            || secretName.Contains("GitHub", StringComparison.Ordinal))
+        var requestor = new AccessRequestor
         {
-            return new GitHubLoginSecretSource();
-        }
-
-        if (secretName.Contains("Aws", StringComparison.OrdinalIgnoreCase))
+            Identifier = CredentialIdentityFactory.CreateRequestorIdentifier(AccessRequestorKind.Manifest, lineage.Manifest?.Digest ?? "manifest"),
+            Kind = AccessRequestorKind.Manifest,
+            SafeDisplayName = "Manifest",
+        };
+        var useLineage = lineage with { Key = CredentialIdentityFactory.CreateLineageIdentifier("secret-key", usage.SecretName) };
+        var scopes = new List<ReleaseMemoryScopeKind> { ReleaseMemoryScopeKind.AllowOnce, ReleaseMemoryScopeKind.ExactUse, ReleaseMemoryScopeKind.AllUses };
+        if (lineage.Session is not null)
         {
-            return new AwsLoginSecretSource();
+            scopes.AddRange([ReleaseMemoryScopeKind.SessionIdentity, ReleaseMemoryScopeKind.KeyInSession]);
         }
-
-        if (secretName.Contains("Azure", StringComparison.OrdinalIgnoreCase))
+        if (lineage.Manifest is not null)
         {
-            return new AzureLoginSecretSource();
+            scopes.Add(ReleaseMemoryScopeKind.ManifestIdentity);
         }
-
-        return credentialSources
-            .OfType<CredentialStoreSecretSource>()
-            .FirstOrDefault(source => string.Equals(source.CredentialName, secretName, StringComparison.OrdinalIgnoreCase))
-            ?? credentialSources.OfType<CredentialStoreSecretSource>().FirstOrDefault();
+        if (lineage.ManifestContent is not null)
+        {
+            scopes.AddRange([ReleaseMemoryScopeKind.ManifestContent, ReleaseMemoryScopeKind.KeyInManifestContent]);
+        }
+        return new StoredSecretAccessRequest
+        {
+            Reference = new SecretReference { Name = usage.SecretName },
+            Credential = new CredentialReference
+            {
+                LogicalIdentifier = CredentialIdentityFactory.CreateLogicalIdentifier(new CredentialIdentityConfiguration
+                {
+                    Provider = CredentialProviderKind.StoredSecret,
+                    Kind = CredentialKind.Secret,
+                    CredentialPartition = usage.SecretName,
+                    SourceCompatibility = "platform-or-environment",
+                    Authority = "",
+                    Audience = "",
+                    ClientPartition = "manifest",
+                    Scopes = [],
+                }),
+                Provider = CredentialProviderKind.StoredSecret,
+                Kind = CredentialKind.Secret,
+            },
+            Requestor = requestor,
+            Use = new CredentialUseDescriptor
+            {
+                Kind = CredentialUseKind.Manifest,
+                Lineage = useLineage,
+                Fingerprint = CredentialIdentityFactory.CreateUseFingerprint(CredentialUseKind.Manifest, useLineage, requestor.Identifier, $"{usage.JsonPath}:{occurrence}"),
+                SafeDisplayName = "Use manifest secret",
+                MemoryScopes = scopes,
+            },
+            PresentationScope = AccessPresentationScope.Runtime,
+            Sources = new[] { CredentialSourceKind.SecretStore, CredentialSourceKind.Environment }.Select(kind => new CredentialSourceChoiceDescriptor
+            {
+                Identifier = CredentialIdentityFactory.CreateSourceIdentifier(CredentialProviderKind.StoredSecret, $"{kind}:{usage.SecretName}"),
+                Kind = kind,
+                Provider = CredentialProviderKind.StoredSecret,
+                SafeDisplayName = kind == CredentialSourceKind.SecretStore ? "Secret store" : "Environment",
+                Usability = CredentialSourceUsability.Missing,
+            }).ToArray(),
+        };
     }
 }

@@ -795,28 +795,26 @@ public sealed class McpTransportFactoryTests
     private sealed class FakeSecretPlaceholderResolver : ISecretPlaceholderResolver
     {
         private readonly string placeholder;
-        private readonly string value;
+        private readonly Phantom.Workspaces.Llm.Interfaces.Access.StoredSecretAccessResult result;
 
         public FakeSecretPlaceholderResolver(string placeholder, string value)
         {
             this.placeholder = placeholder;
-            this.value = value;
+            this.result = Secrets.ManifestAccessTestBroker.CreateResult(value);
         }
 
-        public bool TryResolve(string candidate, [NotNullWhen(true)] out SecretRetriever? retriever)
+        public bool TryResolve(string candidate, [NotNullWhen(true)] out Phantom.Workspaces.Llm.Interfaces.Access.SensitiveValueLease? retriever)
         {
             if (string.Equals(candidate, this.placeholder, StringComparison.Ordinal))
             {
-                retriever = new SecretRetriever
-                {
-                    SecretName = "MyClientSecret",
-                    Secret = _ => Task.FromResult(ToSecureString(this.value)),
-                };
+                retriever = this.result.Lease;
                 return true;
             }
 
             retriever = null;
             return false;
         }
+
+        public ValueTask DisposeAsync() => this.result.DisposeAsync();
     }
 }

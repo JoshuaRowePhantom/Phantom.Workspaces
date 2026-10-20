@@ -464,8 +464,24 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
                 {
                     AgentDefinition = definition,
                     AgentServices = services,
+                    OwnedResources = !ReferenceEquals(request.AgentServices?.SecretPlaceholderResolver, services?.SecretPlaceholderResolver)
+                        && services?.SecretPlaceholderResolver is Secrets.ISecretPlaceholderResolver resolver
+                            ? (request.OwnedResources ?? []).Append(resolver).ToArray()
+                            : request.OwnedResources,
                 };
-                return await AgentChat.CreateAsync(effectiveRequest).ConfigureAwait(true);
+                try
+                {
+                    return await AgentChat.CreateAsync(effectiveRequest).ConfigureAwait(true);
+                }
+                catch
+                {
+                    if (!ReferenceEquals(request.AgentServices?.SecretPlaceholderResolver, services?.SecretPlaceholderResolver)
+                        && services?.SecretPlaceholderResolver is Secrets.ISecretPlaceholderResolver ownedResolver)
+                    {
+                        await ownedResolver.DisposeAsync().ConfigureAwait(true);
+                    }
+                    throw;
+                }
             },
             ct,
             TaskCreationOptions.DenyChildAttach,

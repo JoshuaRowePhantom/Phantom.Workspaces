@@ -25,8 +25,7 @@ public class AgentFactoryTests
         // gate must still materialize ${SECRET:...} — request the secret, rewrite to an opaque
         // handle, and populate the resolver.
         const string plaintext = "super-secret-token";
-        var provider = new FakeSecretProvider();
-        provider.Secrets["GitHubToken"] = ToSecureString(plaintext);
+        var provider = new Secrets.ManifestAccessTestBroker { Material = plaintext };
         var definition = AgentDefinition.FromJson("""
         {
           "kind": "prompt",
@@ -43,11 +42,11 @@ public class AgentFactoryTests
         {
             AgentDefinition = definition,
             AgentSessionId = "session-1",
-            AgentServices = new AgentServices { SecretProvider = provider, ChatClientOverride = new DeterministicTestChatClient() },
+            AgentServices = new AgentServices { AccessBroker = provider, ChatClientOverride = new DeterministicTestChatClient() },
             PersistenceStoreFactory = (_, _) => ValueTask.FromResult<IAgentPersistenceStore>(new InMemoryAgentPersistenceStore()),
         });
 
-        Assert.Equal(1, provider.CallCount);
+        Assert.Single(provider.Requests);
         var promptAgent = Assert.IsType<PromptAgent>(chat.AgentDefinition);
         var connection = Assert.IsType<ApiKeyConnection>(promptAgent.Model!.Connection);
         Assert.StartsWith("${SECRET:", connection.ApiKey, StringComparison.Ordinal);
@@ -59,18 +58,17 @@ public class AgentFactoryTests
     public async Task CreateAgentChatAsync_SecretInManifest_CallsSecretProviderAndKeepsDefinitionTokenized()
     {
         const string plaintext = "super-secret-token";
-        var provider = new FakeSecretProvider();
-        provider.Secrets["GitHubToken"] = ToSecureString(plaintext);
+        var provider = new Secrets.ManifestAccessTestBroker { Material = plaintext };
         var manifest = LoadSecretManifest("${SECRET:GitHubToken}", provider: "github-copilot");
 
         await using var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
         {
             AgentManifest = manifest,
-            AgentServices = new AgentServices { SecretProvider = provider, ChatClientOverride = new DeterministicTestChatClient() },
+            AgentServices = new AgentServices { AccessBroker = provider, ChatClientOverride = new DeterministicTestChatClient() },
             PersistenceStoreFactory = (_, _) => ValueTask.FromResult<IAgentPersistenceStore>(new InMemoryAgentPersistenceStore()),
         });
 
-        Assert.Equal(1, provider.CallCount);
+        Assert.Single(provider.Requests);
         var promptAgent = Assert.IsType<PromptAgent>(chat.AgentDefinition);
         var connection = Assert.IsType<ApiKeyConnection>(promptAgent.Model!.Connection);
         Assert.StartsWith("${SECRET:", connection.ApiKey, StringComparison.Ordinal);
@@ -81,14 +79,14 @@ public class AgentFactoryTests
     [Fact]
     public async Task CreateAgentChatAsync_SecretProviderRefuses_ThrowsSecretMaterializationRefusedException()
     {
-        var provider = new FakeSecretProvider { ReturnNull = true };
+        var provider = new Secrets.ManifestAccessTestBroker { Deny = true };
         var manifest = LoadSecretManifest("${SECRET:GitHubToken}", provider: "github-copilot");
 
         var exception = await Assert.ThrowsAsync<SecretMaterializationRefusedException>(() =>
             AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
             {
                 AgentManifest = manifest,
-                AgentServices = new AgentServices { SecretProvider = provider },
+                AgentServices = new AgentServices { AccessBroker = provider },
                 PersistenceStoreFactory = (_, _) => ValueTask.FromResult<IAgentPersistenceStore>(new InMemoryAgentPersistenceStore()),
             }));
 
@@ -100,13 +98,9 @@ public class AgentFactoryTests
     {
         const string token = "${SECRET:handle}";
         const string plaintext = "byok-secret-token";
-        var secure = ToSecureString(plaintext, makeReadOnly: false);
-        var resolver = new SecretPlaceholderResolver();
-        resolver.Register(token, new SecretRetriever
-        {
-            SecretName = "ApiKey",
-            Secret = _ => Task.FromResult(secure),
-        });
+        await using var resolver = new SecretPlaceholderResolver();
+        var credential = Secrets.ManifestAccessTestBroker.CreateResult(plaintext);
+        resolver.Register(token, credential);
         var agent = AgentDefinitionLoader.LoadAgentFromJson($$"""
         {
           "kind": "prompt",
@@ -125,7 +119,9 @@ public class AgentFactoryTests
 
         var client = Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
         Assert.Equal(plaintext, client.ByokOptions!.ApiKey);
-        Assert.Throws<ObjectDisposedException>(() => secure.AppendChar('x'));
+        await resolver.DisposeAsync();
+        Assert.IsType<Phantom.Workspaces.Llm.Interfaces.Access.SensitiveValueUseFailed<int>>(
+            await credential.Lease.UseAsync((_, _) => ValueTask.FromResult(1), CancellationToken.None));
     }
 
     [Fact]
@@ -136,8 +132,7 @@ public class AgentFactoryTests
         // ResolveRequiredSecretOrEnvAsync (the exact seam in the reported stack trace) the resolved
         // secret — never the raw ${SECRET:GitHubToken} placeholder — reaches the transport.
         const string plaintext = "resolved-github-token";
-        var provider = new FakeSecretProvider();
-        provider.Secrets["GitHubToken"] = ToSecureString(plaintext);
+        var provider = new Secrets.ManifestAccessTestBroker { Material = plaintext };
         var definition = AgentDefinition.FromJson("""
         {
           "kind": "prompt",
@@ -157,12 +152,12 @@ public class AgentFactoryTests
 
         var (materializedDefinition, materializedServices) = await AgentFactory.MaterializeSecretsIfNeededAsync(
             definition,
-            new AgentServices { SecretProvider = provider },
+            new AgentServices { AccessBroker = provider },
             manifest: null,
             agentSessionId: null,
             CancellationToken.None);
 
-        Assert.Equal(1, provider.CallCount);
+        Assert.Single(provider.Requests);
         var rewrittenApiKey = Regex.Match(materializedDefinition!.ToJson(), "\\$\\{SECRET:[^}]+\\}").Value;
         Assert.NotEqual("${SECRET:GitHubToken}", rewrittenApiKey);
         Assert.DoesNotContain("${SECRET:GitHubToken}", materializedDefinition.ToJson(), StringComparison.Ordinal);
@@ -200,11 +195,7 @@ public class AgentFactoryTests
         // placeholder would be treated as an environment-variable name and creation would throw.
         const string token = "${SECRET:GitHubModelsKey}";
         var resolver = new SecretPlaceholderResolver();
-        resolver.Register(token, new SecretRetriever
-        {
-            SecretName = "GitHubModelsKey",
-            Secret = _ => Task.FromResult(ToSecureString("resolved-models-key")),
-        });
+        resolver.Register(token, Secrets.ManifestAccessTestBroker.CreateResult("resolved-models-key"));
         var agent = AgentDefinitionLoader.LoadAgentFromJson($$"""
         {
           "kind": "prompt",
@@ -234,11 +225,7 @@ public class AgentFactoryTests
         // secret resolver, so the resolved plaintext lands in the SDK's BYOK options.
         const string token = "${SECRET:ByokKey}";
         var resolver = new SecretPlaceholderResolver();
-        resolver.Register(token, new SecretRetriever
-        {
-            SecretName = "ByokKey",
-            Secret = _ => Task.FromResult(ToSecureString("resolved-byok-key")),
-        });
+        resolver.Register(token, Secrets.ManifestAccessTestBroker.CreateResult("resolved-byok-key"));
         var agent = AgentDefinitionLoader.LoadAgentFromJson($$"""
         {
           "kind": "prompt",

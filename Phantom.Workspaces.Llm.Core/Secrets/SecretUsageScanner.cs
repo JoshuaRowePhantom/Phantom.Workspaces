@@ -45,8 +45,11 @@ public sealed partial class SecretUsageScanner
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(usageToHandleToken);
 
+        var occurrenceHandles = usageToHandleToken
+            .GroupBy(pair => (pair.Key.SecretName, pair.Key.JsonPath))
+            .ToDictionary(group => group.Key, group => new Queue<string>(group.Select(pair => pair.Value)));
         var root = JsonNode.Parse(definition.ToJson());
-        RewriteNode(root, RootPath, usageToHandleToken);
+        RewriteNode(root, RootPath, occurrenceHandles);
 
         var rewritten = PhantomAgentSchema.AgentDefinitionFromJson(root!.ToJsonString())
             ?? throw new InvalidOperationException("Failed to re-parse the rewritten agent definition.");
@@ -87,7 +90,7 @@ public sealed partial class SecretUsageScanner
     private static void RewriteNode(
         JsonNode? node,
         string path,
-        IReadOnlyDictionary<SecretUsage, string> usageToHandleToken)
+        IReadOnlyDictionary<(string SecretName, string JsonPath), Queue<string>> usageToHandleToken)
     {
         switch (node)
         {
@@ -128,12 +131,12 @@ public sealed partial class SecretUsageScanner
     private static string Rewrite(
         string text,
         string path,
-        IReadOnlyDictionary<SecretUsage, string> usageToHandleToken)
+        IReadOnlyDictionary<(string SecretName, string JsonPath), Queue<string>> usageToHandleToken)
     {
         return SecretPlaceholderRegex().Replace(text, match =>
         {
-            var usage = new SecretUsage(match.Groups[1].Value, path);
-            return usageToHandleToken.TryGetValue(usage, out var handle)
+            var usage = (match.Groups[1].Value, path);
+            return usageToHandleToken.TryGetValue(usage, out var handles) && handles.TryDequeue(out var handle)
                 ? $"${{SECRET:{handle}}}"
                 : match.Value;
         });

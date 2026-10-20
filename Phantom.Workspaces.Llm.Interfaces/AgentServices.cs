@@ -7,6 +7,8 @@ namespace Phantom.Workspaces.Llm;
 
 public sealed record AgentServices : IServiceProvider
 {
+    public Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker? AccessBroker { get; init; }
+
     public bool LogChat { get; init; }
 
     public bool LogHttpRequests { get; init; }

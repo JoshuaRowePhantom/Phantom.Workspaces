@@ -10,6 +10,7 @@ using OpenAI;
 using Phantom.Workspaces.Llm.Copilot;
 using Phantom.Workspaces.Llm.Echo;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Transport.Logging;
 using System.Collections;
@@ -536,6 +537,7 @@ public static class AgentFactory
                 }, ct).ConfigureAwait(false)
             : createAgentChatRequest.AgentDefinition;
 
+        var originalSecretResolver = services?.SecretPlaceholderResolver;
         (requestedAgentDefinition, services) = await MaterializeSecretsIfNeededAsync(
             requestedAgentDefinition,
             services,
@@ -543,6 +545,10 @@ public static class AgentFactory
             createAgentChatRequest.AgentSessionId,
             ct).ConfigureAwait(false);
 
+        var ownedSecretResolver = !ReferenceEquals(originalSecretResolver, services?.SecretPlaceholderResolver)
+            ? services?.SecretPlaceholderResolver as ISecretPlaceholderResolver : null;
+        try
+        {
         var executionTrustContext = services?.RemoteAgentSessionRuntimeIntent is not null
             ? services.AgentExecutionTrustContext
                 as Phantom.Workspaces.Llm.Trust.AgentExecutionTrustContext
@@ -640,6 +646,7 @@ public static class AgentFactory
                 CancellationToken = ct,
                 ForegroundScheduler = createAgentChatRequest.ForegroundScheduler,
                 TimeProvider = createAgentChatRequest.TimeProvider ?? TimeProvider.System,
+                OwnedResources = ownedSecretResolver is null ? null : [ownedSecretResolver],
             });
 
         // Complete the late-bound reference so AgentSessionToolset tools can access the parent chat.
@@ -647,6 +654,15 @@ public static class AgentFactory
             agentChatRef.Chat = chat;
 
         return chat;
+        }
+        catch
+        {
+            if (ownedSecretResolver is not null)
+            {
+                await ownedSecretResolver.DisposeAsync().ConfigureAwait(false);
+            }
+            throw;
+        }
     }
 
     // #1405: Shared, idempotent secret-materialization gate. The #1401 fix originally lived inline in
@@ -669,14 +685,21 @@ public static class AgentFactory
             CancellationToken ct)
     {
         if (definition is null
-            || services?.SecretProvider is not ISecretProvider secretProvider
+            || services?.AccessBroker is not IAccessBroker accessBroker
             || services.SecretPlaceholderResolver is not null)
         {
             return (definition, services);
         }
 
+        var origin = AgentManifestSecretUseMemoryFactory.CreateLineage(manifest, definition, agentSessionId);
+        var lineage = new CredentialUseLineage
+        {
+            Session = origin.SessionIdentity is { } session ? CredentialIdentityFactory.CreateLineageIdentifier("session", session) : null,
+            Manifest = origin.ManifestIdentity is { } identity ? CredentialIdentityFactory.CreateLineageIdentifier("manifest", identity) : null,
+            ManifestContent = origin.ManifestContentHash is { } content ? CredentialIdentityFactory.CreateLineageIdentifier("manifest-content", content) : null,
+        };
         var materialized = await new AgentDefinitionSecretMaterializer()
-            .MaterializeAsync(definition, secretProvider, ct, manifest, agentSessionId)
+            .MaterializeAsync(definition, accessBroker, lineage, ct)
             .ConfigureAwait(false);
         return (materialized.Definition, services with { SecretPlaceholderResolver = materialized.Resolver });
     }
@@ -1287,8 +1310,7 @@ public static class AgentFactory
             && services?.SecretPlaceholderResolver is ISecretPlaceholderResolver secretResolver
             && secretResolver.TryResolve(apiKeyValue, out var retriever))
         {
-            using var secure = await retriever.Secret(cancellationToken).ConfigureAwait(false);
-            return SecureStringMarshal.Use(secure, body);
+            return await UseSecretLeaseAsync(retriever, body, cancellationToken).ConfigureAwait(false);
         }
 
         var resolved = await resolver.ResolveApiKeyAsync(apiKeyValue, serverName, cancellationToken).ConfigureAwait(false);
@@ -1370,8 +1392,7 @@ public static class AgentFactory
             builder.Append(value, position, match.Index - position);
             if (secretResolver.TryResolve(match.Value, out var retriever))
             {
-                using var secure = await retriever.Secret(cancellationToken).ConfigureAwait(false);
-                builder.Append(SecureStringMarshal.Use(secure, static plain => plain));
+                builder.Append(await UseSecretLeaseAsync(retriever, static plain => plain, cancellationToken).ConfigureAwait(false));
             }
             else
             {
@@ -1451,8 +1472,7 @@ public static class AgentFactory
         if (services?.SecretPlaceholderResolver is ISecretPlaceholderResolver secretResolver
             && secretResolver.TryResolve(value, out var retriever))
         {
-            using var secure = await retriever.Secret(cancellationToken).ConfigureAwait(false);
-            return SecureStringMarshal.Use(secure, static plain => plain);
+            return await UseSecretLeaseAsync(retriever, static plain => plain, cancellationToken).ConfigureAwait(false);
         }
 
         return await ResolveApiKeyAsync(value, serverName, cancellationToken).ConfigureAwait(false);
@@ -1482,10 +1502,20 @@ public static class AgentFactory
         if (services?.SecretPlaceholderResolver is ISecretPlaceholderResolver secretResolver
             && secretResolver.TryResolve(value, out var retriever))
         {
-            using var secure = await retriever.Secret(cancellationToken).ConfigureAwait(false);
-            return SecureStringMarshal.Use(secure, static plain => plain);
+            return await UseSecretLeaseAsync(retriever, static plain => plain, cancellationToken).ConfigureAwait(false);
         }
 
         return await ResolveApiKeyAsync(value, serverName, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<TResult> UseSecretLeaseAsync<TResult>(
+        SensitiveValueLease lease,
+        Func<string, TResult> operation,
+        CancellationToken cancellationToken)
+    {
+        var outcome = await lease.UseAsync((material, _) => ValueTask.FromResult(operation(material)), cancellationToken).ConfigureAwait(false);
+        return outcome is SensitiveValueUseSucceeded<TResult> succeeded
+            ? succeeded.Result
+            : throw new InvalidOperationException("Credential authorization or reacquisition is required.");
     }
 }

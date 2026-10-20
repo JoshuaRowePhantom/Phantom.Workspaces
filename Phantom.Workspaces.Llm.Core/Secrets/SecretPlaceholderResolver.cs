@@ -1,34 +1,54 @@
 using System.Diagnostics.CodeAnalysis;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 
 namespace Phantom.Workspaces.Llm.Secrets;
 
-/// <summary>Dictionary-backed per-materialization secret reference resolver.</summary>
 public sealed class SecretPlaceholderResolver : ISecretPlaceholderResolver
 {
-    private readonly Dictionary<string, SecretRetriever> retrievers;
+    private readonly Dictionary<string, StoredSecretAccessResult> results = [];
+    private readonly object gate = new();
+    private bool disposed;
 
-    public SecretPlaceholderResolver()
-        : this([])
+    public static ISecretPlaceholderResolver Empty { get; } = new SecretPlaceholderResolver();
+
+    public void Register(
+        string placeholder,
+        StoredSecretAccessResult result)
     {
+        lock (this.gate)
+        {
+            ObjectDisposedException.ThrowIf(this.disposed, this);
+            this.results.Add(placeholder, result);
+        }
     }
 
-    private SecretPlaceholderResolver(Dictionary<string, SecretRetriever> retrievers)
+    public bool TryResolve(
+        string placeholder,
+        [NotNullWhen(true)] out SensitiveValueLease? lease)
     {
-        this.retrievers = retrievers;
+        lock (this.gate)
+        {
+            lease = !this.disposed && this.results.TryGetValue(placeholder, out var result) ? result.Lease : null;
+            return lease is not null;
+        }
     }
 
-    public static ISecretPlaceholderResolver Empty { get; } = new SecretPlaceholderResolver([]);
-
-    public void Register(string placeholder, SecretRetriever retriever)
+    public async ValueTask DisposeAsync()
     {
-        ArgumentException.ThrowIfNullOrEmpty(placeholder);
-        ArgumentNullException.ThrowIfNull(retriever);
-        this.retrievers[placeholder] = retriever;
-    }
-
-    public bool TryResolve(string placeholder, [NotNullWhen(true)] out SecretRetriever? retriever)
-    {
-        ArgumentNullException.ThrowIfNull(placeholder);
-        return this.retrievers.TryGetValue(placeholder, out retriever);
+        StoredSecretAccessResult[] owned;
+        lock (this.gate)
+        {
+            if (this.disposed)
+            {
+                return;
+            }
+            this.disposed = true;
+            owned = this.results.Values.ToArray();
+            this.results.Clear();
+        }
+        foreach (var result in owned)
+        {
+            await result.DisposeAsync().ConfigureAwait(false);
+        }
     }
 }

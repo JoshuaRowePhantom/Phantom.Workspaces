@@ -2377,7 +2377,7 @@ public sealed class AgentChatTests
             this.reached = reached;
         }
 
-        public bool TryResolve(string candidate, [NotNullWhen(true)] out SecretRetriever? retriever)
+        public bool TryResolve(string candidate, [NotNullWhen(true)] out Phantom.Workspaces.Llm.Interfaces.Access.SensitiveValueLease? retriever)
         {
             if (!string.Equals(candidate, this.placeholder, StringComparison.Ordinal))
             {
@@ -2385,17 +2385,12 @@ public sealed class AgentChatTests
                 return false;
             }
 
-            retriever = new SecretRetriever
-            {
-                SecretName = "OAuthClientId",
-                Secret = _ =>
-                {
-                    this.reached.TrySetResult();
-                    throw new InvalidOperationException("credential resolution failed (test).");
-                },
-            };
-            return true;
+            retriever = null;
+            this.reached.TrySetResult();
+            throw new InvalidOperationException("credential resolution failed (test).");
         }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private static string GetText(IReadOnlyList<AIContent> contents)
