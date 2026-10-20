@@ -1,6 +1,7 @@
 using System.IO;
 using Moq;
 using Phantom.Workspaces.Llm.Interfaces.Access;
+using Phantom.Workspaces.Llm.Interfaces.Access.Execution;
 using Phantom.Workspaces.Services.Access;
 
 namespace Phantom.Workspaces.Tests.Access;
@@ -90,9 +91,220 @@ public sealed class SensitiveValueLeaseTests : IDisposable
             (_, _) => throw new InvalidOperationException(), TestContext.Current.CancellationToken));
     }
 
-    private async Task<(CredentialLeaseBinding Binding, Context Context)> CreateAsync(ReleaseMemoryScopeKind scope)
+    [Fact]
+    public async Task SensitiveValueLease_AuthorizedView_ForgottenParent_PreventsChildMaterialValidation()
     {
-        var policy = new ReleaseAuthorizationPolicy(new ReleaseMemoryStore(Path.Combine(this.directory, "memory.json")));
+        var (childBinding, childContext) = await this.CreateAsync(ReleaseMemoryScopeKind.ExactUse, "child");
+        var (parentBinding, parentContext) = await this.CreateAsync(ReleaseMemoryScopeKind.ExactUse, "parent");
+        var child = new SensitiveValueLease("original".AsMemory(), childBinding, childContext);
+        var owner = new LeaseOwner(child);
+        await using var view = CreateAuthorizedView(child, owner, parentBinding, parentContext);
+        Assert.Equal(0, childContext.GenerationChecks);
+        await parentContext.Policy.ForgetAsync(
+            Assert.Single(await parentContext.Policy.ListAsync(TestContext.Current.CancellationToken)).Identifier,
+            TestContext.Current.CancellationToken);
+
+        var outcome = Assert.IsType<SensitiveValueUseAuthorizationRequired<bool>>(await view.UseAsync<bool>(
+            (_, _) => throw new InvalidOperationException("Neither material nor the operation may be accessed."),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(parentBinding.Request.RequestIdentifier, outcome.RequestIdentifier);
+        Assert.Equal(0, childContext.GenerationChecks);
+        Assert.Null(childContext.RequiredAction);
+    }
+
+    [Fact]
+    public async Task SensitiveValueLease_AuthorizedView_ForgottenChild_PreservesChildAuthorizationRow()
+    {
+        var (childBinding, childContext) = await this.CreateAsync(ReleaseMemoryScopeKind.ExactUse, "child");
+        var (parentBinding, parentContext) = await this.CreateAsync(ReleaseMemoryScopeKind.ExactUse, "parent");
+        var child = new SensitiveValueLease("original".AsMemory(), childBinding, childContext);
+        await using var view = CreateAuthorizedView(child, new LeaseOwner(child), parentBinding, parentContext);
+        await childContext.Policy.ForgetAsync(
+            Assert.Single(await childContext.Policy.ListAsync(TestContext.Current.CancellationToken)).Identifier,
+            TestContext.Current.CancellationToken);
+
+        var outcome = Assert.IsType<SensitiveValueUseAuthorizationRequired<bool>>(await view.UseAsync<bool>(
+            (_, _) => throw new InvalidOperationException("Material must not be released."),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(childBinding.Request.RequestIdentifier, outcome.RequestIdentifier);
+        Assert.Equal(0, childContext.GenerationChecks);
+        Assert.Null(parentContext.RequiredAction);
+    }
+
+    [Fact]
+    public async Task SensitiveValueLease_AuthorizedView_UsesOnlyOriginalChildGeneration()
+    {
+        var (childBinding, childContext) = await this.CreateAsync(ReleaseMemoryScopeKind.AllowOnce, "child");
+        var (parentBinding, parentContext) = await this.CreateAsync(ReleaseMemoryScopeKind.AllowOnce, "parent");
+        var child = new SensitiveValueLease("original".AsMemory(), childBinding, childContext);
+        await using var view = CreateAuthorizedView(child, new LeaseOwner(child), parentBinding, parentContext);
+        Assert.Equal("original", Assert.IsType<SensitiveValueUseSucceeded<string>>(await view.UseAsync(
+            (material, _) => ValueTask.FromResult(material),
+            TestContext.Current.CancellationToken)).Result);
+        childContext.CurrentGeneration = false;
+
+        var outcome = Assert.IsType<SensitiveValueUseReacquisitionRequired<bool>>(await view.UseAsync<bool>(
+            (_, _) => throw new InvalidOperationException("A replacement generation must not be substituted."),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(childBinding.Request.RequestIdentifier, outcome.RequestIdentifier);
+        Assert.Equal(2, childContext.GenerationChecks);
+    }
+
+    [Fact]
+    public async Task SensitiveValueLease_AuthorizedView_PreservesOriginalExpiryWithoutMaterialValidation()
+    {
+        var (childBinding, childContext) = await this.CreateAsync(ReleaseMemoryScopeKind.AllowOnce, "child");
+        var (parentBinding, parentContext) = await this.CreateAsync(ReleaseMemoryScopeKind.AllowOnce, "parent");
+        var child = new SensitiveValueLease("original".AsMemory(), childBinding with { ExpiresOn = DateTimeOffset.MinValue }, childContext);
+        await using var view = CreateAuthorizedView(child, new LeaseOwner(child), parentBinding, parentContext);
+
+        var outcome = Assert.IsType<SensitiveValueUseReacquisitionRequired<bool>>(await view.UseAsync<bool>(
+            (_, _) => throw new InvalidOperationException("Expired material must not be released."),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(childBinding.Request.RequestIdentifier, outcome.RequestIdentifier);
+        Assert.Equal(0, childContext.GenerationChecks);
+    }
+
+    [Fact]
+    public async Task SensitiveValueLease_AuthorizedView_ExpiredChildWithForgottenPolicy_RequiresChildAuthorizationFirst()
+    {
+        var (childBinding, childContext) = await this.CreateAsync(ReleaseMemoryScopeKind.ExactUse, "child");
+        var (parentBinding, parentContext) = await this.CreateAsync(ReleaseMemoryScopeKind.AllowOnce, "parent");
+        var child = new SensitiveValueLease("original".AsMemory(), childBinding with { ExpiresOn = DateTimeOffset.MinValue }, childContext);
+        await using var view = CreateAuthorizedView(child, new LeaseOwner(child), parentBinding, parentContext);
+        await childContext.Policy.ForgetAsync(
+            Assert.Single(await childContext.Policy.ListAsync(TestContext.Current.CancellationToken)).Identifier,
+            TestContext.Current.CancellationToken);
+
+        var outcome = Assert.IsType<SensitiveValueUseAuthorizationRequired<int>>(await view.UseAsync<int>(
+            (_, _) => throw new InvalidOperationException("Neither expiry nor material may bypass child authorization."),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(childBinding.Request.RequestIdentifier, outcome.RequestIdentifier);
+        Assert.Equal(0, childContext.GenerationChecks);
+        Assert.Null(parentContext.RequiredAction);
+    }
+
+    [Fact]
+    public async Task SensitiveValueLease_AuthorizedView_MultipleCleanupFailures_ArePreserved()
+    {
+        var (childBinding, childContext) = await this.CreateAsync(ReleaseMemoryScopeKind.AllowOnce, "child");
+        var (parentBinding, parentContext) = await this.CreateAsync(ReleaseMemoryScopeKind.AllowOnce, "parent");
+        var child = new SensitiveValueLease("original".AsMemory(), childBinding, childContext);
+        var cancellationFailure = new InvalidOperationException("Cancellation cleanup failed.");
+        var ownerFailure = new IOException("Child cleanup failed.");
+        var owner = new LeaseOwner(child, ownerFailure);
+        var view = CreateAuthorizedView(child, owner, parentBinding, parentContext);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var use = view.UseAsync<int>(async (_, cancellationToken) =>
+        {
+            using var registration = cancellationToken.Register(() => throw cancellationFailure);
+            started.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return 1;
+        }, TestContext.Current.CancellationToken).AsTask();
+        await started.Task.WaitAsync(TestContext.Current.CancellationToken);
+
+        var failure = await Assert.ThrowsAsync<AggregateException>(() => view.DisposeAsync().AsTask());
+
+        Assert.Contains(cancellationFailure, failure.Flatten().InnerExceptions);
+        Assert.Contains(ownerFailure, failure.Flatten().InnerExceptions);
+        Assert.Same(failure, await Assert.ThrowsAsync<AggregateException>(() => view.DisposeAsync().AsTask()));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => use);
+        Assert.Equal(1, owner.Disposals);
+    }
+
+    [Fact]
+    public async Task SensitiveValueLease_AuthorizedView_CompletionOnlyContext_RejectsExportWithoutTakingOwnership()
+    {
+        var (childBinding, childContext) = await this.CreateAsync(ReleaseMemoryScopeKind.AllowOnce, "child");
+        var (parentBinding, parentContext) = await this.CreateAsync(ReleaseMemoryScopeKind.AllowOnce, "parent");
+        await using var child = new SensitiveValueLease("original".AsMemory(), childBinding, childContext);
+        var owner = new LeaseOwner(child);
+
+        Assert.Throws<InvalidOperationException>(() => SensitiveValueLease.CreateAuthorizedView(
+            child,
+            owner,
+            parentBinding.AuthorizationIdentifier,
+            new ViewExecutionContext(parentBinding.Request, parentContext, completionOnly: true)));
+
+        Assert.Equal(0, owner.Disposals);
+        Assert.Equal(0, childContext.GenerationChecks);
+        Assert.Equal("original", Assert.IsType<SensitiveValueUseSucceeded<string>>(await child.UseAsync(
+            (material, _) => ValueTask.FromResult(material),
+            TestContext.Current.CancellationToken)).Result);
+    }
+
+    [Fact]
+    public async Task SensitiveValueLease_AuthorizedView_ChildDisposalFailure_IsPreservedWithoutRepeatedCleanup()
+    {
+        var (childBinding, childContext) = await this.CreateAsync(ReleaseMemoryScopeKind.AllowOnce, "child");
+        var (parentBinding, parentContext) = await this.CreateAsync(ReleaseMemoryScopeKind.AllowOnce, "parent");
+        var child = new SensitiveValueLease("original".AsMemory(), childBinding, childContext);
+        var failure = new IOException("Child cleanup failed.");
+        var owner = new LeaseOwner(child, failure);
+        var view = CreateAuthorizedView(child, owner, parentBinding, parentContext);
+
+        Assert.Same(failure, await Assert.ThrowsAsync<IOException>(() => view.DisposeAsync().AsTask()));
+        Assert.Same(failure, await Assert.ThrowsAsync<IOException>(() => view.DisposeAsync().AsTask()));
+
+        Assert.Equal(1, owner.Disposals);
+        Assert.IsType<SensitiveValueUseFailed<int>>(await child.UseAsync(
+            (_, _) => ValueTask.FromResult(1),
+            TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task SensitiveValueLease_AuthorizedView_DisposalCancelsUseAndDisposesChildOwnerExactlyOnce()
+    {
+        var (childBinding, childContext) = await this.CreateAsync(ReleaseMemoryScopeKind.AllowOnce, "child");
+        var (parentBinding, parentContext) = await this.CreateAsync(ReleaseMemoryScopeKind.AllowOnce, "parent");
+        var child = new SensitiveValueLease("original".AsMemory(), childBinding, childContext);
+        var owner = new LeaseOwner(child);
+        var view = CreateAuthorizedView(child, owner, parentBinding, parentContext);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var use = view.UseAsync<int>(async (_, cancellationToken) =>
+        {
+            started.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return 1;
+        }, TestContext.Current.CancellationToken).AsTask();
+        await started.Task.WaitAsync(TestContext.Current.CancellationToken);
+
+        await Task.WhenAll(view.DisposeAsync().AsTask(), view.DisposeAsync().AsTask());
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => use);
+        Assert.Equal(1, owner.Disposals);
+        Assert.IsType<SensitiveValueUseFailed<int>>(await child.UseAsync(
+            (_, _) => ValueTask.FromResult(1),
+            TestContext.Current.CancellationToken));
+        Assert.IsType<SensitiveValueUseFailed<int>>(await view.UseAsync(
+            (_, _) => ValueTask.FromResult(1),
+            TestContext.Current.CancellationToken));
+    }
+
+    private static SensitiveValueLease CreateAuthorizedView(
+        SensitiveValueLease child,
+        IAsyncDisposable owner,
+        CredentialLeaseBinding parentBinding,
+        Context parentContext)
+    {
+        return SensitiveValueLease.CreateAuthorizedView(
+            child,
+            owner,
+            parentBinding.AuthorizationIdentifier,
+            new ViewExecutionContext(parentBinding.Request, parentContext));
+    }
+
+    private async Task<(CredentialLeaseBinding Binding, Context Context)> CreateAsync(
+        ReleaseMemoryScopeKind scope,
+        string policyName = "memory")
+    {
+        var policy = new ReleaseAuthorizationPolicy(new ReleaseMemoryStore(Path.Combine(this.directory, $"{policyName}.json")));
         var request = ReleaseAuthorizationContractTests.Request();
         request = request with { Credential = request.Credential with { Provider = CredentialProviderKind.StoredSecret } };
         var authorization = await policy.CommitAsync(new() { Request = request, Scope = scope }, TestContext.Current.CancellationToken);
@@ -102,6 +314,77 @@ public sealed class SensitiveValueLeaseTests : IDisposable
             Request = request,
             MaterialGeneration = new() { Value = Guid.NewGuid() },
         }, new Context(policy));
+    }
+
+    private sealed class ViewExecutionContext(
+        ReleasePolicyRequest request,
+        Context parentContext,
+        bool completionOnly = false) : ICredentialExecutionContext
+    {
+        public UserAuthorizationRequestIdentifier RequestIdentifier => request.RequestIdentifier;
+        public long Revision => throw new NotSupportedException();
+        public Guid AcquisitionGeneration => throw new NotSupportedException();
+        public AccessRequestor Requestor => new()
+        {
+            Identifier = request.RequestorIdentifier,
+            Kind = AccessRequestorKind.Application,
+            SafeDisplayName = "Application",
+        };
+        public CredentialUseDescriptor Use => request.Use;
+        public AccessPresentationScope PresentationScope => AccessPresentationScope.Runtime;
+        public ReleasePolicyRequest? PolicyRequest => completionOnly ? null : request;
+        public IReleaseAuthorizationPolicy Policy => parentContext.Policy;
+
+        public ValueTask<AccessOutcome<TResult>> AcquireDependencyAsync<TResult>(
+            AccessRequest<TResult> dependency,
+            CancellationToken cancellationToken)
+            where TResult : IAccessResult => throw new NotSupportedException();
+
+        public ValueTask<ProviderAcquisitionOutcome> ExecuteProviderAcquisitionAsync(
+            IProviderAcquisitionOperation operation,
+            ProviderInteractionPermit permit,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public ValueTask<ProviderAcquisitionOutcome> ExecutePrivateProviderDependencyAsync(
+            IProviderAcquisitionOperation operation,
+            ProviderInteractionPermit parentGenerationPermit,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public ICredentialLeaseContext CreateLeaseContext(ICredentialGenerationValidator validator) =>
+            new ViewContext(parentContext, validator);
+    }
+
+    private sealed class ViewContext(
+        Context parentContext,
+        ICredentialGenerationValidator validator) : ICredentialLeaseContext
+    {
+        public IReleaseAuthorizationPolicy Policy => parentContext.Policy;
+
+        public ValueTask<bool> IsCurrentGenerationAsync(
+            CredentialMaterialGenerationIdentifier generation,
+            CancellationToken cancellationToken) => validator.IsCurrentGenerationAsync(generation, cancellationToken);
+
+        public ValueTask<UserAuthorizationRequestIdentifier> RequireAsync(
+            ReleasePolicyRequest request,
+            CredentialLeaseRequiredActionKind action,
+            CancellationToken cancellationToken) => parentContext.RequireAsync(request, action, cancellationToken);
+    }
+
+    private sealed class LeaseOwner(
+        SensitiveValueLease lease,
+        Exception? disposalFailure = null) : IAsyncDisposable
+    {
+        public int Disposals { get; private set; }
+
+        public async ValueTask DisposeAsync()
+        {
+            this.Disposals++;
+            await lease.DisposeAsync();
+            if (disposalFailure is not null)
+            {
+                throw disposalFailure;
+            }
+        }
     }
 
     private sealed class Context(IReleaseAuthorizationPolicy policy) : ICredentialLeaseContext

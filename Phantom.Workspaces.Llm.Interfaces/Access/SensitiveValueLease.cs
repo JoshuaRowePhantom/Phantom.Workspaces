@@ -1,5 +1,7 @@
 using System.Security.Cryptography;
 using System.Runtime.InteropServices;
+using System.Runtime.ExceptionServices;
+using Phantom.Workspaces.Llm.Interfaces.Access.Execution;
 
 namespace Phantom.Workspaces.Llm.Interfaces.Access;
 
@@ -53,7 +55,10 @@ public sealed record SensitiveValueUseFailed<TResult> : SensitiveValueUseOutcome
 public sealed class SensitiveValueLease : IAsyncDisposable
 {
     private readonly char[] material;
+    private readonly CredentialLeaseBinding binding;
     private readonly LeaseUseGuard guard;
+    private readonly SensitiveValueLease? underlyingLease;
+    private readonly IAsyncDisposable? underlyingResultOwner;
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly CancellationTokenSource lifetime = new();
     private readonly TaskCompletionSource disposal = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -66,7 +71,44 @@ public sealed class SensitiveValueLease : IAsyncDisposable
         TimeProvider? timeProvider = null)
     {
         this.material = material.ToArray();
+        this.binding = binding;
         this.guard = new LeaseUseGuard(binding, context, timeProvider ?? TimeProvider.System);
+    }
+
+    private SensitiveValueLease(
+        SensitiveValueLease underlyingLease,
+        IAsyncDisposable underlyingResultOwner,
+        CredentialLeaseBinding binding,
+        ICredentialLeaseContext context,
+        TimeProvider timeProvider)
+    {
+        this.material = [];
+        this.binding = binding;
+        this.guard = new LeaseUseGuard(binding, context, timeProvider);
+        this.underlyingLease = underlyingLease;
+        this.underlyingResultOwner = underlyingResultOwner;
+    }
+
+    internal static SensitiveValueLease CreateAuthorizedView(
+        SensitiveValueLease underlyingLease,
+        IAsyncDisposable underlyingResultOwner,
+        ReleaseAuthorizationIdentifier authorizationIdentifier,
+        ICredentialExecutionContext executionContext,
+        TimeProvider? timeProvider = null)
+    {
+        var request = executionContext.PolicyRequest
+            ?? throw new InvalidOperationException("Completion-only authorization cannot export a credential lease.");
+        return new SensitiveValueLease(
+            underlyingLease,
+            underlyingResultOwner,
+            new CredentialLeaseBinding
+            {
+                AuthorizationIdentifier = authorizationIdentifier,
+                Request = request,
+                MaterialGeneration = underlyingLease.binding.MaterialGeneration,
+            },
+            executionContext.CreateLeaseContext(new UnderlyingLeaseGenerationValidator(underlyingLease)),
+            timeProvider ?? TimeProvider.System);
     }
 
     public async ValueTask<SensitiveValueUseOutcome<TResult>> UseAsync<TResult>(
@@ -95,6 +137,8 @@ public sealed class SensitiveValueLease : IAsyncDisposable
                     ErrorCode = AccessErrorCode.PersistenceFailure,
                     SafeMessage = "Release authorization could not be validated.",
                 },
+                _ when this.underlyingLease is not null =>
+                    await this.underlyingLease.UseAsync(operation, cancellation.Token).ConfigureAwait(false),
                 _ => new SensitiveValueUseSucceeded<TResult>
                 {
                     Result = await operation(new string(this.material), cancellation.Token).ConfigureAwait(false),
@@ -117,21 +161,40 @@ public sealed class SensitiveValueLease : IAsyncDisposable
 
         try
         {
+            Exception? cancellationFailure = null;
             try
             {
                 await this.lifetime.CancelAsync().ConfigureAwait(false);
             }
-            finally
+            catch (Exception exception)
+            {
+                cancellationFailure = exception;
+            }
+
+            try
             {
                 await this.gate.WaitAsync().ConfigureAwait(false);
                 try
                 {
                     CryptographicOperations.ZeroMemory(MemoryMarshal.AsBytes(this.material.AsSpan()));
+                    if (this.underlyingResultOwner is not null)
+                    {
+                        await this.underlyingResultOwner.DisposeAsync().ConfigureAwait(false);
+                    }
                 }
                 finally
                 {
                     this.gate.Release();
                 }
+            }
+            catch (Exception exception) when (cancellationFailure is not null)
+            {
+                throw new AggregateException("Credential lease cleanup failed.", cancellationFailure, exception);
+            }
+
+            if (cancellationFailure is not null)
+            {
+                ExceptionDispatchInfo.Capture(cancellationFailure).Throw();
             }
 
             this.disposal.TrySetResult();
@@ -140,6 +203,21 @@ public sealed class SensitiveValueLease : IAsyncDisposable
         {
             this.disposal.TrySetException(exception);
             throw;
+        }
+    }
+
+    private sealed class UnderlyingLeaseGenerationValidator(
+        SensitiveValueLease underlyingLease) : ICredentialGenerationValidator
+    {
+        public ValueTask<bool> IsCurrentGenerationAsync(
+            CredentialMaterialGenerationIdentifier generation,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            // The inner use checks its live source only after its own release policy has passed.
+            return ValueTask.FromResult(
+                generation == underlyingLease.binding.MaterialGeneration
+                && Volatile.Read(ref underlyingLease.disposed) == 0);
         }
     }
 }
