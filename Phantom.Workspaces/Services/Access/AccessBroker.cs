@@ -737,7 +737,17 @@ internal sealed class AccessBroker : IAccessBroker
         {
             RequestIdentifier = identifier,
             RequestGeneration = generation,
-            Credential = inspection.Credential,
+            Credential = inspection.Credential with
+            {
+                AccountIdentifier = request.Credential.AccountIdentifier ??
+                    (inspection.CachedGenerations.TryGetValue(source, out var cached)
+                        ? cached.AccountIdentifier
+                        : null) ??
+                    (inspection.AcquisitionKeys.TryGetValue(source, out var acquisition)
+                        ? acquisition.Account
+                        : null) ??
+                    inspection.Credential.AccountIdentifier,
+            },
             SourceIdentifier = source,
             RequestorIdentifier = request.Requestor.Identifier,
             Use = request.Use with { MemoryScopes = Array.AsReadOnly(request.Use.MemoryScopes.ToArray()) },

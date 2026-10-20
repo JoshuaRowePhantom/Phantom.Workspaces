@@ -77,6 +77,7 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
         var sources = new List<CredentialSourceChoiceDescriptor>();
         var generations = new Dictionary<CredentialSourceIdentifier, CredentialGenerationInspection>();
         var acquisitions = new Dictionary<CredentialSourceIdentifier, ProviderAcquisitionKey>();
+        var accounts = new List<CredentialAccountIdentifier?>();
         foreach (var choice in request.Sources)
         {
             if (!IsExactSource(request, choice))
@@ -86,6 +87,12 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
             var cache = this.GetCache(choice.Identifier);
             var metadata = await cache.InspectGenerationAsync(cancellationToken).ConfigureAwait(false);
             var exists = choice.Kind != CredentialSourceKind.Environment || this.source.EnvironmentExists();
+            if (!exists)
+            {
+                cache.Clear();
+                metadata = null;
+            }
+            accounts.Add(cache.AccountIdentifier);
             sources.Add(choice with
             {
                 Usability = !exists ? CredentialSourceUsability.Missing
@@ -99,14 +106,18 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
             {
                 Configuration = request.Credential.LogicalIdentifier,
                 Source = choice.Identifier,
-                Account = request.Credential.AccountIdentifier,
+                Account = request.Credential.AccountIdentifier ?? cache.AccountIdentifier,
                 Protocol = ProviderProtocolKind.Cli,
             });
         }
         return new CredentialInspection
         {
             InspectionIdentifier = Guid.NewGuid(),
-            Credential = request.Credential,
+            Credential = request.Credential with
+            {
+                AccountIdentifier = request.Credential.AccountIdentifier ??
+                    (accounts.Count > 0 && accounts.All(account => account is not null && account == accounts[0]) ? accounts[0] : null),
+            },
             Sources = sources,
             CachedGenerations = generations,
             AcquisitionKeys = acquisitions,
@@ -137,7 +148,20 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
         }
 
         var cache = this.GetCache(choice.Identifier);
-        if (await cache.InspectGenerationAsync(cancellationToken).ConfigureAwait(false) is null)
+        if (choice.Usability == CredentialSourceUsability.Missing ||
+            choice.Kind == CredentialSourceKind.Environment && !this.source.EnvironmentExists())
+        {
+            cache.Clear();
+            return new CredentialExecutionMissing<GitHubCredentialAccessResult>();
+        }
+        var metadata = await cache.InspectGenerationAsync(cancellationToken).ConfigureAwait(false);
+        var expectedAccount = request.Credential.AccountIdentifier ?? policyRequest.Credential.AccountIdentifier;
+        if (metadata is not null && expectedAccount is not null && metadata.AccountIdentifier != expectedAccount)
+        {
+            return new CredentialExecutionFailed<GitHubCredentialAccessResult> { ErrorCode = AccessErrorCode.IdentityMismatch, CanRetry = false };
+        }
+        CredentialMaterialGenerationIdentifier generation;
+        if (metadata is null)
         {
             if (interactionPermit is null)
             {
@@ -145,7 +169,7 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
             }
             var operation = new Acquisition(this, cache, choice.Kind, inspection.AcquisitionKeys[choice.Identifier], context);
             var acquired = await context.ExecuteProviderAcquisitionAsync(operation, interactionPermit, cancellationToken).ConfigureAwait(false);
-            if (acquired is not ProviderAcquisitionSucceeded)
+            if (acquired is not ProviderAcquisitionSucceeded committed)
             {
                 return acquired switch
                 {
@@ -154,14 +178,19 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
                     _ => new CredentialExecutionInteractionRequired<GitHubCredentialAccessResult>(),
                 };
             }
+            generation = committed.CommittedGeneration;
+        }
+        else
+        {
+            generation = metadata.Generation;
         }
 
-        var snapshot = cache.Copy();
+        var snapshot = cache.Copy(generation);
         if (snapshot is null)
         {
             return new CredentialExecutionMissing<GitHubCredentialAccessResult>();
         }
-        if (request.Credential.AccountIdentifier is { } expected && expected != snapshot.Account)
+        if ((request.Credential.AccountIdentifier ?? policyRequest.Credential.AccountIdentifier) is { } expected && expected != snapshot.Account)
         {
             snapshot.Dispose();
             return new CredentialExecutionFailed<GitHubCredentialAccessResult> { ErrorCode = AccessErrorCode.IdentityMismatch, CanRetry = false };
@@ -243,8 +272,8 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
             return new GitHubPrivateCredentialUseFailed<TResult> { ErrorCode = AccessErrorCode.IdentityMismatch, CanRetry = false };
         }
 
-        using var snapshot = cache.Copy();
-        if (snapshot is null || snapshot.Generation != metadata.Generation ||
+        using var snapshot = cache.Copy(metadata.Generation);
+        if (snapshot is null ||
             !await cache.IsCurrentGenerationAsync(snapshot.Generation, cancellationToken).ConfigureAwait(false))
         {
             return new GitHubPrivateCredentialUseFailed<TResult> { ErrorCode = AccessErrorCode.InvalidGeneration, CanRetry = true };
@@ -386,6 +415,18 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
     {
         private readonly object gate = new();
         private Snapshot? current;
+        private CredentialAccountIdentifier? accountIdentifier;
+
+        public CredentialAccountIdentifier? AccountIdentifier
+        {
+            get
+            {
+                lock (this.gate)
+                {
+                    return this.accountIdentifier;
+                }
+            }
+        }
 
         public void Commit(
             GitHubCredentialMaterial material,
@@ -394,6 +435,7 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
             lock (this.gate)
             {
                 this.Clear();
+                this.accountIdentifier = material.Account;
                 this.current = new Snapshot
                 {
                     Material = material.Material.ToArray(),
@@ -404,11 +446,11 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
             }
         }
 
-        public Snapshot? Copy()
+        public Snapshot? Copy(CredentialMaterialGenerationIdentifier generation)
         {
             lock (this.gate)
             {
-                return this.current is not { } current || current.ExpiresOn <= DateTimeOffset.UtcNow ? null : new Snapshot
+                return this.current is not { } current || current.Generation != generation || current.ExpiresOn <= DateTimeOffset.UtcNow ? null : new Snapshot
                 {
                     Material = current.Material.ToArray(),
                     Generation = current.Generation,
