@@ -126,12 +126,9 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
             {
                 if (child.HasExited)
                 {
-                    var exitCode = SafeExitCode(child);
-                    var stderr = child.CapturedStandardError;
-                    var stdout = child.CapturedStandardOutput;
-                    this.LogCapturedStandardOutput(stdout);
+                    var completion = await child.WaitForExitAndDrainAsync(context.CancellationToken).ConfigureAwait(false);
                     return WorkspaceToolExecutionResult.Failure(
-                        $"`code tunnel` exited with code {exitCode}.\nStdout:\n{stdout}\nStderr:\n{stderr}");
+                        $"`code tunnel` exited with code {completion.ExitCode}.");
                 }
 
                 // Obtain tunnel status EXCLUSIVELY through the shared status component. The runner
@@ -146,14 +143,11 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
                 if (resolution.Status is null)
                 {
                     child.Kill();
-                    var stdout = child.CapturedStandardOutput;
-                    this.LogCapturedStandardOutput(stdout);
                     return new WorkspaceToolExecutionResult
                     {
                         ResultContent =
                             "`code tunnel status` no longer reports the tunnel as running "
-                            + DescribeResolution(resolution) + "\n"
-                            + $"Tunnel stdout:\n{stdout}",
+                            + DescribeResolution(resolution),
                     };
                 }
 
@@ -176,29 +170,15 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
         }
         finally
         {
+            child.Kill();
+            await child.WaitForExitAndDrainAsync(CancellationToken.None).ConfigureAwait(false);
             child.Dispose();
         }
-    }
-
-    private static int SafeExitCode(IVsCodeTunnelChildProcess child)
-    {
-        try { return child.ExitCode; }
-        catch (InvalidOperationException) { return -1; }
     }
 
     private static string DescribeResolution(VsCodeTunnelResolution resolution)
     {
         return $"({resolution.Outcome}).";
-    }
-
-    // #1356: surface the child's captured stdout (where `code tunnel` prints the tunnel URL and
-    // status) the same way stderr is surfaced, so it is visible in the logs rather than discarded.
-    private void LogCapturedStandardOutput(string capturedStandardOutput)
-    {
-        if (!string.IsNullOrWhiteSpace(capturedStandardOutput))
-        {
-            this.logger.LogInformation("`code tunnel` stdout:\n{Stdout}", capturedStandardOutput);
-        }
     }
 
     private async Task TryLoginAsync(string cliPath, CancellationToken cancellationToken)

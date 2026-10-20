@@ -33,6 +33,15 @@ public sealed class RunVsCodeTunnelToolTests
         public int ExitCode => this.exitCode;
         public string CapturedStandardError => this.capturedStandardError;
         public string CapturedStandardOutput => this.capturedStandardOutput;
+        public VsCodeTunnelProcessEvidence Evidence => new() { ConnectedSeen = false, TokenErrorSeen = false };
+        public Task<VsCodeTunnelProcessCompletion> WaitForExitAndDrainAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(new VsCodeTunnelProcessCompletion
+            {
+                ExitCode = this.exitCode,
+                ConnectedSeen = false,
+                TokenErrorSeen = false,
+                UnauthorizedHttp401Seen = false,
+            });
 
         public void SimulateStandardOutput(string capturedStandardOutput)
         {
