@@ -67,7 +67,8 @@ public sealed class ReleaseAuthorizationPolicy : IReleaseAuthorizationPolicy, IA
                 BindingFingerprint = binding,
             };
             var provisional = request.Credential.AccountIdentifier is null &&
-                request.Credential.Provider is not CredentialProviderKind.StoredSecret;
+                request.Credential.Provider is not CredentialProviderKind.StoredSecret &&
+                request.Credential is not { Provider: CredentialProviderKind.DevTunnel, Kind: CredentialKind.Anonymous };
             if (decision.Scope != ReleaseMemoryScopeKind.AllowOnce && !provisional)
             {
                 var records = new Dictionary<ReleaseMemoryIdentifier, ReleaseMemoryRecord>(await this.LoadAsync(cancellationToken).ConfigureAwait(false))

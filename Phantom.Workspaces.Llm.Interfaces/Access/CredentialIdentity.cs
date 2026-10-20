@@ -37,7 +37,7 @@ public sealed record CredentialMaterialGenerationIdentifier
 }
 
 public enum CredentialProviderKind { StoredSecret, GitHub, Entra, OAuth, McpOAuth, DevTunnel, CliOwned }
-public enum CredentialKind { Secret, AccessToken, IdentityToken, ConnectToken, OpaqueUse, Completion }
+public enum CredentialKind { Secret, AccessToken, IdentityToken, ConnectToken, OpaqueUse, Completion, Anonymous }
 public enum AccessRequestorKind { Application, Agent, Tool, Manifest, McpServer }
 
 public sealed record CredentialReference

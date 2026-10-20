@@ -146,6 +146,63 @@ public sealed class ReleaseAuthorizationPolicyTests : IDisposable
     }
 
     [Fact]
+    public async Task ReleaseAuthorizationPolicy_AnonymousTunnel_PreservesAccountlessAuthorizationAndForget()
+    {
+        var path = Path.Combine(this.directory, "anonymous.json");
+        await using var policy = new ReleaseAuthorizationPolicy(new ReleaseMemoryStore(path));
+        var request = ReleaseAuthorizationContractTests.Request();
+        request = request with
+        {
+            Credential = request.Credential with
+            {
+                Provider = CredentialProviderKind.DevTunnel,
+                Kind = CredentialKind.Anonymous,
+            },
+        };
+        var authorization = await policy.CommitAsync(new()
+        {
+            Request = request,
+            Scope = ReleaseMemoryScopeKind.AllUses,
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(ReleaseAuthorizationValidation.Valid,
+            await policy.ValidateAsync(authorization.Identifier, request, TestContext.Current.CancellationToken));
+        var memory = Assert.Single(await policy.ListAsync(TestContext.Current.CancellationToken));
+        Assert.Null(memory.AccountIdentifier);
+        await using var reopened = new ReleaseAuthorizationPolicy(new ReleaseMemoryStore(path));
+        Assert.IsType<ReleasePolicyMatched>(await reopened.EvaluateAsync(
+            request with { RequestIdentifier = new() { Value = Guid.NewGuid() } },
+            TestContext.Current.CancellationToken));
+        await policy.ForgetAsync(memory.Identifier, TestContext.Current.CancellationToken);
+        Assert.Equal(ReleaseAuthorizationValidation.AuthorizationRequired,
+            await policy.ValidateAsync(authorization.Identifier, request, TestContext.Current.CancellationToken));
+    }
+
+    [Theory]
+    [InlineData(CredentialProviderKind.GitHub, CredentialKind.Anonymous)]
+    [InlineData(CredentialProviderKind.DevTunnel, CredentialKind.IdentityToken)]
+    [InlineData(CredentialProviderKind.DevTunnel, CredentialKind.ConnectToken)]
+    public async Task ReleaseAuthorizationPolicy_IdentityBearingCredential_StillRequiresActualAccount(
+        CredentialProviderKind provider,
+        CredentialKind kind)
+    {
+        var path = Path.Combine(this.directory, "provisional.json");
+        await using var policy = new ReleaseAuthorizationPolicy(new ReleaseMemoryStore(path));
+        var request = ReleaseAuthorizationContractTests.Request();
+        request = request with { Credential = request.Credential with { Provider = provider, Kind = kind } };
+        var authorization = await policy.CommitAsync(new()
+        {
+            Request = request,
+            Scope = ReleaseMemoryScopeKind.AllUses,
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(ReleaseAuthorizationValidation.IdentityMismatch,
+            await policy.ValidateAsync(authorization.Identifier, request, TestContext.Current.CancellationToken));
+        Assert.Empty(await policy.ListAsync(TestContext.Current.CancellationToken));
+        Assert.False(File.Exists(path));
+    }
+
+    [Fact]
     public async Task ReleaseAuthorizationPolicy_ForgetAsync_NextValidationRequiresAuthorization()
     {
         var policy = new ReleaseAuthorizationPolicy(new ReleaseMemoryStore(Path.Combine(this.directory, "memory.json")));
