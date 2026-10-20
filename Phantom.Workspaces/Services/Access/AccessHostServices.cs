@@ -19,6 +19,8 @@ public sealed class AccessHostServices : IAsyncDisposable
     public required IUserAuthorizationRegistry AuthorizationRegistry { get; init; }
     public required AuthorizationRequestRowsViewModel AuthorizationRows { get; init; }
     public required IReleaseMemoryAdministration ReleaseMemoryAdministration { get; init; }
+    public required ICredentialCacheAdministration CredentialCacheAdministration { get; init; }
+    public required IProviderGrantAdministration ProviderGrantAdministration { get; init; }
 
     public static AccessHostServices Create(AccessHostOptions options)
     {
@@ -32,11 +34,14 @@ public sealed class AccessHostServices : IAsyncDisposable
         var storedSecret = new StoredSecretAccessExecutor(options.PlatformSecretStore);
         var gitHub = new GitHubCredentialAccessExecutor();
         var entra = new EntraCredentialAccessExecutor();
+        var connect = new DevTunnelConnectCredentialAccessExecutor(
+            new DevTunnelConnectMintSession(gitHub, entra, new DevTunnelConnectManagementApi()), registry);
         executors.Add<StoredSecretAccessRequest, StoredSecretAccessResult>(storedSecret);
         executors.Add<GitHubCredentialAccessRequest, GitHubCredentialAccessResult>(gitHub);
         executors.Add<EntraCredentialAccessRequest, EntraCredentialAccessResult>(entra);
         executors.Add<DevTunnelIdentityCredentialAccessRequest, DevTunnelIdentityCredentialAccessResult>(
             new DevTunnelIdentityCredentialAccessExecutor(gitHub, entra));
+        executors.Add<DevTunnelConnectCredentialAccessRequest, DevTunnelConnectCredentialAccessResult>(connect);
         executors.AddCompletion<CliOwnedAuthorizationRequest, AuthorizationCompletedAccessResult>(
             new VsCodeTunnelCliAuthorizationExecutor());
         var broker = new AccessBroker(policy, executors, coordinator, registry);
@@ -50,6 +55,10 @@ public sealed class AccessHostServices : IAsyncDisposable
                 AuthorizationRegistry = registry,
                 AuthorizationRows = rows,
                 ReleaseMemoryAdministration = new ReleaseMemoryAdministration { Policy = policy },
+                CredentialCacheAdministration = new CredentialCacheAdministration(
+                    new object[] { storedSecret, gitHub, entra, connect }.OfType<ICredentialCacheAdministration>()),
+                ProviderGrantAdministration = new ProviderGrantAdministration(
+                    new object[] { storedSecret, gitHub, entra, connect }.OfType<IProviderGrantAdministration>()),
             };
         }
         catch (Exception constructionFailure)

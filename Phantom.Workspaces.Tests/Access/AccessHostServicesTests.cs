@@ -53,6 +53,7 @@ public sealed class AccessHostServicesTests : IDisposable
         Assert.Contains(typeof(GitHubCredentialAccessRequest), requests);
         Assert.Contains(typeof(EntraCredentialAccessRequest), requests);
         Assert.Contains(typeof(DevTunnelIdentityCredentialAccessRequest), requests);
+        Assert.Contains(typeof(DevTunnelConnectCredentialAccessRequest), requests);
         Assert.Contains(typeof(CliOwnedAuthorizationRequest), requests);
         Assert.All(requests, request => Assert.True(request.IsSealed));
     }
