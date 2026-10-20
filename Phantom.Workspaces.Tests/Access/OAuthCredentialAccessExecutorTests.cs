@@ -360,6 +360,54 @@ public sealed class OAuthCredentialAccessExecutorTests
         Assert.Equal(1, fixture.Store.Writes);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PrivateRenewal_UnpinnedRequestPreservesLiveOrRetainedAuthoritativeAccount(bool deleteMaterial)
+    {
+        await using var fixture = new Fixture(derived: true);
+        var original = fixture.Request();
+        var acquisition = fixture.Broker.AcquireAsync(original, TestContext.Current.CancellationToken);
+        await fixture.AllowAsync();
+        await using var result = Assert.IsType<AccessSucceeded<OAuthCredentialAccessResult>>(await acquisition).Result;
+        var before = (await fixture.Executor.InspectGenerationAsync(original, TestContext.Current.CancellationToken))!;
+        Assert.Null(original.Credential.AccountIdentifier);
+        if (deleteMaterial)
+        {
+            Assert.Equal(CredentialGenerationInvalidationOutcome.Invalidated,
+                await fixture.Executor.InvalidateGenerationAsync(original, before.Generation, TestContext.Current.CancellationToken));
+        }
+        fixture.Server.AccountResponse = "{\"sub\":\"private-different-principal\"}";
+        var parent = fixture.Derived!.Request(original);
+        Assert.Null(parent.Credential.AccountIdentifier);
+        var renewal = fixture.Broker.AcquireAsync(parent, TestContext.Current.CancellationToken);
+        await fixture.AllowAsync();
+        var failed = Assert.IsType<AccessFailed<DerivedResult>>(await renewal);
+        Assert.Equal(AccessErrorCode.IdentityMismatch, failed.ErrorCode);
+        Assert.Equal(1, fixture.Store.Writes);
+        var after = await fixture.Executor.InspectGenerationAsync(original, TestContext.Current.CancellationToken);
+        if (deleteMaterial) { Assert.Null(after); }
+        else
+        {
+            Assert.Equal(before.Generation, after!.Generation);
+            Assert.Equal(before.AccountIdentifier, after.AccountIdentifier);
+        }
+        var inspection = await fixture.Executor.InspectAsync(original, TestContext.Current.CancellationToken);
+        Assert.Equal(before.AccountIdentifier, inspection.Credential.AccountIdentifier);
+    }
+
+    [Fact]
+    public async Task PrivateUse_PostCallbackValidationCancellationDisposesUnpublishedResult()
+    {
+        await using var fixture = new Fixture(derived: true);
+        fixture.Derived!.ProbeCallbackCancellation = true;
+        var acquisition = fixture.Broker.AcquireAsync(fixture.Derived.Request(fixture.Request()), TestContext.Current.CancellationToken);
+        await fixture.AllowAsync();
+        await using var result = Assert.IsType<AccessSucceeded<DerivedResult>>(await acquisition).Result;
+        Assert.Equal(1, fixture.Derived.CancelledResult!.Disposals);
+        Assert.Equal(42, result.Value);
+    }
+
     [Fact]
     public async Task ProviderFailure_IsSanitizedAndActualFailedWriteCannotPublishReceipt()
     {
@@ -686,6 +734,8 @@ public sealed class OAuthCredentialAccessExecutorTests
     private sealed class DerivedExecutor(IOAuthPrivateCredentialProvider identity) : ICredentialAccessExecutor<DerivedRequest, DerivedResult>
     {
         internal Func<CancellationToken, ValueTask<OAuthGenerationUseOutcome<int>>>? LateUse { get; private set; }
+        internal bool ProbeCallbackCancellation { get; set; }
+        internal TrackedCallbackResult? CancelledResult { get; private set; }
         public CredentialExecutorKind Kind => CredentialExecutorKind.DevTunnelConnect;
         internal DerivedRequest Request(OAuthCredentialAccessRequest oauth) => new()
         {
@@ -721,10 +771,22 @@ public sealed class OAuthCredentialAccessExecutorTests
             var count = 0;
             var acquired = await context.ExecuteProviderAcquisitionAsync(new Operation(context, Key(request), async (commit, token) =>
             {
-                var receipt = Assert.IsType<ProviderAcquisitionSucceeded>(
-                    await identity.AcquirePrivateAsync(request.Identity, context, commit.InteractionPermit, token));
+                var dependency = await identity.AcquirePrivateAsync(request.Identity, context, commit.InteractionPermit, token);
+                if (dependency is not ProviderAcquisitionSucceeded receipt) { return dependency; }
                 var metadata = await identity.InspectGenerationAsync(request.Identity, token);
                 account = metadata!.AccountIdentifier;
+                if (this.ProbeCallbackCancellation)
+                {
+                    using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
+                    var unpublished = this.CancelledResult = new TrackedCallbackResult();
+                    await Assert.ThrowsAnyAsync<OperationCanceledException>(() => identity.UseGenerationAsync(
+                        request.Identity, receipt.CommittedGeneration, account!, context, commit.InteractionPermit,
+                        (_, _) =>
+                        {
+                            cancellation.Cancel();
+                            return ValueTask.FromResult(unpublished);
+                        }, cancellation.Token).AsTask());
+                }
                 Assert.IsType<OAuthGenerationUseUnavailable<int>>(await identity.UseGenerationAsync<int>(
                     request.Identity, new() { Value = Guid.NewGuid() }, account!, context, commit.InteractionPermit,
                     (_, _) => throw new InvalidOperationException("A stale generation must not invoke the callback."), token));
@@ -748,7 +810,14 @@ public sealed class OAuthCredentialAccessExecutorTests
                     return ValueTask.CompletedTask;
                 });
             }), interactionPermit, cancellationToken);
-            Assert.IsType<ProviderAcquisitionSucceeded>(acquired);
+            if (acquired is not ProviderAcquisitionSucceeded)
+            {
+                return new CredentialExecutionFailed<DerivedResult>
+                {
+                    ErrorCode = acquired is ProviderAcquisitionFailed failed ? failed.ErrorCode : AccessErrorCode.ProviderFailure,
+                    CanRetry = true,
+                };
+            }
             return new CredentialExecutionReady<DerivedResult>
             {
                 ResolvedIdentity = new()
@@ -761,6 +830,15 @@ public sealed class OAuthCredentialAccessExecutorTests
                 },
                 Materializer = new DerivedMaterializer(count),
             };
+        }
+        internal sealed class TrackedCallbackResult : IAsyncDisposable
+        {
+            internal int Disposals { get; private set; }
+            public ValueTask DisposeAsync()
+            {
+                this.Disposals++;
+                return ValueTask.CompletedTask;
+            }
         }
         private static ProviderAcquisitionKey Key(DerivedRequest request) => new()
         {

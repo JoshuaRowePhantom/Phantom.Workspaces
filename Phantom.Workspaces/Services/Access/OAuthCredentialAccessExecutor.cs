@@ -247,9 +247,12 @@ internal sealed class OAuthCredentialAccessExecutor :
         }
         try
         {
+            var metadata = await provider.InspectGenerationAsync(cancellationToken).ConfigureAwait(false);
+            var expectedAccount = request.Credential.AccountIdentifier ??
+                parentContext.PolicyRequest?.Credential.AccountIdentifier ??
+                metadata?.AccountIdentifier ?? provider.LastKnownAccount;
             return await parentContext.ExecutePrivateProviderDependencyAsync(
-                new Acquisition(this, request, provider, parentContext,
-                    request.Credential.AccountIdentifier ?? parentContext.PolicyRequest?.Credential.AccountIdentifier),
+                new Acquisition(this, request, provider, parentContext, expectedAccount),
                 parentPermit,
                 cancellationToken).ConfigureAwait(false);
         }
@@ -315,13 +318,25 @@ internal sealed class OAuthCredentialAccessExecutor :
         }
 
         var result = await operation(tokens.AccessToken, cancellation.Token).ConfigureAwait(false);
-        if (!IsApproved() || !await provider.IsCurrentGenerationAsync(generation, cancellation.Token).ConfigureAwait(false))
+        var published = false;
+        try
         {
-            if (result is IAsyncDisposable asynchronous) { await asynchronous.DisposeAsync().ConfigureAwait(false); }
-            else if (result is IDisposable disposable) { disposable.Dispose(); }
-            return new OAuthGenerationUseUnavailable<TResult>();
+            if (!IsApproved() || !await provider.IsCurrentGenerationAsync(generation, cancellation.Token).ConfigureAwait(false))
+            {
+                return new OAuthGenerationUseUnavailable<TResult>();
+            }
+            var outcome = new OAuthGenerationUseSucceeded<TResult> { Result = result };
+            published = true;
+            return outcome;
         }
-        return new OAuthGenerationUseSucceeded<TResult> { Result = result };
+        finally
+        {
+            if (!published)
+            {
+                if (result is IAsyncDisposable asynchronous) { await asynchronous.DisposeAsync().ConfigureAwait(false); }
+                else if (result is IDisposable disposable) { disposable.Dispose(); }
+            }
+        }
     }
 
     public async ValueTask<IReadOnlyList<CredentialCacheDescriptor>> ListAsync(CancellationToken cancellationToken = default)
