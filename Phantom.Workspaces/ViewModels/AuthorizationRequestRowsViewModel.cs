@@ -32,7 +32,16 @@ public sealed class AuthorizationRequestRowsViewModel : IDisposable
         {
             this.registry = value;
             value.Changed += this.OnChanged;
-            this.QueueSnapshot();
+            try
+            {
+                this.QueueSnapshot();
+            }
+            catch
+            {
+                this.disposed = true;
+                value.Changed -= this.OnChanged;
+                throw;
+            }
         }
     }
 
