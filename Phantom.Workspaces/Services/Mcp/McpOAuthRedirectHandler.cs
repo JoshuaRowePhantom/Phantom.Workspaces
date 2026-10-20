@@ -6,6 +6,7 @@ using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using ModelContextProtocol.Authentication;
+using Phantom.Workspaces.Llm.Interfaces.Access.Execution;
 using Phantom.Workspaces.Llm.Mcp;
 using Phantom.Workspaces.Llm.Secrets;
 
@@ -57,6 +58,8 @@ public sealed class McpOAuthRedirectHandler : IDisposable
     private readonly ILogger logger;
     private readonly object gate = new();
     private readonly HashSet<string> consentedServers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<McpOAuthAttempt> attempts = [];
+    private bool disposed;
 
     // Shared loopback listener (issue #1425): bound once, held for the process lifetime, reused by every
     // server. `pending` maps each authorization's OAuth `state` to its waiter so the single accept loop
@@ -131,6 +134,33 @@ public sealed class McpOAuthRedirectHandler : IDisposable
     /// listener rather than a reserve-then-free port (issue #1425).
     /// </summary>
     internal Uri EnsureListenerBound() => this.EnsureListener(preferredRedirectUri: null);
+
+    internal McpOAuthAttempt CreateAttempt(
+        Uri authorizationUri,
+        Uri redirectUri,
+        IProviderAcquisitionOperation operation)
+    {
+        lock (this.gate)
+        {
+            ObjectDisposedException.ThrowIf(this.disposed, this);
+            var attempt = new McpOAuthAttempt(
+                this.browserLauncher,
+                authorizationUri,
+                redirectUri,
+                operation,
+                this.RemoveAttempt);
+            this.attempts.Add(attempt);
+            return attempt;
+        }
+    }
+
+    private void RemoveAttempt(McpOAuthAttempt attempt)
+    {
+        lock (this.gate)
+        {
+            this.attempts.Remove(attempt);
+        }
+    }
 
     /// <summary>
     /// Runs the interactive authorization flow and returns the full loopback redirect URI (its query
@@ -221,10 +251,19 @@ public sealed class McpOAuthRedirectHandler : IDisposable
     public void Dispose()
     {
         HttpListener? listener;
+        McpOAuthAttempt[] activeAttempts;
         lock (this.gate)
         {
+            this.disposed = true;
             listener = this.sharedListener;
             this.sharedListener = null;
+            activeAttempts = this.attempts.ToArray();
+            this.attempts.Clear();
+        }
+
+        foreach (var attempt in activeAttempts)
+        {
+            _ = attempt.DisposeAsync();
         }
 
         if (listener is not null)
@@ -259,6 +298,7 @@ public sealed class McpOAuthRedirectHandler : IDisposable
     {
         lock (this.gate)
         {
+            ObjectDisposedException.ThrowIf(this.disposed, this);
             if (this.sharedListener is { IsListening: true })
             {
                 return this.boundRedirectUri!;

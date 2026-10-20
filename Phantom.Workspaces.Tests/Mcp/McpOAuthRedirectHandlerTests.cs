@@ -10,7 +10,7 @@ using Phantom.Workspaces.Services.Secrets;
 
 namespace Phantom.Workspaces.Tests.Mcp;
 
-public sealed class McpOAuthRedirectHandlerTests
+public sealed partial class McpOAuthRedirectHandlerTests
 {
     private static Uri AuthUri(string state) => new($"https://auth.test/authorize?client_id=abc&state={state}");
 
