@@ -91,6 +91,21 @@
                                      Classes.paused="{Binding ScheduledToolsPause.IsPaused, FallbackValue=False}" />
                     </Button>
 
+                    <Panel x:Name="AuthorizationRequestsHost" IsVisible="False"
+                           x:DataType="vm:AuthorizationRequestsPopupViewModel">
+                        <Button x:Name="AuthorizationKey" Content="{Binding KeyLabel}"
+                                AutomationProperties.Name="Authorization requests"
+                                Click="OnAuthorizationKeyClicked" />
+                        <Popup x:Name="AuthorizationPopup" IsOpen="{Binding IsOpen, Mode=TwoWay}"
+                               PlacementTarget="{Binding #AuthorizationKey}"
+                               IsLightDismissEnabled="True" Closed="OnAuthorizationPopupClosed">
+                            <Border Background="{DynamicResource Theme.Background}" Padding="12"
+                                    Width="900" KeyDown="OnAuthorizationPopupKeyDown">
+                                <controls:AuthorizationRequestRowsControl DataContext="{Binding Rows}" />
+                            </Border>
+                        </Popup>
+                    </Panel>
+
                     <Button Classes="settings-gear top-right"
                             Content="🤫"
                             ToolTip.Tip="Memorized secrets and credentials"
@@ -285,5 +300,4 @@
         </Popup>
     </Grid>
 </Window>
-
 

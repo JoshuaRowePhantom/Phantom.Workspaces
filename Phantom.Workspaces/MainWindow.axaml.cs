@@ -14,6 +14,32 @@ namespace Phantom.Workspaces;
 
 public partial class MainWindow : Window
 {
+    public void AttachAuthorizationRequests(AuthorizationRequestsPopupViewModel popup)
+    {
+        popup.Rows.SetPresentationMode(AuthorizationRowsPresentationMode.Runtime);
+        this.AuthorizationRequestsHost.DataContext = popup;
+        this.AuthorizationRequestsHost.IsVisible = true;
+    }
+
+    private void OnAuthorizationKeyClicked(object? sender, RoutedEventArgs arguments)
+    {
+        (this.AuthorizationRequestsHost.DataContext as AuthorizationRequestsPopupViewModel)?.ToggleOpen();
+    }
+
+    private void OnAuthorizationPopupKeyDown(object? sender, KeyEventArgs arguments)
+    {
+        if (arguments.Key != Key.Escape) { return; }
+        (this.AuthorizationRequestsHost.DataContext as AuthorizationRequestsPopupViewModel)?.Dismiss();
+        this.AuthorizationKey.Focus();
+        arguments.Handled = true;
+    }
+
+    private void OnAuthorizationPopupClosed(object? sender, EventArgs arguments)
+    {
+        (this.AuthorizationRequestsHost.DataContext as AuthorizationRequestsPopupViewModel)?.NotifyLightDismissed();
+        this.AuthorizationKey.Focus();
+    }
+
     private bool ctrlIsDown;
     private bool navStackIntentSeenWhileCtrlDown;
 
@@ -57,6 +83,15 @@ public partial class MainWindow : Window
 
     private void OnPreviewKeyDown(object? sender, KeyEventArgs e)
     {
+        if (e.Key == Key.Escape &&
+            this.AuthorizationRequestsHost.DataContext is AuthorizationRequestsPopupViewModel { IsOpen: true } authorizationPopup)
+        {
+            authorizationPopup.Dismiss();
+            this.AuthorizationKey.Focus();
+            e.Handled = true;
+            return;
+        }
+
         if (this.DataContext is not MainWindowViewModel viewModel)
         {
             return;
