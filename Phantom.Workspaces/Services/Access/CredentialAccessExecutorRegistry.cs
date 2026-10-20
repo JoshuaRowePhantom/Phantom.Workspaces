@@ -12,7 +12,9 @@ internal sealed record CredentialDependencyKey
 internal sealed class CredentialAccessExecutorRegistry : IAsyncDisposable
 {
     private readonly Dictionary<Type, IRegistration> registrations = new();
+    private readonly TaskCompletionSource disposal = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private bool sealedForDispatch;
+    private int disposalStarted;
 
     public void Add<TRequest, TResult>(ICredentialAccessExecutor<TRequest, TResult> executor)
         where TRequest : CredentialAccessRequest<TResult>
@@ -43,10 +45,34 @@ internal sealed class CredentialAccessExecutorRegistry : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref this.disposalStarted, 1) != 0)
+        {
+            await this.disposal.Task.ConfigureAwait(false);
+            return;
+        }
+
+        this.sealedForDispatch = true;
+        var failures = new List<Exception>();
         foreach (var registration in this.registrations.Values)
         {
-            await registration.DisposeAsync().ConfigureAwait(false);
+            try
+            {
+                await registration.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                failures.Add(exception);
+            }
         }
+
+        if (failures.Count > 0)
+        {
+            var failure = new AggregateException("One or more credential executors could not be disposed.", failures);
+            this.disposal.TrySetException(failure);
+            throw failure;
+        }
+
+        this.disposal.TrySetResult();
     }
 
     private void AddRegistration(
