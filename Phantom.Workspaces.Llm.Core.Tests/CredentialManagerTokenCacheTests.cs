@@ -1,7 +1,9 @@
 using System.Security;
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Authentication;
 using Phantom.Workspaces.Llm.Auth;
+using Phantom.Workspaces.Llm.Interfaces.Access.Execution;
 using Phantom.Workspaces.Llm.Secrets;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
@@ -63,7 +65,7 @@ public sealed class CredentialManagerTokenCacheTests
         await cache.StoreTokensAsync(SampleTokens(), CancellationToken.None);
 
         var key = Assert.Single(store.Secrets.Keys);
-        Assert.Equal(KeyPrefix + ServerName, key);
+        Assert.Equal(KeyPrefix + "v2:" + ServerName, key);
         Assert.Contains(ServerName, key);
     }
 
@@ -209,17 +211,73 @@ public sealed class CredentialManagerTokenCacheTests
         await cache.StoreTokensAsync(SampleTokens(), CancellationToken.None);
 
         var key = Assert.Single(store.Secrets.Keys);
-        Assert.Equal(devTunnelPrefix + ServerName, key);
+        Assert.Equal(devTunnelPrefix + "v2:" + ServerName, key);
         Assert.StartsWith(devTunnelPrefix, key, StringComparison.Ordinal);
         Assert.DoesNotContain("mcp-oauth:", key, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("mcp-oauth:")]
+    [InlineData("devtunnel:")]
+    public async Task CredentialManagerTokenCache_UnversionedBareTokens_AreNotReadMigratedOrDeleted(string prefix)
+    {
+        var store = new FakePlatformSecretStore();
+        var obsoleteKey = prefix + ServerName;
+        var currentKey = prefix + "v2:" + ServerName;
+        using var bareTokens = new SecureString();
+        foreach (var character in JsonSerializer.Serialize(SampleTokens()))
+        {
+            bareTokens.AppendChar(character);
+        }
+        bareTokens.MakeReadOnly();
+        await store.WriteAsync(obsoleteKey, bareTokens, CancellationToken.None);
+        var obsoleteEntry = store.Secrets[obsoleteKey];
+        var cache = new CredentialManagerTokenCache(store, prefix, ServerName);
+        var generations = (ICredentialGenerationCache)cache;
+
+        Assert.Null(await cache.GetTokensAsync(CancellationToken.None));
+        Assert.Null(await generations.InspectGenerationAsync(CancellationToken.None));
+        Assert.Equal(new[] { currentKey }, store.ReadKeys);
+        Assert.Same(obsoleteEntry, Assert.Single(store.Secrets).Value);
+
+        await cache.StoreTokensAsync(new TokenContainer
+        {
+            TokenType = "Bearer",
+            AccessToken = "versioned-access-token",
+            ExpiresIn = 3600,
+            ObtainedAt = DateTimeOffset.UtcNow,
+        }, CancellationToken.None);
+        Assert.Equal(2, store.Secrets.Count);
+        Assert.Contains(currentKey, store.Secrets.Keys);
+        Assert.Same(obsoleteEntry, store.Secrets[obsoleteKey]);
+        var metadata = (await generations.InspectGenerationAsync(CancellationToken.None))!;
+        var freshCache = new CredentialManagerTokenCache(store, prefix, ServerName);
+        Assert.Equal(metadata.Generation, (await ((ICredentialGenerationCache)freshCache)
+            .InspectGenerationAsync(CancellationToken.None))!.Generation);
+        Assert.Equal("versioned-access-token", (await freshCache.GetTokensAsync(CancellationToken.None))!.AccessToken);
+        Assert.Equal("versioned-access-token", (await freshCache.GetGenerationTokensAsync(
+            metadata.Generation, CancellationToken.None))!.AccessToken);
+
+        Assert.Equal(CredentialGenerationInvalidationOutcome.Invalidated,
+            await generations.InvalidateGenerationAsync(metadata.Generation, CancellationToken.None));
+        await cache.ClearAsync(CancellationToken.None);
+        Assert.Same(obsoleteEntry, Assert.Single(store.Secrets).Value);
+        Assert.Null(await freshCache.GetTokensAsync(CancellationToken.None));
+        Assert.DoesNotContain(obsoleteKey, store.ReadKeys);
+        Assert.DoesNotContain(obsoleteKey, store.DeleteKeys);
     }
 
     private sealed class FakePlatformSecretStore : IPlatformSecretStore
     {
         public Dictionary<string, SecureString> Secrets { get; } = new(StringComparer.Ordinal);
+        public List<string> ReadKeys { get; } = [];
+        public List<string> DeleteKeys { get; } = [];
 
         public Task<SecureString?> ReadAsync(string name, CancellationToken ct)
-            => Task.FromResult(this.Secrets.TryGetValue(name, out var value) ? Copy(value) : null);
+        {
+            this.ReadKeys.Add(name);
+            return Task.FromResult(this.Secrets.TryGetValue(name, out var value) ? Copy(value) : null);
+        }
 
         public Task WriteAsync(string name, SecureString value, CancellationToken ct)
         {
@@ -229,6 +287,7 @@ public sealed class CredentialManagerTokenCacheTests
 
         public Task DeleteAsync(string name, CancellationToken ct)
         {
+            this.DeleteKeys.Add(name);
             this.Secrets.Remove(name);
             return Task.CompletedTask;
         }

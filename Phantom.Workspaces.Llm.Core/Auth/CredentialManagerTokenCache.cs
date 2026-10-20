@@ -15,7 +15,7 @@ namespace Phantom.Workspaces.Llm.Auth;
 /// A persistent <see cref="ITokenCache"/> (sub-item #1384) that stores an OAuth
 /// <see cref="TokenContainer"/> in the existing per-user platform secret store
 /// (<see cref="IPlatformSecretStore"/>, backed by Windows Credential Manager). The container is
-/// serialized to JSON and persisted under a per-caller key (<c>keyPrefix + cacheKey</c>) so a
+/// serialized to JSON and persisted under a versioned per-caller key (<c>keyPrefix + "v2:" + cacheKey</c>) so a
 /// restart can reuse a stored refresh token (silent refresh) instead of forcing a fresh interactive
 /// sign-in. Registered into the #1382 <see cref="InteractiveOAuthOptions.TokenCacheProvider"/> seam.
 /// The key prefix is caller-supplied (issue #1454): MCP passes <c>mcp-oauth:</c>, dev-tunnel passes
@@ -26,12 +26,14 @@ namespace Phantom.Workspaces.Llm.Auth;
 /// process boundary as a <see cref="SecureString"/>, marshalled via
 /// <see cref="SecureStringMarshal.Use{T}(SecureString, System.Func{string, T})"/> exactly like the
 /// rest of the secret store; the plaintext lifetime is bounded to the marshalling delegate.
-/// The private cache record persists its exact material generation with the tokens. Safe in-process
-/// metadata is shared by store/partition; cold-start inspection remains unknown until an authorized
+/// The private cache record persists its exact material generation with the tokens under
+/// <c>keyPrefix + "v2:" + cacheKey</c>. Obsolete unversioned records are neither read nor migrated.
+/// Safe in-process metadata is shared by store/partition; cold-start inspection remains unknown until an authorized
 /// read or acquisition, rather than opening Credential Manager during metadata inspection.
 /// </remarks>
 public sealed class CredentialManagerTokenCache : ITokenCache, ICredentialGenerationCache
 {
+    private const string StorageNamespace = "v2:";
     private static readonly ConditionalWeakTable<IPlatformSecretStore, ConcurrentDictionary<string, CachePartition>> partitions = new();
     private readonly IPlatformSecretStore store;
     private readonly string key;
@@ -50,7 +52,7 @@ public sealed class CredentialManagerTokenCache : ITokenCache, ICredentialGenera
         ArgumentException.ThrowIfNullOrEmpty(cacheKey);
 
         this.store = store;
-        this.key = keyPrefix + cacheKey;
+        this.key = keyPrefix + StorageNamespace + cacheKey;
         this.partition = partitions.GetValue(store, _ => new(StringComparer.Ordinal))
             .GetOrAdd(this.key, _ => new CachePartition());
         this.logger = logger ?? NullLogger<CredentialManagerTokenCache>.Instance;
