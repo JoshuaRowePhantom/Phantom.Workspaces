@@ -1,0 +1,185 @@
+using Azure.Core;
+using Azure.Identity;
+using Phantom.Workspaces.Llm.Auth;
+using Phantom.Workspaces.Llm.Interfaces.Access;
+using Phantom.Workspaces.Llm.Interfaces.Access.Execution;
+
+namespace Phantom.Workspaces.Llm.Core.Tests;
+
+public sealed class EntraCredentialSessionTests
+{
+    [Fact]
+    public async Task EntraCredentialSession_InspectCacheAsync_DoesNotCallAzureIdentity()
+    {
+        var request = Request();
+        var acquirer = new Acquirer();
+        await using var session = new EntraCredentialSession(request, new ForbiddenCredential(), acquirer);
+        var inspection = await session.InspectCacheAsync(request, CancellationToken.None);
+        Assert.Null(inspection.Generation);
+        Assert.Equal(0, acquirer.Calls);
+        Assert.Equal(request.CreateLogicalIdentifier(), inspection.LogicalIdentifier);
+        Assert.Equal(request.CreateSourceIdentifier(), inspection.SourceIdentifier);
+    }
+
+    [Fact]
+    public async Task EntraCredentialSession_ExecuteAsync_RequiresMatchingPermit()
+    {
+        var request = Request();
+        var acquirer = new Acquirer();
+        await using var session = new EntraCredentialSession(request, new ForbiddenCredential(), acquirer);
+        var key = (await session.InspectCacheAsync(request, CancellationToken.None)).AcquisitionKey;
+        var rawPermit = Permit(key);
+        var wrongKey = key with { Protocol = ProviderProtocolKind.OAuth };
+        foreach (var permit in new[] { rawPermit, Permit(wrongKey).BindExecution(() => true), Permit(key).BindExecution(() => false) })
+        {
+            var commit = new ProviderAcquisitionCommitContext(() => true, default, new SemaphoreSlim(1, 1), permit);
+            Assert.IsType<ProviderAcquisitionDenied>(await session.ExecuteAsync(request, commit, CancellationToken.None));
+        }
+
+        Assert.Equal(0, acquirer.Calls);
+        Assert.Null(await session.InspectGenerationAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task EntraPinnedTokenProvider_Commit_PublishesGenerationAfterCacheWrite()
+    {
+        var request = Request();
+        var acquirer = new Acquirer();
+        await using var session = new EntraCredentialSession(request, new ForbiddenCredential(), acquirer);
+        var key = (await session.InspectCacheAsync(request, CancellationToken.None)).AcquisitionKey;
+        using var gate = new SemaphoreSlim(0, 1);
+        var commit = new ProviderAcquisitionCommitContext(() => true, default, gate, Permit(key).BindExecution(() => true));
+        var acquisition = session.ExecuteAsync(request, commit, CancellationToken.None).AsTask();
+        Assert.False(acquisition.IsCompleted);
+        Assert.Null(await session.InspectGenerationAsync(CancellationToken.None));
+        Assert.Null(commit.CommittedGeneration);
+        gate.Release();
+        var receipt = Assert.IsType<ProviderAcquisitionSucceeded>(await acquisition);
+        var generation = await session.InspectGenerationAsync(CancellationToken.None);
+        Assert.Equal(receipt.CommittedGeneration, generation!.Generation);
+        Assert.Equal(acquirer.Account, generation.AccountIdentifier);
+        using var material = await session.CopyGenerationAsync(receipt.CommittedGeneration, CancellationToken.None);
+        Assert.Equal("private-token", new string(material!.Token));
+    }
+
+    [Fact]
+    public async Task EntraCredentialSession_InvalidationNeverDeletesNewerGeneration()
+    {
+        var request = Request();
+        await using var session = new EntraCredentialSession(request, new ForbiddenCredential(), new Acquirer());
+        async Task<CredentialMaterialGenerationIdentifier> AcquireAsync()
+        {
+            var key = (await session.InspectCacheAsync(request, CancellationToken.None)).AcquisitionKey;
+            using var gate = new SemaphoreSlim(1, 1);
+            var context = new ProviderAcquisitionCommitContext(() => true, default, gate, Permit(key).BindExecution(() => true));
+            return Assert.IsType<ProviderAcquisitionSucceeded>(
+                await session.ExecuteAsync(request, context, CancellationToken.None)).CommittedGeneration;
+        }
+
+        var first = await AcquireAsync();
+        var second = await AcquireAsync();
+        Assert.Equal(CredentialGenerationInvalidationOutcome.NoLongerCurrent,
+            await session.InvalidateGenerationAsync(first, CancellationToken.None));
+        Assert.True(await session.IsCurrentGenerationAsync(second, CancellationToken.None));
+        Assert.Equal(CredentialGenerationInvalidationOutcome.Invalidated,
+            await session.InvalidateGenerationAsync(second, CancellationToken.None));
+        Assert.False(await session.IsCurrentGenerationAsync(second, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task EntraCredentialSession_TombstonedCommitCannotPublishAndProviderErrorsAreSafe()
+    {
+        var request = Request();
+        var acquirer = new Acquirer();
+        await using var session = new EntraCredentialSession(request, new ForbiddenCredential(), acquirer);
+        var key = (await session.InspectCacheAsync(request, CancellationToken.None)).AcquisitionKey;
+        using var gate = new SemaphoreSlim(1, 1);
+        var commit = new ProviderAcquisitionCommitContext(() => false, default, gate, Permit(key).BindExecution(() => true));
+        Assert.IsType<ProviderAcquisitionCancelled>(await session.ExecuteAsync(request, commit, CancellationToken.None));
+        Assert.Null(await session.InspectGenerationAsync(CancellationToken.None));
+        acquirer.Failure = new AuthenticationFailedException("private-account private-token");
+        commit = new ProviderAcquisitionCommitContext(() => true, default, gate, Permit(key).BindExecution(() => true));
+        var failure = Assert.IsType<ProviderAcquisitionFailed>(await session.ExecuteAsync(request, commit, CancellationToken.None));
+        Assert.Equal(AccessErrorCode.ProviderFailure, failure.ErrorCode);
+        Assert.DoesNotContain("private", failure.ToString());
+    }
+
+    internal static ProviderInteractionPermit Permit(ProviderAcquisitionKey key) =>
+        new(new() { Value = Guid.NewGuid() }, 1, CredentialExecutorKind.Entra, Guid.NewGuid(), key, () => true);
+
+    internal static EntraCredentialAccessRequest Request()
+    {
+        var requestor = CredentialIdentityFactory.CreateRequestorIdentifier(AccessRequestorKind.Application, "test");
+        var lineage = new CredentialUseLineage();
+        var request = new EntraCredentialAccessRequest
+        {
+            Authority = new() { Value = new Uri("https://login.microsoftonline.com/organizations/v2.0") },
+            Client = new() { Value = "test-client" },
+            CachePartition = new() { Value = "test-partition" },
+            Scopes = [new() { Value = "api://example/.default" }],
+            Credential = new()
+            {
+                LogicalIdentifier = new() { Digest = new string('a', 64) },
+                Provider = CredentialProviderKind.Entra,
+                Kind = CredentialKind.AccessToken,
+            },
+            Requestor = new() { Identifier = requestor, Kind = AccessRequestorKind.Application, SafeDisplayName = "Application" },
+            Use = new()
+            {
+                Fingerprint = CredentialIdentityFactory.CreateUseFingerprint(CredentialUseKind.Application, lineage, requestor, "test"),
+                Kind = CredentialUseKind.Application,
+                Lineage = lineage,
+                SafeDisplayName = "Test",
+                MemoryScopes = [ReleaseMemoryScopeKind.AllowOnce, ReleaseMemoryScopeKind.AllUses],
+            },
+            PresentationScope = AccessPresentationScope.Runtime,
+            Sources = [],
+        };
+        return request with
+        {
+            Credential = request.Credential with { LogicalIdentifier = request.CreateLogicalIdentifier() },
+            Sources = [new()
+            {
+                Identifier = request.CreateSourceIdentifier(),
+                Kind = CredentialSourceKind.ProviderCache,
+                Provider = CredentialProviderKind.Entra,
+                Usability = CredentialSourceUsability.AcquisitionRequired,
+                SafeDisplayName = "Microsoft Entra",
+            }],
+        };
+    }
+
+    internal sealed class Acquirer : IEntraTokenAcquirer
+    {
+        internal int Calls { get; private set; }
+        internal Exception? Failure { get; set; }
+        internal DateTimeOffset ExpiresOn { get; set; } = DateTimeOffset.UtcNow.AddHours(1);
+        internal CredentialAccountIdentifier Account { get; } =
+            CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.Entra, "stable-test-account");
+        internal Func<CancellationToken, ValueTask>? BeforeAcquire { get; set; }
+
+        public async ValueTask<EntraAcquiredToken> AcquireAsync(CancellationToken cancellationToken)
+        {
+            this.Calls++;
+            if (this.BeforeAcquire is not null)
+            {
+                await this.BeforeAcquire(cancellationToken);
+            }
+
+            if (this.Failure is not null)
+            {
+                throw this.Failure;
+            }
+
+            return new() { Token = new("private-token", this.ExpiresOn), AccountIdentifier = this.Account };
+        }
+    }
+
+    internal sealed class ForbiddenCredential : TokenCredential
+    {
+        public override AccessToken GetToken(TokenRequestContext requestContext, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("Unexpected Azure Identity call.");
+        public override ValueTask<AccessToken> GetTokenAsync(TokenRequestContext requestContext, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("Unexpected Azure Identity call.");
+    }
+}

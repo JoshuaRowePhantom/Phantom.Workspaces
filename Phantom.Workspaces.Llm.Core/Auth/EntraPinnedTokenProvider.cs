@@ -3,6 +3,8 @@ using System.Linq;
 using Azure.Core;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Phantom.Workspaces.Llm.Interfaces.Access;
+using Phantom.Workspaces.Llm.Interfaces.Access.Execution;
 
 namespace Phantom.Workspaces.Llm.Auth;
 
@@ -30,6 +32,82 @@ public sealed class EntraPinnedTokenProvider
     private readonly SemaphoreSlim acquisitionGate = new(1, 1);
 
     private AccessToken? cachedToken;
+    private readonly object generationGate = new();
+    private EntraCachedMaterial? brokerGeneration;
+    private bool brokerCacheDisposed;
+
+    internal CredentialGenerationInspection? InspectBrokerGeneration()
+    {
+        lock (this.generationGate)
+        {
+            return this.brokerGeneration?.Inspection;
+        }
+    }
+
+    internal bool IsCurrentBrokerGeneration(CredentialMaterialGenerationIdentifier generation)
+    {
+        lock (this.generationGate)
+        {
+            return !this.brokerCacheDisposed &&
+                this.brokerGeneration?.Inspection.Generation == generation;
+        }
+    }
+
+    internal EntraCachedMaterial? CopyBrokerGeneration(CredentialMaterialGenerationIdentifier generation)
+    {
+        lock (this.generationGate)
+        {
+            return !this.brokerCacheDisposed && this.brokerGeneration?.Inspection.Generation == generation
+                ? this.brokerGeneration.Copy()
+                : null;
+        }
+    }
+
+    internal CredentialGenerationInvalidationOutcome InvalidateBrokerGeneration(CredentialMaterialGenerationIdentifier generation)
+    {
+        lock (this.generationGate)
+        {
+            if (this.brokerGeneration is null)
+            {
+                return CredentialGenerationInvalidationOutcome.Missing;
+            }
+
+            if (this.brokerGeneration.Inspection.Generation != generation)
+            {
+                return CredentialGenerationInvalidationOutcome.NoLongerCurrent;
+            }
+
+            this.brokerGeneration.Dispose();
+            this.brokerGeneration = null;
+            return CredentialGenerationInvalidationOutcome.Invalidated;
+        }
+    }
+
+    internal ValueTask<ProviderAcquisitionOutcome> CommitBrokerGenerationAsync(
+        EntraCachedMaterial material,
+        ProviderAcquisitionCommitContext commitContext) =>
+        commitContext.CommitAsync(material.Inspection.Generation, cancellationToken =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            lock (this.generationGate)
+            {
+                ObjectDisposedException.ThrowIf(this.brokerCacheDisposed, this);
+                this.brokerGeneration?.Dispose();
+                this.brokerGeneration = material.Copy();
+            }
+
+            return ValueTask.CompletedTask;
+        });
+
+    internal void DisposeBrokerCache()
+    {
+        lock (this.generationGate)
+        {
+            this.brokerCacheDisposed = true;
+            this.brokerGeneration?.Dispose();
+            this.brokerGeneration = null;
+        }
+    }
 
     /// <summary>
     /// Creates a provider that acquires tokens for <paramref name="scopes"/> through
