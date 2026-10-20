@@ -1,3 +1,5 @@
+using Phantom.Workspaces.Llm.Interfaces.Access.Execution;
+
 namespace Phantom.Workspaces.Llm.Interfaces.Access;
 
 public sealed record EntraAuthority
@@ -50,6 +52,15 @@ public sealed class EntraCredentialAccessResult : ICredentialAccessResult
 {
     public required SensitiveValueLease AccessToken { get; init; }
     public required DateTimeOffset ExpiresOn { get; init; }
+    internal Func<CancellationToken, ValueTask<CredentialGenerationInvalidationOutcome>>? GenerationRejection { private get; init; }
+
+    internal ValueTask<CredentialGenerationInvalidationOutcome> RejectGenerationAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return this.GenerationRejection is { } rejection
+            ? rejection(cancellationToken)
+            : throw new InvalidOperationException("The credential result has no provider generation binding.");
+    }
 
     public ValueTask DisposeAsync() => this.AccessToken.DisposeAsync();
 }

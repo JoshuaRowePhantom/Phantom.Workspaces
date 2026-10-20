@@ -320,16 +320,19 @@ internal sealed class EntraCredentialAccessExecutor :
                 throw new ReleaseIdentityMismatchException();
             }
 
+            var generation = material.Inspection.Generation;
+            var generationCache = session;
             return ValueTask.FromResult(new EntraCredentialAccessResult
             {
                 ExpiresOn = material.Inspection.ExpiresOn!.Value,
+                GenerationRejection = token => generationCache.InvalidateGenerationAsync(generation, token),
                 AccessToken = new SensitiveValueLease(
                     material.Token,
                     new CredentialLeaseBinding
                     {
                         AuthorizationIdentifier = authorization.Identifier,
                         Request = request,
-                        MaterialGeneration = material.Inspection.Generation,
+                        MaterialGeneration = generation,
                         ExpiresOn = material.Inspection.ExpiresOn,
                     },
                     context.CreateLeaseContext(session),

@@ -230,6 +230,73 @@ public sealed class EntraCredentialAccessExecutorTests
             await result.AccessToken.UseAsync((token, _) => ValueTask.FromResult(token.Length), TestContext.Current.CancellationToken));
     }
 
+    [Fact]
+    public async Task EntraExecutor_ResultRejection_InvalidatesExactLeaseAndRequiresExplicitPerform()
+    {
+        await using var fixture = new Fixture();
+        await using var result = await fixture.AcquireAsync(ReleaseMemoryScopeKind.AllUses);
+        Assert.Equal(CredentialGenerationInvalidationOutcome.Invalidated,
+            await result.RejectGenerationAsync(TestContext.Current.CancellationToken));
+        Assert.Null(await fixture.Session.InspectGenerationAsync(TestContext.Current.CancellationToken));
+        Assert.Single(await fixture.Policy.ListAsync(TestContext.Current.CancellationToken));
+        Assert.IsType<SensitiveValueUseReacquisitionRequired<int>>(await result.AccessToken.UseAsync<int>(
+            (_, _) => throw new InvalidOperationException("Rejected material cannot run."),
+            TestContext.Current.CancellationToken));
+        var pending = fixture.Broker.AcquireAsync(fixture.Request, TestContext.Current.CancellationToken);
+        var row = fixture.Registry.GetSnapshot().Last();
+        Assert.Equal(UserAuthorizationPrimaryActionKind.Perform, row.PrimaryAction);
+        Assert.False(pending.IsCompleted);
+        Assert.Equal(1, fixture.Acquirer.Calls);
+        await fixture.Registry.ActAsync(new DenyUserAuthorizationAction
+        {
+            RequestIdentifier = row.Identifier,
+            ExpectedRevision = row.Revision,
+        }, TestContext.Current.CancellationToken);
+        Assert.IsType<AccessDenied<EntraCredentialAccessResult>>(await pending);
+        Assert.Equal(1, fixture.Acquirer.Calls);
+    }
+
+    [Fact]
+    public async Task EntraExecutor_StaleResultRejectionCannotInvalidateReplacementGeneration()
+    {
+        await using var fixture = new Fixture();
+        await using var stale = await fixture.AcquireAsync(ReleaseMemoryScopeKind.AllUses);
+        var replacement = await CommitSessionAsync(fixture.Session, fixture.Request);
+        await using var current = Assert.IsType<AccessSucceeded<EntraCredentialAccessResult>>(
+            await fixture.Broker.AcquireAsync(fixture.Request, TestContext.Current.CancellationToken)).Result;
+        Assert.Equal(CredentialGenerationInvalidationOutcome.NoLongerCurrent,
+            await stale.RejectGenerationAsync(TestContext.Current.CancellationToken));
+        Assert.True(await fixture.Session.IsCurrentGenerationAsync(replacement, TestContext.Current.CancellationToken));
+        Assert.IsType<SensitiveValueUseSucceeded<int>>(await current.AccessToken.UseAsync(
+            (material, _) => ValueTask.FromResult(material.Length),
+            TestContext.Current.CancellationToken));
+        Assert.Equal(CredentialGenerationInvalidationOutcome.Invalidated,
+            await current.RejectGenerationAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(CredentialGenerationInvalidationOutcome.Missing,
+            await stale.RejectGenerationAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(CredentialGenerationInvalidationOutcome.Missing,
+            await current.RejectGenerationAsync(TestContext.Current.CancellationToken));
+        Assert.Single(await fixture.Policy.ListAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(2, fixture.Acquirer.Calls);
+    }
+
+    [Fact]
+    public async Task EntraExecutor_CancelledResultRejectionDoesNotInvalidateGeneration()
+    {
+        await using var fixture = new Fixture();
+        await using var result = await fixture.AcquireAsync(ReleaseMemoryScopeKind.AllUses);
+        var generation = (await fixture.Session.InspectGenerationAsync(TestContext.Current.CancellationToken))!.Generation;
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            await result.RejectGenerationAsync(cancellation.Token));
+        Assert.True(await fixture.Session.IsCurrentGenerationAsync(generation, TestContext.Current.CancellationToken));
+        Assert.IsType<SensitiveValueUseSucceeded<int>>(await result.AccessToken.UseAsync(
+            (material, _) => ValueTask.FromResult(material.Length),
+            TestContext.Current.CancellationToken));
+        Assert.Equal(1, fixture.Acquirer.Calls);
+    }
+
     private sealed class Fixture : IAsyncDisposable
     {
         private readonly string directory = Path.Combine(Environment.CurrentDirectory, ".entra-executor-tests", Guid.NewGuid().ToString("N"));
