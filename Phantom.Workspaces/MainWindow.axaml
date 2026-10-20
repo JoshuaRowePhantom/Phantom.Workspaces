@@ -98,7 +98,7 @@
                                 Click="OnAuthorizationKeyClicked" />
                         <Popup x:Name="AuthorizationPopup" IsOpen="{Binding IsOpen, Mode=TwoWay}"
                                PlacementTarget="{Binding #AuthorizationKey}"
-                               IsLightDismissEnabled="True" Closed="OnAuthorizationPopupClosed">
+                               IsLightDismissEnabled="False" Closed="OnAuthorizationPopupClosed">
                             <Border Background="{DynamicResource Theme.Background}" Padding="12"
                                     Width="900" KeyDown="OnAuthorizationPopupKeyDown">
                                 <controls:AuthorizationRequestRowsControl DataContext="{Binding Rows}" />
@@ -300,4 +300,3 @@
         </Popup>
     </Grid>
 </Window>
-
