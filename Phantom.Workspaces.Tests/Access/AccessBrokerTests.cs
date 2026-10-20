@@ -66,13 +66,11 @@ public sealed class AccessBrokerTests : IDisposable
         Assert.Single(generations);
         Assert.Equal(initial.Identifier, renewal.Identifier);
         Assert.Equal(UserAuthorizationPrimaryActionKind.Perform, renewal.PrimaryAction);
-        
-        var renewalSnapshot = Assert.Single(registry.GetSnapshot());
-        Assert.True(renewalSnapshot.CanAct);
-        Assert.Equal(UserAuthorizationState.RenewalNeeded, renewalSnapshot.State);
-        await ApplyAsync(registry, renewalSnapshot);
-        
-        // Wait for the broker to process the 2nd decision and complete the task
+        await Assert.ThrowsAsync<UserAuthorizationActionRejectedException>(() => ApplyAsync(registry, initial));
+        Assert.Single(generations);
+        Assert.False(task.IsCompleted);
+
+        await ApplyAsync(registry, renewal);
         await using var result = Assert.IsType<AccessSucceeded<Result>>(
             await task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).Result;
 
@@ -707,17 +705,13 @@ public sealed class AccessBrokerTests : IDisposable
 
     private static Task ApplyAsync(
         UserAuthorizationRegistry registry,
-        UserAuthorizationSnapshot row) 
-    {
-        File.AppendAllText(@"C:\dev\Phantom.Workspaces-Skills\test-debug.log", $"DEBUG ApplyAsync called: Revision={row.Revision}, State={row.State}, CanAct={row.CanAct}{Environment.NewLine}");
-        return registry.ActAsync(new ApplyUserAuthorizationAction
+        UserAuthorizationSnapshot row) => registry.ActAsync(new ApplyUserAuthorizationAction
         {
             RequestIdentifier = row.Identifier,
             ExpectedRevision = row.Revision,
             Memory = row.SelectedMemory,
             Source = row.SelectedSource,
         }, TestContext.Current.CancellationToken);
-    }
 
     private static RequestRecord Request(string purpose = "first-use")
     {
