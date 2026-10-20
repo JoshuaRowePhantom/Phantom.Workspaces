@@ -57,9 +57,14 @@ public sealed partial class McpOAuthRedirectHandlerTests
             AttemptPermit(operation, generation: Guid.NewGuid()).BindExecution(() => true),
             AttemptPermit(operation, requestIdentifier: new() { Value = Guid.NewGuid() }).BindExecution(() => true),
             AttemptPermit(operation, executor: CredentialExecutorKind.Entra).BindExecution(() => true),
+            AttemptPermit(operation, executor: CredentialExecutorKind.OAuth).BindExecution(() => true),
             AttemptPermit(operation, key: operation.CompatibilityKey with
             {
                 Source = new() { Digest = new string('c', 64) },
+            }).BindExecution(() => true),
+            AttemptPermit(operation, key: operation.CompatibilityKey with
+            {
+                Account = new() { Digest = new string('d', 64) },
             }).BindExecution(() => true),
             AttemptPermit(operation).BindExecution(() => false),
         })

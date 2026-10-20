@@ -431,7 +431,7 @@ internal sealed class McpOAuthCredentialAccessExecutor :
                 Source = configuration.Source,
                 Protocol = ProviderProtocolKind.OAuth,
             };
-            this.Commits = new McpOAuthCacheCommitCoordinator(configuration.Cache, this.Key);
+            this.Commits = new McpOAuthCacheCommitCoordinator(configuration.Cache, this.Key, CredentialExecutorKind.McpOAuth);
             this.GenerationCache = new OwnedGenerationCache(configuration.Cache, active);
         }
         internal McpOAuthProviderConfiguration Configuration { get; }

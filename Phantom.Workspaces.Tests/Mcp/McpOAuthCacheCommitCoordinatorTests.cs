@@ -18,7 +18,7 @@ public sealed class McpOAuthCacheCommitCoordinatorTests
         var cache = Cache(store);
         var operation = new Operation();
         var context = Context(operation);
-        await using var coordinator = new McpOAuthCacheCommitCoordinator(cache, operation.CompatibilityKey);
+        await using var coordinator = new McpOAuthCacheCommitCoordinator(cache, operation.CompatibilityKey, CredentialExecutorKind.McpOAuth);
         var generation = await coordinator.BeginGenerationAsync(context, TestContext.Current.CancellationToken);
         var waiting = coordinator.WaitForCommitAsync(generation, TestContext.Current.CancellationToken);
         var storing = coordinator.StoreAndPublishAsync(Tokens("committed"), generation, TestContext.Current.CancellationToken).AsTask();
@@ -46,7 +46,7 @@ public sealed class McpOAuthCacheCommitCoordinatorTests
         var store = new MemoryStore();
         var cache = Cache(store);
         var operation = new Operation();
-        await using var coordinator = new McpOAuthCacheCommitCoordinator(cache, operation.CompatibilityKey);
+        await using var coordinator = new McpOAuthCacheCommitCoordinator(cache, operation.CompatibilityKey, CredentialExecutorKind.McpOAuth);
         var original = await coordinator.BeginGenerationAsync(Context(operation), TestContext.Current.CancellationToken);
         await coordinator.StoreAndPublishAsync(Tokens("initial"), original, TestContext.Current.CancellationToken);
         var refreshContext = Context(operation);
@@ -77,7 +77,7 @@ public sealed class McpOAuthCacheCommitCoordinatorTests
     {
         var store = new MemoryStore();
         var operation = new Operation();
-        await using var coordinator = new McpOAuthCacheCommitCoordinator(Cache(store), operation.CompatibilityKey);
+        await using var coordinator = new McpOAuthCacheCommitCoordinator(Cache(store), operation.CompatibilityKey, CredentialExecutorKind.McpOAuth);
         var old = await coordinator.BeginGenerationAsync(Context(operation), TestContext.Current.CancellationToken);
         var oldWait = coordinator.WaitForCommitAsync(old, TestContext.Current.CancellationToken);
         var current = await coordinator.BeginGenerationAsync(Context(operation), TestContext.Current.CancellationToken);
@@ -98,8 +98,8 @@ public sealed class McpOAuthCacheCommitCoordinatorTests
     {
         var store = new MemoryStore();
         var operation = new Operation();
-        await using var first = new McpOAuthCacheCommitCoordinator(Cache(store), operation.CompatibilityKey);
-        await using var second = new McpOAuthCacheCommitCoordinator(Cache(store), operation.CompatibilityKey);
+        await using var first = new McpOAuthCacheCommitCoordinator(Cache(store), operation.CompatibilityKey, CredentialExecutorKind.McpOAuth);
+        await using var second = new McpOAuthCacheCommitCoordinator(Cache(store), operation.CompatibilityKey, CredentialExecutorKind.McpOAuth);
         var oldContext = Context(operation);
         var old = await first.BeginGenerationAsync(oldContext, TestContext.Current.CancellationToken);
         var oldWait = first.WaitForCommitAsync(old, TestContext.Current.CancellationToken);
@@ -120,7 +120,7 @@ public sealed class McpOAuthCacheCommitCoordinatorTests
     {
         var store = new MemoryStore();
         var operation = new Operation();
-        await using var coordinator = new McpOAuthCacheCommitCoordinator(Cache(store), operation.CompatibilityKey);
+        await using var coordinator = new McpOAuthCacheCommitCoordinator(Cache(store), operation.CompatibilityKey, CredentialExecutorKind.McpOAuth);
         var generation = await coordinator.BeginGenerationAsync(Context(operation), TestContext.Current.CancellationToken);
         var follower = coordinator.WaitForCommitAsync(generation, TestContext.Current.CancellationToken);
         using var cancellation = new CancellationTokenSource();
@@ -137,7 +137,7 @@ public sealed class McpOAuthCacheCommitCoordinatorTests
     {
         var store = new MemoryStore { BlockWrite = true };
         var operation = new Operation();
-        await using var coordinator = new McpOAuthCacheCommitCoordinator(Cache(store), operation.CompatibilityKey);
+        await using var coordinator = new McpOAuthCacheCommitCoordinator(Cache(store), operation.CompatibilityKey, CredentialExecutorKind.McpOAuth);
         var context = Context(operation);
         var generation = await coordinator.BeginGenerationAsync(context, TestContext.Current.CancellationToken);
         var follower = coordinator.WaitForCommitAsync(generation, TestContext.Current.CancellationToken);
@@ -159,7 +159,7 @@ public sealed class McpOAuthCacheCommitCoordinatorTests
     {
         var store = new MemoryStore { BlockWrite = true };
         var operation = new Operation();
-        await using var coordinator = new McpOAuthCacheCommitCoordinator(Cache(store), operation.CompatibilityKey);
+        await using var coordinator = new McpOAuthCacheCommitCoordinator(Cache(store), operation.CompatibilityKey, CredentialExecutorKind.McpOAuth);
         var generation = await coordinator.BeginGenerationAsync(Context(operation), TestContext.Current.CancellationToken);
         var storing = coordinator.StoreAndPublishAsync(Tokens("current"), generation, TestContext.Current.CancellationToken).AsTask();
         await store.Writing.Task.WaitAsync(TestContext.Current.CancellationToken);
@@ -186,7 +186,7 @@ public sealed class McpOAuthCacheCommitCoordinatorTests
         store.FailWrite = true;
         var operation = new Operation();
         var context = Context(operation);
-        await using var coordinator = new McpOAuthCacheCommitCoordinator(cache, operation.CompatibilityKey);
+        await using var coordinator = new McpOAuthCacheCommitCoordinator(cache, operation.CompatibilityKey, CredentialExecutorKind.McpOAuth);
         var generation = await coordinator.BeginGenerationAsync(context, TestContext.Current.CancellationToken);
         var follower = coordinator.WaitForCommitAsync(generation, TestContext.Current.CancellationToken);
         var leaderFailure = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
@@ -211,7 +211,7 @@ public sealed class McpOAuthCacheCommitCoordinatorTests
         var operation = new Operation();
         var active = true;
         var context = Context(operation, () => active);
-        await using var coordinator = new McpOAuthCacheCommitCoordinator(Cache(store), operation.CompatibilityKey);
+        await using var coordinator = new McpOAuthCacheCommitCoordinator(Cache(store), operation.CompatibilityKey, CredentialExecutorKind.McpOAuth);
         var generation = await coordinator.BeginGenerationAsync(context, TestContext.Current.CancellationToken);
         var follower = coordinator.WaitForCommitAsync(generation, TestContext.Current.CancellationToken);
         active = false;
@@ -228,7 +228,7 @@ public sealed class McpOAuthCacheCommitCoordinatorTests
     {
         var store = new MemoryStore();
         var operation = new Operation();
-        await using var coordinator = new McpOAuthCacheCommitCoordinator(Cache(store), operation.CompatibilityKey);
+        await using var coordinator = new McpOAuthCacheCommitCoordinator(Cache(store), operation.CompatibilityKey, CredentialExecutorKind.McpOAuth);
         var generation = await coordinator.BeginGenerationAsync(Context(operation), TestContext.Current.CancellationToken);
         var follower = coordinator.WaitForCommitAsync(generation, TestContext.Current.CancellationToken);
         await coordinator.DisposeAsync();
@@ -243,13 +243,13 @@ public sealed class McpOAuthCacheCommitCoordinatorTests
     {
         var store = new MemoryStore();
         var operation = new Operation();
-        await using var coordinator = new McpOAuthCacheCommitCoordinator(Cache(store), operation.CompatibilityKey);
+        await using var coordinator = new McpOAuthCacheCommitCoordinator(Cache(store), operation.CompatibilityKey, CredentialExecutorKind.McpOAuth);
         var rawPermit = Permit(operation);
         var context = new ProviderAcquisitionCommitContext(() => true, CancellationToken.None, new(1, 1), rawPermit);
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
             await coordinator.BeginGenerationAsync(context, TestContext.Current.CancellationToken));
         var otherKey = operation.CompatibilityKey with { Source = new() { Digest = new string('f', 64) } };
-        await using var other = new McpOAuthCacheCommitCoordinator(Cache(store), otherKey);
+        await using var other = new McpOAuthCacheCommitCoordinator(Cache(store), otherKey, CredentialExecutorKind.McpOAuth);
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
             await other.BeginGenerationAsync(Context(operation), TestContext.Current.CancellationToken));
         Assert.Equal(0, store.Writes);
@@ -263,7 +263,7 @@ public sealed class McpOAuthCacheCommitCoordinatorTests
         var leader = new Operation();
         var follower = new Operation();
         await using var acquisitions = new ProviderAcquisitionCoordinator();
-        await using var coordinator = new McpOAuthCacheCommitCoordinator(cache, leader.CompatibilityKey);
+        await using var coordinator = new McpOAuthCacheCommitCoordinator(cache, leader.CompatibilityKey, CredentialExecutorKind.McpOAuth);
         leader.Execute = async (context, cancellationToken) =>
         {
             var generation = await coordinator.BeginGenerationAsync(context, cancellationToken);

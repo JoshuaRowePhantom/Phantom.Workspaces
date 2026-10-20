@@ -20,6 +20,7 @@ internal sealed class McpOAuthAttempt : IAsyncDisposable
     private readonly long revision;
     private readonly Guid acquisitionGeneration;
     private readonly ProviderAcquisitionKey acquisitionKey;
+    private readonly CredentialExecutorKind executorKind;
     private readonly Action<McpOAuthAttempt>? onClosed;
     private readonly TaskCompletionSource<Uri> completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Task acceptLoop;
@@ -46,9 +47,11 @@ internal sealed class McpOAuthAttempt : IAsyncDisposable
         this.acquisitionGeneration = operation.AcquisitionGeneration;
         this.acquisitionKey = operation.CompatibilityKey;
         this.onClosed = onClosed;
-        if (operation.ExecutorKind != CredentialExecutorKind.McpOAuth)
+        this.executorKind = operation.ExecutorKind;
+        if (this.executorKind is not (CredentialExecutorKind.McpOAuth or CredentialExecutorKind.OAuth) ||
+            this.acquisitionKey.Protocol != ProviderProtocolKind.OAuth)
         {
-            throw new InvalidOperationException("OAuth attempt requires an MCP acquisition.");
+            throw new InvalidOperationException("OAuth attempt requires an OAuth acquisition.");
         }
 
         this.state = QueryValue(authorizationUri, "state") ?? Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
@@ -94,8 +97,8 @@ internal sealed class McpOAuthAttempt : IAsyncDisposable
             }
 
             if (permit is null ||
-                !permit.AuthorizesProvider(CredentialExecutorKind.McpOAuth, this.acquisitionKey) ||
-                !permit.Authorizes(this.requestIdentifier, this.revision, CredentialExecutorKind.McpOAuth,
+                !permit.AuthorizesProvider(this.executorKind, this.acquisitionKey) ||
+                !permit.Authorizes(this.requestIdentifier, this.revision, this.executorKind,
                     this.acquisitionGeneration, this.acquisitionKey))
             {
                 this.Close();

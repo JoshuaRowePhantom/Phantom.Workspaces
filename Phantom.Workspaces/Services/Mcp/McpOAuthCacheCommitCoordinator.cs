@@ -13,15 +13,23 @@ internal sealed class McpOAuthCacheCommitCoordinator : IAsyncDisposable
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly CredentialManagerTokenCache cache;
     private readonly ProviderAcquisitionKey acquisitionKey;
+    private readonly CredentialExecutorKind executorKind;
     private ProviderAcquisitionGeneration? current;
     private bool disposed;
 
     internal McpOAuthCacheCommitCoordinator(
         CredentialManagerTokenCache cache,
-        ProviderAcquisitionKey acquisitionKey)
+        ProviderAcquisitionKey acquisitionKey,
+        CredentialExecutorKind executorKind)
     {
+        if (executorKind is not (CredentialExecutorKind.McpOAuth or CredentialExecutorKind.OAuth) ||
+            acquisitionKey.Protocol != ProviderProtocolKind.OAuth)
+        {
+            throw new InvalidOperationException("OAuth cache requires an OAuth acquisition.");
+        }
         this.cache = cache;
         this.acquisitionKey = acquisitionKey;
+        this.executorKind = executorKind;
     }
 
     internal async ValueTask<ProviderAcquisitionGeneration> BeginGenerationAsync(
@@ -32,7 +40,7 @@ internal sealed class McpOAuthCacheCommitCoordinator : IAsyncDisposable
         try
         {
             ObjectDisposedException.ThrowIf(this.disposed, this);
-            if (!commitContext.InteractionPermit.AuthorizesProvider(CredentialExecutorKind.McpOAuth, this.acquisitionKey) ||
+            if (!commitContext.InteractionPermit.AuthorizesProvider(this.executorKind, this.acquisitionKey) ||
                 commitContext.CommittedGeneration is not null)
             {
                 throw new InvalidOperationException("OAuth cache acquisition is not authorized.");
