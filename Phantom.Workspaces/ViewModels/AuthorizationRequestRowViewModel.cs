@@ -25,7 +25,20 @@ public sealed class AuthorizationRequestRowViewModel : ViewModelBase
     public string UseDisplayName => this.snapshot.UseDisplayName;
     public string SafeStatus => this.snapshot.SafeStatus;
     public UserAuthorizationState State => this.snapshot.State;
-    public string PrimaryActionLabel => this.snapshot.PrimaryAction?.ToString() ?? "Unavailable";
+    public string PrimaryActionLabel
+    {
+        get
+        {
+            if (this.State is not (UserAuthorizationState.Pending or UserAuthorizationState.Failed or UserAuthorizationState.RenewalNeeded) ||
+                this.SelectedSourceOption is not { } source)
+            {
+                return "Unavailable";
+            }
+
+            var action = source.Usability == CredentialSourceUsability.Usable ? "Allow" : "Perform";
+            return this.State == UserAuthorizationState.Failed ? $"Retry ({action})" : action;
+        }
+    }
     public bool IsBootstrapBlocking => this.snapshot.IsBootstrapBlocking;
     public bool CanAct => this.isPresent && !this.isSubmitting && this.snapshot.CanAct &&
         this.State is UserAuthorizationState.Pending or UserAuthorizationState.Failed or UserAuthorizationState.RenewalNeeded;
@@ -39,7 +52,14 @@ public sealed class AuthorizationRequestRowViewModel : ViewModelBase
     public CredentialSourceIdentifier SelectedSource
     {
         get => this.selectedSource;
-        set => this.SetProperty(ref this.selectedSource, value);
+        set
+        {
+            if (this.SetProperty(ref this.selectedSource, value))
+            {
+                this.RaisePropertyChanged(nameof(this.SelectedSourceOption));
+                this.RaisePropertyChanged(nameof(this.PrimaryActionLabel));
+            }
+        }
     }
     public ReleaseMemoryOptionDescriptor? SelectedMemoryOption
     {
@@ -49,7 +69,7 @@ public sealed class AuthorizationRequestRowViewModel : ViewModelBase
     public CredentialSourceChoiceDescriptor? SelectedSourceOption
     {
         get => this.SourceOptions.FirstOrDefault(option => option.Identifier == this.SelectedSource);
-        set { if (value is not null) { this.SelectedSource = value.Identifier; this.RaisePropertyChanged(); } }
+        set { if (value is not null) { this.SelectedSource = value.Identifier; } }
     }
     public bool IsDetailsExpanded
     {

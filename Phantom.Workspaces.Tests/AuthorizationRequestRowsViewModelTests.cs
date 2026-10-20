@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Llm.Interfaces.Authorization;
+using Phantom.Workspaces.Services.Authorization;
 using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces.Tests;
@@ -43,9 +44,21 @@ public sealed class AuthorizationRequestRowsViewModelTests
         UseDisplayName = "Application credential",
         State = UserAuthorizationState.Pending,
         PrimaryAction = UserAuthorizationPrimaryActionKind.Allow,
-        MemoryOptions = [],
+        MemoryOptions = [new()
+        {
+            Identifier = new() { Value = Guid.Empty },
+            Scope = ReleaseMemoryScopeKind.AllowOnce,
+            SafeDisplayName = "Once",
+        }],
         SelectedMemory = new() { Value = Guid.Empty },
-        SourceOptions = [],
+        SourceOptions = [new()
+        {
+            Identifier = new() { Digest = new string('a', 64) },
+            Provider = CredentialProviderKind.Entra,
+            Kind = CredentialSourceKind.ProviderCache,
+            Usability = CredentialSourceUsability.Usable,
+            SafeDisplayName = "Provider cache",
+        }],
         SelectedSource = new() { Digest = new string('a', 64) },
         SafeStatus = "Authorization required.",
         IsBootstrapBlocking = true,
@@ -172,5 +185,103 @@ public sealed class AuthorizationRequestRowsViewModelTests
         registry.ExecuteAction = _ => throw new ObjectDisposedException("registry");
         await row.ApplyCommand.ExecuteAsync(null);
         Assert.False(row.CanAct);
+    }
+
+    [Theory]
+    [InlineData(UserAuthorizationState.Pending, CredentialSourceUsability.Usable, "Allow")]
+    [InlineData(UserAuthorizationState.Pending, CredentialSourceUsability.AcquisitionRequired, "Perform")]
+    [InlineData(UserAuthorizationState.Failed, CredentialSourceUsability.Usable, "Retry (Allow)")]
+    [InlineData(UserAuthorizationState.Failed, CredentialSourceUsability.AcquisitionRequired, "Retry (Perform)")]
+    [InlineData(UserAuthorizationState.RenewalNeeded, CredentialSourceUsability.Usable, "Allow")]
+    [InlineData(UserAuthorizationState.RenewalNeeded, CredentialSourceUsability.AcquisitionRequired, "Perform")]
+    public void PrimaryActionLabelUsesCurrentSelectedSourceAndRowState(
+        UserAuthorizationState state,
+        CredentialSourceUsability usability,
+        string expected)
+    {
+        var snapshot = Snapshot();
+        snapshot = snapshot with
+        {
+            State = state,
+            PrimaryAction = UserAuthorizationPrimaryActionKind.Allow,
+            SourceOptions = [snapshot.SourceOptions[0] with { Usability = usability }],
+        };
+        var registry = new Registry { Snapshot = [snapshot] };
+        using var rows = new AuthorizationRequestRowsViewModel { Dispatch = action => action(), Registry = registry };
+        Assert.Equal(expected, Assert.Single(rows.Rows).PrimaryActionLabel);
+    }
+
+    [Fact]
+    public void LocalSelectionAndMetadataUpdatesNotifyAllowPerformInBothDirections()
+    {
+        var snapshot = Snapshot();
+        var acquisition = snapshot.SourceOptions[0] with
+        {
+            Identifier = new() { Digest = new string('b', 64) },
+            Usability = CredentialSourceUsability.AcquisitionRequired,
+        };
+        snapshot = snapshot with { SourceOptions = [snapshot.SourceOptions[0], acquisition] };
+        var registry = new Registry { Snapshot = [snapshot] };
+        using var rows = new AuthorizationRequestRowsViewModel { Dispatch = action => action(), Registry = registry };
+        var row = Assert.Single(rows.Rows);
+        var labels = new List<string>();
+        row.PropertyChanged += (_, arguments) =>
+        {
+            if (string.IsNullOrEmpty(arguments.PropertyName) || arguments.PropertyName == nameof(row.PrimaryActionLabel))
+            {
+                labels.Add(row.PrimaryActionLabel);
+            }
+        };
+        Assert.Equal("Allow", row.PrimaryActionLabel);
+        row.SelectedSourceOption = acquisition;
+        Assert.Equal("Perform", row.PrimaryActionLabel);
+        row.SelectedSource = snapshot.SelectedSource;
+        Assert.Equal("Allow", row.PrimaryActionLabel);
+        row.SelectedSource = acquisition.Identifier;
+        registry.Snapshot = [snapshot with
+        {
+            Revision = 3,
+            SourceOptions = [snapshot.SourceOptions[0], acquisition with { Usability = CredentialSourceUsability.Usable }],
+        }];
+        registry.Notify();
+        Assert.Equal("Allow", row.PrimaryActionLabel);
+        Assert.Equal(acquisition.Identifier, row.SelectedSource);
+        registry.Snapshot = [snapshot with { Revision = 2 }];
+        registry.Notify();
+        Assert.Equal(3, row.Revision);
+        Assert.Equal("Allow", row.PrimaryActionLabel);
+        Assert.Contains("Perform", labels);
+        Assert.Equal("Allow", labels[^1]);
+    }
+
+    [Fact]
+    public async Task DisplayedPerformMatchesActualRegistryDecisionAndStaleActionCannotGrantAgain()
+    {
+        var snapshot = Snapshot();
+        var acquisition = snapshot.SourceOptions[0] with
+        {
+            Identifier = new() { Digest = new string('b', 64) },
+            Usability = CredentialSourceUsability.AcquisitionRequired,
+        };
+        snapshot = snapshot with { SourceOptions = [snapshot.SourceOptions[0], acquisition] };
+        await using var registry = new UserAuthorizationRegistry();
+        registry.Add(snapshot);
+        var callbacks = new List<Action>();
+        using var rows = new AuthorizationRequestRowsViewModel { Dispatch = callbacks.Add, Registry = registry };
+        callbacks[0]();
+        var row = Assert.Single(rows.Rows);
+        row.SelectedSourceOption = acquisition;
+        Assert.Equal("Perform", row.PrimaryActionLabel);
+        await row.ApplyCommand.ExecuteAsync(null);
+        var decision = await registry.WaitForDecisionAsync(snapshot.Identifier, TestContext.Current.CancellationToken);
+        Assert.Equal(UserAuthorizationPrimaryActionKind.Perform, decision.PrimaryAction);
+        Assert.Equal(acquisition.Identifier, decision.Source);
+        Assert.Equal(snapshot.Revision + 1, decision.Revision);
+        var performing = Assert.Single(registry.GetSnapshot());
+        await row.ApplyCommand.ExecuteAsync(null);
+        Assert.Same(performing, Assert.Single(registry.GetSnapshot()));
+        callbacks[1]();
+        Assert.False(row.CanAct);
+        Assert.Equal("Unavailable", row.PrimaryActionLabel);
     }
 }
