@@ -90,10 +90,13 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
                 return Failure(presence);
             }
 
-            if (presence == VsCodeTunnelOutcome.AuthenticationRequired
-                && !await this.AuthorizeAsync(request, requiresRenewal: false, context.CancellationToken).ConfigureAwait(false))
+            if (presence == VsCodeTunnelOutcome.AuthenticationRequired)
             {
-                return Failure(VsCodeTunnelOutcome.AuthenticationRequired);
+                var recovery = await this.AuthorizeAsync(request, requiresRenewal: false, context.CancellationToken).ConfigureAwait(false);
+                if (recovery != VsCodeTunnelOutcome.Ready)
+                {
+                    return Failure(recovery);
+                }
             }
 
             var outcome = await this.RunHostAsync(request, context.CancellationToken).ConfigureAwait(false);
@@ -102,9 +105,10 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
                 return Result(outcome);
             }
 
-            if (!await this.AuthorizeAsync(request, requiresRenewal: true, context.CancellationToken).ConfigureAwait(false))
+            var authorization = await this.AuthorizeAsync(request, requiresRenewal: true, context.CancellationToken).ConfigureAwait(false);
+            if (authorization != VsCodeTunnelOutcome.Ready)
             {
-                return Failure(VsCodeTunnelOutcome.AuthenticationRequired);
+                return Failure(authorization);
             }
 
             outcome = await this.RunHostAsync(request, context.CancellationToken).ConfigureAwait(false);
@@ -112,8 +116,9 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
             {
                 // Keep an actionable Perform row, but never automatically run another login
                 // or restart this host again. A later explicit action is a new generation.
-                await this.AuthorizeAsync(request, requiresRenewal: true, context.CancellationToken).ConfigureAwait(false);
-                return Failure(VsCodeTunnelOutcome.AuthenticationRequired);
+                var recovery = await this.AuthorizeAsync(request, requiresRenewal: true, context.CancellationToken).ConfigureAwait(false);
+                return Failure(recovery == VsCodeTunnelOutcome.Ready
+                    ? VsCodeTunnelOutcome.AuthenticationRequired : recovery);
             }
 
             return Result(outcome);
@@ -128,7 +133,7 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
         }
     }
 
-    private async Task<bool> AuthorizeAsync(
+    private async Task<VsCodeTunnelOutcome> AuthorizeAsync(
         VsCodeTunnelStartRequest request,
         bool requiresRenewal,
         CancellationToken cancellationToken)
@@ -157,13 +162,21 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
         }, cancellationToken).ConfigureAwait(false);
         if (outcome is not AccessSucceeded<AuthorizationCompletedAccessResult> succeeded)
         {
-            return false;
+            return cancellationToken.IsCancellationRequested
+                || outcome is AccessCancelled<AuthorizationCompletedAccessResult> or AccessShuttingDown<AuthorizationCompletedAccessResult>
+                    ? VsCodeTunnelOutcome.Cancelled
+                    : outcome is AccessFailed<AuthorizationCompletedAccessResult>
+                        ? VsCodeTunnelOutcome.CommandFailed
+                        : VsCodeTunnelOutcome.AuthenticationRequired;
         }
 
         await succeeded.Result.DisposeAsync().ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
         var status = await this.tunnelStatusResolver.ResolveAsync(request.CliPath, cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
         return status.Outcome is VsCodeTunnelOutcome.NotRunning or VsCodeTunnelOutcome.Ready or VsCodeTunnelOutcome.RunningDisconnected
-            && await this.ProbePresenceAsync(request.CliPath, cancellationToken).ConfigureAwait(false) == VsCodeTunnelOutcome.Ready;
+            ? await this.ProbePresenceAsync(request.CliPath, cancellationToken).ConfigureAwait(false)
+            : status.Outcome;
     }
 
     private Task<VsCodeTunnelOutcome> ProbePresenceAsync(

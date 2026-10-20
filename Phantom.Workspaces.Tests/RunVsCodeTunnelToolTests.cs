@@ -188,6 +188,96 @@ public sealed class RunVsCodeTunnelToolTests
     }
 
     [Fact]
+    public async Task BrokerCancelledWithoutTokenCancellation_PreservesCancelledOutcome()
+    {
+        await using var harness = new Harness { HasStoredCredential = false };
+        var broker = new Mock<IAccessBroker>(MockBehavior.Strict);
+        broker.Setup(value => value.AcquireAsync(
+                It.IsAny<AccessRequest<AuthorizationCompletedAccessResult>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AccessCancelled<AuthorizationCompletedAccessResult>());
+
+        var result = await harness.CreateTool(accessBroker: broker.Object).ExecuteAsync(Context());
+
+        Assert.Equal("VS Code tunnel: Cancelled.", result.ErrorMessage);
+        Assert.Empty(harness.Hosts);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task CancellationWhileAuthorizationPending_PreservesOutcomeAtEveryRecoverySite(
+        int hostStartsBeforeAuthorization)
+    {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        await using var harness = new Harness { HasStoredCredential = hostStartsBeforeAuthorization > 0 };
+        for (var index = 0; index < hostStartsBeforeAuthorization; index++)
+        {
+            harness.Children.Enqueue(Child.Completed(tokenError: true));
+        }
+        var execution = harness.Tool.ExecuteAsync(Context() with { CancellationToken = cancellation.Token });
+        var row = await harness.WaitForPendingRowAsync();
+        if (hostStartsBeforeAuthorization == 2)
+        {
+            await VsCodeTunnelAuthorizationTests.PerformAsync(harness.Registry, row);
+            await harness.WaitForPendingRowAsync();
+        }
+
+        await cancellation.CancelAsync();
+        var result = await execution.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        Assert.Equal("VS Code tunnel: Cancelled.", result.ErrorMessage);
+        Assert.Equal(hostStartsBeforeAuthorization, harness.Hosts.Count);
+        Assert.All(harness.ChildrenStarted, child => Assert.True(child.Disposed && child.Drained));
+        harness.Policy.VerifyNoOtherCalls();
+    }
+
+    [Theory]
+    [InlineData(0, VsCodeTunnelOutcome.InvalidStatus)]
+    [InlineData(0, VsCodeTunnelOutcome.CommandFailed)]
+    [InlineData(0, VsCodeTunnelOutcome.Cancelled)]
+    [InlineData(1, VsCodeTunnelOutcome.InvalidStatus)]
+    [InlineData(1, VsCodeTunnelOutcome.CommandFailed)]
+    [InlineData(1, VsCodeTunnelOutcome.Cancelled)]
+    [InlineData(2, VsCodeTunnelOutcome.InvalidStatus)]
+    [InlineData(2, VsCodeTunnelOutcome.CommandFailed)]
+    [InlineData(2, VsCodeTunnelOutcome.Cancelled)]
+    public async Task PostLoginGuard_PreservesTypedFailureAtEveryRecoverySite(
+        int hostStartsBeforeAuthorization,
+        VsCodeTunnelOutcome guardOutcome)
+    {
+        await using var harness = new Harness { HasStoredCredential = hostStartsBeforeAuthorization > 0 };
+        for (var index = 0; index < hostStartsBeforeAuthorization; index++)
+        {
+            harness.Children.Enqueue(Child.Completed(tokenError: true));
+        }
+        var broker = new Mock<IAccessBroker>(MockBehavior.Strict);
+        var authorizations = 0;
+        broker.Setup(value => value.AcquireAsync(
+                It.IsAny<AccessRequest<AuthorizationCompletedAccessResult>>(), It.IsAny<CancellationToken>()))
+            .Returns(() =>
+            {
+                harness.HasStoredCredential = true;
+                authorizations++;
+                if (authorizations == (hostStartsBeforeAuthorization == 2 ? 2 : 1))
+                {
+                    harness.Status = guardOutcome;
+                }
+                return Task.FromResult<AccessOutcome<AuthorizationCompletedAccessResult>>(
+                    new AccessSucceeded<AuthorizationCompletedAccessResult>
+                    {
+                        Result = new AuthorizationCompletedAccessResult(),
+                    });
+            });
+
+        var result = await harness.CreateTool(accessBroker: broker.Object).ExecuteAsync(Context());
+
+        Assert.Equal($"VS Code tunnel: {guardOutcome}.", result.ErrorMessage);
+        Assert.Equal(hostStartsBeforeAuthorization, harness.Hosts.Count);
+        Assert.All(harness.ChildrenStarted, child => Assert.True(child.Disposed && child.Drained));
+    }
+
+    [Fact]
     public async Task CommandFailure_NeverEchoesRawOutputOrException()
     {
         var broker = new Mock<IAccessBroker>(MockBehavior.Strict);
@@ -322,8 +412,10 @@ public sealed class RunVsCodeTunnelToolTests
             this.Tool = this.CreateTool();
         }
 
-        internal RunVsCodeTunnelTool CreateTool(Func<CancellationToken, Task>? wait = null) => new(
-            this.Broker,
+        internal RunVsCodeTunnelTool CreateTool(
+            Func<CancellationToken, Task>? wait = null,
+            IAccessBroker? accessBroker = null) => new(
+            accessBroker ?? this.Broker,
             cliInvoker: this.invoker,
             tunnelStatusResolver: this.resolver,
             processLauncher: (_, arguments) =>
