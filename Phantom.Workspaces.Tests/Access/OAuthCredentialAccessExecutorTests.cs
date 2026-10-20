@@ -18,6 +18,54 @@ namespace Phantom.Workspaces.Tests.Access;
 
 public sealed class OAuthCredentialAccessExecutorTests
 {
+    [Fact]
+    public async Task DynamicRegistry_RegistersRealProviderAfterBrokerHasAlreadyDispatched()
+    {
+        await using var fixture = new Fixture();
+        var first = fixture.Broker.AcquireAsync(fixture.Request(), TestContext.Current.CancellationToken);
+        await fixture.AllowAsync();
+        await using var firstResult = Assert.IsType<AccessSucceeded<OAuthCredentialAccessResult>>(await first).Result;
+        var template = fixture.Request("dynamic");
+        var provider = template.Provider with { Audience = "https://second-resource.test/" };
+        var unregistered = template with { Provider = provider };
+        Assert.Empty((await fixture.Executor.InspectAsync(unregistered, TestContext.Current.CancellationToken)).Sources);
+        var request = fixture.Providers.CreateRequest(
+            provider, template.ClientAuthentication, template.Scopes,
+            template.Requestor, template.Use, template.PresentationScope);
+        Assert.NotEqual(template.Credential.LogicalIdentifier, request.Credential.LogicalIdentifier);
+        var reads = fixture.Store.Reads;
+        var inspection = await fixture.Executor.InspectAsync(request, TestContext.Current.CancellationToken);
+        Assert.Single(inspection.Sources);
+        Assert.Equal(reads, fixture.Store.Reads);
+        Assert.Equal(1, fixture.Browser.Opens);
+        var second = fixture.Broker.AcquireAsync(request, TestContext.Current.CancellationToken);
+        await fixture.AllowAsync();
+        await using var result = Assert.IsType<AccessSucceeded<OAuthCredentialAccessResult>>(await second).Result;
+        Assert.Equal(2, fixture.Store.Writes);
+        Assert.Equal(2, fixture.Browser.Opens);
+        Assert.Equal(2, (await fixture.Executor.ListAsync(TestContext.Current.CancellationToken)).Count);
+        Assert.IsType<SensitiveValueUseSucceeded<int>>(
+            await firstResult.AccessToken.UseAsync((_, _) => ValueTask.FromResult(1), TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task DynamicRegistry_ConcurrentRegistrationIsMetadataOnlyAndDefensivelyCopiesScopes()
+    {
+        await using var fixture = new Fixture();
+        var scopes = new List<OAuthScope> { new() { Value = "write" }, new() { Value = "read" } };
+        var registrations = await Task.WhenAll(Enumerable.Range(0, 16).Select(_ => Task.Run(
+            () => fixture.Providers.RegisterProvider(fixture.Configuration.Provider, fixture.Configuration.ClientAuthentication, scopes),
+            TestContext.Current.CancellationToken)));
+        Assert.Single(registrations.Select(registration => registration.Credential.LogicalIdentifier).Distinct());
+        Assert.Single(registrations.Select(registration => registration.Source).Distinct());
+        scopes.Clear();
+        Assert.All(registrations, registration => Assert.Equal(new[] { "read", "write" }, registration.Scopes.Select(scope => scope.Value)));
+        Assert.Empty(fixture.Events);
+        Assert.Equal(0, fixture.Store.Reads);
+        Assert.Equal(0, fixture.Store.Writes);
+        Assert.Equal(0, fixture.Browser.Opens);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -334,7 +382,8 @@ public sealed class OAuthCredentialAccessExecutorTests
         internal Browser Browser { get; }
         internal SecretSource Secret { get; } = new();
         internal Clock Clock { get; } = new();
-        internal OAuthProviderConfiguration Configuration { get; }
+        internal OAuthProviderRegistry Providers { get; }
+        internal OAuthProviderRegistration Configuration { get; }
         internal OAuthCredentialAccessExecutor Executor { get; }
         internal DerivedExecutor? Derived { get; }
         internal AccessBroker Broker { get; }
@@ -346,9 +395,10 @@ public sealed class OAuthCredentialAccessExecutorTests
             this.Store = new MemoryStore(this.Events);
             this.Server = new Server(this.Events);
             this.Browser = new Browser(this.Events, this.Server);
-            this.Configuration = new OAuthProviderConfiguration
-            {
-                Provider = new OAuthProviderDescriptor
+            this.Providers = new OAuthProviderRegistry(this.Store, RedirectUri, () => new Handler(this.Server), this.Clock);
+            this.Executor = new OAuthCredentialAccessExecutor(this.Providers, this.Browser);
+            this.Configuration = this.Providers.RegisterProvider(
+                new OAuthProviderDescriptor
                 {
                     Authority = new("https://authority.test/"),
                     AuthorizationEndpoint = new("https://authority.test/authorize"),
@@ -357,18 +407,12 @@ public sealed class OAuthCredentialAccessExecutorTests
                     Audience = "https://resource.test/",
                     AccountIdentifierClaim = identifierClaim ? OAuthAccountIdentifierClaim.Identifier : OAuthAccountIdentifierClaim.Subject,
                 },
-                ClientAuthentication = confidential ? new ConfidentialOAuthClient
+                confidential ? new ConfidentialOAuthClient
                 {
                     Client = new() { Value = "private-client" },
                     ClientSecret = new() { Name = "private-secret-name" },
                 } : new PublicOAuthClient { Client = new() { Value = "private-client" } },
-                Scopes = [new() { Value = "read" }],
-                Cache = new CredentialManagerTokenCache(this.Store, "oauth:", Guid.NewGuid().ToString("N")),
-                CreateRedirectUri = RedirectUri,
-                CreateHttpHandler = () => new Handler(this.Server),
-                TimeProvider = this.Clock,
-            };
-            this.Executor = new OAuthCredentialAccessExecutor([this.Configuration], this.Browser);
+                [new() { Value = "read" }]);
             var executors = new CredentialAccessExecutorRegistry();
             executors.Add<OAuthCredentialAccessRequest, OAuthCredentialAccessResult>(this.Executor);
             executors.Add<StoredSecretAccessRequest, StoredSecretAccessResult>(cycle
@@ -390,15 +434,12 @@ public sealed class OAuthCredentialAccessExecutorTests
                 SafeDisplayName = "OAuth use",
             };
             var lineage = new CredentialUseLineage();
-            return new OAuthCredentialAccessRequest
-            {
-                Provider = this.Configuration.Provider,
-                ClientAuthentication = this.Configuration.ClientAuthentication,
-                Scopes = this.Configuration.Scopes,
-                Credential = OAuthCredentialAccessExecutor.DescribeCredential(
-                    this.Configuration.Provider, this.Configuration.ClientAuthentication, this.Configuration.Scopes),
-                Requestor = requestor,
-                Use = new CredentialUseDescriptor
+            return this.Providers.CreateRequest(
+                this.Configuration.Provider,
+                this.Configuration.ClientAuthentication,
+                this.Configuration.Scopes,
+                requestor,
+                new CredentialUseDescriptor
                 {
                     Fingerprint = CredentialIdentityFactory.CreateUseFingerprint(CredentialUseKind.Application, lineage, requestor.Identifier, purpose),
                     Kind = CredentialUseKind.Application,
@@ -406,16 +447,7 @@ public sealed class OAuthCredentialAccessExecutorTests
                     SafeDisplayName = "Use OAuth credential",
                     MemoryScopes = [ReleaseMemoryScopeKind.AllowOnce],
                 },
-                PresentationScope = AccessPresentationScope.Runtime,
-                Sources = [new()
-                {
-                    Identifier = this.Configuration.Source,
-                    Provider = CredentialProviderKind.OAuth,
-                    Kind = CredentialSourceKind.Provider,
-                    Usability = CredentialSourceUsability.AcquisitionRequired,
-                    SafeDisplayName = "OAuth provider",
-                }],
-            };
+                AccessPresentationScope.Runtime);
         }
 
         internal Task AllowAsync(UserAuthorizationSnapshot? row = null)

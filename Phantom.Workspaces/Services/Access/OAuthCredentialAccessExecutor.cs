@@ -35,7 +35,8 @@ internal sealed class OAuthCredentialAccessExecutor :
     ICredentialCacheAdministration,
     IAsyncDisposable
 {
-    private readonly Provider[] providers;
+    private readonly OAuthProviderRegistry registry;
+    private readonly Dictionary<LogicalCredentialIdentifier, Provider> providers = [];
     private readonly ISystemBrowserLauncher browserLauncher;
     private readonly CancellationTokenSource lifetime = new();
     private readonly object gate = new();
@@ -44,16 +45,11 @@ internal sealed class OAuthCredentialAccessExecutor :
     private bool disposed;
 
     internal OAuthCredentialAccessExecutor(
-        IReadOnlyList<OAuthProviderConfiguration> configurations,
+        OAuthProviderRegistry registry,
         ISystemBrowserLauncher browserLauncher)
     {
         this.browserLauncher = browserLauncher;
-        this.providers = configurations.Select(configuration =>
-            new Provider(configuration, () => !Volatile.Read(ref this.disposed))).ToArray();
-        if (this.providers.Select(provider => provider.LogicalIdentifier).Distinct().Count() != this.providers.Length)
-        {
-            throw new InvalidOperationException("OAuth provider configuration is duplicated.");
-        }
+        this.registry = registry;
     }
 
     public CredentialExecutorKind Kind => CredentialExecutorKind.OAuth;
@@ -331,7 +327,7 @@ internal sealed class OAuthCredentialAccessExecutor :
     public async ValueTask<IReadOnlyList<CredentialCacheDescriptor>> ListAsync(CancellationToken cancellationToken = default)
     {
         var descriptors = new List<CredentialCacheDescriptor>();
-        foreach (var provider in this.providers)
+        foreach (var provider in this.SnapshotProviders(includeRegistered: true))
         {
             var metadata = await provider.InspectGenerationAsync(cancellationToken).ConfigureAwait(false);
             if (metadata is null) { continue; }
@@ -386,20 +382,49 @@ internal sealed class OAuthCredentialAccessExecutor :
         }
         await this.lifetime.CancelAsync().ConfigureAwait(false);
         foreach (var attempt in active) { await attempt.DisposeAsync().ConfigureAwait(false); }
-        foreach (var provider in this.providers) { await provider.DisposeAsync().ConfigureAwait(false); }
+        foreach (var provider in this.SnapshotProviders(includeRegistered: false)) { await provider.DisposeAsync().ConfigureAwait(false); }
     }
 
     private Provider? FindProvider(OAuthCredentialAccessRequest request)
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref this.disposed), this);
-        return this.providers.SingleOrDefault(provider =>
-            provider.Configuration.Provider == request.Provider &&
-            provider.Configuration.ClientAuthentication == request.ClientAuthentication &&
-            provider.Configuration.Scopes.Select(scope => scope.Value).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)
-                .SequenceEqual(request.Scopes.Select(scope => scope.Value).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)) &&
-            provider.LogicalIdentifier == request.Credential.LogicalIdentifier &&
-            request.Credential.Provider == CredentialProviderKind.OAuth && request.Credential.Kind == CredentialKind.AccessToken &&
-            request.Sources.Any(source => IsSource(provider, source)));
+        var configuration = this.registry.FindConfiguration(request.Credential.LogicalIdentifier);
+        if (configuration is null || configuration.Provider != request.Provider ||
+            configuration.ClientAuthentication != request.ClientAuthentication ||
+            !configuration.Scopes.Select(scope => scope.Value).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)
+                .SequenceEqual(request.Scopes.Select(scope => scope.Value).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)))
+        {
+            return null;
+        }
+        lock (this.gate)
+        {
+            ObjectDisposedException.ThrowIf(this.disposed, this);
+            if (!this.providers.TryGetValue(request.Credential.LogicalIdentifier, out var provider))
+            {
+                this.providers.Add(request.Credential.LogicalIdentifier,
+                    provider = new Provider(configuration, () => !Volatile.Read(ref this.disposed)));
+            }
+            return provider.LogicalIdentifier == request.Credential.LogicalIdentifier &&
+                request.Credential.Provider == CredentialProviderKind.OAuth && request.Credential.Kind == CredentialKind.AccessToken &&
+                request.Sources.Any(source => IsSource(provider, source)) ? provider : null;
+        }
+    }
+
+    private Provider[] SnapshotProviders(bool includeRegistered)
+    {
+        var registered = includeRegistered ? this.registry.SnapshotConfigurations() : [];
+        lock (this.gate)
+        {
+            if (!this.disposed)
+            {
+                foreach (var configuration in registered)
+                {
+                    var identifier = DescribeCredential(configuration.Provider, configuration.ClientAuthentication, configuration.Scopes).LogicalIdentifier;
+                    if (!this.providers.ContainsKey(identifier))
+                        this.providers.Add(identifier, new Provider(configuration, () => !Volatile.Read(ref this.disposed)));
+                }
+            }
+            return this.providers.Values.ToArray();
+        }
     }
 
     private static bool IsSource(Provider provider, CredentialSourceChoiceDescriptor source) =>
