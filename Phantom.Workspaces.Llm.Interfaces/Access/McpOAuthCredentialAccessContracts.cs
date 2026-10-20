@@ -1,3 +1,5 @@
+using AgentSchema;
+
 namespace Phantom.Workspaces.Llm.Interfaces.Access;
 
 public sealed record McpProviderConfigurationIdentifier : CredentialDigest;
@@ -33,6 +35,15 @@ public sealed record McpOAuthCredentialUseRequest : CredentialAccessRequest<McpC
     public required McpProviderConfigurationIdentifier ProviderConfiguration { get; init; }
     public required OAuthClientAuthentication ClientAuthentication { get; init; }
     public required IReadOnlyList<OAuthScope> Scopes { get; init; }
+}
+
+public interface IMcpOAuthCredentialRequestCatalog
+{
+    McpOAuthCredentialUseRequest? CreateRequest(
+        McpTool tool,
+        AccessRequestor requestor,
+        CredentialUseDescriptor use,
+        AccessPresentationScope presentationScope);
 }
 
 public sealed class McpCredentialUseResult : ICredentialAccessResult
