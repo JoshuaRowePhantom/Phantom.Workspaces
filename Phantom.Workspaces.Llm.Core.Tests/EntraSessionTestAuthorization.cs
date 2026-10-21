@@ -8,7 +8,8 @@ internal static class EntraSessionTestAuthorization
     internal static (ICredentialExecutionContext Context, ProviderInteractionPermit Permit) PrivateConnect(
         EntraCredentialAccessRequest configuration,
         CredentialAccountIdentifier? account = null,
-        Func<bool>? isActive = null)
+        Func<bool>? isActive = null,
+        Func<ReleaseAuthorizationValidation>? acquisitionValidation = null)
     {
         var request = PolicyRequest(configuration, account) with
         {
@@ -19,7 +20,7 @@ internal static class EntraSessionTestAuthorization
                 AccountIdentifier = account ?? DefaultAccount(),
             },
         };
-        var context = Context(configuration, request, ReleaseAuthorizationValidation.Valid);
+        var context = Context(configuration, request, ReleaseAuthorizationValidation.Valid, acquisitionValidation);
         var key = new ProviderAcquisitionKey
         {
             Configuration = request.Credential.LogicalIdentifier,
@@ -79,15 +80,18 @@ internal static class EntraSessionTestAuthorization
     private static ICredentialExecutionContext Context(
         EntraCredentialAccessRequest configuration,
         ReleasePolicyRequest request,
-        ReleaseAuthorizationValidation validation)
+        ReleaseAuthorizationValidation validation,
+        Func<ReleaseAuthorizationValidation>? acquisitionValidation = null)
     {
-        return new ExecutionContext(configuration, request, new Policy(validation));
+        return new ExecutionContext(configuration, request, new Policy(validation, acquisitionValidation));
     }
 
     private static CredentialAccountIdentifier DefaultAccount() =>
         CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.Entra, "stable-test-account");
 
-    private sealed class Policy(ReleaseAuthorizationValidation validation) :
+    private sealed class Policy(
+        ReleaseAuthorizationValidation validation,
+        Func<ReleaseAuthorizationValidation>? acquisitionValidation) :
         IReleaseAuthorizationPolicy, IProviderAcquisitionAuthorizationPolicy
     {
         public ValueTask<ReleaseAuthorizationValidation> ValidateAsync(
@@ -98,7 +102,7 @@ internal static class EntraSessionTestAuthorization
         public ValueTask<ReleaseAuthorizationValidation> ValidateAcquisitionAuthorizationAsync(
             ReleaseAuthorization authorization,
             ReleasePolicyRequest request,
-            CancellationToken cancellationToken) => ValueTask.FromResult(validation);
+            CancellationToken cancellationToken) => ValueTask.FromResult(acquisitionValidation?.Invoke() ?? validation);
 
         public ValueTask<ReleasePolicyEvaluation> EvaluateAsync(
             ReleasePolicyRequest request,

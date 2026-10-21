@@ -438,6 +438,41 @@ public sealed class EntraCredentialSessionTests
             (material, _) => ValueTask.FromResult(material.Length), CancellationToken.None));
     }
 
+    [Fact]
+    public async Task EntraCredentialSession_PrivateUse_PostCallbackValidationThrowDisposesUnclaimedResult()
+    {
+        var request = Request();
+        var acquirer = new Acquirer();
+        await using var session = new EntraCredentialSession(request, new ForbiddenCredential(), acquirer);
+        var generation = await AcquireAsync(session, request);
+        var returned = false;
+        var capability = EntraSessionTestAuthorization.PrivateConnect(
+            request, acquirer.Account, acquisitionValidation: () => returned
+                ? throw new InvalidOperationException("Post-callback validation failed.")
+                : ReleaseAuthorizationValidation.Valid);
+        ReadOnlyMemory<char> observed = default;
+        var result = new TrackedAsynchronousResult
+        {
+            BeforeDisposal = () => Assert.All(observed.ToArray(), character => Assert.Equal('\0', character)),
+        };
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(async () => await session.UseGenerationAsync(
+            generation, capability.Context, capability.Permit, (material, _) =>
+            {
+                observed = material;
+                returned = true;
+                return ValueTask.FromResult(result);
+            }, CancellationToken.None));
+        Assert.Equal("Post-callback validation failed.", failure.Message);
+        Assert.Equal(1, result.AsynchronousDisposals);
+        Assert.Equal(0, result.SynchronousDisposals);
+        Assert.All(observed.ToArray(), character => Assert.Equal('\0', character));
+        Assert.True(await session.IsCurrentGenerationAsync(generation, CancellationToken.None));
+        var next = EntraSessionTestAuthorization.PrivateConnect(request, acquirer.Account);
+        Assert.IsType<EntraGenerationUseSucceeded<int>>(await session.UseGenerationAsync(
+            generation, next.Context, next.Permit,
+            (material, _) => ValueTask.FromResult(material.Length), CancellationToken.None));
+    }
+
     private sealed class TrackedAsynchronousResult : IAsyncDisposable, IDisposable
     {
         internal int AsynchronousDisposals { get; private set; }
