@@ -3,8 +3,22 @@
   "worktree": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020",
   "branch": "integration/access-arc-ready-v2-20261020",
   "baseline": "e8ed98d70fe885ce37b12410e82f63317a923db5",
-  "status": "IMPLEMENTATION AND REQUESTED HERMETIC TARGETED ACCEPTANCE COMPLETE at6efcbad5, including latest actual configured-root Audience requirement. Root independently uses declared absolute Audience with distinct or absent Endpoint; blank/relative/control values fail before registry/material access. All prior GitHub0879/89/74, recovery327/6c/653, shutdowne69/84, generic/MCP/Entra, HTTP and coherent legacy/usage cutovers retained. Final exact-source App795 initial+10x795, Core159 initial+10x159 and actual Transport11 initial+10x11 ALL PASS; bounded final three-file root-net review clear. All67 execution/review artifacts hash-verified, with prior766/794 and original failures preserved. No remaining owned correction/legacy wait. Parent owns final acceptance/publication; no features advancement, push, release, issue closure or live provider/OS-process acceptance claimed.",
+  "status": "IMPLEMENTATION AND REQUESTED HERMETIC TARGETED ACCEPTANCE COMPLETE at6efcbad5, including actual configured-root Audience and explicit1567/1568 retired-contract requirements. Root independently uses declared absolute Audience with distinct or absent Endpoint; blank/relative/control values fail before registry/material access. Retired modal families/OAuth marker deleted in coherentc9, not merelyfa2; exact API-resolver type absence guard now explicitly included. All prior GitHub0879/89/74, recovery327/6c/653, shutdowne69/84, generic/MCP/Entra, HTTP and legacy/usage cutovers retained. Final exact-source App795 initial+10x795, Core160 initial+10x160 and actual Transport11 initial+10x11 ALL PASS. Bounded paired-deletion and final root-net reviews clear. All69 execution/review artifacts hash-verified, prior evidence preserved. No remaining owned correction/legacy wait. Parent owns final acceptance/publication; no features advancement, push, release, issue closure or live provider/OS-process acceptance claimed.",
   "reviewedCodeCheckpoint": "6efcbad52e20e98fd4a2ab9a631331b4241a7cde",
+  "requiredLegacyConfirmation20261021": {
+    "source": "6efcbad52e20e98fd4a2ab9a631331b4241a7cde",
+    "coherentRetirement": "c9d203afc7638451a9f3147af2cbf9e0ecb0b80b",
+    "scope": "Exclusive2042 paired App/Core retirement already implemented beyondfa2. Core ISecretUseDialogHost, SecretUseDialogInput, SecretUseDialogResult and row/result families are deleted, not bridged or preserved as native contracts. Last App SecretProvider/Core ISecretProvider/GitHubAuthTokenResolver and OAuthSecretSource are absent. Only coherentc9 or descendants accepted, not partial81504 prefix.",
+    "exact1567": "IApiKeyResolver and EnvironmentApiKeyResolver were already absent; existing AgentFactory_ResolveApiKey_LegacyResolverTypesRemoved now explicitly selected in final Core160 alongside modal/marker/provider absence and unknown oauth discriminator rejection.",
+    "productionInventory": "Whole application worktree *.cs search finds the exact retired names only in test absence assertions/comments, zero production declarations/references or compatibility bridges.",
+    "nativePreservation": "IPlatformSecretStore, ICredentialPicker, NullPlatformSecretStore, CredentialManagerTokenCache and actual Windows/NullCredentialPicker source files remain byte-for-byte unchanged in Git versus pre-retiremente6515e9a.",
+    "guardCoverage": "Existing AgentFactory legacy resolver guard, AgentServices typed-broker/no-provider guard, SecretModel retired-modal/OAuth-marker and fail-closed discriminator guards, plus native/cache tests all pass in source6ef Core160 initial+10x160. Existing final App795 includes actual retired GUI/provider guards.",
+    "boundedReview": "Already-recorded independent complete21-file3f15a94a..c9 paired-deletion/usage net review found no significant issues, explicitly including Core modal/OAuth marker retirement and retained native contracts. This is notfa2-only clearance. No new production delta or duplicated review/writer introduced for this later scope reminder.",
+    "newEvidence": [
+      ".scratch\\integration-v2-required-legacy-cutovers-core-tests.log",
+      ".scratch\\integration-v2-required-legacy-cutovers-core-stability.log"
+    ]
+  },
   "rootAudienceFollowthrough20261021": {
     "base": "127e346def1ff512e2a39949bba9ce3c3c7a93ca",
     "commits": [
@@ -15,7 +29,7 @@
     "concreteFinding": "Actual AccessHostServices route delegates to DevTunnelIdentityRouteFactory.CreateOAuth, not the separate factory corrected by97. Endpoint was already independent, but RequireText accepted a relative Audience; the preserved old root fixture and source997 green execution establish prior behavior. No new failing/counterfactual run claimed.",
     "correction": "One existing descriptor field now requires an absolute URI and uses AbsoluteUri before same registry registration. Original RequireText blank/control protection retained. No Endpoint fallback/constraint, model/UI/external757 intake, new graph, native/provider action or changes to cleared97.",
     "actualRootScenarios": "Two direct-host distinct/null Endpoint cases plus four real configured DevTunnelNameRepositorySource Repository/Application cases preserve exact declared Audience and same configuration/logical identity across bootstrap/runtime. Six actual-root invalid Audience cases fail typed UnsupportedRequest before OAuth registration or authorization rows; strict native store receives zero calls.",
-    "execution": "Final exact-source focused84; complete App795 initial+10x795, Core159 initial+10x159 and actual Transport11 initial+10x11 all PASS, zero failed/skipped. App selection adds complete route-factory class and all actual-root cases while retaining original private/HTTP/stale401/worker scenarios.",
+    "execution": "Root delivery exact-source focused84; complete App795 initial+10x795, Core159 initial+10x159 and actual Transport11 initial+10x11 all PASS. Later explicit legacy confirmation adds one existing API-resolver absence guard to the same source, final Core160 initial+10x160 all PASS. Zero failed/skipped; App retains original private/HTTP/stale401/worker scenarios.",
     "intermediateEvidence": "Source301 targeted246 and complete794 initial+10x794 are separately preserved, not substituted for final6ef execution. Source6ef preserves previous control validation and adds actual-root trailing-newline rejection.",
     "reviewArtifact": ".scratch\\integration-v2-root-audience-review-20261021.json",
     "review": "Fresh independent read-only review of complete127-to-final three-file root net: no significant issues. No reviewer builds/tests/edits; no source changes after final review/execution.",
@@ -401,13 +415,13 @@
     "finalCompleteCore": {
       "codeCheckpoint": "6efcbad52e20e98fd4a2ab9a631331b4241a7cde",
       "testProject": "Phantom.Workspaces.Llm.Core.Tests\\Phantom.Workspaces.Llm.Core.Tests.csproj",
-      "passed": 159,
+      "passed": 160,
       "failed": 0,
       "stabilityRuns": 10,
-      "passedPerRun": 159,
-      "log": ".scratch\\integration-v2-root-audience-complete-core-tests.log",
-      "stability": ".scratch\\integration-v2-root-audience-complete-core-stability.log",
-      "selectors": "AgentFactoryAccessTests,AgentDefinitionSecretMaterializerTests,SecretModelTests,SecretUsageScannerTests,SecretUseScopePreimageTests,AgentManifestSecretUseMemoryFactoryTests,SecretRetrieverTests,AllowedSecretsStoreTests,NullPlatformSecretStoreTests,EntraCredentialSessionTests,EntraBrowserTokenAcquirerTests,CredentialManagerTokenCacheTests"
+      "passedPerRun": 160,
+      "log": ".scratch\\integration-v2-required-legacy-cutovers-core-tests.log",
+      "stability": ".scratch\\integration-v2-required-legacy-cutovers-core-stability.log",
+      "selectors": "AgentFactoryAccessTests,AgentDefinitionSecretMaterializerTests,SecretModelTests,SecretUsageScannerTests,SecretUseScopePreimageTests,AgentManifestSecretUseMemoryFactoryTests,SecretRetrieverTests,AllowedSecretsStoreTests,NullPlatformSecretStoreTests,EntraCredentialSessionTests,EntraBrowserTokenAcquirerTests,CredentialManagerTokenCacheTests,AgentFactory_ResolveApiKey_LegacyResolverTypesRemoved"
     },
     "finalCompleteTransport": {
       "codeCheckpoint": "6efcbad52e20e98fd4a2ab9a631331b4241a7cde",
@@ -454,6 +468,6 @@
   "openOwnerWork": [],
   "remainingAcceptanceBoundary": "No known requested source correction or targeted runtime blocker remains. Parent must decide broader arc acceptance/publication using this immutable handoff; full repository/live authentication/native profile/OS-process BYOK acceptance was not performed or authorized. No local or remote features ref advanced.",
   "executionEvidenceManifest": ".scratch\\integration-v2-execution-evidence-20261020.json",
-  "cleanState": "Final immutable source/test/production6efcbad52e20e98fd4a2ab9a631331b4241a7cde retains all reviewed ready packets/coherent legacy endpointc9 and adds independently reviewed actual-root Audience followthrough301/6ef. Final795/159/11 each initial+10 stability runs passed with no source edits afterward. Metadata commit records evidence only; no active cherry-pick/revert/unmerged paths, diff checks clean, all67 artifact hashes verified and original submodule pins exact. Prior source997766 and source301794 evidence retained. Historical81504 remains an unaccepted partial prefix; final pair/c9 and descendants are coherent.",
+  "cleanState": "Final immutable source/test/production6efcbad52e20e98fd4a2ab9a631331b4241a7cde retains all reviewed packets/coherent legacy endpointc9 and actual-root Audience followthrough301/6ef. Final795/160/11 each initial+10 stability runs passed with no source edits afterward; Core160 explicitly adds existing exact API-resolver absence guard. Metadata commit records evidence only; no active cherry-pick/revert/unmerged paths, diff checks clean, all69 artifact hashes verified and original submodule pins exact. Prior source997766/source301794/Core159 evidence retained. Historical81504 remains an unaccepted partial prefix; final pair/c9 and descendants are coherent.",
   "safety": "No live checkout, auth, browser/UI/provider actions, features advancement, push/release/closure or rewritten history. Normal submodule init preserves Dock8c8d11 and MXC29702c3."
 }

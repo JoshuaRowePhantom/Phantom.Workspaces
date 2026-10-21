@@ -2,6 +2,16 @@
   "codeCheckpoint": "6efcbad52e20e98fd4a2ab9a631331b4241a7cde",
   "productionCheckpoint": "6efcbad52e20e98fd4a2ab9a631331b4241a7cde",
   "historicalFinalAccessPacketCheckpoint": "997f2d6e8f8d4a0f67abc9ebc1ec7b40932508c4",
+  "requiredLegacyConfirmation": {
+    "source": "6efcbad52e20e98fd4a2ab9a631331b4241a7cde",
+    "retirement": "Coherentc9, beyondfa2, already deletes retired Core modal families and OAuthSecretSource after paired provider retirement. Exact IApiKeyResolver/EnvironmentApiKeyResolver types also absent, no bridge/fallback.",
+    "addedExistingSelector": "AgentFactory_ResolveApiKey_LegacyResolverTypesRemoved",
+    "coreInitialPassed": 160,
+    "coreStabilityRuns": 10,
+    "corePassedPerRun": 160,
+    "productionInventory": "Exact names occur only in test absence assertions/comments across whole worktree *.cs; zero production references.",
+    "preservationAndReview": "Six real native store/picker/cache files unchanged versus pre-retiremente651. Existing independent21-file paired-deletion review3f15..c9 clear, not merelyfa2. No new source delta/writer or repeated source review."
+  },
   "rootAudienceFollowthrough": {
     "commits": [
       "30183784f5494c76644115179a30178e1cc556a9",
@@ -37,15 +47,15 @@
     "appInitialPassed": 795,
     "appStabilityRuns": 10,
     "appPassedPerRun": 795,
-    "coreInitialPassed": 159,
+    "coreInitialPassed": 160,
     "coreStabilityRuns": 10,
-    "corePassedPerRun": 159,
+    "corePassedPerRun": 160,
     "transportInitialPassed": 11,
     "transportStabilityRuns": 10,
     "transportPassedPerRun": 11,
     "failed": 0,
     "skipped": 0,
-    "review": "New legacy/usage delta, final provider/recovery merge, shutdown compatibility and latest complete three-file actual-root Audience net each independently reviewed read-only; no significant issues. No source edits after final root review and exact-source795/159/11 execution.",
+    "review": "New legacy/usage delta, final provider/recovery merge, shutdown compatibility and latest complete three-file actual-root Audience net each independently reviewed read-only; no significant issues. No source edits after final root review; final795/160/11 execution includes explicitly selected inherited API-resolver absence guard.",
     "boundary": "Complete requested hermetic targeted matrices, not every repository suite/live provider/OS-process BYOK acceptance. Parent owns acceptance/publication decision. No features advancement, push, release or issue closure."
   },
   "gitHubOwnershipPairPassed": 75,
@@ -89,6 +99,16 @@
   "pairedLegacyBoundary": "Only coherent c9 endpoint accepted, never SDK-only81504 prefix. Actual missing095 usage prerequisite plus parent-authorized paired App/Core/modal/OAuth marker retirement; native contracts/caches preserved. Read-only new21-file review clear; source unchanged after116/133x10 and fresh final committed116/133.",
   "dumpCount": 0,
   "logs": [
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-required-legacy-cutovers-core-tests.log",
+      "bytes": 5986,
+      "sha256": "591F6C3820413303AEB31D991B781DF2FC58356942B8699A6DC5D7EE65B107B4"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-required-legacy-cutovers-core-stability.log",
+      "bytes": 3350,
+      "sha256": "0F22A31FD008C40D7F9730BD2F54AD18EEDDA07676E668D2058829F3824BEB0C"
+    },
     {
       "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-root-audience-followthrough-tests.log",
       "bytes": 6278,
