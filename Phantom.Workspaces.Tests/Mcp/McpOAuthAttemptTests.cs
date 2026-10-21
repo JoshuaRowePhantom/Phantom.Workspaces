@@ -94,15 +94,14 @@ public sealed partial class McpOAuthRedirectHandlerTests
     }
 
     [Fact]
-    public async Task McpOAuthAttempt_CancellationAndHandlerShutdown_CloseListeners()
+    public async Task McpOAuthAttempt_CancellationAndDisposal_CloseListeners()
     {
         foreach (var cancelBeforeLaunch in new[] { true, false })
         {
             var browser = new FakeSystemBrowserLauncher();
-            using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider());
             var operation = new AttemptOperation();
             await using var binding = await BindAttemptAsync(operation);
-            await using var attempt = handler.CreateAttempt(AuthUri("private-state"), binding, operation);
+            await using var attempt = new McpOAuthAttempt(browser, AuthUri("private-state"), binding, operation);
             using var cancellation = new CancellationTokenSource();
             if (cancelBeforeLaunch)
             {
@@ -111,7 +110,7 @@ public sealed partial class McpOAuthRedirectHandlerTests
             var result = attempt.ExecuteAsync(AttemptPermit(operation).BindExecution(() => true), cancellation.Token);
             if (!cancelBeforeLaunch)
             {
-                handler.Dispose();
+                await attempt.DisposeAsync();
             }
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => result);
             Assert.False(attempt.IsListenerBound);

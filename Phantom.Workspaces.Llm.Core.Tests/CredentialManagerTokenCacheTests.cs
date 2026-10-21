@@ -11,8 +11,7 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 /// <summary>
 /// Covers the persistent MCP OAuth token cache (#1384): the <see cref="ITokenCache"/> implementation
 /// over <see cref="IPlatformSecretStore"/> (round-trip, per-server keying, overwrite, clear, refresh
-/// / expiry preservation) and the DI factory that plugs into the #1382
-/// <see cref="InteractiveOAuthOptions.TokenCacheProvider"/> seam. Tests use an in-memory
+/// / expiry preservation) and the provider-owned SDK cache factory. Tests use an in-memory
 /// <see cref="IPlatformSecretStore"/> fake and never touch the real Windows Credential Manager.
 /// </summary>
 public sealed class CredentialManagerTokenCacheTests
@@ -184,15 +183,11 @@ public sealed class CredentialManagerTokenCacheTests
     }
 
     [Fact]
-    public void TokenCacheFactory_IsRegisteredIntoTransportOAuthSeam()
+    public void TokenCacheFactory_CreatesProviderOwnedSdkCache()
     {
         var store = new FakePlatformSecretStore();
-        var options = new InteractiveOAuthOptions
-        {
-            TokenCacheProvider = CredentialManagerTokenCache.CreateProvider(store, KeyPrefix),
-        };
-
-        var cache = options.ResolveTokenCache(ServerName);
+        var provider = CredentialManagerTokenCache.CreateProvider(store, KeyPrefix);
+        var cache = provider(ServerName);
 
         Assert.NotNull(cache);
         Assert.IsType<CredentialManagerTokenCache>(cache);

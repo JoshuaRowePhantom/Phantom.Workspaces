@@ -68,7 +68,6 @@ public sealed class McpTransportFactoryTrustContextTests
             services: null,
             NullLoggerFactory.Instance,
             CancellationToken.None,
-            clientIdOverride: null,
             trustContext: trustContext,
             processExecutor: executor);
 
@@ -110,7 +109,6 @@ public sealed class McpTransportFactoryTrustContextTests
                 services: null,
                 NullLoggerFactory.Instance,
                 CancellationToken.None,
-                clientIdOverride: null,
                 trustContext: trustContext,
                 processExecutor: executor));
 

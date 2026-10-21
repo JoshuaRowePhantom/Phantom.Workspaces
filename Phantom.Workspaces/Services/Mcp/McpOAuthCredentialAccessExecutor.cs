@@ -26,6 +26,7 @@ internal sealed record McpOAuthProviderConfiguration
     public required CredentialSourceIdentifier Source { get; init; }
     public required CredentialManagerTokenCache Cache { get; init; }
     public OAuthCallbackBindingFactory CallbackBindings { get; init; } = new();
+    public HttpTransportMode TransportMode { get; init; } = HttpTransportMode.StreamableHttp;
     public Func<HttpMessageHandler> CreateHttpHandler { get; init; } = () => new SocketsHttpHandler { AllowAutoRedirect = false };
 }
 
@@ -33,7 +34,8 @@ internal sealed class McpOAuthCredentialAccessExecutor :
     ICredentialAccessExecutor<McpOAuthCredentialUseRequest, McpCredentialUseResult>, IAsyncDisposable
 {
     private readonly object gate = new();
-    private readonly Dictionary<McpProviderConfigurationIdentifier, Provider> providers;
+    private readonly Dictionary<McpProviderConfigurationIdentifier, Provider> providers = [];
+    private readonly McpOAuthCredentialRequestCatalog catalog;
     private readonly HashSet<FixedSession> sessions = [];
     private readonly HashSet<OAuthCallbackBinding> callbackBindings = [];
     private readonly ISystemBrowserLauncher browserLauncher;
@@ -41,12 +43,11 @@ internal sealed class McpOAuthCredentialAccessExecutor :
     private bool disposed;
 
     internal McpOAuthCredentialAccessExecutor(
-        IReadOnlyList<McpOAuthProviderConfiguration> configurations,
+        McpOAuthCredentialRequestCatalog catalog,
         ISystemBrowserLauncher browserLauncher)
     {
         this.browserLauncher = browserLauncher;
-        this.providers = configurations.ToDictionary(configuration => configuration.Identifier,
-            configuration => new Provider(configuration, () => !Volatile.Read(ref this.disposed)));
+        this.catalog = catalog;
     }
 
     public CredentialExecutorKind Kind => CredentialExecutorKind.McpOAuth;
@@ -60,7 +61,7 @@ internal sealed class McpOAuthCredentialAccessExecutor :
             Provider = CredentialProviderKind.McpOAuth,
             Kind = CredentialKind.OpaqueUse,
             CredentialPartition = configuration.Identifier.Digest,
-            SourceCompatibility = configuration.Source.Digest,
+            SourceCompatibility = $"{configuration.Source.Digest}:{configuration.TransportMode}",
             Authority = configuration.AuthorizationServer.AbsoluteUri,
             Audience = configuration.Endpoint.AbsoluteUri,
             ClientPartition = configuration.ClientAuthentication switch
@@ -227,7 +228,8 @@ internal sealed class McpOAuthCredentialAccessExecutor :
     }
 
     internal ICredentialGenerationCache GetGenerationCache(McpProviderConfigurationIdentifier configuration) =>
-        this.providers[configuration].GenerationCache;
+        this.GetProvider(this.catalog.FindConfiguration(configuration)
+            ?? throw new InvalidOperationException("MCP provider configuration is unavailable.")).GenerationCache;
 
     public async ValueTask DisposeAsync()
     {
@@ -257,17 +259,29 @@ internal sealed class McpOAuthCredentialAccessExecutor :
 
     private Provider? FindProvider(McpOAuthCredentialUseRequest request)
     {
+        var configuration = this.catalog.FindConfiguration(request.ProviderConfiguration);
+        if (configuration is null || configuration.ClientAuthentication != request.ClientAuthentication ||
+            !configuration.Scopes.Select(scope => scope.Value).Order(StringComparer.Ordinal)
+                .SequenceEqual(request.Scopes.Select(scope => scope.Value).Order(StringComparer.Ordinal)) ||
+            DescribeCredential(configuration).LogicalIdentifier != request.Credential.LogicalIdentifier ||
+            request.Credential.Provider != CredentialProviderKind.McpOAuth || request.Credential.Kind != CredentialKind.OpaqueUse)
+        {
+            return null;
+        }
+        return this.GetProvider(configuration);
+    }
+
+    private Provider GetProvider(McpOAuthProviderConfiguration configuration)
+    {
         lock (this.gate)
         {
             ObjectDisposedException.ThrowIf(this.disposed, this);
-            return this.providers.TryGetValue(request.ProviderConfiguration, out var provider) &&
-                provider.Configuration.ClientAuthentication == request.ClientAuthentication &&
-                provider.Configuration.Scopes.Select(scope => scope.Value).Order(StringComparer.Ordinal)
-                    .SequenceEqual(request.Scopes.Select(scope => scope.Value).Order(StringComparer.Ordinal)) &&
-                DescribeCredential(provider.Configuration).LogicalIdentifier == request.Credential.LogicalIdentifier &&
-                request.Credential.Provider == CredentialProviderKind.McpOAuth && request.Credential.Kind == CredentialKind.OpaqueUse
-                ? provider
-                : null;
+            if (!this.providers.TryGetValue(configuration.Identifier, out var provider))
+            {
+                provider = new Provider(configuration, () => !Volatile.Read(ref this.disposed));
+                this.providers.Add(configuration.Identifier, provider);
+            }
+            return provider;
         }
     }
 
@@ -360,7 +374,7 @@ internal sealed class McpOAuthCredentialAccessExecutor :
             await using var transport = new HttpClientTransport(new HttpClientTransportOptions
             {
                 Endpoint = configuration.Endpoint,
-                TransportMode = HttpTransportMode.StreamableHttp,
+                TransportMode = configuration.TransportMode,
                 OAuth = options,
             }, httpClient, loggerFactory: null, ownsHttpClient: false);
             await using var client = await McpClient.CreateAsync(transport, cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -558,8 +572,7 @@ internal sealed class McpOAuthCredentialAccessExecutor :
         {
             if (this.currentScope.Value is not { Active: true } scope || Volatile.Read(ref this.disposed) != 0 ||
                 request.RequestUri is not { IsAbsoluteUri: true } target ||
-                target.Scheme != this.endpoint.Scheme || target.Authority != this.endpoint.Authority ||
-                target.AbsolutePath != this.endpoint.AbsolutePath)
+                target.Scheme != this.endpoint.Scheme || target.Authority != this.endpoint.Authority)
             {
                 throw new InvalidOperationException("MCP credential use is outside its approved operation.");
             }
@@ -568,7 +581,7 @@ internal sealed class McpOAuthCredentialAccessExecutor :
             outgoing.Headers.Authorization = new AuthenticationHeaderValue("Bearer", new string(this.token));
             try
             {
-                var response = await this.client.SendAsync(outgoing, cancellation.Token).ConfigureAwait(false);
+                var response = await this.client.SendAsync(outgoing, HttpCompletionOption.ResponseHeadersRead, cancellation.Token).ConfigureAwait(false);
                 response.RequestMessage = CopyRequest(request);
                 return response;
             }

@@ -168,6 +168,46 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
         Assert.Equal(1, tracker.Disposals);
     }
 
+    [Fact]
+    public async Task McpOAuthExecutor_StreamingResponse_ReturnsHeadersWithoutHoldingUseUntilBodyCompletes()
+    {
+        var tracker = new SessionTracker { StreamResponse = true };
+        await using var fixture = new Fixture(createHttpHandler: tracker.Create);
+        var acquisition = fixture.Broker.AcquireAsync(fixture.Request(), TestContext.Current.CancellationToken);
+        await fixture.AllowAsync();
+        await using var result = Assert.IsType<AccessSucceeded<McpCredentialUseResult>>(
+            await acquisition.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken)).Result;
+        using var request = new HttpRequestMessage(HttpMethod.Get, fixture.Configuration.Endpoint);
+        var sending = result.Use.UseAsync(
+            cancellation => result.Session.SendAsync(request, cancellation), TestContext.Current.CancellationToken).AsTask();
+        using var response = Assert.IsType<CredentialUseSucceeded<HttpResponseMessage>>(
+            await sending.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken)).Result;
+        Assert.False(tracker.AllowResponseBody.Task.IsCompleted);
+        Assert.Null(request.Headers.Authorization);
+        Assert.Null(response.RequestMessage!.Headers.Authorization);
+        var reading = response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        tracker.AllowResponseBody.TrySetResult();
+        Assert.Equal("response-body", await reading);
+    }
+
+    [Fact]
+    public async Task McpOAuthExecutor_SameOriginProtocolEndpoint_KeepsCredentialPrivate()
+    {
+        var tracker = new SessionTracker();
+        await using var fixture = new Fixture(createHttpHandler: tracker.Create);
+        var acquisition = fixture.Broker.AcquireAsync(fixture.Request(), TestContext.Current.CancellationToken);
+        await fixture.AllowAsync();
+        await using var result = Assert.IsType<AccessSucceeded<McpCredentialUseResult>>(
+            await acquisition.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken)).Result;
+        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(fixture.Configuration.Endpoint, "/messages"));
+        using var response = Assert.IsType<CredentialUseSucceeded<HttpResponseMessage>>(await result.Use.UseAsync(
+            cancellation => result.Session.SendAsync(request, cancellation), TestContext.Current.CancellationToken)).Result;
+        Assert.Equal(request.RequestUri, tracker.Outgoing!.RequestUri);
+        Assert.Null(request.Headers.Authorization);
+        Assert.Null(tracker.Outgoing.Headers.Authorization);
+        Assert.Null(response.RequestMessage!.Headers.Authorization);
+    }
+
     private static char[]? FindOwnedBuffer(Phantom.Workspaces.Services.Mcp.McpOAuthCredentialAccessExecutor executor)
     {
         var sessions = (System.Collections.IEnumerable)executor.GetType()
@@ -205,6 +245,7 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
         private int handlers;
         internal bool Fail { get; init; }
         internal bool Block { get; init; }
+        internal bool StreamResponse { get; init; }
         internal HttpRequestMessage? Outgoing { get; set; }
         internal string? Body { get; set; }
         internal char[]? OwnedBuffer { get; set; }
@@ -212,6 +253,7 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
         internal int Disposals { get; set; }
         internal TaskCompletionSource Created { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource Sending { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource AllowResponseBody { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         internal HttpMessageHandler Create(Server server)
         {
@@ -237,7 +279,7 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 RequestMessage = request,
-                Content = new StringContent("response-body"),
+                Content = tracker.StreamResponse ? new DelayedResponseContent(tracker.AllowResponseBody) : new StringContent("response-body"),
             };
         }
         protected override void Dispose(bool disposing)
@@ -249,6 +291,20 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
             }
             base.Dispose(disposing);
         }
+    }
+
+    private sealed class DelayedResponseContent(TaskCompletionSource release) : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
+            this.WriteAsync(stream, CancellationToken.None);
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context, CancellationToken cancellationToken) =>
+            this.WriteAsync(stream, cancellationToken);
+        private async Task WriteAsync(Stream stream, CancellationToken cancellationToken)
+        {
+            await release.Task.WaitAsync(cancellationToken);
+            await stream.WriteAsync(Encoding.UTF8.GetBytes("response-body"), cancellationToken);
+        }
+        protected override bool TryComputeLength(out long length) { length = 0; return false; }
     }
 
     private sealed class CallerContent : HttpContent

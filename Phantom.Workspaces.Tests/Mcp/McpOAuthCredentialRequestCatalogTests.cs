@@ -1,9 +1,12 @@
 using AgentSchema;
+using ModelContextProtocol.Client;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Auth;
 using Phantom.Workspaces.Llm.Interfaces.Access;
+using Phantom.Workspaces.Llm.Mcp;
 using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Services.Mcp;
+using Phantom.Workspaces.Services.Access;
 using Phantom.Workspaces.Tests.Access;
 
 namespace Phantom.Workspaces.Tests.Mcp;
@@ -72,6 +75,7 @@ public sealed class McpOAuthCredentialRequestCatalogTests
     [InlineData("mode")]
     [InlineData("token-endpoint")]
     [InlineData("authority")]
+    [InlineData("transport")]
     public void McpOAuthCatalog_UnsupportedMetadata_NeverSubstitutesConfiguredProvider(string changed)
     {
         var catalog = new McpOAuthCredentialRequestCatalog([Configuration(true)]);
@@ -86,9 +90,80 @@ public sealed class McpOAuthCredentialRequestCatalogTests
             case "mode": connection.AuthenticationMode = PhantomAgentSchema.EntraPinnedAuthenticationMode; break;
             case "token-endpoint": connection.TokenUrl = "https://other.test/token"; break;
             case "authority": tool.Connection = PhantomOAuthConnection.From(connection, "https://other.test/"); break;
+            case "transport": tool = new PhantomMcpTool { Connection = connection, Transport = McpHttpTransport.Sse }; break;
         }
         var context = StoredSecretAccessExecutorTests.Request();
         Assert.Null(catalog.CreateRequest(tool, context.Requestor, context.Use, context.PresentationScope));
+    }
+
+    [Fact]
+    public void McpOAuthCatalog_ConfiguredSseMode_IsBoundInCredentialIdentity()
+    {
+        var streamable = Configuration(false);
+        var configuration = streamable with { TransportMode = HttpTransportMode.Sse };
+        var catalog = new McpOAuthCredentialRequestCatalog([configuration]);
+        var context = StoredSecretAccessExecutorTests.Request();
+        var request = catalog.CreateRequest(new PhantomMcpTool
+        {
+            Connection = Tool(false).Connection,
+            Transport = McpHttpTransport.Sse,
+        }, context.Requestor, context.Use, context.PresentationScope);
+        Assert.NotNull(request);
+        Assert.NotEqual(McpOAuthCredentialAccessExecutor.DescribeCredential(streamable).LogicalIdentifier,
+            request.Credential.LogicalIdentifier);
+    }
+
+    [Fact]
+    public async Task McpOAuthComposition_CanRegisterRealExecutorBeforeAnyProviderConfiguration()
+    {
+        var configuration = Configuration(false);
+        var context = StoredSecretAccessExecutorTests.Request();
+        var request = new McpOAuthCredentialRequestCatalog([configuration])
+            .CreateRequest(Tool(false), context.Requestor, context.Use, context.PresentationScope)!;
+        var catalog = McpOAuthComposition.CreateCatalog();
+        await using var registrations = new CredentialAccessExecutorRegistry();
+        var executor = McpOAuthComposition.RegisterExecutor(registrations, catalog, new MetadataOnlyBrowser());
+        Assert.Empty((await executor.InspectAsync(request, TestContext.Current.CancellationToken)).Sources);
+        catalog.RegisterConfiguration(configuration);
+        Assert.Single((await executor.InspectAsync(request, TestContext.Current.CancellationToken)).Sources);
+        Assert.Same(configuration.Cache, Assert.Single(catalog.GetConfigurations()).Cache);
+    }
+
+    [Fact]
+    public void McpOAuthCatalog_DuplicateConfiguration_CannotRebindItsIdentityOrPhysicalPartition()
+    {
+        var store = new MetadataOnlyStore();
+        var configuration = Configuration(false) with { Cache = new CredentialManagerTokenCache(store, "mcp-oauth:", "partition") };
+        var catalog = new McpOAuthCredentialRequestCatalog([configuration]);
+        catalog.RegisterConfiguration(configuration with
+        {
+            Scopes = configuration.Scopes.ToArray(),
+            Cache = new CredentialManagerTokenCache(store, "mcp-oauth:", "partition"),
+        });
+        Assert.Single(catalog.GetConfigurations());
+        Assert.Throws<InvalidOperationException>(() => catalog.RegisterConfiguration(configuration with
+        {
+            AccountEndpoint = new Uri("https://authority.test/different-account"),
+        }));
+        Assert.Throws<InvalidOperationException>(() => catalog.RegisterConfiguration(configuration with
+        {
+            Cache = new CredentialManagerTokenCache(store, "mcp-oauth:", "other-partition"),
+        }));
+        Assert.Same(configuration.Cache, catalog.FindConfiguration(configuration.Identifier)!.Cache);
+    }
+
+    [Fact]
+    public void McpOAuthCatalog_CopiesConfiguredAndReturnedScopes()
+    {
+        var scopes = new List<OAuthScope> { new() { Value = "read" } };
+        var catalog = new McpOAuthCredentialRequestCatalog([Configuration(false) with { Scopes = scopes }]);
+        scopes.Add(new() { Value = "other" });
+        var context = StoredSecretAccessExecutorTests.Request();
+        var request = catalog.CreateRequest(Tool(false), context.Requestor, context.Use, context.PresentationScope)!;
+        Assert.Equal("read", Assert.Single(request.Scopes).Value);
+        ((OAuthScope[])request.Scopes)[0] = new() { Value = "changed" };
+        var later = catalog.CreateRequest(Tool(false), context.Requestor, context.Use, context.PresentationScope)!;
+        Assert.Equal("read", Assert.Single(later.Scopes).Value);
     }
 
     private static McpTool Tool(bool confidential) => new()
@@ -119,7 +194,6 @@ public sealed class McpOAuthCredentialRequestCatalogTests
         Scopes = [new() { Value = "read" }],
         Source = new() { Digest = new string('b', 64) },
         Cache = new CredentialManagerTokenCache(new MetadataOnlyStore(), "mcp-oauth:", "private-partition"),
-        CreateRedirectUri = () => throw new InvalidOperationException("Metadata cannot open listeners."),
         CreateHttpHandler = () => throw new InvalidOperationException("Metadata cannot create HTTP sessions."),
     };
 
@@ -133,5 +207,10 @@ public sealed class McpOAuthCredentialRequestCatalogTests
             throw new InvalidOperationException("Metadata cannot delete material.");
         public Task<IReadOnlyList<string>> EnumerateNamesAsync(string prefix, CancellationToken cancellationToken) =>
             throw new InvalidOperationException("Metadata catalog cannot inspect private storage.");
+    }
+
+    private sealed class MetadataOnlyBrowser : ISystemBrowserLauncher
+    {
+        public void Open(Uri uri) => throw new InvalidOperationException("Metadata composition cannot open a browser.");
     }
 }

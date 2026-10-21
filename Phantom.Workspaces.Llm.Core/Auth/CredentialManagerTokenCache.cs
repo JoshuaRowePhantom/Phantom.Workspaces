@@ -17,7 +17,7 @@ namespace Phantom.Workspaces.Llm.Auth;
 /// (<see cref="IPlatformSecretStore"/>, backed by Windows Credential Manager). The container is
 /// serialized to JSON and persisted under a versioned per-caller key (<c>keyPrefix + "v2:" + cacheKey</c>) so a
 /// restart can reuse a stored refresh token (silent refresh) instead of forcing a fresh interactive
-/// sign-in. Registered into the #1382 <see cref="InteractiveOAuthOptions.TokenCacheProvider"/> seam.
+/// sign-in. Used as an executor-owned SDK <see cref="ITokenCache"/>.
 /// The key prefix is caller-supplied (issue #1454): MCP passes <c>mcp-oauth:</c>, dev-tunnel passes
 /// <c>devtunnel:</c>.
 /// </summary>
@@ -31,7 +31,7 @@ namespace Phantom.Workspaces.Llm.Auth;
 /// Safe in-process metadata is shared by store/partition; cold-start inspection remains unknown until an authorized
 /// read or acquisition, rather than opening Credential Manager during metadata inspection.
 /// </remarks>
-public sealed class CredentialManagerTokenCache : ITokenCache, ICredentialGenerationCache
+internal sealed class CredentialManagerTokenCache : ITokenCache, ICredentialGenerationCache
 {
     private const string StorageNamespace = "v2:";
     private static readonly ConditionalWeakTable<IPlatformSecretStore, ConcurrentDictionary<string, CachePartition>> partitions = new();
@@ -58,8 +58,10 @@ public sealed class CredentialManagerTokenCache : ITokenCache, ICredentialGenera
         this.logger = logger ?? NullLogger<CredentialManagerTokenCache>.Instance;
     }
 
+    internal bool SharesPartitionWith(CredentialManagerTokenCache other) => ReferenceEquals(this.partition, other.partition);
+
     /// <summary>
-    /// Builds an <see cref="InteractiveOAuthOptions.TokenCacheProvider"/> seam factory over
+    /// Builds a provider-owned SDK cache factory over
     /// <paramref name="store"/>, keyed under the caller-supplied <paramref name="keyPrefix"/>. The
     /// returned factory yields a persistent cache per caller when a real secret store is available,
     /// and null (SDK in-memory fallback) when it is not — e.g. on non-Windows platforms where the host

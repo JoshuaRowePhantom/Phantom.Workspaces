@@ -1,12 +1,58 @@
 using AgentSchema;
+using ModelContextProtocol.Client;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces.Access;
 
 namespace Phantom.Workspaces.Services.Mcp;
 
-internal sealed class McpOAuthCredentialRequestCatalog(
-    IReadOnlyList<McpOAuthProviderConfiguration> configurations) : IMcpOAuthCredentialRequestCatalog
+internal sealed class McpOAuthCredentialRequestCatalog : IMcpOAuthCredentialRequestCatalog
 {
+    private readonly object gate = new();
+    private readonly Dictionary<McpProviderConfigurationIdentifier, McpOAuthProviderConfiguration> configurations = [];
+
+    internal McpOAuthCredentialRequestCatalog(IEnumerable<McpOAuthProviderConfiguration>? configurations = null)
+    {
+        foreach (var configuration in configurations ?? [])
+        {
+            this.RegisterConfiguration(configuration);
+        }
+    }
+
+    internal void RegisterConfiguration(McpOAuthProviderConfiguration configuration)
+    {
+        var owned = configuration with { Scopes = configuration.Scopes.ToArray() };
+        lock (this.gate)
+        {
+            if (this.configurations.TryGetValue(owned.Identifier, out var current))
+            {
+                if (McpOAuthCredentialAccessExecutor.DescribeCredential(current).LogicalIdentifier !=
+                    McpOAuthCredentialAccessExecutor.DescribeCredential(owned).LogicalIdentifier ||
+                    !current.Cache.SharesPartitionWith(owned.Cache))
+                {
+                    throw new InvalidOperationException("MCP provider configuration is already registered with different bindings.");
+                }
+                return;
+            }
+            this.configurations.Add(owned.Identifier, owned);
+        }
+    }
+
+    internal McpOAuthProviderConfiguration? FindConfiguration(McpProviderConfigurationIdentifier identifier)
+    {
+        lock (this.gate) { return this.configurations.GetValueOrDefault(identifier); }
+    }
+
+    internal IReadOnlyList<McpOAuthProviderConfiguration> GetConfigurations()
+    {
+        lock (this.gate)
+        {
+            return this.configurations.Values.Select(configuration => configuration with
+            {
+                Scopes = configuration.Scopes.ToArray(),
+            }).ToArray();
+        }
+    }
+
     public McpOAuthCredentialUseRequest? CreateRequest(
         McpTool tool,
         AccessRequestor requestor,
@@ -22,8 +68,16 @@ internal sealed class McpOAuthCredentialRequestCatalog(
             return null;
         }
 
-        var configuration = configurations.SingleOrDefault(candidate =>
+        var mode = tool is PhantomMcpTool typed ? typed.Transport : McpHttpTransport.Streamable;
+        var transport = mode switch
+        {
+            McpHttpTransport.Sse => HttpTransportMode.Sse,
+            McpHttpTransport.Auto => HttpTransportMode.AutoDetect,
+            _ => HttpTransportMode.StreamableHttp,
+        };
+        var configuration = this.GetConfigurations().SingleOrDefault(candidate =>
             candidate.Endpoint == endpoint && MatchesAuthority(candidate.AuthorizationServer, connection) &&
+            candidate.TransportMode == transport &&
             MatchesClient(candidate.ClientAuthentication, connection) &&
             candidate.Scopes.Select(scope => scope.Value).Order(StringComparer.Ordinal)
                 .SequenceEqual((connection.Scopes ?? []).Order(StringComparer.Ordinal)));
@@ -42,7 +96,7 @@ internal sealed class McpOAuthCredentialRequestCatalog(
         {
             ProviderConfiguration = configuration.Identifier,
             ClientAuthentication = configuration.ClientAuthentication,
-            Scopes = configuration.Scopes,
+            Scopes = configuration.Scopes.ToArray(),
             Credential = credential,
             Requestor = requestor,
             Use = use with

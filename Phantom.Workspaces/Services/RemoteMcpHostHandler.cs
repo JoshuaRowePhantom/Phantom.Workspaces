@@ -94,7 +94,6 @@ public sealed class RemoteMcpHostHandler
             this.services,
             this.loggerFactory,
             ct,
-            clientIdOverride: null,
             trustContext: trustContext,
             processExecutor: this.services?.ProcessExecutor as IProcessExecutor).ConfigureAwait(false);
 

@@ -1,6 +1,7 @@
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using ModelContextProtocol;
 using ModelContextProtocol.Client;
 using AgentSchema;
 using System.Text.Json;
@@ -161,11 +162,8 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
 
     private async Task<AITool[]> ConnectAndListToolsAsync(CancellationToken cancellationToken)
     {
-        var logger = this.loggerFactory?.CreateLogger<McpToolContextProvider>();
-        var serverName = string.IsNullOrWhiteSpace(this.tool.ServerName) ? this.tool.Name : this.tool.ServerName;
-
         this.client = IsLocalDescriptor(this.boundExecutor) || this.router is null
-            ? await this.ConnectLocalAsync(logger, serverName, cancellationToken)
+            ? await this.ConnectLocalAsync(cancellationToken)
             : await this.ConnectRemoteAsync(cancellationToken);
 
         var mcpTools = await McpClientToolListing.ListToolsAsync(this.client, cancellationToken);
@@ -180,43 +178,64 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
 
     // Local (in-process) binding: connect the MCP client directly through the shared transport
     // factory exactly as before the per-component executor work (behaviour-preserving default).
-    private Task<McpClient> ConnectLocalAsync(ILogger? logger, string? serverName, CancellationToken cancellationToken)
-        => McpTransportFactory.ConnectWithDynamicRegistrationFallbackAsync(
+    private async Task<McpClient> ConnectLocalAsync(CancellationToken cancellationToken)
+    {
+        var transport = await McpTransportFactory.CreateMcpTransportAsync(
             this.tool,
-            async (clientIdOverride, ct) =>
+            this.services,
+            this.loggerFactory,
+            cancellationToken,
+            this.trustContext,
+            this.services?.ProcessExecutor as IProcessExecutor);
+        var disposableTransport = transport as IAsyncDisposable;
+        this.initializingClientTransport = disposableTransport;
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var client = await McpClient.CreateAsync(transport, null, this.loggerFactory, cancellationToken);
+            this.connectedClientTransport = disposableTransport;
+            Interlocked.CompareExchange(ref this.initializingClientTransport, null, disposableTransport);
+            return client;
+        }
+        catch (Exception exception) when ((this.tool.Connection is OAuthConnection or ApiKeyConnection) &&
+            exception is McpException or System.Net.Http.HttpRequestException or InvalidOperationException)
+        {
+            throw new InvalidOperationException("MCP credential-bound connection failed.");
+        }
+        finally
+        {
+            if (ReferenceEquals(
+                Interlocked.CompareExchange(ref this.initializingClientTransport, null, disposableTransport),
+                disposableTransport) && disposableTransport is not null)
             {
-                var transport = await McpTransportFactory.CreateMcpTransportAsync(
-                    this.tool,
-                    this.services,
-                    this.loggerFactory,
-                    ct,
-                    clientIdOverride,
-                    this.trustContext,
-                    this.services?.ProcessExecutor as IProcessExecutor);
-                var disposableTransport = transport as IAsyncDisposable;
-                this.initializingClientTransport = disposableTransport;
-                try
-                {
-                    ct.ThrowIfCancellationRequested();
-                    var client = await McpClient.CreateAsync(transport, null, this.loggerFactory, ct);
-                    this.connectedClientTransport = disposableTransport;
-                    Interlocked.CompareExchange(ref this.initializingClientTransport, null, disposableTransport);
-                    return client;
-                }
-                finally
-                {
-                    if (ReferenceEquals(
-                        Interlocked.CompareExchange(ref this.initializingClientTransport, null, disposableTransport),
-                        disposableTransport)
-                        && disposableTransport is not null)
-                    {
-                        await disposableTransport.DisposeAsync();
-                    }
-                }
-            },
-            logger,
-            serverName,
-            cancellationToken);
+                await disposableTransport.DisposeAsync();
+            }
+        }
+    }
+
+    internal async Task ReconnectAfterCredentialCommitAsync(CancellationToken cancellationToken)
+    {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken, this.lifetimeCancellation.Token);
+        await this.initializeLock.WaitAsync(cancellation.Token).ConfigureAwait(false);
+        try
+        {
+            await this.DisposeConnectionAsync().ConfigureAwait(false);
+            this.initializationFailed = false;
+            this.resetCleanupRequired = false;
+            this.cachedTools = await this.InvokeInitializerAsync(cancellation.Token).ConfigureAwait(false);
+        }
+        catch
+        {
+            this.initializationFailed = true;
+            this.cachedTools = null;
+            throw;
+        }
+        finally
+        {
+            this.initializeLock.Release();
+        }
+    }
 
     // Remote binding (issue #1438): route an MCP channel to the bound machine via the production
     // ExecutorTargetRouter, wrap it as an MCP SDK client transport, and complete the JSON-RPC

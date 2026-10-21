@@ -6,171 +6,22 @@ using ModelContextProtocol;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Core.Transport;
 using Phantom.Workspaces.Llm.Echo;
-using Phantom.Workspaces.Llm.Mcp;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
-/// <summary>
-/// Covers the #1421 DCR-first, static-fallback-second connect strategy used by
-/// <c>McpToolContextProvider.ProvideAIContextAsync</c>. The provider funnels its connect through
-/// <see cref="McpTransportFactory.ConnectWithDynamicRegistrationFallbackAsync{TClient}"/>, which is
-/// exercised here with a fake connect delegate (a real <c>McpClient.CreateAsync</c> would require a
-/// live OAuth server). A sentinel client stands in for the connected client.
-/// </summary>
 public sealed class McpToolContextProviderTests
 {
-    private const string HttpEndpoint = "https://example.test/mcp";
-
-    private static McpTool OAuthTool(string? clientId = null)
-        => new()
-        {
-            ServerName = "oauth-server",
-            Connection = new OAuthConnection { Endpoint = HttpEndpoint, ClientId = clientId! },
-        };
-
-    private static McpException DcrRejection()
-        => new("Failed to handle unauthorized response with 'Bearer' scheme. Authorization server does not support dynamic client registration");
-
-    [Fact]
-    public async Task ProvideAIContext_WhenDynamicClientRegistrationRejected_RetriesWithFallbackClientId()
-    {
-        var overridesSeen = new List<string?>();
-        var sentinel = new object();
-
-        var result = await McpTransportFactory.ConnectWithDynamicRegistrationFallbackAsync<object>(
-            OAuthTool(clientId: null),
-            (clientIdOverride, _) =>
-            {
-                overridesSeen.Add(clientIdOverride);
-                if (clientIdOverride is null)
-                {
-                    throw DcrRejection();
-                }
-
-                return Task.FromResult(sentinel);
-            },
-            NullLogger.Instance,
-            "oauth-server",
-            CancellationToken.None);
-
-        Assert.Same(sentinel, result);
-
-        // Exactly two attempts: the DCR-first attempt (null override) then the single static fallback.
-        Assert.Equal(2, overridesSeen.Count);
-        Assert.Null(overridesSeen[0]);
-        Assert.Equal(McpTransportFactory.DefaultDynamicRegistrationFallbackClientId, overridesSeen[1]);
-    }
-
-    [Fact]
-    public async Task ProvideAIContext_WhenDcrRejectedAndRetryFails_SurfacesOriginalDiagnostic()
-    {
-        var attempts = 0;
-        var retryFailure = new McpException(
-            "Failed to handle unauthorized response with 'Bearer' scheme. Dynamic client registration failed with status BadRequest");
-
-        var thrown = await Assert.ThrowsAsync<McpException>(() =>
-            McpTransportFactory.ConnectWithDynamicRegistrationFallbackAsync<object>(
-                OAuthTool(clientId: null),
-                (clientIdOverride, _) =>
-                {
-                    attempts++;
-                    throw clientIdOverride is null ? DcrRejection() : retryFailure;
-                },
-                NullLogger.Instance,
-                "oauth-server",
-                CancellationToken.None));
-
-        // The single retry ran (no infinite retry) and its failure propagated so the caller's
-        // #1408 diagnostic is shown.
-        Assert.Equal(2, attempts);
-        Assert.Same(retryFailure, thrown);
-    }
-
-    [Fact]
-    public async Task ProvideAIContext_WhenNonDcrFailure_DoesNotRetry()
-    {
-        var attempts = 0;
-        var networkFailure = new McpException("The remote name could not be resolved: 'auth.example.test'");
-
-        var thrown = await Assert.ThrowsAsync<McpException>(() =>
-            McpTransportFactory.ConnectWithDynamicRegistrationFallbackAsync<object>(
-                OAuthTool(clientId: null),
-                (_, _) =>
-                {
-                    attempts++;
-                    throw networkFailure;
-                },
-                NullLogger.Instance,
-                "oauth-server",
-                CancellationToken.None));
-
-        Assert.Equal(1, attempts);
-        Assert.Same(networkFailure, thrown);
-    }
-
-    [Fact]
-    public async Task ProvideAIContext_WhenExplicitClientIdConfigured_DoesNotRetryOnDcrShapedFailure()
-    {
-        var attempts = 0;
-
-        var thrown = await Assert.ThrowsAsync<McpException>(() =>
-            McpTransportFactory.ConnectWithDynamicRegistrationFallbackAsync<object>(
-                OAuthTool(clientId: "explicit-client-id"),
-                (_, _) =>
-                {
-                    attempts++;
-                    throw DcrRejection();
-                },
-                NullLogger.Instance,
-                "oauth-server",
-                CancellationToken.None));
-
-        Assert.Equal(1, attempts);
-        Assert.IsType<McpException>(thrown);
-    }
-
-    [Fact]
-    public async Task ProvideAIContext_WhenDcrSucceeds_DoesNotUseFallback()
-    {
-        var overridesSeen = new List<string?>();
-        var sentinel = new object();
-
-        var result = await McpTransportFactory.ConnectWithDynamicRegistrationFallbackAsync<object>(
-            OAuthTool(clientId: null),
-            (clientIdOverride, _) =>
-            {
-                overridesSeen.Add(clientIdOverride);
-                return Task.FromResult(sentinel);
-            },
-            NullLogger.Instance,
-            "oauth-server",
-            CancellationToken.None);
-
-        Assert.Same(sentinel, result);
-        Assert.Single(overridesSeen);
-        Assert.Null(overridesSeen[0]);
-    }
-
-    // --- issue #1447: terminal-failure latch on the provider instance -----------------------------
-
     [Fact]
     public async Task McpToolContextProvider_InitFailure_MarksTerminalAndNotRetriedOnNextInvocation()
     {
         var attempts = 0;
-        var provider = CreateProvider(_ =>
+        await using var provider = CreateProvider(_ =>
         {
             attempts++;
             throw new McpException("connect failed");
         });
-        await using var disposable = provider;
-
-        // First invocation attempts the connect, which fails and sets the terminal latch.
         await Assert.ThrowsAsync<McpException>(() => InvokeAsync(provider));
-
-        // The second invocation short-circuits on the latch and must NOT retry the connect.
-        var tools = await InvokeAsync(provider);
-
-        Assert.Empty(tools);
+        Assert.Empty(await InvokeAsync(provider));
         Assert.Equal(1, attempts);
     }
 
@@ -178,113 +29,154 @@ public sealed class McpToolContextProviderTests
     public async Task McpToolContextProvider_SuccessfulInit_CachesSingleClientAcrossInvocations()
     {
         var attempts = 0;
-        var sampleTool = AIFunctionFactory.Create(() => "ok", "sampleTool");
-        var provider = CreateProvider(_ =>
+        var sample = AIFunctionFactory.Create(() => "ok", "sample");
+        await using var provider = CreateProvider(_ =>
         {
             attempts++;
-            return Task.FromResult<AITool[]>([sampleTool]);
+            return Task.FromResult<AITool[]>([sample]);
         });
-        await using var disposable = provider;
-
-        var first = await InvokeAsync(provider);
-        var second = await InvokeAsync(provider);
-
-        // A successful init is cached: the connect ran exactly once, and tools are still returned.
+        Assert.Single(await InvokeAsync(provider));
+        Assert.Single(await InvokeAsync(provider));
         Assert.Equal(1, attempts);
-        Assert.Single(first);
-        Assert.Single(second);
-        Assert.Equal("sampleTool", second[0].Name);
     }
 
     [Fact]
     public async Task McpToolContextProvider_TerminalFailure_DoesNotRelaunchOAuthRedirect()
     {
-        var redirectLaunches = 0;
-        var provider = CreateProvider(_ =>
+        var attempts = 0;
+        await using var provider = CreateProvider(_ =>
         {
-            // Model the OAuth authorization-code flow launching the browser redirect, then failing.
-            redirectLaunches++;
+            attempts++;
             throw new McpException("authorization failed");
         });
-        await using var disposable = provider;
-
         await Assert.ThrowsAsync<McpException>(() => InvokeAsync(provider));
-        _ = await InvokeAsync(provider);
-        _ = await InvokeAsync(provider);
-
-        // The redirect (browser relaunch) fires at most once despite repeated invocations.
-        Assert.Equal(1, redirectLaunches);
+        Assert.Empty(await InvokeAsync(provider));
+        Assert.Empty(await InvokeAsync(provider));
+        Assert.Equal(1, attempts);
     }
 
     [Fact]
-    public async Task McpToolContextProvider_ResetInitialization_ClearsFailureAndAllowsOneNewAttempt()
+    public async Task McpToolContextProvider_ResetInitialization_ClearsFailureAndDrainsPreviousTransport()
     {
         var attempts = 0;
-        var ownedTransport = new BlockingOwnedTransport();
-        var provider = CreateProvider(_ =>
+        var transport = new BlockingOwnedTransport();
+        await using var provider = CreateProvider(_ =>
         {
             attempts++;
             throw new McpException("connect failed");
-        }, ownedTransport);
-        await using var disposable = provider;
-
+        }, transport);
         await Assert.ThrowsAsync<McpException>(() => InvokeAsync(provider));
-        Assert.Equal(1, attempts);
-
-        // Latched: further invocations do not retry.
-        _ = await InvokeAsync(provider);
-        Assert.Equal(1, attempts);
-
+        Assert.Empty(await InvokeAsync(provider));
         provider.ResetInitialization();
+        var reconnect = InvokeAsync(provider);
+        try
+        {
+            await transport.DisposeStarted.Task.WaitAsync(TimeSpan.FromSeconds(20));
+            Assert.False(reconnect.IsCompleted);
+            Assert.Equal(1, attempts);
+        }
+        finally { transport.AllowDispose.TrySetResult(); }
+        await Assert.ThrowsAsync<McpException>(() => reconnect);
+        Assert.Equal(2, attempts);
+        Assert.Equal(1, transport.DisposeCount);
+        Assert.Empty(await InvokeAsync(provider));
+    }
 
-        var reinitialize = InvokeAsync(provider);
-        await ownedTransport.DisposeStarted.Task;
+    [Fact]
+    public async Task McpToolContextProvider_ReconnectAfterCredentialCommit_DrainsOldTransportAndCreatesFreshConnection()
+    {
+        var attempts = 0;
+        var transport = new BlockingOwnedTransport();
+        await using var provider = CreateProvider(_ =>
+        {
+            attempts++;
+            return Task.FromResult<AITool[]>([]);
+        }, transport);
+        await InvokeAsync(provider);
+        var reconnect = provider.ReconnectAfterCredentialCommitAsync(CancellationToken.None);
+        try
+        {
+            await transport.DisposeStarted.Task.WaitAsync(TimeSpan.FromSeconds(20));
+            Assert.False(reconnect.IsCompleted);
+            Assert.Equal(1, attempts);
+        }
+        finally { transport.AllowDispose.TrySetResult(); }
+        await reconnect;
+        await InvokeAsync(provider);
+        Assert.Equal(2, attempts);
+        Assert.Equal(1, transport.DisposeCount);
+    }
+
+    [Fact]
+    public async Task McpToolContextProvider_FailedReconnect_IsLatchedUntilExplicitAction()
+    {
+        var attempts = 0;
+        await using var provider = CreateProvider(_ =>
+        {
+            attempts++;
+            if (attempts <= 2) { throw new McpException("connect failed"); }
+            return Task.FromResult<AITool[]>([]);
+        });
+        await Assert.ThrowsAsync<McpException>(() => InvokeAsync(provider));
+        await Assert.ThrowsAsync<McpException>(() => provider.ReconnectAfterCredentialCommitAsync(CancellationToken.None));
+        Assert.Empty(await InvokeAsync(provider));
+        Assert.Equal(2, attempts);
+        await provider.ReconnectAfterCredentialCommitAsync(CancellationToken.None);
+        Assert.Empty(await InvokeAsync(provider));
+        Assert.Equal(3, attempts);
+    }
+
+    [Fact]
+    public async Task McpToolContextProvider_CancelledReconnectWait_DoesNotInterruptExistingInitialization()
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var attempts = 0;
+        await using var provider = CreateProvider(async cancellation =>
+        {
+            attempts++;
+            started.TrySetResult();
+            await finish.Task.WaitAsync(cancellation);
+            return [];
+        });
+        var initialization = InvokeAsync(provider);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(20));
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => provider.ReconnectAfterCredentialCommitAsync(cancellation.Token));
+        finish.TrySetResult();
+        await initialization;
+        await InvokeAsync(provider);
         Assert.Equal(1, attempts);
-        Assert.False(reinitialize.IsCompleted);
-
-        ownedTransport.AllowDispose.TrySetResult();
-        await Assert.ThrowsAsync<McpException>(() => reinitialize);
-        Assert.Equal(2, attempts);
-        Assert.Equal(1, ownedTransport.DisposeCount);
-
-        _ = await InvokeAsync(provider);
-        Assert.Equal(2, attempts);
     }
 
     [Fact]
     public async Task DisposeAsync_InFlightInitialization_CancelsAndDrainsAttempt()
     {
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var canceled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var neverCompletes = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var provider = CreateProvider(async cancellationToken =>
+        var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = CreateProvider(async cancellation =>
         {
-            started.SetResult();
+            started.TrySetResult();
             try
             {
-                await neverCompletes.Task.WaitAsync(cancellationToken);
+                await finish.Task.WaitAsync(cancellation);
                 return [];
             }
-            finally
-            {
-                canceled.SetResult();
-            }
+            finally { cancelled.TrySetResult(); }
         });
-
         var initialization = InvokeAsync(provider);
-        await started.Task;
-
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(20));
         await provider.DisposeAsync();
-
-        await canceled.Task;
+        await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(20));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => initialization);
     }
 
     private static McpToolContextProvider CreateProvider(
         Func<CancellationToken, Task<AITool[]>> initialize,
-        IAsyncDisposable? ownedTransport = null)
-        => new(
-            OAuthTool(),
+        IAsyncDisposable? ownedTransport = null) => new(
+            new McpTool { ServerName = "MCP server", Connection = new OAuthConnection { Endpoint = "https://resource.test/mcp" } },
             NullLoggerFactory.Instance,
             ExecutorTarget.AgentExecutor,
             services: null,
@@ -295,18 +187,13 @@ public sealed class McpToolContextProviderTests
 
     private sealed class BlockingOwnedTransport : IAsyncDisposable
     {
-        private int disposeCount;
-        public int DisposeCount => Volatile.Read(ref this.disposeCount);
-        public TaskCompletionSource DisposeStarted { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public TaskCompletionSource AllowDispose { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-
+        private int disposals;
+        public int DisposeCount => Volatile.Read(ref this.disposals);
+        public TaskCompletionSource DisposeStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource AllowDispose { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public async ValueTask DisposeAsync()
         {
-            if (Interlocked.Increment(ref this.disposeCount) != 1)
-                return;
-
+            if (Interlocked.Increment(ref this.disposals) != 1) { return; }
             this.DisposeStarted.TrySetResult();
             await this.AllowDispose.Task;
         }
@@ -314,10 +201,7 @@ public sealed class McpToolContextProviderTests
 
     private static async Task<AITool[]> InvokeAsync(McpToolContextProvider provider)
     {
-        var agent = new ChatClientAgent(new EchoChatClient(), new ChatClientAgentOptions
-        {
-            UseProvidedChatClientAsIs = true,
-        });
+        var agent = new ChatClientAgent(new EchoChatClient(), new ChatClientAgentOptions { UseProvidedChatClientAsIs = true });
         var session = await agent.CreateSessionAsync(CancellationToken.None);
         return await AIContextProviderToolReader.GetToolsAsync(provider, agent, session, CancellationToken.None);
     }

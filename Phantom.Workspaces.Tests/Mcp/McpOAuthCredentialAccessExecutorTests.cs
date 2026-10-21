@@ -1,7 +1,7 @@
 using System.Net;
+using System.Net.Sockets;
 using System.Net.Http;
 using System.Net.Http.Headers;
-using System.Net.Sockets;
 using System.Security;
 using System.Text;
 using System.Text.Json;
@@ -368,7 +368,7 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
         Assert.Equal(0, fixture.Store.Reads);
     }
 
-    private sealed class Fixture : IAsyncDisposable
+    internal sealed class Fixture : IAsyncDisposable
     {
         private readonly string releaseMemoryDirectory = Path.Combine(
             Environment.CurrentDirectory, ".mcp-oauth-executor-tests", Guid.NewGuid().ToString("N"));
@@ -378,6 +378,7 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
         internal Browser Browser { get; }
         internal SecretSource SecretSource { get; } = new();
         internal McpOAuthProviderConfiguration Configuration { get; }
+        internal McpOAuthCredentialRequestCatalog Catalog { get; }
         internal McpOAuthCredentialAccessExecutor Executor { get; }
         internal AccessBroker Broker { get; }
         internal UserAuthorizationRegistry Registry { get; } = new();
@@ -411,7 +412,8 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
                 Cache = new CredentialManagerTokenCache(this.Store, "mcp-oauth:", "private-cache"),
                 CreateHttpHandler = () => createHttpHandler?.Invoke(this.Server) ?? new Handler(this.Server),
             };
-            this.Executor = new McpOAuthCredentialAccessExecutor([this.Configuration], this.Browser);
+            this.Catalog = new McpOAuthCredentialRequestCatalog([this.Configuration]);
+            this.Executor = new McpOAuthCredentialAccessExecutor(this.Catalog, this.Browser);
             var executors = new CredentialAccessExecutorRegistry();
             executors.Add<McpOAuthCredentialUseRequest, McpCredentialUseResult>(wrapMcpExecutor?.Invoke(this.Executor) ?? this.Executor);
             if (cycle)
@@ -516,7 +518,7 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
 
     }
 
-    private sealed class Browser(List<string> events) : ISystemBrowserLauncher
+    internal sealed class Browser(List<string> events) : ISystemBrowserLauncher
     {
         internal int OpenCount { get; private set; }
         internal bool Block { get; set; }
@@ -557,7 +559,7 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
             server.SendAsync(request, cancellationToken);
     }
 
-    private sealed class ObservedAcquisitions : IProviderAcquisitionCoordinator
+    internal sealed class ObservedAcquisitions : IProviderAcquisitionCoordinator
     {
         private readonly ProviderAcquisitionCoordinator coordinator = new();
         private int calls;
@@ -574,7 +576,7 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
         public ValueTask DisposeAsync() => this.coordinator.DisposeAsync();
     }
 
-    private sealed class Server(List<string> events)
+    internal sealed class Server(List<string> events)
     {
         internal string AccessToken { get; set; } = "private-access";
         internal string? Subject { get; set; } = "private-stable-account";
@@ -645,7 +647,7 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
                     return new HttpResponseMessage(HttpStatusCode.Accepted);
                 }
                 return document.RootElement.GetProperty("method").GetString() == "initialize"
-                    ? Json($$$$"""{"jsonrpc":"2.0","id":{{{{identifier.GetRawText()}}}},"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"test","version":"1"}}}""")
+                    ? Json($$$$"""{"jsonrpc":"2.0","id":{{{{identifier.GetRawText()}}}},"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"test","version":"1"}}}""")
                     : Json($$$$"""{"jsonrpc":"2.0","id":{{{{identifier.GetRawText()}}}},"result":{"tools":[]}}""");
             }
             return new HttpResponseMessage(HttpStatusCode.NotFound);
@@ -656,7 +658,7 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
         };
     }
 
-    private sealed class Store(List<string> events) : IPlatformSecretStore
+    internal sealed class Store(List<string> events) : IPlatformSecretStore
     {
         private readonly Dictionary<string, SecureString> material = [];
         internal int Reads { get; private set; }
@@ -684,7 +686,7 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
             Task.FromResult<IReadOnlyList<string>>(this.material.Keys.Where(name => name.StartsWith(prefix, StringComparison.Ordinal)).ToArray());
     }
 
-    private sealed class SecretSource : IStoredSecretAccessSource
+    internal sealed class SecretSource : IStoredSecretAccessSource
     {
         internal int Reads { get; private set; }
         public ValueTask<bool> ExistsAsync(string name, CredentialSourceKind source, CancellationToken cancellationToken) => ValueTask.FromResult(true);
