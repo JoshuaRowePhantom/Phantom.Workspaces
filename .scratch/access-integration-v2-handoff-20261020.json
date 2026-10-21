@@ -95,6 +95,16 @@
     "Fresh read-only code-review db8c66b4..0fcfd0d8 actual canonical selected-source A/B remint test: no significant issues. No builds/tests run by either reviewer.",
     "Fresh read-only code-review079f2081 exact three-line causal actual-token cancellation acknowledgment: no significant issues; no production changes."
   ],
+  "genericOAuthShutdownReview20261021": {
+    "reviewer": "9138ee92-e671-4e53-b882-67573927d963",
+    "reviewedCandidate": "bd1b901c81437bd1ce51c3a76253234aac58a5d2",
+    "resolvedBoundedFinding": "Gate-registered pending native Bind obligations, atomic ownership transfer and late cleanup join close the initiating-shutdown snapshot gap.",
+    "remainingFinding": "MEDIUM: generic OAuthCredentialAccessExecutor.DisposeAsync returns immediately for a second concurrent disposer while the first remains pending and the native binding is undisposed. Reviewer identifies the disposed early return at source line420 and deterministic real Kestrel gate regression.",
+    "owner": "497ddd2f-332e-4a55-8aea-337b84fc0e2c",
+    "requiredDelivery": "Await immutable shared-disposal-completion followup and regression plus actual bounded clearance. Candidate bd1 is not final generic clearance and remains unimported.",
+    "preserveMcp": "Existing independently cleared MCP d42 shared completion plus active-work/whole-acquisition/native cleanup barrier remains intact; no old bd1 MCP file or lifecycle replacement.",
+    "acceptanceBoundary": "Reviewer performed no builds/tests/edits. This metadata update makes no new runtime or whole-arc acceptance claim."
+  },
   "openOwnerWork": [
     "Generic OAuth pending binding-startup join and cleanup faults: consume only cleared generic hunks when authorized; preserve independently cleared MCP lifecycle.",
     "GitHub full canonical async validation and unpublished TResult ownership plus14 private fixture cases pending provider owner35ff; candidate0879baed observed committed, clearance not yet received.",
