@@ -30,6 +30,7 @@ public sealed class LegacyAuthorizationUiRemovalTests
     [InlineData("Phantom.Workspaces.Services.Secrets.SecretMemoryGroup")]
     [InlineData("Phantom.Workspaces.Services.Secrets.SecretMemoryUse")]
     [InlineData("Phantom.Workspaces.Services.Secrets.SecretSourceDisplay")]
+    [InlineData("Phantom.Workspaces.Services.Secrets.SecretProvider")]
     [InlineData("Phantom.Workspaces.Converters.SecretSourceLabelConverter")]
     public void DisconnectedLegacyTypesAreAbsentFromApplicationAssembly(string name) =>
         Assert.Null(typeof(MainWindow).Assembly.GetType(name));

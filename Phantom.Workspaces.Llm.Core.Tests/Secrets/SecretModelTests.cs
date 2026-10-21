@@ -46,7 +46,6 @@ public class SecretModelTests
             new AwsLoginSecretSource(),
             new AzureLoginSecretSource(),
             new CredentialStoreSecretSource("my-cred"),
-            new OAuthSecretSource(),
         };
 
         foreach (var source in sources)
@@ -56,6 +55,19 @@ public class SecretModelTests
             Assert.Equal(source, roundTripped);
         }
     }
+
+    [Theory]
+    [InlineData("ISecretUseDialogHost")]
+    [InlineData("SecretUseDialogInput")]
+    [InlineData("SecretUseDialogResult")]
+    [InlineData("SecretUseDialogRow")]
+    [InlineData("OAuthSecretSource")]
+    public void RetiredModalAndOAuthMarkerTypesAreAbsent(string name) =>
+        Assert.Null(typeof(SecretSource).Assembly.GetType("Phantom.Workspaces.Llm.Secrets." + name));
+
+    [Fact]
+    public void RetiredOAuthSourceDiscriminatorFailsClosed() =>
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<SecretSource>("""{"$type":"oauth"}"""));
 
     [Fact]
     public void CredentialStoreSecretSource_ExposesCredentialName()
