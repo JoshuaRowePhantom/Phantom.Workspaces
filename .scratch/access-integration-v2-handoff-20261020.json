@@ -66,7 +66,16 @@
     "uiRequestedSourceReview": "CLEAR: actual c4d74639-4b75-4c3b-b8b8-972796a79a99 bounded source receipt2026-10-21T01:32:53-07:00 for immutablefa2 against978. No significant introduced defects. This is the requested source receipt, separate from prior integration-delta review.",
     "uiSourceReviewScope": "Deleted concrete dialogs/VMs/host/enumerator/helper records/converter, replacement tests and minimum references/resources/navigation. Retired names remain only absence-test literals, not production C#/AXAML/resources/project includes. Reviewer verified actual gear navigation and all3 modern controls share exact host administration instances. Native contracts/picker/store and provider/cache code preserved. No reviewer builds/tests/live interaction;55/550 owner execution remains separate. Root978 prerequisite was not re-reviewed or newly cleared by this receipt.",
     "uiScope": "Only disconnected old UI/dialog/host/enumeration/converter/tests retired. Preserve actual native store/backend, provider caches and Core contracts; do not restore old UI fallback.",
-    "coreDependency": "Per latest direct parent instruction, SDK Core ISecretProvider/GitHubAuthTokenResolver production deletion remains BLOCKED on immutable35ff App SecretProvider removal. Do not delete other owners' classes or treat earlier broad legacy handback wording as permission to bypass this dependency. No such production deletions made here."
+    "coreDependency": "Per latest direct parent instruction, SDK Core ISecretProvider/GitHubAuthTokenResolver production deletion remains BLOCKED on immutable35ff App SecretProvider removal. Do not delete other owners' classes or treat earlier broad legacy handback wording as permission to bypass this dependency. No such production deletions made here.",
+    "coreWriterHandback": "SDK3891b377-81d3-407b-b1f2-9baa3c3a36db explicitly handed back ONLY the narrow Core production scope and removed its own uncommitted draft after exporting. No concurrent SDK writer or SDK commit wait remains. This is NOT permission to delete35ff-owned App files before immutable App prerequisite or explicit parent handoff.",
+    "coreHandbackPatch": {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-agent-core-legacy-removal.patch",
+      "sha256": "1C825265157824856001066063E02DE78C2F92141D59B4078B4EF0B0E294D8C9",
+      "exportBase": "2d1f6269e11e2d4ffb2a56a10880c53aa9b00cec",
+      "scope": "FOUR files total: delete Core Secrets\\ISecretProvider.cs, Core GitHubAuthTokenResolver.cs and Core.Tests GitHubAuthTokenResolverTests.cs; modify Core.Tests AgentFactoryAccessTests.cs with two absence assertions. Not four deletions.",
+      "verification": "Actual SHA256 matches. Read-only git apply --check succeeds against current integration; patch NOT APPLIED. Both tracked App Services\\Secrets\\SecretProvider.cs and Tests\\Secrets\\SecretProviderTests.cs still present, so dependency remains blocked. No unbuildable production commit claimed.",
+      "preservation": "Native IPlatformSecretStore, active picker/backend/cache/UI contracts and accepted shared/root/provider paths untouched. Test-onlyf4cb/e8 already consumed once; no equivalent aliases replayed."
+    }
   },
   "mcpCanonicalMatching20261021": {
     "source": "9cbb95f5ad23c182143def0a3d48a3b394a09370",
