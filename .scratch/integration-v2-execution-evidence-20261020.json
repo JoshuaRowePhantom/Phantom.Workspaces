@@ -7,6 +7,7 @@
     "source": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
     "earlierAcceptedHunk": "74141c06db95feb0297892236e13e1a252476c18 and cba9588f4406eb76952217d315d04805821b1b8d exact four-line missing-source Clear only; stronger current late-read/admin behavior retained.",
     "reproduction": "Two real-broker same-executor cases BEFORE production fix both fail cached-generation count2 vs1. Original log/TRX preserved; isolated read-only diagnosis related, no independent rerun/dumps. Later lease assertions were not reached in red run.",
+    "rawTrxPreservation": "Exact targeted .gitattributes -text prevents core.autocrlf from changing the archived original TRX bytes. Its committed Git blob and original raw file match; manifest SHA256 remains43450832338A947AF93B3CEBB301D7EBC904549B962D855630118953D4015856.",
     "correctedCoverage": "Both missing Environment/SecretStore cases retain independent warm leases, invalidate only missing generation, empty its cache/admin entry, block its callback, preserve other lease and add zero material reads. Focused13 pass.",
     "review": "Fresh independent read-only exact two-file stored-missing-source-review: no significant issues. No reviewer tests/builds/edits.",
     "caseAccounting": "Final App801 = prior795 +2 new source-disappearance cases +4 existing StoredSecretExecutionLifetimeTests; Core160 and actual Transport11 unchanged selectors, freshly run on sourceb007.",
