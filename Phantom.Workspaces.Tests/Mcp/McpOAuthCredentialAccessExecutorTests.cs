@@ -759,9 +759,9 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
         public ValueTask<ReleaseAuthorizationValidation> ValidateAsync(ReleaseAuthorizationIdentifier identifier, ReleasePolicyRequest request, CancellationToken cancellationToken) =>
             this.policy.ValidateAsync(identifier, request, cancellationToken);
         public ValueTask<ReleaseAuthorizationValidation> ValidateAcquisitionAuthorizationAsync(
-            ReleaseAuthorizationIdentifier identifier, ReleasePolicyRequest request, CancellationToken cancellationToken) =>
+            ReleaseAuthorization authorization, ReleasePolicyRequest request, CancellationToken cancellationToken) =>
             ((IProviderAcquisitionAuthorizationPolicy)this.policy)
-                .ValidateAcquisitionAuthorizationAsync(identifier, request, cancellationToken);
+                .ValidateAcquisitionAuthorizationAsync(authorization, request, cancellationToken);
         public async ValueTask FinalizeCredentialIdentityAsync(ReleaseAuthorizationIdentifier identifier, ResolvedCredentialIdentity identity, CancellationToken cancellationToken)
         {
             await this.policy.FinalizeCredentialIdentityAsync(identifier, identity, cancellationToken);
