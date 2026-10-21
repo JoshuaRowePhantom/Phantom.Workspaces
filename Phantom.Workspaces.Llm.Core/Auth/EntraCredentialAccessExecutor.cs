@@ -213,12 +213,6 @@ internal sealed class EntraCredentialAccessExecutor :
             return new CredentialExecutionDenied<EntraCredentialAccessResult>();
         }
 
-        var material = await session.CopyGenerationAsync(generation.Generation, cancellationToken).ConfigureAwait(false);
-        if (material is null)
-        {
-            return new CredentialExecutionInteractionRequired<EntraCredentialAccessResult>();
-        }
-
         return new CredentialExecutionReady<EntraCredentialAccessResult>
         {
             ResolvedIdentity = new()
@@ -229,7 +223,7 @@ internal sealed class EntraCredentialAccessExecutor :
                 RequestIdentifier = policyRequest.RequestIdentifier,
                 RequestGeneration = policyRequest.RequestGeneration,
             },
-            Materializer = new Materializer(material, authorization, context, session, this.timeProvider),
+            Materializer = new Materializer(generation, authorization, context, session, this.timeProvider),
         };
     }
 
@@ -305,26 +299,33 @@ internal sealed class EntraCredentialAccessExecutor :
     }
 
     private sealed class Materializer(
-        EntraCachedMaterial material,
+        CredentialGenerationInspection generationInspection,
         ReleaseAuthorization authorization,
         ICredentialExecutionContext context,
         IEntraCredentialSession session,
         TimeProvider timeProvider) : IAccessResultMaterializer<EntraCredentialAccessResult>
     {
-        public ValueTask<EntraCredentialAccessResult> MaterializeAsync(CancellationToken cancellationToken)
+        public async ValueTask<EntraCredentialAccessResult> MaterializeAsync(CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var request = context.PolicyRequest!;
-            if (request.Credential.AccountIdentifier != material.Inspection.AccountIdentifier)
+            if (request.Credential.AccountIdentifier != generationInspection.AccountIdentifier)
             {
                 throw new ReleaseIdentityMismatchException();
             }
 
-            var generation = material.Inspection.Generation;
-            var generationCache = session;
-            return ValueTask.FromResult(new EntraCredentialAccessResult
+            using var material = await session.CopyGenerationAsync(
+                generationInspection.Generation, authorization, context, cancellationToken).ConfigureAwait(false);
+            if (material is null)
             {
-                ExpiresOn = material.Inspection.ExpiresOn!.Value,
+                throw new ReleaseIdentityMismatchException();
+            }
+
+            var generation = generationInspection.Generation;
+            var generationCache = session;
+            return new EntraCredentialAccessResult
+            {
+                ExpiresOn = generationInspection.ExpiresOn!.Value,
                 GenerationRejection = token => generationCache.InvalidateGenerationAsync(generation, token),
                 AccessToken = new SensitiveValueLease(
                     material.Token,
@@ -333,16 +334,15 @@ internal sealed class EntraCredentialAccessExecutor :
                         AuthorizationIdentifier = authorization.Identifier,
                         Request = request,
                         MaterialGeneration = generation,
-                        ExpiresOn = material.Inspection.ExpiresOn,
+                        ExpiresOn = generationInspection.ExpiresOn,
                     },
                     context.CreateLeaseContext(session),
                     timeProvider),
-            });
+            };
         }
 
         public ValueTask DisposeAsync()
         {
-            material.Dispose();
             return ValueTask.CompletedTask;
         }
     }

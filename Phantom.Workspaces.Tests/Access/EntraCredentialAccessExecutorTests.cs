@@ -415,8 +415,8 @@ public sealed class EntraCredentialAccessExecutorTests
             await current.AccessToken.UseAsync<int>(
                 (_, _) => throw new InvalidOperationException("Deleted cache generation cannot be used."),
                 TestContext.Current.CancellationToken));
-        Assert.IsType<EntraGenerationUseUnavailable<int>>(await fixture.Session.UseGenerationAsync<int>(
-            replacement, (_, _) => throw new InvalidOperationException("Deleted private generation cannot be used."),
+        Assert.IsType<EntraGenerationUseDenied<int>>(await fixture.Session.UseGenerationAsync<int>(
+            replacement, null, null, (_, _) => throw new InvalidOperationException("Private use without a capability cannot run."),
             TestContext.Current.CancellationToken));
         Assert.Equal(2, fixture.Acquirer.Calls);
     }
@@ -545,7 +545,7 @@ public sealed class EntraCredentialAccessExecutorTests
         public ValueTask DisposeAsync() => policy.DisposeAsync();
     }
 
-    private static EntraCredentialAccessRequest CreateRequest()
+    internal static EntraCredentialAccessRequest CreateRequest()
     {
         var policyRequest = ReleaseAuthorizationContractTests.Request();
         var request = new EntraCredentialAccessRequest

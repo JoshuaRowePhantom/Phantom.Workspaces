@@ -59,7 +59,9 @@ public sealed class EntraCredentialSessionTests
         var generation = await session.InspectGenerationAsync(CancellationToken.None);
         Assert.Equal(receipt.CommittedGeneration, generation!.Generation);
         Assert.Equal(acquirer.Account, generation.AccountIdentifier);
-        using var material = await session.CopyGenerationAsync(receipt.CommittedGeneration, CancellationToken.None);
+        var export = EntraSessionTestAuthorization.Export(request, acquirer.Account);
+        using var material = await session.CopyGenerationAsync(
+            receipt.CommittedGeneration, export.Authorization, export.Context, CancellationToken.None);
         Assert.Equal("private-token", new string(material!.Token));
     }
 
@@ -115,8 +117,9 @@ public sealed class EntraCredentialSessionTests
         var acquirer = new Acquirer();
         await using var session = new EntraCredentialSession(request, new ForbiddenCredential(), acquirer);
         var generation = await AcquireAsync(session, request);
+        var capability = EntraSessionTestAuthorization.PrivateConnect(request, acquirer.Account);
         ReadOnlyMemory<char> observed = default;
-        var outcome = await session.UseGenerationAsync(generation, (material, _) =>
+        var outcome = await session.UseGenerationAsync(generation, capability.Context, capability.Permit, (material, _) =>
         {
             observed = material;
             Assert.Equal("private-token", new string(material.Span));
@@ -125,7 +128,7 @@ public sealed class EntraCredentialSessionTests
         Assert.Equal("private-token".Length, Assert.IsType<EntraGenerationUseSucceeded<int>>(outcome).Result);
         Assert.All(observed.ToArray(), character => Assert.Equal('\0', character));
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-            await session.UseGenerationAsync<int>(generation, (material, _) =>
+            await session.UseGenerationAsync<int>(generation, capability.Context, capability.Permit, (material, _) =>
             {
                 observed = material;
                 throw new InvalidOperationException("callback failed");
@@ -141,10 +144,11 @@ public sealed class EntraCredentialSessionTests
         var acquirer = new Acquirer();
         await using var session = new EntraCredentialSession(request, new ForbiddenCredential(), acquirer);
         var generation = await AcquireAsync(session, request);
+        var capability = EntraSessionTestAuthorization.PrivateConnect(request, acquirer.Account);
         using var cancellation = new CancellationTokenSource();
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         ReadOnlyMemory<char> observed = default;
-        var pending = session.UseGenerationAsync<int>(generation, async (material, cancellationToken) =>
+        var pending = session.UseGenerationAsync<int>(generation, capability.Context, capability.Permit, async (material, cancellationToken) =>
         {
             observed = material;
             started.TrySetResult();
@@ -165,11 +169,12 @@ public sealed class EntraCredentialSessionTests
         var request = Request();
         await using var session = new EntraCredentialSession(request, new ForbiddenCredential(), new Acquirer());
         var generation = await AcquireAsync(session, request);
+        var capability = EntraSessionTestAuthorization.PrivateConnect(request);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var finish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         ReadOnlyMemory<char> observed = default;
-        var pending = session.UseGenerationAsync<int>(generation, async (material, cancellationToken) =>
+        var pending = session.UseGenerationAsync<int>(generation, capability.Context, capability.Permit, async (material, cancellationToken) =>
         {
             observed = material;
             using var registration = cancellationToken.Register(() => cancelled.TrySetResult());
@@ -186,7 +191,8 @@ public sealed class EntraCredentialSessionTests
         await disposal.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.All(observed.ToArray(), character => Assert.Equal('\0', character));
         Assert.IsType<EntraGenerationUseUnavailable<int>>(await session.UseGenerationAsync<int>(
-            generation, (_, _) => throw new InvalidOperationException("Disposed session cannot run."), CancellationToken.None));
+            generation, capability.Context, capability.Permit,
+            (_, _) => throw new InvalidOperationException("Disposed session cannot run."), CancellationToken.None));
     }
 
     [Fact]
@@ -196,10 +202,11 @@ public sealed class EntraCredentialSessionTests
         var acquirer = new Acquirer();
         await using var session = new EntraCredentialSession(request, new ForbiddenCredential(), acquirer);
         var generation = await AcquireAsync(session, request);
+        var capability = EntraSessionTestAuthorization.PrivateConnect(request, acquirer.Account);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var finish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         ReadOnlyMemory<char> observed = default;
-        var pending = session.UseGenerationAsync<int>(generation, async (material, _) =>
+        var pending = session.UseGenerationAsync<int>(generation, capability.Context, capability.Permit, async (material, _) =>
         {
             observed = material;
             started.TrySetResult();
@@ -214,9 +221,11 @@ public sealed class EntraCredentialSessionTests
         Assert.IsType<EntraGenerationUseSucceeded<int>>(await pending.WaitAsync(TimeSpan.FromSeconds(10)));
         Assert.All(observed.ToArray(), character => Assert.Equal('\0', character));
         Assert.IsType<EntraGenerationUseUnavailable<int>>(await session.UseGenerationAsync<int>(
-            generation, (_, _) => throw new InvalidOperationException("A stale receipt cannot read a replacement."), CancellationToken.None));
+            generation, capability.Context, capability.Permit,
+            (_, _) => throw new InvalidOperationException("A stale receipt cannot read a replacement."), CancellationToken.None));
         Assert.IsType<EntraGenerationUseSucceeded<int>>(await session.UseGenerationAsync(
-            replacement, (material, _) => ValueTask.FromResult(material.Length), CancellationToken.None));
+            replacement, capability.Context, capability.Permit,
+            (material, _) => ValueTask.FromResult(material.Length), CancellationToken.None));
         Assert.Equal(2, acquirer.Calls);
     }
 
@@ -228,14 +237,17 @@ public sealed class EntraCredentialSessionTests
         var acquirer = new Acquirer { ExpiresOn = clock.GetUtcNow().AddHours(1) };
         await using var session = new EntraCredentialSession(request, new ForbiddenCredential(), acquirer, clock);
         var generation = await AcquireAsync(session, request);
+        var capability = EntraSessionTestAuthorization.PrivateConnect(request, acquirer.Account);
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
             await session.UseGenerationAsync<int>(
-                generation, (_, _) => throw new InvalidOperationException("Cancelled use cannot run."), cancellation.Token));
+                generation, capability.Context, capability.Permit,
+                (_, _) => throw new InvalidOperationException("Cancelled use cannot run."), cancellation.Token));
         clock.Advance(TimeSpan.FromHours(1));
         Assert.IsType<EntraGenerationUseUnavailable<int>>(await session.UseGenerationAsync<int>(
-            generation, (_, _) => throw new InvalidOperationException("Expired use cannot run."), CancellationToken.None));
+            generation, capability.Context, capability.Permit,
+            (_, _) => throw new InvalidOperationException("Expired use cannot run."), CancellationToken.None));
         Assert.Equal(1, acquirer.Calls);
     }
 
@@ -286,6 +298,36 @@ public sealed class EntraCredentialSessionTests
         Assert.Equal(before, await session.InspectGenerationAsync(CancellationToken.None));
         Assert.Equal(approvedAccount, (await session.InspectCacheAsync(request, CancellationToken.None)).AccountIdentifier);
         Assert.Equal(2, acquirer.Calls);
+    }
+
+    [Fact]
+    public async Task EntraCredentialSession_ExportCopyRequiresFinalizedEntraReleaseAuthorization()
+    {
+        var request = Request();
+        var acquirer = new Acquirer();
+        await using var session = new EntraCredentialSession(request, new ForbiddenCredential(), acquirer);
+        var generation = await AcquireAsync(session, request);
+        Assert.Null(await session.CopyGenerationAsync(generation, null, null, CancellationToken.None));
+        var connect = EntraSessionTestAuthorization.PrivateConnect(request, acquirer.Account);
+        var authorized = EntraSessionTestAuthorization.Export(request, acquirer.Account);
+        Assert.Null(await session.CopyGenerationAsync(
+            generation, authorized.Authorization, connect.Context, CancellationToken.None));
+        foreach (var validation in new[]
+        {
+            ReleaseAuthorizationValidation.AuthorizationRequired,
+            ReleaseAuthorizationValidation.IdentityMismatch,
+        })
+        {
+            var denied = EntraSessionTestAuthorization.Export(request, acquirer.Account, validation);
+            Assert.Null(await session.CopyGenerationAsync(
+                generation, denied.Authorization, denied.Context, CancellationToken.None));
+        }
+
+        using var material = await session.CopyGenerationAsync(
+            generation, authorized.Authorization, authorized.Context, CancellationToken.None);
+        Assert.NotNull(material);
+        Assert.Equal("private-token", new string(material!.Token));
+        Assert.Equal(1, acquirer.Calls);
     }
 
     internal static EntraCredentialAccessRequest Request()

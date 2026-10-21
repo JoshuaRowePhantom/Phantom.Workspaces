@@ -49,6 +49,7 @@ internal sealed record EntraGenerationUseSucceeded<TResult> : EntraGenerationUse
 }
 
 internal sealed record EntraGenerationUseUnavailable<TResult> : EntraGenerationUseOutcome<TResult>;
+internal sealed record EntraGenerationUseDenied<TResult> : EntraGenerationUseOutcome<TResult>;
 
 internal interface IEntraCredentialSession : ICredentialGenerationCache, IAsyncDisposable
 {
@@ -63,10 +64,14 @@ internal interface IEntraCredentialSession : ICredentialGenerationCache, IAsyncD
 
     ValueTask<EntraCachedMaterial?> CopyGenerationAsync(
         CredentialMaterialGenerationIdentifier generation,
+        ReleaseAuthorization? authorization,
+        ICredentialExecutionContext? context,
         CancellationToken cancellationToken);
 
     ValueTask<EntraGenerationUseOutcome<TResult>> UseGenerationAsync<TResult>(
         CredentialMaterialGenerationIdentifier generation,
+        ICredentialExecutionContext? parentContext,
+        ProviderInteractionPermit? parentExecutionPermit,
         Func<ReadOnlyMemory<char>, CancellationToken, ValueTask<TResult>> operation,
         CancellationToken cancellationToken);
 }
@@ -223,16 +228,45 @@ internal sealed class EntraCredentialSession : IEntraCredentialSession
         return ValueTask.FromResult(this.provider.InvalidateBrokerGeneration(generation));
     }
 
-    public ValueTask<EntraCachedMaterial?> CopyGenerationAsync(
+    public async ValueTask<EntraCachedMaterial?> CopyGenerationAsync(
         CredentialMaterialGenerationIdentifier generation,
+        ReleaseAuthorization? authorization,
+        ICredentialExecutionContext? context,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return ValueTask.FromResult(this.provider.CopyBrokerGeneration(generation));
+        var request = context?.PolicyRequest;
+        if (authorization is null || context is null || request is null ||
+            request.Credential.Provider != CredentialProviderKind.Entra ||
+            request.Credential.Kind != CredentialKind.AccessToken ||
+            request.Credential.LogicalIdentifier != this.logicalIdentifier ||
+            request.SourceIdentifier != this.sourceIdentifier ||
+            request.Credential.AccountIdentifier is null ||
+            request.RequestIdentifier != context.RequestIdentifier ||
+            request.RequestGeneration != context.Revision ||
+            authorization.RequestIdentifier != context.RequestIdentifier ||
+            authorization.RequestGeneration != context.Revision ||
+            await context.Policy.ValidateAsync(authorization.Identifier, request, cancellationToken).ConfigureAwait(false) !=
+                ReleaseAuthorizationValidation.Valid)
+        {
+            return null;
+        }
+
+        var metadata = this.provider.InspectBrokerGeneration();
+        if (metadata is null || metadata.Generation != generation || metadata.AccountIdentifier != request.Credential.AccountIdentifier ||
+            metadata.ExpiresOn is not { } expiresOn || this.timeProvider.GetUtcNow() >= expiresOn)
+        {
+            return null;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return this.provider.CopyBrokerGeneration(generation);
     }
 
     public async ValueTask<EntraGenerationUseOutcome<TResult>> UseGenerationAsync<TResult>(
         CredentialMaterialGenerationIdentifier generation,
+        ICredentialExecutionContext? parentContext,
+        ProviderInteractionPermit? parentExecutionPermit,
         Func<ReadOnlyMemory<char>, CancellationToken, ValueTask<TResult>> operation,
         CancellationToken cancellationToken)
     {
@@ -242,21 +276,75 @@ internal sealed class EntraCredentialSession : IEntraCredentialSession
             return new EntraGenerationUseUnavailable<TResult>();
         }
 
+        var request = parentContext?.PolicyRequest;
+        if (parentContext is null || parentExecutionPermit is null || request is null ||
+            request.Credential.Provider != CredentialProviderKind.DevTunnel ||
+            request.Credential.Kind != CredentialKind.ConnectToken ||
+            request.RequestIdentifier != parentContext.RequestIdentifier ||
+            request.RequestGeneration != parentContext.Revision ||
+            request.RequestorIdentifier != parentContext.Requestor.Identifier ||
+            request.Use.Fingerprint != parentContext.Use.Fingerprint)
+        {
+            return new EntraGenerationUseDenied<TResult>();
+        }
+
+        var key = new ProviderAcquisitionKey
+        {
+            Configuration = request.Credential.LogicalIdentifier,
+            Source = request.SourceIdentifier,
+            Account = request.Credential.AccountIdentifier,
+            Protocol = ProviderProtocolKind.TunnelConnect,
+        };
+        var requestIdentifier = parentContext.RequestIdentifier;
+        var revision = parentContext.Revision;
+        var acquisitionGeneration = parentContext.AcquisitionGeneration;
+        bool IsAuthorized() =>
+            parentExecutionPermit.Authorizes(
+                requestIdentifier, revision, CredentialExecutorKind.DevTunnelConnect, acquisitionGeneration, key) &&
+            parentExecutionPermit.AuthorizesProvider(CredentialExecutorKind.DevTunnelConnect, key);
+        if (!IsAuthorized())
+        {
+            return new EntraGenerationUseDenied<TResult>();
+        }
+
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, this.lifetime.Token);
         await this.useGate.WaitAsync(cancellation.Token).ConfigureAwait(false);
         try
         {
             cancellation.Token.ThrowIfCancellationRequested();
-            using var material = this.provider.CopyBrokerGeneration(generation);
-            if (material is null || material.Inspection.ExpiresOn is not { } expiresOn ||
+            if (!IsAuthorized())
+            {
+                return new EntraGenerationUseDenied<TResult>();
+            }
+
+            var metadata = this.provider.InspectBrokerGeneration();
+            if (metadata is null || metadata.Generation != generation || metadata.ExpiresOn is not { } expiresOn ||
                 this.timeProvider.GetUtcNow() >= expiresOn)
             {
                 return new EntraGenerationUseUnavailable<TResult>();
             }
 
+            if (key.Account is { } account && metadata.AccountIdentifier != account)
+            {
+                return new EntraGenerationUseDenied<TResult>();
+            }
+
+            using var material = this.provider.CopyBrokerGeneration(generation);
+            if (material is null)
+            {
+                return new EntraGenerationUseUnavailable<TResult>();
+            }
+
+            if (!IsAuthorized())
+            {
+                return new EntraGenerationUseDenied<TResult>();
+            }
+
             var result = await operation(material.Token, cancellation.Token).ConfigureAwait(false);
             cancellation.Token.ThrowIfCancellationRequested();
-            return new EntraGenerationUseSucceeded<TResult> { Result = result };
+            return IsAuthorized()
+                ? new EntraGenerationUseSucceeded<TResult> { Result = result }
+                : new EntraGenerationUseDenied<TResult>();
         }
         finally
         {

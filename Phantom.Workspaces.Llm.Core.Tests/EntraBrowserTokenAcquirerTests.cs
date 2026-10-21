@@ -68,7 +68,9 @@ public sealed class EntraBrowserTokenAcquirerTests
         await startedB.Task.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Equal(requestA.Credential.AccountIdentifier,
             (await session.InspectGenerationAsync(CancellationToken.None))!.AccountIdentifier);
-        using (var material = await session.CopyGenerationAsync(committedA.CommittedGeneration, CancellationToken.None))
+        var exportA = EntraSessionTestAuthorization.Export(requestA);
+        using (var material = await session.CopyGenerationAsync(
+            committedA.CommittedGeneration, exportA.Authorization, exportA.Context, CancellationToken.None))
         {
             Assert.NotNull(material);
             Assert.Equal("token-a", new string(material!.Token));
@@ -77,13 +79,16 @@ public sealed class EntraBrowserTokenAcquirerTests
         var committedB = Assert.IsType<ProviderAcquisitionSucceeded>(await second.WaitAsync(TimeSpan.FromSeconds(10)));
         Assert.Equal(requestB.Credential.AccountIdentifier,
             (await session.InspectGenerationAsync(CancellationToken.None))!.AccountIdentifier);
-        using (var material = await session.CopyGenerationAsync(committedB.CommittedGeneration, CancellationToken.None))
+        var exportB = EntraSessionTestAuthorization.Export(requestB);
+        using (var material = await session.CopyGenerationAsync(
+            committedB.CommittedGeneration, exportB.Authorization, exportB.Context, CancellationToken.None))
         {
             Assert.NotNull(material);
             Assert.Equal("token-b", new string(material!.Token));
         }
 
-        Assert.Null(await session.CopyGenerationAsync(committedA.CommittedGeneration, CancellationToken.None));
+        Assert.Null(await session.CopyGenerationAsync(
+            committedA.CommittedGeneration, exportA.Authorization, exportA.Context, CancellationToken.None));
         Assert.Equal(0, selector.TokenCalls);
         Assert.Equal(2, selector.AuthenticationCalls);
         Assert.Equal(new[] { accountA, accountB }, optionsSeen.Select(options => options.AuthenticationRecord));
