@@ -71,7 +71,7 @@ public sealed class AuthorizationEndToEndTests
             MainWindowIntegrationTests.CreateTestRunningAgentChatTable(), cache, NullLoggerFactory.Instance,
             accessBroker: host.Broker, accessPresentationScope: () => host.PresentationScope);
         var viewModel = new MainWindowViewModel(
-            new WebRepositorySource("https://repository.invalid/", UseGitHubAuthToken: true),
+            new WebRepositorySource("https://repository-8080.euw.devtunnels.ms/", UseGitHubAuthToken: true),
             new Configuration.WorkspacesConfiguration { SkipStartupWorkspace = true },
             new ProfileStore(Path.Combine(Environment.CurrentDirectory, ".nonexistent-startup-repository", "profile.json")),
             services);
@@ -105,7 +105,7 @@ public sealed class AuthorizationEndToEndTests
         };
         await using var cache = new AgentPersistenceStoreCache(host.Broker, () => host.PresentationScope);
         var store = await cache.GetOrCreateAsync(
-            new WebRepositorySource("https://persistence.invalid/", UseGitHubAuthToken: true));
+            new WebRepositorySource("https://persistence-8080.euw.devtunnels.ms/", UseGitHubAuthToken: true));
         var pending = store.ReadSubAgentChildIdsAsync("session", TestContext.Current.CancellationToken).AsTask();
         await registered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         Assert.Single(host.AuthorizationRows.Rows);
