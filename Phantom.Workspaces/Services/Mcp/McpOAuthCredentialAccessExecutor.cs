@@ -142,6 +142,7 @@ internal sealed class McpOAuthCredentialAccessExecutor :
         }
 
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, this.lifetime.Token);
+        FixedSession? unpublishedSession = null;
         try
         {
             var metadata = await provider.GenerationCache.InspectGenerationAsync(linked.Token).ConfigureAwait(false);
@@ -180,11 +181,11 @@ internal sealed class McpOAuthCredentialAccessExecutor :
             var account = await ResolveAccountAsync(provider.Configuration, tokens.AccessToken, linked.Token).ConfigureAwait(false);
             provider.SetAccount(generation, account);
             var session = new FixedSession(provider.Configuration, tokens.AccessToken, this.RemoveSession);
+            unpublishedSession = session;
             lock (this.gate)
             {
                 if (this.disposed)
                 {
-                    _ = session.DisposeAsync();
                     return new CredentialExecutionFailed<McpCredentialUseResult> { ErrorCode = AccessErrorCode.Disposed, CanRetry = false };
                 }
                 this.sessions.Add(session);
@@ -193,10 +194,9 @@ internal sealed class McpOAuthCredentialAccessExecutor :
             var committed = await provider.GenerationCache.InspectGenerationAsync(linked.Token).ConfigureAwait(false);
             if (committed?.Generation != generation)
             {
-                await session.DisposeAsync().ConfigureAwait(false);
                 return new CredentialExecutionInteractionRequired<McpCredentialUseResult>();
             }
-            return new CredentialExecutionReady<McpCredentialUseResult>
+            var ready = new CredentialExecutionReady<McpCredentialUseResult>
             {
                 ResolvedIdentity = new ResolvedCredentialIdentity
                 {
@@ -208,11 +208,20 @@ internal sealed class McpOAuthCredentialAccessExecutor :
                 },
                 Materializer = new Materializer(session, committed, authorization, context, provider.GenerationCache),
             };
+            unpublishedSession = null;
+            return ready;
         }
         catch (Exception exception) when (exception is HttpRequestException or McpException or IOException or
             JsonException or Win32Exception or UnauthorizedAccessException or InvalidOperationException)
         {
             return new CredentialExecutionFailed<McpCredentialUseResult> { ErrorCode = AccessErrorCode.ProviderFailure, CanRetry = true };
+        }
+        finally
+        {
+            if (unpublishedSession is not null)
+            {
+                await unpublishedSession.DisposeAsync().ConfigureAwait(false);
+            }
         }
     }
 
@@ -604,9 +613,15 @@ internal sealed class McpOAuthCredentialAccessExecutor :
         {
             if (Interlocked.Exchange(ref this.disposed, 1) == 0)
             {
-                this.client.Dispose();
-                CryptographicOperations.ZeroMemory(MemoryMarshal.AsBytes(this.token.AsSpan()));
-                this.onDisposed(this);
+                try
+                {
+                    this.client.Dispose();
+                }
+                finally
+                {
+                    CryptographicOperations.ZeroMemory(MemoryMarshal.AsBytes(this.token.AsSpan()));
+                    this.onDisposed(this);
+                }
             }
             return ValueTask.CompletedTask;
         }

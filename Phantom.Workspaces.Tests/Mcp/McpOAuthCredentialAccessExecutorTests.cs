@@ -387,7 +387,9 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
         internal Fixture(
             bool confidential = false,
             bool cycle = false,
-            Func<Server, HttpMessageHandler>? createHttpHandler = null)
+            Func<Server, HttpMessageHandler>? createHttpHandler = null,
+            Func<ICredentialAccessExecutor<McpOAuthCredentialUseRequest, McpCredentialUseResult>,
+                ICredentialAccessExecutor<McpOAuthCredentialUseRequest, McpCredentialUseResult>>? wrapMcpExecutor = null)
         {
             this.Store = new Store(this.Events);
             this.Server = new Server(this.Events);
@@ -413,7 +415,7 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
             };
             this.Executor = new McpOAuthCredentialAccessExecutor([this.Configuration], this.Browser);
             var executors = new CredentialAccessExecutorRegistry();
-            executors.Add<McpOAuthCredentialUseRequest, McpCredentialUseResult>(this.Executor);
+            executors.Add<McpOAuthCredentialUseRequest, McpCredentialUseResult>(wrapMcpExecutor?.Invoke(this.Executor) ?? this.Executor);
             if (cycle)
             {
                 executors.Add<StoredSecretAccessRequest, StoredSecretAccessResult>(new CycleExecutor(this.Request()));
@@ -580,6 +582,9 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
     {
         internal string AccessToken { get; set; } = "private-access";
         internal string? Subject { get; set; } = "private-stable-account";
+        internal bool BlockAccount { get; set; }
+        internal TaskCompletionSource AccountRequested { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource ContinueAccount { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal int TokenRequests { get; private set; }
         internal bool SawVerifier { get; private set; }
         internal bool SawClientSecret { get; private set; }
@@ -613,6 +618,11 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
             if (uri.AbsolutePath == "/userinfo")
             {
                 Assert.Equal(this.AccessToken, request.Headers.Authorization?.Parameter);
+                this.AccountRequested.TrySetResult();
+                if (this.BlockAccount)
+                {
+                    await this.ContinueAccount.Task.WaitAsync(cancellationToken);
+                }
                 return Json(JsonSerializer.Serialize(new { sub = this.Subject }));
             }
             if (uri.AbsolutePath == "/mcp")

@@ -1,8 +1,11 @@
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Reflection;
 using System.Text;
 using Phantom.Workspaces.Llm.Interfaces.Access;
+using Phantom.Workspaces.Llm.Interfaces.Access.Execution;
+using Phantom.Workspaces.Llm.Auth;
 
 namespace Phantom.Workspaces.Tests.Mcp;
 
@@ -107,6 +110,96 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
         Assert.Equal("caller-body", await content.ReadAsStringAsync(TestContext.Current.CancellationToken));
     }
 
+    [Theory]
+    [InlineData("cancelled")]
+    [InlineData("exception")]
+    [InlineData("invalidated")]
+    public async Task McpOAuthExecutor_UnpublishedSessionExit_DisposesClientAndZeroesMaterial(string exit)
+    {
+        var tracker = new SessionTracker();
+        ObservedExecutor? observed = null;
+        await using var fixture = new Fixture(createHttpHandler: tracker.Create,
+            wrapMcpExecutor: executor => observed = new ObservedExecutor(executor));
+        fixture.Server.BlockAccount = true;
+        tracker.OnDisposing = () => tracker.OwnedBuffer = FindOwnedBuffer(fixture.Executor);
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var acquisition = fixture.Broker.AcquireAsync(fixture.Request(), cancellation.Token);
+        await fixture.AllowAsync();
+        await fixture.Server.AccountRequested.Task.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+        var cacheGate = FindCacheGate(fixture.Configuration.Cache);
+        var held = false;
+        try
+        {
+            switch (exit)
+            {
+                case "cancelled":
+                    await cacheGate.WaitAsync(TestContext.Current.CancellationToken);
+                    held = true;
+                    break;
+                case "exception":
+                    cacheGate.Dispose();
+                    break;
+                case "invalidated":
+                    var cache = fixture.Executor.GetGenerationCache(fixture.Configuration.Identifier);
+                    var metadata = (await cache.InspectGenerationAsync(TestContext.Current.CancellationToken))!;
+                    await cache.InvalidateGenerationAsync(metadata.Generation, TestContext.Current.CancellationToken);
+                    break;
+            }
+            fixture.Server.ContinueAccount.TrySetResult();
+            await tracker.Created.Task.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+            if (exit == "cancelled") { cancellation.Cancel(); }
+            await observed!.Finished.Task.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+            var outcome = await acquisition.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+            if (exit == "cancelled") { Assert.IsType<AccessCancelled<McpCredentialUseResult>>(outcome); }
+            else if (exit == "exception") { Assert.IsType<AccessFailed<McpCredentialUseResult>>(outcome); }
+            else { Assert.IsType<AccessReacquisitionRequired<McpCredentialUseResult>>(outcome); }
+
+            Assert.Equal(1, tracker.Disposals);
+            Assert.NotNull(tracker.OwnedBuffer);
+            Assert.All(tracker.OwnedBuffer, character => Assert.Equal('\0', character));
+            Assert.Empty((System.Collections.IEnumerable)typeof(Phantom.Workspaces.Services.Mcp.McpOAuthCredentialAccessExecutor)
+                .GetField("sessions", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(fixture.Executor)!);
+        }
+        finally
+        {
+            if (held) { cacheGate.Release(); }
+        }
+        await fixture.DisposeAsync();
+        Assert.Equal(1, tracker.Disposals);
+    }
+
+    private static char[]? FindOwnedBuffer(Phantom.Workspaces.Services.Mcp.McpOAuthCredentialAccessExecutor executor)
+    {
+        var sessions = (System.Collections.IEnumerable)executor.GetType()
+            .GetField("sessions", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(executor)!;
+        var session = sessions.Cast<object>().SingleOrDefault();
+        return session?.GetType().GetField("token", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(session) as char[];
+    }
+
+    private static SemaphoreSlim FindCacheGate(CredentialManagerTokenCache cache)
+    {
+        var partition = cache.GetType().GetField("partition", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(cache)!;
+        return (SemaphoreSlim)partition.GetType().GetProperty("Gate", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(partition)!;
+    }
+
+    private sealed class ObservedExecutor(
+        ICredentialAccessExecutor<McpOAuthCredentialUseRequest, McpCredentialUseResult> executor) :
+        ICredentialAccessExecutor<McpOAuthCredentialUseRequest, McpCredentialUseResult>, IAsyncDisposable
+    {
+        internal TaskCompletionSource Finished { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public CredentialExecutorKind Kind => executor.Kind;
+        public ValueTask<CredentialInspection> InspectAsync(McpOAuthCredentialUseRequest request, CancellationToken cancellationToken) =>
+            executor.InspectAsync(request, cancellationToken);
+        public async ValueTask<CredentialExecutionOutcome<McpCredentialUseResult>> ExecuteAsync(
+            McpOAuthCredentialUseRequest request, CredentialInspection inspection, ReleaseAuthorization authorization,
+            ProviderInteractionPermit? interactionPermit, ICredentialExecutionContext context, CancellationToken cancellationToken)
+        {
+            try { return await executor.ExecuteAsync(request, inspection, authorization, interactionPermit, context, cancellationToken); }
+            finally { this.Finished.TrySetResult(); }
+        }
+        public ValueTask DisposeAsync() => ((IAsyncDisposable)executor).DisposeAsync();
+    }
+
     private sealed class SessionTracker
     {
         private int handlers;
@@ -114,11 +207,18 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
         internal bool Block { get; init; }
         internal HttpRequestMessage? Outgoing { get; set; }
         internal string? Body { get; set; }
+        internal char[]? OwnedBuffer { get; set; }
+        internal Action? OnDisposing { get; set; }
+        internal int Disposals { get; set; }
+        internal TaskCompletionSource Created { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource Sending { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        internal HttpMessageHandler Create(Server server) => Interlocked.Increment(ref this.handlers) == 3
-            ? new SessionHandler(this)
-            : new Handler(server);
+        internal HttpMessageHandler Create(Server server)
+        {
+            if (Interlocked.Increment(ref this.handlers) != 3) { return new Handler(server); }
+            this.Created.TrySetResult();
+            return new SessionHandler(this);
+        }
     }
 
     private sealed class SessionHandler(SessionTracker tracker) : HttpMessageHandler
@@ -139,6 +239,15 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
                 RequestMessage = request,
                 Content = new StringContent("response-body"),
             };
+        }
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                tracker.Disposals++;
+                tracker.OnDisposing?.Invoke();
+            }
+            base.Dispose(disposing);
         }
     }
 
