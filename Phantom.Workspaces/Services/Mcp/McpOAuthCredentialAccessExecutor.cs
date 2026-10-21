@@ -31,7 +31,7 @@ internal sealed record McpOAuthProviderConfiguration
     public Func<HttpMessageHandler> CreateHttpHandler { get; init; } = () => new SocketsHttpHandler { AllowAutoRedirect = false };
 }
 
-internal sealed class McpOAuthCredentialAccessExecutor :
+internal sealed partial class McpOAuthCredentialAccessExecutor :
     ICredentialAccessExecutor<McpOAuthCredentialUseRequest, McpCredentialUseResult>, IAsyncDisposable
 {
     private readonly object gate = new();
@@ -289,6 +289,11 @@ internal sealed class McpOAuthCredentialAccessExecutor :
             await this.lifetime.CancelAsync().ConfigureAwait(false);
             foreach (var callback in callbacks) { await callback.DisposeAsync().ConfigureAwait(false); }
             await Task.WhenAll(pending).ConfigureAwait(false);
+            lock (this.gate)
+            {
+                this.cacheIdentifiers.Clear();
+                this.listedCaches.Clear();
+            }
             foreach (var session in active)
             {
                 await session.DisposeAsync().ConfigureAwait(false);
