@@ -3,8 +3,8 @@
   "worktree": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020",
   "branch": "integration/access-arc-ready-v2-20261020",
   "baseline": "e8ed98d70fe885ce37b12410e82f63317a923db5",
-  "status": "CLEAN checkpointe6515e9a: exact immutable rootabd864f3 regression consumed once; actual host late MCP registration, metadata-only aggregate listing, original-generation deletion and unchanged authorization rows/release memory now pass100 initial plus100x10. Current parent admin handoff also explicitly reports exactb515 facet source clearance, separate from ac9 and already-received9cbb clearance; stale pending relays do not downgrade those receipts. Production unchanged since0434a855. Prior HTTP82x10, CLI/root151x10, Transport11x10, MCP99x10, Core43x10 and generic105x10 retain original provenance. Separate broker shutdown239 run5, GitHub final-await High and latest direct Core App prerequisite remain blockers. Not whole-arc acceptance.",
-  "reviewedCodeCheckpoint": "e6515e9aaef72d63dc3efacbd3f46edea90dca61",
+  "status": "CLEAN coherent paired endpointc9d203af: parent-authorized App/Core legacy entry points, retired modal family and OAuth marker removed; genuine native store/picker/cache/configuration contracts preserved. Actual reference audit found missing ready1566 usage callers; seven immutable095 paths plus exact live root broker/scope and cancellation/ownership integration committed8152b9af before final retirement. Core116 and App133 each initial plus10 stability passes, then fresh exact committed116/133 pass; independent new21-file delta review clear. Historical81504 is only an incomplete SDK prefix, NEVER standalone accepted; append-only c9 completes actual pair. New ready GH74 and broker327/6c/653 remain integrator intake, not waiting old owners; separate root shutdown239 failure still documented. Not whole-arc acceptance.",
+  "reviewedCodeCheckpoint": "c9d203afc7638451a9f3147af2cbf9e0ecb0b80b",
   "sourceToLocal": {
     "19acd7f6b1940290d08c43dfc4e9f535d56d03f3": "ac151c04",
     "083c040727028de4694192bd378e6d23d9b96529": "9202d011",
@@ -38,7 +38,8 @@
     "3a368e44effbc26dcdc0c9704297e38293f1d9ce": "0434a8550f4a8977d9451c38be585adfbb0bfb71 (ONLY generic executor/tests)",
     "9d470c2f6e8ce25f695c7116be0c3ab75a6a5ce1": "0434a8550f4a8977d9451c38be585adfbb0bfb71 (generic-only exact correction)",
     "04fca10642f1630dc2f8d95c79a95a3d4f8542c4": "0434a8550f4a8977d9451c38be585adfbb0bfb71 (generic-only exact final drain correction)",
-    "abd864f31fad996993fede97e511db287b8c57e0": "e6515e9aaef72d63dc3efacbd3f46edea90dca61"
+    "abd864f31fad996993fede97e511db287b8c57e0": "e6515e9aaef72d63dc3efacbd3f46edea90dca61",
+    "095a7ed352bb9d07b34f10b6a918bfd23d0f56a2": "8152b9af305a85a7ae7f5e4520c0cb514716a301 (ONLY seven usage/root/test paths plus reviewed live-scope/cancellation integration; obsolete wrapper tests excluded)"
   },
   "gitHubOwnershipPair20261021": {
     "coherentCodeCheckpoint": "cbce2a686879be78873d45f232bac3dc735e3ca0",
@@ -56,27 +57,41 @@
       "communication": "Provider owner35ff notified directly before consumption, including exact selective scope and pending canonical boundary."
     },
     "review": "Fresh independent read-only review of48e0b75a..0aa7f5f7 plus exact paired caller/fixture delta: no significant issues found. Reviewer did not edit or build/test.",
-    "boundary": "c4d b382 clearance is ONLY post-callback cancellation/local-proof rejection result cleanup. Canonical asynchronous actual-policy/provisional validation and post-final-await generation/expiry checks remain owner35ff pending; these are not resolved by this pair."
+    "boundary": "At this pair's cbce checkpoint, c4d b382 clearance covered ONLY unpublished result cleanup, not canonical async/post-final-await checks. NEW final owner7a packet0879/89/74 is source-cleared and awaiting integrator intake; do not wait old35ff ownership or infer current High resolved by this earlier pair alone."
   },
   "latestDirectUiAndCoreAuthority20261021": {
-    "authority": "Direct parent message2026-10-21T01:00:11-07:00 supersedes conflicting earlier peer/file source-review and legacy-ownership wording.",
+    "authority": "Historical01:00 UI/source-review gate retained for provenance. NEW direct parent2026-10-21T02:32:01-07:00 explicitly reassigns coherent paired App/Core retirement exclusively to2042 and stops35ff dead-file scope; current absolute manifest separately requires retired modal family/OAuth marker removal.",
     "uiSource": "fa2b26f07dd05be7b2571eea05df88c5b0dadad9",
     "uiLocal": "e5b78e38",
     "rootPrerequisiteSource": "9784130df73a4af2776619f7c503fa74b29c269d",
     "rootPrerequisiteLocal": "a885edb6",
     "uiRequestedSourceReview": "CLEAR: actual c4d74639-4b75-4c3b-b8b8-972796a79a99 bounded source receipt2026-10-21T01:32:53-07:00 for immutablefa2 against978. No significant introduced defects. This is the requested source receipt, separate from prior integration-delta review.",
     "uiSourceReviewScope": "Deleted concrete dialogs/VMs/host/enumerator/helper records/converter, replacement tests and minimum references/resources/navigation. Retired names remain only absence-test literals, not production C#/AXAML/resources/project includes. Reviewer verified actual gear navigation and all3 modern controls share exact host administration instances. Native contracts/picker/store and provider/cache code preserved. No reviewer builds/tests/live interaction;55/550 owner execution remains separate. Root978 prerequisite was not re-reviewed or newly cleared by this receipt.",
-    "uiScope": "Only disconnected old UI/dialog/host/enumeration/converter/tests retired. Preserve actual native store/backend, provider caches and Core contracts; do not restore old UI fallback.",
-    "coreDependency": "Per latest direct parent instruction, SDK Core ISecretProvider/GitHubAuthTokenResolver production deletion remains BLOCKED on immutable35ff App SecretProvider removal. Do not delete other owners' classes or treat earlier broad legacy handback wording as permission to bypass this dependency. No such production deletions made here.",
-    "coreWriterHandback": "SDK3891b377-81d3-407b-b1f2-9baa3c3a36db explicitly handed back ONLY the narrow Core production scope and removed its own uncommitted draft after exporting. No concurrent SDK writer or SDK commit wait remains. This is NOT permission to delete35ff-owned App files before immutable App prerequisite or explicit parent handoff.",
+    "uiScope": "fa2 alone retired only disconnected old UI and retained Core contracts at that source checkpoint. Subsequent explicitly authorized pairedc9 removes dead Core entry points/modal family; actual native store/backend/picker/provider caches remain untouched. No old UI fallback restored.",
+    "coreDependency": "RESOLVED: explicit direct parent02:32 paired App/Core assignment supplies the required handoff, after verifying35ff clean/no legacy edits and stopping that old dead-file scope. Actual paired retirement completed atc9d203af; no cross-writer class deletion.",
+    "coreWriterHandback": "SDK3891 handback/export and writer withdrawal retained. Parent's explicit02:32 assignment now authorizes stopped-owner App half together with exact Core patch; SDK e8 fake cleanup was already integrated and was not repeated.",
     "coreHandbackPatch": {
       "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-agent-core-legacy-removal.patch",
       "sha256": "1C825265157824856001066063E02DE78C2F92141D59B4078B4EF0B0E294D8C9",
       "exportBase": "2d1f6269e11e2d4ffb2a56a10880c53aa9b00cec",
       "scope": "FOUR files total: delete Core Secrets\\ISecretProvider.cs, Core GitHubAuthTokenResolver.cs and Core.Tests GitHubAuthTokenResolverTests.cs; modify Core.Tests AgentFactoryAccessTests.cs with two absence assertions. Not four deletions.",
-      "verification": "Actual SHA256 matches. Read-only git apply --check succeeds against current integration; patch NOT APPLIED. Both tracked App Services\\Secrets\\SecretProvider.cs and Tests\\Secrets\\SecretProviderTests.cs still present, so dependency remains blocked. No unbuildable production commit claimed.",
-      "preservation": "Native IPlatformSecretStore, active picker/backend/cache/UI contracts and accepted shared/root/provider paths untouched. Test-onlyf4cb/e8 already consumed once; no equivalent aliases replayed."
+      "verification": "Hash matched and exact four-file SDK patch APPLIED. Coherent final paired endpointc9 includes actual App provider/test removal, modal retirement and absence guards; fresh committed Core116/App133 build and pass. Intermediate81504 contains only SDK prefix and is explicitly NOT independently accepted/buildable; remaining files appended immediately without rewriting history.",
+      "preservation": "Real IPlatformSecretStore/ICredentialPicker/native backend/cache/configuration and accepted shared/root/provider paths untouched. Retired modal contracts are NOT native dependencies and were removed per explicit1568 authority. Test-onlyf4cb/e8 consumed only once."
     }
+  },
+  "pairedLegacyRetirement20261021": {
+    "codeCheckpoint": "c9d203afc7638451a9f3147af2cbf9e0ecb0b80b",
+    "usagePrerequisiteLocal": "8152b9af305a85a7ae7f5e4520c0cb514716a301",
+    "sdkCorePrefix": "81504a5ea6f1c418aab49ba2d70ba3f406407d9a",
+    "authority": "Direct parent02:32:01 paired ownership handback plus ABSOLUTE authority legacyRemovalOwnership/requiredLegacyCutovers1544/1567/1568.35ff stopped only dead App files; provider/private ownership unchanged. No other writer overlapped.",
+    "actualReferenceFinding": "Contrary to earlier bounded unused inventory, current default GitHubCopilotUsageProvider and GitHubActionsUsageProvider STILL referenced GitHubAuthTokenResolver and were constructed by actual MainWindow. Found immutable ready1566 source095 already present in root/SDK source branches but absent from e8 integration; do not delete live usage services or invent a replacement auth path.",
+    "usageIntake": "Normal native Git three-way selected-path095 import, seven files only. Existing standalone GitHubConsumerTestBroker already has source's exact material-provider semantics; obsolete root-deleted GitHubCredentialConsumerTests/raw wrapper was NOT resurrected. Preserve parser and bounded single401 retry as independently broker-authorized operation. Additional reviewed root integration uses exact ApplicationServices.AccessBroker and its same live AccessPresentationScope delegate; adapter samples each request, maps typed cancellation/shutdown to OCE and owns late successful result before observing cancellation.",
+    "removed": "App SecretProvider/obsolete tests; Core ISecretProvider/GitHubAuthTokenResolver/obsolete resolver tests via exact SDK patch; retired ISecretUseDialogHost/Input/Result/Row and dead test host/tests; OAuthSecretSource plus discriminator. No deprecated shim or raw token fallback.",
+    "preserved": "All actual native IPlatformSecretStore/ICredentialPicker/backend/picker implementations, real provider caches, remaining SecretSource configuration subtypes, typed references and root/shared/private policy code. Production C# retired-name inventory now ZERO. Existing migration guards plus new modal/marker/App type absence and unknown oauth discriminator fail-closed tests pass.",
+    "history": "A staged-deleted pathspec rejected broad add after usage-only commit; an unchecked subsequent cached commit produced81504 SDK-only prefix. Immediately appended actual App/modal completionc9, without reset/amend/rebase/revert. Only coherent finalc9 is an accepted paired endpoint; NEVER cherry-pick81504 alone. Current source is exact fully reviewed/tested tree, fresh committed verification repeated.",
+    "review": "Fresh independent code-review specialist reviewed complete current21-file tracked delta vs3f15a94a, including previously missing095 usage cutover, all removals, cancellation/liveness/result ownership, native preservation and guards: no significant issues found. Read-only, no reviewer builds/tests/edits; source unchanged after review/stability.",
+    "validation": "Core116 initial+10x116 and App133 initial+10x133; then fresh exact committedc9 Core116/App133 pass. All runs existing explicit-project runner, sequential projects, no dumps/native/live credentials/auth/browser/user checkout actions. Six logs preserved and hashed.",
+    "boundary": "Completes these explicit retirement/usage prerequisites, not full arc. Current source still needs newly ready GH0879/89/74 and broker327/6c/653 intake plus final private/HTTP/worker acceptance; historical root shutdown failure remains separately tracked."
   },
   "mcpCanonicalMatching20261021": {
     "source": "9cbb95f5ad23c182143def0a3d48a3b394a09370",
@@ -317,6 +332,18 @@
       "selectors": "DevTunnelAuthenticationHandlerTests,DevTunnelConnectMintSessionTests,DevTunnelClientAuthorizationTests,DevTunnelCredentialConsumerTests,DevTunnelConnectManagementApiTests",
       "boundary": "Full named HTTP/mint/client-authorization/consumer/management API classes, including real stale401 and legitimate/cancel/replay/sanitization/ownership cases. Does not replace known failed239 provider matrix or clear root/GitHub blockers."
     },
+    "pairedLegacyRetirement": {
+      "codeCheckpoint": "c9d203afc7638451a9f3147af2cbf9e0ecb0b80b",
+      "corePassed": 116,
+      "appPassed": 133,
+      "stabilityRunsEach": 10,
+      "coreFinalCommittedPassed": 116,
+      "appFinalCommittedPassed": 133,
+      "coreSelectors": "AgentFactoryAccessTests,AgentDefinitionSecretMaterializerTests,SecretModelTests,SecretUsageScannerTests,SecretUseScopePreimageTests,AgentManifestSecretUseMemoryFactoryTests,SecretRetrieverTests,AllowedSecretsStoreTests,NullPlatformSecretStoreTests",
+      "appSelectors": "GitHubActionsUsageProviderTests,GitHubCopilotUsageProviderTests,GitHubUsageProviderAccessTests,AccessMigrationTests,LegacyAuthorizationUiRemovalTests,AccessHostServicesTests,HostConfiguredAccessGraphTests,StoredSecretAccessExecutorTests,ProviderCredentialCacheAdministrationTests",
+      "logs": ".scratch\\integration-v2-paired-legacy-{core,app}-tests.log; .scratch\\integration-v2-paired-legacy-{core,app}-stability.log; .scratch\\integration-v2-paired-legacy-final-{core,app}-tests.log",
+      "provenance": "Working source stayed unchanged after independent21-file review and116/133x10. Commits preserve that exact source; final coherent committed endpoint then freshly rebuilt/reran both116/133. No acceptance of incomplete81504 prefix."
+    },
     "runner": "Only existing scripts\\run-tests.ps1 explicit TestProject/unquoted comma-separated TestNames and existing Skills run-tests-stability.ps1 Runs10 Modefull NoBuild with explicit TestProject default; no direct dotnet test.",
     "dumps": "Recursive scans before runners and during validation found no .dmp files; none discarded."
   },
@@ -329,7 +356,8 @@
     "Fresh independent read-only generic-only integration compatibility review of selected bd1/3a/9d/04 intake through0434a855, preserved explicit Audience fixture and untouched newer MCP lifecycle/catalog/admin: no significant issues. Existing source-clear algorithms not reopened; no reviewer edits/builds/tests.",
     "Requested c4d bounded SOURCE reviewfa2b26f0 against9784130d now CLEAR at01:32:53: no significant introduced defects in disconnected UI retirement or actual shared-host navigation replacement tests. Native contracts/store/picker/providers/caches retained. No builds/tests/live interaction; no new root978 or whole-arc clearance.",
     "Fresh parent-requested two-handler HTTP review: no significant issues in actual1e9923ef Management/Connect exact-invalidation net or three owned real-broker regression files committedceb8000f. Actual rejected-A disposal/no-B-substitution and current source checked; no reviewer builds/tests, no broader shared/GitHub/root shutdown clearance.",
-    "DIRECT9138 source receipt2026-10-21T02:25:19-07:00 independently clears exact05d80103 vs60663d8b three-file candidate after explicit parent authorization. No significant issues in both exact-invalidation handlers and actual real-broker relay stale401 regression; static only, owner179 not rerun. Both current full handler blobs verified exactly equal reviewed05d. No duplicate equivalent intake or former-owner ownership restored; separate from integrator82x10 and local fresh net review."
+    "DIRECT9138 source receipt2026-10-21T02:25:19-07:00 independently clears exact05d80103 vs60663d8b three-file candidate after explicit parent authorization. No significant issues in both exact-invalidation handlers and actual real-broker relay stale401 regression; static only, owner179 not rerun. Both current full handler blobs verified exactly equal reviewed05d. No duplicate equivalent intake or former-owner ownership restored; separate from integrator82x10 and local fresh net review.",
+    "Fresh independent read-only code-review of complete21-file3f15a94a..c9 source delta: no significant issues in paired App/Core entry-point/modal/OAuth marker removal, missing immutable095 usage prerequisite, exact live root broker/scope forwarding, cancellation/late-result ownership and new negative guards. Native store/picker/cache/configuration preserved. No reviewer builds/tests/edits."
   ],
   "genericOAuthShutdownReview20261021": {
     "reviewer": "9138ee92-e671-4e53-b882-67573927d963",
@@ -344,12 +372,13 @@
     "acceptanceBoundary": "Source reviewer performed no builds/tests/edits. Integrator105 plus ten105 executions are recorded separately, not attributed to reviewer. No whole-arc acceptance."
   },
   "openOwnerWork": [
-    "GitHub full canonical async validation and post-final-await generation/expiry remain provider owner35ff pending. Narrow b382 unpublished TResult ownership is now integrated with paired caller cleanup removal, and exact owner fixture prerequisites resolve14 fabricated-account cases. Candidate0879 production remains unimported and uncleared.",
+    "NEW current authority source-clears complete GitHub0879/89/74 packet from final owner7a; integrator must now intake reviewed correction, preserving existing51b/2d/b382 and paired caller cleanup.0879 alone was uncleared High; final74 closes source High. No waiting old35ff loop or excluded shared prerequisite.",
     "Root broker shutdown outcome race found by actual239 stability run5; isolated read-only diagnosis completed and root5a25 now exclusively owns immutable correction/regression. No broker/identity fixture edits by integrator; full239x10 acceptance BLOCKED.",
-    "UI fa2 integrated after root978 and actual requested c4d bounded SOURCE review now CLEAR at01:32:53; no UI source-review blocker remains. SDK Core ISecretProvider/GitHubAuthTokenResolver production deletion still awaits immutable35ff App SecretProvider removal per latest direct parent instruction; preserve active native/provider caches and Core contracts, no cross-owner classes deleted.",
+    "Paired legacy handback/resolved atc9d203af with missing095 usage prerequisite8152b9af, native preservation,116/133x10 plus fresh committed116/133 and new-delta review clear. UI fa2 remains separately source-cleared; retired Core modal contracts now removed under latest explicit1568 authority. No legacy-writer wait remains.",
+    "NEW reviewed broker recovery3272555c+6c172ef7+653b4663 is ready exact owner922 stack; intake all required leaves, never intentionally red327 alone, preserve current broker cancellation/lifetime and accepted selected-source authority. Separate from earlier root shutdown outcome diagnosis.",
     "Independent registered CLI/root/worker-broker151x10 and real hermetic Transport-project worker round-trips11x10 now executed at0434a855. After root/GitHub corrections and required legacy prerequisites, rerun the complete actual private/HTTP target and relevant affected final-source graph selectors; current earlier-checkpoint passes do not substitute for final full acceptance."
   ],
   "executionEvidenceManifest": ".scratch\\integration-v2-execution-evidence-20261020.json",
-  "cleanState": "All source/test code is immutable throughe6515e9aaef72d63dc3efacbd3f46edea90dca61; production remains unchanged since0434a855 and both HTTP guards since1e9923ef. Latest root test file exactly equals immutableabd864f3 source; final metadata commit records handoff/evidence only. No active cherry-pick/revert/unmerged paths; git diff --check clean; exact submodule pins preserved.",
+  "cleanState": "Coherent source/test/production endpointc9d203afc7638451a9f3147af2cbf9e0ecb0b80b follows usage8152b9af and SDK-only prefix81504 (NOT standalone accepted). Final App/Core pair committed and fresh116/133 passes; no code edits after review/stability. HTTP guards/root MCP test/shared algorithms unchanged. Metadata commit records evidence only; no active cherry-pick/revert/unmerged paths; diff checks clean and exact submodule pins preserved.",
   "safety": "No live checkout, auth, browser/UI/provider actions, features advancement, push/release/closure or rewritten history. Normal submodule init preserves Dock8c8d11 and MXC29702c3."
 }

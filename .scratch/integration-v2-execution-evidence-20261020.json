@@ -1,6 +1,7 @@
 {
-  "codeCheckpoint": "e6515e9aaef72d63dc3efacbd3f46edea90dca61",
-  "productionCheckpoint": "0434a8550f4a8977d9451c38be585adfbb0bfb71",
+  "codeCheckpoint": "c9d203afc7638451a9f3147af2cbf9e0ecb0b80b",
+  "productionCheckpoint": "c9d203afc7638451a9f3147af2cbf9e0ecb0b80b",
+  "historicalPreRetirementProductionCheckpoint": "0434a8550f4a8977d9451c38be585adfbb0bfb71",
   "historicalHttpExactGenerationCodeCheckpoint": "ceb8000fcb0bab5c7fafdde802ee0ae09c881230",
   "historicalMcpMatchingCodeCheckpoint": "af3c4a47ed231101bb4bee4edcceac517dd43794",
   "readyProviderCodeCheckpoint": "1e9923ef6b018e629b19e7c3539aec9c714ac74e",
@@ -16,7 +17,7 @@
   "coreStabilityPassedPerRun": 171,
   "largerAppTargetInitialPassed": 312,
   "largerAppTargetStability": "Failed run5/10; exact causal fixture correction079f2081 subsequently targeted16 and root200x10 plus exact-final-source200 pass. Not claimed312x10.",
-  "knownRemainingFailures": "NEW root broker identity nested shutdown outcome failure in App239 stability run5: expected AccessShuttingDown, actual AccessFailed. Isolated read-only diagnosis completed; root5a25 owns immutable correction. Full239 initial and runs1-4 pass;239x10 NOT claimed. Former stale401 scenario is now fixed by actual05d production guard and passed in complete Management/Connect selection. Canonical GitHub/final-await High remains35ff-owned; prior14 fabricated-account fixtures already resolved.",
+  "knownRemainingFailures": "Historical root broker identity nested shutdown outcome failure in App239 stability run5: expected AccessShuttingDown, actual AccessFailed. Isolated diagnosis completed; root5a25 owns requested followup.239x10 NOT claimed. Former stale401 is resolved and82x10 verified. New final owner7a0879/89/74 packet and broker922327/6c/653 are now source-cleared but still require current integrator intake/final execution. Legacy retirement completed at coherentc9, not an owner wait. Prior14 fabricated-account fixtures resolved.",
   "gitHubOwnershipPairPassed": 75,
   "gitHubOwnershipPairStabilityRuns": 10,
   "gitHubOwnershipPairStabilityPassedPerRun": 75,
@@ -50,8 +51,44 @@
   "httpExactGenerationStabilityRuns": 10,
   "httpExactGenerationStabilityPassedPerRun": 82,
   "httpExactGenerationProductionFix": "1e9923ef6b018e629b19e7c3539aec9c714ac74e",
+  "pairedLegacyCorePassed": 116,
+  "pairedLegacyAppPassed": 133,
+  "pairedLegacyStabilityRunsEach": 10,
+  "pairedLegacyFinalCommittedCorePassed": 116,
+  "pairedLegacyFinalCommittedAppPassed": 133,
+  "pairedLegacyBoundary": "Only coherent c9 endpoint accepted, never SDK-only81504 prefix. Actual missing095 usage prerequisite plus parent-authorized paired App/Core/modal/OAuth marker retirement; native contracts/caches preserved. Read-only new21-file review clear; source unchanged after116/133x10 and fresh final committed116/133.",
   "dumpCount": 0,
   "logs": [
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-paired-legacy-app-stability.log",
+      "bytes": 2996,
+      "sha256": "C1E802C2B9B6C8C984BF0117C25FD7D0D285B047D2EB8691EA742FC4F1F5E8E9"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-paired-legacy-app-tests.log",
+      "bytes": 6277,
+      "sha256": "B00CA828147D165FCFD39A91A85BB8EA74ECAAFABD57359F9CB2F1E63E5D80B1"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-paired-legacy-core-stability.log",
+      "bytes": 3050,
+      "sha256": "0B926DBB1776060F46D6A6818B464F80E48CF71BDE5A67BCC143E6035D5F9D7D"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-paired-legacy-core-tests.log",
+      "bytes": 5986,
+      "sha256": "5545225A401EF8E61A63EB6985D71D1430DF617C85211DA32B7AA458FB6473C0"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-paired-legacy-final-app-tests.log",
+      "bytes": 6277,
+      "sha256": "E6BFC30846AF2DF62014F664C7F88FF4BF17602FFEBB14970B89EDD8CE66F356"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-paired-legacy-final-core-tests.log",
+      "bytes": 6151,
+      "sha256": "50EBA1C1F1C30ED7FE0002574DEE40EBBEBD7C022846F9F04A3E6EAB7B2F0DAC"
+    },
     {
       "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-real-root-mcp-administration-tests.log",
       "bytes": 6277,
