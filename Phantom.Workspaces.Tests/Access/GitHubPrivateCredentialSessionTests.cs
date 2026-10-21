@@ -8,6 +8,46 @@ namespace Phantom.Workspaces.Tests.Access;
 
 public sealed class GitHubPrivateCredentialSessionTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PrivateAcquisition_RealUnconsumedParentAdmissionCannotStartChildProvider(bool knownAccount)
+    {
+        var events = new List<string>();
+        var source = new Source(events);
+        var provider = new GitHubCredentialAccessExecutor(source);
+        var parent = new ParentExecutor(provider, events)
+        {
+            UseSplitBoundary = true,
+            IdentityRequest = new()
+            {
+                Source = CredentialSourceKind.GitHubCli,
+                AccountIdentifier = knownAccount ? source.Account : null,
+            },
+        };
+        parent.BeforeParentAcquisition = async (context, rawPermit, cancellationToken) =>
+        {
+            var inspection = await provider.InspectPrivateAsync(parent.IdentityRequest, cancellationToken);
+            var acquisition = provider.CreatePrivateAcquisition(parent.IdentityRequest, inspection.Source, context);
+            Assert.IsType<ProviderAcquisitionDenied>(
+                await context.ExecutePrivateProviderDependencyAsync(acquisition, rawPermit, cancellationToken));
+            Assert.IsType<GitHubPrivateCredentialUseDenied<int>>(await provider.UsePrivateAsync<int>(
+                parent.IdentityRequest, context, rawPermit,
+                (_, _) => throw new InvalidOperationException("Raw admission must not reach a private callback."),
+                cancellationToken));
+            Assert.Equal(0, source.Acquisitions);
+        };
+        var (broker, registry) = Create(provider, parent);
+        await using var owned = broker;
+        var request = Request();
+        request = request with { Credential = request.Credential with { AccountIdentifier = knownAccount ? source.Account : null } };
+        var task = broker.AcquireAsync(request, TestContext.Current.CancellationToken);
+        await AllowAsync(registry);
+        await Assert.IsType<AccessSucceeded<ParentResult>>(await task).Result.DisposeAsync();
+        Assert.Equal(1, source.Acquisitions);
+        Assert.Equal(1, events.Count(item => item == "mint"));
+    }
+
     [Fact]
     public async Task PrivateMaterialUse_CancelledCallbackResultIsDisposedBeforeReturning()
     {
@@ -198,6 +238,9 @@ public sealed class GitHubPrivateCredentialSessionTests
     [InlineData(1)]
     [InlineData(2)]
     [InlineData(3)]
+    [InlineData(4)]
+    [InlineData(5)]
+    [InlineData(6)]
     public async Task PrivateMaterialUse_RejectsExpiredRawWrongExecutorAndWrongKeyProofs(int proofKind)
     {
         var events = new List<string>();
@@ -228,6 +271,14 @@ public sealed class GitHubPrivateCredentialSessionTests
                 proofKind == 3 ? key with { Configuration = new() { Digest = new string('e', 64) } } : key,
                 () => true);
             proof = proofKind == 1 ? candidate : candidate.BindExecution(() => true, TestContext.Current.CancellationToken);
+        }
+        if (proofKind == 5)
+        {
+            proof = null!;
+        }
+        if (proofKind == 6)
+        {
+            context = null!;
         }
         Assert.IsType<GitHubPrivateCredentialUseDenied<int>>(await provider.UseGenerationAsync<int>(
             inspection.Source, inspection.CachedGeneration!.Generation, context, proof,
@@ -671,6 +722,7 @@ public sealed class GitHubPrivateCredentialSessionTests
         public CredentialMaterialGenerationIdentifier? UsedGeneration { get; private set; }
         public Func<GitHubPrivateCredentialInspection, CredentialMaterialGenerationIdentifier, CancellationToken, ValueTask>? BeforeGenerationUse { get; set; }
         public Func<ICredentialExecutionContext, ProviderAcquisitionCommitContext, CancellationToken, ValueTask<ProviderAcquisitionOutcome>>? BodyOverride { get; set; }
+        public Func<ICredentialExecutionContext, ProviderInteractionPermit, CancellationToken, ValueTask>? BeforeParentAcquisition { get; set; }
         public CredentialExecutorKind Kind => CredentialExecutorKind.DevTunnelConnect;
 
         public ValueTask<CredentialInspection> InspectAsync(ParentRequest request, CancellationToken cancellationToken) => ValueTask.FromResult(new CredentialInspection
@@ -702,6 +754,10 @@ public sealed class GitHubPrivateCredentialSessionTests
                 await context.Policy.ValidateAsync(authorization.Identifier, context.PolicyRequest!, cancellationToken));
             events.Add("release validated");
             Assert.NotNull(interactionPermit);
+            if (this.BeforeParentAcquisition is { } beforeParent)
+            {
+                await beforeParent(context, interactionPermit, cancellationToken);
+            }
             var operation = new Operation(this, provider, events, context, inspection.AcquisitionKeys[inspection.SelectedSource!]);
             var acquired = await context.ExecuteProviderAcquisitionAsync(operation, interactionPermit, cancellationToken);
             if (acquired is ProviderAcquisitionDenied)

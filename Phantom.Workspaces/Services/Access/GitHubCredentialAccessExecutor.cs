@@ -307,7 +307,8 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (!IsApprovedConnectGeneration(context, parentGenerationPermit) || !IsPrivateSource(source))
+        if (parentGenerationPermit is null || context is null ||
+            !await parentGenerationPermit.AuthorizesPrivateUseAsync(context, cancellationToken).ConfigureAwait(false) || !IsPrivateSource(source))
         {
             return new GitHubPrivateCredentialUseDenied<TResult>();
         }
@@ -326,7 +327,7 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
         {
             return new GitHubPrivateCredentialUseFailed<TResult> { ErrorCode = AccessErrorCode.IdentityMismatch, CanRetry = false };
         }
-        if (!IsApprovedConnectGeneration(context, parentGenerationPermit))
+        if (!await parentGenerationPermit.AuthorizesPrivateUseAsync(context, cancellationToken).ConfigureAwait(false))
         {
             return new GitHubPrivateCredentialUseDenied<TResult>();
         }
@@ -336,7 +337,7 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
             return new GitHubPrivateCredentialUseFailed<TResult> { ErrorCode = AccessErrorCode.InvalidGeneration, CanRetry = true };
         }
         cancellationToken.ThrowIfCancellationRequested();
-        if (!IsApprovedConnectGeneration(context, parentGenerationPermit))
+        if (!await parentGenerationPermit.AuthorizesPrivateUseAsync(context, cancellationToken).ConfigureAwait(false))
         {
             return new GitHubPrivateCredentialUseDenied<TResult>();
         }
@@ -345,7 +346,7 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!IsApprovedConnectGeneration(context, parentGenerationPermit))
+            if (!await parentGenerationPermit.AuthorizesPrivateUseAsync(context, cancellationToken).ConfigureAwait(false))
             {
                 return new GitHubPrivateCredentialUseDenied<TResult>();
             }
@@ -378,25 +379,6 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
         source.Kind is CredentialSourceKind.Environment or CredentialSourceKind.GitHubCli &&
         source.Identifier == GitHubCredentialAccessRequest.CreateSource(source.Kind).Identifier;
 
-    private static bool IsApprovedConnectGeneration(
-        ICredentialExecutionContext context,
-        ProviderInteractionPermit permit)
-    {
-        if (context.PolicyRequest is not { Credential.Provider: CredentialProviderKind.DevTunnel, Credential.Kind: CredentialKind.ConnectToken } request)
-        {
-            return false;
-        }
-        var key = new ProviderAcquisitionKey
-        {
-            Configuration = request.Credential.LogicalIdentifier,
-            Source = request.SourceIdentifier,
-            Account = request.Credential.AccountIdentifier,
-            Protocol = ProviderProtocolKind.TunnelConnect,
-        };
-        return permit.AuthorizesProvider(CredentialExecutorKind.DevTunnelConnect, key) &&
-            permit.Authorizes(context.RequestIdentifier, context.Revision, CredentialExecutorKind.DevTunnelConnect, context.AcquisitionGeneration, key);
-    }
-
     private static ProviderAcquisitionKey CreatePrivateKey(GitHubPrivateCredentialSource source) => new()
     {
         Configuration = GitHubCredentialAccessRequest.CreateLogicalIdentifier(),
@@ -413,7 +395,8 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (!IsApprovedConnectGeneration(context, parentGenerationPermit) ||
+        if (parentGenerationPermit is null || context is null ||
+            !await parentGenerationPermit.AuthorizesPrivateUseAsync(context, cancellationToken).ConfigureAwait(false) ||
             request.Source is not (CredentialSourceKind.Environment or CredentialSourceKind.GitHubCli))
         {
             return new GitHubPrivateCredentialUseDenied<TResult>();
@@ -448,7 +431,7 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
             generation = inspection.CachedGeneration!.Generation;
         }
 
-        if (!IsApprovedConnectGeneration(context, parentGenerationPermit))
+        if (!await parentGenerationPermit.AuthorizesPrivateUseAsync(context, cancellationToken).ConfigureAwait(false))
         {
             return new GitHubPrivateCredentialUseDenied<TResult>();
         }
