@@ -121,6 +121,56 @@ public sealed class AgentFactoryAccessTests
             typeof(AgentServices).GetProperty("RemoteCopilotProviderCatalog", BindingFlags.Instance | BindingFlags.NonPublic)!.PropertyType);
     }
 
+    [Fact]
+    public async Task AgentFactory_PresentationProvider_IsEvaluatedForEachManifestRequest()
+    {
+        var phase = AccessPresentationScope.Bootstrap;
+        var broker = new AgentAccessTestBroker
+        {
+            OnStoredRequest = count =>
+            {
+                if (count == 1) phase = AccessPresentationScope.Runtime;
+            },
+        };
+        var definition = Definition("openai", "${SECRET:ModelKey}");
+        ((PromptAgent)definition).Model!.Options = new ModelOptions
+        {
+            AdditionalProperties = new Dictionary<string, object>
+            {
+                ["headers"] = new Dictionary<string, object> { ["Authorization"] = "Bearer ${SECRET:HeaderKey}" },
+            },
+        };
+        var services = new AgentServices { AccessBroker = broker, AccessPresentationScopeProvider = () => phase };
+        var result = await AgentFactory.CreateChatClientAsync(definition, services);
+        await using var client = Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
+        Assert.Equal(new[] { AccessPresentationScope.Bootstrap, AccessPresentationScope.Runtime },
+            broker.StoredRequests.Select(request => request.PresentationScope).ToArray());
+        Assert.Equal(AccessPresentationScope.Runtime, services.AccessPresentationScope);
+        Assert.Equal(AccessPresentationScope.Runtime, (services with { LogChat = true }).AccessPresentationScope);
+    }
+
+    [Fact]
+    public async Task CopilotSdkChatClient_PresentationProvider_IsNotFrozenAtClientCreation()
+    {
+        var phase = AccessPresentationScope.Bootstrap;
+        var broker = new AgentAccessTestBroker();
+        var factory = new RecordingFactory(new FakeCopilotClient(new FakeCopilotSession()), broker.Context);
+        var result = await AgentFactory.CreateChatClientAsync(
+            Definition("github-copilot", "${GITHUB_TOKEN}", endpoint: null),
+            new AgentServices
+            {
+                AccessBroker = broker,
+                CopilotClientFactory = factory,
+                AccountUpsertService = new RecordingAccountService(),
+                AccessPresentationScopeProvider = () => phase,
+            });
+        await using var client = Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
+        phase = AccessPresentationScope.Runtime;
+        await EstablishSessionAsync(client);
+        Assert.Equal(new[] { AccessPresentationScope.Bootstrap, AccessPresentationScope.Runtime },
+            broker.GitHubRequests.Select(request => request.PresentationScope).ToArray());
+    }
+
     [Theory]
     [InlineData("${MODEL_CONTEXT_KEY}")]
     [InlineData("${SECRET:ModelContextKey}")]
@@ -535,6 +585,7 @@ internal sealed class AgentAccessTestBroker : IAccessBroker
 {
     public string Material { get; init; } = "test-token";
     public string AccountMaterial { get; init; } = "account-token";
+    public Action<int>? OnStoredRequest { get; init; }
     public LeaseContext Context { get; } = new();
     public List<StoredSecretAccessRequest> StoredRequests { get; } = [];
     public List<GitHubCredentialAccessRequest> GitHubRequests { get; } = [];
@@ -549,6 +600,7 @@ internal sealed class AgentAccessTestBroker : IAccessBroker
         if (request is StoredSecretAccessRequest stored)
         {
             this.StoredRequests.Add(stored);
+            this.OnStoredRequest?.Invoke(this.StoredRequests.Count);
             var lease = CreateLease(this.Material, this.Context);
             this.Leases.Add(lease);
             AccessOutcome<StoredSecretAccessResult> outcome = new AccessSucceeded<StoredSecretAccessResult>

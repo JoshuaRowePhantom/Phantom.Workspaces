@@ -52,7 +52,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private readonly AgentCredentialLeaseSet credentials;
     private readonly IAccessBroker? accessBroker;
     private readonly CredentialUseLineage credentialLineage;
-    private readonly AccessPresentationScope accessPresentationScope;
+    private readonly Func<AccessPresentationScope> accessPresentationScope;
     private readonly AccessRequestor? credentialRequestor;
     private readonly CredentialUseDescriptor? credentialUse;
     private readonly ICredentialAccessResult? credentialOwner;
@@ -253,7 +253,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         IAsyncDisposable? ownedSecretResolver = null,
         AccessPresentationScope accessPresentationScope = AccessPresentationScope.Runtime,
         AccessRequestor? credentialRequestor = null,
-        CredentialUseDescriptor? credentialUse = null)
+        CredentialUseDescriptor? credentialUse = null,
+        Func<AccessPresentationScope>? accessPresentationScopeProvider = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
         ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
@@ -267,7 +268,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             secretPlaceholderResolver);
         this.accessBroker = accessBroker;
         this.credentialLineage = credentialLineage ?? new CredentialUseLineage();
-        this.accessPresentationScope = accessPresentationScope;
+        this.accessPresentationScope = accessPresentationScopeProvider ?? (() => accessPresentationScope);
         this.credentialRequestor = credentialRequestor;
         this.credentialUse = credentialUse;
         this.credentialOwner = credentialOwner;
@@ -2065,7 +2066,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             this.credentialUse is null
                 ? "copilot-account-upsert"
                 : $"{this.credentialUse.Fingerprint.Digest}:copilot-account-upsert",
-            this.accessPresentationScope);
+            this.accessPresentationScope());
         if (this.credentialUse is { } parent)
         {
             request = request with { Use = request.Use with { MemoryScopes = parent.MemoryScopes } };

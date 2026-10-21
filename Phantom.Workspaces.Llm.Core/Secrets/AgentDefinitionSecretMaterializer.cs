@@ -14,7 +14,8 @@ public sealed class AgentDefinitionSecretMaterializer
         CancellationToken cancellationToken,
         AccessPresentationScope presentationScope = AccessPresentationScope.Runtime,
         AccessRequestor? requestor = null,
-        CredentialUseDescriptor? parentUse = null)
+        CredentialUseDescriptor? parentUse = null,
+        Func<AccessPresentationScope>? presentationScopeProvider = null)
     {
         var resolver = new SecretPlaceholderResolver();
         var handles = new Dictionary<SecretUsage, string>(ReferenceEqualityComparer.Instance);
@@ -25,7 +26,7 @@ public sealed class AgentDefinitionSecretMaterializer
             {
                 var usage = usages[occurrence];
                 var outcome = await accessBroker.AcquireAsync(
-                    CreateRequest(usage, lineage, occurrence, presentationScope, requestor, parentUse),
+                    CreateRequest(usage, lineage, occurrence, presentationScopeProvider?.Invoke() ?? presentationScope, requestor, parentUse),
                     cancellationToken).ConfigureAwait(false);
                 if (outcome is AccessDenied<StoredSecretAccessResult> or AccessCancelled<StoredSecretAccessResult>)
                 {

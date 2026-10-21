@@ -34,11 +34,13 @@ public static class AgentServicesComposition
         IAccessBroker? accessBroker,
         object? mcpOAuthOptions,
         ILoggerFactory loggerFactory,
-        IMcpOAuthCredentialRequestCatalog? mcpOAuthCredentials = null)
+        IMcpOAuthCredentialRequestCatalog? mcpOAuthCredentials = null,
+        Func<AccessPresentationScope>? accessPresentationScopeProvider = null)
         => new()
         {
             AccessBroker = accessBroker,
             McpOAuthCredentials = mcpOAuthCredentials,
+            AccessPresentationScopeProvider = accessPresentationScopeProvider,
             McpOAuthOptions = mcpOAuthOptions,
             LoggerFactory = loggerFactory,
             ProcessExecutor = new ProcessExecutor(),

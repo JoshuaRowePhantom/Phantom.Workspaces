@@ -84,6 +84,25 @@ public sealed class AgentServicesCompositionTests
         Assert.Same(process, services.LoggerFactory);
     }
 
+    [Fact]
+    public void AgentServicesComposition_PresentationProvider_IsSharedWithoutFreezingHostPhase()
+    {
+        var phase = AccessPresentationScope.Bootstrap;
+        Func<AccessPresentationScope> provider = () => phase;
+        var services = AgentServicesComposition.ComposeHostServices(
+            Mock.Of<IAccessBroker>(),
+            null,
+            NullLoggerFactory.Instance,
+            accessPresentationScopeProvider: provider);
+        Assert.Same(provider, services.AccessPresentationScopeProvider);
+        Assert.Equal(AccessPresentationScope.Bootstrap, services.AccessPresentationScope);
+        var session = services with { LogChat = true };
+        phase = AccessPresentationScope.Runtime;
+        Assert.Same(provider, session.AccessPresentationScopeProvider);
+        Assert.Equal(AccessPresentationScope.Runtime, session.AccessPresentationScope);
+        Assert.Equal(AccessPresentationScope.Runtime, new AgentServices().AccessPresentationScope);
+    }
+
     [AvaloniaFact(Timeout = 15_000)]
     public async Task AgentServicesComposition_ComposeRuntimeHostServices_CarriesProcessLoggerFactory()
     {

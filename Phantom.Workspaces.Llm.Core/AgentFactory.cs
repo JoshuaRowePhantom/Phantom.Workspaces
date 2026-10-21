@@ -446,7 +446,8 @@ public static class AgentFactory
             credentialLineage: CreateCredentialLineage(definition, services),
             accessPresentationScope: services?.AccessPresentationScope ?? AccessPresentationScope.Runtime,
             credentialRequestor: services?.AccessRequestor,
-            credentialUse: services?.AccessUse);
+            credentialUse: services?.AccessUse,
+            accessPresentationScopeProvider: services?.AccessPresentationScopeProvider);
         if (services?.CopilotClientFactory is ICopilotClientFactory factory)
         {
             client.SetCopilotClientFactoryForTest(factory);
@@ -851,7 +852,8 @@ public static class AgentFactory
                 ct,
                 services.AccessPresentationScope,
                 services.AccessRequestor,
-                services.AccessUse)
+                services.AccessUse,
+                () => services.AccessPresentationScope)
             .ConfigureAwait(false);
         return (materialized.Definition, services with
         {
@@ -1060,7 +1062,8 @@ public static class AgentFactory
                 ownedSecretResolver: ownedResolver,
                 accessPresentationScope: services?.AccessPresentationScope ?? AccessPresentationScope.Runtime,
                 credentialRequestor: services?.AccessRequestor,
-                credentialUse: services?.AccessUse);
+                credentialUse: services?.AccessUse,
+                accessPresentationScopeProvider: services?.AccessPresentationScopeProvider);
 
             if (services?.CopilotClientFactory is ICopilotClientFactory factory)
             {
@@ -1149,7 +1152,8 @@ public static class AgentFactory
                 ownedSecretResolver: ownedResolver,
                 accessPresentationScope: services?.AccessPresentationScope ?? AccessPresentationScope.Runtime,
                 credentialRequestor: services?.AccessRequestor,
-                credentialUse: services?.AccessUse);
+                credentialUse: services?.AccessUse,
+                accessPresentationScopeProvider: services?.AccessPresentationScopeProvider);
 
             if (services?.CopilotClientFactory is ICopilotClientFactory factory)
             {

@@ -7,11 +7,18 @@ namespace Phantom.Workspaces.Llm;
 
 public sealed record AgentServices : IServiceProvider
 {
+    private Phantom.Workspaces.Llm.Interfaces.Access.AccessPresentationScope accessPresentationScope;
+
     public Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker? AccessBroker { get; init; }
     public Phantom.Workspaces.Llm.Interfaces.Access.AccessRequestor? AccessRequestor { get; init; }
     public Phantom.Workspaces.Llm.Interfaces.Access.CredentialUseDescriptor? AccessUse { get; init; }
     public Phantom.Workspaces.Llm.Interfaces.Access.CredentialUseLineage? AccessLineage { get; init; }
-    public Phantom.Workspaces.Llm.Interfaces.Access.AccessPresentationScope AccessPresentationScope { get; init; }
+    public Func<Phantom.Workspaces.Llm.Interfaces.Access.AccessPresentationScope>? AccessPresentationScopeProvider { get; init; }
+    public Phantom.Workspaces.Llm.Interfaces.Access.AccessPresentationScope AccessPresentationScope
+    {
+        get => this.AccessPresentationScopeProvider?.Invoke() ?? this.accessPresentationScope;
+        init => this.accessPresentationScope = value;
+    }
     public Phantom.Workspaces.Llm.Interfaces.Access.IMcpOAuthCredentialRequestCatalog? McpOAuthCredentials { get; init; }
     internal Phantom.Workspaces.Llm.Interfaces.Access.IRemoteCopilotProviderCatalog? RemoteCopilotProviderCatalog { get; init; }
 
