@@ -258,7 +258,7 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
         await using var original = Assert.IsType<AccessSucceeded<McpCredentialUseResult>>(
             await first.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken)).Result;
         var accountA = CredentialIdentityFactory.CreateAccountIdentifier(
-            CredentialProviderKind.McpOAuth, $"{fixture.Configuration.AuthorizationServer.AbsoluteUri}\nprincipal-A");
+            CredentialProviderKind.McpOAuth, $"{fixture.Configuration.AuthorizationServer!.AbsoluteUri}\nprincipal-A");
         var cache = fixture.Executor.GetGenerationCache(fixture.Configuration.Identifier);
         var originalGeneration = (await cache.InspectGenerationAsync(TestContext.Current.CancellationToken))!.Generation;
         Assert.Equal(CredentialGenerationInvalidationOutcome.Invalidated,
@@ -282,7 +282,7 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
             TestContext.Current.CancellationToken));
 
         var accountB = CredentialIdentityFactory.CreateAccountIdentifier(
-            CredentialProviderKind.McpOAuth, $"{fixture.Configuration.AuthorizationServer.AbsoluteUri}\nprincipal-B");
+            CredentialProviderKind.McpOAuth, $"{fixture.Configuration.AuthorizationServer!.AbsoluteUri}\nprincipal-B");
         var existingRows = fixture.Registry.GetSnapshot().Select(row => row.Identifier).ToHashSet();
         var otherAccount = fixture.Broker.AcquireAsync(request with
         {
@@ -389,7 +389,8 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
             bool cycle = false,
             Func<Server, HttpMessageHandler>? createHttpHandler = null,
             Func<ICredentialAccessExecutor<McpOAuthCredentialUseRequest, McpCredentialUseResult>,
-                ICredentialAccessExecutor<McpOAuthCredentialUseRequest, McpCredentialUseResult>>? wrapMcpExecutor = null)
+                ICredentialAccessExecutor<McpOAuthCredentialUseRequest, McpCredentialUseResult>>? wrapMcpExecutor = null,
+            bool autoConfigure = false)
         {
             this.Store = new Store(this.Events);
             this.Server = new Server(this.Events);
@@ -412,7 +413,9 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
                 Cache = new CredentialManagerTokenCache(this.Store, "mcp-oauth:", "private-cache"),
                 CreateHttpHandler = () => createHttpHandler?.Invoke(this.Server) ?? new Handler(this.Server),
             };
-            this.Catalog = new McpOAuthCredentialRequestCatalog([this.Configuration]);
+            this.Catalog = autoConfigure
+                ? McpOAuthComposition.CreateCatalog(this.Store, () => new Handler(this.Server))
+                : new McpOAuthCredentialRequestCatalog([this.Configuration]);
             this.Executor = new McpOAuthCredentialAccessExecutor(this.Catalog, this.Browser);
             var executors = new CredentialAccessExecutorRegistry();
             executors.Add<McpOAuthCredentialUseRequest, McpCredentialUseResult>(wrapMcpExecutor?.Invoke(this.Executor) ?? this.Executor);
@@ -555,8 +558,12 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
 
     private sealed class Handler(Server server) : HttpMessageHandler
     {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
-            server.SendAsync(request, cancellationToken);
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var response = await server.SendAsync(request, cancellationToken);
+            response.RequestMessage ??= request;
+            return response;
+        }
     }
 
     internal sealed class ObservedAcquisitions : IProviderAcquisitionCoordinator
@@ -580,6 +587,7 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
     {
         internal string AccessToken { get; set; } = "private-access";
         internal string? Subject { get; set; } = "private-stable-account";
+        internal bool ExposePrincipalMetadata { get; set; } = true;
         internal bool BlockAccount { get; set; }
         internal TaskCompletionSource AccountRequested { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource ContinueAccount { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -596,7 +604,17 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
             }
             if (uri.Host == "authority.test" && uri.AbsolutePath.Contains(".well-known", StringComparison.Ordinal))
             {
-                return Json("""{"issuer":"https://authority.test/","authorization_endpoint":"https://authority.test/authorize","token_endpoint":"https://authority.test/token","response_types_supported":["code"],"grant_types_supported":["authorization_code","refresh_token"],"code_challenge_methods_supported":["S256"],"token_endpoint_auth_methods_supported":["client_secret_post","none"]}""");
+                return Json(JsonSerializer.Serialize(new
+                {
+                    issuer = "https://authority.test/",
+                    authorization_endpoint = "https://authority.test/authorize",
+                    token_endpoint = "https://authority.test/token",
+                    userinfo_endpoint = this.ExposePrincipalMetadata ? "https://authority.test/userinfo" : null,
+                    response_types_supported = new[] { "code" },
+                    grant_types_supported = new[] { "authorization_code", "refresh_token" },
+                    code_challenge_methods_supported = new[] { "S256" },
+                    token_endpoint_auth_methods_supported = new[] { "client_secret_post", "none" },
+                }));
             }
             if (uri.AbsolutePath == "/token")
             {

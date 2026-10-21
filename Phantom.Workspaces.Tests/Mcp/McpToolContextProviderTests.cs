@@ -74,6 +74,76 @@ public sealed class McpToolContextProviderTests
     }
 
     [Fact]
+    public async Task McpToolContextProvider_StoreBackedRootWithoutManifests_DiscoversVerifiedProviderPrincipalAfterPerform()
+    {
+        await using var fixture = new Fixture(autoConfigure: true);
+        Assert.Empty(fixture.Catalog.GetConfigurations());
+        var transportTask = CreateTransportAsync(fixture, "discovered");
+        Assert.Equal(0, fixture.Store.Reads);
+        Assert.Equal(0, fixture.Browser.OpenCount);
+        Assert.Empty(fixture.Events);
+        var configuration = Assert.Single(fixture.Catalog.GetConfigurations());
+        Assert.Null(configuration.AccountEndpoint);
+        Assert.Null(configuration.AuthorizationServer);
+        await fixture.AllowAsync();
+        var transport = await transportTask.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+        await using var owner = (IAsyncDisposable)transport;
+        await using var client = await McpClient.CreateAsync(transport, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Empty(await McpClientToolListing.ListToolsAsync(client, TestContext.Current.CancellationToken));
+        var context = fixture.Request();
+        var request = fixture.Catalog.CreateRequest(Tool(fixture), context.Requestor, context.Use, context.PresentationScope)!;
+        var inspection = await fixture.Executor.InspectAsync(request, TestContext.Current.CancellationToken);
+        Assert.Equal(CredentialIdentityFactory.CreateAccountIdentifier(
+            CredentialProviderKind.McpOAuth, "https://authority.test/\nprivate-stable-account"), inspection.Credential.AccountIdentifier);
+        Assert.Equal(1, fixture.Browser.OpenCount);
+        Assert.Equal(1, fixture.Server.TokenRequests);
+        Assert.Equal(1, fixture.Store.Writes);
+        var cachedTask = CreateTransportAsync(fixture, "discovered-cached");
+        var pending = fixture.Registry.GetSnapshot().Single(row => row.State == UserAuthorizationState.Pending);
+        Assert.Equal(UserAuthorizationPrimaryActionKind.Allow, pending.PrimaryAction);
+        await fixture.AllowAsync(pending);
+        var cachedTransport = await cachedTask.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+        await using var cachedOwner = (IAsyncDisposable)cachedTransport;
+        Assert.Equal(1, fixture.Browser.OpenCount);
+        Assert.Equal(1, fixture.Server.TokenRequests);
+        Assert.Equal(1, fixture.Store.Writes);
+    }
+
+    [Fact]
+    public async Task McpToolContextProvider_OpaqueProviderWithoutPrincipalEvidence_FailsRatherThanHashingConfiguration()
+    {
+        await using var fixture = new Fixture(autoConfigure: true);
+        fixture.Server.ExposePrincipalMetadata = false;
+        var task = CreateTransportAsync(fixture, "unsupported");
+        await fixture.AllowAsync();
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            task.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken));
+        Assert.Equal("MCP credential access failed.", failure.Message);
+        Assert.Equal(UserAuthorizationState.Failed, Assert.Single(fixture.Registry.GetSnapshot()).State);
+        var context = fixture.Request();
+        var request = fixture.Catalog.CreateRequest(Tool(fixture), context.Requestor, context.Use, context.PresentationScope)!;
+        var inspection = await fixture.Executor.InspectAsync(request, TestContext.Current.CancellationToken);
+        Assert.Null(inspection.Credential.AccountIdentifier);
+        Assert.Equal(CredentialSourceUsability.AcquisitionRequired, Assert.Single(inspection.Sources).Usability);
+        Assert.DoesNotContain("finalize", fixture.Events);
+    }
+
+    [Fact]
+    public async Task McpToolContextProvider_DeclaredTokenEndpointMismatch_FailsBeforeForwardingClientCredentials()
+    {
+        await using var fixture = new Fixture(autoConfigure: true);
+        var tool = Tool(fixture);
+        ((OAuthConnection)tool.Connection!).TokenUrl = "https://other.test/token";
+        var task = McpTransportFactory.CreateMcpTransportAsync(tool, Services(fixture, "token-pin"),
+            NullLoggerFactory.Instance, TestContext.Current.CancellationToken);
+        await fixture.AllowAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            task.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken));
+        Assert.Equal(0, fixture.Server.TokenRequests);
+        Assert.Equal(0, fixture.Store.Writes);
+    }
+
+    [Fact]
     public async Task McpToolContextProvider_StartupAndRuntimeRequests_UseTheLiveHostPhase()
     {
         await using var fixture = new Fixture();

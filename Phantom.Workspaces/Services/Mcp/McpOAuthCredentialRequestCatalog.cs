@@ -1,7 +1,9 @@
 using AgentSchema;
 using ModelContextProtocol.Client;
+using System.Net.Http;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces.Access;
+using Phantom.Workspaces.Llm.Secrets;
 
 namespace Phantom.Workspaces.Services.Mcp;
 
@@ -22,6 +24,13 @@ internal sealed class McpOAuthCredentialRequestCatalog : IMcpOAuthCredentialRequ
     internal McpOAuthCredentialRequestCatalog(Func<McpTool, McpOAuthProviderConfiguration?> configurationFactory)
     {
         this.configurationFactory = configurationFactory;
+    }
+
+    internal McpOAuthCredentialRequestCatalog(
+        IPlatformSecretStore platformSecretStore,
+        Func<HttpMessageHandler>? createHttpHandler = null)
+    {
+        this.configurationFactory = new McpOAuthProviderConfigurationFactory(platformSecretStore, createHttpHandler).Create;
     }
 
     internal void RegisterConfiguration(McpOAuthProviderConfiguration configuration)
@@ -68,7 +77,6 @@ internal sealed class McpOAuthCredentialRequestCatalog : IMcpOAuthCredentialRequ
         if (tool.Connection is not OAuthConnection connection ||
             (!string.IsNullOrEmpty(connection.AuthenticationMode) &&
                 !string.Equals(connection.AuthenticationMode, "system", StringComparison.OrdinalIgnoreCase)) ||
-            !string.IsNullOrEmpty(connection.TokenUrl) ||
             !Uri.TryCreate(connection.Endpoint, UriKind.Absolute, out var endpoint))
         {
             return null;
@@ -83,6 +91,7 @@ internal sealed class McpOAuthCredentialRequestCatalog : IMcpOAuthCredentialRequ
         };
         bool Matches(McpOAuthProviderConfiguration candidate) =>
             candidate.Endpoint == endpoint && MatchesAuthority(candidate.AuthorizationServer, connection) &&
+            MatchesTokenEndpoint(candidate.ExpectedTokenEndpoint, connection.TokenUrl) &&
             candidate.TransportMode == transport && MatchesClient(candidate.ClientAuthentication, connection) &&
             candidate.Scopes.Select(scope => scope.Value).Order(StringComparer.Ordinal)
                 .SequenceEqual((connection.Scopes ?? []).Order(StringComparer.Ordinal));
@@ -146,8 +155,12 @@ internal sealed class McpOAuthCredentialRequestCatalog : IMcpOAuthCredentialRequ
         };
 
     private static bool MatchesAuthority(
-        Uri authority,
+        Uri? authority,
         OAuthConnection connection) => connection is not PhantomOAuthConnection configured ||
             string.IsNullOrEmpty(configured.Authority) ||
             (Uri.TryCreate(configured.Authority, UriKind.Absolute, out var expected) && authority == expected);
+
+    private static bool MatchesTokenEndpoint(Uri? expected, string? declared) =>
+        string.IsNullOrEmpty(declared) ||
+        (Uri.TryCreate(declared, UriKind.Absolute, out var endpoint) && expected == endpoint);
 }

@@ -19,8 +19,9 @@ internal sealed record McpOAuthProviderConfiguration
 {
     public required McpProviderConfigurationIdentifier Identifier { get; init; }
     public required Uri Endpoint { get; init; }
-    public required Uri AuthorizationServer { get; init; }
-    public required Uri AccountEndpoint { get; init; }
+    public Uri? AuthorizationServer { get; init; }
+    public Uri? AccountEndpoint { get; init; }
+    public Uri? ExpectedTokenEndpoint { get; init; }
     public required OAuthClientAuthentication ClientAuthentication { get; init; }
     public required IReadOnlyList<OAuthScope> Scopes { get; init; }
     public required CredentialSourceIdentifier Source { get; init; }
@@ -63,14 +64,14 @@ internal sealed class McpOAuthCredentialAccessExecutor :
             Provider = CredentialProviderKind.McpOAuth,
             Kind = CredentialKind.OpaqueUse,
             CredentialPartition = configuration.Identifier.Digest,
-            SourceCompatibility = $"{configuration.Source.Digest}:{configuration.TransportMode}",
-            Authority = configuration.AuthorizationServer.AbsoluteUri,
+            SourceCompatibility = $"{configuration.Source.Digest}:{configuration.TransportMode}:{configuration.ExpectedTokenEndpoint?.AbsoluteUri}",
+            Authority = configuration.AuthorizationServer?.AbsoluteUri ?? "resource-delegated-discovery-v1",
             Audience = configuration.Endpoint.AbsoluteUri,
             ClientPartition = configuration.ClientAuthentication switch
             {
                 ConfidentialOAuthClient confidential =>
-                    $"confidential:{confidential.Client.Value}:{confidential.ClientSecret.Name}:{configuration.AccountEndpoint.AbsoluteUri}",
-                PublicOAuthClient client => $"public:{client.Client?.Value}:{configuration.AccountEndpoint.AbsoluteUri}",
+                    $"confidential:{confidential.Client.Value}:{confidential.ClientSecret.Name}:{configuration.AccountEndpoint?.AbsoluteUri ?? "verified-discovery-v1"}",
+                PublicOAuthClient client => $"public:{client.Client?.Value}:{configuration.AccountEndpoint?.AbsoluteUri ?? "verified-discovery-v1"}",
                 _ => throw new InvalidOperationException("Unsupported OAuth client authentication."),
             },
             Scopes = configuration.Scopes.Select(scope => scope.Value).ToArray(),
@@ -102,7 +103,8 @@ internal sealed class McpOAuthCredentialAccessExecutor :
                 source.Provider == CredentialProviderKind.McpOAuth && source.Kind == CredentialSourceKind.Provider)
                 .Select(source => source with
                 {
-                    Usability = metadata is not null && (metadata.ExpiresOn is null || metadata.ExpiresOn > DateTimeOffset.UtcNow)
+                    Usability = metadata is not null && provider.GetEvidence(metadata.Generation) is not null &&
+                        (metadata.ExpiresOn is null || metadata.ExpiresOn > DateTimeOffset.UtcNow)
                         ? CredentialSourceUsability.Usable
                         : CredentialSourceUsability.AcquisitionRequired,
                 }).ToArray(),
@@ -188,7 +190,8 @@ internal sealed class McpOAuthCredentialAccessExecutor :
                 }
                 generation = success.CommittedGeneration;
             }
-            else if (metadata is not null && (metadata.ExpiresOn is null || metadata.ExpiresOn > DateTimeOffset.UtcNow))
+            else if (metadata is not null && provider.GetEvidence(metadata.Generation) is not null &&
+                (metadata.ExpiresOn is null || metadata.ExpiresOn > DateTimeOffset.UtcNow))
             {
                 generation = metadata.Generation;
             }
@@ -203,7 +206,14 @@ internal sealed class McpOAuthCredentialAccessExecutor :
                 return new CredentialExecutionInteractionRequired<McpCredentialUseResult>();
             }
 
-            var account = await ResolveAccountAsync(provider.Configuration, tokens.AccessToken, linked.Token).ConfigureAwait(false);
+            var evidence = provider.GetEvidence(generation);
+            if (evidence is null)
+            {
+                return new CredentialExecutionFailed<McpCredentialUseResult> { ErrorCode = AccessErrorCode.ProviderFailure, CanRetry = false };
+            }
+            var account = await new OAuthPrincipalEvidenceResolver().ReadAccountAsync(
+                evidence, CredentialProviderKind.McpOAuth, tokens.AccessToken,
+                provider.Configuration.CreateHttpHandler, linked.Token).ConfigureAwait(false);
             provider.SetAccount(generation, account);
             var session = new FixedSession(provider.Configuration, tokens.AccessToken, generation, this.RemoveSession);
             unpublishedSession = session;
@@ -404,11 +414,13 @@ internal sealed class McpOAuthCredentialAccessExecutor :
         }
         var generation = await provider.Commits.BeginGenerationAsync(commitContext, cancellationToken).ConfigureAwait(false);
         var configuration = provider.Configuration;
-        if (configuration.Endpoint.Scheme != Uri.UriSchemeHttps || configuration.AuthorizationServer.Scheme != Uri.UriSchemeHttps)
+        if (configuration.Endpoint.Scheme != Uri.UriSchemeHttps ||
+            (configuration.AuthorizationServer is { } configuredIssuer && configuredIssuer.Scheme != Uri.UriSchemeHttps))
         {
             return new ProviderAcquisitionFailed { ErrorCode = AccessErrorCode.ProviderFailure };
         }
-        var cache = new AcquisitionTokenCache(configuration.Cache, provider.Commits, generation);
+        var cache = new AcquisitionTokenCache(configuration.Cache, provider.Commits, generation, configuration.AccountEndpoint is null);
+        Uri? selectedIssuer = configuration.AuthorizationServer;
         await using var binding = await configuration.CallbackBindings.BindAsync(
             operation, commitContext.InteractionPermit, cancellationToken).ConfigureAwait(false);
         lock (this.gate)
@@ -428,7 +440,12 @@ internal sealed class McpOAuthCredentialAccessExecutor :
             ClientSecret = clientSecret,
             RedirectUri = binding.RedirectUri,
             Scopes = configuration.Scopes.Select(scope => scope.Value).ToArray(),
-            AuthServerSelector = servers => servers.FirstOrDefault(server => server == configuration.AuthorizationServer),
+            AuthServerSelector = servers =>
+            {
+                selectedIssuer = servers.FirstOrDefault(server => server.Scheme == Uri.UriSchemeHttps &&
+                    (configuration.AuthorizationServer is null || server == configuration.AuthorizationServer));
+                return selectedIssuer;
+            },
             TokenCache = cache,
             AuthorizationRedirectDelegate = async (authorizationUri, callbackUri, cancellation) =>
             {
@@ -442,7 +459,12 @@ internal sealed class McpOAuthCredentialAccessExecutor :
         };
         try
         {
-            using var httpClient = new HttpClient(configuration.CreateHttpHandler());
+            var handler = configuration.CreateHttpHandler();
+            if (configuration.ExpectedTokenEndpoint is { } tokenEndpoint)
+            {
+                handler = new TokenEndpointPinningHandler(tokenEndpoint) { InnerHandler = handler };
+            }
+            using var httpClient = new HttpClient(handler);
             await using var transport = new HttpClientTransport(new HttpClientTransportOptions
             {
                 Endpoint = configuration.Endpoint,
@@ -459,6 +481,17 @@ internal sealed class McpOAuthCredentialAccessExecutor :
                 }
                 await provider.Commits.StoreAndPublishAsync(tokens, generation, cancellationToken).ConfigureAwait(false);
             }
+            if (provider.GetEvidence(generation.MaterialGeneration) is null)
+            {
+                if (selectedIssuer is null)
+                {
+                    return new ProviderAcquisitionFailed { ErrorCode = AccessErrorCode.ProviderFailure };
+                }
+                var evidence = await new OAuthPrincipalEvidenceResolver().DiscoverAsync(
+                    selectedIssuer, configuration.CreateHttpHandler, operation, commitContext.InteractionPermit, cancellationToken)
+                    .ConfigureAwait(false);
+                provider.SetEvidence(generation.MaterialGeneration, evidence);
+            }
             await provider.Commits.WaitForCommitAsync(generation, cancellationToken).ConfigureAwait(false);
             return generation.Outcome!;
         }
@@ -467,31 +500,6 @@ internal sealed class McpOAuthCredentialAccessExecutor :
         {
             return generation.Outcome;
         }
-    }
-
-    private static async ValueTask<CredentialAccountIdentifier> ResolveAccountAsync(
-        McpOAuthProviderConfiguration configuration,
-        string token,
-        CancellationToken cancellationToken)
-    {
-        if (configuration.AccountEndpoint.Scheme != Uri.UriSchemeHttps)
-        {
-            throw new HttpRequestException("OAuth account endpoint is not secure.");
-        }
-        using var client = new HttpClient(configuration.CreateHttpHandler());
-        using var request = new HttpRequestMessage(HttpMethod.Get, configuration.AccountEndpoint);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        using var response = await client.SendAsync(request, cancellationToken).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
-        using var document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false),
-            cancellationToken: cancellationToken).ConfigureAwait(false);
-        if (!document.RootElement.TryGetProperty("sub", out var subject) || subject.ValueKind != JsonValueKind.String ||
-            string.IsNullOrWhiteSpace(subject.GetString()))
-        {
-            throw new HttpRequestException("OAuth account identity is unavailable.");
-        }
-        return CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.McpOAuth,
-            $"{configuration.AuthorizationServer.AbsoluteUri}\n{subject.GetString()}");
     }
 
     private void RemoveCallbackBinding(OAuthCallbackBinding binding)
@@ -536,6 +544,7 @@ internal sealed class McpOAuthCredentialAccessExecutor :
     private sealed class Provider
     {
         private readonly Dictionary<CredentialMaterialGenerationIdentifier, CredentialAccountIdentifier> accounts = [];
+        private readonly Dictionary<CredentialMaterialGenerationIdentifier, OAuthPrincipalEvidence> evidence = [];
         internal Provider(McpOAuthProviderConfiguration configuration, Func<bool> active)
         {
             this.Configuration = configuration;
@@ -559,6 +568,18 @@ internal sealed class McpOAuthCredentialAccessExecutor :
         internal void SetAccount(CredentialMaterialGenerationIdentifier generation, CredentialAccountIdentifier account)
         {
             lock (this.accounts) { this.accounts[generation] = account; }
+        }
+        internal OAuthPrincipalEvidence? GetEvidence(CredentialMaterialGenerationIdentifier generation)
+        {
+            if (this.Configuration.AuthorizationServer is { } issuer && this.Configuration.AccountEndpoint is { } endpoint)
+            {
+                return new OAuthPrincipalEvidence { Issuer = issuer, AccountEndpoint = endpoint };
+            }
+            lock (this.evidence) { return this.evidence.GetValueOrDefault(generation); }
+        }
+        internal void SetEvidence(CredentialMaterialGenerationIdentifier generation, OAuthPrincipalEvidence value)
+        {
+            lock (this.evidence) { this.evidence[generation] = value; }
         }
     }
 
@@ -595,11 +616,38 @@ internal sealed class McpOAuthCredentialAccessExecutor :
     private sealed class AcquisitionTokenCache(
         CredentialManagerTokenCache cache,
         McpOAuthCacheCommitCoordinator coordinator,
-        ProviderAcquisitionGeneration generation) : ITokenCache
+        ProviderAcquisitionGeneration generation,
+        bool requireDiscovery) : ITokenCache
     {
-        public ValueTask<TokenContainer?> GetTokensAsync(CancellationToken cancellationToken) => cache.GetTokensAsync(cancellationToken);
+        public async ValueTask<TokenContainer?> GetTokensAsync(CancellationToken cancellationToken)
+        {
+            var tokens = await cache.GetTokensAsync(cancellationToken).ConfigureAwait(false);
+            return tokens is null || !requireDiscovery || generation.Outcome is ProviderAcquisitionSucceeded ? tokens : new TokenContainer
+            {
+                TokenType = tokens.TokenType,
+                AccessToken = tokens.AccessToken,
+                RefreshToken = tokens.RefreshToken,
+                Scope = tokens.Scope,
+                ObtainedAt = DateTimeOffset.UnixEpoch,
+                ExpiresIn = 0,
+            };
+        }
         public ValueTask StoreTokensAsync(TokenContainer tokens, CancellationToken cancellationToken) =>
             coordinator.StoreAndPublishAsync(tokens, generation, cancellationToken);
+    }
+
+    private sealed class TokenEndpointPinningHandler(Uri expected) : DelegatingHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (request.Method == HttpMethod.Post &&
+                request.Content?.Headers.ContentType?.MediaType == "application/x-www-form-urlencoded" &&
+                request.RequestUri != expected)
+            {
+                throw new HttpRequestException("OAuth token endpoint does not match its configured binding.");
+            }
+            return base.SendAsync(request, cancellationToken);
+        }
     }
 
     private sealed class FixedSession : IMcpCredentialUseSession
