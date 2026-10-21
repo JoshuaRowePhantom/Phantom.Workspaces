@@ -369,6 +369,25 @@ public sealed class GitHubCredentialAccessExecutorTests
     }
 
     [Fact]
+    public async Task GitHubExecutor_EnvironmentDisappears_InvalidatesItsCachedGenerationWithoutReadingValues()
+    {
+        var source = new Source();
+        await using var executor = new GitHubCredentialAccessExecutor(source);
+        var (broker, registry) = Create(executor);
+        await using var owned = broker;
+        var request = Request(CredentialSourceKind.Environment);
+        var task = broker.AcquireAsync(request, TestContext.Current.CancellationToken);
+        await AllowAsync(registry, CredentialSourceKind.Environment);
+        await using var result = Assert.IsType<AccessSucceeded<GitHubCredentialAccessResult>>(await task).Result;
+        source.HasEnvironment = false;
+        var inspection = await executor.InspectAsync(request, TestContext.Current.CancellationToken);
+        Assert.Equal(CredentialSourceUsability.Missing, Assert.Single(inspection.Sources).Usability);
+        Assert.Empty(inspection.CachedGenerations);
+        Assert.Single(source.Acquisitions);
+        Assert.IsType<SensitiveValueUseReacquisitionRequired<int>>(await result.Lease.UseAsync((_, _) => ValueTask.FromResult(1), TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task GitHubExecutor_CacheDeletion_InvalidatesOldLeasesButNotIndependentCallerOwnership()
     {
         var source = new Source();
@@ -387,8 +406,11 @@ public sealed class GitHubCredentialAccessExecutorTests
         Assert.Single(source.Acquisitions);
         var cache = executor.GetGenerationCache(request.Sources[0].Identifier);
         var original = (await cache.InspectGenerationAsync(TestContext.Current.CancellationToken))!;
+        Assert.Equal(original, Assert.Single(await executor.InspectCachedGenerationsAsync(TestContext.Current.CancellationToken)).Value);
+        Assert.Single(source.Acquisitions);
         Assert.Equal(CredentialGenerationInvalidationOutcome.Invalidated,
             await cache.InvalidateGenerationAsync(original.Generation, TestContext.Current.CancellationToken));
+        Assert.Empty(await executor.InspectCachedGenerationsAsync(TestContext.Current.CancellationToken));
         Assert.IsType<SensitiveValueUseReacquisitionRequired<int>>(await second.Lease.UseAsync((_, _) => ValueTask.FromResult(1), TestContext.Current.CancellationToken));
         var nextTask = broker.AcquireAsync(request, TestContext.Current.CancellationToken);
         await AllowAsync(registry, CredentialSourceKind.GitHubCli);
