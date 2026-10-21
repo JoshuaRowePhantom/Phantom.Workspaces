@@ -99,7 +99,7 @@ internal sealed class DevTunnelIdentityRouteFactory(OAuthProviderRegistry oauthR
             AuthorizationEndpoint = RequireEndpoint(authentication.AuthorizationEndpoint),
             TokenEndpoint = RequireEndpoint(authentication.TokenEndpoint),
             AccountEndpoint = RequireEndpoint(authentication.AccountEndpoint),
-            Audience = Uri.TryCreate(authentication.Audience, UriKind.Absolute, out var audience)
+            Audience = Uri.TryCreate(RequireText(authentication.Audience), UriKind.Absolute, out var audience)
                 ? audience.AbsoluteUri : throw Unsupported(),
             AccountIdentifierClaim = authentication.AccountIdentifierClaim is { } claim && Enum.IsDefined(claim)
                 ? claim : throw Unsupported(),

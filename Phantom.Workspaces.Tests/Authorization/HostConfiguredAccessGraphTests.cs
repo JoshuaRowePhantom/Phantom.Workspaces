@@ -179,6 +179,7 @@ public sealed class HostConfiguredAccessGraphTests
     [InlineData(" ")]
     [InlineData("relative-audience")]
     [InlineData("/relative-audience")]
+    [InlineData("https://tunnels.api.visualstudio.com/\n")]
     public async Task InvalidConfiguredOAuthAudienceFailsInActualRootBeforeRegistration(string? audience)
     {
         var store = new Mock<IPlatformSecretStore>(MockBehavior.Strict);
