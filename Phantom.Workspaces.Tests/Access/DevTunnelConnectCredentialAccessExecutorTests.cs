@@ -205,8 +205,10 @@ public sealed class DevTunnelConnectCredentialAccessExecutorTests
         Assert.Empty(await fixture.Executor.ListAsync(TestContext.Current.CancellationToken));
     }
 
-    [Fact]
-    public async Task ConnectExecutor_BindsExactKeyToSafelySelectedSourceAccountBeforeAcquisition()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ConnectExecutor_BindsExactKeyToSafelySelectedSourceAccountBeforeAcquisition(bool sameAccount)
     {
         var clock = new TestClock();
         await using var fixture = new Fixture(multipleIdentitySources: true, timeProvider: clock);
@@ -215,7 +217,7 @@ public sealed class DevTunnelConnectCredentialAccessExecutorTests
         var account = fixture.Session.MintedAccount;
         clock.Now = clock.Now.AddHours(2);
         fixture.Session.ExpiresOn = clock.Now.AddHours(1);
-        fixture.Session.MintedAccount = CredentialIdentityFactory.CreateAccountIdentifier(
+        fixture.Session.MintedAccount = sameAccount ? account : CredentialIdentityFactory.CreateAccountIdentifier(
             CredentialProviderKind.GitHub, "different principal");
         fixture.Session.MintProofObserved = (context, key) =>
         {
@@ -226,11 +228,21 @@ public sealed class DevTunnelConnectCredentialAccessExecutorTests
         await fixture.ApplyAsync(fixture.Registry.GetSnapshot().Last(row =>
             row.State is UserAuthorizationState.Pending or UserAuthorizationState.RenewalNeeded), source);
 
-        Assert.Equal(AccessErrorCode.IdentityMismatch,
-            Assert.IsType<AccessFailed<DevTunnelConnectCredentialAccessResult>>(await pending).ErrorCode);
+        var outcome = await pending;
+        if (sameAccount)
+        {
+            await using var replacement = Assert.IsType<AccessSucceeded<DevTunnelConnectCredentialAccessResult>>(outcome).Result;
+            Assert.Equal(account, replacement.ConnectToken!.AccountIdentifier);
+            Assert.NotEqual(original.ConnectToken!.MaterialGeneration, replacement.ConnectToken.MaterialGeneration);
+        }
+        else
+        {
+            Assert.Equal(AccessErrorCode.IdentityMismatch,
+                Assert.IsType<AccessFailed<DevTunnelConnectCredentialAccessResult>>(outcome).ErrorCode);
+            Assert.DoesNotContain(await fixture.Executor.ListAsync(TestContext.Current.CancellationToken),
+                descriptor => descriptor.Generation != original.ConnectToken!.MaterialGeneration);
+        }
         Assert.All(fixture.Session.LastMaterial!, character => Assert.Equal('\0', character));
-        Assert.DoesNotContain(await fixture.Executor.ListAsync(TestContext.Current.CancellationToken),
-            descriptor => descriptor.Generation != original.ConnectToken!.MaterialGeneration);
     }
 
     [Fact]
@@ -498,6 +510,7 @@ public sealed class DevTunnelConnectCredentialAccessExecutorTests
                 context.RequestIdentifier, context.Revision, CredentialExecutorKind.DevTunnelConnect,
                 context.AcquisitionGeneration, parentAcquisitionKey));
             Assert.True(parentGenerationPermit.AuthorizesProvider(CredentialExecutorKind.DevTunnelConnect, parentAcquisitionKey));
+            Assert.True(await parentGenerationPermit.AuthorizesPrivateUseAsync(context, cancellationToken));
             this.MintProofObserved?.Invoke(context, parentAcquisitionKey);
             this.Mints++;
             if (this.DenyUse)
