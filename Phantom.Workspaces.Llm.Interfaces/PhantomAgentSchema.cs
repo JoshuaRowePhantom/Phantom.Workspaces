@@ -53,7 +53,8 @@ public static class PhantomAgentSchema
 
             OAuthConnection oauth and not PhantomOAuthConnection
                 when string.Equals(oauth.AuthenticationMode, EntraPinnedAuthenticationMode, StringComparison.OrdinalIgnoreCase) ||
-                    data.ContainsKey("accountEndpoint") || data.ContainsKey("accountIdentifierClaim")
+                    data.ContainsKey("accountEndpoint") || data.ContainsKey("accountIdentifierClaim") ||
+                    data.ContainsKey("audience")
                 => ReadOAuthConnection(oauth, data),
 
             _ => result,
@@ -70,6 +71,8 @@ public static class PhantomAgentSchema
         var connection = PhantomOAuthConnection.From(source, ReadAuthority(data));
         connection.AccountEndpoint = data.TryGetValue("accountEndpoint", out var endpoint) && endpoint is string text
             ? text : null;
+        connection.Audience = data.TryGetValue("audience", out var audience) && audience is string configuredAudience
+            ? configuredAudience : null;
         if (data.TryGetValue("accountIdentifierClaim", out var value) && value is not null)
         {
             var claimText = value switch

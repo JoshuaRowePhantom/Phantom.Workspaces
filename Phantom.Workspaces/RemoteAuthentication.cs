@@ -142,6 +142,7 @@ public sealed record RemoteAuthentication(
             Authority = this.Authority,
             AccountEndpoint = this.AccountEndpoint,
             AccountIdentifierClaim = this.AccountIdentifierClaim,
+            Audience = this.Audience,
         };
     }
 
@@ -165,6 +166,7 @@ public sealed record RemoteAuthentication(
         {
             AccountEndpoint = connection.AccountEndpoint,
             AccountIdentifierClaim = connection.AccountIdentifierClaim,
+            Audience = connection.Audience,
         };
     }
 

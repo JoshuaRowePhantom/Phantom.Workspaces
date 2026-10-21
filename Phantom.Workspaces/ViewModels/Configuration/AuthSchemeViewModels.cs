@@ -135,6 +135,7 @@ public sealed class EntraAuthSchemeViewModel : AuthSchemeViewModel
 /// </summary>
 public sealed class OAuthAuthSchemeViewModel : AuthSchemeViewModel
 {
+    private readonly RemoteAuthentication original = new(RemoteAuthentication.OAuthScheme);
     private string? authority;
     private string? accountEndpoint;
     private OAuthAccountIdentifierClaim? accountIdentifierClaim;
@@ -154,6 +155,7 @@ public sealed class OAuthAuthSchemeViewModel : AuthSchemeViewModel
     public OAuthAuthSchemeViewModel(RemoteAuthentication authentication)
     {
         ArgumentNullException.ThrowIfNull(authentication);
+        this.original = authentication;
         this.authority = authentication.Authority;
         this.accountEndpoint = authentication.AccountEndpoint;
         this.accountIdentifierClaim = authentication.AccountIdentifierClaim;
@@ -279,17 +281,19 @@ public sealed class OAuthAuthSchemeViewModel : AuthSchemeViewModel
     }
 
     /// <inheritdoc />
-    public override RemoteAuthentication ToRemoteAuthentication() => new(
-        Scheme: RemoteAuthentication.OAuthScheme,
-        Authority: AuthSchemeScopes.NullIfBlank(this.Authority),
-        ClientId: AuthSchemeScopes.NullIfBlank(this.ClientId),
-        ClientSecret: AuthSchemeScopes.NullIfBlank(this.ClientSecret),
-        AuthorizationEndpoint: AuthSchemeScopes.NullIfBlank(this.AuthorizationEndpoint),
-        TokenEndpoint: AuthSchemeScopes.NullIfBlank(this.TokenEndpoint),
-        Scopes: AuthSchemeScopes.Parse(this.Scopes),
-        AccountEndpoint: AuthSchemeScopes.NullIfBlank(this.AccountEndpoint),
-        AccountIdentifierClaim: this.AccountIdentifierClaim,
-        Audience: AuthSchemeScopes.NullIfBlank(this.Audience));
+    public override RemoteAuthentication ToRemoteAuthentication() => this.original with
+    {
+        Scheme = RemoteAuthentication.OAuthScheme,
+        Authority = AuthSchemeScopes.NullIfBlank(this.Authority),
+        ClientId = AuthSchemeScopes.NullIfBlank(this.ClientId),
+        ClientSecret = AuthSchemeScopes.NullIfBlank(this.ClientSecret),
+        AuthorizationEndpoint = AuthSchemeScopes.NullIfBlank(this.AuthorizationEndpoint),
+        TokenEndpoint = AuthSchemeScopes.NullIfBlank(this.TokenEndpoint),
+        Scopes = AuthSchemeScopes.Parse(this.Scopes),
+        AccountEndpoint = AuthSchemeScopes.NullIfBlank(this.AccountEndpoint),
+        AccountIdentifierClaim = this.AccountIdentifierClaim,
+        Audience = AuthSchemeScopes.NullIfBlank(this.Audience),
+    };
 
     private static bool IsTrustedEndpoint(string? value)
         => Uri.TryCreate(value, UriKind.Absolute, out var uri)

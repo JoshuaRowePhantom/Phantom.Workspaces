@@ -25,9 +25,11 @@ public sealed class OAuthPrincipalConfigurationTests
         Assert.Equal(original.AccountEndpoint, loaded.AccountEndpoint);
         Assert.Equal(claim, loaded.AccountIdentifierClaim);
         Assert.Equal(original.Authority, loaded.Authority);
+        Assert.Equal(original.Audience, loaded.Audience);
         var projected = RemoteAuthentication.FromPhantomOAuthConnection(original.ToPhantomOAuthConnection(), original.Scheme);
         Assert.Equal(original.AccountEndpoint, projected.AccountEndpoint);
         Assert.Equal(claim, projected.AccountIdentifierClaim);
+        Assert.Equal(original.Audience, projected.Audience);
     }
 
     [Theory]
@@ -46,11 +48,13 @@ public sealed class OAuthPrincipalConfigurationTests
         Assert.Equal("system", loaded.AuthenticationMode);
         Assert.Equal(configuration.AccountEndpoint, loaded.AccountEndpoint);
         Assert.Equal(configuration.Authority, loaded.Authority);
+        Assert.Equal(configuration.Audience, loaded.Audience);
         Assert.Equal(claim, loaded.AccountIdentifierClaim);
         var second = PhantomAgentSchema.McpToolFromJson(first.ToJson());
         var cloned = Assert.IsType<PhantomOAuthConnection>(second.Connection);
         Assert.Equal(loaded.AccountEndpoint, cloned.AccountEndpoint);
         Assert.Equal(loaded.AccountIdentifierClaim, cloned.AccountIdentifierClaim);
+        Assert.Equal(loaded.Audience, cloned.Audience);
     }
 
     [Fact]
@@ -62,6 +66,26 @@ public sealed class OAuthPrincipalConfigurationTests
             Connection = new OAuthConnection { Kind = "oauth", AuthenticationMode = "system", Endpoint = "https://resource.test/" },
         };
         Assert.IsNotType<PhantomOAuthConnection>(PhantomAgentSchema.McpToolFromJson(tool.ToJson()).Connection);
+    }
+
+    [Fact]
+    public void AudienceOnlyOAuth_RoundTripsWithoutInventingAccountEvidence()
+    {
+        var tool = new McpTool
+        {
+            ServerName = "configured-audience",
+            Connection = new PhantomOAuthConnection
+            {
+                Kind = "oauth",
+                AuthenticationMode = "system",
+                Endpoint = "https://resource.test/",
+                Audience = "https://resource.test/",
+            },
+        };
+        var loaded = Assert.IsType<PhantomOAuthConnection>(PhantomAgentSchema.McpToolFromJson(tool.ToJson()).Connection);
+        Assert.Equal("https://resource.test/", loaded.Audience);
+        Assert.Null(loaded.AccountEndpoint);
+        Assert.Null(loaded.AccountIdentifierClaim);
     }
 
     [Fact]
@@ -129,6 +153,7 @@ public sealed class OAuthPrincipalConfigurationTests
         Assert.Equal(original.AccountIdentifierClaim, saved.AccountIdentifierClaim);
         Assert.Equal(original.Remember, saved.Remember);
         Assert.Equal(original.TokenCacheKey, saved.TokenCacheKey);
+        Assert.Equal(original.Audience, saved.Audience);
         viewModel.AccountIdentifierClaim = null;
         Assert.False(viewModel.IsValid);
         viewModel.AccountIdentifierClaim = OAuthAccountIdentifierClaim.Identifier;
@@ -147,6 +172,7 @@ public sealed class OAuthPrincipalConfigurationTests
     {
         AccountEndpoint = "https://authority.test/account",
         AccountIdentifierClaim = OAuthAccountIdentifierClaim.Subject,
+        Audience = "https://resource.test/",
     };
 
     private static (AccessRequestor Requestor, CredentialUseDescriptor Use) Context()

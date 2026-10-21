@@ -29,6 +29,8 @@ public sealed class PhantomOAuthConnection : OAuthConnection
     public string? AccountEndpoint { get; set; }
     /// <summary>The explicitly configured stable claim returned by the account evidence endpoint.</summary>
     public OAuthAccountIdentifierClaim? AccountIdentifierClaim { get; set; }
+    /// <summary>The explicitly configured credential audience, independent of the provider endpoints.</summary>
+    public string? Audience { get; set; }
 
     /// <summary>
     /// Builds a <see cref="PhantomOAuthConnection"/> from a plain <see cref="OAuthConnection"/>,
@@ -51,6 +53,7 @@ public sealed class PhantomOAuthConnection : OAuthConnection
             Authority = authority,
             AccountEndpoint = (source as PhantomOAuthConnection)?.AccountEndpoint,
             AccountIdentifierClaim = (source as PhantomOAuthConnection)?.AccountIdentifierClaim,
+            Audience = (source as PhantomOAuthConnection)?.Audience,
         };
     }
 
@@ -73,6 +76,10 @@ public sealed class PhantomOAuthConnection : OAuthConnection
         if (this.AccountIdentifierClaim is { } claim)
         {
             result["accountIdentifierClaim"] = claim.ToString();
+        }
+        if (!string.IsNullOrEmpty(this.Audience))
+        {
+            result["audience"] = this.Audience;
         }
 
         return result;
