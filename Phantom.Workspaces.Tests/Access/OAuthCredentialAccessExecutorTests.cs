@@ -408,6 +408,23 @@ public sealed class OAuthCredentialAccessExecutorTests
         Assert.Equal(42, result.Value);
     }
 
+    [Theory]
+    [InlineData("proof")]
+    [InlineData("rotation")]
+    [InlineData("success")]
+    [InlineData("cleanup-failure")]
+    public async Task PrivateUse_PostCallbackValidationRetainsOwnershipUntilSuccessfulPublication(string scenario)
+    {
+        await using var fixture = new Fixture(derived: true);
+        fixture.Derived!.CallbackScenario = scenario;
+        var acquisition = fixture.Broker.AcquireAsync(fixture.Derived.Request(fixture.Request()), TestContext.Current.CancellationToken);
+        await fixture.AllowAsync();
+        await using var result = Assert.IsType<AccessSucceeded<DerivedResult>>(await acquisition).Result;
+        Assert.Equal(scenario == "success", fixture.Derived.CallbackPublished);
+        Assert.Equal(1, fixture.Derived.CompletedCallbackResult!.Disposals);
+        Assert.Equal(scenario == "rotation" ? 2 : 1, fixture.Store.Writes);
+    }
+
     [Fact]
     public async Task ProviderFailure_IsSanitizedAndActualFailedWriteCannotPublishReceipt()
     {
@@ -736,6 +753,9 @@ public sealed class OAuthCredentialAccessExecutorTests
         internal Func<CancellationToken, ValueTask<OAuthGenerationUseOutcome<int>>>? LateUse { get; private set; }
         internal bool ProbeCallbackCancellation { get; set; }
         internal TrackedCallbackResult? CancelledResult { get; private set; }
+        internal string? CallbackScenario { get; set; }
+        internal TrackedSynchronousResult? CompletedCallbackResult { get; private set; }
+        internal bool CallbackPublished { get; private set; }
         public CredentialExecutorKind Kind => CredentialExecutorKind.DevTunnelConnect;
         internal DerivedRequest Request(OAuthCredentialAccessRequest oauth) => new()
         {
@@ -786,6 +806,51 @@ public sealed class OAuthCredentialAccessExecutorTests
                             cancellation.Cancel();
                             return ValueTask.FromResult(unpublished);
                         }, cancellation.Token).AsTask());
+                }
+                if (this.CallbackScenario is { } scenario)
+                {
+                    var proofActive = true;
+                    var proof = scenario is "proof" or "cleanup-failure" ? new ProviderInteractionPermit(
+                        context.RequestIdentifier, context.Revision, CredentialExecutorKind.DevTunnelConnect,
+                        context.AcquisitionGeneration, Key(request), () => proofActive).BindExecution(() => proofActive)
+                        : commit.InteractionPermit;
+                    var pending = this.CompletedCallbackResult = new TrackedSynchronousResult
+                    {
+                        ThrowOnDispose = scenario == "cleanup-failure",
+                    };
+                    var pendingUse = identity.UseGenerationAsync(
+                        request.Identity, receipt.CommittedGeneration, account!, context, proof,
+                        async (_, cancellation) =>
+                        {
+                            if (scenario is "proof" or "cleanup-failure") { proofActive = false; }
+                            if (scenario == "rotation")
+                            {
+                                receipt = Assert.IsType<ProviderAcquisitionSucceeded>(await identity.AcquirePrivateAsync(
+                                    request.Identity, context, commit.InteractionPermit, cancellation));
+                            }
+                            return pending;
+                        }, token).AsTask();
+                    if (scenario == "cleanup-failure")
+                    {
+                        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => pendingUse);
+                        Assert.Equal("Expected cleanup failure.", failure.Message);
+                        Assert.Equal(1, pending.Disposals);
+                    }
+                    else if (scenario == "success")
+                    {
+                        var use = await pendingUse;
+                        var published = Assert.IsType<OAuthGenerationUseSucceeded<TrackedSynchronousResult>>(use);
+                        Assert.Same(pending, published.Result);
+                        Assert.Equal(0, pending.Disposals);
+                        this.CallbackPublished = true;
+                        published.Result.Dispose();
+                    }
+                    else
+                    {
+                        var use = await pendingUse;
+                        Assert.IsType<OAuthGenerationUseUnavailable<TrackedSynchronousResult>>(use);
+                        Assert.Equal(1, pending.Disposals);
+                    }
                 }
                 Assert.IsType<OAuthGenerationUseUnavailable<int>>(await identity.UseGenerationAsync<int>(
                     request.Identity, new() { Value = Guid.NewGuid() }, account!, context, commit.InteractionPermit,
@@ -838,6 +903,16 @@ public sealed class OAuthCredentialAccessExecutorTests
             {
                 this.Disposals++;
                 return ValueTask.CompletedTask;
+            }
+        }
+        internal sealed class TrackedSynchronousResult : IDisposable
+        {
+            internal int Disposals { get; private set; }
+            internal bool ThrowOnDispose { get; init; }
+            public void Dispose()
+            {
+                this.Disposals++;
+                if (this.ThrowOnDispose) { throw new InvalidOperationException("Expected cleanup failure."); }
             }
         }
         private static ProviderAcquisitionKey Key(DerivedRequest request) => new()
