@@ -114,7 +114,10 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
                 cache.Clear();
                 metadata = null;
             }
-            accounts.Add(cache.AccountIdentifier);
+            if (exists || request.Sources.Count == 1)
+            {
+                accounts.Add(cache.AccountIdentifier);
+            }
             sources.Add(choice with
             {
                 Usability = !exists ? CredentialSourceUsability.Missing

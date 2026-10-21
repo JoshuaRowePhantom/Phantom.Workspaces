@@ -136,6 +136,9 @@ public sealed class GitHubCredentialAccessExecutorTests
             await Assert.IsType<AccessSucceeded<GitHubCredentialAccessResult>>(await firstTask).Result.DisposeAsync();
             var nextRequest = Request();
             nextRequest = nextRequest with { Use = nextRequest.Use with { MemoryScopes = [scope, ReleaseMemoryScopeKind.AllowOnce] } };
+            var inspection = await executor.InspectAsync(nextRequest, TestContext.Current.CancellationToken);
+            Assert.Equal(source.Account, inspection.Credential.AccountIdentifier);
+            Assert.Equal(CredentialSourceUsability.Missing, inspection.Sources.Single(choice => choice.Kind == CredentialSourceKind.Environment).Usability);
             await using var next = Assert.IsType<AccessSucceeded<GitHubCredentialAccessResult>>(
                 await broker.AcquireAsync(nextRequest, TestContext.Current.CancellationToken)).Result;
             Assert.Single(registry.GetSnapshot());
@@ -148,6 +151,39 @@ public sealed class GitHubCredentialAccessExecutorTests
                 System.IO.Directory.Delete(directory, recursive: true);
             }
         }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task GitHubExecutor_MissingEnvironment_DoesNotContaminateEligibleCliAccount(bool previouslyVerifiedEnvironment)
+    {
+        var source = new Source();
+        await using var executor = new GitHubCredentialAccessExecutor(source);
+        var (broker, registry) = Create(executor);
+        await using var owned = broker;
+        var environmentAccount = source.Account;
+        if (previouslyVerifiedEnvironment)
+        {
+            var environment = broker.AcquireAsync(Request(CredentialSourceKind.Environment), TestContext.Current.CancellationToken);
+            await AllowAsync(registry, CredentialSourceKind.Environment);
+            await Assert.IsType<AccessSucceeded<GitHubCredentialAccessResult>>(await environment).Result.DisposeAsync();
+        }
+        source.HasEnvironment = false;
+        source.Account = CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.GitHub, "eligible-cli-principal");
+        var cli = broker.AcquireAsync(Request(CredentialSourceKind.GitHubCli), TestContext.Current.CancellationToken);
+        await AllowAsync(registry, CredentialSourceKind.GitHubCli);
+        await Assert.IsType<AccessSucceeded<GitHubCredentialAccessResult>>(await cli).Result.DisposeAsync();
+
+        var request = Request();
+        var inspection = await executor.InspectAsync(request, TestContext.Current.CancellationToken);
+        var environmentSource = request.Sources.Single(choice => choice.Kind == CredentialSourceKind.Environment).Identifier;
+        Assert.Equal(source.Account, inspection.Credential.AccountIdentifier);
+        Assert.Equal(CredentialSourceUsability.Missing, inspection.Sources.Single(choice => choice.Identifier == environmentSource).Usability);
+        Assert.False(inspection.CachedGenerations.ContainsKey(environmentSource));
+        Assert.Equal(previouslyVerifiedEnvironment ? environmentAccount : null, inspection.AcquisitionKeys[environmentSource].Account);
+        var forcedEnvironment = await executor.InspectAsync(Request(CredentialSourceKind.Environment), TestContext.Current.CancellationToken);
+        Assert.Equal(previouslyVerifiedEnvironment ? environmentAccount : null, forcedEnvironment.Credential.AccountIdentifier);
     }
 
     [Fact]
