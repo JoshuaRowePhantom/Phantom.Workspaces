@@ -1,7 +1,6 @@
 using AgentSchema;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Secrets;
-using System.Security;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
@@ -270,36 +269,4 @@ public sealed class AgentFactoryManifestTests
         }
         """);
 
-    private static SecureString ToSecureString(string value)
-    {
-        var secure = new SecureString();
-        foreach (var ch in value)
-        {
-            secure.AppendChar(ch);
-        }
-
-        secure.MakeReadOnly();
-        return secure;
-    }
-
-    private sealed class CountingSecretProvider : ISecretProvider
-    {
-        public int CallCount { get; private set; }
-        public Dictionary<string, SecureString> Secrets { get; } = [];
-
-        public Task<RequestSecretsResult?> RequestSecretsAsync(IReadOnlyList<SecretRequest> requests, CancellationToken cancellationToken)
-        {
-            this.CallCount++;
-            var retrievers = requests
-                .Where(request => this.Secrets.ContainsKey(request.SecretName))
-                .Select(request => new SecretRetriever
-                {
-                    SecretName = request.SecretName,
-                    Secret = _ => Task.FromResult(this.Secrets[request.SecretName]),
-                })
-                .ToArray();
-
-            return Task.FromResult<RequestSecretsResult?>(new RequestSecretsResult(retrievers, []));
-        }
-    }
 }

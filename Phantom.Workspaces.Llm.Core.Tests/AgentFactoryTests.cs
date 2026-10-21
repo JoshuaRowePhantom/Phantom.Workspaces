@@ -8,7 +8,6 @@ using Phantom.Workspaces.Llm.Echo;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Llm.Tests;
-using System.Security;
 using System.Collections.Concurrent;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -2188,45 +2187,4 @@ public class AgentFactoryTests
         }
         """);
 
-    private static SecureString ToSecureString(string value, bool makeReadOnly = true)
-    {
-        var secure = new SecureString();
-        foreach (var ch in value)
-        {
-            secure.AppendChar(ch);
-        }
-
-        if (makeReadOnly)
-        {
-            secure.MakeReadOnly();
-        }
-
-        return secure;
-    }
-
-    private sealed class FakeSecretProvider : ISecretProvider
-    {
-        public int CallCount { get; private set; }
-        public bool ReturnNull { get; set; }
-        public Dictionary<string, SecureString> Secrets { get; } = [];
-
-        public Task<RequestSecretsResult?> RequestSecretsAsync(IReadOnlyList<SecretRequest> requests, CancellationToken cancellationToken)
-        {
-            this.CallCount++;
-            if (this.ReturnNull)
-            {
-                return Task.FromResult<RequestSecretsResult?>(null);
-            }
-
-            var retrievers = requests
-                .Where(request => this.Secrets.ContainsKey(request.SecretName))
-                .Select(request => new SecretRetriever
-                {
-                    SecretName = request.SecretName,
-                    Secret = _ => Task.FromResult(this.Secrets[request.SecretName]),
-                })
-                .ToArray();
-
-            return Task.FromResult<RequestSecretsResult?>(new RequestSecretsResult(retrievers, []));
-        }
-    }}
+}

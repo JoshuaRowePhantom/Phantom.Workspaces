@@ -3,7 +3,6 @@ using Moq;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using System.Collections.Specialized;
-using System.Security;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Llm.Secrets;
@@ -299,18 +298,6 @@ public sealed class McpToolIntegrationTests
             Times.Never);
     }
 
-    private static SecureString ToSecureString(string value)
-    {
-        var secure = new SecureString();
-        foreach (var ch in value)
-        {
-            secure.AppendChar(ch);
-        }
-
-        secure.MakeReadOnly();
-        return secure;
-    }
-
     [Fact]
     public async Task AgentChatSessionCache_SecretGatedSession_ResolvesSecretOnLaunch()
     {
@@ -367,24 +354,4 @@ public sealed class McpToolIntegrationTests
         }
     }
 
-    private sealed class StubSecretProvider : ISecretProvider
-    {
-        public int CallCount { get; private set; }
-        public Dictionary<string, SecureString> Secrets { get; } = [];
-
-        public Task<RequestSecretsResult?> RequestSecretsAsync(IReadOnlyList<SecretRequest> requests, CancellationToken cancellationToken)
-        {
-            this.CallCount++;
-            var retrievers = requests
-                .Where(request => this.Secrets.ContainsKey(request.SecretName))
-                .Select(request => new SecretRetriever
-                {
-                    SecretName = request.SecretName,
-                    Secret = _ => Task.FromResult(this.Secrets[request.SecretName]),
-                })
-                .ToArray();
-
-            return Task.FromResult<RequestSecretsResult?>(new RequestSecretsResult(retrievers, []));
-        }
-    }
 }

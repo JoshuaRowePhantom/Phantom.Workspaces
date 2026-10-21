@@ -8,7 +8,6 @@ using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.Reflection;
 using System.Runtime.CompilerServices;
-using System.Security;
 
 namespace Phantom.Workspaces.Llm.Tests;
 
@@ -919,7 +918,7 @@ public sealed class AgentChatFactoryTests
     public async Task GetAsync_DefinitionWithSecretPlaceholder_MaterializesBeforeCreatingChatClient()
     {
         // #1405: the GUI foreground factory path (GetOrCreateAsync -> CreateChatOnForegroundAsync)
-        // must materialize ${SECRET:...} placeholders — invoking the SecretProvider and rewriting
+        // must materialize ${SECRET:...} placeholders — acquiring broker leases and rewriting
         // the definition to an opaque handle — before the chat client is built.
         var provider = new Phantom.Workspaces.Llm.Core.Tests.Secrets.ManifestAccessTestBroker { Material = "resolved-token" };
         var services = new AgentServices
@@ -980,36 +979,4 @@ public sealed class AgentChatFactoryTests
         }
         """);
 
-    private static SecureString ToSecureString(string value)
-    {
-        var secure = new SecureString();
-        foreach (var ch in value)
-        {
-            secure.AppendChar(ch);
-        }
-
-        secure.MakeReadOnly();
-        return secure;
-    }
-
-    private sealed class FakeSecretProvider : ISecretProvider
-    {
-        public int CallCount { get; private set; }
-        public Dictionary<string, SecureString> Secrets { get; } = [];
-
-        public Task<RequestSecretsResult?> RequestSecretsAsync(IReadOnlyList<SecretRequest> requests, CancellationToken cancellationToken)
-        {
-            this.CallCount++;
-            var retrievers = requests
-                .Where(request => this.Secrets.ContainsKey(request.SecretName))
-                .Select(request => new SecretRetriever
-                {
-                    SecretName = request.SecretName,
-                    Secret = _ => Task.FromResult(this.Secrets[request.SecretName]),
-                })
-                .ToArray();
-
-            return Task.FromResult<RequestSecretsResult?>(new RequestSecretsResult(retrievers, []));
-        }
-    }
 }
