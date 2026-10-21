@@ -26,7 +26,8 @@ public sealed class ApplicationServices
         TransportFactoryRegistryProvider? transportFactoryRegistryProvider = null,
         string? updateUnavailableReason = null,
         ITransportFactory? outboundHttpTransportFactory = null,
-        IAccessBroker? accessBroker = null)
+        IAccessBroker? accessBroker = null,
+        Func<AccessPresentationScope>? accessPresentationScope = null)
     {
         this.RunningAgentChats = runningAgentChats;
         this.AgentPersistenceStoreCache = agentPersistenceStoreCache;
@@ -53,6 +54,7 @@ public sealed class ApplicationServices
             transportFactoryRegistryProvider ?? new TransportFactoryRegistryProvider();
         this.OutboundHttpTransportFactory = outboundHttpTransportFactory;
         this.AccessBroker = accessBroker;
+        this.AccessPresentationScope = accessPresentationScope;
     }
 
     internal static (ISecretProvider SecretProvider, ICredentialPicker CredentialPicker, IAllowedSecretsStore AllowedSecretsStore, IPlatformSecretStore PlatformSecretStore) CreateDefaultSecretServices()
@@ -87,6 +89,8 @@ public sealed class ApplicationServices
     public IRunningAgentChatTable RunningAgentChats { get; }
 
     public IAccessBroker? AccessBroker { get; }
+    public Func<AccessPresentationScope>? AccessPresentationScope { get; }
+    internal DevTunnel.DevTunnelIdentityRouteFactory? DevTunnelIdentityRoutes { get; init; }
 
     public IAgentPersistenceStoreCache AgentPersistenceStoreCache { get; }
 

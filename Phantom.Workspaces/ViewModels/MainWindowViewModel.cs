@@ -26,7 +26,9 @@ using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Web.Client;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Services.DevTunnel;
 using Phantom.Workspaces.Services.Navigation;
 using Phantom.Workspaces.Services.Notifications;
 using Phantom.Workspaces.Transport;
@@ -53,8 +55,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private readonly Trust.DeferredTrustedExecutorSelector trustedExecutorSelector;
     private Services.DevTunnel.IDevTunnelHostService? devTunnelHostService;
     private Task? devTunnelHostStartTask;
-    internal Func<Services.DevTunnel.IDevTunnelHostService> DevTunnelHostServiceFactory { get; set; } =
-        static () => new Services.DevTunnel.DevTunnelServiceFactory().CreateHostService();
+    internal Func<Services.DevTunnel.IDevTunnelHostService> DevTunnelHostServiceFactory { get; set; }
     private EntityBroker? entityBroker;
     private InterestCatalog? interestCatalog;
     private EntityTypeCatalog? entityTypeCatalog;
@@ -118,6 +119,38 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     {
         var services = applicationServices ?? CreateDefaultApplicationServices();
         this.applicationServices = services;
+        this.DevTunnelHostServiceFactory = () =>
+        {
+            if (services.AccessBroker is not { } broker ||
+                services.DevTunnelIdentityRoutes is not { } routes ||
+                services.AccessPresentationScope is not { } presentationScope)
+            {
+                throw new DevTunnelCredentialAccessException(AccessErrorCode.UnsupportedRequest);
+            }
+
+            var requestor = new AccessRequestor
+            {
+                Identifier = CredentialIdentityFactory.CreateRequestorIdentifier(
+                    AccessRequestorKind.Application, "devtunnel-host"),
+                Kind = AccessRequestorKind.Application,
+                SafeDisplayName = "Dev Tunnel host",
+            };
+            var lineage = new CredentialUseLineage();
+            var use = new CredentialUseDescriptor
+            {
+                Kind = CredentialUseKind.Tunnel,
+                Lineage = lineage,
+                Fingerprint = CredentialIdentityFactory.CreateUseFingerprint(
+                    CredentialUseKind.Tunnel, lineage, requestor.Identifier, "devtunnel-host"),
+                SafeDisplayName = "Manage Dev Tunnel",
+                MemoryScopes = [ReleaseMemoryScopeKind.AllowOnce, ReleaseMemoryScopeKind.AllUses],
+            };
+            var scope = presentationScope();
+            var identity = DevTunnelIdentityCredentialAccessRequest.Create(
+                routes.Create(this.configuration?.DevTunnel?.Authentication, requestor, use, scope),
+                requestor, use, scope);
+            return new DevTunnelServiceFactory(broker, identity, presentationScope).CreateHostService();
+        };
         this.ownsLoggerFactory = applicationServices is null;
         this.loggerFactory = services.LoggerFactory;
         this.logDirectoryProvider = services.LogDirectoryProvider;
