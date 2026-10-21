@@ -186,11 +186,7 @@ public sealed class RemoteCopilotLifecycleTests
         await using var session = await client.CreateSessionAsync(
             new SessionConfig { Model = "safe-model" }, TestToken());
 
-        AssertLifecycleOrder(caller, "open-start", "open-complete", "create-write-start",
-            "create-written", "ack-received");
-        AssertLifecycleOrder(worker, "request-received", "listener-entered", "cli-start-started",
-            "cli-start-succeeded", "create-received", "sdk-create-started", "sdk-created",
-            "ack-write-started", "ack-written");
+        await AssertStartupLifecycleOrderAsync(caller, worker);
         AssertSeparateInfoAttempts(caller, worker, "create");
         Assert.Equal("create-written",
             Assert.Single(caller.Entries, entry => entry.Stage == "create-written").LastConfirmedStage);
@@ -217,11 +213,7 @@ public sealed class RemoteCopilotLifecycleTests
             "private-resume-session-id",
             new ResumeSessionConfig { Model = "safe-model" }, TestToken());
 
-        AssertLifecycleOrder(caller, "open-start", "open-complete", "create-write-start",
-            "create-written", "ack-received");
-        AssertLifecycleOrder(worker, "request-received", "listener-entered", "cli-start-started",
-            "cli-start-succeeded", "create-received", "sdk-create-started", "sdk-created",
-            "ack-write-started", "ack-written");
+        await AssertStartupLifecycleOrderAsync(caller, worker);
         AssertSeparateInfoAttempts(caller, worker, "resume");
         Assert.All(caller.Entries, entry => Assert.Equal("resume", entry.Operation));
         Assert.All(worker.Entries.Where(entry => entry.Stage is "create-received" or "sdk-create-started"
@@ -938,6 +930,51 @@ public sealed class RemoteCopilotLifecycleTests
         AssertSanitized(logs, secret, "worker-only.invalid");
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RemoteSplitSession_AcknowledgementReceivedBeforeCallerWriteLog_IsAccepted(bool resume)
+    {
+        var enteredCallerLog = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseCallerLog = new ManualResetEventSlim();
+        using var caller = new LifecycleLoggerFactory(entry =>
+        {
+            if (entry.Role != "caller" || entry.Stage != "create-written")
+                return;
+            enteredCallerLog.TrySetResult();
+            if (!releaseCallerLog.Wait(TimeSpan.FromSeconds(30)))
+                throw new TimeoutException("Caller frame writer logger was not released.");
+        });
+        using var worker = new LifecycleLoggerFactory();
+        var listeners = new TransportRegistry();
+        listeners.Register(new CopilotClientTransportListener(new AgentServices
+        {
+            CopilotClientFactory = new ToolCapturingClientFactory(),
+            LoggerFactory = worker,
+        }));
+        await using var transport = new LocalTransport(listeners);
+        await using var client = new CopilotClientOverTransport(transport, loggerFactory: caller);
+        var creating = Task.Run(async () => resume
+            ? await client.ResumeSessionAsync("safe-session", new ResumeSessionConfig { Model = "safe-model" }, TestToken())
+            : await client.CreateSessionAsync(new SessionConfig { Model = "safe-model" }, TestToken()));
+        try
+        {
+            await enteredCallerLog.Task.WaitAsync(TestToken());
+            var correlation = Assert.Single(caller.Entries, entry => entry.Stage == "open-start").CorrelationId!;
+            await caller.WaitForAsync(correlation, "ack-received").WaitAsync(TestToken());
+            Assert.DoesNotContain(caller.Entries, entry => entry.Stage == "create-written");
+            Assert.False(creating.IsCompleted);
+        }
+        finally
+        {
+            releaseCallerLog.Set();
+        }
+
+        await using var session = await creating.WaitAsync(TestToken());
+        await AssertStartupLifecycleOrderAsync(caller, worker);
+        Assert.True(caller.IndexOf("ack-received") < caller.IndexOf("create-written"));
+    }
+
     [Fact]
     public async Task RemoteSplitSession_LifecycleStages_CancellationRecordsCallerBoundary()
     {
@@ -1365,6 +1402,22 @@ public sealed class RemoteCopilotLifecycleTests
 
     private static CancellationToken TestToken()
         => new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token;
+
+    private static async Task AssertStartupLifecycleOrderAsync(
+        LifecycleLoggerFactory caller,
+        LifecycleLoggerFactory worker)
+    {
+        var correlation = Assert.Single(caller.Entries, entry => entry.Stage == "open-start").CorrelationId!;
+        await Task.WhenAll(
+            caller.WaitForAsync(correlation, "create-written"),
+            caller.WaitForAsync(correlation, "ack-received"),
+            worker.WaitForAsync(correlation, "ack-written")).WaitAsync(TestToken());
+        AssertLifecycleOrder(caller, "open-start", "open-complete", "create-write-start", "create-written");
+        AssertLifecycleOrder(caller, "create-write-start", "ack-received");
+        AssertLifecycleOrder(worker, "request-received", "listener-entered", "cli-start-started",
+            "cli-start-succeeded", "create-received", "sdk-create-started", "sdk-created",
+            "ack-write-started", "ack-written");
+    }
 
     private static void AssertLifecycleOrder(
         LifecycleLoggerFactory logs,
