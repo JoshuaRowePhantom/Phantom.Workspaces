@@ -250,6 +250,13 @@ public partial class App : Application
             };
             var loadingViewModel = new LoadingWindowViewModel { AuthorizationRows = this.accessHost.AuthorizationRows };
             var loadingWindow = new LoadingWindow(loadingViewModel);
+            var dismissingSplash = false;
+            loadingWindow.Closing += (_, arguments) =>
+            {
+                if (dismissingSplash || this.shutdownCompleted || arguments.Cancel) { return; }
+                arguments.Cancel = true;
+                this.RequestShutdown(desktop);
+            };
             desktop.MainWindow = loadingWindow;
 
             base.OnFrameworkInitializationCompleted();
@@ -395,7 +402,11 @@ public partial class App : Application
                         this.RequestShutdown(desktop);
                     };
                 },
-                closeSplash: () => loadingWindow.Close());
+                closeSplash: () =>
+                {
+                    dismissingSplash = true;
+                    loadingWindow.Close();
+                });
 
             _ = succeeded;
             return;

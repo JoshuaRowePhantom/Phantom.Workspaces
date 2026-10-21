@@ -90,6 +90,35 @@ public sealed class AuthorizationEndToEndTests
     }
 
     [AvaloniaFact]
+    public async Task AuthorizationEndToEnd_PendingPersistenceBootstrap_ShutdownCancelsWithoutProviderContact()
+    {
+        await using var host = App.CreateAccessHostBeforeStartup(new AccessHostOptions
+        {
+            PlatformSecretStore = new NullPlatformSecretStore(),
+            Dispatch = action => action(),
+            ReleaseMemoryFilePath = Path.Combine(Environment.CurrentDirectory, ".nonexistent-startup-persistence", "release-memory.json"),
+        });
+        var registered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.AuthorizationRegistry.Changed += (_, _) =>
+        {
+            if (host.AuthorizationRegistry.GetSnapshot().Count > 0) { registered.TrySetResult(); }
+        };
+        await using var cache = new AgentPersistenceStoreCache(host.Broker, () => host.PresentationScope);
+        var store = await cache.GetOrCreateAsync(
+            new WebRepositorySource("https://persistence.invalid/", UseGitHubAuthToken: true));
+        var pending = store.ReadSubAgentChildIdsAsync("session", TestContext.Current.CancellationToken).AsTask();
+        await registered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        Assert.Single(host.AuthorizationRows.Rows);
+        Assert.False(pending.IsCompleted);
+
+        await host.DisposeAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+
+        Assert.Empty(host.AuthorizationRegistry.GetSnapshot());
+        Assert.Empty(host.AuthorizationRows.Rows);
+    }
+
+    [AvaloniaFact]
     public async Task MainWindowViewModel_DisposeAsync_IsExactlyOnceAndPreventsLateInitialization()
     {
         var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
