@@ -74,6 +74,37 @@ public sealed class McpToolContextProviderTests
     }
 
     [Fact]
+    public async Task McpToolContextProvider_StartupAndRuntimeRequests_UseTheLiveHostPhase()
+    {
+        await using var fixture = new Fixture();
+        var phase = AccessPresentationScope.Bootstrap;
+        var services = Services(fixture, "phase-test") with
+        {
+            AccessPresentationScopeProvider = () => phase,
+        };
+        using var firstCancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var first = McpTransportFactory.CreateMcpTransportAsync(
+            Tool(fixture), services, NullLoggerFactory.Instance, firstCancellation.Token);
+        var bootstrap = fixture.Registry.GetSnapshot().Single(row => row.State == UserAuthorizationState.Pending);
+        Assert.True(bootstrap.IsBootstrapBlocking);
+        firstCancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first);
+
+        phase = AccessPresentationScope.Runtime;
+        using var secondCancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var second = McpTransportFactory.CreateMcpTransportAsync(
+            Tool(fixture), services, NullLoggerFactory.Instance, secondCancellation.Token);
+        var runtime = fixture.Registry.GetSnapshot().Single(row =>
+            row.State == UserAuthorizationState.Pending && row.Identifier != bootstrap.Identifier);
+        Assert.False(runtime.IsBootstrapBlocking);
+        Assert.NotEqual(bootstrap.Identifier, runtime.Identifier);
+        Assert.Equal(0, fixture.Browser.OpenCount);
+        Assert.Equal(0, fixture.Store.Reads);
+        secondCancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => second);
+    }
+
+    [Fact]
     public void AccessMigration_McpProductionTree_HasNoInteractiveOAuthOptionsRedirectDelegate()
     {
         Assert.Null(typeof(McpClientToolListing).Assembly.GetType("Phantom.Workspaces.Llm.Auth.InteractiveOAuthOptions"));
@@ -82,27 +113,29 @@ public sealed class McpToolContextProviderTests
             System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic));
     }
 
-    private static Task<IClientTransport> CreateTransportAsync(Fixture fixture, string session)
+    private static McpTool Tool(Fixture fixture) => new()
     {
-        var tool = new McpTool
+        ServerName = "private-server",
+        Connection = new OAuthConnection
         {
-            ServerName = "private-server",
-            Connection = new OAuthConnection
-            {
-                Endpoint = fixture.Configuration.Endpoint.AbsoluteUri,
-                ClientId = "private-client",
-                Scopes = ["read"],
-            },
-        };
-        return McpTransportFactory.CreateMcpTransportAsync(tool, new AgentServices
+            Endpoint = fixture.Configuration.Endpoint.AbsoluteUri,
+            ClientId = "private-client",
+            Scopes = ["read"],
+        },
+    };
+
+    private static AgentServices Services(Fixture fixture, string session) => new()
+    {
+        AccessBroker = fixture.Broker,
+        McpOAuthCredentials = fixture.Catalog,
+        AccessLineage = new CredentialUseLineage
         {
-            AccessBroker = fixture.Broker,
-            McpOAuthCredentials = fixture.Catalog,
-            AccessLineage = new CredentialUseLineage
-            {
-                Session = CredentialIdentityFactory.CreateLineageIdentifier("session", session),
-            },
-            AccessPresentationScope = AccessPresentationScope.Runtime,
-        }, NullLoggerFactory.Instance, TestContext.Current.CancellationToken);
-    }
+            Session = CredentialIdentityFactory.CreateLineageIdentifier("session", session),
+        },
+        AccessPresentationScope = AccessPresentationScope.Runtime,
+    };
+
+    private static Task<IClientTransport> CreateTransportAsync(Fixture fixture, string session) =>
+        McpTransportFactory.CreateMcpTransportAsync(Tool(fixture), Services(fixture, session),
+            NullLoggerFactory.Instance, TestContext.Current.CancellationToken);
 }

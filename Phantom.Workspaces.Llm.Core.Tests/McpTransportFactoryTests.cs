@@ -70,6 +70,51 @@ public sealed class McpTransportFactoryTests
         Assert.Equal(1, broker.Sessions[0].Disposals);
     }
 
+    [Theory]
+    [InlineData("oauth")]
+    [InlineData("entra")]
+    [InlineData("stored")]
+    public async Task McpTransportFactory_LiveHostScope_IsEvaluatedForEachNewRequest(string kind)
+    {
+        var phase = AccessPresentationScope.Bootstrap;
+        Func<AccessPresentationScope> provider = () => phase;
+        var broker = new Broker();
+        var services = new AgentServices
+        {
+            AccessBroker = broker,
+            McpOAuthCredentials = new Catalog(),
+            AccessPresentationScopeProvider = provider,
+        };
+        var tool = kind switch
+        {
+            "entra" => new McpTool
+            {
+                Connection = new PhantomOAuthConnection
+                {
+                    Endpoint = Endpoint,
+                    AuthenticationMode = PhantomAgentSchema.EntraPinnedAuthenticationMode,
+                    Authority = "https://login.microsoftonline.com/tenant/v2.0",
+                    ClientId = "public-client",
+                    Scopes = ["scope/.default"],
+                },
+            },
+            "stored" => new McpTool
+            {
+                Connection = new ApiKeyConnection { Endpoint = Endpoint, ApiKey = "${SECRET:configured-key}" },
+            },
+            _ => OAuthTool(),
+        };
+        var first = await CreateAsync(tool, services);
+        await using var firstOwner = (IAsyncDisposable)first;
+        Assert.Equal(AccessPresentationScope.Bootstrap, broker.LastScope);
+        phase = AccessPresentationScope.Runtime;
+        var second = await CreateAsync(tool, services);
+        await using var secondOwner = (IAsyncDisposable)second;
+        Assert.Equal(AccessPresentationScope.Runtime, broker.LastScope);
+        Assert.Same(provider, services.AccessPresentationScopeProvider);
+        Assert.Equal(2, broker.Calls);
+    }
+
     [Fact]
     public async Task McpTransportFactory_PreservesTypedParentRequestorAndUseLineage()
     {
@@ -394,6 +439,7 @@ public sealed class McpTransportFactoryTests
         internal int Calls { get; private set; }
         internal bool Deny { get; init; }
         internal object? LastRequest { get; private set; }
+        internal AccessPresentationScope LastScope { get; private set; }
         internal McpOAuthCredentialUseRequest? McpRequest { get; private set; }
         internal EntraCredentialAccessResult? EntraResult { get; private set; }
         internal List<Session> Sessions { get; } = [];
@@ -402,6 +448,7 @@ public sealed class McpTransportFactoryTests
         {
             this.Calls++;
             this.LastRequest = request;
+            this.LastScope = request.PresentationScope;
             if (this.Deny)
             {
                 return Task.FromResult<AccessOutcome<TResult>>(new AccessDenied<TResult> { Reason = AccessDenialReason.PolicyDenied });
