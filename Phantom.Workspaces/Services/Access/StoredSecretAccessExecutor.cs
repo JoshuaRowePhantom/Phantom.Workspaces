@@ -96,17 +96,37 @@ internal sealed class StoredSecretAccessExecutor : ICredentialAccessExecutor<Sto
         try
         {
             material = await this.source.ReadAsync(request.Reference.Name, choice.Kind, cancellationToken).ConfigureAwait(false);
-            if (material is null)
+            cancellationToken.ThrowIfCancellationRequested();
+            lock (this.gate)
             {
-                cache.Clear();
-                return new CredentialExecutionMissing<StoredSecretAccessResult>();
+                if (this.disposed)
+                {
+                    return new CredentialExecutionFailed<StoredSecretAccessResult> { ErrorCode = AccessErrorCode.Disposed, CanRetry = false };
+                }
             }
-
-            var generation = cache.Commit(material);
-            return new CredentialExecutionReady<StoredSecretAccessResult>
+            var validation = await context.Policy.ValidateAsync(authorization.Identifier, policyRequest, cancellationToken).ConfigureAwait(false);
+            lock (this.gate)
             {
-                Materializer = new Materializer(material, generation, authorization, context, cache),
-            };
+                cancellationToken.ThrowIfCancellationRequested();
+                if (this.disposed)
+                {
+                    return new CredentialExecutionFailed<StoredSecretAccessResult> { ErrorCode = AccessErrorCode.Disposed, CanRetry = false };
+                }
+                if (validation != ReleaseAuthorizationValidation.Valid)
+                {
+                    return new CredentialExecutionDenied<StoredSecretAccessResult>();
+                }
+                if (material is null)
+                {
+                    cache.Clear();
+                    return new CredentialExecutionMissing<StoredSecretAccessResult>();
+                }
+                var generation = cache.Commit(material);
+                return new CredentialExecutionReady<StoredSecretAccessResult>
+                {
+                    Materializer = new Materializer(material, generation, authorization, context, cache),
+                };
+            }
         }
         catch (System.ComponentModel.Win32Exception)
         {
