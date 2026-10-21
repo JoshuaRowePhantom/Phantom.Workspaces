@@ -1,3 +1,4 @@
+using System.IO;
 using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Llm.Interfaces.Access.Execution;
 using Phantom.Workspaces.Llm.Interfaces.Authorization;
@@ -19,6 +20,26 @@ public sealed class StoredSecretAccessExecutorTests
         Assert.Equal(2, source.Inspections);
         Assert.Empty(source.Reads);
         Assert.Empty(inspection.CachedGenerations);
+    }
+
+    [Fact]
+    public async Task StoredSecretExecutor_AllowAsync_WaitsForPendingRowAfterAsynchronousInspection()
+    {
+        var inspection = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var source = new Source { InspectionGate = inspection.Task };
+        await using var executor = new StoredSecretAccessExecutor(source);
+        var (broker, registry) = Create(executor);
+        await using var ownedBroker = broker;
+        await using var ownedRegistry = registry;
+        var acquisition = broker.AcquireAsync(Request(), TestContext.Current.CancellationToken);
+        var allowing = AllowAsync(registry, CredentialSourceKind.Environment);
+        Assert.False(allowing.IsCompleted);
+        Assert.Empty(source.Reads);
+
+        inspection.SetResult();
+        await allowing;
+        await using var result = Assert.IsType<AccessSucceeded<StoredSecretAccessResult>>(await acquisition).Result;
+        Assert.Equal(new[] { CredentialSourceKind.Environment }, source.Reads);
     }
 
     [Theory]
@@ -136,26 +157,48 @@ public sealed class StoredSecretAccessExecutorTests
         };
     }
 
-    internal static (AccessBroker Broker, UserAuthorizationRegistry Registry) Create(StoredSecretAccessExecutor executor)
+    internal static (AccessBroker Broker, UserAuthorizationRegistry Registry) Create(
+        StoredSecretAccessExecutor executor,
+        string? releaseMemoryPath = null)
     {
         var registry = new UserAuthorizationRegistry();
         var executors = new CredentialAccessExecutorRegistry();
         executors.Add<StoredSecretAccessRequest, StoredSecretAccessResult>(executor);
-        return (new AccessBroker(new ReleaseAuthorizationPolicy(new ReleaseMemoryStore()), executors, new ProviderAcquisitionCoordinator(), registry), registry);
+        var store = new ReleaseMemoryStore(releaseMemoryPath ?? Path.Combine(
+            AppContext.BaseDirectory,
+            "stored-secret-access-tests",
+            $"{Guid.NewGuid():N}.json"));
+        return (new AccessBroker(new ReleaseAuthorizationPolicy(store), executors, new ProviderAcquisitionCoordinator(), registry), registry);
     }
 
     internal static async Task AllowAsync(
         UserAuthorizationRegistry registry,
         CredentialSourceKind selected)
     {
-        var row = registry.GetSnapshot().Last(snapshot => snapshot.State == UserAuthorizationState.Pending);
-        await registry.ActAsync(new ApplyUserAuthorizationAction
+        var pending = new TaskCompletionSource<UserAuthorizationSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void ObservePending()
         {
-            RequestIdentifier = row.Identifier,
-            ExpectedRevision = row.Revision,
-            Memory = row.SelectedMemory,
-            Source = row.SourceOptions.Single(source => source.Kind == selected).Identifier,
-        }, TestContext.Current.CancellationToken);
+            if (registry.GetSnapshot().LastOrDefault(snapshot => snapshot.State == UserAuthorizationState.Pending) is { } row)
+                pending.TrySetResult(row);
+        }
+        void Changed(object? sender, UserAuthorizationChangedEventArgs args) => ObservePending();
+        registry.Changed += Changed;
+        try
+        {
+            ObservePending();
+            var row = await pending.Task.WaitAsync(TestContext.Current.CancellationToken);
+            await registry.ActAsync(new ApplyUserAuthorizationAction
+            {
+                RequestIdentifier = row.Identifier,
+                ExpectedRevision = row.Revision,
+                Memory = row.SelectedMemory,
+                Source = row.SourceOptions.Single(source => source.Kind == selected).Identifier,
+            }, TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            registry.Changed -= Changed;
+        }
     }
 
     private sealed class Source : IStoredSecretAccessSource
@@ -164,11 +207,14 @@ public sealed class StoredSecretAccessExecutorTests
         public List<CredentialSourceKind> Reads { get; } = [];
         public bool MissingOnRead { get; set; }
         public string Suffix { get; set; } = "";
+        public Task? InspectionGate { get; init; }
 
-        public ValueTask<bool> ExistsAsync(string name, CredentialSourceKind source, CancellationToken cancellationToken)
+        public async ValueTask<bool> ExistsAsync(string name, CredentialSourceKind source, CancellationToken cancellationToken)
         {
             this.Inspections++;
-            return ValueTask.FromResult(true);
+            if (this.InspectionGate is { } gate)
+                await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            return true;
         }
 
         public ValueTask<char[]?> ReadAsync(string name, CredentialSourceKind source, CancellationToken cancellationToken)
