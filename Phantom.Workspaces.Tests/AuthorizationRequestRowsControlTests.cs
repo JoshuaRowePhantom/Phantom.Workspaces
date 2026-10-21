@@ -1,10 +1,14 @@
+using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
+using Avalonia.Input.Raw;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Phantom.Workspaces.Controls;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces.Tests;
@@ -120,5 +124,117 @@ public sealed class AuthorizationRequestRowsControlTests
         Assert.Equal(0, registry.Subscribers);
         Assert.NotEmpty(notifications);
         Assert.All(notifications, Assert.True);
+    }
+
+    [AvaloniaFact]
+    public void LoadingToRuntimePreservesScrollSelectionsAndExplicitKeyboardFocusIntent()
+    {
+        var snapshots = Enumerable.Range(0, 30).Select(_ =>
+        {
+            var snapshot = AuthorizationRequestRowsViewModelTests.Snapshot();
+            return snapshot with
+            {
+                Identifier = new() { Value = Guid.NewGuid() },
+                MemoryOptions =
+                [
+                    snapshot.MemoryOptions[0],
+                    snapshot.MemoryOptions[0] with
+                    {
+                        Identifier = new() { Value = Guid.NewGuid() },
+                        Scope = ReleaseMemoryScopeKind.AllUses,
+                        SafeDisplayName = "All uses",
+                    },
+                ],
+                SourceOptions =
+                [
+                    snapshot.SourceOptions[0],
+                    snapshot.SourceOptions[0] with
+                    {
+                        Identifier = new() { Digest = new string('b', 64) },
+                        Usability = CredentialSourceUsability.AcquisitionRequired,
+                        SafeDisplayName = "Provider",
+                    },
+                ],
+            };
+        }).ToArray();
+        var registry = new AuthorizationRequestRowsViewModelTests.Registry { Snapshot = snapshots };
+        using var rows = new AuthorizationRequestRowsViewModel { Dispatch = action => action(), Registry = registry };
+        var loading = new LoadingWindow(new LoadingWindowViewModel { AuthorizationRows = rows });
+        loading.Show();
+        Dispatcher.UIThread.RunJobs();
+        var loadingControl = Assert.Single(loading.GetVisualDescendants().OfType<AuthorizationRequestRowsControl>());
+        var selected = rows.Rows[9];
+        selected.SelectedMemoryOption = selected.MemoryOptions[1];
+        selected.SelectedSourceOption = selected.SourceOptions[1];
+        selected.IsDetailsExpanded = true;
+        var loadingSource = FindTarget(loadingControl, selected, AuthorizationRowFocusTarget.Source);
+        Assert.True(loadingSource.Focus());
+        Dispatcher.UIThread.RunJobs();
+        var loadingScroller = loadingControl.FindControl<ScrollViewer>("RowsScroller")!;
+        loadingScroller.Offset = new Vector(0, 180);
+        Dispatcher.UIThread.RunJobs();
+        var savedOffset = loadingScroller.Offset;
+        Assert.True(savedOffset.Y > 0);
+        Assert.Equal(savedOffset, rows.Presentation.ScrollOffset);
+        Assert.Equal(selected.Identifier, rows.Presentation.FocusedRequestIdentifier);
+        Assert.Equal(AuthorizationRowFocusTarget.Source, rows.Presentation.FocusTarget);
+        loading.Close();
+        Dispatcher.UIThread.RunJobs();
+
+        rows.SetPresentationMode(AuthorizationRowsPresentationMode.Runtime);
+        var sentinel = new TextBox();
+        var runtimeControl = new AuthorizationRequestRowsControl { DataContext = rows, Height = 260 };
+        var runtime = new Window
+        {
+            Width = 900,
+            Height = 400,
+            Content = new StackPanel { Children = { sentinel, runtimeControl } },
+        };
+        runtime.Show();
+        Dispatcher.UIThread.RunJobs();
+        Assert.True(sentinel.Focus());
+        Assert.Same(rows, runtimeControl.DataContext);
+        Assert.Same(selected, rows.Rows[9]);
+        Assert.Equal(selected.MemoryOptions[1].Identifier, selected.SelectedMemory);
+        Assert.Equal(selected.SourceOptions[1].Identifier, selected.SelectedSource);
+        Assert.True(selected.IsDetailsExpanded);
+        Assert.Equal(savedOffset, runtimeControl.FindControl<ScrollViewer>("RowsScroller")!.Offset);
+        Assert.True(sentinel.IsFocused);
+
+        PressTab(runtime);
+        var runtimeSource = FindTarget(runtimeControl, selected, AuthorizationRowFocusTarget.Source);
+        Assert.True(runtimeSource.IsKeyboardFocusWithin);
+        PressTab(runtime);
+        Assert.True(FindTarget(runtimeControl, selected, AuthorizationRowFocusTarget.PrimaryAction).IsFocused);
+        Assert.Equal(AuthorizationRowFocusTarget.PrimaryAction, rows.Presentation.FocusTarget);
+        var focused = runtime.FocusManager!.GetFocusedElement();
+        var runtimeOffset = runtimeControl.FindControl<ScrollViewer>("RowsScroller")!.Offset;
+        registry.Snapshot = snapshots.Append(AuthorizationRequestRowsViewModelTests.Snapshot() with
+        {
+            Identifier = new() { Value = Guid.NewGuid() },
+        }).ToArray();
+        registry.Notify();
+        Dispatcher.UIThread.RunJobs();
+        Assert.Same(focused, runtime.FocusManager.GetFocusedElement());
+        Assert.Equal(runtimeOffset, runtimeControl.FindControl<ScrollViewer>("RowsScroller")!.Offset);
+        runtime.Close();
+        rows.Dispose();
+        Assert.Equal(default, rows.Presentation.ScrollOffset);
+        Assert.Null(rows.Presentation.FocusedRequestIdentifier);
+        Assert.Null(rows.Presentation.FocusTarget);
+    }
+
+    private static Control FindTarget(
+        AuthorizationRequestRowsControl control,
+        AuthorizationRequestRowViewModel row,
+        AuthorizationRowFocusTarget target) =>
+        control.GetVisualDescendants().OfType<Control>().Single(element =>
+            ReferenceEquals(element.DataContext, row) && element.Tag is AuthorizationRowFocusTarget actual && actual == target);
+
+    private static void PressTab(Window window)
+    {
+        window.KeyPress(Key.Tab, RawInputModifiers.None, PhysicalKey.Tab, "\t");
+        window.KeyRelease(Key.Tab, RawInputModifiers.None, PhysicalKey.Tab, "\t");
+        Dispatcher.UIThread.RunJobs();
     }
 }

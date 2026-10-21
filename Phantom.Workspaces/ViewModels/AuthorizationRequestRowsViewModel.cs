@@ -37,6 +37,7 @@ public sealed class AuthorizationRequestRowsViewModel : IDisposable
     }
 
     public ReadOnlyObservableCollection<AuthorizationRequestRowViewModel> Rows { get; }
+    public AuthorizationRowsPresentationState Presentation { get; } = new();
     public event EventHandler? Changed;
     public int ActionableCount => this.keyedRows.Values.Count(row => row.CanAct);
 
@@ -104,6 +105,7 @@ public sealed class AuthorizationRequestRowsViewModel : IDisposable
             foreach (var row in this.keyedRows.Values) { row.Deactivate(); }
             this.keyedRows.Clear();
             this.rows.Clear();
+            this.Presentation.Clear();
             this.Changed = null;
         });
     }

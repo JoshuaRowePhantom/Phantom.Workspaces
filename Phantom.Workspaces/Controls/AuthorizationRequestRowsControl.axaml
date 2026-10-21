@@ -11,7 +11,7 @@
             <TextBlock Grid.Column="2" Text="Source" FontWeight="Bold" />
             <TextBlock Grid.Column="3" Text="Actions" FontWeight="Bold" />
         </Grid>
-        <ScrollViewer Grid.Row="1" MaxHeight="360">
+        <ScrollViewer x:Name="RowsScroller" Grid.Row="1" MaxHeight="360">
             <ItemsControl ItemsSource="{Binding Rows}">
                 <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="vm:AuthorizationRequestRowViewModel">
@@ -22,6 +22,7 @@
                                            AutomationProperties.LiveSetting="Polite" />
                             </StackPanel>
                             <ComboBox Grid.Column="1" ItemsSource="{Binding MemoryOptions}"
+                                      Tag="{x:Static vm:AuthorizationRowFocusTarget.Memory}"
                                       SelectedItem="{Binding SelectedMemoryOption, Mode=TwoWay}"
                                       IsEnabled="{Binding CanAct}" AutomationProperties.Name="Release memory scope">
                                 <ComboBox.ItemTemplate>
@@ -31,6 +32,7 @@
                                 </ComboBox.ItemTemplate>
                             </ComboBox>
                             <ComboBox Grid.Column="2" ItemsSource="{Binding SourceOptions}"
+                                      Tag="{x:Static vm:AuthorizationRowFocusTarget.Source}"
                                       SelectedItem="{Binding SelectedSourceOption, Mode=TwoWay}"
                                       IsEnabled="{Binding CanAct}" AutomationProperties.Name="Credential source">
                                 <ComboBox.ItemTemplate>
@@ -41,9 +43,12 @@
                             </ComboBox>
                             <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="4">
                                 <Button Content="{Binding PrimaryActionLabel}" Command="{Binding ApplyCommand}"
+                                        Tag="{x:Static vm:AuthorizationRowFocusTarget.PrimaryAction}"
                                         AutomationProperties.Name="{Binding PrimaryActionLabel}" />
-                                <Button Content="Deny" Command="{Binding DenyCommand}" />
-                                <Button Content="Cancel" Command="{Binding CancelCommand}" />
+                                <Button Content="Deny" Command="{Binding DenyCommand}"
+                                        Tag="{x:Static vm:AuthorizationRowFocusTarget.Deny}" />
+                                <Button Content="Cancel" Command="{Binding CancelCommand}"
+                                        Tag="{x:Static vm:AuthorizationRowFocusTarget.Cancel}" />
                             </StackPanel>
                         </Grid>
                     </DataTemplate>
