@@ -34,7 +34,8 @@ public sealed class AgentPersistenceStoreCache : IAgentPersistenceStoreCache, IA
             return this.cache.GetValue(repositorySource, src =>
             {
                 var task = src is WebRepositorySource or DevTunnelNameRepositorySource
-                    ? new AgentPersistenceStoreSourceFactory(src, this.accessBroker, this.presentationScope).CreateAsync(this.lifetime.Token)
+                    ? new AgentPersistenceStoreSourceFactory(src, this.accessBroker,
+                        presentationScope: this.presentationScope).CreateAsync(this.lifetime.Token)
                     : CreateAgentPersistenceStoreAsync(src);
                 this.stores.Add(task);
                 return task;
