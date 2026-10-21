@@ -1,7 +1,9 @@
 using System.IO;
 using System.Reflection;
+using System.Security;
 using Moq;
 using Phantom.Workspaces.Llm.Interfaces.Access;
+using Phantom.Workspaces.Llm.Interfaces.Authorization;
 using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Services.Access;
 using Phantom.Workspaces.Tools;
@@ -108,6 +110,54 @@ public sealed class AccessHostServicesTests : IDisposable
         Assert.Empty(host.AuthorizationRegistry.GetSnapshot());
         Assert.Empty(host.AuthorizationRows.Rows);
         Assert.Throws<ObjectDisposedException>(host.EnterRuntime);
+    }
+
+    [Fact]
+    public async Task AccessHostServices_Administration_DeletesRealRegisteredExecutorGenerationWithoutDeletingSourceOrMemory()
+    {
+        var platform = new Mock<IPlatformSecretStore>(MockBehavior.Strict);
+        platform.Setup(value => value.EnumerateNamesAsync("TEST_SECRET", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[] { "TEST_SECRET" });
+        platform.Setup(value => value.ReadAsync("TEST_SECRET", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() =>
+            {
+                var material = new SecureString();
+                foreach (var character in "root-aggregate-private") { material.AppendChar(character); }
+                material.MakeReadOnly();
+                return material;
+            });
+        await using var host = this.Create(platform.Object);
+        var template = StoredSecretAccessExecutorTests.Request();
+        var request = template with
+        {
+            PresentationScope = AccessPresentationScope.Bootstrap,
+            Sources = template.Sources.Where(source => source.Kind == CredentialSourceKind.SecretStore).ToArray(),
+            Use = template.Use with { MemoryScopes = [ReleaseMemoryScopeKind.AllUses, ReleaseMemoryScopeKind.AllowOnce] },
+        };
+        var pending = host.Broker.AcquireAsync(request, TestContext.Current.CancellationToken);
+        var row = Assert.Single(host.AuthorizationRegistry.GetSnapshot());
+        await host.AuthorizationRegistry.ActAsync(new ApplyUserAuthorizationAction
+        {
+            RequestIdentifier = row.Identifier,
+            ExpectedRevision = row.Revision,
+            Source = Assert.Single(row.SourceOptions).Identifier,
+            Memory = row.SelectedMemory,
+        }, TestContext.Current.CancellationToken);
+        await using var result = Assert.IsType<AccessSucceeded<StoredSecretAccessResult>>(await pending).Result;
+        var cache = Assert.Single(await host.CredentialCacheAdministration.ListAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(CredentialProviderKind.StoredSecret, cache.Provider);
+        Assert.DoesNotContain("root-aggregate-private", System.Text.Json.JsonSerializer.Serialize(cache));
+        Assert.Single(await host.ReleaseMemoryAdministration.ListAsync(TestContext.Current.CancellationToken));
+
+        await host.CredentialCacheAdministration.DeleteAsync(cache.Identifier, TestContext.Current.CancellationToken);
+
+        Assert.Empty(await host.CredentialCacheAdministration.ListAsync(TestContext.Current.CancellationToken));
+        Assert.Single(await host.ReleaseMemoryAdministration.ListAsync(TestContext.Current.CancellationToken));
+        Assert.Empty(await host.ProviderGrantAdministration.ListAsync(TestContext.Current.CancellationToken));
+        Assert.IsType<SensitiveValueUseReacquisitionRequired<int>>(await result.Lease.UseAsync(
+            (_, _) => ValueTask.FromResult(1), TestContext.Current.CancellationToken));
+        platform.Verify(value => value.ReadAsync("TEST_SECRET", It.IsAny<CancellationToken>()), Times.Once);
+        platform.Verify(value => value.DeleteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
