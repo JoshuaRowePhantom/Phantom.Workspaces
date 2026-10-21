@@ -483,7 +483,9 @@ public sealed class GitHubCredentialAccessExecutorTests
         var registry = new UserAuthorizationRegistry();
         var executors = new CredentialAccessExecutorRegistry();
         executors.Add<GitHubCredentialAccessRequest, GitHubCredentialAccessResult>(executor);
-        return (new AccessBroker(new ReleaseAuthorizationPolicy(new ReleaseMemoryStore(memoryPath)), executors, coordinator ?? new ProviderAcquisitionCoordinator(), registry), registry);
+        var path = memoryPath ?? System.IO.Path.Combine(
+            Environment.CurrentDirectory, ".access-github-isolated-policy", Guid.NewGuid().ToString("N"), "memory.json");
+        return (new AccessBroker(new ReleaseAuthorizationPolicy(new ReleaseMemoryStore(path)), executors, coordinator ?? new ProviderAcquisitionCoordinator(), registry), registry);
     }
 
     private static async Task AllowAsync(
