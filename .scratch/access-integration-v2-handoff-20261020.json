@@ -99,6 +99,7 @@
     "persistence": "Original failed TRX XML copied byte-for-byte to ignored .trx.log before subsequent runner; logs and SHA256 manifest preserved. Zero dumps found."
   },
   "equivalentSkipped": {
+    "1d8a45ec53753379625ec723168efa96707b3d21": "Parent-resolved exact b515 facet/executor/tests alias, already integrated as ec4b0a2a. NOT a new root aggregate wiring commit and not imported again. Actual current AccessHostServices.cs143/166-167 feeds the SAME registered mcp object into the cache facet aggregate; existing AccessHostServicesTests.cs65-72 asserts exact registration/facet object identity and ran in latest105x10. Alias ancestry is not used as wiring or review proof.",
     "245e6b6f2e55098c1221b0a04381d7fc5009577d": "Already satisfied by baseline770d28be unique isolated policy path, optional explicit path plus causal row observation. Conflict inspected; skipped duplicate rather than replacing newer fixture.",
     "558d1fdf9b0402bd91efd6c82db66e2f8dd734c9": "Explicit validation-only snapshot NOT imported.",
     "615443fdf70b50fe304dd080ee0da12d256772d6": "Excluded duplicate lifetime NOT imported."
