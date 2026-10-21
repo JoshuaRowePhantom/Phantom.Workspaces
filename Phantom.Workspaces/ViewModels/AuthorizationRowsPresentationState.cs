@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Linq;
 using Avalonia;
 using Phantom.Workspaces.Llm.Interfaces.Access;
 
@@ -26,5 +28,15 @@ public sealed class AuthorizationRowsPresentationState
         this.ScrollOffset = default;
         this.FocusedRequestIdentifier = null;
         this.FocusTarget = null;
+    }
+
+    internal void RetainFocusIfVisible(
+        IEnumerable<UserAuthorizationRequestIdentifier> identifiers)
+    {
+        if (this.FocusedRequestIdentifier is { } identifier && !identifiers.Contains(identifier))
+        {
+            this.FocusedRequestIdentifier = null;
+            this.FocusTarget = null;
+        }
     }
 }

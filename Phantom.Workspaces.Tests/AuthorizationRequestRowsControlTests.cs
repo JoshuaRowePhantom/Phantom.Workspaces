@@ -224,6 +224,65 @@ public sealed class AuthorizationRequestRowsControlTests
         Assert.Null(rows.Presentation.FocusTarget);
     }
 
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DeletedOrHiddenRowsDiscardFocusAndShorterNewHostClampsSavedScroll(
+        bool hiddenByBootstrap)
+    {
+        var snapshots = Enumerable.Range(0, 12).Select(index =>
+            AuthorizationRequestRowsViewModelTests.Snapshot() with
+            {
+                Identifier = new() { Value = Guid.NewGuid() },
+                IsBootstrapBlocking = index == 0,
+            }).ToArray();
+        var registry = new AuthorizationRequestRowsViewModelTests.Registry { Snapshot = snapshots };
+        using var rows = new AuthorizationRequestRowsViewModel { Dispatch = action => action(), Registry = registry };
+        rows.SetPresentationMode(AuthorizationRowsPresentationMode.Runtime);
+        var control = new AuthorizationRequestRowsControl { DataContext = rows, Height = 220 };
+        var window = new Window { Width = 900, Height = 300, Content = control };
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+        var selected = rows.Rows[^1];
+        Assert.True(FindTarget(control, selected, AuthorizationRowFocusTarget.Source).Focus());
+        control.FindControl<ScrollViewer>("RowsScroller")!.Offset = new Vector(0, 180);
+        Dispatcher.UIThread.RunJobs();
+        Assert.True(rows.Presentation.ScrollOffset.Y > 0);
+        Assert.Equal(selected.Identifier, rows.Presentation.FocusedRequestIdentifier);
+        window.Close();
+        Dispatcher.UIThread.RunJobs();
+
+        if (hiddenByBootstrap)
+        {
+            rows.SetPresentationMode(AuthorizationRowsPresentationMode.Bootstrap);
+        }
+        else
+        {
+            registry.Snapshot = [snapshots[0]];
+            registry.Notify();
+        }
+        Assert.Single(rows.Rows);
+        Assert.Null(rows.Presentation.FocusedRequestIdentifier);
+        Assert.Null(rows.Presentation.FocusTarget);
+
+        var sentinel = new TextBox();
+        var replacement = new AuthorizationRequestRowsControl { DataContext = rows, Height = 220 };
+        var replacementWindow = new Window
+        {
+            Width = 900,
+            Height = 300,
+            Content = new StackPanel { Children = { sentinel, replacement } },
+        };
+        replacementWindow.Show();
+        Dispatcher.UIThread.RunJobs();
+        Assert.True(sentinel.Focus());
+        Assert.Equal(default, replacement.FindControl<ScrollViewer>("RowsScroller")!.Offset);
+        Assert.Equal(default, rows.Presentation.ScrollOffset);
+        Assert.False(replacement.RestoreKeyboardFocus());
+        Assert.True(sentinel.IsFocused);
+        replacementWindow.Close();
+    }
+
     private static Control FindTarget(
         AuthorizationRequestRowsControl control,
         AuthorizationRequestRowViewModel row,

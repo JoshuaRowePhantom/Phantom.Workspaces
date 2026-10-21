@@ -99,6 +99,7 @@ public sealed class AuthorizationRequestRowsViewModel : IDisposable
         if (this.disposed) { return; }
         var visible = this.keyedRows.Values.Where(row =>
             this.mode == AuthorizationRowsPresentationMode.Runtime || row.IsBootstrapBlocking).ToArray();
+        this.Presentation.RetainFocusIfVisible(visible.Select(row => row.Identifier));
         foreach (var row in this.rows.Where(row => !visible.Contains(row)).ToArray()) { this.rows.Remove(row); }
         foreach (var row in visible.Where(row => !this.rows.Contains(row))) { this.rows.Add(row); }
         this.Changed?.Invoke(this, EventArgs.Empty);

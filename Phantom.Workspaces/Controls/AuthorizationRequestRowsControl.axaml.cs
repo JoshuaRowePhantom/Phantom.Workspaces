@@ -72,6 +72,7 @@ public partial class AuthorizationRequestRowsControl : UserControl
             return;
         }
         this.RowsScroller.Offset = this.rows.Presentation.ScrollOffset;
+        this.rows.Presentation.CaptureScroll(this.RowsScroller.Offset);
         this.restoringScroll = false;
     }
 
