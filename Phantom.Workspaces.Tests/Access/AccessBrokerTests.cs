@@ -1513,6 +1513,12 @@ public sealed class AccessBrokerTests : IDisposable
                     AccountIdentifier = request.Use.SafeDisplayName == "Account B" ? accountB : accountA,
                 },
                 Sources = request.Sources,
+                CachedGenerations = request.Sources.ToDictionary(source => source.Identifier, _ => new CredentialGenerationInspection
+                {
+                    Generation = new() { Value = Guid.NewGuid() },
+                    AccountIdentifier = request.Use.SafeDisplayName == "Account B" ? accountB : accountA,
+                    ExpiresOn = DateTimeOffset.UtcNow.AddHours(-1),
+                }),
                 AcquisitionKeys = request.Sources.ToDictionary(source => source.Identifier, source => new ProviderAcquisitionKey
                 {
                     Configuration = request.Credential.LogicalIdentifier,
@@ -1777,6 +1783,130 @@ public sealed class AccessBrokerTests : IDisposable
                 Memory = row.MemoryOptions.Single(option => option.Scope == ReleaseMemoryScopeKind.AllUses).Identifier,
             }, TestContext.Current.CancellationToken);
         }
+    }
+
+    [Theory]
+    [InlineData(ReleaseMemoryScopeKind.ExactUse, 0)]
+    [InlineData(ReleaseMemoryScopeKind.AllUses, 0)]
+    [InlineData(ReleaseMemoryScopeKind.ExactUse, 1)]
+    [InlineData(ReleaseMemoryScopeKind.AllUses, 1)]
+    [InlineData(ReleaseMemoryScopeKind.ExactUse, 2)]
+    [InlineData(ReleaseMemoryScopeKind.AllUses, 2)]
+    [InlineData(ReleaseMemoryScopeKind.ExactUse, 3)]
+    [InlineData(ReleaseMemoryScopeKind.AllUses, 3)]
+    public async Task AccessBroker_SelectedSourceAccount_DoesNotBorrowAnotherCandidatesCommonIdentity(
+        ReleaseMemoryScopeKind scope, int sourceIdentity)
+    {
+        var accountA = CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.GitHub, "environment-a");
+        var accountB = CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.GitHub, "cli-b");
+        var expectedAccount = sourceIdentity == 0 ? null : accountA;
+        var commonAccount = sourceIdentity is 2 or 3 ? accountA : accountB;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var failProvider = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ReleaseAuthorization? committed = null;
+        ICredentialExecutionContext? executionContext = null;
+        var request = Request();
+        var environment = request.Sources[0] with
+        {
+            Provider = CredentialProviderKind.GitHub,
+            Kind = CredentialSourceKind.Environment,
+            Usability = CredentialSourceUsability.Missing,
+        };
+        var cli = environment with
+        {
+            Identifier = new() { Digest = new string('c', 64) },
+            Kind = CredentialSourceKind.GitHubCli,
+            Usability = CredentialSourceUsability.Usable,
+        };
+        request = request with
+        {
+            Credential = request.Credential with
+            {
+                Provider = CredentialProviderKind.GitHub,
+                Kind = CredentialKind.AccessToken,
+                AccountIdentifier = sourceIdentity == 2 ? accountA : null,
+            },
+            Use = request.Use with { MemoryScopes = [scope, ReleaseMemoryScopeKind.AllowOnce] },
+            Sources = sourceIdentity == 3 ? [environment] : [environment, cli],
+        };
+        var executor = new Executor
+        {
+            Kind = CredentialExecutorKind.GitHub,
+            InspectOverride = candidate => new CredentialInspection
+            {
+                InspectionIdentifier = Guid.NewGuid(),
+                Credential = candidate.Credential with { AccountIdentifier = commonAccount },
+                Sources = candidate.Sources,
+                CachedGenerations = sourceIdentity == 3
+                    ? new Dictionary<CredentialSourceIdentifier, CredentialGenerationInspection>()
+                    : new Dictionary<CredentialSourceIdentifier, CredentialGenerationInspection>
+                    {
+                        [cli.Identifier] = new()
+                        {
+                            Generation = new() { Value = Guid.NewGuid() },
+                            AccountIdentifier = accountB,
+                        },
+                    },
+                AcquisitionKeys = candidate.Sources.ToDictionary(source => source.Identifier, source => new ProviderAcquisitionKey
+                {
+                    Configuration = candidate.Credential.LogicalIdentifier,
+                    Source = source.Identifier,
+                    Account = source.Identifier == environment.Identifier ? expectedAccount : accountB,
+                    Protocol = ProviderProtocolKind.Cli,
+                }),
+            },
+            Execute = async (_, inspection, authorization, admission, context, cancellationToken) =>
+            {
+                Assert.Equal(commonAccount, inspection.Credential.AccountIdentifier);
+                Assert.Equal(environment.Identifier, inspection.SelectedSource);
+                var key = inspection.AcquisitionKeys[environment.Identifier];
+                Assert.Equal(expectedAccount, key.Account);
+                Assert.True(admission!.Authorizes(context.RequestIdentifier, context.Revision,
+                    CredentialExecutorKind.GitHub, context.AcquisitionGeneration, key));
+                committed = authorization;
+                executionContext = context;
+                entered.TrySetResult();
+                await failProvider.Task.WaitAsync(cancellationToken);
+                return new CredentialExecutionMissing<Result>();
+            },
+        };
+        var (broker, registry) = this.Create(executor);
+        await using var owned = broker;
+        var pending = broker.AcquireAsync(request, TestContext.Current.CancellationToken);
+        var row = Assert.Single(registry.GetSnapshot());
+        await registry.ActAsync(new ApplyUserAuthorizationAction
+        {
+            RequestIdentifier = row.Identifier,
+            ExpectedRevision = row.Revision,
+            Source = environment.Identifier,
+            Memory = row.MemoryOptions.Single(option => option.Scope == scope).Identifier,
+        }, TestContext.Current.CancellationToken);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        Assert.Equal(expectedAccount, executionContext!.PolicyRequest!.Credential.AccountIdentifier);
+        Assert.Equal(ReleaseAuthorizationValidation.Valid,
+            await ((IProviderAcquisitionAuthorizationPolicy)broker.Policy).ValidateAcquisitionAuthorizationAsync(
+                committed!, executionContext.PolicyRequest, TestContext.Current.CancellationToken));
+        var remembered = await broker.Policy.ListAsync(TestContext.Current.CancellationToken);
+        Assert.DoesNotContain(remembered, memory =>
+            memory.SourceIdentifier == environment.Identifier && memory.AccountIdentifier == accountB);
+        if (expectedAccount is null)
+        {
+            Assert.Empty(remembered);
+            Assert.Equal(ReleaseAuthorizationValidation.IdentityMismatch, await broker.Policy.ValidateAsync(
+                committed!.Identifier, executionContext.PolicyRequest, TestContext.Current.CancellationToken));
+        }
+        else
+        {
+            var memory = Assert.Single(remembered);
+            Assert.Equal(environment.Identifier, memory.SourceIdentifier);
+            Assert.Equal(accountA, memory.AccountIdentifier);
+            Assert.Equal(scope, memory.Scope);
+        }
+        Assert.False(pending.IsCompleted);
+        failProvider.TrySetResult();
+        Assert.IsType<AccessReacquisitionRequired<Result>>(
+            await pending.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+        Assert.Equal(expectedAccount is null ? 0 : 1, (await broker.Policy.ListAsync(TestContext.Current.CancellationToken)).Count);
     }
 
     private static RequestRecord ConnectRequest(CredentialAccountIdentifier? account)

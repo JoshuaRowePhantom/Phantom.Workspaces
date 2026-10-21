@@ -742,19 +742,37 @@ internal sealed class AccessBroker : IAccessBroker
             RequestGeneration = generation,
             Credential = inspection.Credential with
             {
-                AccountIdentifier = request.Credential.AccountIdentifier ??
-                    (inspection.CachedGenerations.TryGetValue(source, out var cached)
-                        ? cached.AccountIdentifier
-                        : null) ??
-                    (inspection.AcquisitionKeys.TryGetValue(source, out var acquisition)
-                        ? acquisition.Account
-                        : null) ??
-                    inspection.Credential.AccountIdentifier,
+                AccountIdentifier = SelectedSourceAccount(request.Credential, inspection, source),
             },
             SourceIdentifier = source,
             RequestorIdentifier = request.Requestor.Identifier,
             Use = request.Use with { MemoryScopes = Array.AsReadOnly(request.Use.MemoryScopes.ToArray()) },
         };
+
+    private static CredentialAccountIdentifier? SelectedSourceAccount(
+        CredentialReference requested,
+        CredentialInspection inspection,
+        CredentialSourceIdentifier source)
+    {
+        if (requested.AccountIdentifier is { } explicitAccount)
+        {
+            return explicitAccount;
+        }
+
+        var hasCachedSource = inspection.CachedGenerations.TryGetValue(source, out var cached);
+        if (cached?.AccountIdentifier is { } cachedAccount)
+        {
+            return cachedAccount;
+        }
+
+        if (inspection.AcquisitionKeys.TryGetValue(source, out var acquisition))
+        {
+            // A selected source's unknown identity is not another candidate's common account.
+            return acquisition.Account;
+        }
+
+        return hasCachedSource ? null : inspection.Credential.AccountIdentifier;
+    }
 
     private static bool SameCredential(
         CredentialReference expected,
