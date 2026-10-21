@@ -117,6 +117,9 @@ public sealed class OAuthPrincipalConfigurationTests
     [InlineData("configured-A", "configured-A")]
     [InlineData("${SECRET:}", "")]
     [InlineData("${SECRET:configured-{A}}", "configured-{A}")]
+    [InlineData("${SECRET:configured-A", "configured-A")]
+    [InlineData("${SECRET:configured-A}suffix", "configured-A")]
+    [InlineData("${secret:configured-A}", "configured-A")]
     public void ActualConfigurationFactory_RejectsUnboundOrUnsupportedSecretWithoutRegistration(
         string configuredSecret, string suppliedName)
     {
@@ -161,6 +164,35 @@ public sealed class OAuthPrincipalConfigurationTests
 
         Assert.Same(client, request.ClientAuthentication);
         Assert.Same(client, Assert.Single(registry.SnapshotConfigurations()).ClientAuthentication);
+        store.VerifyNoOtherCalls();
+    }
+
+    [Theory]
+    [InlineData("${SECRET:configured-A}", false)]
+    [InlineData(null, true)]
+    [InlineData("", true)]
+    public void ActualConfigurationFactory_RejectsConfiguredClientKindMismatchWithoutRegistration(
+        string? configuredSecret, bool confidential)
+    {
+        var store = new Mock<IPlatformSecretStore>(MockBehavior.Strict);
+        var registry = new OAuthProviderRegistry(store.Object,
+            createHttpHandler: () => throw new InvalidOperationException("Invalid metadata must not create provider HTTP."));
+        var configuration = Configuration() with { ClientSecret = configuredSecret };
+        var context = Context();
+        OAuthClientAuthentication client = confidential
+            ? new ConfidentialOAuthClient
+            {
+                Client = new() { Value = configuration.ClientId! },
+                ClientSecret = new() { Name = "configured-A" },
+            }
+            : new PublicOAuthClient { Client = new() { Value = configuration.ClientId! } };
+
+        Assert.Throws<OAuthCredentialConfigurationException>(() =>
+            new RemoteOAuthCredentialRequestFactory(registry).CreateRequest(
+                configuration, client, new Uri(configuration.Endpoint!),
+                context.Requestor, context.Use, AccessPresentationScope.Runtime));
+
+        Assert.Empty(registry.SnapshotConfigurations());
         store.VerifyNoOtherCalls();
     }
 
