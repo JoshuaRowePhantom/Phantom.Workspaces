@@ -41,6 +41,7 @@ internal sealed class OAuthCredentialAccessExecutor :
     private readonly CancellationTokenSource lifetime = new();
     private readonly object gate = new();
     private readonly HashSet<McpOAuthAttempt> attempts = [];
+    private readonly HashSet<OAuthCallbackBinding> callbackBindings = [];
     private readonly Dictionary<Guid, Provider> listedCaches = [];
     private bool disposed;
 
@@ -428,14 +429,17 @@ internal sealed class OAuthCredentialAccessExecutor :
     public async ValueTask DisposeAsync()
     {
         McpOAuthAttempt[] active;
+        OAuthCallbackBinding[] callbacks;
         lock (this.gate)
         {
             if (this.disposed) { return; }
             this.disposed = true;
             active = this.attempts.ToArray();
+            callbacks = this.callbackBindings.ToArray();
         }
         await this.lifetime.CancelAsync().ConfigureAwait(false);
         foreach (var attempt in active) { await attempt.DisposeAsync().ConfigureAwait(false); }
+        foreach (var callback in callbacks) { await callback.DisposeAsync().ConfigureAwait(false); }
         foreach (var provider in this.SnapshotProviders(includeRegistered: false)) { await provider.DisposeAsync().ConfigureAwait(false); }
     }
 
@@ -549,6 +553,12 @@ internal sealed class OAuthCredentialAccessExecutor :
         var state = Base64Url(RandomNumberGenerator.GetBytes(32));
         await using var binding = await configuration.CallbackBindings.BindAsync(
             operation, commitContext.InteractionPermit, cancellation.Token).ConfigureAwait(false);
+        lock (this.gate)
+        {
+            if (this.disposed) { throw new OperationCanceledException(cancellation.Token); }
+            this.callbackBindings.Add(binding);
+            binding.Disposed += this.RemoveCallbackBinding;
+        }
         var redirect = binding.RedirectUri;
         var authorization = new UriBuilder(descriptor.AuthorizationEndpoint);
         var query = System.Web.HttpUtility.ParseQueryString(authorization.Query);
@@ -645,6 +655,11 @@ internal sealed class OAuthCredentialAccessExecutor :
     private void RemoveAttempt(McpOAuthAttempt attempt)
     {
         lock (this.gate) { this.attempts.Remove(attempt); }
+    }
+
+    private void RemoveCallbackBinding(OAuthCallbackBinding binding)
+    {
+        lock (this.gate) { this.callbackBindings.Remove(binding); }
     }
 
     private static async ValueTask<CredentialAccountIdentifier> ResolveAccountAsync(

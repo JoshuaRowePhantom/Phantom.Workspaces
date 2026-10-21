@@ -71,6 +71,7 @@ internal sealed class OAuthCallbackBinding : IAsyncDisposable
     }
 
     internal Uri RedirectUri => this.redirectUri ?? throw new InvalidOperationException("OAuth callback binding is not ready.");
+    internal event Action<OAuthCallbackBinding>? Disposed;
     internal bool IsListening { get { lock (this.gate) { return !this.closed && this.redirectUri is not null; } } }
     internal bool IsActive => this.IsListening &&
         this.executionProof.AuthorizesProvider(this.executorKind, this.acquisitionKey) &&
@@ -175,6 +176,8 @@ internal sealed class OAuthCallbackBinding : IAsyncDisposable
                     finally { this.lifetime.Dispose(); }
                 }
             }
+            this.Disposed?.Invoke(this);
+            this.Disposed = null;
             completion.TrySetResult();
         }
         catch (Exception exception) { completion.TrySetException(exception); }

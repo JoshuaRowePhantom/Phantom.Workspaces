@@ -35,6 +35,7 @@ internal sealed class McpOAuthCredentialAccessExecutor :
     private readonly object gate = new();
     private readonly Dictionary<McpProviderConfigurationIdentifier, Provider> providers;
     private readonly HashSet<FixedSession> sessions = [];
+    private readonly HashSet<OAuthCallbackBinding> callbackBindings = [];
     private readonly ISystemBrowserLauncher browserLauncher;
     private readonly CancellationTokenSource lifetime = new();
     private bool disposed;
@@ -231,6 +232,7 @@ internal sealed class McpOAuthCredentialAccessExecutor :
     public async ValueTask DisposeAsync()
     {
         FixedSession[] active;
+        OAuthCallbackBinding[] callbacks;
         lock (this.gate)
         {
             if (this.disposed)
@@ -239,8 +241,10 @@ internal sealed class McpOAuthCredentialAccessExecutor :
             }
             this.disposed = true;
             active = this.sessions.ToArray();
+            callbacks = this.callbackBindings.ToArray();
         }
         await this.lifetime.CancelAsync().ConfigureAwait(false);
+        foreach (var callback in callbacks) { await callback.DisposeAsync().ConfigureAwait(false); }
         foreach (var session in active)
         {
             await session.DisposeAsync().ConfigureAwait(false);
@@ -321,6 +325,12 @@ internal sealed class McpOAuthCredentialAccessExecutor :
         var cache = new AcquisitionTokenCache(configuration.Cache, provider.Commits, generation);
         await using var binding = await configuration.CallbackBindings.BindAsync(
             operation, commitContext.InteractionPermit, cancellationToken).ConfigureAwait(false);
+        lock (this.gate)
+        {
+            if (this.disposed) { throw new OperationCanceledException(cancellationToken); }
+            this.callbackBindings.Add(binding);
+            binding.Disposed += this.RemoveCallbackBinding;
+        }
         var options = new ClientOAuthOptions
         {
             ClientId = configuration.ClientAuthentication switch
@@ -396,6 +406,11 @@ internal sealed class McpOAuthCredentialAccessExecutor :
         }
         return CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.McpOAuth,
             $"{configuration.AuthorizationServer.AbsoluteUri}\n{subject.GetString()}");
+    }
+
+    private void RemoveCallbackBinding(OAuthCallbackBinding binding)
+    {
+        lock (this.gate) { this.callbackBindings.Remove(binding); }
     }
 
     private static StoredSecretAccessRequest SecretRequest(
