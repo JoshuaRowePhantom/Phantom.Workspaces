@@ -58,7 +58,7 @@ internal sealed class DevTunnelConnectMintSession(
             EntraDevTunnelIdentityRoute microsoft => await this.MintEntraAsync(
                 request, microsoft.Credential, identitySource, context, parentGenerationPermit, cancellationToken).ConfigureAwait(false),
             OAuthDevTunnelIdentityRoute configured => await this.MintOAuthAsync(
-                request, configured.Credential, context, parentAcquisitionKey, parentGenerationPermit, cancellationToken).ConfigureAwait(false),
+                request, configured.Credential, context, parentGenerationPermit, cancellationToken).ConfigureAwait(false),
             _ => new DevTunnelConnectMintFailed { ErrorCode = AccessErrorCode.ProviderFailure },
         };
     }
@@ -189,7 +189,6 @@ internal sealed class DevTunnelConnectMintSession(
         DevTunnelConnectCredentialAccessRequest request,
         OAuthCredentialAccessRequest identityRequest,
         ICredentialExecutionContext context,
-        ProviderAcquisitionKey parentAcquisitionKey,
         ProviderInteractionPermit permit,
         CancellationToken cancellationToken)
     {
@@ -204,7 +203,7 @@ internal sealed class DevTunnelConnectMintSession(
         var metadata = await provider.InspectGenerationAsync(identityRequest, cancellationToken).ConfigureAwait(false);
         if (metadata?.AccountIdentifier is null || metadata.ExpiresOn <= DateTimeOffset.UtcNow)
         {
-            var acquired = await provider.AcquirePrivateAsync(identityRequest, context, parentAcquisitionKey, permit, cancellationToken).ConfigureAwait(false);
+            var acquired = await provider.AcquirePrivateAsync(identityRequest, context, permit, cancellationToken).ConfigureAwait(false);
             if (acquired is ProviderAcquisitionDenied)
             {
                 return new DevTunnelConnectMintDenied();
@@ -228,7 +227,7 @@ internal sealed class DevTunnelConnectMintSession(
         {
             return new DevTunnelConnectMintFailed { ErrorCode = AccessErrorCode.IdentityMismatch };
         }
-        var used = await provider.UseGenerationAsync(identityRequest, metadata.Generation, account, context, parentAcquisitionKey, permit,
+        var used = await provider.UseGenerationAsync(identityRequest, metadata.Generation, account, context, permit,
             (identity, token) =>
                 management.MintAsync(request.Tunnel, DevTunnelIdentityScheme.OAuth, identity, token),
             cancellationToken).ConfigureAwait(false);
