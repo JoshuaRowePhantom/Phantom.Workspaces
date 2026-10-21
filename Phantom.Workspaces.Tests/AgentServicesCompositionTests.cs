@@ -4,6 +4,7 @@ using Avalonia.Headless.XUnit;
 using Moq;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Services;
@@ -27,7 +28,8 @@ public sealed class AgentServicesCompositionTests
             credentialPicker: new NullCredentialPicker(),
             allowedSecretsStore: new AllowedSecretsStore(new AllowedSecretsStoreConfiguration()),
             platformSecretStore: new NullPlatformSecretStore(),
-            mcpOAuthOptions: mcpOAuthOptions);
+            mcpOAuthOptions: mcpOAuthOptions,
+            accessBroker: Mock.Of<IAccessBroker>());
 
     [AvaloniaFact(Timeout = 15_000)]
     public async Task AgentServicesComposition_Compose_ProducesCompleteBundle()
@@ -44,8 +46,8 @@ public sealed class AgentServicesCompositionTests
             NullLoggerFactory.Instance);
 
         // Every service the launch paths depend on is present in the one bundle.
-        Assert.NotNull(services.SecretProvider);
-        Assert.Same(applicationServices.SecretProvider, services.SecretProvider);
+        Assert.NotNull(services.AccessBroker);
+        Assert.Same(applicationServices.AccessBroker, services.AccessBroker);
         Assert.NotNull(services.McpOAuthOptions);
         Assert.Same(mcpOAuthOptions, services.McpOAuthOptions);
         Assert.NotNull(services.ToolsetFactory);
@@ -61,12 +63,12 @@ public sealed class AgentServicesCompositionTests
     [AvaloniaFact(Timeout = 15_000)]
     public async Task AgentServicesComposition_ComposeHostServices_CarriesSecretProviderAndMcpOAuthOptions()
     {
-        var secretProvider = new object();
+        var accessBroker = Mock.Of<IAccessBroker>();
         var mcpOAuthOptions = new object();
 
-        var services = AgentServicesComposition.ComposeHostServices(secretProvider, mcpOAuthOptions, NullLoggerFactory.Instance);
+        var services = AgentServicesComposition.ComposeHostServices(accessBroker, mcpOAuthOptions, NullLoggerFactory.Instance);
 
-        Assert.Same(secretProvider, services.SecretProvider);
+        Assert.Same(accessBroker, services.AccessBroker);
         Assert.Same(mcpOAuthOptions, services.McpOAuthOptions);
         Assert.NotNull(services.ProcessExecutor);
         Assert.NotNull(services.TrustProfilePolicyCompiler);
@@ -78,7 +80,7 @@ public sealed class AgentServicesCompositionTests
     public void AgentServicesComposition_ComposeHostServices_CarriesProcessLoggerFactory()
     {
         using var process = LoggerFactory.Create(builder => builder.AddProvider(new TestLoggerProvider()));
-        var services = AgentServicesComposition.ComposeHostServices(new object(), new object(), process);
+        var services = AgentServicesComposition.ComposeHostServices(Mock.Of<IAccessBroker>(), new object(), process);
         Assert.Same(process, services.LoggerFactory);
     }
 

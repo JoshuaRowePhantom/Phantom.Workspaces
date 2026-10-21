@@ -207,21 +207,20 @@ public sealed class AgentFactoryManifestTests
         Assert.Contains("${SECRET:GitHubToken}", definition.ToJson(), StringComparison.Ordinal);
 
         // Going through chat creation materializes exactly once, on the resulting definition.
-        var provider = new CountingSecretProvider();
-        provider.Secrets["GitHubToken"] = ToSecureString("super-secret-token");
+        var provider = new Secrets.ManifestAccessTestBroker { Material = "super-secret-token" };
 
         await using var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
         {
             AgentManifest = manifest,
             AgentServices = new AgentServices
             {
-                SecretProvider = provider,
+                AccessBroker = provider,
                 ChatClientOverride = new DeterministicTestChatClient(),
             },
             PersistenceStoreFactory = (_, _) => ValueTask.FromResult<IAgentPersistenceStore>(new InMemoryAgentPersistenceStore()),
         });
 
-        Assert.Equal(1, provider.CallCount);
+        Assert.Single(provider.Requests);
     }
 
     [Fact]

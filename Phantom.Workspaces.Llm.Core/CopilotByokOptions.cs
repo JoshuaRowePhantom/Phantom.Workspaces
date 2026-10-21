@@ -1,3 +1,5 @@
+using Phantom.Workspaces.Llm.Interfaces.Access;
+
 namespace Phantom.Workspaces.Llm;
 
 /// <summary>
@@ -25,6 +27,6 @@ public sealed record CopilotByokOptions
     /// <summary>Absolute base URL of the OpenAI-compatible API endpoint.</summary>
     public required string BaseUrl { get; init; }
 
-    /// <summary>API key for the custom endpoint, if it requires one.</summary>
-    public string? ApiKey { get; init; }
+    /// <summary>Fixed-generation API-key lease for the custom endpoint, if required.</summary>
+    public SensitiveValueLease? ApiKeyLease { get; init; }
 }

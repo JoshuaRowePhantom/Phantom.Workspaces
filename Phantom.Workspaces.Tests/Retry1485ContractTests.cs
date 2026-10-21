@@ -368,7 +368,6 @@ public sealed class Retry1485ContractTests
         foreach (var name in new[]
         {
             nameof(AgentServices.CurrentSessionContext),
-            nameof(AgentServices.SecretProvider),
             nameof(AgentServices.SecretPlaceholderResolver),
             nameof(AgentServices.McpOAuthOptions),
             nameof(AgentServices.CopilotClientFactory),

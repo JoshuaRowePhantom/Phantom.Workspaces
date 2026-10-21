@@ -8,6 +8,12 @@ namespace Phantom.Workspaces.Llm;
 public sealed record AgentServices : IServiceProvider
 {
     public Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker? AccessBroker { get; init; }
+    public Phantom.Workspaces.Llm.Interfaces.Access.AccessRequestor? AccessRequestor { get; init; }
+    public Phantom.Workspaces.Llm.Interfaces.Access.CredentialUseDescriptor? AccessUse { get; init; }
+    public Phantom.Workspaces.Llm.Interfaces.Access.CredentialUseLineage? AccessLineage { get; init; }
+    public Phantom.Workspaces.Llm.Interfaces.Access.AccessPresentationScope AccessPresentationScope { get; init; }
+    public Phantom.Workspaces.Llm.Interfaces.Access.IMcpOAuthCredentialRequestCatalog? McpOAuthCredentials { get; init; }
+    internal Phantom.Workspaces.Llm.Interfaces.Access.IRemoteCopilotProviderCatalog? RemoteCopilotProviderCatalog { get; init; }
 
     public bool LogChat { get; init; }
 
@@ -67,24 +73,15 @@ public sealed record AgentServices : IServiceProvider
     public object? CurrentSessionContext { get; init; }
 
     /// <summary>
-    /// Optional secret provider used by the core secret materialization seam. Typed as
-    /// <see langword="object"/> to avoid a reverse project reference from
-    /// <c>Phantom.Workspaces.Llm.Interfaces</c> to <c>Phantom.Workspaces.Llm.Core</c>; consuming
-    /// code casts to <c>ISecretProvider</c>.
-    /// </summary>
-    public object? SecretProvider { get; init; }
-
-    /// <summary>
     /// Per-materialization secret placeholder resolver. Typed as <see langword="object"/> for the
-    /// same layering reason as <see cref="SecretProvider"/>; consuming code casts to
-    /// <c>ISecretPlaceholderResolver</c>.
+    /// core/interface layering boundary; consuming code casts to <c>ISecretPlaceholderResolver</c>.
     /// </summary>
     public object? SecretPlaceholderResolver { get; init; }
 
     /// <summary>
     /// Optional MCP OAuth seam bundle (redirect-delegate provider, optional redirect URI, optional
     /// token-cache provider). Typed as <see langword="object"/> for the same layering reason as
-    /// <see cref="SecretProvider"/> — <c>Phantom.Workspaces.Llm.Interfaces</c> must not reference the
+    /// the core interfaces — <c>Phantom.Workspaces.Llm.Interfaces</c> must not reference the
     /// MCP SDK or <c>Phantom.Workspaces.Llm.Core</c>; consuming code casts to
     /// <c>Phantom.Workspaces.Llm.Mcp.McpOAuthOptions</c>. When null, the MCP transport factory uses
     /// its safe default (a redirect delegate that throws a clear "interactive OAuth not configured"
@@ -203,6 +200,9 @@ public sealed record AgentServices : IServiceProvider
 
     public object? GetService(Type serviceType)
     {
+        if (serviceType == typeof(Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker)) return AccessBroker;
+        if (serviceType == typeof(Phantom.Workspaces.Llm.Interfaces.Access.IMcpOAuthCredentialRequestCatalog)) return McpOAuthCredentials;
+        if (serviceType == typeof(Phantom.Workspaces.Llm.Interfaces.Access.IRemoteCopilotProviderCatalog)) return RemoteCopilotProviderCatalog;
         if (serviceType == typeof(ILoggerFactory))             return LoggerFactory;
         if (serviceType == typeof(IAgentPersistenceStore))     return AgentPersistenceStoreOverride;
         if (serviceType == typeof(IRunningAgentChatFactory))   return RunningAgentChatFactory;

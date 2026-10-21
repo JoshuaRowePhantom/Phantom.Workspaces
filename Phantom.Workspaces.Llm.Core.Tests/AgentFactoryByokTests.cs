@@ -22,7 +22,7 @@ public sealed class AgentFactoryByokTests
     private static AgentDefinition LoadByokAgent(
         string provider,
         string endpoint,
-        string apiKey = "test-key",
+        string apiKey = "",
         string? additionalOptions = null)
     {
         var optionsSection = additionalOptions is null
@@ -121,25 +121,31 @@ public sealed class AgentFactoryByokTests
     }
 
     [Fact]
-    public void CreateChatClient_OpenAi_ApiKey_IsResolvedFromConnection()
+    public async Task CreateChatClient_OpenAi_ApiKey_IsResolvedFromConnection()
     {
-        var agent = LoadByokAgent("openai", "http://localhost:12345/", apiKey: "my-api-key");
-        var result = AgentFactory.CreateChatClient(agent);
+        var agent = LoadByokAgent("openai", "http://localhost:12345/", apiKey: "${MODEL_KEY}");
+        var result = await AgentFactory.CreateChatClientAsync(
+            agent,
+            new AgentServices { AccessBroker = new AgentAccessTestBroker { Material = "my-api-key" } });
 
         var copilotClient = Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
         Assert.NotNull(copilotClient.ByokOptions);
-        Assert.Equal("my-api-key", copilotClient.ByokOptions!.ApiKey);
+        Assert.Equal("my-api-key", await AgentAccessTestBroker.UseLeaseAsync(copilotClient.ByokOptions!.ApiKeyLease!));
+        await copilotClient.DisposeAsync();
     }
 
     [Fact]
-    public void CreateChatClient_AzureOpenAi_ApiKey_IsResolvedFromConnection()
+    public async Task CreateChatClient_AzureOpenAi_ApiKey_IsResolvedFromConnection()
     {
-        var agent = LoadByokAgent("azure-openai", "http://localhost:12345/", apiKey: "my-azure-key");
-        var result = AgentFactory.CreateChatClient(agent);
+        var agent = LoadByokAgent("azure-openai", "http://localhost:12345/", apiKey: "${MODEL_KEY}");
+        var result = await AgentFactory.CreateChatClientAsync(
+            agent,
+            new AgentServices { AccessBroker = new AgentAccessTestBroker { Material = "my-azure-key" } });
 
         var copilotClient = Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
         Assert.NotNull(copilotClient.ByokOptions);
-        Assert.Equal("my-azure-key", copilotClient.ByokOptions!.ApiKey);
+        Assert.Equal("my-azure-key", await AgentAccessTestBroker.UseLeaseAsync(copilotClient.ByokOptions!.ApiKeyLease!));
+        await copilotClient.DisposeAsync();
     }
 
     [Fact]
@@ -234,7 +240,7 @@ public sealed class AgentFactoryByokTests
           "model": {
             "id": "test-model",
             "provider": "openai",
-            "connection": { "kind": "key", "apiKey": "test-key" }
+            "connection": { "kind": "key" }
           }
         }
         """);
@@ -250,7 +256,7 @@ public sealed class AgentFactoryByokTests
     [Fact]
     public void CreateChatClient_GithubCopilot_NoEndpoint_NoByokOptions()
     {
-        var agent = LoadStandardAgent(apiKey: "gh-pat");
+        var agent = LoadStandardAgent();
         var result = AgentFactory.CreateChatClient(agent);
 
         var copilotClient = Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
@@ -258,13 +264,16 @@ public sealed class AgentFactoryByokTests
     }
 
     [Fact]
-    public void CreateChatClient_GithubCopilot_ApiKey_BecomesGitHubToken()
+    public async Task CreateChatClient_GithubCopilot_ApiKey_BecomesGitHubToken()
     {
-        var agent = LoadStandardAgent(apiKey: "gh-pat");
-        var result = AgentFactory.CreateChatClient(agent);
+        var agent = LoadStandardAgent(apiKey: "${GITHUB_TOKEN}");
+        var result = await AgentFactory.CreateChatClientAsync(
+            agent,
+            new AgentServices { AccessBroker = new AgentAccessTestBroker { Material = "gh-pat" } });
 
         var copilotClient = Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
-        Assert.Equal("gh-pat", copilotClient.GitHubToken);
+        Assert.Equal("gh-pat", await AgentAccessTestBroker.UseLeaseAsync(copilotClient.GitHubToken!));
+        await copilotClient.DisposeAsync();
     }
 
     [Fact]
@@ -278,19 +287,22 @@ public sealed class AgentFactoryByokTests
     }
 
     [Fact]
-    public void CreateChatClient_GithubCopilot_WithByokEndpoint_BuildsByokClientPointedAtEndpoint()
+    public async Task CreateChatClient_GithubCopilot_WithByokEndpoint_BuildsByokClientPointedAtEndpoint()
     {
         // Issue #1106: github-copilot + explicit endpoint routes through the Copilot SDK BYOK
         // client so schema and runtime agree. Replaces the old
         // CreateChatClient_GithubCopilot_WithEndpoint_Throws behaviour.
-        var agent = LoadByokAgent("github-copilot", "http://localhost:12345/", apiKey: "my-key");
+        var agent = LoadByokAgent("github-copilot", "http://localhost:12345/", apiKey: "${MODEL_KEY}");
 
-        var result = AgentFactory.CreateChatClient(agent);
+        var result = await AgentFactory.CreateChatClientAsync(
+            agent,
+            new AgentServices { AccessBroker = new AgentAccessTestBroker { Material = "my-key" } });
 
         var copilotClient = Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
         Assert.NotNull(copilotClient.ByokOptions);
         Assert.Equal("http://localhost:12345/", copilotClient.ByokOptions!.BaseUrl);
-        Assert.Equal("my-key", copilotClient.ByokOptions.ApiKey);
+        Assert.Equal("my-key", await AgentAccessTestBroker.UseLeaseAsync(copilotClient.ByokOptions.ApiKeyLease!));
+        await copilotClient.DisposeAsync();
     }
 
     [Fact]
@@ -308,7 +320,7 @@ public sealed class AgentFactoryByokTests
     }
 
     [Fact]
-    public void CreateChatClient_Workspaces256kManifest_ConstructsChatClientWithoutThrowing()
+    public async Task CreateChatClient_Workspaces256kManifest_RequiresCredentialReference()
     {
         // Issue #1106: the exact "workspaces-256k" manifest shape (github-copilot + Ollama /v1
         // endpoint + apiType OpenAI) must deserialize and build a chat client without throwing.
@@ -337,13 +349,9 @@ public sealed class AgentFactoryByokTests
         }
         """);
 
-        var result = AgentFactory.CreateChatClient(agent);
-
-        var copilotClient = Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
-        Assert.NotNull(copilotClient.ByokOptions);
-        Assert.Equal("http://localhost:11434/v1", copilotClient.ByokOptions!.BaseUrl);
-        Assert.Equal("ollama", copilotClient.ByokOptions.ApiKey);
-        Assert.Equal("openai", copilotClient.ByokOptions.Provider);
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            AgentFactory.CreateChatClientAsync(agent, services: null));
+        Assert.Contains("reference", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -366,7 +374,7 @@ public sealed class AgentFactoryByokTests
                     "connection": {
                         "kind": "key",
                         "endpoint": "{{server.BaseUrl}}",
-                        "apiKey": "test-key"
+                        "apiKey": "${MODEL_KEY}"
                     }
                 }
             }
@@ -375,12 +383,14 @@ public sealed class AgentFactoryByokTests
 
         var manifest = AgentManifestLoader.LoadManifestFromJson(manifestJson);
         var definition = AgentDefinitionParameterSubstitutor.Substitute(manifest, parameterValues: null);
-        var result = AgentFactory.CreateChatClient(definition);
+        var result = await AgentFactory.CreateChatClientAsync(
+            definition,
+            new AgentServices { AccessBroker = new AgentAccessTestBroker { Material = "test-key" } });
 
         var copilotClient = Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
         Assert.NotNull(copilotClient.ByokOptions);
         Assert.Equal(server.BaseUrl, copilotClient.ByokOptions!.BaseUrl);
-        Assert.Equal("test-key", copilotClient.ByokOptions.ApiKey);
+        Assert.Equal("test-key", await AgentAccessTestBroker.UseLeaseAsync(copilotClient.ByokOptions.ApiKeyLease!));
         Assert.Equal("openai", copilotClient.ByokOptions.Provider);
     }
 
@@ -433,7 +443,7 @@ public sealed class AgentFactoryByokTests
                     "connection": {
                         "kind": "key",
                         "endpoint": "{{server.BaseUrl}}",
-                        "apiKey": "test-key"
+                        "apiKey": "${MODEL_KEY}"
                     }
                 }
             }
@@ -442,12 +452,14 @@ public sealed class AgentFactoryByokTests
 
         var manifest = AgentManifestLoader.LoadManifestFromJson(manifestJson);
         var definition = AgentDefinitionParameterSubstitutor.Substitute(manifest, parameterValues: null);
-        var result = AgentFactory.CreateChatClient(definition);
+        var result = await AgentFactory.CreateChatClientAsync(
+            definition,
+            new AgentServices { AccessBroker = new AgentAccessTestBroker { Material = "test-key" } });
 
         var copilotClient = Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
         Assert.NotNull(copilotClient.ByokOptions);
         Assert.Equal(server.BaseUrl, copilotClient.ByokOptions!.BaseUrl);
-        Assert.Equal("test-key", copilotClient.ByokOptions.ApiKey);
+        Assert.Equal("test-key", await AgentAccessTestBroker.UseLeaseAsync(copilotClient.ByokOptions.ApiKeyLease!));
         Assert.Equal("openai", copilotClient.ByokOptions.Provider);
     }
 
@@ -478,7 +490,7 @@ public sealed class AgentFactoryByokTests
                     "connection": {
                         "kind": "key",
                         "endpoint": "{{server.BaseUrl}}",
-                        "apiKey": "test-key"
+                        "apiKey": "${MODEL_KEY}"
                     }
                 }
             }
@@ -487,7 +499,9 @@ public sealed class AgentFactoryByokTests
 
         var manifest = AgentManifestLoader.LoadManifestFromJson(manifestJson);
         var definition = AgentDefinitionParameterSubstitutor.Substitute(manifest, parameterValues: null);
-        var result = AgentFactory.CreateChatClient(definition);
+        var result = await AgentFactory.CreateChatClientAsync(
+            definition,
+            new AgentServices { AccessBroker = new AgentAccessTestBroker { Material = "test-key" } });
 
         var response = await result.ChatClient.GetResponseAsync(
             [new ChatMessage(ChatRole.User, "ping")]);

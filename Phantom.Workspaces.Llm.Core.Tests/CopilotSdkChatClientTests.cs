@@ -2048,14 +2048,15 @@ public sealed class CopilotSdkChatClientTests
 
         var sessionField = typeof(CopilotSdkChatClient).GetField(
             "copilotSession", BindingFlags.NonPublic | BindingFlags.Instance)!;
-        Assert.NotNull(sessionField.GetValue(client));
+        var sessionBefore = sessionField.GetValue(client);
+        Assert.NotNull(sessionBefore);
 
         await client.SetModelIdAsync("claude-4", CancellationToken.None);
 
         // The live session was retuned in place, not disposed/recreated.
         Assert.Equal(1, fakeSession.SetModelAsyncCallCount);
         Assert.Equal("claude-4", fakeSession.LastModelSet);
-        Assert.Same(fakeSession, sessionField.GetValue(client));
+        Assert.Same(sessionBefore, sessionField.GetValue(client));
         Assert.Single(fakeSession.CreateSessionConfigs);
         Assert.Empty(fakeSession.ResumeSessionCalls);
     }

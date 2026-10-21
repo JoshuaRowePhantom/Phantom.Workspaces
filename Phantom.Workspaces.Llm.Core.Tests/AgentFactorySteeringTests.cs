@@ -6,27 +6,25 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 public sealed class AgentFactorySteeringTests
 {
     [Fact]
-    public void CreateChatClient_GitHubModels_WithQueueManager_WrapsWithMiddleware()
+    public async Task CreateChatClient_GitHubModels_WithQueueManager_WrapsWithMiddleware()
     {
         var agent = LoadGitHubModelsAgent();
-        var result = AgentFactory.CreateChatClient(
+        var result = await AgentFactory.CreateChatClientAsync(
             agent,
-            services: null,
-            queueManager: new AgentInputQueueManager(),
-            apiKeyResolver: new FixedApiKeyResolver("test-token"));
+            new AgentServices { AccessBroker = new AgentAccessTestBroker() },
+            queueManager: new AgentInputQueueManager());
 
         Assert.IsType<ToolResultSteeringMiddleware>(result.ChatClient);
     }
 
     [Fact]
-    public void CreateChatClient_GitHubModels_WithoutQueueManager_NoMiddleware()
+    public async Task CreateChatClient_GitHubModels_WithoutQueueManager_NoMiddleware()
     {
         var agent = LoadGitHubModelsAgent();
-        var result = AgentFactory.CreateChatClient(
+        var result = await AgentFactory.CreateChatClientAsync(
             agent,
-            services: null,
-            queueManager: null,
-            apiKeyResolver: new FixedApiKeyResolver("test-token"));
+            new AgentServices { AccessBroker = new AgentAccessTestBroker() },
+            queueManager: null);
 
         Assert.IsNotType<ToolResultSteeringMiddleware>(result.ChatClient);
     }
@@ -69,8 +67,4 @@ public sealed class AgentFactorySteeringTests
             }
             """);
 
-    private sealed class FixedApiKeyResolver(string key) : IApiKeyResolver
-    {
-        public Task<string> ResolveApiKeyAsync(string? apiKeyValue, string? serverName, CancellationToken cancellationToken = default) => Task.FromResult(key);
-    }
 }

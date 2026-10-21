@@ -118,7 +118,7 @@ public class AgentFactoryTests
             new AgentServices { SecretPlaceholderResolver = resolver });
 
         var client = Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
-        Assert.Equal(plaintext, client.ByokOptions!.ApiKey);
+        Assert.Equal(plaintext, await AgentAccessTestBroker.UseLeaseAsync(client.ByokOptions!.ApiKeyLease!));
         await resolver.DisposeAsync();
         Assert.IsType<Phantom.Workspaces.Llm.Interfaces.Access.SensitiveValueUseFailed<int>>(
             await credential.Lease.UseAsync((_, _) => ValueTask.FromResult(1), CancellationToken.None));
@@ -162,29 +162,23 @@ public class AgentFactoryTests
         Assert.NotEqual("${SECRET:GitHubToken}", rewrittenApiKey);
         Assert.DoesNotContain("${SECRET:GitHubToken}", materializedDefinition.ToJson(), StringComparison.Ordinal);
 
-        var resolved = await AgentFactory.ResolveRequiredSecretOrEnvAsync(
-            rewrittenApiKey,
-            materializedServices,
-            serverName: "github-secret-gated");
-
-        Assert.Equal(plaintext, resolved);
+        var resolver = Assert.IsAssignableFrom<ISecretPlaceholderResolver>(materializedServices!.SecretPlaceholderResolver);
+        Assert.True(resolver.TryResolve(rewrittenApiKey, out var lease));
+        Assert.Equal(plaintext, await AgentAccessTestBroker.UseLeaseAsync(lease!));
+        await resolver.DisposeAsync();
     }
 
     [Fact]
-    public async Task CreateAgentChatAsync_NoSecretProvider_LeavesLegacySecretPlaceholderPathIntact()
+    public async Task CreateAgentChatAsync_NoAccessBroker_RejectsUnresolvedSecret()
     {
         var manifest = LoadSecretManifest("${SECRET:GitHubToken}", provider: "github-copilot", modelId: "test");
 
-        await using var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+        await Assert.ThrowsAsync<SecretMaterializationRefusedException>(() => AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
         {
             AgentManifest = manifest,
             AgentServices = new AgentServices { ChatClientOverride = new DeterministicTestChatClient() },
             PersistenceStoreFactory = (_, _) => ValueTask.FromResult<IAgentPersistenceStore>(new InMemoryAgentPersistenceStore()),
-        });
-
-        var promptAgent = Assert.IsType<PromptAgent>(chat.AgentDefinition);
-        var connection = Assert.IsType<ApiKeyConnection>(promptAgent.Model!.Connection);
-        Assert.Equal("${SECRET:GitHubToken}", connection.ApiKey);
+        }));
     }
 
     [Fact]
@@ -243,11 +237,11 @@ public class AgentFactoryTests
             new AgentServices { SecretPlaceholderResolver = resolver });
 
         var client = Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
-        Assert.Equal("resolved-byok-key", client.ByokOptions!.ApiKey);
+        Assert.Equal("resolved-byok-key", await AgentAccessTestBroker.UseLeaseAsync(client.ByokOptions!.ApiKeyLease!));
     }
 
     [Fact]
-    public void AgentFactory_ResolveApiKey_SyncMethodRemoved()
+    public void AgentFactory_ResolveApiKey_LegacyResolverTypesRemoved()
     {
         // #1398: the synchronous ResolveApiKey duplicate (and its IApiKeyResolver member) were
         // removed so that all API-key resolution flows through the async resolver-first path.
@@ -257,8 +251,8 @@ public class AgentFactoryTests
             .ToArray();
         Assert.Empty(syncOnAgentFactory);
 
-        var syncOnInterface = typeof(IApiKeyResolver).GetMethod("ResolveApiKey");
-        Assert.Null(syncOnInterface);
+        Assert.Null(typeof(AgentFactory).Assembly.GetType("Phantom.Workspaces.Llm.IApiKeyResolver"));
+        Assert.Null(typeof(AgentFactory).Assembly.GetType("Phantom.Workspaces.Llm.EnvironmentApiKeyResolver"));
     }
 
     [Fact]
@@ -540,7 +534,7 @@ public class AgentFactoryTests
     }
 
     [Fact]
-    public void CreateChatClient_GitHubProvider_ReturnsOpenAiChatClient()
+    public async Task CreateChatClient_GitHubProvider_ReturnsOpenAiChatClient()
     {
         var agent = AgentDefinitionLoader.LoadAgentFromJson(
             """
@@ -561,17 +555,16 @@ public class AgentFactoryTests
             }
             """);
 
-        var (client, displayName) = AgentFactory.CreateChatClient(
+        var (client, displayName) = await AgentFactory.CreateChatClientAsync(
             agent,
-            services: null,
-            apiKeyResolver: new FixedApiKeyResolver("test-token"));
+            new AgentServices { AccessBroker = new AgentAccessTestBroker() });
 
         Assert.NotNull(client);
         Assert.Equal("GitHub Models (gpt-4.1-mini at https://models.github.ai/inference)", displayName);
     }
 
     [Fact]
-    public void CreateChatClient_GitHubProvider_WithNoEndpoint_UsesDefaultEndpoint()
+    public async Task CreateChatClient_GitHubProvider_WithNoEndpoint_UsesDefaultEndpoint()
     {
         var agent = AgentDefinitionLoader.LoadAgentFromJson(
             """
@@ -591,45 +584,18 @@ public class AgentFactoryTests
             }
             """);
 
-        var (client, displayName) = AgentFactory.CreateChatClient(
+        var (client, displayName) = await AgentFactory.CreateChatClientAsync(
             agent,
-            services: null,
-            apiKeyResolver: new FixedApiKeyResolver("test-token"));
+            new AgentServices { AccessBroker = new AgentAccessTestBroker() });
 
         Assert.NotNull(client);
         Assert.Equal("GitHub Models (gpt-4.1-mini at https://models.github.ai/inference)", displayName);
     }
 
     [Fact]
-    public void CreateChatClient_GitHubProvider_WithMissingEnv_UsesGhAuthToken()
+    public async Task CreateChatClient_GitHubProvider_UsesTypedBrokerForEnvironmentAndCliSources()
     {
-        var originalToken = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
-        var originalPath = Environment.GetEnvironmentVariable("PATH");
-        var tempDir = Path.Combine(Path.GetTempPath(), $"gh-stub-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
-
-        var ghToken = "token-from-gh-cli";
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-        {
-            File.WriteAllText(
-                Path.Combine(tempDir, "gh.cmd"),
-                $"@echo off{Environment.NewLine}echo {ghToken}{Environment.NewLine}exit /b 0{Environment.NewLine}");
-        }
-
-        else
-        {
-            var ghPath = Path.Combine(tempDir, "gh");
-            File.WriteAllText(
-                ghPath,
-                $"#!/usr/bin/env sh{Environment.NewLine}echo {ghToken}{Environment.NewLine}");
-            System.Diagnostics.Process.Start("chmod", $"+x \"{ghPath}\"")!.WaitForExit();
-        }
-
-        Environment.SetEnvironmentVariable("GITHUB_TOKEN", null);
-        Environment.SetEnvironmentVariable("PATH", $"{tempDir}{Path.PathSeparator}{originalPath}");
-
-        try
-        {
+        var broker = new AgentAccessTestBroker { Material = "token-from-github-broker" };
             var agent = AgentDefinitionLoader.LoadAgentFromJson(
                 """
                 {
@@ -648,21 +614,21 @@ public class AgentFactoryTests
                 }
                 """);
 
-            var (client, displayName) = AgentFactory.CreateChatClient(agent);
+            var (client, displayName) = await AgentFactory.CreateChatClientAsync(
+                agent,
+                new AgentServices { AccessBroker = broker });
 
             Assert.NotNull(client);
             Assert.Equal("GitHub Models (gpt-4.1-mini at https://models.github.ai/inference)", displayName);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("GITHUB_TOKEN", originalToken);
-            Environment.SetEnvironmentVariable("PATH", originalPath);
-            Directory.Delete(tempDir, recursive: true);
-        }
+        var request = Assert.Single(broker.GitHubRequests);
+        Assert.Equal(Phantom.Workspaces.Llm.Interfaces.Access.GitHubCredentialPurpose.Model, request.Purpose);
+        Assert.Equal(
+            new[] { Phantom.Workspaces.Llm.Interfaces.Access.CredentialSourceKind.Environment, Phantom.Workspaces.Llm.Interfaces.Access.CredentialSourceKind.GitHubCli },
+            request.Sources.Select(source => source.Kind).ToArray());
     }
 
     [Fact]
-    public void CreateChatClient_GitHubCopilotProvider_ReturnsCopilotSdkClient()
+    public async Task CreateChatClient_GitHubCopilotProvider_ReturnsCopilotSdkClient()
     {
         var agent = AgentDefinitionLoader.LoadAgentFromJson(
             """
@@ -682,10 +648,9 @@ public class AgentFactoryTests
             }
             """);
 
-        var (client, displayName) = AgentFactory.CreateChatClient(
+        var (client, displayName) = await AgentFactory.CreateChatClientAsync(
             agent,
-            services: null,
-            apiKeyResolver: new FixedApiKeyResolver("test-token"));
+            new AgentServices { AccessBroker = new AgentAccessTestBroker() });
 
         Assert.NotNull(client);
         Assert.IsType<CopilotSdkChatClient>(client);
@@ -824,8 +789,7 @@ public class AgentFactoryTests
 
         var result = AgentFactory.CreateChatClient(
             agent,
-            services: null,
-            apiKeyResolver: new FixedApiKeyResolver("test-token"));
+            services: null);
 
         var client = Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
         Assert.Null(client.BuiltinToolPolicyForTest);
@@ -889,7 +853,7 @@ public class AgentFactoryTests
                 Id = "gpt-5",
                 Provider = "github-copilot",
                 ApiType = "OpenAI",
-                Connection = new ApiKeyConnection { ApiKey = "${GITHUB_TOKEN}" },
+                Connection = new ApiKeyConnection(),
             },
             Tools =
             [
@@ -903,8 +867,7 @@ public class AgentFactoryTests
 
         var exception = Assert.Throws<InvalidOperationException>(() => AgentFactory.CreateChatClient(
             agent,
-            services: null,
-            apiKeyResolver: new FixedApiKeyResolver("test-token")));
+            services: null));
         Assert.Contains("client-mode: empty", exception.Message, StringComparison.Ordinal);
         Assert.Contains("available-tools", exception.Message, StringComparison.Ordinal);
     }
@@ -2142,8 +2105,7 @@ public class AgentFactoryTests
 
         var result = AgentFactory.CreateChatClient(
             agent,
-            services: null,
-            apiKeyResolver: new FixedApiKeyResolver("test-token"));
+            services: null);
 
         return Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
     }
@@ -2159,18 +2121,12 @@ public class AgentFactoryTests
                 "provider": "github-copilot",
                 "apiType": "OpenAI",
                 "connection": {
-                  "kind": "key",
-                  "apiKey": "${GITHUB_TOKEN}"
+                  "kind": "key"
                 }
               },
               "tools": {{toolsJson}}
             }
             """);
-
-    private sealed class FixedApiKeyResolver(string key) : IApiKeyResolver
-    {
-        public Task<string> ResolveApiKeyAsync(string? apiKeyValue, string? serverName, CancellationToken cancellationToken = default) => Task.FromResult(key);
-    }
 
     // ─── Fix #1187: hosted Copilot sub-agent AgentDefinition compatibility ─────
 

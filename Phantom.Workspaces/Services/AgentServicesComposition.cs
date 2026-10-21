@@ -3,6 +3,7 @@ using System.Threading.Tasks;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Llm.Processes;
 using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Llm.Core.Transport.Chat;
@@ -24,16 +25,20 @@ namespace Phantom.Workspaces.Services;
 public static class AgentServicesComposition
 {
     /// <summary>
-    /// Composes the process-wide host services (<see cref="AgentServices.SecretProvider"/> and
+    /// Composes the process-wide host services (<see cref="AgentServices.AccessBroker"/> and
     /// <see cref="AgentServices.McpOAuthOptions"/>) that every launch path must carry. Used by
     /// <c>App.axaml.cs</c> for the app-level <c>AgentChatFactory</c> seed and reused by
     /// <see cref="ComposeSessionServicesAsync"/> so the session path shares the same instances.
     /// </summary>
     public static AgentServices ComposeHostServices(
-        object? secretProvider, object? mcpOAuthOptions, ILoggerFactory loggerFactory)
+        IAccessBroker? accessBroker,
+        object? mcpOAuthOptions,
+        ILoggerFactory loggerFactory,
+        IMcpOAuthCredentialRequestCatalog? mcpOAuthCredentials = null)
         => new()
         {
-            SecretProvider = secretProvider,
+            AccessBroker = accessBroker,
+            McpOAuthCredentials = mcpOAuthCredentials,
             McpOAuthOptions = mcpOAuthOptions,
             LoggerFactory = loggerFactory,
             ProcessExecutor = new ProcessExecutor(),
@@ -137,7 +142,7 @@ public static class AgentServicesComposition
         // exactly one place, guaranteeing the session path carries the same instances the app-level
         // path does.
         return ComposeHostServices(
-            applicationServices.SecretProvider,
+            applicationServices.AccessBroker,
             applicationServices.McpOAuthOptions,
             loggerFactory) with
         {

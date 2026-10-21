@@ -17,7 +17,7 @@ public sealed class CopilotByokTests
         {
             Provider = "openai",
             BaseUrl = "http://localhost:1234/",
-            ApiKey = "test-key",
+            ApiKeyLease = AgentAccessTestBroker.CreateLease("test-key"),
         };
         var modelOptions = new AgentSchema.ModelOptions
         {
@@ -32,7 +32,7 @@ public sealed class CopilotByokTests
         var providerConfig = CopilotSdkChatClient.CreateProviderConfig(byok, "gpt-test", modelOptions);
 
         Assert.Equal("http://localhost:1234/", providerConfig.BaseUrl);
-        Assert.Equal("test-key", providerConfig.ApiKey);
+        Assert.Null(providerConfig.ApiKey);
         Assert.Equal("openai", providerConfig.Type);
         Assert.Equal("chat-completions", providerConfig.WireApi);
         Assert.Equal("gpt-test", providerConfig.ModelId);
@@ -119,7 +119,7 @@ public sealed class CopilotByokTests
         {
             Provider = "openai",
             BaseUrl = server.BaseUrl,
-            ApiKey = "test-key",
+            ApiKeyLease = AgentAccessTestBroker.CreateLease("test-key"),
         };
 
         var cliPath = Environment.GetEnvironmentVariable("COPILOT_CLI_PATH");

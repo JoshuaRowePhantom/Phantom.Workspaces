@@ -330,7 +330,7 @@ public partial class App : Application
             var mcpOAuthOptions = Services.Mcp.McpOAuthComposition.CreateOptions(secretProvider, platformStore, loggerFactory);
             var agentChatFactory = new AgentChatFactory(
                 agentPersistenceStore,
-                Services.AgentServicesComposition.ComposeHostServices(secretProvider, mcpOAuthOptions, loggerFactory) with
+                Services.AgentServicesComposition.ComposeHostServices(this.accessHost.Broker, mcpOAuthOptions, loggerFactory) with
                 {
                     AccessBroker = this.accessHost.Broker,
                 },

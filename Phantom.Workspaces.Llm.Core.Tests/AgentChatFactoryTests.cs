@@ -921,11 +921,10 @@ public sealed class AgentChatFactoryTests
         // #1405: the GUI foreground factory path (GetOrCreateAsync -> CreateChatOnForegroundAsync)
         // must materialize ${SECRET:...} placeholders — invoking the SecretProvider and rewriting
         // the definition to an opaque handle — before the chat client is built.
-        var provider = new FakeSecretProvider();
-        provider.Secrets["GitHubToken"] = ToSecureString("resolved-token");
+        var provider = new Phantom.Workspaces.Llm.Core.Tests.Secrets.ManifestAccessTestBroker { Material = "resolved-token" };
         var services = new AgentServices
         {
-            SecretProvider = provider,
+            AccessBroker = provider,
             ChatClientOverride = new DeterministicTestChatClient(),
         };
         await using var factory = CreateFactory();
@@ -933,7 +932,7 @@ public sealed class AgentChatFactoryTests
 
         await using var lease = await factory.GetOrCreateAsync(sessionId, McpSecretDefinition(), services);
 
-        Assert.Equal(1, provider.CallCount);
+        Assert.Single(provider.Requests);
         var json = lease.LocalAgentChat.AgentDefinition!.ToJson();
         Assert.DoesNotContain("${SECRET:GitHubToken}", json, StringComparison.Ordinal);
         Assert.Contains("${SECRET:", json, StringComparison.Ordinal);
@@ -945,24 +944,23 @@ public sealed class AgentChatFactoryTests
         // #1405: idempotency — a definition already rewritten to opaque handles (with a resolver
         // attached to services) must not be re-scanned or re-prompted when it flows through the
         // foreground factory path again.
-        var provider = new FakeSecretProvider();
-        provider.Secrets["GitHubToken"] = ToSecureString("resolved-token");
+        var provider = new Phantom.Workspaces.Llm.Core.Tests.Secrets.ManifestAccessTestBroker { Material = "resolved-token" };
         var baseServices = new AgentServices
         {
-            SecretProvider = provider,
+            AccessBroker = provider,
             ChatClientOverride = new DeterministicTestChatClient(),
         };
 
         var (materializedDefinition, materializedServices) = await AgentFactory.MaterializeSecretsIfNeededAsync(
             McpSecretDefinition(), baseServices, manifest: null, agentSessionId: null, CancellationToken.None);
-        Assert.Equal(1, provider.CallCount);
+        Assert.Single(provider.Requests);
 
         await using var factory = CreateFactory();
         var sessionId = new AgentSessionId("session-already-materialized");
 
         await using var lease = await factory.GetOrCreateAsync(sessionId, materializedDefinition, materializedServices);
 
-        Assert.Equal(1, provider.CallCount);
+        Assert.Single(provider.Requests);
     }
 
     private static AgentDefinition McpSecretDefinition() => AgentDefinitionLoader.LoadAgentFromJson("""

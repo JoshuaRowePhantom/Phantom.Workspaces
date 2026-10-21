@@ -12,6 +12,8 @@ using AgentRegistryLiveTargetEntry = GitHub.Copilot.Rpc.AgentRegistryLiveTargetE
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Llm.Copilot;
+using Phantom.Workspaces.Llm.Interfaces.Access;
+using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Llm.Core.Manifest;
 using Phantom.Workspaces.Llm.Core.Transport.Chat;
 using Phantom.Workspaces.Llm.Trust;
@@ -46,7 +48,16 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 {
     private string modelId;
     private readonly string displayName;
-    private readonly string? gitHubToken;
+    private readonly SensitiveValueLease? gitHubToken;
+    private readonly AgentCredentialLeaseSet credentials;
+    private readonly IAccessBroker? accessBroker;
+    private readonly CredentialUseLineage credentialLineage;
+    private readonly AccessPresentationScope accessPresentationScope;
+    private readonly AccessRequestor? credentialRequestor;
+    private readonly CredentialUseDescriptor? credentialUse;
+    private readonly ICredentialAccessResult? credentialOwner;
+    private readonly IAsyncDisposable? ownedSecretResolver;
+    private bool accountUpsertCompleted;
     private readonly ILoggerFactory? loggerFactory;
     private readonly CopilotByokOptions? byokOptions;
     private readonly string? remoteProviderReference;
@@ -70,6 +81,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private readonly AgentExecutionTrustContext? executionTrustContext;
     private ExecutorBindings? executorBindings;
     private ITransportFactoryRegistry? executorTransportFactoryRegistry;
+    private bool requiresRemoteProvider;
     private TimeProvider? remoteSessionTimeProvider;
     private TimeSpan? remoteSessionStartupTimeout;
     private TimeSpan? remoteSessionTerminalTimeout;
@@ -164,7 +176,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     /// explicit token was provided (SDK falls back to the logged-in Copilot user). Exposed
     /// internally for factory wiring tests.
     /// </summary>
-    internal string? GitHubToken => this.gitHubToken;
+    internal SensitiveValueLease? GitHubToken => this.gitHubToken;
 
     /// <summary>
     /// The explicit Copilot CLI executable path this client was constructed with or read from
@@ -223,7 +235,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     public CopilotSdkChatClient(
         string modelId,
         string displayName,
-        string? gitHubToken,
+        SensitiveValueLease? gitHubToken,
         ILoggerFactory? loggerFactory,
         CopilotByokOptions? byokOptions = null,
         string? cliPath = null,
@@ -233,14 +245,33 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         IGitHubAccountUpsertService? accountUpsertService = null,
         SlashCommands.ISlashCommandRegistry? slashCommandRegistry = null,
         CopilotBuiltinToolPolicy? builtinToolPolicy = null,
-        AgentExecutionTrustContext? executionTrustContext = null)
+        AgentExecutionTrustContext? executionTrustContext = null,
+        IAccessBroker? accessBroker = null,
+        CredentialUseLineage? credentialLineage = null,
+        ISecretPlaceholderResolver? secretPlaceholderResolver = null,
+        ICredentialAccessResult? credentialOwner = null,
+        IAsyncDisposable? ownedSecretResolver = null,
+        AccessPresentationScope accessPresentationScope = AccessPresentationScope.Runtime,
+        AccessRequestor? credentialRequestor = null,
+        CredentialUseDescriptor? credentialUse = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
         ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
 
         this.modelId = modelId;
         this.displayName = displayName;
-        this.gitHubToken = string.IsNullOrWhiteSpace(gitHubToken) ? null : gitHubToken;
+        this.gitHubToken = gitHubToken;
+        this.credentials = new AgentCredentialLeaseSet(
+            byokOptions?.ApiKeyLease ?? gitHubToken,
+            modelOptions,
+            secretPlaceholderResolver);
+        this.accessBroker = accessBroker;
+        this.credentialLineage = credentialLineage ?? new CredentialUseLineage();
+        this.accessPresentationScope = accessPresentationScope;
+        this.credentialRequestor = credentialRequestor;
+        this.credentialUse = credentialUse;
+        this.credentialOwner = credentialOwner;
+        this.ownedSecretResolver = ownedSecretResolver;
         this.loggerFactory = loggerFactory;
         this.byokOptions = byokOptions;
         this.remoteProviderReference = GetStringModelOption(modelOptions, "remoteProvider");
@@ -285,10 +316,14 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     /// session over a transport instead of the in-process CLI factory. Passing <see langword="null"/>
     /// for either argument keeps the behaviour-preserving in-process path.
     /// </summary>
-    internal void ConfigureExecutorRouting(ExecutorBindings? bindings, ITransportFactoryRegistry? registry)
+    internal void ConfigureExecutorRouting(
+        ExecutorBindings? bindings,
+        ITransportFactoryRegistry? registry,
+        bool requiresRemoteProvider = false)
     {
         this.executorBindings = bindings;
         this.executorTransportFactoryRegistry = registry;
+        this.requiresRemoteProvider |= requiresRemoteProvider;
     }
 
     internal void ConfigureRemoteSessionLifecycleForTest(
@@ -330,7 +365,6 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             Type = MapProviderType(byokOptions.Provider),
             WireApi = GetStringModelOption(modelOptions, "wireApi") ?? "chat-completions",
             BaseUrl = byokOptions.BaseUrl,
-            ApiKey = byokOptions.ApiKey,
             ModelId = modelId,
             WireModel = GetStringModelOption(modelOptions, "wireModel"),
         };
@@ -542,13 +576,13 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     public async Task SetModelIdAsync(string modelId, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
-        this.modelId = modelId;
 
         if (this.copilotSession is { } session)
         {
             await session.SetModelAsync(modelId, cancellationToken).ConfigureAwait(false);
         }
 
+        this.modelId = modelId;
         this.ModelChanged?.Invoke(this, EventArgs.Empty);
 
         // No live session yet: BuildSessionConfig/BuildResumeSessionConfig already read this.modelId
@@ -584,18 +618,22 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 return;
             }
 
-            var clientOptions = await CreateClientOptionsAsync(
-                workingDirectory: null,
-                cancellationToken).ConfigureAwait(false);
-
-            var client = this.copilotClientFactory.Create(clientOptions);
+            var client = await this.TryCreateRemoteClientAsync(cancellationToken).ConfigureAwait(false)
+                ?? await this.CreateClientAsync(workingDirectory: null, cancellationToken).ConfigureAwait(false);
             try
             {
                 await StartClientAsync(client, cancellationToken).ConfigureAwait(false);
             }
             catch
             {
-                await DisposeRuntimeConnectionSelectionAsync().ConfigureAwait(false);
+                try
+                {
+                    await client.DisposeAsync().ConfigureAwait(false);
+                }
+                finally
+                {
+                    await DisposeRuntimeConnectionSelectionAsync().ConfigureAwait(false);
+                }
                 throw;
             }
             this.copilotClient = client;
@@ -640,7 +678,6 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             .ConfigureAwait(false);
         var clientOptions = new CopilotClientOptions
         {
-            GitHubToken = this.gitHubToken,
             Logger = this.loggerFactory?.CreateLogger<CopilotClient>(),
             Mode = this.builtinToolPolicy?.ClientMode ?? CopilotClientMode.CopilotCli,
             Connection = selection?.Connection
@@ -670,6 +707,23 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         }
 
         return clientOptions;
+    }
+
+    private async Task<ICopilotClient> CreateClientAsync(
+        string? workingDirectory,
+        CancellationToken cancellationToken)
+    {
+        var options = await this.CreateClientOptionsAsync(workingDirectory, cancellationToken).ConfigureAwait(false);
+        return await this.credentials.UseAsync((material, _, _) =>
+        {
+            options.GitHubToken = this.byokOptions is null ? material : null;
+            options.UseLoggedInUser = this.gitHubToken is null ? null : false;
+            var client = this.copilotClientFactory.Create(options);
+            return Task.FromResult<ICopilotClient>(new CredentialBoundCopilotClient(
+                client,
+                this.credentials,
+                this.byokOptions));
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<CopilotRuntimeConnectionLease?> GetRuntimeConnectionSelectionAsync(
@@ -1712,23 +1766,43 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
     private async Task DisposeCoreAsync()
     {
-        await this.StopStateObserverAsync().ConfigureAwait(false);
-        var session = this.copilotSession;
-        if (session is not null)
+        try
         {
-            await session.DisposeAsync().ConfigureAwait(false);
-        }
+            await this.StopStateObserverAsync().ConfigureAwait(false);
+            var session = this.copilotSession;
+            if (session is not null)
+            {
+                await session.DisposeAsync().ConfigureAwait(false);
+            }
 
-        var client = this.copilotClient;
-        if (client is not null)
+            var client = this.copilotClient;
+            if (client is not null)
+            {
+                await client.DisposeAsync().ConfigureAwait(false);
+            }
+
+            await DisposeRuntimeConnectionSelectionAsync().ConfigureAwait(false);
+
+            this.sessionInitializationLock.Dispose();
+            this.turnLock.Dispose();
+        }
+        finally
         {
-            await client.DisposeAsync().ConfigureAwait(false);
+            try
+            {
+                if (this.credentialOwner is not null)
+                {
+                    await this.credentialOwner.DisposeAsync().ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                if (this.ownedSecretResolver is not null)
+                {
+                    await this.ownedSecretResolver.DisposeAsync().ConfigureAwait(false);
+                }
+            }
         }
-
-        await DisposeRuntimeConnectionSelectionAsync().ConfigureAwait(false);
-
-        this.sessionInitializationLock.Dispose();
-        this.turnLock.Dispose();
     }
 
     /// <summary>
@@ -1908,33 +1982,33 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 else
                 {
                     var workingDirectory = GetWorkingDirectory(options);
-                    var clientOptions = await CreateClientOptionsAsync(
+                    var client = await this.CreateClientAsync(
                         workingDirectory,
                         cancellationToken).ConfigureAwait(false);
-
-                    var client = this.copilotClientFactory.Create(clientOptions);
                     try
                     {
                         await StartClientAsync(client, cancellationToken).ConfigureAwait(false);
+                        await this.UpsertAccountAsync(cancellationToken).ConfigureAwait(false);
                     }
                     catch
                     {
-                        await DisposeRuntimeConnectionSelectionAsync().ConfigureAwait(false);
+                        try
+                        {
+                            await client.DisposeAsync().ConfigureAwait(false);
+                        }
+                        finally
+                        {
+                            await DisposeRuntimeConnectionSelectionAsync().ConfigureAwait(false);
+                        }
                         throw;
                     }
                     this.copilotClient = client;
-
-                    if (this.accountUpsertService is not null)
-                    {
-                        // Resolve the token that the SDK is actually using. When this.gitHubToken is null
-                        // the SDK falls back to the ambient gh CLI user, so resolve it the same way.
-                        var tokenForUpsert = this.gitHubToken ?? await GitHubAuthTokenResolver.ResolveAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
-                        if (!string.IsNullOrWhiteSpace(tokenForUpsert))
-                        {
-                            await this.accountUpsertService.UpsertForTokenAsync(tokenForUpsert, cancellationToken).ConfigureAwait(false);
-                        }
-                    }
                 }
+            }
+
+            if (this.copilotClient is CredentialBoundCopilotClient)
+            {
+                await this.UpsertAccountAsync(cancellationToken).ConfigureAwait(false);
             }
 
             if (this.copilotSession is { } staleSession)
@@ -1968,6 +2042,53 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         }
     }
 
+    private async Task UpsertAccountAsync(CancellationToken cancellationToken)
+    {
+        if (this.accountUpsertService is null || this.accountUpsertCompleted)
+        {
+            return;
+        }
+        if (this.accessBroker is null)
+        {
+            throw new AgentCredentialAccessException();
+        }
+
+        var request = GitHubCredentialAccessRequest.Create(
+            GitHubCredentialPurpose.Agent,
+            this.credentialRequestor ?? new AccessRequestor
+            {
+                Identifier = CredentialIdentityFactory.CreateRequestorIdentifier(AccessRequestorKind.Agent, "copilot-account-upsert"),
+                Kind = AccessRequestorKind.Agent,
+                SafeDisplayName = "Agent account",
+            },
+            this.credentialLineage,
+            this.credentialUse is null
+                ? "copilot-account-upsert"
+                : $"{this.credentialUse.Fingerprint.Digest}:copilot-account-upsert",
+            this.accessPresentationScope);
+        if (this.credentialUse is { } parent)
+        {
+            request = request with { Use = request.Use with { MemoryScopes = parent.MemoryScopes } };
+        }
+        var outcome = await this.accessBroker.AcquireAsync(request, cancellationToken).ConfigureAwait(false);
+        if (outcome is AccessCancelled<GitHubCredentialAccessResult>)
+        {
+            throw new OperationCanceledException(cancellationToken);
+        }
+        if (outcome is not AccessSucceeded<GitHubCredentialAccessResult> succeeded)
+        {
+            throw new AgentCredentialAccessException();
+        }
+
+        await using var result = succeeded.Result;
+        await new AgentCredentialLeaseSet(result.Lease, null, null).UseAsync(async (material, _, token) =>
+        {
+            await this.accountUpsertService.UpsertForTokenAsync(material!, token).ConfigureAwait(false);
+            return true;
+        }, cancellationToken).ConfigureAwait(false);
+        this.accountUpsertCompleted = true;
+    }
+
     // Resumes the persisted Copilot session on the first creation when a resume id was provided, so
     // prior conversation history remains visible to the model (issue #3); otherwise creates a fresh
     // session. The resume id is one-shot. If resuming fails (for example the on-disk session has been
@@ -1990,7 +2111,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                     .ResumeSessionAsync(resumeSessionId, resumeConfig, cancellationToken)
                     .ConfigureAwait(false);
             }
-            catch (Exception exception) when (exception is not OperationCanceledException)
+            catch (Exception exception) when (exception is not OperationCanceledException and not AgentCredentialAccessException)
             {
                 this.loggerFactory?.CreateLogger<CopilotSdkChatClient>().LogWarning(
                     exception,
@@ -2016,6 +2137,10 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     {
         if (this.executorBindings is null)
         {
+            if (this.requiresRemoteProvider)
+            {
+                throw new InvalidOperationException("Remote model execution requires its configured executor binding.");
+            }
             if (!string.IsNullOrWhiteSpace(this.modelExecutorName))
             {
                 throw new InvalidOperationException(
@@ -2029,6 +2154,10 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
         if (IsLocalDescriptor(descriptor))
         {
+            if (this.requiresRemoteProvider)
+            {
+                throw new InvalidOperationException("Remote model execution cannot fall back to a local executor.");
+            }
             return null;
         }
         if (this.executorTransportFactoryRegistry is null)
@@ -2036,9 +2165,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             throw new InvalidOperationException(
                 "Remote Copilot execution requires a configured executor transport registry.");
         }
-        if (this.byokOptions is not null
-            && !CopilotSessionTransportFrames.IsValidProviderReference(
-                this.remoteProviderReference))
+        if ((this.byokOptions is not null || !string.IsNullOrWhiteSpace(this.remoteProviderReference))
+            && !CopilotSessionTransportFrames.IsValidProviderReference(this.remoteProviderReference))
         {
             throw new InvalidOperationException(
                 "Remote BYOK execution requires a valid worker-local remoteProvider reference.");
@@ -2059,11 +2187,11 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             this.remoteSessionTimeProvider,
             this.remoteSessionStartupTimeout,
             this.remoteSessionTerminalTimeout,
-            this.byokOptions is null ? null : this.remoteProviderReference,
+            this.remoteProviderReference,
             this.loggerFactory);
     }
 
-    private static bool IsLocalDescriptor(JsonElement descriptor)
+    internal static bool IsLocalDescriptor(JsonElement descriptor)
     {
         if (descriptor.ValueKind != JsonValueKind.Object
             || !descriptor.TryGetProperty("type", out var type)
@@ -2199,3 +2327,86 @@ internal sealed record StreamingTurnContext(
     Func<CancellationToken, Task> SendAsync,
     Func<Task> OnCancelledAsync,
     Func<Task> OnPipeBrokenAsync);
+
+internal sealed class CredentialBoundCopilotClient(
+    ICopilotClient inner,
+    AgentCredentialLeaseSet credentials,
+    CopilotByokOptions? byokOptions) : ICopilotClient
+{
+    public Task StartAsync(CancellationToken cancellationToken) =>
+        credentials.GuardAsync(inner.StartAsync, cancellationToken);
+
+    public Task<IReadOnlyList<ModelInfo>> ListModelsAsync(CancellationToken cancellationToken) =>
+        credentials.GuardAsync(inner.ListModelsAsync, cancellationToken);
+
+    public Task<ICopilotSession> CreateSessionAsync(
+        SessionConfig config,
+        CancellationToken cancellationToken) =>
+        credentials.UseAsync(async (material, modelOptions, token) =>
+        {
+            if (byokOptions is not null)
+            {
+                config.Provider = CopilotSdkChatClient.CreateProviderConfig(byokOptions, config.Model!, modelOptions);
+                config.Provider.ApiKey = material;
+            }
+            var session = await inner.CreateSessionAsync(config, token).ConfigureAwait(false);
+            return (ICopilotSession)new CredentialBoundCopilotSession(session, credentials);
+        }, cancellationToken);
+
+    public Task<ICopilotSession> ResumeSessionAsync(
+        string sessionId,
+        ResumeSessionConfig config,
+        CancellationToken cancellationToken) =>
+        credentials.UseAsync(async (material, modelOptions, token) =>
+        {
+            if (byokOptions is not null)
+            {
+                config.Provider = CopilotSdkChatClient.CreateProviderConfig(byokOptions, config.Model!, modelOptions);
+                config.Provider.ApiKey = material;
+            }
+            var session = await inner.ResumeSessionAsync(sessionId, config, token).ConfigureAwait(false);
+            return (ICopilotSession)new CredentialBoundCopilotSession(session, credentials);
+        }, cancellationToken);
+
+    public Task<EventsReadResult> ReadPersistedEventsAsync(
+        ReadCopilotPersistedEventsRequest request,
+        CancellationToken cancellationToken) =>
+        credentials.GuardAsync(token => inner.ReadPersistedEventsAsync(request, token), cancellationToken);
+
+    public Task<IReadOnlyList<AgentRegistryLiveTargetEntry>> ListLiveSessionStatesAsync(CancellationToken cancellationToken) =>
+        credentials.GuardAsync(inner.ListLiveSessionStatesAsync, cancellationToken);
+
+    public ValueTask DisposeAsync() => inner.DisposeAsync();
+}
+
+internal sealed class CredentialBoundCopilotSession(
+    ICopilotSession inner,
+    AgentCredentialLeaseSet credentials) : ICopilotSession
+{
+    public string SessionId => inner.SessionId;
+    public IDisposable Subscribe(Action<SessionEvent> handler) => inner.Subscribe(handler);
+
+    public Task<AssistantMessageEvent?> SendAndWaitAsync(
+        MessageOptions options,
+        TimeSpan? timeout,
+        CancellationToken cancellationToken) =>
+        credentials.GuardAsync(token => inner.SendAndWaitAsync(options, timeout, token), cancellationToken);
+
+    public Task SendAsync(
+        MessageOptions options,
+        CancellationToken cancellationToken) =>
+        credentials.GuardAsync(token => inner.SendAsync(options, token), cancellationToken);
+
+    public Task AbortAsync(CancellationToken cancellationToken) =>
+        inner.AbortAsync(cancellationToken);
+
+    public Task<IReadOnlyList<TaskInfo>> ListTasksAsync(CancellationToken cancellationToken) =>
+        credentials.GuardAsync(inner.ListTasksAsync, cancellationToken);
+
+    public Task SetModelAsync(
+        string modelId,
+        CancellationToken cancellationToken) =>
+        credentials.GuardAsync(token => inner.SetModelAsync(modelId, token), cancellationToken);
+
+    public ValueTask DisposeAsync() => inner.DisposeAsync();
+}

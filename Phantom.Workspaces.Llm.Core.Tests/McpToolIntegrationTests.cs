@@ -245,8 +245,7 @@ public sealed class McpToolIntegrationTests
         // opaque handle and opens the server via the secret-aware key arm.
         await using var server = await TestMcpServerProcess.StartAsync();
 
-        var provider = new StubSecretProvider();
-        provider.Secrets["GitHubToken"] = ToSecureString("secret-gated-token");
+        var provider = new Secrets.ManifestAccessTestBroker { Material = "secret-gated-token" };
 
         var manifest = AgentManifestLoader.LoadManifestFromJson($$"""
         {
@@ -274,7 +273,7 @@ public sealed class McpToolIntegrationTests
             AgentManifest = manifest,
             AgentServices = new AgentServices
             {
-                SecretProvider = provider,
+                AccessBroker = provider,
                 ChatClientOverride = new DeterministicTestChatClient(),
             },
             PersistenceStoreFactory = (_, _) => ValueTask.FromResult<IAgentPersistenceStore>(new InMemoryAgentPersistenceStore()),
@@ -285,7 +284,7 @@ public sealed class McpToolIntegrationTests
         Assert.Contains(
             chat.History,
             item => DiagnosticText(item).Contains("Opened MCP server 'github-secret-gated'", StringComparison.Ordinal));
-        Assert.True(provider.CallCount > 0, "The secret provider should have been consulted during materialization.");
+        Assert.NotEmpty(provider.Requests);
     }
 
     private static SecureString ToSecureString(string value)
@@ -312,12 +311,11 @@ public sealed class McpToolIntegrationTests
         {
             await using var server = await TestMcpServerProcess.StartAsync();
 
-            var provider = new StubSecretProvider();
-            provider.Secrets["GitHubToken"] = ToSecureString("secret-gated-token");
+            var provider = new Secrets.ManifestAccessTestBroker { Material = "secret-gated-token" };
 
             await using var cache = new AgentChatSessionCache(new AgentServices
             {
-                SecretProvider = provider,
+                AccessBroker = provider,
                 AgentPersistenceStoreOverride = new InMemoryAgentPersistenceStore(),
             });
 
@@ -349,7 +347,7 @@ public sealed class McpToolIntegrationTests
             {
             }
 
-            Assert.True(provider.CallCount > 0, "The secret provider should have been consulted during session launch.");
+            Assert.NotEmpty(provider.Requests);
         }
         finally
         {

@@ -11,7 +11,10 @@ public sealed class AgentDefinitionSecretMaterializer
         AgentDefinition definition,
         IAccessBroker accessBroker,
         CredentialUseLineage lineage,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        AccessPresentationScope presentationScope = AccessPresentationScope.Runtime,
+        AccessRequestor? requestor = null,
+        CredentialUseDescriptor? parentUse = null)
     {
         var resolver = new SecretPlaceholderResolver();
         var handles = new Dictionary<SecretUsage, string>(ReferenceEqualityComparer.Instance);
@@ -21,7 +24,9 @@ public sealed class AgentDefinitionSecretMaterializer
             for (var occurrence = 0; occurrence < usages.Count; occurrence++)
             {
                 var usage = usages[occurrence];
-                var outcome = await accessBroker.AcquireAsync(CreateRequest(usage, lineage, occurrence), cancellationToken).ConfigureAwait(false);
+                var outcome = await accessBroker.AcquireAsync(
+                    CreateRequest(usage, lineage, occurrence, presentationScope, requestor, parentUse),
+                    cancellationToken).ConfigureAwait(false);
                 if (outcome is AccessDenied<StoredSecretAccessResult> or AccessCancelled<StoredSecretAccessResult>)
                 {
                     throw new SecretMaterializationRefusedException("Credential use was not authorized.");
@@ -49,9 +54,12 @@ public sealed class AgentDefinitionSecretMaterializer
     private static StoredSecretAccessRequest CreateRequest(
         SecretUsage usage,
         CredentialUseLineage lineage,
-        int occurrence)
+        int occurrence,
+        AccessPresentationScope presentationScope,
+        AccessRequestor? suppliedRequestor,
+        CredentialUseDescriptor? parentUse)
     {
-        var requestor = new AccessRequestor
+        var requestor = suppliedRequestor ?? new AccessRequestor
         {
             Identifier = CredentialIdentityFactory.CreateRequestorIdentifier(AccessRequestorKind.Manifest, lineage.Manifest?.Digest ?? "manifest"),
             Kind = AccessRequestorKind.Manifest,
@@ -70,6 +78,11 @@ public sealed class AgentDefinitionSecretMaterializer
         if (lineage.ManifestContent is not null)
         {
             scopes.AddRange([ReleaseMemoryScopeKind.ManifestContent, ReleaseMemoryScopeKind.KeyInManifestContent]);
+        }
+        var purpose = $"{usage.JsonPath}:{occurrence}";
+        if (parentUse is not null)
+        {
+            purpose = $"{parentUse.Fingerprint.Digest}:{purpose}";
         }
         return new StoredSecretAccessRequest
         {
@@ -95,11 +108,13 @@ public sealed class AgentDefinitionSecretMaterializer
             {
                 Kind = CredentialUseKind.Manifest,
                 Lineage = useLineage,
-                Fingerprint = CredentialIdentityFactory.CreateUseFingerprint(CredentialUseKind.Manifest, useLineage, requestor.Identifier, $"{usage.JsonPath}:{occurrence}"),
+                Fingerprint = CredentialIdentityFactory.CreateUseFingerprint(
+                    CredentialUseKind.Manifest, useLineage, requestor.Identifier,
+                    purpose),
                 SafeDisplayName = "Use manifest secret",
-                MemoryScopes = scopes,
+                MemoryScopes = parentUse?.MemoryScopes ?? scopes,
             },
-            PresentationScope = AccessPresentationScope.Runtime,
+            PresentationScope = presentationScope,
             Sources = new[] { CredentialSourceKind.SecretStore, CredentialSourceKind.Environment }.Select(kind => new CredentialSourceChoiceDescriptor
             {
                 Identifier = CredentialIdentityFactory.CreateSourceIdentifier(CredentialProviderKind.StoredSecret, $"{kind}:{usage.SecretName}"),

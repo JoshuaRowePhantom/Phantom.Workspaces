@@ -5,3 +5,4 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("Phantom.Workspaces.Tests")]
 [assembly: InternalsVisibleTo("Phantom.Workspaces.IntegrationTests")]
 [assembly: InternalsVisibleTo("Phantom.Workspaces.Llm.Core.Tests")]
+[assembly: InternalsVisibleTo("Phantom.Workspaces.Transport.Tests")]

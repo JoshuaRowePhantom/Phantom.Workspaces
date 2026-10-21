@@ -13,6 +13,7 @@ using Phantom.Workspaces.Llm.Core.Manifest;
 using Phantom.Workspaces.Llm.Core.Tests;
 using Phantom.Workspaces.Llm.Core.Transport.Chat;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Testing;
 using Phantom.Workspaces.Transport.Chat;
 using Phantom.Workspaces.Transport.Http;
@@ -79,6 +80,35 @@ public sealed class RemoteSplitSessionByokRoundTripTests
 
         AssertSuccessfulTurn(setup, chat, "worker-a", "reply-from-worker-a", ProfileB);
         await AssertPersistedAsync(setup, chat, "reply-from-worker-a");
+    }
+
+    [Fact]
+    public async Task RemoteSplitSession_Byok_CallerLease_RemainsUnreadAcrossRemoteProviderBinding()
+    {
+        var context = new AgentAccessTestBroker.LeaseContext { Authorized = false };
+        await using var credential = AgentAccessTestBroker.CreateLease("caller-credential-must-not-be-exported", context);
+        using var caller = new CapturingLoggerFactory();
+        using var hub = new CapturingLoggerFactory();
+        using var worker = new CapturingLoggerFactory();
+        await using var setup = await SplitSessionSetup.CreateWithDiagnosticsAsync(
+            ProfileA,
+            ProfileB,
+            caller,
+            hub,
+            worker,
+            credential);
+        setup.Session.EnqueueTextAndIdle("worker-owned-credential-route");
+
+        await using var chat = await setup.CreateChatAsync();
+        await CompleteTurnAsync(chat, "caller-lease-route instance-marker:worker-b");
+
+        AssertSuccessfulTurn(setup, chat, "worker-b", "worker-owned-credential-route", ProfileA);
+        Assert.Equal(0, context.Validations);
+        foreach (var factory in new[] { caller, hub, worker })
+        {
+            Assert.All(factory.Entries, entry =>
+                Assert.DoesNotContain("caller-credential-must-not-be-exported", entry.Message, StringComparison.Ordinal));
+        }
     }
 
     [Fact]
@@ -438,6 +468,8 @@ public sealed class RemoteSplitSessionByokRoundTripTests
                 ["remoteProvider"] = "worker-byok",
             },
         };
+        var callerContext = new AgentAccessTestBroker.LeaseContext { Authorized = false };
+        await using var callerCredential = AgentAccessTestBroker.CreateLease("caller-test-key", callerContext);
         await using var remoteClient = new CopilotSdkChatClient(
             "gpt-test",
             "real BYOK worker B",
@@ -447,7 +479,7 @@ public sealed class RemoteSplitSessionByokRoundTripTests
             {
                 Provider = "openai",
                 BaseUrl = server.BaseUrl,
-                ApiKey = "caller-test-key",
+                ApiKeyLease = callerCredential,
             },
             modelOptions: modelOptions);
         remoteClient.ConfigureExecutorRouting(
@@ -497,6 +529,7 @@ public sealed class RemoteSplitSessionByokRoundTripTests
             diagnostic);
         Assert.Equal("worker-byok", providerResolver.Reference);
         Assert.Equal(ProfileA.ToString(), identityListener.ObservedIdentity?.UserComputerProfileEntityId);
+        Assert.Equal(0, callerContext.Validations);
         Assert.DoesNotContain(
             routingRegistry.Descriptors,
             descriptor => descriptor.TryGetProperty("type", out var type) && type.GetString() == "local");
@@ -594,6 +627,8 @@ public sealed class RemoteSplitSessionByokRoundTripTests
             },
         };
         var callerLogs = new CapturingLoggerFactory();
+        var callerContext = new AgentAccessTestBroker.LeaseContext { Authorized = false };
+        await using var callerCredential = AgentAccessTestBroker.CreateLease("caller-test-key", callerContext);
         await using var client = new CopilotSdkChatClient(
             "gpt-test",
             "process split tool owner",
@@ -603,7 +638,7 @@ public sealed class RemoteSplitSessionByokRoundTripTests
             {
                 Provider = "openai",
                 BaseUrl = server.BaseUrl,
-                ApiKey = "caller-test-key",
+                ApiKeyLease = callerCredential,
             },
             modelOptions: modelOptions);
         client.ConfigureExecutorRouting(
@@ -657,6 +692,7 @@ public sealed class RemoteSplitSessionByokRoundTripTests
         var invoked = await callback.Task;
         Assert.Equal(Environment.ProcessId, invoked.ProcessId);
         Assert.Equal("from-worker-cli", invoked.Value);
+        Assert.Equal(0, callerContext.Validations);
         var followUp = await conversation.GetRequestAsync(1).WaitAsync(ct);
         Assert.True(
             followUp.AnyMessageContains(
@@ -733,6 +769,8 @@ public sealed class RemoteSplitSessionByokRoundTripTests
                 ["remoteProvider"] = "worker-byok",
             },
         };
+        var callerContext = new AgentAccessTestBroker.LeaseContext { Authorized = false };
+        await using var callerCredential = AgentAccessTestBroker.CreateLease("caller-test-key", callerContext);
         await using var client = new CopilotSdkChatClient(
             "gpt-test",
             "process split BYOK",
@@ -742,7 +780,7 @@ public sealed class RemoteSplitSessionByokRoundTripTests
             {
                 Provider = "openai",
                 BaseUrl = server.BaseUrl,
-                ApiKey = "caller-test-key",
+                ApiKeyLease = callerCredential,
             },
             modelOptions: modelOptions);
         client.ConfigureExecutorRouting(
@@ -814,6 +852,7 @@ public sealed class RemoteSplitSessionByokRoundTripTests
             ct);
         Assert.NotNull(restored);
         Assert.False(string.IsNullOrWhiteSpace(restored!.Value.CopilotSdkSessionId));
+        Assert.Equal(0, callerContext.Validations);
         Assert.Empty(server.Failures);
     }
 
@@ -1308,13 +1347,14 @@ public sealed class RemoteSplitSessionByokRoundTripTests
 
         public static Task<SplitSessionSetup> CreateWithDiagnosticsAsync(
             EntityId source, EntityId target,
-            ILoggerFactory caller, ILoggerFactory hub, ILoggerFactory worker)
+            ILoggerFactory caller, ILoggerFactory hub, ILoggerFactory worker,
+            SensitiveValueLease? callerCredential = null)
         {
             var session = new FakeCopilotSession { SessionId = "worker-b" };
             var recoverySession = new FakeCopilotSession { SessionId = "worker-b" };
             var sdkClient = new SequencedFakeCopilotClient([session, recoverySession]);
             return CreateWithClientAsync(source, target, sdkClient, session, recoverySession,
-                TestToken(), new SplitTraceFactories(caller, hub, worker));
+                TestToken(), new SplitTraceFactories(caller, hub, worker), callerCredential);
         }
 
         private static async Task<SplitSessionSetup> CreateWithClientAsync(
@@ -1324,7 +1364,8 @@ public sealed class RemoteSplitSessionByokRoundTripTests
             FakeCopilotSession session,
             FakeCopilotSession recoverySession,
             CancellationToken cancellationToken,
-            SplitTraceFactories? diagnostics = null)
+            SplitTraceFactories? diagnostics = null,
+            SensitiveValueLease? callerCredential = null)
         {
             var listener = diagnostics is null
                 ? new CopilotClientTransportListener(new FakeCopilotClientFactory(remoteClient))
@@ -1347,7 +1388,8 @@ public sealed class RemoteSplitSessionByokRoundTripTests
                 session,
                 recoverySession,
                 cancellationToken,
-                diagnostics);
+                diagnostics,
+                callerCredential);
         }
 
         public static Task<SplitSessionSetup> CreateWithListenerAsync(
@@ -1370,7 +1412,8 @@ public sealed class RemoteSplitSessionByokRoundTripTests
             FakeCopilotSession session,
             FakeCopilotSession recoverySession,
             CancellationToken cancellationToken,
-            SplitTraceFactories? diagnostics = null)
+            SplitTraceFactories? diagnostics = null,
+            SensitiveValueLease? callerCredential = null)
         {
             var effectiveCancellation = cancellationToken.CanBeCanceled
                 ? cancellationToken
@@ -1427,6 +1470,12 @@ public sealed class RemoteSplitSessionByokRoundTripTests
                 "remote split session",
                 null,
                 diagnostics?.Caller,
+                byokOptions: callerCredential is null ? null : new CopilotByokOptions
+                {
+                    Provider = "openai",
+                    BaseUrl = "http://caller-only.invalid",
+                    ApiKeyLease = callerCredential,
+                },
                 modelOptions: options);
             sdkClient.ConfigureExecutorRouting(
                 new ExecutorBindings

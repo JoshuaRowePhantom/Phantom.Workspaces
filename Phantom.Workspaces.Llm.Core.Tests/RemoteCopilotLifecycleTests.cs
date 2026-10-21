@@ -1121,7 +1121,7 @@ public sealed class RemoteCopilotLifecycleTests
             {
                 Provider = "openai",
                 BaseUrl = "http://caller-only.invalid",
-                ApiKey = "caller-key",
+                ApiKeyLease = AgentAccessTestBroker.CreateLease("caller-key"),
             },
             modelOptions: options);
         var registry = new NeverConnectingRegistry();

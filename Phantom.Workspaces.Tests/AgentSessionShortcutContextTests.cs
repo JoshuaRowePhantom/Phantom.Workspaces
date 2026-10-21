@@ -357,7 +357,7 @@ public sealed class AgentSessionShortcutContextTests
         // Same process-wide instances as the app-level path (both flow through
         // AgentServicesComposition.ComposeHostServices), not a hand-assembled bundle.
         Assert.Same(applicationServices.McpOAuthOptions, services.McpOAuthOptions);
-        Assert.Same(applicationServices.SecretProvider, services.SecretProvider);
+        Assert.Same(applicationServices.AccessBroker, services.AccessBroker);
 
         // The full composition-root bundle is present (toolset factory, MCP tool-resource factory,
         // account-upsert service, current-session context all set).

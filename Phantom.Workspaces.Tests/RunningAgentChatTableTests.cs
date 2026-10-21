@@ -12,6 +12,7 @@ using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Llm.Core.Manifest;
 using Phantom.Workspaces.Llm.Secrets;
@@ -2505,11 +2506,10 @@ public sealed class RunningAgentChatTableTests
         // #1405: opening a session via the foreground RunningAgentChatTable path must materialize the
         // ${SECRET:...} in an MCP tool connection — rewriting it to an opaque handle and invoking the
         // SecretProvider — instead of passing the raw placeholder through to the MCP transport.
-        var provider = new FakeSecretProvider();
-        provider.Secrets["GitHubToken"] = ToSecureString("resolved-token");
+        var provider = new FakeAccessBroker();
         var services = new AgentServices
         {
-            SecretProvider = provider,
+            AccessBroker = provider,
             ChatClientOverride = new DeterministicTestChatClient(),
         };
         await using var factory = new AgentChatFactory(new InMemoryAgentPersistenceStore(), services, TaskScheduler.Default);
@@ -2537,10 +2537,10 @@ public sealed class RunningAgentChatTableTests
     {
         // #1405: a definition without any ${SECRET:...} usages flows through the materialization gate
         // unchanged and never invokes the SecretProvider.
-        var provider = new FakeSecretProvider();
+        var provider = new FakeAccessBroker();
         var services = new AgentServices
         {
-            SecretProvider = provider,
+            AccessBroker = provider,
             ChatClientOverride = new DeterministicTestChatClient(),
         };
         await using var factory = new AgentChatFactory(new InMemoryAgentPersistenceStore(), services, TaskScheduler.Default);
@@ -2582,36 +2582,62 @@ public sealed class RunningAgentChatTableTests
             }
             """);
 
-    private static SecureString ToSecureString(string value)
-    {
-        var secure = new SecureString();
-        foreach (var ch in value)
-        {
-            secure.AppendChar(ch);
-        }
-
-        secure.MakeReadOnly();
-        return secure;
-    }
-
-    private sealed class FakeSecretProvider : ISecretProvider
+    private sealed class FakeAccessBroker : IAccessBroker
     {
         public int CallCount { get; private set; }
-        public Dictionary<string, SecureString> Secrets { get; } = [];
 
-        public Task<RequestSecretsResult?> RequestSecretsAsync(IReadOnlyList<SecretRequest> requests, CancellationToken cancellationToken)
+        public Task<AccessOutcome<TResult>> AcquireAsync<TResult>(
+            AccessRequest<TResult> request,
+            CancellationToken cancellationToken = default)
+            where TResult : IAccessResult
         {
             this.CallCount++;
-            var retrievers = requests
-                .Where(request => this.Secrets.ContainsKey(request.SecretName))
-                .Select(request => new SecretRetriever
+            var stored = Assert.IsType<StoredSecretAccessRequest>(request);
+            var lease = new SensitiveValueLease("resolved-token".AsMemory(), new CredentialLeaseBinding
+            {
+                AuthorizationIdentifier = new() { Value = Guid.NewGuid() },
+                MaterialGeneration = new() { Value = Guid.NewGuid() },
+                Request = new ReleasePolicyRequest
                 {
-                    SecretName = request.SecretName,
-                    Secret = _ => Task.FromResult(this.Secrets[request.SecretName]),
-                })
-                .ToArray();
+                    RequestIdentifier = new() { Value = Guid.NewGuid() },
+                    RequestGeneration = 1,
+                    Credential = stored.Credential,
+                    SourceIdentifier = stored.Sources[0].Identifier,
+                    RequestorIdentifier = stored.Requestor.Identifier,
+                    Use = stored.Use,
+                },
+            }, new FakeLeaseContext());
+            AccessOutcome<StoredSecretAccessResult> outcome = new AccessSucceeded<StoredSecretAccessResult>
+            {
+                Result = new StoredSecretAccessResult { Lease = lease },
+            };
+            return Task.FromResult(outcome is AccessOutcome<TResult> typed ? typed : throw new InvalidOperationException());
+        }
 
-            return Task.FromResult<RequestSecretsResult?>(new RequestSecretsResult(retrievers, []));
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        private sealed class FakeLeaseContext : ICredentialLeaseContext
+        {
+            public IReleaseAuthorizationPolicy Policy { get; }
+            public FakeLeaseContext()
+            {
+                var policy = new Mock<IReleaseAuthorizationPolicy>();
+                policy.Setup(value => value.ValidateAsync(
+                    It.IsAny<ReleaseAuthorizationIdentifier>(),
+                    It.IsAny<ReleasePolicyRequest>(),
+                    It.IsAny<CancellationToken>()))
+                    .ReturnsAsync(ReleaseAuthorizationValidation.Valid);
+                this.Policy = policy.Object;
+            }
+
+            public ValueTask<bool> IsCurrentGenerationAsync(
+                CredentialMaterialGenerationIdentifier generation,
+                CancellationToken cancellationToken) => ValueTask.FromResult(true);
+
+            public ValueTask<UserAuthorizationRequestIdentifier> RequireAsync(
+                ReleasePolicyRequest request,
+                CredentialLeaseRequiredActionKind action,
+                CancellationToken cancellationToken) => ValueTask.FromResult(new UserAuthorizationRequestIdentifier { Value = Guid.NewGuid() });
         }
     }
 
