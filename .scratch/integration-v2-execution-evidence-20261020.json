@@ -1,0 +1,81 @@
+{
+  "codeCheckpoint": "079f20811faa410455c15c5035d51783355de1cd",
+  "baseline": "e8ed98d70fe885ce37b12410e82f63317a923db5",
+  "appRootFinalPassed": 200,
+  "appRootStabilityRuns": 10,
+  "appRootStabilityPassedPerRun": 200,
+  "corePassed": 171,
+  "coreStabilityRuns": 10,
+  "coreStabilityPassedPerRun": 171,
+  "largerAppTargetInitialPassed": 312,
+  "largerAppTargetStability": "Failed run5/10; exact causal fixture correction079f2081 subsequently targeted16 and root200x10 plus exact-final-source200 pass. Not claimed312x10.",
+  "knownRemainingFailures": "14 provider-owned GitHub private fixture scenarios and one root-owned stale401 replay fixture; these were explicitly excluded from bounded root200, not represented as resolved.",
+  "dumpCount": 0,
+  "logs": [
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-build-initial.log",
+      "bytes": 12610,
+      "sha256": "CFCEC16190AC6942EE290507F92D3FDECC6A192FFBC55D16F7A18BB10A8869ED"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-build-token-fixtures.log",
+      "bytes": 15317,
+      "sha256": "4BCD52CFB71DEFB4FEB1A41C8AD697853F532C7304ED975266AD280D77AEF0A8"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-build-policy-signature.log",
+      "bytes": 5987,
+      "sha256": "A4ABEE7D62467979AF45E5A9C680864E56F85641901F8898B7AB145C2596B916"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-provider-initial.log",
+      "bytes": 83809,
+      "sha256": "EBD47E04F1FF1F4F550606B05462D1BE1A7EA6602F41A7EB31FEB2AF3991FBE9"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-provider-second.log",
+      "bytes": 86749,
+      "sha256": "CA535BC0834A1051D2F573ED373C41A6D4523BC2D7C4CF3626911794D37D37A0"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-app-passing.log",
+      "bytes": 6278,
+      "sha256": "009D2D2F080C1535AC3E321367ACCCB47040EF081542F58B665B59BBA7610418"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-app-stability.log",
+      "bytes": 4236,
+      "sha256": "A00883A12354AA57A6A179AA20B5A4E121728B41BA6A284980D5B79180643CBF"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-app-stability-failure.log",
+      "bytes": 1799,
+      "sha256": "7A89CF85026744AF5E8E61B00D3ED0253DC2CC0BFDE83F56FCAAD7CBEA30A03C"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-cache-shutdown-passing.log",
+      "bytes": 6275,
+      "sha256": "DD3B78D2FAC83CDE4FE6920EA58C6AACAC055D60EE75F6F6FB513EAA1F153219"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-root-stability.log",
+      "bytes": 3634,
+      "sha256": "BAB95EA191745956117A0D8D054D21332DF15B6316F9B3471AAF61D888856BB8"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-root-final-exact-source.log",
+      "bytes": 6278,
+      "sha256": "59A1D67C6468EA4F10AB3A03FDFDDC29B32A42A9F95CD7EFB6D0F566A9006EDF"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-core-passing.log",
+      "bytes": 5984,
+      "sha256": "E6E6B4395D28820F4FBF0D3D382FFF77B9CF675C74DC5B696FCC03AB1ACE1B11"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-core-stability.log",
+      "bytes": 3070,
+      "sha256": "6F47EC9236418020D0C60FEC242540CB61F53D0CE4DA48B2166C027AB52FA01F"
+    }
+  ]
+}

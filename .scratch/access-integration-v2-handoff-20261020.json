@@ -3,7 +3,8 @@
   "worktree": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020",
   "branch": "integration/access-arc-ready-v2-20261020",
   "baseline": "e8ed98d70fe885ce37b12410e82f63317a923db5",
-  "status": "Integration implemented; actual merged validation in progress. Not whole-arc acceptance.",
+  "status": "CLEAN coherent checkpoint completed: actual merged-root App200 passed ten consecutive stability runs plus a fresh exact-final-source200 build/run; Core171 passed initial plus ten stability runs. Larger App312 initial target passed, but its first stability run5 exposed the now-corrected causal administration fixture race and is not claimed10green. Independent bounded merged-graph reviews clear. Known remaining private GitHub/tunnel fixture and owner-source followups explicitly remain open; not whole-arc acceptance.",
+  "reviewedCodeCheckpoint": "079f20811faa410455c15c5035d51783355de1cd",
   "sourceToLocal": {
     "19acd7f6b1940290d08c43dfc4e9f535d56d03f3": "ac151c04",
     "083c040727028de4694192bd378e6d23d9b96529": "9202d011",
@@ -17,21 +18,92 @@
     "517a389c881b6e8db81b845ca20025939d1c744a": "14cea9d9",
     "83ebf2bdbe86455ad1245db83a8d2e7760886d62": "4a6739d9",
     "eccf369b45038ee0a02f0a2d62d98cd2285add92": "dd0610ac",
-    "51b247b7589d6ea3d9b584fb846278c49fb38002": "9e367e38"
+    "51b247b7589d6ea3d9b584fb846278c49fb38002": "9e367e38",
+    "dee08c2d7cd86a7d21fc6eb068361988436c24c1": "6aa87da6",
+    "35ff498f610ff608ea66c3f5d1f4c1e77e0b6c10": "a2f02087",
+    "d2cbc6b88b6519ead578f72dc5fdd2b92aa7db95": "f13a1a5a",
+    "fa2b26f07dd05be7b2571eea05df88c5b0dadad9": "e5b78e38",
+    "f4cb599a174146ce44171e5065e8c23e8fc7d121": "9f8fd81c",
+    "e8e97555c28c5482dac810bd92bc74470ff27faa": "d3ef0ecd",
+    "1ea4540c246d12864658a007978f2485c8541bdc": "73042c2e",
+    "aa7a5ca07b516c2687d148a51f8705d6a12428f1": "920642c6",
+    "e44b3d2e4481e3f5f63bbe557acc85fa24aaa8bf": "079f20811faa410455c15c5035d51783355de1cd"
+  },
+  "equivalentSkipped": {
+    "245e6b6f2e55098c1221b0a04381d7fc5009577d": "Already satisfied by baseline770d28be unique isolated policy path, optional explicit path plus causal row observation. Conflict inspected; skipped duplicate rather than replacing newer fixture.",
+    "558d1fdf9b0402bd91efd6c82db66e2f8dd734c9": "Explicit validation-only snapshot NOT imported.",
+    "615443fdf70b50fe304dd080ee0da12d256772d6": "Excluded duplicate lifetime NOT imported."
+  },
+  "inheritedRootSourceToBaseline": {
+    "31d6397ad3c3e1c696f2cf804fe985bc0a3afecd": "511abc0e",
+    "0e3447211516f4a09cb4437d4f0d4259fa721bd2": "d4efbaa9",
+    "438c68ef1c1b3bab1a6108614f93271be89c19e7": "51498520",
+    "58a3cbfdbb77306ef2866d8cc63b0c35b937da4a": "32551c66",
+    "8f56bba35106dc6e54998baac9a0a8198c9624d6": "3828faa4 four Web.Client files plus54629b0e remaining root lifecycle/scope; coherent final caller resolutionac151c04",
+    "c26bc0cae8e8edde8f3a0ce4f900e7c418afe1b7": "832b9631",
+    "3db79f13ea2485f95a02eca4dee0ba76360f96e2": "fc0e45e6",
+    "bb59318df18690a2693eac9cc3bb0c149fe6fd63": "6eec8587",
+    "a615b3a6b4ce2f898b919c8ef16930582aaedfde": "173a34b2",
+    "ae89935618d175b79f1239055715d2be7dfe1e6e": "3be1f4b0",
+    "b97a4e362a5d58fab653371f7c2918c3d0e218f9": "34575bea",
+    "4804fdeb70bc3fb92d0213fd2a1edddf1ad98a2b": "0f192d96",
+    "b85e30b4c79b471d51675151ef339222ab14b1c1": "Inherited exact selected-source Connect key correction; preserved and enhanced real canonical A/B remint0fcfd0d8",
+    "3955b497": "Inherited six typed caller checkpoint preserved through coherent root conflict resolution"
   },
   "sharedReconciliation": "Only excluded 99405fc9 and 6f247104 deltas were reversed in index, without committing an intermediate rollback; accepted468/2be/941/8bc were applied in exact order. A test helper conflict preserved both independent RefineInspection and accepted InspectOverride. The three permit/context/coordinator production files exactly match accepted8bc. Independent broker renewal, cancellation, lifetime and root changes retained.",
   "rootMerge": "Preserved typed caller RequirePresentationScope fail-closed exception, exact ownsHttpClient lifetimes, source-pinned Connect key and Perform publication barrier. Integrated actual source-route rebound, same registered OAuth/MCP graph and live delegate. SDK five typed arguments retain remote catalog; AccessPresentationScopeProvider remains alias to root delegate. MCP cache aggregate already includes same registered object through existing OfType projection; explicit root identity regression added.",
   "validation": {
     "initial": "0 tests; duplicate MainWindow import diagnosed by isolated read-only specialist and removed.",
     "second": "0 tests; accepted BindExecution optional cancellation token exposed xUnit1051 in four provider fixture files. Isolated read-only diagnosis; explicit TestContext token added without assertion changes.",
-    "third": "Running; MCP recording decorator lacks real acquisition-policy interface and causes deterministic early AccessDenied plus downstream barrier timeouts. Isolated read-only diagnosis; forward exact actual wrapped policy interface. No retry/sleep/assertion weakening."
+    "third": "260 executed,212 passed48failed. MCP recording decorator lacked real acquisition-policy interface; isolated read-only diagnosis found deterministic early AccessDenied plus downstream barrier timeouts. Forward actual wrapped policy; initial forwarding signature compile error independently diagnosed and corrected in70aad2a3.",
+    "fourth": "293 executed276passed17failed.14 GitHub private cases have fabricated parent account incompatible with actual private identity, one stale401 tunnel fixture unconditionally SetResult on legitimate second send, two inherited remembered-fallback fixtures lacked selected-source identity metadata. All received isolated read-only diagnosis. Own remembered fixture correcteddb8c66b4; other owned fixes requested without duplicating work.",
+    "appCurrent": {
+      "passed": 312,
+      "failed": 0,
+      "log": ".scratch\\integration-v2-app-passing.log",
+      "stability": ".scratch\\integration-v2-app-stability.log",
+      "selectors": "AccessHostServicesTests,HostConfiguredAccessGraphTests,AccessBrokerTests,ProviderAcquisitionCoordinatorTests,EntraPrivateCapabilityTests,EntraCredentialAccessExecutorTests,DevTunnelCredentialConsumerTests,DevTunnelConnectMintSessionTests.ConnectMint_,ExportedManagementIdentity_401InvalidatesExactGeneration,DevTunnelConnectCredentialAccessExecutorTests,McpOAuthCacheAdministrationTests,OAuthPrincipalConfigurationTests,OAuthCredentialAccessExecutorTests,AgentServicesCompositionTests,ApplicationServicesConstructionTests,GitHubSelectedSourcePolicyTests,OAuthCallbackBindingFactoryTests,McpOAuthAttemptTests,LegacyAuthorizationUiRemovalTests,HostAgentServicesAuthorizationTests,UserAuthorizationRegistryTests",
+      "boundary": "Explicit bounded selection while provider-owner private GitHub and stale401 fixture corrections remain pending; prior failing broad selection preserved, not claimed green or hidden.",
+      "stabilityFailure": "Initial312 stability passed runs1-4 then run5 failed only admin Shutdown_CancelsAndJoinsAdmittedDelete. Isolated read-only diagnosis: Assert.False(shutdown.IsCompleted) did not establish actual linked ReadAsync token cancellation propagation before releasing backend. Source owner had already committed exact three-line causal handshake e44; own uncommitted equivalent discarded, exact e44 imported once as079f2081.16 related tests pass. Initial312 stability is NOT claimed10green.",
+      "stabilityFailureEvidence": ".scratch\\integration-v2-app-stability-failure.log"
+    },
+    "appFocusedRoot": {
+      "passedPerRun": 200,
+      "stabilityRuns": 10,
+      "failed": 0,
+      "log": ".scratch\\integration-v2-root-stability.log",
+      "exactFinalSourceBuildLog": ".scratch\\integration-v2-root-final-exact-source.log",
+      "exactFinalSourcePassed": 200,
+      "binaryProvenance": "Ten stability runs used the exact causal handshake semantics first built locally. The subsequently discovered owner's identical e44 leaf differed only by local-variable name registration versus cancellation and was consumed once as079f2081 instead of committing a duplicate. A fresh final exact079f2081 source build/run then passed200; no production or behavioral test delta occurred between these binaries.",
+      "selectors": "AccessHostServicesTests,HostConfiguredAccessGraphTests,AccessBrokerTests,ProviderAcquisitionCoordinatorTests,EntraPrivateCapabilityTests,EntraCredentialAccessExecutorTests,DevTunnelCredentialConsumerTests,DevTunnelConnectMintSessionTests.ConnectMint_,ExportedManagementIdentity_401InvalidatesExactGeneration,DevTunnelConnectCredentialAccessExecutorTests,McpOAuthCacheAdministrationTests,AgentServicesCompositionTests,ApplicationServicesConstructionTests,GitHubSelectedSourcePolicyTests,LegacyAuthorizationUiRemovalTests,HostAgentServicesAuthorizationTests,UserAuthorizationRegistryTests",
+      "reason": "Focused actual merged graph/broker/private proof/caller/administration/legacy regression matrix after causal handshake correction. Source OAuth/config/native protocol tests had already passed in312 selection; unchanged source is not repeatedly rerun solely to increase totals."
+    },
+    "coreCurrent": {
+      "passed": 171,
+      "failed": 0,
+      "stabilityRuns": 10,
+      "passedPerRun": 171,
+      "log": ".scratch\\integration-v2-core-passing.log",
+      "stability": ".scratch\\integration-v2-core-stability.log",
+      "selectors": "WorkerCopilotProviderAccessTests,AgentFactoryAccessTests,RemoteCopilotLifecycleTests,AgentDefinitionSecretMaterializerTests,CredentialManagerTokenCacheTests,EntraCredentialSessionTests,EntraBrowserTokenAcquirerTests,McpToolContextProviderTests,McpToolIntegrationTests"
+    },
+    "runner": "Only existing scripts\\run-tests.ps1 explicit TestProject/unquoted comma-separated TestNames and existing Skills run-tests-stability.ps1 Runs10 Modefull NoBuild with explicit TestProject default; no direct dotnet test.",
+    "dumps": "Recursive scans before runners and during validation found no .dmp files; none discarded."
   },
+  "independentReview": [
+    "Fresh read-only code-review e8ed98d7..db8c66b4: no significant NEW merged/conflict-resolution or coherent-graph issues; focused UI deletion/replacement tests also inspected. Already-cleared source implementations and known pending source blockers explicitly excluded.",
+    "Fresh read-only code-review db8c66b4..0fcfd0d8 actual canonical selected-source A/B remint test: no significant issues. No builds/tests run by either reviewer.",
+    "Fresh read-only code-review079f2081 exact three-line causal actual-token cancellation acknowledgment: no significant issues; no production changes."
+  ],
   "openOwnerWork": [
     "Generic OAuth pending binding-startup join and cleanup faults: consume only cleared generic hunks when authorized; preserve independently cleared MCP lifecycle.",
-    "GitHub full canonical async validation and unpublished TResult ownership pending provider owner.",
+    "GitHub full canonical async validation and unpublished TResult ownership plus14 private fixture cases pending provider owner35ff; candidate0879baed observed committed, clearance not yet received.",
+    "Root owner5a25 asked for concrete immutable stale401 fixture replay correction; no dirty snapshot consumed.",
     "MCP missing-authority/token metadata canonical matching pending owner.",
     "Configured OAuth factory independent Audience correction pending owner.",
-    "UI and SDK/App-provider dead legacy removals require actual ready commits and bounded review."
+    "UI deletion integrated and independently bounded-review clear. SDK explicitly handed final Core ISecretProvider/GitHubAuthTokenResolver/test deletion scope back to integrator at23:54, but prerequisite App SecretProvider/test deletion remains35ff-owned; concrete immutable prerequisite/handback requested, no independent cross-owner deletion."
   ],
+  "executionEvidenceManifest": ".scratch\\integration-v2-execution-evidence-20261020.json",
+  "cleanState": "All code is immutable through079f20811faa410455c15c5035d51783355de1cd; final metadata commit records this handoff and evidence only. No active cherry-pick/revert/unmerged paths; git diff --check clean; exact submodule pins preserved.",
   "safety": "No live checkout, auth, browser/UI/provider actions, features advancement, push/release/closure or rewritten history. Normal submodule init preserves Dock8c8d11 and MXC29702c3."
 }
