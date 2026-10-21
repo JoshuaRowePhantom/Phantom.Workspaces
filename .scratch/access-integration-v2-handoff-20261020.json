@@ -49,6 +49,16 @@
     "review": "Fresh independent read-only review of48e0b75a..0aa7f5f7 plus exact paired caller/fixture delta: no significant issues found. Reviewer did not edit or build/test.",
     "boundary": "c4d b382 clearance is ONLY post-callback cancellation/local-proof rejection result cleanup. Canonical asynchronous actual-policy/provisional validation and post-final-await generation/expiry checks remain owner35ff pending; these are not resolved by this pair."
   },
+  "latestDirectUiAndCoreAuthority20261021": {
+    "authority": "Direct parent message2026-10-21T01:00:11-07:00 supersedes conflicting earlier peer/file source-review and legacy-ownership wording.",
+    "uiSource": "fa2b26f07dd05be7b2571eea05df88c5b0dadad9",
+    "uiLocal": "e5b78e38",
+    "rootPrerequisiteSource": "9784130df73a4af2776619f7c503fa74b29c269d",
+    "rootPrerequisiteLocal": "a885edb6",
+    "uiRequestedSourceReview": "PENDING new bounded c4d review assigned by parent. No c4d fa2 clearance claimed until actual receipt. Prior independent integration-delta reviewer inspected UI deletion/replacement tests; that historical bounded review is not substituted for this newly requested source receipt.",
+    "uiScope": "Only disconnected old UI/dialog/host/enumeration/converter/tests retired. Preserve actual native store/backend, provider caches and Core contracts; do not restore old UI fallback.",
+    "coreDependency": "Per latest direct parent instruction, SDK Core ISecretProvider/GitHubAuthTokenResolver production deletion remains BLOCKED on immutable35ff App SecretProvider removal. Do not delete other owners' classes or treat earlier broad legacy handback wording as permission to bypass this dependency. No such production deletions made here."
+  },
   "equivalentSkipped": {
     "245e6b6f2e55098c1221b0a04381d7fc5009577d": "Already satisfied by baseline770d28be unique isolated policy path, optional explicit path plus causal row observation. Conflict inspected; skipped duplicate rather than replacing newer fixture.",
     "558d1fdf9b0402bd91efd6c82db66e2f8dd734c9": "Explicit validation-only snapshot NOT imported.",
@@ -157,7 +167,7 @@
     "Root owner5a25 asked for concrete immutable stale401 fixture replay correction; no dirty snapshot consumed.",
     "MCP missing-authority/token metadata canonical matching pending owner.",
     "Configured OAuth factory independent Audience correction pending owner.",
-    "UI deletion integrated and independently bounded-review clear. SDK explicitly handed final Core ISecretProvider/GitHubAuthTokenResolver/test deletion scope back to integrator at23:54, but prerequisite App SecretProvider/test deletion remains35ff-owned; concrete immutable prerequisite/handback requested, no independent cross-owner deletion."
+    "UI fa2 integrated after root978; newly parent-assigned c4d bounded SOURCE review PENDING per direct01:00:11 instruction. Historical independent integration-delta review remains distinct and is not represented as this pending source receipt. SDK Core ISecretProvider/GitHubAuthTokenResolver production deletion still awaits immutable35ff App SecretProvider removal; preserve active native/provider caches and Core contracts, no cross-owner classes deleted."
   ],
   "executionEvidenceManifest": ".scratch\\integration-v2-execution-evidence-20261020.json",
   "cleanState": "All source code is immutable through a171c3dd540c433bb6fa7341edf10f439d513d24; final metadata commit records this handoff and evidence only. No active cherry-pick/revert/unmerged paths; git diff --check clean; exact submodule pins preserved.",
