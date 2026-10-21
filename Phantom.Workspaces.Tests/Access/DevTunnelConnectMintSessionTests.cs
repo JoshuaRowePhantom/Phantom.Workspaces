@@ -62,13 +62,7 @@ public sealed class DevTunnelConnectMintSessionTests
             Account = policy.Credential.AccountIdentifier,
             Protocol = ProviderProtocolKind.TunnelConnect,
         };
-        var context = new Mock<ICredentialExecutionContext>();
-        context.SetupGet(value => value.PolicyRequest).Returns(policy);
-        context.SetupGet(value => value.RequestIdentifier).Returns(policy.RequestIdentifier);
-        context.SetupGet(value => value.Revision).Returns(policy.RequestGeneration);
-        context.SetupGet(value => value.AcquisitionGeneration).Returns(generation);
-        context.SetupGet(value => value.Requestor).Returns(fixture.Request.Requestor);
-        context.SetupGet(value => value.Use).Returns(fixture.Request.Use);
+        var context = new UnboundExecutionContext(policy, generation, fixture.Request.Requestor);
         var permit = new ProviderInteractionPermit(policy.RequestIdentifier, policy.RequestGeneration,
             CredentialExecutorKind.DevTunnelConnect, generation, key, () => true);
         if (bindExecution)
@@ -76,7 +70,7 @@ public sealed class DevTunnelConnectMintSessionTests
             permit = permit.BindExecution(() => true, TestContext.Current.CancellationToken);
         }
         Assert.IsType<DevTunnelConnectMintDenied>(await fixture.Session.MintAsync(
-            fixture.Request, source, nullContext ? null! : context.Object, key, permit,
+            fixture.Request, source, nullContext ? null! : context, key, permit,
             TestContext.Current.CancellationToken));
         Assert.Equal(0, fixture.Source.Acquisitions);
         Assert.Equal(0, fixture.ManagementCalls);
@@ -327,6 +321,41 @@ public sealed class DevTunnelConnectMintSessionTests
         }
         Assert.Equal(2, fixture.Source.Acquisitions);
         Assert.Equal(2, fixture.ManagementCalls);
+    }
+
+    private sealed class UnboundExecutionContext(
+        ReleasePolicyRequest policy,
+        Guid generation,
+        AccessRequestor requestor) : ICredentialExecutionContext
+    {
+        public UserAuthorizationRequestIdentifier RequestIdentifier => policy.RequestIdentifier;
+        public long Revision => policy.RequestGeneration;
+        public Guid AcquisitionGeneration => generation;
+        public AccessRequestor Requestor => requestor;
+        public CredentialUseDescriptor Use => policy.Use;
+        public AccessPresentationScope PresentationScope => AccessPresentationScope.Runtime;
+        public ReleasePolicyRequest PolicyRequest => policy;
+        public IReleaseAuthorizationPolicy Policy => throw new InvalidOperationException("Unbound parent cannot access policy.");
+
+        public ValueTask<AccessOutcome<TResult>> AcquireDependencyAsync<TResult>(
+            AccessRequest<TResult> request,
+            CancellationToken cancellationToken) where TResult : IAccessResult =>
+            throw new InvalidOperationException("Unbound parent cannot acquire a dependency.");
+
+        public ValueTask<ProviderAcquisitionOutcome> ExecuteProviderAcquisitionAsync(
+            IProviderAcquisitionOperation operation,
+            ProviderInteractionPermit permit,
+            CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("Unbound parent cannot execute provider work.");
+
+        public ValueTask<ProviderAcquisitionOutcome> ExecutePrivateProviderDependencyAsync(
+            IProviderAcquisitionOperation operation,
+            ProviderInteractionPermit parentGenerationPermit,
+            CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("Unbound parent cannot execute private provider work.");
+
+        public ICredentialLeaseContext CreateLeaseContext(ICredentialGenerationValidator generationValidator) =>
+            throw new InvalidOperationException("Unbound parent cannot create a lease.");
     }
 
     private sealed class Fixture : IAsyncDisposable
