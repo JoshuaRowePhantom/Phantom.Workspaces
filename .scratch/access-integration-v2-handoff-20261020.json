@@ -3,8 +3,8 @@
   "worktree": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020",
   "branch": "integration/access-arc-ready-v2-20261020",
   "baseline": "e8ed98d70fe885ce37b12410e82f63317a923db5",
-  "status": "CLEAN checkpointceb8000f: current BOTH Management/Connect exact-generation HTTP guards confirmed unchanged from owned1e9923ef; fresh real-broker regressions now prove one handler acquisition, exact rejectedA lease disposed, old response disposed and independently rotatedB usable. HTTP82 initial plus82x10 and fresh two-handler net review clear; no duplicate production fix or withdrawn HEAD used. Prior CLI/root151x10, Transport11x10, MCP99x10, Core43x10 and generic105x10 preserved with exact source provenance. Separate broker shutdown239 run5, GitHub final-await High and latest direct Core App prerequisite remain blockers. Not whole-arc acceptance.",
-  "reviewedCodeCheckpoint": "ceb8000fcb0bab5c7fafdde802ee0ae09c881230",
+  "status": "CLEAN checkpointe6515e9a: exact immutable rootabd864f3 regression consumed once; actual host late MCP registration, metadata-only aggregate listing, original-generation deletion and unchanged authorization rows/release memory now pass100 initial plus100x10. Current parent admin handoff also explicitly reports exactb515 facet source clearance, separate from ac9 and already-received9cbb clearance; stale pending relays do not downgrade those receipts. Production unchanged since0434a855. Prior HTTP82x10, CLI/root151x10, Transport11x10, MCP99x10, Core43x10 and generic105x10 retain original provenance. Separate broker shutdown239 run5, GitHub final-await High and latest direct Core App prerequisite remain blockers. Not whole-arc acceptance.",
+  "reviewedCodeCheckpoint": "e6515e9aaef72d63dc3efacbd3f46edea90dca61",
   "sourceToLocal": {
     "19acd7f6b1940290d08c43dfc4e9f535d56d03f3": "ac151c04",
     "083c040727028de4694192bd378e6d23d9b96529": "9202d011",
@@ -37,7 +37,8 @@
     "bd1b901c81437bd1ce51c3a76253234aac58a5d2": "0434a8550f4a8977d9451c38be585adfbb0bfb71 (ONLY generic executor/tests plus common factory seam)",
     "3a368e44effbc26dcdc0c9704297e38293f1d9ce": "0434a8550f4a8977d9451c38be585adfbb0bfb71 (ONLY generic executor/tests)",
     "9d470c2f6e8ce25f695c7116be0c3ab75a6a5ce1": "0434a8550f4a8977d9451c38be585adfbb0bfb71 (generic-only exact correction)",
-    "04fca10642f1630dc2f8d95c79a95a3d4f8542c4": "0434a8550f4a8977d9451c38be585adfbb0bfb71 (generic-only exact final drain correction)"
+    "04fca10642f1630dc2f8d95c79a95a3d4f8542c4": "0434a8550f4a8977d9451c38be585adfbb0bfb71 (generic-only exact final drain correction)",
+    "abd864f31fad996993fede97e511db287b8c57e0": "e6515e9aaef72d63dc3efacbd3f46edea90dca61"
   },
   "gitHubOwnershipPair20261021": {
     "coherentCodeCheckpoint": "cbce2a686879be78873d45f232bac3dc735e3ca0",
@@ -84,6 +85,18 @@
     "intake": "Normal conflict-free additive cherry-pick. Catalog, actual canonical factory and test blobs exactly equal cleared9cbb. Existing newer MCP executor changed ONLY by adding BindToCallerDeclarations record property; all d42/ac9/b515 native disposal, work admission, cache administration and registry sharing preserved.",
     "behavior": "Canonical direct/delegate factories bind explicit absence to null authority/token metadata; immutable registration rejects policy rebind, identity/source/cache remain separately partitioned, trusted advanced override policy remains explicit and multiple matches fail closed.",
     "validation": "Actual merged MCP catalog/discovery/attempt/commit/admin/executor/native ownership plus same registered root graph99/99 and ten consecutive99 stability passes. No dumps or failures."
+  },
+  "actualRootMcpAdministration20261021": {
+    "source": "abd864f31fad996993fede97e511db287b8c57e0",
+    "local": "e6515e9aaef72d63dc3efacbd3f46edea90dca61",
+    "actualSourceParent": "d6ef3459d896b9d30d3d710ae853111a290529ac",
+    "provenance": "Root owner's actualMcpCacheAdministration20261020 in its absolute handoff and parent admin handoff newActualRootAcceptance. Consume only immutable committed92-line HostConfiguredAccessGraphTests delta, never dirty root snapshots. Normal conflict-free cherry-pick; complete resulting test file exactly equals abd source. Incidental prerequisite0d0 in original message is a label typo, not a commit/alias.",
+    "behavior": "Actual AccessHostServices graph registers a late MCP tool through its real catalog, warms that exact configuration's real generation cache over owned in-memory platform store, and administers it through the existing root aggregate. List adds zero material reads; Delete removes the original listed generation; authorization rows and release memory remain unchanged. Extends prior same-object root identity assertion with actual functional cache behavior, without a new facet/graph, fake grant/revocation, live profile/provider/browser/network action.",
+    "overlapReconciliation": "Do NOT duplicate facet1d8/b515 or import whole d6ef cache/fixture packet. Existing accepted ac9 canonical cancellation check remains immediately AFTER awaited authoritative read and BEFORE null/early return, stronger than d6ef's placement after null branch. Existing ac9 Core late-invalidation regression and e44 actual backend-token cancellation handshake retained; these are functional prerequisite coverage, not a claim that d6ef blobs are byte-equivalent.",
+    "sourceReview": "Root owner reports final independent bounded read-only review of its final cache/fixture/root-regression delta with no significant issues. Source unchanged by this conflict-free import and exact test blob verified. No new source review of already-cleared facet/catalog algorithms launched; owner Core15/App51x10 and integrator100x10 are separate executions, not reviewer execution.",
+    "facetSourceReceipt": "Current ABSOLUTE parent access-admin-composition-handoff-20261020.json providerFacetCoordination.mcp.latestBoundedReviewReported explicitly records reviewer5de source CLEAR for exact b515694601fe1a3e8f4a887fd6694742fbcf803b against ac9cd093: same-executor metadata-only dynamic catalog, opaque original-generation routing, shutdown join and safe failures. Read-only, no builds/tests/live interaction. Distinct from ac9-only23:39 receipt, original9b/a89 review and whole-arc acceptance. Stale routingStatus pending9cbb is superseded by actual direct5de9cbb clearance already received and recorded.",
+    "validation": "Fresh explicit-project100/100 plus ten consecutive100 full/NoBuild stability passes at exact e6515e9a. Zero dumps; production remains0434a855 unchanged.",
+    "boundary": "Actual root MCP cache aggregate behavior and current catalog/lifecycle compatibility only. Does not resolve separate broker shutdown239 run5 or GitHub final-await High, authorize App/Core cross-owner deletion, or claim whole discovery/private/full-arc acceptance."
   },
   "readyProviderCorrections20261021": {
     "codeCheckpoint": "1e9923ef6b018e629b19e7c3539aec9c714ac74e",
@@ -211,6 +224,18 @@
       "stability": ".scratch\\integration-v2-mcp-canonical-matching-stability.log",
       "selectors": "McpOAuthCredentialRequestCatalogTests,McpOAuthCacheAdministrationTests,McpOAuthCredentialAccessExecutorTests,McpOAuthCredentialAccessExecutorOwnershipTests,McpOAuthProviderDiscoveryTests,McpOAuthAttemptTests,McpOAuthCacheCommitCoordinatorTests,AccessHostServicesTests,HostConfiguredAccessGraphTests"
     },
+    "actualRootMcpAdministration": {
+      "codeCheckpoint": "e6515e9aaef72d63dc3efacbd3f46edea90dca61",
+      "productionCheckpoint": "0434a8550f4a8977d9451c38be585adfbb0bfb71",
+      "passed": 100,
+      "failed": 0,
+      "stabilityRuns": 10,
+      "passedPerRun": 100,
+      "log": ".scratch\\integration-v2-real-root-mcp-administration-tests.log",
+      "stability": ".scratch\\integration-v2-real-root-mcp-administration-stability.log",
+      "selectors": "McpOAuthCredentialRequestCatalogTests,McpOAuthCacheAdministrationTests,McpOAuthCredentialAccessExecutorTests,McpOAuthCredentialAccessExecutorOwnershipTests,McpOAuthProviderDiscoveryTests,McpOAuthAttemptTests,McpOAuthCacheCommitCoordinatorTests,AccessHostServicesTests,HostConfiguredAccessGraphTests",
+      "boundary": "Actual registered late-tool configuration/cache through real root aggregate, zero-read metadata listing and exact-generation deletion with unchanged authorization rows/release memory. Owned in-memory store only; not live provider acquisition or a substitute for blocked full239 acceptance."
+    },
     "readyProviderApp": {
       "codeCheckpoint": "1e9923ef6b018e629b19e7c3539aec9c714ac74e",
       "initialPassed": 239,
@@ -314,6 +339,6 @@
     "Independent registered CLI/root/worker-broker151x10 and real hermetic Transport-project worker round-trips11x10 now executed at0434a855. After root/GitHub corrections and required legacy prerequisites, rerun the complete actual private/HTTP target and relevant affected final-source graph selectors; current earlier-checkpoint passes do not substitute for final full acceptance."
   ],
   "executionEvidenceManifest": ".scratch\\integration-v2-execution-evidence-20261020.json",
-  "cleanState": "All source/test code is immutable throughceb8000fcb0bab5c7fafdde802ee0ae09c881230; production remains unchanged since0434a855 and both HTTP guards since1e9923ef. Final metadata commit records handoff/evidence only. No active cherry-pick/revert/unmerged paths; git diff --check clean; exact submodule pins preserved.",
+  "cleanState": "All source/test code is immutable throughe6515e9aaef72d63dc3efacbd3f46edea90dca61; production remains unchanged since0434a855 and both HTTP guards since1e9923ef. Latest root test file exactly equals immutableabd864f3 source; final metadata commit records handoff/evidence only. No active cherry-pick/revert/unmerged paths; git diff --check clean; exact submodule pins preserved.",
   "safety": "No live checkout, auth, browser/UI/provider actions, features advancement, push/release/closure or rewritten history. Normal submodule init preserves Dock8c8d11 and MXC29702c3."
 }

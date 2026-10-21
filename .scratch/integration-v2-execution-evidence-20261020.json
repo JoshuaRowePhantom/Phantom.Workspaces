@@ -1,6 +1,7 @@
 {
-  "codeCheckpoint": "ceb8000fcb0bab5c7fafdde802ee0ae09c881230",
+  "codeCheckpoint": "e6515e9aaef72d63dc3efacbd3f46edea90dca61",
   "productionCheckpoint": "0434a8550f4a8977d9451c38be585adfbb0bfb71",
+  "historicalHttpExactGenerationCodeCheckpoint": "ceb8000fcb0bab5c7fafdde802ee0ae09c881230",
   "historicalMcpMatchingCodeCheckpoint": "af3c4a47ed231101bb4bee4edcceac517dd43794",
   "readyProviderCodeCheckpoint": "1e9923ef6b018e629b19e7c3539aec9c714ac74e",
   "historicalGitHubRealCallerCodeCheckpoint": "a171c3dd540c433bb6fa7341edf10f439d513d24",
@@ -25,6 +26,10 @@
   "mcpCanonicalMatchingPassed": 99,
   "mcpCanonicalMatchingStabilityRuns": 10,
   "mcpCanonicalMatchingStabilityPassedPerRun": 99,
+  "actualRootMcpAdministrationPassed": 100,
+  "actualRootMcpAdministrationStabilityRuns": 10,
+  "actualRootMcpAdministrationStabilityPassedPerRun": 100,
+  "actualRootMcpAdministrationBoundary": "Exact immutable rootabd864 regression via e6515e9a exercises actual late registered configuration cache through existing root aggregate. Metadata List adds zero reads, exact generation Delete leaves rows/memory unchanged. Real in-memory backend only; production unchanged0434. No whole-arc acceptance.",
   "readyProviderAppInitialPassed": 239,
   "readyProviderAppStabilityPassedRuns": 4,
   "readyProviderAppStabilityFailureRun": 5,
@@ -47,6 +52,16 @@
   "httpExactGenerationProductionFix": "1e9923ef6b018e629b19e7c3539aec9c714ac74e",
   "dumpCount": 0,
   "logs": [
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-real-root-mcp-administration-tests.log",
+      "bytes": 6277,
+      "sha256": "81EB663E0AF994060AA7DBEFFE2BC7C4F8C8717F9DCC8D022DC8AB0C72C74C88"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-real-root-mcp-administration-stability.log",
+      "bytes": 3032,
+      "sha256": "0F226D8A2082E4216535EB10DA3EB3DEA9BA51DE0653211D916F2768BBD96270"
+    },
     {
       "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-exact-generation-http-tests.log",
       "bytes": 6275,
