@@ -3,7 +3,16 @@
   "worktree": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020",
   "branch": "integration/access-arc-ready-v2-20261020",
   "baseline": "e8ed98d70fe885ce37b12410e82f63317a923db5",
-  "status": "IMPLEMENTATION AND REQUESTED HERMETIC TARGETED ACCEPTANCE COMPLETE atb0078d92, including verified StoredSecret missing-source gap. Exact four-line741/cba invalidation restored without provider-history replay or weakened late-read guards; two real-broker regressions reproduce old failures and now pass. Isolated diagnosis related; bounded two-file review clear. Final exact-source App801 initial+10x801, Core160 initial+10x160 and real Transport11 initial+10x11 ALL PASS. Accepted shared/provider/generic/root/caller/CLI/scanner/legacy cuts retained;79 artifacts hash-verified including original reproduction/TRX. No owner wait or known required targeted blocker. Parent owns broader acceptance/publication; no features advancement or live-provider/OS-process acceptance claimed.",
+  "status": "NEW REQUIRED SDK GATE OPEN: reviewer7d3e Medium relayed by root5a from SDK3891: independent Agent-purpose account Upsert loses AuthorizationRequired/ReacquisitionRequired row/kind through parameterless AgentCredentialAccessException. SDK3891 exclusively owns append-only correction plus2 regressions; immutable SHA/evidence/bounded clearance pending. Existing sourceb007 and801/160/11 each initial+10 remain valid prior targeted evidence, NOT closure of this newly identified scenario. No duplicate SDK investigation/implementation or root replay; hold final arc acceptance/features/publication.",
+  "pendingSdkAgentAccountRequiredOutcomes20261021": {
+    "owner": "3891b377-81d3-407b-b1f2-9baa3c3a36db",
+    "reviewer": "7d3e, as relayed in new root5a message",
+    "finding": "Independent Agent-purpose account Upsert loses typed AuthorizationRequired/ReacquisitionRequired row/kind by throwing parameterless AgentCredentialAccessException.",
+    "expectedOwnedDelivery": "Targeted append-only correction plus two typed-required-outcome regressions; actual immutable SHA/evidence and bounded source review receipt.",
+    "status": "Pending owned immutable SDK delivery; no new SHA supplied or intake authorized yet.",
+    "integrationGate": "2042 consumes reviewed immutable delta once, preserves accepted shared/root/private/caller/source semantics, refreshes affected targeted acceptance and immutable handoff.",
+    "preserved": "Root lane frozen; existing sourceb007 and79-artifact prior acceptance unchanged. No duplicated writer/review or assumption that existing closures cover this finding."
+  },
   "storedMissingSourceFollowthrough20261021": {
     "base": "8c93d38269ff37a258ab8885d89474dc75788370",
     "source": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
@@ -479,9 +488,11 @@
     "preserveMcp": "Existing independently cleared MCP d42 shared completion plus active-work/whole-acquisition/native cleanup barrier remains intact; no old bd1 MCP file or lifecycle replacement.",
     "acceptanceBoundary": "Source reviewer performed no builds/tests/edits. Integrator105 plus ten105 executions are recorded separately, not attributed to reviewer. No whole-arc acceptance."
   },
-  "openOwnerWork": [],
-  "remainingAcceptanceBoundary": "No known required source correction or targeted runtime blocker remains. Currentb007 has fresh exact-source801/160/11 each initial+10, not inferred from prior795. Parent owns broader acceptance/publication; no features refs advanced or live authentication/native profile/OS-process BYOK acceptance claimed.",
+  "openOwnerWork": [
+    "SDK3891 owned Agent-purpose account Upsert typed-required-outcome fix: await actual immutable SHA/evidence/bounded review, then2042 intake and affected final validation. No duplicate implementation."
+  ],
+  "remainingAcceptanceBoundary": "New SDK required-outcome finding remains OPEN and blocks final arc acceptance. Priorb007801/160/11 evidence does not close this newly identified scenario. Parent owns broader acceptance/publication; no features refs advanced or live authentication/native profile/OS-process BYOK acceptance claimed.",
   "executionEvidenceManifest": ".scratch\\integration-v2-execution-evidence-20261020.json",
-  "cleanState": "Final immutable source/test/productionb0078d9284de95d76a228aa9f59b51282dff0ddc retains all accepted packets/coherent legacy endpointc9/root Audience followthrough and restores exact stored missing-source invalidation. Final801/160/11 each initial+10 stability PASS, no source edits after bounded review/execution. Metadata receipt only; no active cherry-pick/revert/unmerged paths, diff checks clean, all79 hashes verified and pins exact. Prior795/766/794 and all diagnosed failures retained, including original two-case missing-source reproduction. Historical81504 remains an unaccepted partial prefix.",
+  "cleanState": "Clean pre-SDK-correction sourceb0078d9284de95d76a228aa9f59b51282dff0ddc retains accepted packets/legacy/root Audience and stored missing-source fix. Prior801/160/11 each initial+10 remain valid, but new SDK typed-outcome gate is OPEN. No source edits, active cherry-pick/revert/unmerged paths or publication;79 hashes/pins retained. Metadata gate receipt only, not final arc acceptance.",
   "safety": "No live checkout, auth, browser/UI/provider actions, features advancement, push/release/closure or rewritten history. Normal submodule init preserves Dock8c8d11 and MXC29702c3."
 }

@@ -1,6 +1,13 @@
 {
   "codeCheckpoint": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
   "productionCheckpoint": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
+  "pendingRequiredCorrections": [
+    {
+      "owner": "3891b377-81d3-407b-b1f2-9baa3c3a36db",
+      "finding": "NEW reviewer7d3e Medium, root5a relay: independent Agent-purpose account Upsert drops AuthorizationRequired/ReacquisitionRequired row/kind through parameterless AgentCredentialAccessException.",
+      "status": "Owned corrective SHA/evidence/review forthcoming. Existing801/160/11 is prior targeted evidence, not closure of this scenario. Hold arc acceptance/publication."
+    }
+  ],
   "historicalRootAudienceCheckpoint": "6efcbad52e20e98fd4a2ab9a631331b4241a7cde",
   "storedMissingSourceCorrection": {
     "base": "8c93d38269ff37a258ab8885d89474dc75788370",
@@ -53,7 +60,7 @@
   "coreStabilityPassedPerRun": 171,
   "largerAppTargetInitialPassed": 312,
   "largerAppTargetStability": "Failed run5/10; exact causal fixture correction079f2081 subsequently targeted16 and root200x10 plus exact-final-source200 pass. Not claimed312x10.",
-  "knownRemainingFailures": "NONE in requested final targeted acceptance. Original App239 run5/pre-fix751 and new two-case missing-source red reproduction remain preserved, never retrospectively called green. Isolated diagnoses related; sourceb007 restores exact741/cba missing-source hunk while retaining stronger late-read guards. Current exact-source801/160/11 each initial+10 PASS, including unchanged original identity shutdown assertion, private/mint/HTTP/CLI/root/worker and all legacy guards. Prior766/795 execution remains historical evidence; final GitHub74/root shutdown84 and root Audience correction retained.",
+  "knownRemainingFailures": "NEW required SDK gate OPEN: Agent-purpose account Upsert loses typed AuthorizationRequired/ReacquisitionRequired row/kind. SDK3891 exclusively owns correction plus2 regressions; actual SHA/evidence/review forthcoming. Prior801/160/11 counts remain valid but do NOT close new finding. Original App239/pre-fix751/two-case stored-source failures and resolved diagnoses remain preserved; accepted GitHub74/root84/root Audience/stored corrections unchanged.",
   "finalAcceptance": {
     "codeCheckpoint": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
     "appInitialPassed": 801,
@@ -68,7 +75,7 @@
     "failed": 0,
     "skipped": 0,
     "review": "Legacy/usage, provider/recovery, shutdown, actual-root Audience and latest exact two-file stored missing-source delta independently reviewed read-only; no significant issues. No source edits after final stored review and sourceb007801/160/11 each initial+10 execution.",
-    "boundary": "Complete requested hermetic targeted matrices, not every repository suite/live provider/OS-process BYOK acceptance. Parent owns acceptance/publication decision. No features advancement, push, release or issue closure."
+    "boundary": "These are completed PRIOR targeted matrices at sourceb007, not closure of newly identified SDK Agent-purpose account required-outcome Medium. That owned correction/intake/validation remains OPEN. Not every repository suite/live provider/OS-process BYOK acceptance; no features advancement/publication."
   },
   "gitHubOwnershipPairPassed": 75,
   "gitHubOwnershipPairStabilityRuns": 10,
