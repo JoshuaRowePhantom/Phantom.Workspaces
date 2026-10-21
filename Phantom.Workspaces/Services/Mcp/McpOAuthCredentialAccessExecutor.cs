@@ -22,6 +22,7 @@ internal sealed record McpOAuthProviderConfiguration
     public Uri? AuthorizationServer { get; init; }
     public Uri? AccountEndpoint { get; init; }
     public Uri? ExpectedTokenEndpoint { get; init; }
+    public bool BindToCallerDeclarations { get; init; }
     public required OAuthClientAuthentication ClientAuthentication { get; init; }
     public required IReadOnlyList<OAuthScope> Scopes { get; init; }
     public required CredentialSourceIdentifier Source { get; init; }

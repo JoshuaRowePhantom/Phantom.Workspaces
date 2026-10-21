@@ -95,6 +95,7 @@ internal sealed class McpOAuthProviderConfigurationFactory(
             Endpoint = endpoint,
             AuthorizationServer = authority,
             ExpectedTokenEndpoint = tokenEndpoint,
+            BindToCallerDeclarations = true,
             ClientAuthentication = authentication,
             Scopes = scopes,
             TransportMode = transportMode,

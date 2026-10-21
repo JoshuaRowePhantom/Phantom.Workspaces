@@ -42,6 +42,7 @@ internal sealed class McpOAuthCredentialRequestCatalog : IMcpOAuthCredentialRequ
             {
                 if (McpOAuthCredentialAccessExecutor.DescribeCredential(current).LogicalIdentifier !=
                     McpOAuthCredentialAccessExecutor.DescribeCredential(owned).LogicalIdentifier ||
+                    current.BindToCallerDeclarations != owned.BindToCallerDeclarations ||
                     !current.Cache.SharesPartitionWith(owned.Cache))
                 {
                     throw new InvalidOperationException("MCP provider configuration is already registered with different bindings.");
@@ -90,12 +91,14 @@ internal sealed class McpOAuthCredentialRequestCatalog : IMcpOAuthCredentialRequ
             _ => HttpTransportMode.StreamableHttp,
         };
         bool Matches(McpOAuthProviderConfiguration candidate) =>
-            candidate.Endpoint == endpoint && MatchesAuthority(candidate.AuthorizationServer, connection) &&
-            MatchesTokenEndpoint(candidate.ExpectedTokenEndpoint, connection.TokenUrl) &&
+            candidate.Endpoint == endpoint && MatchesAuthority(candidate.AuthorizationServer, connection, candidate.BindToCallerDeclarations) &&
+            MatchesTokenEndpoint(candidate.ExpectedTokenEndpoint, connection.TokenUrl, candidate.BindToCallerDeclarations) &&
             candidate.TransportMode == transport && MatchesClient(candidate.ClientAuthentication, connection) &&
             candidate.Scopes.Select(scope => scope.Value).Order(StringComparer.Ordinal)
                 .SequenceEqual((connection.Scopes ?? []).Order(StringComparer.Ordinal));
-        var configuration = this.GetConfigurations().SingleOrDefault(Matches);
+        var matches = this.GetConfigurations().Where(Matches).Take(2).ToArray();
+        if (matches.Length > 1) { return null; }
+        var configuration = matches.SingleOrDefault();
         if (configuration is null && this.configurationFactory is { } createConfiguration)
         {
             var created = createConfiguration(tool);
@@ -156,11 +159,18 @@ internal sealed class McpOAuthCredentialRequestCatalog : IMcpOAuthCredentialRequ
 
     private static bool MatchesAuthority(
         Uri? authority,
-        OAuthConnection connection) => connection is not PhantomOAuthConnection configured ||
-            string.IsNullOrEmpty(configured.Authority) ||
-            (Uri.TryCreate(configured.Authority, UriKind.Absolute, out var expected) && authority == expected);
+        OAuthConnection connection,
+        bool bindToCallerDeclarations)
+    {
+        var declared = (connection as PhantomOAuthConnection)?.Authority;
+        // Trusted advanced adapters may supply omitted pins; canonical first-use discovery is a distinct policy.
+        return string.IsNullOrEmpty(declared)
+            ? !bindToCallerDeclarations || authority is null
+            : Uri.TryCreate(declared, UriKind.Absolute, out var expected) && authority == expected;
+    }
 
-    private static bool MatchesTokenEndpoint(Uri? expected, string? declared) =>
-        string.IsNullOrEmpty(declared) ||
-        (Uri.TryCreate(declared, UriKind.Absolute, out var endpoint) && expected == endpoint);
+    private static bool MatchesTokenEndpoint(Uri? expected, string? declared, bool bindToCallerDeclarations) =>
+        string.IsNullOrEmpty(declared)
+            ? !bindToCallerDeclarations || expected is null
+            : Uri.TryCreate(declared, UriKind.Absolute, out var endpoint) && expected == endpoint;
 }

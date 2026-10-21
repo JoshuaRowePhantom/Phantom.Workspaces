@@ -191,6 +191,10 @@ public sealed class McpOAuthCredentialRequestCatalogTests
         }));
         Assert.Throws<InvalidOperationException>(() => catalog.RegisterConfiguration(configuration with
         {
+            BindToCallerDeclarations = true,
+        }));
+        Assert.Throws<InvalidOperationException>(() => catalog.RegisterConfiguration(configuration with
+        {
             Cache = new CredentialManagerTokenCache(store, "mcp-oauth:", "other-partition"),
         }));
         Assert.Same(configuration.Cache, catalog.FindConfiguration(configuration.Identifier)!.Cache);
@@ -242,6 +246,72 @@ public sealed class McpOAuthCredentialRequestCatalogTests
         var context = StoredSecretAccessExecutorTests.Request();
         Assert.Null(catalog.CreateRequest(Tool(false), context.Requestor, context.Use, context.PresentationScope));
         Assert.Empty(catalog.GetConfigurations());
+    }
+
+    [Theory]
+    [InlineData("token", 1, false, false)]
+    [InlineData("token", 2, false, false)]
+    [InlineData("token", 2, true, false)]
+    [InlineData("authority", 1, false, false)]
+    [InlineData("authority", 2, false, false)]
+    [InlineData("authority", 2, true, false)]
+    [InlineData("token", 2, false, true)]
+    [InlineData("authority", 2, false, true)]
+    public void McpOAuthCatalog_CanonicalAbsentPins_DoNotReuseDeclaredPinsRegardlessOfRegistrationOrder(
+        string field, int pinCount, bool absentFirst, bool useFactoryDelegate)
+    {
+        var store = new MetadataOnlyStore();
+        var catalog = useFactoryDelegate
+            ? McpOAuthComposition.CreateCatalog(new McpOAuthProviderConfigurationFactory(store).Create)
+            : McpOAuthComposition.CreateCatalog(store);
+        var context = StoredSecretAccessExecutorTests.Request();
+        McpOAuthCredentialUseRequest Request(string? pin)
+        {
+            var tool = Tool(false);
+            var connection = Assert.IsType<OAuthConnection>(tool.Connection);
+            if (field == "authority") { tool.Connection = PhantomOAuthConnection.From(connection, pin); }
+            else { connection.TokenUrl = pin!; }
+            return Assert.IsType<McpOAuthCredentialUseRequest>(
+                catalog.CreateRequest(tool, context.Requestor, context.Use, context.PresentationScope));
+        }
+
+        var before = absentFirst ? Request(null) : null;
+        var declared = Enumerable.Range(0, pinCount)
+            .Select(index => Request($"https://pin-{index}.test/{(field == "token" ? "token" : "")}")).ToArray();
+        var absent = Request(null);
+        var repeated = Request(null);
+
+        Assert.Equal(absent.ProviderConfiguration, repeated.ProviderConfiguration);
+        if (before is not null) { Assert.Equal(before.ProviderConfiguration, absent.ProviderConfiguration); }
+        var discoveryConfiguration = catalog.FindConfiguration(absent.ProviderConfiguration)!;
+        Assert.Null(discoveryConfiguration.AuthorizationServer);
+        Assert.Null(discoveryConfiguration.ExpectedTokenEndpoint);
+        foreach (var pinned in declared)
+        {
+            Assert.NotEqual(pinned.ProviderConfiguration, absent.ProviderConfiguration);
+            Assert.NotEqual(pinned.Credential.LogicalIdentifier, absent.Credential.LogicalIdentifier);
+            Assert.NotEqual(pinned.Sources[0].Identifier, absent.Sources[0].Identifier);
+            Assert.False(discoveryConfiguration.Cache.SharesPartitionWith(
+                catalog.FindConfiguration(pinned.ProviderConfiguration)!.Cache));
+        }
+        Assert.Equal(pinCount + 1, catalog.GetConfigurations().Count);
+    }
+
+    [Fact]
+    public void McpOAuthCatalog_TrustedAdvancedOverride_RemainsExplicitAndAmbiguityFailsClosed()
+    {
+        var first = Configuration(false) with { ExpectedTokenEndpoint = new Uri("https://pin-a.test/token") };
+        var context = StoredSecretAccessExecutorTests.Request();
+        var catalog = McpOAuthComposition.CreateCatalog(_ => first);
+        Assert.NotNull(catalog.CreateRequest(Tool(false), context.Requestor, context.Use, context.PresentationScope));
+        catalog.RegisterConfiguration(first with
+        {
+            Identifier = new() { Digest = new string('c', 64) },
+            ExpectedTokenEndpoint = new Uri("https://pin-b.test/token"),
+        });
+
+        Assert.Null(catalog.CreateRequest(Tool(false), context.Requestor, context.Use, context.PresentationScope));
+        Assert.Equal(2, catalog.GetConfigurations().Count);
     }
 
     private static McpTool Tool(bool confidential) => new()
