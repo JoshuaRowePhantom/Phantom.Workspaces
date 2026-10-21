@@ -2072,16 +2072,16 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             request = request with { Use = request.Use with { MemoryScopes = parent.MemoryScopes } };
         }
         var outcome = await this.accessBroker.AcquireAsync(request, cancellationToken).ConfigureAwait(false);
-        if (outcome is AccessCancelled<GitHubCredentialAccessResult>)
+        await using var result = outcome switch
         {
-            throw new OperationCanceledException(cancellationToken);
-        }
-        if (outcome is not AccessSucceeded<GitHubCredentialAccessResult> succeeded)
-        {
-            throw new AgentCredentialAccessException();
-        }
-
-        await using var result = succeeded.Result;
+            AccessSucceeded<GitHubCredentialAccessResult> succeeded => succeeded.Result,
+            AccessCancelled<GitHubCredentialAccessResult> => throw new OperationCanceledException(cancellationToken),
+            AccessAuthorizationRequired<GitHubCredentialAccessResult> required => throw new AgentCredentialAccessException(
+                CredentialLeaseRequiredActionKind.Authorization, required.RequestIdentifier),
+            AccessReacquisitionRequired<GitHubCredentialAccessResult> required => throw new AgentCredentialAccessException(
+                CredentialLeaseRequiredActionKind.Reacquisition, required.RequestIdentifier),
+            _ => throw new AgentCredentialAccessException(),
+        };
         await new AgentCredentialLeaseSet(result.Lease, null, null).UseAsync(async (material, _, token) =>
         {
             await this.accountUpsertService.UpsertForTokenAsync(material!, token).ConfigureAwait(false);

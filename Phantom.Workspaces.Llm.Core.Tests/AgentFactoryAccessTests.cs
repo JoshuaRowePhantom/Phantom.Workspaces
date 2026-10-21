@@ -96,6 +96,52 @@ public sealed class AgentFactoryAccessTests
             (_, _) => ValueTask.FromResult(1), CancellationToken.None));
     }
 
+    [Theory]
+    [InlineData(CredentialLeaseRequiredActionKind.Authorization)]
+    [InlineData(CredentialLeaseRequiredActionKind.Reacquisition)]
+    public async Task CopilotSdkChatClient_AccountUpsert_PreservesRequiredActionAndRequestIdentifier(
+        CredentialLeaseRequiredActionKind action)
+    {
+        var row = new UserAuthorizationRequestIdentifier { Value = Guid.NewGuid() };
+        AccessOutcome<GitHubCredentialAccessResult> required = action switch
+        {
+            CredentialLeaseRequiredActionKind.Authorization => new AccessAuthorizationRequired<GitHubCredentialAccessResult>
+            {
+                RequestIdentifier = row,
+            },
+            _ => new AccessReacquisitionRequired<GitHubCredentialAccessResult>
+            {
+                RequestIdentifier = row,
+            },
+        };
+        var broker = new AgentAccessTestBroker { AccountOutcome = required };
+        var account = new RecordingAccountService();
+        var session = new FakeCopilotSession();
+        var sdkClient = new FakeCopilotClient(session);
+        var result = await AgentFactory.CreateChatClientAsync(
+            Definition("github-copilot", "${GITHUB_TOKEN}", endpoint: null),
+            new AgentServices
+            {
+                AccessBroker = broker,
+                AccountUpsertService = account,
+                CopilotClientFactory = new RecordingFactory(sdkClient, broker.Context),
+                AccessPresentationScope = AccessPresentationScope.Bootstrap,
+            });
+        await using var client = Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
+
+        var exception = await Assert.ThrowsAsync<AgentCredentialAccessException>(
+            () => EstablishSessionAsync(client));
+
+        Assert.Equal(action, exception.RequiredAction);
+        Assert.Same(row, exception.RequestIdentifier);
+        Assert.Empty(account.Tokens);
+        Assert.Empty(session.CreateSessionConfigs);
+        Assert.Equal(1, sdkClient.DisposeAsyncCallCount);
+        Assert.Equal(new[] { GitHubCredentialPurpose.Model, GitHubCredentialPurpose.Agent },
+            broker.GitHubRequests.Select(request => request.Purpose).ToArray());
+        Assert.Single(broker.Leases);
+    }
+
     [Fact]
     public void AgentServices_AccessBroker_IsTypedAndHasNoSecretProviderSlot()
     {
@@ -585,6 +631,7 @@ internal sealed class AgentAccessTestBroker : IAccessBroker
 {
     public string Material { get; init; } = "test-token";
     public string AccountMaterial { get; init; } = "account-token";
+    public AccessOutcome<GitHubCredentialAccessResult>? AccountOutcome { get; init; }
     public Action<int>? OnStoredRequest { get; init; }
     public LeaseContext Context { get; } = new();
     public List<StoredSecretAccessRequest> StoredRequests { get; } = [];
@@ -612,6 +659,12 @@ internal sealed class AgentAccessTestBroker : IAccessBroker
         if (request is GitHubCredentialAccessRequest github)
         {
             this.GitHubRequests.Add(github);
+            if (github.Purpose == GitHubCredentialPurpose.Agent && this.AccountOutcome is { } accountOutcome)
+            {
+                return Task.FromResult(accountOutcome is AccessOutcome<TResult> typedAccountOutcome
+                    ? typedAccountOutcome
+                    : throw new InvalidOperationException());
+            }
             var lease = CreateLease(github.Purpose == GitHubCredentialPurpose.Agent ? this.AccountMaterial : this.Material, this.Context);
             this.Leases.Add(lease);
             AccessOutcome<GitHubCredentialAccessResult> outcome = new AccessSucceeded<GitHubCredentialAccessResult>
