@@ -1,9 +1,11 @@
 using Microsoft.Extensions.AI;
+using Moq;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using System.Collections.Specialized;
 using System.Security;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Llm.Trust;
 
@@ -238,11 +240,9 @@ public sealed class McpToolIntegrationTests
         }));
 
     [Fact]
-    public async Task AgentChat_SecretGatedMcpApiKey_ConnectsWithoutEnvironmentVariable()
+    public async Task AgentChat_SecretGatedMcpApiKey_RejectsHttpBeforeUsingMaterial()
     {
-        // #1398 end-to-end: a manifest whose MCP "key" server uses a ${SECRET:...} apiKey, with a
-        // stub SecretProvider (and no environment variable set), materializes the placeholder to an
-        // opaque handle and opens the server via the secret-aware key arm.
+        // The broker transport requires HTTPS even after a manifest credential was approved.
         await using var server = await TestMcpServerProcess.StartAsync();
 
         var provider = new Secrets.ManifestAccessTestBroker { Material = "secret-gated-token" };
@@ -283,8 +283,20 @@ public sealed class McpToolIntegrationTests
 
         Assert.Contains(
             chat.History,
-            item => DiagnosticText(item).Contains("Opened MCP server 'github-secret-gated'", StringComparison.Ordinal));
-        Assert.NotEmpty(provider.Requests);
+            item => DiagnosticText(item).Contains("MCP credential access is unavailable.", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            chat.History,
+            item => DiagnosticText(item).Contains("Opened MCP server", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            chat.History,
+            item => DiagnosticText(item).Contains(provider.Material, StringComparison.Ordinal));
+        Assert.Single(provider.Requests);
+        Mock.Get(provider.Context.Policy).Verify(
+            policy => policy.ValidateAsync(
+                It.IsAny<ReleaseAuthorizationIdentifier>(),
+                It.IsAny<ReleasePolicyRequest>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     private static SecureString ToSecureString(string value)
