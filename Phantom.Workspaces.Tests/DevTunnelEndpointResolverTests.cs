@@ -8,6 +8,27 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class DevTunnelEndpointResolverTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ResolveAsync_ShutdownRemainsCancellationWithoutMinting(bool pendingBeforeShutdown)
+    {
+        await using var fixture = new DevTunnelConnectCredentialAccessExecutorTests.Fixture();
+        var resolver = new DevTunnelEndpointResolver(fixture.Broker, fixture.Request, () => AccessPresentationScope.Bootstrap);
+        Task<DevTunnelEndpointResolution>? pending = null;
+        if (pendingBeforeShutdown)
+        {
+            pending = resolver.ResolveAsync(fixture.Request.Tunnel.Name!, DevTunnelAccessMode.Private,
+                TestContext.Current.CancellationToken);
+            Assert.Single(fixture.Registry.GetSnapshot());
+        }
+        await fixture.Broker.DisposeAsync();
+        pending ??= resolver.ResolveAsync(fixture.Request.Tunnel.Name!, DevTunnelAccessMode.Private,
+            TestContext.Current.CancellationToken);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        Assert.Equal(0, fixture.Session.Mints);
+    }
+
     [Fact]
     public async Task ResolveAsync_FailedEndpointRequiresExplicitRemint_StaleReceiptCannotDeleteReplacement()
     {

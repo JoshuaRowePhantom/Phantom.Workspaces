@@ -34,8 +34,9 @@ public sealed class DevTunnelAuthenticationHandler : DelegatingHandler
         {
             await request.Content.LoadIntoBufferAsync(cancellationToken).ConfigureAwait(false);
         }
-        await using var credential = DevTunnelCredentialAccessException.Require(
-            await this.broker.AcquireAsync(this.CurrentRequest(), cancellationToken).ConfigureAwait(false));
+        await using var credential = await DevTunnelCredentialAccessException.RequireAsync(
+            await this.broker.AcquireAsync(this.CurrentRequest(), cancellationToken).ConfigureAwait(false),
+            cancellationToken).ConfigureAwait(false);
         using var outgoing = await CloneRequestAsync(request, cancellationToken).ConfigureAwait(false);
         var response = await this.SendWithCredentialAsync(outgoing, credential, cancellationToken).ConfigureAwait(false);
         if (response.StatusCode != HttpStatusCode.Unauthorized || credential.ConnectToken is null)
@@ -46,8 +47,9 @@ public sealed class DevTunnelAuthenticationHandler : DelegatingHandler
         await credential.InvalidateRejectedGenerationAsync(cancellationToken).ConfigureAwait(false);
 
         // A missing Connect generation causes the broker to wait for a new explicit Perform.
-        await using var renewed = DevTunnelCredentialAccessException.Require(
-            await this.broker.AcquireAsync(this.CurrentRequest(), cancellationToken).ConfigureAwait(false));
+        await using var renewed = await DevTunnelCredentialAccessException.RequireAsync(
+            await this.broker.AcquireAsync(this.CurrentRequest(), cancellationToken).ConfigureAwait(false),
+            cancellationToken).ConfigureAwait(false);
         using var retry = await CloneRequestAsync(request, cancellationToken).ConfigureAwait(false);
         var replayResponse = await this.SendWithCredentialAsync(retry, renewed, cancellationToken).ConfigureAwait(false);
         try

@@ -21,9 +21,9 @@ public sealed class DevTunnelEndpointResolver(
         {
             throw new DevTunnelCredentialAccessException(AccessErrorCode.IdentityMismatch);
         }
-        await using var result = DevTunnelCredentialAccessException.Require(
+        await using var result = await DevTunnelCredentialAccessException.RequireAsync(
             await broker.AcquireAsync(request with { PresentationScope = this.getPresentationScope() },
-                cancellationToken).ConfigureAwait(false));
+                cancellationToken).ConfigureAwait(false), cancellationToken).ConfigureAwait(false);
         return new DevTunnelEndpointResolution(result.Endpoint, result.CreateGenerationInvalidation());
     }
 }

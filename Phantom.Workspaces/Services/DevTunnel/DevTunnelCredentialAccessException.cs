@@ -16,15 +16,36 @@ public sealed class DevTunnelCredentialAccessException : InvalidOperationExcepti
     public AccessErrorCode ErrorCode { get; }
     public UserAuthorizationRequestIdentifier? RequiredAction { get; }
 
-    internal static TResult Require<TResult>(AccessOutcome<TResult> outcome) where TResult : IAccessResult =>
-        outcome switch
+    internal static async ValueTask<TResult> RequireAsync<TResult>(
+        AccessOutcome<TResult> outcome,
+        CancellationToken cancellationToken) where TResult : IAccessResult
+    {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                if (outcome is AccessSucceeded<TResult> late)
+                {
+                    await late.Result.DisposeAsync().ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+        }
+
+        return outcome switch
         {
             AccessSucceeded<TResult> succeeded => succeeded.Result,
             AccessFailed<TResult> failed => throw new DevTunnelCredentialAccessException(failed.ErrorCode),
-            AccessCancelled<TResult> => throw new OperationCanceledException("Dev Tunnel credential access was cancelled."),
-            AccessShuttingDown<TResult> => throw new DevTunnelCredentialAccessException(AccessErrorCode.Disposed),
+            AccessCancelled<TResult> => throw new OperationCanceledException(
+                "Dev Tunnel credential access was cancelled.", cancellationToken),
+            AccessShuttingDown<TResult> => throw new OperationCanceledException(
+                "Dev Tunnel credential access is shutting down.", cancellationToken),
             _ => throw new DevTunnelCredentialAccessException(AccessErrorCode.ProviderFailure),
         };
+    }
 
     internal static TResult RequireUse<TResult>(SensitiveValueUseOutcome<TResult> outcome) =>
         outcome switch

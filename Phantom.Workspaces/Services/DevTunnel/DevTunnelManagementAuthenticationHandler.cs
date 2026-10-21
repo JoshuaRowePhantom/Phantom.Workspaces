@@ -24,8 +24,9 @@ internal sealed class DevTunnelManagementAuthenticationHandler(
         {
             await request.Content.LoadIntoBufferAsync(cancellationToken).ConfigureAwait(false);
         }
-        await using var identity = DevTunnelCredentialAccessException.Require(
-            await broker.AcquireAsync(CurrentRequest(), cancellationToken).ConfigureAwait(false));
+        await using var identity = await DevTunnelCredentialAccessException.RequireAsync(
+            await broker.AcquireAsync(CurrentRequest(), cancellationToken).ConfigureAwait(false),
+            cancellationToken).ConfigureAwait(false);
         using var outgoing = await DevTunnelAuthenticationHandler.CloneRequestAsync(request, cancellationToken).ConfigureAwait(false);
         var response = await this.SendWithIdentityAsync(outgoing, identity, cancellationToken).ConfigureAwait(false);
         if (response.StatusCode != HttpStatusCode.Unauthorized || identity.AccessToken is null)
@@ -34,8 +35,9 @@ internal sealed class DevTunnelManagementAuthenticationHandler(
         }
         response.Dispose();
         await identity.InvalidateRejectedGenerationAsync(cancellationToken).ConfigureAwait(false);
-        await using var renewed = DevTunnelCredentialAccessException.Require(
-            await broker.AcquireAsync(CurrentRequest(), cancellationToken).ConfigureAwait(false));
+        await using var renewed = await DevTunnelCredentialAccessException.RequireAsync(
+            await broker.AcquireAsync(CurrentRequest(), cancellationToken).ConfigureAwait(false),
+            cancellationToken).ConfigureAwait(false);
         using var retry = await DevTunnelAuthenticationHandler.CloneRequestAsync(request, cancellationToken).ConfigureAwait(false);
         var replay = await this.SendWithIdentityAsync(retry, renewed, cancellationToken).ConfigureAwait(false);
         try

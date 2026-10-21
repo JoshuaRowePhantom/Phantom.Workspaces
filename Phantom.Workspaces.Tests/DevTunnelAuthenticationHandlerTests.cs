@@ -9,6 +9,27 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class DevTunnelAuthenticationHandlerTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DevTunnelAuthenticationHandler_ShutdownRemainsCancellationWithoutSending(bool pendingBeforeShutdown)
+    {
+        await using var fixture = new DevTunnelConnectCredentialAccessExecutorTests.Fixture();
+        using var client = new AuthenticatedHttpClientFactory(() => new RecordingHandler(_ =>
+            throw new InvalidOperationException("Shutdown reached transport.")))
+            .CreateClient(fixture.Session.Endpoint, fixture.Broker, fixture.Request, () => AccessPresentationScope.Bootstrap);
+        Task<HttpResponseMessage>? pending = null;
+        if (pendingBeforeShutdown)
+        {
+            pending = client.GetAsync(fixture.Session.Endpoint, TestContext.Current.CancellationToken);
+            Assert.Single(fixture.Registry.GetSnapshot());
+        }
+        await fixture.Broker.DisposeAsync();
+        pending ??= client.GetAsync(fixture.Session.Endpoint, TestContext.Current.CancellationToken);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        Assert.Equal(0, fixture.Session.Mints);
+    }
+
     [Fact]
     public async Task DevTunnelAuthenticationHandler_FactoryRejectsMissingLiveScopeBeforeCreatingTransport()
     {
