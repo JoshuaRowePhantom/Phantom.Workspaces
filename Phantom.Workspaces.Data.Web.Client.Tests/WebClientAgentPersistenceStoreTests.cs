@@ -10,6 +10,30 @@ namespace Phantom.Workspaces.Data.Web.Client.Tests;
 
 public sealed class WebClientAgentPersistenceStoreTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Dispose_RespectsInjectedHttpClientOwnership(bool ownsHttpClient)
+    {
+        using var client = new HttpClient(new RecordingHttpMessageHandler(
+            _ => new HttpResponseMessage(HttpStatusCode.OK)));
+        var store = new WebClientAgentPersistenceStore("https://example.test", client, ownsHttpClient);
+
+        store.Dispose();
+        store.Dispose();
+
+        if (ownsHttpClient)
+        {
+            await Assert.ThrowsAsync<ObjectDisposedException>(
+                () => client.GetAsync("https://example.test"));
+        }
+        else
+        {
+            using var response = await client.GetAsync("https://example.test");
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+    }
+
     [Fact]
     public async Task StoreAsync_PostsToStoreEndpoint()
     {

@@ -21,7 +21,8 @@ public sealed class WebClientAgentPersistenceStore : IAgentPersistenceStore, IDi
 
     public WebClientAgentPersistenceStore(
         string endpoint,
-        HttpClient? httpClient = null)
+        HttpClient? httpClient = null,
+        bool ownsHttpClient = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(endpoint);
         if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var endpointUri))
@@ -33,7 +34,7 @@ public sealed class WebClientAgentPersistenceStore : IAgentPersistenceStore, IDi
         {
             BaseAddress = endpointUri,
         };
-        this.ownsHttpClient = httpClient is null;
+        this.ownsHttpClient = httpClient is null || ownsHttpClient;
 
         if (this.httpClient.BaseAddress is null)
         {

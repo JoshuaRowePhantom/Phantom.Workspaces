@@ -9,6 +9,30 @@ namespace Phantom.Workspaces.Data.Web.Client.Tests;
 
 public sealed class WebClientDataAccessLayerTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Dispose_RespectsInjectedHttpClientOwnership(bool ownsHttpClient)
+    {
+        using var client = new HttpClient(new RecordingHttpMessageHandler(
+            _ => new HttpResponseMessage(HttpStatusCode.OK)));
+        var layer = new WebClientDataAccessLayer("https://example.test", client, ownsHttpClient);
+
+        layer.Dispose();
+        layer.Dispose();
+
+        if (ownsHttpClient)
+        {
+            await Assert.ThrowsAsync<ObjectDisposedException>(
+                () => client.GetAsync("https://example.test"));
+        }
+        else
+        {
+            using var response = await client.GetAsync("https://example.test");
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+    }
+
     [Fact]
     public void IsConnectivityFailure_WithUnauthorizedStatusCode_ReturnsTrue()
     {
