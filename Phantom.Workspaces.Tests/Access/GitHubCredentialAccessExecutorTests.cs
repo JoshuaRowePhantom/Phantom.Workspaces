@@ -417,12 +417,15 @@ public sealed class GitHubCredentialAccessExecutorTests
         };
     }
 
-    private static (AccessBroker Broker, UserAuthorizationRegistry Registry) Create(GitHubCredentialAccessExecutor executor)
+    private static (AccessBroker Broker, UserAuthorizationRegistry Registry) Create(
+        GitHubCredentialAccessExecutor executor,
+        string? memoryPath = null,
+        IProviderAcquisitionCoordinator? coordinator = null)
     {
         var registry = new UserAuthorizationRegistry();
         var executors = new CredentialAccessExecutorRegistry();
         executors.Add<GitHubCredentialAccessRequest, GitHubCredentialAccessResult>(executor);
-        return (new AccessBroker(new ReleaseAuthorizationPolicy(new ReleaseMemoryStore()), executors, new ProviderAcquisitionCoordinator(), registry), registry);
+        return (new AccessBroker(new ReleaseAuthorizationPolicy(new ReleaseMemoryStore(memoryPath)), executors, coordinator ?? new ProviderAcquisitionCoordinator(), registry), registry);
     }
 
     private static async Task AllowAsync(
@@ -491,10 +494,12 @@ public sealed class GitHubCredentialAccessExecutorTests
         public CredentialAccountIdentifier Account { get; set; } = CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.GitHub, "private-account");
         public string Material { get; set; } = "private-test-token";
         public List<CredentialSourceKind> Acquisitions { get; } = [];
+        public TaskCompletionSource? Started { get; init; }
+        public TaskCompletionSource? Continue { get; init; }
 
         public bool EnvironmentExists() => this.HasEnvironment;
 
-        public ValueTask<GitHubCredentialMaterial?> AcquireAsync(
+        public async ValueTask<GitHubCredentialMaterial?> AcquireAsync(
             CredentialSourceKind source,
             ProviderInteractionPermit permit,
             ProviderAcquisitionKey key,
@@ -502,11 +507,16 @@ public sealed class GitHubCredentialAccessExecutorTests
         {
             Assert.True(permit.AuthorizesProvider(CredentialExecutorKind.GitHub, key));
             this.Acquisitions.Add(source);
-            return ValueTask.FromResult(source == CredentialSourceKind.Environment && !this.HasEnvironment ? null : new GitHubCredentialMaterial
+            this.Started?.TrySetResult();
+            if (this.Continue is { } continuation)
+            {
+                await continuation.Task.WaitAsync(cancellationToken);
+            }
+            return source == CredentialSourceKind.Environment && !this.HasEnvironment ? null : new GitHubCredentialMaterial
             {
                 Material = this.Material.ToCharArray(),
                 Account = this.Account,
-            });
+            };
         }
     }
 }
