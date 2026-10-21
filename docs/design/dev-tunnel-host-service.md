@@ -237,20 +237,34 @@ access-point mode is **retained**:
    lookup required. This remains fully supported and is the right choice when the endpoint is fixed or
    the client has no management access.
 2. **Tunnel name (new).** The user supplies just a **tunnel name**. The client resolves the live
-   endpoint at connect time via a new `IDevTunnelEndpointResolver`, using the **unified dev tunnel
-   sign-in** (`IDevTunnelAuthTokenProvider`) for identity:
-   - look up the tunnel by name with a `TunnelManagementClient` authenticated by the signed-in
-     identity;
+   endpoint at connect time via `IDevTunnelEndpointResolver`, using the host's typed access broker:
+   - for anonymous relay access, separately authorize a non-anonymous
+     `DevTunnelIdentityCredentialAccessRequest` and its exported provider identity lease before any
+     Management send; `DevTunnelManagementAuthenticationHandler` uses that lease only at validated
+     HTTPS Management destinations, never at the relay;
+   - match exactly one tunnel carrying the Workspaces marker and requested name label (`auto` selects
+     the single marker-bearing tunnel);
    - read its **single** forwarded `TunnelPort` (relying on the host's single-port invariant) — no
      port number is configured by the user;
-   - construct the relay endpoint URI for that port. For **Private** access the per-connection
-     `X-Tunnel-Authorization` is derived from the signed-in identity (the user never types a token);
-     only in **Token** mode is a pre-shared token read from `AccessTokenSource`;
-   - hand the resolved base URI (and header, if any) to `WebClientDataAccessLayer`.
+   - validate the exact HTTPS relay endpoint for that port. **Anonymous** access binds that explicit
+     endpoint to an anonymous relay request: no account, no Connect mint, and neither `Authorization`
+     nor `X-Tunnel-Authorization` is sent. **Private** access continues through the typed Connect
+     executor; identity goes only to Management and only the Connect lease may reach the relay;
+   - hand metadata only to the reconnecting repository/persistence consumer, dispose Management
+     resources and identity leases, and independently authorize actual relay sends.
+
+   `AccessMode.Anonymous` controls relay access, independently of an explicitly configured
+   GitHub/Entra/OAuth Management identity. Null authentication, or an explicit `anonymous` scheme,
+   uses the normal unbound GitHub typed request for Management discovery; the broker/provider must
+   discover and verify its real account. No default/verified account is fabricated. An explicit
+   `anonymous` scheme also selects anonymous relay access when the access mode is Private.
+   Configuration projection retains its existing data-profile/tunnel-profile/default precedence.
+   An explicit anonymous Web endpoint needs neither name discovery nor a Management identity.
 
    Because the port is discovered, the host can change its listening port (the host re-points its
    single forwarded port) and the client still reconnects to the right place by name. Because identity
-   comes from the same sign-in as hosting, the client and host share one account experience.
+   is acquired through the same host broker/catalog graph as hosting, release authorization and
+   current Bootstrap/Runtime presentation remain host-owned. Each discovery re-reads the live scope.
 
 ### Resolution + reconnect refresh
 

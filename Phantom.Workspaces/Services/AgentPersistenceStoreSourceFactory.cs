@@ -24,6 +24,7 @@ public sealed class AgentPersistenceStoreSourceFactory
     private readonly DevTunnelIdentityRoute? identityRoute;
     private readonly Func<AccessPresentationScope>? presentationScope;
     private readonly IAuthenticatedHttpClientFactory httpClientFactory;
+    private readonly Func<System.Net.Http.HttpMessageHandler>? managementTransportFactory;
 
     public AgentPersistenceStoreSourceFactory(
         RepositorySource repositorySource,
@@ -39,13 +40,15 @@ public sealed class AgentPersistenceStoreSourceFactory
         IAccessBroker? accessBroker,
         DevTunnelIdentityRoute? identityRoute,
         Func<AccessPresentationScope>? presentationScope,
-        IAuthenticatedHttpClientFactory httpClientFactory)
+        IAuthenticatedHttpClientFactory httpClientFactory,
+        Func<System.Net.Http.HttpMessageHandler>? managementTransportFactory = null)
     {
         this.repositorySource = repositorySource;
         this.accessBroker = accessBroker;
         this.identityRoute = identityRoute;
         this.presentationScope = presentationScope;
         this.httpClientFactory = httpClientFactory;
+        this.managementTransportFactory = managementTransportFactory;
     }
 
     /// <summary>
@@ -100,10 +103,16 @@ public sealed class AgentPersistenceStoreSourceFactory
                 Name = repositorySource.TunnelName,
             },
             repositorySource.Authentication, this.identityRoute, CredentialUseKind.Application, "agent-persistence", scope);
-        var identity = DevTunnelIdentityCredentialAccessRequest.Create(
-            request.IdentityRoute, request.Requestor, request.Use, request.PresentationScope);
+        var identity = anonymous
+            ? EntityRepository.CreateNamedManagementIdentityRequest(
+                repositorySource, this.identityRoute, CredentialUseKind.Application, "agent-persistence", scope)
+            : DevTunnelIdentityCredentialAccessRequest.Create(
+                request.IdentityRoute, request.Requestor, request.Use, request.PresentationScope);
         var resolver = new DevTunnelServiceFactory(
-            broker, identity, scope).CreateEndpointResolver(request);
+            broker, identity, scope)
+        {
+            ManagementTransportFactory = this.managementTransportFactory,
+        }.CreateEndpointResolver(request);
 
         var reconnectingStore = new Services.DevTunnel.ReconnectingWebAgentPersistenceStore(
             resolveEndpointAsync: cancellationToken => resolver.ResolveAsync(
@@ -112,7 +121,8 @@ public sealed class AgentPersistenceStoreSourceFactory
                 cancellationToken),
             buildAgentPersistenceStore: resolution =>
             {
-                var httpClient = this.httpClientFactory.CreateClient(resolution.BaseUri, broker, request, scope);
+                var relayRequest = EntityRepository.BindAnonymousEndpoint(request, resolution.BaseUri, scope());
+                var httpClient = this.httpClientFactory.CreateClient(resolution.BaseUri, broker, relayRequest, scope);
                 return new Data.Web.Client.WebClientAgentPersistenceStore(
                     resolution.BaseUri.ToString(),
                     httpClient,

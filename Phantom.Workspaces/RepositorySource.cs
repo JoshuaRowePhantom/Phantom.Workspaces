@@ -38,10 +38,13 @@ public sealed record WebRepositorySource(
 /// change its listening port without the client reconfiguring.
 /// </summary>
 /// <param name="TunnelName">The dev tunnel name to resolve.</param>
-/// <param name="AccessMode">The tunnel access mode (Anonymous: no token; Private/Token: connect token fetched automatically from Management API).</param>
+/// <param name="AccessMode">The relay access mode (Anonymous: no relay token; Private/Token: Connect credential acquired through the broker).</param>
 /// <param name="Authentication">
 /// Optional pluggable authentication configuration (issue #1455), threaded uniformly to the data and
-/// persistence layers. Null selects GitHub identity for private access; anonymous access remains explicit.
+/// persistence layers. Name discovery always requires an independently broker-authorized Management
+/// identity. Null selects GitHub; an explicit github/entra/oauth identity is retained even for anonymous
+/// relay access. The anonymous scheme selects tokenless relay access, not anonymous Management:
+/// discovery uses an unbound GitHub request whose actual account must be verified by the provider.
 /// </param>
 public sealed record DevTunnelNameRepositorySource(
     string TunnelName,

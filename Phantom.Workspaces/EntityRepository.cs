@@ -219,7 +219,8 @@ public sealed class EntityRepository : IAsyncDisposable
         DevTunnelIdentityRoute? identityRoute,
         Func<AccessPresentationScope>? presentationScope,
         CancellationToken cancellationToken,
-        IAuthenticatedHttpClientFactory? httpClientFactory = null)
+        IAuthenticatedHttpClientFactory? httpClientFactory = null,
+        Func<System.Net.Http.HttpMessageHandler>? managementTransportFactory = null)
     {
         var broker = RequireAccessBroker(accessBroker);
         presentationScope = RequirePresentationScope(presentationScope);
@@ -231,10 +232,15 @@ public sealed class EntityRepository : IAsyncDisposable
                 Name = repositorySource.TunnelName,
             },
             repositorySource.Authentication, identityRoute, CredentialUseKind.Repository, "repository", presentationScope);
-        var identity = DevTunnelIdentityCredentialAccessRequest.Create(
-            request.IdentityRoute, request.Requestor, request.Use, request.PresentationScope);
+        var identity = anonymous
+            ? CreateNamedManagementIdentityRequest(repositorySource, identityRoute, CredentialUseKind.Repository, "repository", presentationScope)
+            : DevTunnelIdentityCredentialAccessRequest.Create(
+                request.IdentityRoute, request.Requestor, request.Use, request.PresentationScope);
         var resolver = new DevTunnelServiceFactory(
-            broker, identity, presentationScope).CreateEndpointResolver(request);
+            broker, identity, presentationScope)
+        {
+            ManagementTransportFactory = managementTransportFactory,
+        }.CreateEndpointResolver(request);
         var authenticatedHttpClientFactory = httpClientFactory ?? new AuthenticatedHttpClientFactory();
 
         var reconnectingDataAccessLayer = new Services.DevTunnel.ReconnectingWebDataAccessLayer(
@@ -244,7 +250,8 @@ public sealed class EntityRepository : IAsyncDisposable
                 cancellationToken),
             buildDataAccessLayer: resolution =>
             {
-                var httpClient = authenticatedHttpClientFactory.CreateClient(resolution.BaseUri, broker, request, presentationScope);
+                var relayRequest = BindAnonymousEndpoint(request, resolution.BaseUri, presentationScope());
+                var httpClient = authenticatedHttpClientFactory.CreateClient(resolution.BaseUri, broker, relayRequest, presentationScope);
                 return new WebClientDataAccessLayer(resolution.BaseUri.ToString(), httpClient, ownsHttpClient: true);
             },
             delayScheduler: Services.DevTunnel.RealDelayScheduler.Instance);
@@ -274,6 +281,37 @@ public sealed class EntityRepository : IAsyncDisposable
         source.AccessMode == Configuration.DevTunnelAccessMode.Anonymous ||
         string.Equals(source.Authentication?.Scheme, RemoteAuthentication.AnonymousScheme, StringComparison.OrdinalIgnoreCase);
 
+    internal static RemoteAuthentication? NamedManagementAuthentication(DevTunnelNameRepositorySource source) =>
+        string.Equals(source.Authentication?.Scheme, RemoteAuthentication.AnonymousScheme, StringComparison.OrdinalIgnoreCase)
+            ? null : source.Authentication;
+
+    internal static DevTunnelIdentityCredentialAccessRequest CreateNamedManagementIdentityRequest(
+        DevTunnelNameRepositorySource source,
+        DevTunnelIdentityRoute? configuredRoute,
+        CredentialUseKind useKind,
+        string purpose,
+        Func<AccessPresentationScope> presentationScope)
+    {
+        var (requestor, use) = CreateConnectUse(
+            new DevTunnelAccessDescriptor { Access = DevTunnelAccessKind.Private, Name = source.TunnelName },
+            useKind,
+            $"{purpose}-management-discovery");
+        use = use with { SafeDisplayName = "Resolve named tunnel endpoint through Management" };
+        var scope = presentationScope();
+        var route = CreateAuthenticatedIdentityRoute(
+            NamedManagementAuthentication(source), configuredRoute, requestor, use, scope, "devtunnel-management");
+        return DevTunnelIdentityCredentialAccessRequest.Create(route, requestor, use, scope);
+    }
+
+    internal static DevTunnelConnectCredentialAccessRequest BindAnonymousEndpoint(
+        DevTunnelConnectCredentialAccessRequest request,
+        Uri endpoint,
+        AccessPresentationScope scope) =>
+        request.Tunnel.Access == DevTunnelAccessKind.Anonymous
+            ? DevTunnelConnectCredentialAccessRequest.Create(
+                request.Tunnel with { Endpoint = endpoint }, request.IdentityRoute, request.Requestor, request.Use, scope)
+            : request;
+
     internal static IAccessBroker RequireAccessBroker(IAccessBroker? broker) =>
         broker ?? throw new InvalidOperationException("The host access broker is required for relay access.");
 
@@ -296,19 +334,28 @@ public sealed class EntityRepository : IAsyncDisposable
         var (requestor, use) = CreateConnectUse(tunnel, useKind, purpose);
         presentationScope = RequirePresentationScope(presentationScope);
         var scope = presentationScope();
-        DevTunnelIdentityRoute route;
-        if (tunnel.Access == DevTunnelAccessKind.Anonymous)
-        {
-            route = new AnonymousDevTunnelIdentityRoute();
-        }
-        else if (configuredRoute is not null)
+        var route = tunnel.Access == DevTunnelAccessKind.Anonymous
+            ? new AnonymousDevTunnelIdentityRoute()
+            : CreateAuthenticatedIdentityRoute(authentication, configuredRoute, requestor, use, scope, purpose);
+        return DevTunnelConnectCredentialAccessRequest.Create(tunnel, route, requestor, use, scope);
+    }
+
+    private static DevTunnelIdentityRoute CreateAuthenticatedIdentityRoute(
+        RemoteAuthentication? authentication,
+        DevTunnelIdentityRoute? configuredRoute,
+        AccessRequestor requestor,
+        CredentialUseDescriptor use,
+        AccessPresentationScope scope,
+        string purpose)
+    {
+        if (configuredRoute is not null)
         {
             if (configuredRoute is AnonymousDevTunnelIdentityRoute ||
                 authentication is not null && !string.Equals(authentication.Scheme, configuredRoute.Scheme.ToString(), StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException("The configured identity route does not match relay authentication.");
             }
-            route = configuredRoute switch
+            return configuredRoute switch
             {
                 GitHubDevTunnelIdentityRoute github => github with
                 {
@@ -327,7 +374,7 @@ public sealed class EntityRepository : IAsyncDisposable
         }
         else if (authentication is null || string.Equals(authentication.Scheme, RemoteAuthentication.GithubScheme, StringComparison.OrdinalIgnoreCase))
         {
-            route = new GitHubDevTunnelIdentityRoute
+            return new GitHubDevTunnelIdentityRoute
             {
                 Credential = GitHubCredentialAccessRequest.Create(
                     GitHubCredentialPurpose.DevTunnelIdentity, requestor, use.Lineage, purpose, scope),
@@ -337,7 +384,6 @@ public sealed class EntityRepository : IAsyncDisposable
         {
             throw new InvalidOperationException("A configured typed identity route is required for this relay authentication scheme.");
         }
-        return DevTunnelConnectCredentialAccessRequest.Create(tunnel, route, requestor, use, scope);
     }
 
     internal static (AccessRequestor Requestor, CredentialUseDescriptor Use) CreateConnectUse(

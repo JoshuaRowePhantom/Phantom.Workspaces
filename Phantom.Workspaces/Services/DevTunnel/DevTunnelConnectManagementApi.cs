@@ -155,7 +155,7 @@ internal class DevTunnelConnectManagementApi
         Uri.Compare(left, right, UriComponents.SchemeAndServer | UriComponents.Path,
             UriFormat.SafeUnescaped, StringComparison.OrdinalIgnoreCase) == 0;
 
-    private static bool TryEndpoint(Tunnel tunnel, out Uri endpoint)
+    internal static bool TryEndpoint(Tunnel tunnel, out Uri endpoint)
     {
         endpoint = null!;
         if (string.IsNullOrWhiteSpace(tunnel.TunnelId) || string.IsNullOrWhiteSpace(tunnel.ClusterId) ||

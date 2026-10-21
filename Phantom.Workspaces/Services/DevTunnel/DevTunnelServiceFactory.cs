@@ -13,6 +13,8 @@ public sealed class DevTunnelServiceFactory(
     private readonly Func<AccessPresentationScope> getPresentationScope =
         presentationScope ?? throw new ArgumentNullException(nameof(presentationScope));
 
+    internal Func<HttpMessageHandler>? ManagementTransportFactory { get; init; }
+
     public IDevTunnelHostService CreateHostService()
     {
         var handler = new DevTunnelManagementAuthenticationHandler(
@@ -29,7 +31,10 @@ public sealed class DevTunnelServiceFactory(
     }
 
     public IDevTunnelEndpointResolver CreateEndpointResolver(DevTunnelConnectCredentialAccessRequest request) =>
-        new DevTunnelEndpointResolver(broker, request, this.getPresentationScope);
+        request.Tunnel.Access == DevTunnelAccessKind.Anonymous && request.Tunnel.Endpoint is null
+            ? new DevTunnelNamedAnonymousEndpointResolver(
+                broker, identityRequest, request, this.getPresentationScope, this.ManagementTransportFactory)
+            : new DevTunnelEndpointResolver(broker, request, this.getPresentationScope);
 
     private sealed class ManagementLifetime(TunnelManagementClient management, HttpMessageHandler handler) : IAsyncDisposable
     {

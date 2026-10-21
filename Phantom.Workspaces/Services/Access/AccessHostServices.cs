@@ -53,8 +53,8 @@ public sealed class AccessHostServices : IAsyncDisposable
                     Endpoint = new Uri(web.Endpoint, UriKind.Absolute),
                 };
                 break;
-            case DevTunnelNameRepositorySource named when !EntityRepository.IsAnonymous(named):
-                authentication = named.Authentication;
+            case DevTunnelNameRepositorySource named:
+                authentication = EntityRepository.NamedManagementAuthentication(named);
                 tunnel = new DevTunnelAccessDescriptor { Access = DevTunnelAccessKind.Private, Name = named.TunnelName };
                 break;
             default:
