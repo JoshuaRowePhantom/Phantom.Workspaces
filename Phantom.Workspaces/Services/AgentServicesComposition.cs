@@ -15,24 +15,18 @@ namespace Phantom.Workspaces.Services;
 
 /// <summary>
 /// The single composition root that produces the complete <see cref="AgentServices"/> bundle for a
-/// launch (issue #1403). Previously each launch site (the app-level <c>App.axaml.cs</c> and the GUI
-/// session-launch <c>AgentSessionShortcutContext</c>) hand-assembled its own bundle, so services
-/// silently drifted between paths — the direct root cause of #1401 (dropped <c>SecretProvider</c>
-/// materialization) and #1402 (dropped <c>McpOAuthOptions</c>). Routing every path through this one
-/// method makes those omissions structurally impossible: there is exactly one place that can forget
-/// a service, and it forgets it for everyone (caught by one test) rather than silently for one path.
+/// launch. Every replacement session bundle forwards the host-owned broker and typed metadata
+/// services rather than retaining caller-owned OAuth configuration.
 /// </summary>
 public static class AgentServicesComposition
 {
     /// <summary>
-    /// Composes the process-wide host services (<see cref="AgentServices.AccessBroker"/> and
-    /// <see cref="AgentServices.McpOAuthOptions"/>) that every launch path must carry. Used by
+    /// Composes the process-wide host services that every launch path must carry. Used by
     /// <c>App.axaml.cs</c> for the app-level <c>AgentChatFactory</c> seed and reused by
     /// <see cref="ComposeSessionServicesAsync"/> so the session path shares the same instances.
     /// </summary>
     public static AgentServices ComposeHostServices(
         IAccessBroker? accessBroker,
-        object? mcpOAuthOptions,
         ILoggerFactory loggerFactory,
         IMcpOAuthCredentialRequestCatalog? mcpOAuthCredentials = null,
         Func<AccessPresentationScope>? accessPresentationScopeProvider = null)
@@ -41,7 +35,6 @@ public static class AgentServicesComposition
             AccessBroker = accessBroker,
             McpOAuthCredentials = mcpOAuthCredentials,
             AccessPresentationScopeProvider = accessPresentationScopeProvider,
-            McpOAuthOptions = mcpOAuthOptions,
             LoggerFactory = loggerFactory,
             ProcessExecutor = new ProcessExecutor(),
             TrustProfilePolicyCompiler = new MxcTrustProfilePolicyCompiler(),
@@ -49,8 +42,8 @@ public static class AgentServicesComposition
         };
 
     /// <summary>
-    /// Composes the complete session-launch bundle: the process-wide host services (secret provider
-    /// + MCP OAuth options taken from <see cref="ApplicationServices"/>) plus the toolset-factory
+    /// Composes the complete session-launch bundle: the process-wide host services
+    /// taken from <see cref="ApplicationServices"/> plus the toolset-factory
     /// chain, the MCP tool-resource factory, the GitHub account-upsert service, the resolved current
     /// session context, the persistence-store override, and the logger factory.
     /// </summary>
@@ -140,13 +133,11 @@ public static class AgentServicesComposition
 
         var applicationServices = mainWindowViewModel.ApplicationServices;
 
-        // Reuse ComposeHostServices so SecretProvider (#1401) and McpOAuthOptions (#1402) come from
-        // exactly one place, guaranteeing the session path carries the same instances the app-level
-        // path does.
         return ComposeHostServices(
             applicationServices.AccessBroker,
-            applicationServices.McpOAuthOptions,
-            loggerFactory) with
+            loggerFactory,
+            mcpOAuthCredentials: applicationServices.McpOAuthCredentials,
+            accessPresentationScopeProvider: applicationServices.AccessPresentationScopeProvider) with
         {
             AccessBroker = applicationServices.AccessBroker,
             AgentPersistenceStoreOverride = agentPersistenceStore,

@@ -369,7 +369,6 @@ public sealed class Retry1485ContractTests
         {
             nameof(AgentServices.CurrentSessionContext),
             nameof(AgentServices.SecretPlaceholderResolver),
-            nameof(AgentServices.McpOAuthOptions),
             nameof(AgentServices.CopilotClientFactory),
             nameof(AgentServices.CurrentAgentChatRef),
             nameof(AgentServices.ExecutorBindings),

@@ -23,7 +23,7 @@ public sealed class ApplicationServices
         ICredentialPicker? credentialPicker = null,
         IAllowedSecretsStore? allowedSecretsStore = null,
         IPlatformSecretStore? platformSecretStore = null,
-        object? mcpOAuthOptions = null,
+        IMcpOAuthCredentialRequestCatalog? mcpOAuthCredentials = null,
         TransportFactoryRegistryProvider? transportFactoryRegistryProvider = null,
         string? updateUnavailableReason = null,
         ITransportFactory? outboundHttpTransportFactory = null,
@@ -49,7 +49,7 @@ public sealed class ApplicationServices
         this.CredentialPicker = credentialPicker;
         this.AllowedSecretsStore = allowedSecretsStore;
         this.PlatformSecretStore = platformSecretStore;
-        this.McpOAuthOptions = mcpOAuthOptions;
+        this.McpOAuthCredentials = mcpOAuthCredentials;
         this.TransportFactoryRegistryProvider =
             transportFactoryRegistryProvider ?? new TransportFactoryRegistryProvider();
         this.OutboundHttpTransportFactory = outboundHttpTransportFactory;
@@ -135,15 +135,9 @@ public sealed class ApplicationServices
     /// <summary>The process-wide platform credential store.</summary>
     public IPlatformSecretStore PlatformSecretStore { get; }
 
-    /// <summary>
-    /// The single process-wide MCP OAuth options bundle (interactive redirect handler + loopback
-    /// listener + token cache), built once by <c>App.axaml.cs</c> via <c>McpOAuthComposition</c> and
-    /// threaded to every GUI session-launch path through the shared <see cref="AgentServicesComposition"/>
-    /// so interactive MCP OAuth works on session launch (issue #1402). Typed as <see langword="object"/>
-    /// to match <c>AgentServices.McpOAuthOptions</c> and avoid a Core dependency. Null in headless
-    /// hosts (CLI / Web.Server / tests), which intentionally keep the failing default.
-    /// </summary>
-    public object? McpOAuthOptions { get; }
+    public IMcpOAuthCredentialRequestCatalog? McpOAuthCredentials { get; }
+
+    public Func<AccessPresentationScope> AccessPresentationScopeProvider => this.AccessPresentationScope;
 
     public TransportFactoryRegistryProvider TransportFactoryRegistryProvider { get; }
 

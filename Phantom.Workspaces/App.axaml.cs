@@ -323,7 +323,7 @@ public partial class App : Application
 
             var agentChatFactory = new AgentChatFactory(
                 agentPersistenceStore,
-                Services.AgentServicesComposition.ComposeHostServices(this.accessHost.Broker, null, loggerFactory) with
+                Services.AgentServicesComposition.ComposeHostServices(this.accessHost.Broker, loggerFactory) with
                 {
                     AccessBroker = this.accessHost.Broker,
                 },

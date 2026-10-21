@@ -262,6 +262,11 @@ public sealed class AgentFactoryAccessTests
     {
         Assert.Equal(typeof(IAccessBroker), typeof(AgentServices).GetProperty(nameof(AgentServices.AccessBroker))!.PropertyType);
         Assert.Null(typeof(AgentServices).GetProperty("SecretProvider"));
+        Assert.Null(typeof(AgentServices).GetProperty("McpOAuthOptions"));
+        const BindingFlags allMethods = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
+        Assert.Null(typeof(AgentFactory).GetMethod("ResolveApiKeyAsync", allMethods));
+        Assert.Null(typeof(AgentFactory).GetMethod("ResolveRequiredSecretOrEnvAsync", allMethods));
+        Assert.Null(typeof(AgentFactory).GetMethod("ResolveOptionalSecretOrEnvAsync", allMethods));
         Assert.DoesNotContain(typeof(AgentFactory).GetMethods().SelectMany(method => method.GetParameters()),
             parameter => parameter.ParameterType.Name == "IApiKeyResolver");
     }

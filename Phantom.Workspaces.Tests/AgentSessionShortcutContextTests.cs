@@ -8,8 +8,10 @@ using System.Threading.Tasks;
 using AgentSchema;
 using Avalonia.Headless.XUnit;
 using Microsoft.Extensions.Time.Testing;
+using Moq;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Secrets;
@@ -301,11 +303,8 @@ public sealed class AgentSessionShortcutContextTests
         Assert.Contains("PC\"WITH\"QUOTES", displayName!);
     }
 
-    // Issue #1402 / #1403: the session-launch AgentServices is now produced by the single
-    // AgentServicesComposition root, which threads the process-wide McpOAuthOptions (and
-    // SecretProvider) from ApplicationServices. These helpers/tests prove the session path carries
-    // the same instances the app-level path does, so interactive MCP OAuth is wired on launch.
-    private static ApplicationServices CreateApplicationServicesWithMcpOAuthOptions(object mcpOAuthOptions)
+    private static ApplicationServices CreateApplicationServicesWithMcpCatalog(
+        IMcpOAuthCredentialRequestCatalog mcpOAuthCredentials)
         => new(
             MainWindowIntegrationTests.CreateTestRunningAgentChatTable(),
             new AgentPersistenceStoreCache(),
@@ -314,23 +313,25 @@ public sealed class AgentSessionShortcutContextTests
             credentialPicker: new NullCredentialPicker(),
             allowedSecretsStore: new AllowedSecretsStore(new AllowedSecretsStoreConfiguration()),
             platformSecretStore: new NullPlatformSecretStore(),
-            mcpOAuthOptions: mcpOAuthOptions);
+            mcpOAuthCredentials: mcpOAuthCredentials,
+            accessBroker: Mock.Of<IAccessBroker>());
 
     [AvaloniaFact(Timeout = 15_000)]
-    public async Task ApplicationServices_McpOAuthOptions_ExposesInjectedInstance()
+    public async Task ApplicationServices_McpCatalog_ExposesExactTypedInstanceWithoutLegacySlot()
     {
-        var sentinel = new object();
-        var applicationServices = CreateApplicationServicesWithMcpOAuthOptions(sentinel);
+        var sentinel = Mock.Of<IMcpOAuthCredentialRequestCatalog>();
+        var applicationServices = CreateApplicationServicesWithMcpCatalog(sentinel);
 
-        Assert.Same(sentinel, applicationServices.McpOAuthOptions);
+        Assert.Same(sentinel, applicationServices.McpOAuthCredentials);
+        Assert.Null(typeof(ApplicationServices).GetProperty("McpOAuthOptions"));
         await Task.CompletedTask;
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public async Task AgentSessionShortcutContext_CreateAgentServices_ThreadsMcpOAuthOptions()
+    public async Task AgentSessionShortcutContext_CreateAgentServices_ThreadsTypedMcpCatalog()
     {
-        var sentinel = new object();
-        var applicationServices = CreateApplicationServicesWithMcpOAuthOptions(sentinel);
+        var sentinel = Mock.Of<IMcpOAuthCredentialRequestCatalog>();
+        var applicationServices = CreateApplicationServicesWithMcpCatalog(sentinel);
         await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel(
             applicationServices: applicationServices);
         await viewModel.InitializeAsync();
@@ -338,15 +339,14 @@ public sealed class AgentSessionShortcutContextTests
         var shortcutContext = new AgentSessionShortcutContext();
         var services = await shortcutContext.CreateAgentServicesAsync(viewModel, Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
 
-        Assert.NotNull(services.McpOAuthOptions);
-        Assert.Same(sentinel, services.McpOAuthOptions);
+        Assert.Same(sentinel, services.McpOAuthCredentials);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
     public async Task AgentSessionShortcutContext_CreateAgentServices_DelegatesToCompositionRoot()
     {
-        var sentinel = new object();
-        var applicationServices = CreateApplicationServicesWithMcpOAuthOptions(sentinel);
+        var sentinel = Mock.Of<IMcpOAuthCredentialRequestCatalog>();
+        var applicationServices = CreateApplicationServicesWithMcpCatalog(sentinel);
         await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel(
             applicationServices: applicationServices);
         await viewModel.InitializeAsync();
@@ -356,7 +356,7 @@ public sealed class AgentSessionShortcutContextTests
 
         // Same process-wide instances as the app-level path (both flow through
         // AgentServicesComposition.ComposeHostServices), not a hand-assembled bundle.
-        Assert.Same(applicationServices.McpOAuthOptions, services.McpOAuthOptions);
+        Assert.Same(applicationServices.McpOAuthCredentials, services.McpOAuthCredentials);
         Assert.Same(applicationServices.AccessBroker, services.AccessBroker);
 
         // The full composition-root bundle is present (toolset factory, MCP tool-resource factory,

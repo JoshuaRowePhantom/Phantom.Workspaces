@@ -19,7 +19,9 @@ namespace Phantom.Workspaces.Tests;
 // path needs, so no path can silently drop one (the root cause of #1401 and #1402).
 public sealed class AgentServicesCompositionTests
 {
-    private static ApplicationServices CreateApplicationServices(object mcpOAuthOptions)
+    private static ApplicationServices CreateApplicationServices(
+        IMcpOAuthCredentialRequestCatalog mcpOAuthCredentials,
+        Func<AccessPresentationScope>? accessPresentationScopeProvider = null)
         => new(
             MainWindowIntegrationTests.CreateTestRunningAgentChatTable(),
             new AgentPersistenceStoreCache(),
@@ -28,14 +30,17 @@ public sealed class AgentServicesCompositionTests
             credentialPicker: new NullCredentialPicker(),
             allowedSecretsStore: new AllowedSecretsStore(new AllowedSecretsStoreConfiguration()),
             platformSecretStore: new NullPlatformSecretStore(),
-            mcpOAuthOptions: mcpOAuthOptions,
-            accessBroker: Mock.Of<IAccessBroker>());
+            mcpOAuthCredentials: mcpOAuthCredentials,
+            accessBroker: Mock.Of<IAccessBroker>(),
+            accessPresentationScope: accessPresentationScopeProvider);
 
     [AvaloniaFact(Timeout = 15_000)]
     public async Task AgentServicesComposition_Compose_ProducesCompleteBundle()
     {
-        var mcpOAuthOptions = new object();
-        var applicationServices = CreateApplicationServices(mcpOAuthOptions);
+        var mcpOAuthCredentials = Mock.Of<IMcpOAuthCredentialRequestCatalog>();
+        var phase = AccessPresentationScope.Bootstrap;
+        Func<AccessPresentationScope> presentationProvider = () => phase;
+        var applicationServices = CreateApplicationServices(mcpOAuthCredentials, presentationProvider);
         await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel(
             applicationServices: applicationServices);
         await viewModel.InitializeAsync();
@@ -48,8 +53,11 @@ public sealed class AgentServicesCompositionTests
         // Every service the launch paths depend on is present in the one bundle.
         Assert.NotNull(services.AccessBroker);
         Assert.Same(applicationServices.AccessBroker, services.AccessBroker);
-        Assert.NotNull(services.McpOAuthOptions);
-        Assert.Same(mcpOAuthOptions, services.McpOAuthOptions);
+        Assert.Same(mcpOAuthCredentials, services.McpOAuthCredentials);
+        Assert.Same(presentationProvider, services.AccessPresentationScopeProvider);
+        Assert.Equal(AccessPresentationScope.Bootstrap, services.AccessPresentationScope);
+        phase = AccessPresentationScope.Runtime;
+        Assert.Equal(AccessPresentationScope.Runtime, services.AccessPresentationScope);
         Assert.NotNull(services.ToolsetFactory);
         Assert.NotNull(services.ToolResourceFactory);
         Assert.NotNull(services.AccountUpsertService);
@@ -61,15 +69,18 @@ public sealed class AgentServicesCompositionTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public async Task AgentServicesComposition_ComposeHostServices_CarriesSecretProviderAndMcpOAuthOptions()
+    public async Task AgentServicesComposition_ComposeHostServices_CarriesTypedBrokerAndMcpCatalog()
     {
         var accessBroker = Mock.Of<IAccessBroker>();
-        var mcpOAuthOptions = new object();
+        var mcpOAuthCredentials = Mock.Of<IMcpOAuthCredentialRequestCatalog>();
 
-        var services = AgentServicesComposition.ComposeHostServices(accessBroker, mcpOAuthOptions, NullLoggerFactory.Instance);
+        var services = AgentServicesComposition.ComposeHostServices(
+            accessBroker,
+            NullLoggerFactory.Instance,
+            mcpOAuthCredentials: mcpOAuthCredentials);
 
         Assert.Same(accessBroker, services.AccessBroker);
-        Assert.Same(mcpOAuthOptions, services.McpOAuthOptions);
+        Assert.Same(mcpOAuthCredentials, services.McpOAuthCredentials);
         Assert.NotNull(services.ProcessExecutor);
         Assert.NotNull(services.TrustProfilePolicyCompiler);
         Assert.NotNull(services.RemoteCopilotProviderResolver);
@@ -80,7 +91,7 @@ public sealed class AgentServicesCompositionTests
     public void AgentServicesComposition_ComposeHostServices_CarriesProcessLoggerFactory()
     {
         using var process = LoggerFactory.Create(builder => builder.AddProvider(new TestLoggerProvider()));
-        var services = AgentServicesComposition.ComposeHostServices(Mock.Of<IAccessBroker>(), new object(), process);
+        var services = AgentServicesComposition.ComposeHostServices(Mock.Of<IAccessBroker>(), process);
         Assert.Same(process, services.LoggerFactory);
     }
 
@@ -91,7 +102,6 @@ public sealed class AgentServicesCompositionTests
         Func<AccessPresentationScope> provider = () => phase;
         var services = AgentServicesComposition.ComposeHostServices(
             Mock.Of<IAccessBroker>(),
-            null,
             NullLoggerFactory.Instance,
             accessPresentationScopeProvider: provider);
         Assert.Same(provider, services.AccessPresentationScopeProvider);
@@ -107,7 +117,7 @@ public sealed class AgentServicesCompositionTests
     public async Task AgentServicesComposition_ComposeRuntimeHostServices_CarriesProcessLoggerFactory()
     {
         using var process = LoggerFactory.Create(builder => builder.AddProvider(new TestLoggerProvider()));
-        var applicationServices = CreateApplicationServices(new object());
+        var applicationServices = CreateApplicationServices(Mock.Of<IMcpOAuthCredentialRequestCatalog>());
         await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel(
             applicationServices: applicationServices);
         await viewModel.InitializeAsync();
@@ -135,7 +145,11 @@ public sealed class AgentServicesCompositionTests
     [AvaloniaFact(Timeout = 15_000)]
     public async Task AgentServicesComposition_ComposeRuntimeHostServices_CarriesRuntimeToolsWithoutReplacingPersistence()
     {
-        var applicationServices = CreateApplicationServices(new object());
+        var phase = AccessPresentationScope.Bootstrap;
+        Func<AccessPresentationScope> presentationProvider = () => phase;
+        var applicationServices = CreateApplicationServices(
+            Mock.Of<IMcpOAuthCredentialRequestCatalog>(),
+            presentationProvider);
         await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel(
             applicationServices: applicationServices);
         await viewModel.InitializeAsync();
@@ -145,6 +159,12 @@ public sealed class AgentServicesCompositionTests
             NullLoggerFactory.Instance);
 
         Assert.Null(services.AgentPersistenceStoreOverride);
+        Assert.Same(applicationServices.AccessBroker, services.AccessBroker);
+        Assert.Same(applicationServices.McpOAuthCredentials, services.McpOAuthCredentials);
+        Assert.Same(presentationProvider, services.AccessPresentationScopeProvider);
+        Assert.Equal(AccessPresentationScope.Bootstrap, services.AccessPresentationScope);
+        phase = AccessPresentationScope.Runtime;
+        Assert.Equal(AccessPresentationScope.Runtime, services.AccessPresentationScope);
         Assert.NotNull(services.ToolsetFactory);
         Assert.NotNull(services.ToolResourceFactory);
         Assert.NotNull(services.CurrentSessionContext);
