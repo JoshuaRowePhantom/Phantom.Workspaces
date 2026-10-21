@@ -22,17 +22,11 @@ public sealed class DevTunnelCredentialAccessException : InvalidOperationExcepti
     {
         if (cancellationToken.IsCancellationRequested)
         {
-            try
+            if (outcome is AccessSucceeded<TResult> late)
             {
-                if (outcome is AccessSucceeded<TResult> late)
-                {
-                    await late.Result.DisposeAsync().ConfigureAwait(false);
-                }
+                await late.Result.DisposeAsync().ConfigureAwait(false);
             }
-            finally
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-            }
+            cancellationToken.ThrowIfCancellationRequested();
         }
 
         return outcome switch
@@ -47,8 +41,27 @@ public sealed class DevTunnelCredentialAccessException : InvalidOperationExcepti
         };
     }
 
-    internal static TResult RequireUse<TResult>(SensitiveValueUseOutcome<TResult> outcome) =>
-        outcome switch
+    internal static async ValueTask<TResult> RequireUseAsync<TResult>(
+        SensitiveValueUseOutcome<TResult> outcome,
+        CancellationToken cancellationToken)
+    {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            if (outcome is SensitiveValueUseSucceeded<TResult> late)
+            {
+                if (late.Result is IAsyncDisposable asynchronous)
+                {
+                    await asynchronous.DisposeAsync().ConfigureAwait(false);
+                }
+                else if (late.Result is IDisposable synchronous)
+                {
+                    synchronous.Dispose();
+                }
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+
+        return outcome switch
         {
             SensitiveValueUseSucceeded<TResult> succeeded => succeeded.Result,
             SensitiveValueUseAuthorizationRequired<TResult> required =>
@@ -58,4 +71,5 @@ public sealed class DevTunnelCredentialAccessException : InvalidOperationExcepti
             SensitiveValueUseFailed<TResult> failed => throw new DevTunnelCredentialAccessException(failed.ErrorCode),
             _ => throw new DevTunnelCredentialAccessException(AccessErrorCode.ProviderFailure),
         };
+    }
 }

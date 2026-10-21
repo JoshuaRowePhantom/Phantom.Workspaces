@@ -84,7 +84,7 @@ public sealed class DevTunnelAuthenticationHandler : DelegatingHandler
             SanitizeResponseRequest(response, request);
             return response;
         }
-        return DevTunnelCredentialAccessException.RequireUse(await credential.ConnectToken.UseAsync(
+        return await DevTunnelCredentialAccessException.RequireUseAsync(await credential.ConnectToken.UseAsync(
             async (material, token) =>
             {
                 request.Headers.TryAddWithoutValidation(TunnelAuthorizationHeader, $"tunnel {material}");
@@ -98,7 +98,7 @@ public sealed class DevTunnelAuthenticationHandler : DelegatingHandler
                 {
                     request.Headers.Remove(TunnelAuthorizationHeader);
                 }
-            }, cancellationToken).ConfigureAwait(false));
+            }, cancellationToken).ConfigureAwait(false), cancellationToken).ConfigureAwait(false);
     }
 
     internal static void SanitizeResponseRequest(HttpResponseMessage response, HttpRequestMessage request)

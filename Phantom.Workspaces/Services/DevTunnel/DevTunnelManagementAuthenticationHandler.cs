@@ -87,7 +87,7 @@ internal sealed class DevTunnelManagementAuthenticationHandler(
         {
             throw new DevTunnelCredentialAccessException(AccessErrorCode.ProviderFailure);
         }
-        return DevTunnelCredentialAccessException.RequireUse(await identity.AccessToken.UseAsync(
+        return await DevTunnelCredentialAccessException.RequireUseAsync(await identity.AccessToken.UseAsync(
             async (material, token) =>
             {
                 request.Headers.Authorization = new AuthenticationHeaderValue(identity.Scheme switch
@@ -106,6 +106,6 @@ internal sealed class DevTunnelManagementAuthenticationHandler(
                 {
                     request.Headers.Authorization = null;
                 }
-            }, cancellationToken).ConfigureAwait(false));
+            }, cancellationToken).ConfigureAwait(false), cancellationToken).ConfigureAwait(false);
     }
 }
