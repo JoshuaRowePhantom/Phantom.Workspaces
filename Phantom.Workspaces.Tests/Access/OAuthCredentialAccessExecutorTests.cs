@@ -132,6 +132,211 @@ public sealed class OAuthCredentialAccessExecutorTests
         Assert.False((object)fixture.Executor is IProviderGrantAdministration);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ConcurrentAndRepeatedShutdownDuringNativeCallbackBinding_JoinsOneCleanupOutcome(bool cleanupFails)
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var disposed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cleanupFailure = new InvalidOperationException("Expected native binding cleanup failure.");
+        var disposals = 0;
+        Task[] shutdowns = [];
+        var factory = new OAuthCallbackBindingFactory(async (binding, token) =>
+        {
+            Assert.True(binding.IsListening);
+            binding.Disposed += _ =>
+            {
+                Assert.Equal(2, shutdowns.Length);
+                Assert.All(shutdowns, shutdown => Assert.False(shutdown.IsCompleted));
+                Interlocked.Increment(ref disposals);
+                disposed.TrySetResult();
+                if (cleanupFails) { throw cleanupFailure; }
+            };
+            using var registration = token.Register(() => cancelled.TrySetResult());
+            entered.TrySetResult();
+            await release.Task;
+        });
+        var fixture = new Fixture(callbackBindings: factory);
+        try
+        {
+            var request = fixture.Request();
+            var acquisition = fixture.Broker.AcquireAsync(request, TestContext.Current.CancellationToken);
+            await fixture.AllowAsync();
+            await entered.Task.WaitAsync(TestContext.Current.CancellationToken);
+            var shutdown = fixture.Executor.DisposeAsync().AsTask();
+            Task concurrentShutdown;
+            try
+            {
+                await cancelled.Task.WaitAsync(TestContext.Current.CancellationToken);
+                concurrentShutdown = fixture.Executor.DisposeAsync().AsTask();
+                shutdowns = [shutdown, concurrentShutdown];
+                Assert.False(shutdown.IsCompleted);
+                Assert.False(concurrentShutdown.IsCompleted);
+                Assert.False(disposed.Task.IsCompleted);
+                Assert.Equal(0, Volatile.Read(ref disposals));
+            }
+            finally { release.TrySetResult(); }
+            if (cleanupFails)
+            {
+                Assert.Same(cleanupFailure, await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                    shutdown.WaitAsync(TestContext.Current.CancellationToken)));
+                Assert.Same(cleanupFailure, await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                    concurrentShutdown.WaitAsync(TestContext.Current.CancellationToken)));
+                Assert.Same(cleanupFailure, await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                    fixture.Executor.DisposeAsync().AsTask().WaitAsync(TestContext.Current.CancellationToken)));
+            }
+            else
+            {
+                await Task.WhenAll(shutdown, concurrentShutdown).WaitAsync(TestContext.Current.CancellationToken);
+                await fixture.Executor.DisposeAsync();
+            }
+            var outcome = Assert.IsType<AccessFailed<OAuthCredentialAccessResult>>(await acquisition);
+            Assert.Equal(AccessErrorCode.ProviderFailure, outcome.ErrorCode);
+            Assert.True(disposed.Task.IsCompletedSuccessfully);
+            Assert.Equal(1, Volatile.Read(ref disposals));
+            await Assert.ThrowsAsync<ObjectDisposedException>(() =>
+                fixture.Executor.InspectAsync(request, TestContext.Current.CancellationToken).AsTask());
+            Assert.Equal(0, fixture.Browser.Opens);
+            Assert.Equal(0, fixture.Secret.Reads);
+            Assert.Equal(0, fixture.Server.TokenCalls);
+            Assert.Equal(0, fixture.Store.Reads);
+            Assert.Equal(0, fixture.Store.Writes);
+        }
+        finally
+        {
+            release.TrySetResult();
+            if (cleanupFails)
+            {
+                var failure = await Assert.ThrowsAsync<AggregateException>(() => fixture.DisposeAsync().AsTask());
+                Assert.Contains(cleanupFailure, failure.Flatten().InnerExceptions);
+            }
+            else { await fixture.DisposeAsync(); }
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ActiveNativeCleanupFailure_ConcurrentShutdownStillDrainsPendingNativeBinding(bool pendingCleanupFails)
+    {
+        var activeBinding = new TaskCompletionSource<OAuthCallbackBinding>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var activeDisposed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pendingEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pendingCancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pendingReleased = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pendingDisposed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var activeFailure = new InvalidOperationException("Expected active native binding cleanup failure.");
+        var pendingFailure = new InvalidOperationException("Expected pending native binding cleanup failure.");
+        var bindings = 0;
+        var activeDisposals = 0;
+        var pendingDisposals = 0;
+        Task[] shutdowns = [];
+        var factory = new OAuthCallbackBindingFactory(async (binding, token) =>
+        {
+            Assert.True(binding.IsListening);
+            if (Interlocked.Increment(ref bindings) == 1)
+            {
+                binding.Disposed += _ =>
+                {
+                    Interlocked.Increment(ref activeDisposals);
+                    activeDisposed.TrySetResult();
+                    throw activeFailure;
+                };
+                activeBinding.TrySetResult(binding);
+                return;
+            }
+            binding.Disposed += _ =>
+            {
+                Assert.Equal(2, shutdowns.Length);
+                Assert.All(shutdowns, shutdown => Assert.False(shutdown.IsCompleted));
+                Interlocked.Increment(ref pendingDisposals);
+                pendingDisposed.TrySetResult();
+                if (pendingCleanupFails) { throw pendingFailure; }
+            };
+            using var registration = token.Register(() => pendingCancelled.TrySetResult());
+            pendingEntered.TrySetResult();
+            await pendingReleased.Task;
+        });
+        var fixture = new Fixture(callbackBindings: factory);
+        fixture.Browser.Block = true;
+        try
+        {
+            var activeAcquisition = fixture.Broker.AcquireAsync(fixture.Request(), TestContext.Current.CancellationToken);
+            await fixture.AllowAsync();
+            await fixture.Browser.Opened.Task.WaitAsync(TestContext.Current.CancellationToken);
+            var registeredBinding = await activeBinding.Task.WaitAsync(TestContext.Current.CancellationToken);
+            var template = fixture.Request("pending");
+            var pendingRequest = fixture.Providers.CreateRequest(
+                template.Provider with { Audience = "https://pending-resource.test/" },
+                template.ClientAuthentication,
+                template.Scopes,
+                template.Requestor,
+                template.Use,
+                template.PresentationScope);
+            var pendingAcquisition = fixture.Broker.AcquireAsync(pendingRequest, TestContext.Current.CancellationToken);
+            await fixture.AllowAsync();
+            await pendingEntered.Task.WaitAsync(TestContext.Current.CancellationToken);
+            var shutdown = fixture.Executor.DisposeAsync().AsTask();
+            Task concurrentShutdown;
+            try
+            {
+                await activeDisposed.Task.WaitAsync(TestContext.Current.CancellationToken);
+                Assert.Same(activeFailure, await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                    registeredBinding.DisposeAsync().AsTask().WaitAsync(TestContext.Current.CancellationToken)));
+                await pendingCancelled.Task.WaitAsync(TestContext.Current.CancellationToken);
+                concurrentShutdown = fixture.Executor.DisposeAsync().AsTask();
+                shutdowns = [shutdown, concurrentShutdown];
+                Assert.False(shutdown.IsCompleted);
+                Assert.False(concurrentShutdown.IsCompleted);
+                Assert.False(pendingDisposed.Task.IsCompleted);
+                Assert.Equal(1, Volatile.Read(ref activeDisposals));
+                Assert.Equal(0, Volatile.Read(ref pendingDisposals));
+            }
+            finally { pendingReleased.TrySetResult(); }
+            Assert.Same(activeFailure, await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                shutdown.WaitAsync(TestContext.Current.CancellationToken)));
+            Assert.Same(activeFailure, await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                concurrentShutdown.WaitAsync(TestContext.Current.CancellationToken)));
+            var repeatedShutdown = fixture.Executor.DisposeAsync().AsTask();
+            Assert.Same(activeFailure, await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                repeatedShutdown.WaitAsync(TestContext.Current.CancellationToken)));
+            foreach (var completed in new[] { shutdown, concurrentShutdown, repeatedShutdown })
+            {
+                var failures = completed.Exception!.InnerExceptions;
+                Assert.Equal(pendingCleanupFails ? 2 : 1, failures.Count);
+                Assert.Contains(activeFailure, failures);
+                if (pendingCleanupFails) { Assert.Contains(pendingFailure, failures); }
+            }
+            Assert.True(pendingDisposed.Task.IsCompletedSuccessfully);
+            Assert.Equal(1, Volatile.Read(ref activeDisposals));
+            Assert.Equal(1, Volatile.Read(ref pendingDisposals));
+            foreach (var acquisition in new[] { activeAcquisition, pendingAcquisition })
+            {
+                var outcome = Assert.IsType<AccessFailed<OAuthCredentialAccessResult>>(await acquisition);
+                Assert.Equal(AccessErrorCode.ProviderFailure, outcome.ErrorCode);
+            }
+            Assert.Equal(1, fixture.Browser.Opens);
+            Assert.Equal(0, fixture.Secret.Reads);
+            Assert.Equal(0, fixture.Server.TokenCalls);
+            Assert.Equal(0, fixture.Store.Reads);
+            Assert.Equal(0, fixture.Store.Writes);
+        }
+        finally
+        {
+            pendingReleased.TrySetResult();
+            var failure = await Assert.ThrowsAsync<AggregateException>(() => fixture.DisposeAsync().AsTask());
+            Assert.Contains(activeFailure, failure.Flatten().InnerExceptions);
+            fixture.Browser.Continue.TrySetResult();
+            if (fixture.Browser.Callback is { } callback)
+            {
+                await Assert.ThrowsAsync<HttpRequestException>(() => callback);
+            }
+        }
+    }
+
     [Fact]
     public async Task Perform_UsesRealPkceAndCommitsActualCacheBeforePublication()
     {
@@ -586,12 +791,13 @@ public sealed class OAuthCredentialAccessExecutorTests
         internal UserAuthorizationRegistry Registry { get; } = new();
         internal ObservedCoordinator Acquisitions { get; } = new();
 
-        internal Fixture(bool confidential = false, bool cycle = false, bool derived = false, bool identifierClaim = false)
+        internal Fixture(bool confidential = false, bool cycle = false, bool derived = false, bool identifierClaim = false,
+            OAuthCallbackBindingFactory? callbackBindings = null)
         {
             this.Store = new MemoryStore(this.Events);
             this.Server = new Server(this.Events);
             this.Browser = new Browser(this.Events, this.Server);
-            this.Providers = new OAuthProviderRegistry(this.Store, new OAuthCallbackBindingFactory(), () => new Handler(this.Server), this.Clock);
+            this.Providers = new OAuthProviderRegistry(this.Store, callbackBindings ?? new OAuthCallbackBindingFactory(), () => new Handler(this.Server), this.Clock);
             this.Executor = new OAuthCredentialAccessExecutor(this.Providers, this.Browser);
             this.Configuration = this.Providers.RegisterProvider(
                 new OAuthProviderDescriptor

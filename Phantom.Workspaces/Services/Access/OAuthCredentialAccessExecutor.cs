@@ -42,7 +42,9 @@ internal sealed class OAuthCredentialAccessExecutor :
     private readonly object gate = new();
     private readonly HashSet<McpOAuthAttempt> attempts = [];
     private readonly HashSet<OAuthCallbackBinding> callbackBindings = [];
+    private readonly HashSet<Task> callbackBindingStarts = [];
     private readonly Dictionary<Guid, Provider> listedCaches = [];
+    private readonly TaskCompletionSource disposal = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private bool disposed;
 
     internal OAuthCredentialAccessExecutor(
@@ -409,21 +411,65 @@ internal sealed class OAuthCredentialAccessExecutor :
         }
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        McpOAuthAttempt[] active;
-        OAuthCallbackBinding[] callbacks;
+        McpOAuthAttempt[]? active = null;
+        OAuthCallbackBinding[] callbacks = [];
+        Task[] bindingStarts = [];
         lock (this.gate)
         {
-            if (this.disposed) { return; }
-            this.disposed = true;
-            active = this.attempts.ToArray();
-            callbacks = this.callbackBindings.ToArray();
+            if (!this.disposed)
+            {
+                this.disposed = true;
+                active = this.attempts.ToArray();
+                callbacks = this.callbackBindings.ToArray();
+                bindingStarts = this.callbackBindingStarts.ToArray();
+            }
         }
-        await this.lifetime.CancelAsync().ConfigureAwait(false);
-        foreach (var attempt in active) { await attempt.DisposeAsync().ConfigureAwait(false); }
-        foreach (var callback in callbacks) { await callback.DisposeAsync().ConfigureAwait(false); }
-        foreach (var provider in this.SnapshotProviders(includeRegistered: false)) { await provider.DisposeAsync().ConfigureAwait(false); }
+        if (active is not null) { _ = this.DisposeCoreAsync(active, callbacks, bindingStarts); }
+        return new ValueTask(this.disposal.Task);
+    }
+
+    private async Task DisposeCoreAsync(
+        McpOAuthAttempt[] active,
+        OAuthCallbackBinding[] callbacks,
+        Task[] bindingStarts)
+    {
+        var failures = new List<Exception>();
+        CancellationToken? cancellation = null;
+        async Task DrainAsync(Func<Task> cleanup)
+        {
+            Task? pending = null;
+            try
+            {
+                pending = cleanup();
+                await pending.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException exception) when (pending is null || pending.IsCanceled)
+            {
+                cancellation ??= exception.CancellationToken;
+            }
+            catch (Exception exception)
+            {
+                IEnumerable<Exception> recorded = pending?.Exception is { } aggregate ? aggregate.InnerExceptions : [exception];
+                foreach (var failure in recorded)
+                {
+                    if (!failures.Any(previous => ReferenceEquals(previous, failure))) { failures.Add(failure); }
+                }
+            }
+        }
+
+        await DrainAsync(this.lifetime.CancelAsync).ConfigureAwait(false);
+        foreach (var attempt in active) { await DrainAsync(() => attempt.DisposeAsync().AsTask()).ConfigureAwait(false); }
+        foreach (var callback in callbacks) { await DrainAsync(() => callback.DisposeAsync().AsTask()).ConfigureAwait(false); }
+        await DrainAsync(() => Task.WhenAll(bindingStarts)).ConfigureAwait(false);
+        foreach (var provider in this.SnapshotProviders(includeRegistered: false))
+        {
+            await DrainAsync(() => provider.DisposeAsync().AsTask()).ConfigureAwait(false);
+        }
+        if (failures.Count > 0) { this.disposal.TrySetException(failures); }
+        else if (cancellation is { } token) { this.disposal.TrySetCanceled(token); }
+        else { this.disposal.TrySetResult(); }
     }
 
     private Provider? FindProvider(OAuthCredentialAccessRequest request)
@@ -534,14 +580,8 @@ internal sealed class OAuthCredentialAccessExecutor :
         var generation = await commits.BeginGenerationAsync(commitContext, cancellation.Token).ConfigureAwait(false);
         var verifier = Base64Url(RandomNumberGenerator.GetBytes(32));
         var state = Base64Url(RandomNumberGenerator.GetBytes(32));
-        await using var binding = await configuration.CallbackBindings.BindAsync(
+        await using var binding = await this.BindCallbackAsync(configuration.CallbackBindings,
             operation, commitContext.InteractionPermit, cancellation.Token).ConfigureAwait(false);
-        lock (this.gate)
-        {
-            if (this.disposed) { throw new OperationCanceledException(cancellation.Token); }
-            this.callbackBindings.Add(binding);
-            binding.Disposed += this.RemoveCallbackBinding;
-        }
         var redirect = binding.RedirectUri;
         var authorization = new UriBuilder(descriptor.AuthorizationEndpoint);
         var query = System.Web.HttpUtility.ParseQueryString(authorization.Query);
@@ -638,6 +678,59 @@ internal sealed class OAuthCredentialAccessExecutor :
     private void RemoveAttempt(McpOAuthAttempt attempt)
     {
         lock (this.gate) { this.attempts.Remove(attempt); }
+    }
+
+    private async ValueTask<OAuthCallbackBinding> BindCallbackAsync(
+        OAuthCallbackBindingFactory factory,
+        IProviderAcquisitionOperation operation,
+        ProviderInteractionPermit proof,
+        CancellationToken cancellationToken)
+    {
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (this.gate)
+        {
+            if (this.disposed) { throw new OperationCanceledException(cancellationToken); }
+            this.callbackBindingStarts.Add(completion.Task);
+        }
+        OAuthCallbackBinding? binding = null;
+        try
+        {
+            binding = await factory.BindAsync(operation, proof, cancellationToken).ConfigureAwait(false);
+            lock (this.gate)
+            {
+                if (this.disposed) { throw new OperationCanceledException(cancellationToken); }
+                this.callbackBindings.Add(binding);
+                binding.Disposed += this.RemoveCallbackBinding;
+            }
+            return binding;
+        }
+        catch (Exception exception)
+        {
+            try
+            {
+                if (binding is not null) { await binding.DisposeAsync().ConfigureAwait(false); }
+            }
+            catch (Exception cleanupException)
+            {
+                completion.TrySetException(cleanupException);
+                _ = completion.Task.Exception;
+                throw;
+            }
+            if (exception is not OperationCanceledException)
+            {
+                completion.TrySetException(exception);
+                _ = completion.Task.Exception;
+            }
+            throw;
+        }
+        finally
+        {
+            lock (this.gate)
+            {
+                completion.TrySetResult();
+                this.callbackBindingStarts.Remove(completion.Task);
+            }
+        }
     }
 
     private void RemoveCallbackBinding(OAuthCallbackBinding binding)

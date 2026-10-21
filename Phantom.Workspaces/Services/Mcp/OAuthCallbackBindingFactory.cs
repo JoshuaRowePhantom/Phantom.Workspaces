@@ -12,7 +12,7 @@ using Phantom.Workspaces.Llm.Interfaces.Access.Execution;
 
 namespace Phantom.Workspaces.Services.Mcp;
 
-internal sealed class OAuthCallbackBindingFactory
+internal sealed class OAuthCallbackBindingFactory(Func<OAuthCallbackBinding, CancellationToken, ValueTask>? onBound = null)
 {
     internal async ValueTask<OAuthCallbackBinding> BindAsync(
         IProviderAcquisitionOperation operation,
@@ -27,13 +27,21 @@ internal sealed class OAuthCallbackBindingFactory
                 operation.AcquisitionGeneration, operation.CompatibilityKey);
         if (!IsAuthorized()) { throw new InvalidOperationException("OAuth callback binding is not authorized."); }
         var binding = await OAuthCallbackBinding.StartAsync(operation, executionProof, cancellationToken).ConfigureAwait(false);
-        if (!IsAuthorized() || cancellationToken.IsCancellationRequested)
+        try
+        {
+            if (onBound is not null) { await onBound(binding, cancellationToken).ConfigureAwait(false); }
+            if (!IsAuthorized() || cancellationToken.IsCancellationRequested)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                throw new InvalidOperationException("OAuth callback binding is no longer authorized.");
+            }
+            return binding;
+        }
+        catch
         {
             await binding.DisposeAsync().ConfigureAwait(false);
-            cancellationToken.ThrowIfCancellationRequested();
-            throw new InvalidOperationException("OAuth callback binding is no longer authorized.");
+            throw;
         }
-        return binding;
     }
 }
 
