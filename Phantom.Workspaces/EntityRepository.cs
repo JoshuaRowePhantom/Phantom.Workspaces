@@ -9,27 +9,46 @@ using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.MongoDB;
 using Phantom.Workspaces.Data.Offline;
 using Phantom.Workspaces.Data.Web.Client;
+using Phantom.Workspaces.Llm.Interfaces.Access;
+using Phantom.Workspaces.Services.DevTunnel;
 
 namespace Phantom.Workspaces;
 
-public sealed class EntityRepository
+public sealed class EntityRepository : IAsyncDisposable
 {
     private readonly IDataAccessLayer coreDataAccessLayer;
+    private readonly IDataAccessLayer underlyingDataAccessLayer;
+    private readonly TaskCompletionSource disposal = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private int disposalStarted;
 
     internal static Func<MongoDB.Driver.IMongoDatabase, string, MongoDbEntityDataAccessLayer>? TestMongoDbEntityDataAccessLayerFactory { get; set; }
 
     private EntityRepository(
         RepositorySource repositorySource,
         IDataAccessLayer coreDataAccessLayer,
-        WorkspaceEntitySession workspaceEntitySession)
+        WorkspaceEntitySession workspaceEntitySession,
+        IAccessBroker? accessBroker,
+        DevTunnelIdentityRoute? identityRoute,
+        Func<AccessPresentationScope>? presentationScope,
+        IDataAccessLayer underlyingDataAccessLayer)
     {
         this.RepositorySource = repositorySource;
+        this.AccessBroker = accessBroker;
+        this.DevTunnelIdentityRoute = identityRoute;
+        this.PresentationScope = presentationScope;
+        this.underlyingDataAccessLayer = underlyingDataAccessLayer;
         this.coreDataAccessLayer = coreDataAccessLayer;
         this.WorkspaceEntitySession = workspaceEntitySession;
         this.DataAccessLayer = new WorkspaceEntitySessionDataAccessLayer(this.coreDataAccessLayer, this.WorkspaceEntitySession);
     }
 
     public RepositorySource RepositorySource { get; }
+
+    public IAccessBroker? AccessBroker { get; }
+
+    public DevTunnelIdentityRoute? DevTunnelIdentityRoute { get; }
+
+    public Func<AccessPresentationScope>? PresentationScope { get; }
 
     public WorkspaceEntitySession WorkspaceEntitySession { get; }
 
@@ -64,131 +83,261 @@ public sealed class EntityRepository
         var repositorySource = options.RepositorySource;
         IDataAccessLayer underlyingDataAccessLayer;
         using (RepositoryStartupDiagnostics.Start("repository-underlying-layer"))
-            underlyingDataAccessLayer = await CreateUnderlyingDataAccessLayerAsync(repositorySource, cancellationToken).ConfigureAwait(false);
-        var isWebSource = repositorySource is WebRepositorySource or DevTunnelNameRepositorySource;
-        IDataAccessLayer innerDataAccessLayer;
-        if (isWebSource)
+            underlyingDataAccessLayer = await CreateUnderlyingDataAccessLayerAsync(
+                repositorySource, options.AccessBroker, options.DevTunnelIdentityRoute, options.AccessPresentationScope, cancellationToken).ConfigureAwait(false);
+        try
         {
-            innerDataAccessLayer = underlyingDataAccessLayer;
-        }
-        else
-        {
-            innerDataAccessLayer = ValidatedDataAccessLayerFactory.Create(
-                underlyingDataAccessLayer,
-                options.ValidationPassStarted);
-        }
-        if (!isWebSource)
-        {
-            // For MongoDB data access layers, ensure indexes and migrate schema before any reads
-            if (underlyingDataAccessLayer is MongoDbEntityDataAccessLayer mongoDbDataAccessLayer)
+            var isWebSource = repositorySource is WebRepositorySource or DevTunnelNameRepositorySource;
+            IDataAccessLayer innerDataAccessLayer;
+            if (isWebSource)
             {
-                await mongoDbDataAccessLayer.EnsureIndexesAsync().ConfigureAwait(false);
-                await mongoDbDataAccessLayer.MigrateAsync().ConfigureAwait(false);
+                innerDataAccessLayer = underlyingDataAccessLayer;
+            }
+            else
+            {
+                innerDataAccessLayer = ValidatedDataAccessLayerFactory.Create(
+                    underlyingDataAccessLayer,
+                    options.ValidationPassStarted);
+            }
+            if (!isWebSource)
+            {
+                // For MongoDB data access layers, ensure indexes and migrate schema before any reads
+                if (underlyingDataAccessLayer is MongoDbEntityDataAccessLayer mongoDbDataAccessLayer)
+                {
+                    await mongoDbDataAccessLayer.EnsureIndexesAsync().ConfigureAwait(false);
+                    await mongoDbDataAccessLayer.MigrateAsync().ConfigureAwait(false);
+                }
+
+                using (RepositoryStartupDiagnostics.Start("repository-schema-population"))
+                    await EnsureSeedDataIfNeededAsync(innerDataAccessLayer, cancellationToken).ConfigureAwait(false);
             }
 
-            using (RepositoryStartupDiagnostics.Start("repository-schema-population"))
-                await EnsureSeedDataIfNeededAsync(innerDataAccessLayer, cancellationToken).ConfigureAwait(false);
+            var coreDataAccessLayer = new ScheduleDataAccessLayer(innerDataAccessLayer);
+            WorkspaceEntitySession workspaceEntitySession;
+            using (RepositoryStartupDiagnostics.Start("repository-session-bootstrap"))
+                workspaceEntitySession = await WorkspaceEntitySessionBootstrapper.InitializeAsync(
+                    coreDataAccessLayer,
+                    options.UserComputerProfileOverride,
+                    cancellationToken).ConfigureAwait(false);
+            return new EntityRepository(
+                repositorySource, coreDataAccessLayer, workspaceEntitySession,
+                options.AccessBroker, options.DevTunnelIdentityRoute, options.AccessPresentationScope,
+                underlyingDataAccessLayer);
         }
-
-        var coreDataAccessLayer = new ScheduleDataAccessLayer(innerDataAccessLayer);
-        WorkspaceEntitySession workspaceEntitySession;
-        using (RepositoryStartupDiagnostics.Start("repository-session-bootstrap"))
-            workspaceEntitySession = await WorkspaceEntitySessionBootstrapper.InitializeAsync(
-                coreDataAccessLayer,
-                options.UserComputerProfileOverride,
-                cancellationToken).ConfigureAwait(false);
-        var repository = new EntityRepository(repositorySource, coreDataAccessLayer, workspaceEntitySession);
-        return repository;
+        catch (Exception initializationFailure)
+        {
+            try
+            {
+                await DisposeLayerAsync(underlyingDataAccessLayer).ConfigureAwait(false);
+            }
+            catch (Exception cleanupFailure)
+            {
+                throw new AggregateException("Repository initialization and cleanup failed.", initializationFailure, cleanupFailure);
+            }
+            throw;
+        }
     }
 
     private static async Task<IDataAccessLayer> CreateUnderlyingDataAccessLayerAsync(
         RepositorySource repositorySource,
+        IAccessBroker? accessBroker,
+        DevTunnelIdentityRoute? identityRoute,
+        Func<AccessPresentationScope>? presentationScope,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         return repositorySource switch
         {
-            WebRepositorySource web => CreateWebDataAccessLayer(web),
-            DevTunnelNameRepositorySource devTunnel => await CreateDevTunnelNameDataAccessLayerAsync(devTunnel, cancellationToken).ConfigureAwait(false),
+            WebRepositorySource web => CreateWebDataAccessLayer(web, accessBroker, identityRoute, presentationScope),
+            DevTunnelNameRepositorySource devTunnel => await CreateDevTunnelNameDataAccessLayerAsync(
+                devTunnel, accessBroker, identityRoute, presentationScope, cancellationToken).ConfigureAwait(false),
             LocalGitRepositorySource git => new GitDataAccessLayer(git.Path),
             MongoDbRepositorySource mongo => await CreateMongoDbDataAccessLayerAsync(mongo).ConfigureAwait(false),
             _ => new InMemoryDataAccessLayer(),
         };
     }
 
-    private static IDataAccessLayer CreateWebDataAccessLayer(WebRepositorySource repositorySource)
+    internal static IDataAccessLayer CreateWebDataAccessLayer(
+        WebRepositorySource repositorySource,
+        IAccessBroker? accessBroker,
+        DevTunnelIdentityRoute? identityRoute,
+        Func<AccessPresentationScope>? presentationScope,
+        IAuthenticatedHttpClientFactory? httpClientFactory = null)
     {
         if (string.IsNullOrWhiteSpace(repositorySource.Endpoint))
         {
             throw new InvalidOperationException("Web repository source requires an endpoint URL.");
         }
 
-        // Dev tunnel access authorizes with the GitHub auth token (GITHUB_TOKEN env var, else
-        // `gh auth token`); plain web access uses no tunnel-authorization header. The shared
-        // DevTunnelAuthenticationHandler (issue #1456) attaches/refreshes the token per request; this
-        // client no longer knows about tunnels or tokens.
-        if (!repositorySource.UseGitHubAuthToken)
+        if (!RequiresTunnelAuthentication(repositorySource))
         {
             return new WebClientDataAccessLayer(repositorySource.Endpoint);
         }
 
-        var initialToken = Phantom.Workspaces.Llm.GitHubAuthTokenResolver.Resolve();
-        if (string.IsNullOrWhiteSpace(initialToken))
-        {
-            throw new InvalidOperationException(
-                "A GitHub authentication token is required to connect to the dev tunnel endpoint. Set the GITHUB_TOKEN environment variable or sign in with 'gh auth login'.");
-        }
-
-        var tokenProvider = new Services.DevTunnel.DelegateDevTunnelConnectTokenProvider(
-            acquire: _ => new ValueTask<string?>(Phantom.Workspaces.Llm.GitHubAuthTokenResolver.Resolve()),
-            refresh: _ => new ValueTask<string?>(Phantom.Workspaces.Llm.GitHubAuthTokenResolver.Resolve()));
-        var httpClient = new Services.DevTunnel.AuthenticatedHttpClientFactory()
-            .CreateClient(new Uri(repositorySource.Endpoint), tokenProvider);
-        return new WebClientDataAccessLayer(repositorySource.Endpoint, httpClient);
+        var broker = RequireAccessBroker(accessBroker);
+        var scope = RequirePresentationScope(presentationScope);
+        var endpoint = new Uri(repositorySource.Endpoint, UriKind.Absolute);
+        var request = CreateConnectRequest(
+            new DevTunnelAccessDescriptor { Access = DevTunnelAccessKind.Private, Endpoint = endpoint },
+            repositorySource.Authentication, identityRoute, CredentialUseKind.Repository, "repository", scope);
+        var httpClient = (httpClientFactory ?? new AuthenticatedHttpClientFactory())
+            .CreateClient(endpoint, broker, request, scope);
+        return new WebClientDataAccessLayer(repositorySource.Endpoint, httpClient, ownsHttpClient: true);
     }
 
-    private static async Task<IDataAccessLayer> CreateDevTunnelNameDataAccessLayerAsync(
+    internal static async Task<IDataAccessLayer> CreateDevTunnelNameDataAccessLayerAsync(
         DevTunnelNameRepositorySource repositorySource,
-        CancellationToken cancellationToken)
+        IAccessBroker? accessBroker,
+        DevTunnelIdentityRoute? identityRoute,
+        Func<AccessPresentationScope>? presentationScope,
+        CancellationToken cancellationToken,
+        IAuthenticatedHttpClientFactory? httpClientFactory = null)
     {
-        // Discover the relay endpoint (and forwarded port) from the tunnel name, and keep it fresh:
-        // on a connection DROP the reconnecting layer re-resolves the tunnel (picking up a changed
-        // port) and reconnects with bounded backoff, without restarting the workspace. AUTH (a relay
-        // 401) is a separate concern owned by the shared DevTunnelAuthenticationHandler (issue #1456)
-        // inside each built client's HTTP pipeline: it attaches the Connect token per request and
-        // re-mints/retries once on 401. The connect token is fetched automatically by the Management
-        // API (Private mode) or absent (Anonymous).
-        var resolver = new Services.DevTunnel.DevTunnelServiceFactory()
-            .CreateEndpointResolver();
-        var authenticatedHttpClientFactory = new Services.DevTunnel.AuthenticatedHttpClientFactory();
+        var broker = RequireAccessBroker(accessBroker);
+        var scope = RequirePresentationScope(presentationScope);
+        var anonymous = IsAnonymous(repositorySource);
+        var request = CreateConnectRequest(
+            new DevTunnelAccessDescriptor
+            {
+                Access = anonymous ? DevTunnelAccessKind.Anonymous : DevTunnelAccessKind.Private,
+                Name = repositorySource.TunnelName,
+            },
+            repositorySource.Authentication, identityRoute, CredentialUseKind.Repository, "repository", scope);
+        var identity = DevTunnelIdentityCredentialAccessRequest.Create(
+            request.IdentityRoute, request.Requestor, request.Use, request.PresentationScope);
+        var resolver = new DevTunnelServiceFactory(
+            broker, identity, scope).CreateEndpointResolver(request);
+        var authenticatedHttpClientFactory = httpClientFactory ?? new AuthenticatedHttpClientFactory();
 
         var reconnectingDataAccessLayer = new Services.DevTunnel.ReconnectingWebDataAccessLayer(
             resolveEndpointAsync: cancellationToken => resolver.ResolveAsync(
                 repositorySource.TunnelName,
-                repositorySource.AccessMode,
+                anonymous ? Configuration.DevTunnelAccessMode.Anonymous : Configuration.DevTunnelAccessMode.Private,
                 cancellationToken),
             buildDataAccessLayer: resolution =>
             {
-                // Issue #1293: For Private access, only a Microsoft Connect-scope tunnel access
-                // token is acceptable to the *.devtunnels.ms relay; a GitHub OAuth token is always
-                // rejected with 401. If the Management API did not mint a Connect token, Resolve
-                // throws an actionable error rather than silently sending the wrong token.
-                // Anonymous access sends no tunnel-authorization header.
-                var authorization = Services.DevTunnel.DevTunnelClientAuthorization.Resolve(
-                    resolution,
-                    repositorySource.AccessMode);
-
-                // Wave 2 (#1456): the token-provider seam wraps the resolution's Connect token; the
-                // concrete Management-API minting/refresh provider lands in Wave 3 (#1458).
-                var tokenProvider = new Services.DevTunnel.DelegateDevTunnelConnectTokenProvider(
-                    acquire: _ => new ValueTask<string?>(authorization.Token));
-                var httpClient = authenticatedHttpClientFactory.CreateClient(resolution.BaseUri, tokenProvider);
-                return new WebClientDataAccessLayer(resolution.BaseUri.ToString(), httpClient);
+                var httpClient = authenticatedHttpClientFactory.CreateClient(resolution.BaseUri, broker, request, scope);
+                return new WebClientDataAccessLayer(resolution.BaseUri.ToString(), httpClient, ownsHttpClient: true);
             },
             delayScheduler: Services.DevTunnel.RealDelayScheduler.Instance);
 
-        await reconnectingDataAccessLayer.StartAsync(cancellationToken).ConfigureAwait(false);
-        return reconnectingDataAccessLayer;
+        var initialized = false;
+        try
+        {
+            await reconnectingDataAccessLayer.StartAsync(cancellationToken).ConfigureAwait(false);
+            initialized = true;
+            return reconnectingDataAccessLayer;
+        }
+        finally
+        {
+            if (!initialized)
+            {
+                await reconnectingDataAccessLayer.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+    }
+
+    internal static bool RequiresTunnelAuthentication(WebRepositorySource source) =>
+        source.Authentication is { } authentication
+            ? !string.Equals(authentication.Scheme, RemoteAuthentication.AnonymousScheme, StringComparison.OrdinalIgnoreCase)
+            : source.UseGitHubAuthToken;
+
+    internal static bool IsAnonymous(DevTunnelNameRepositorySource source) =>
+        source.AccessMode == Configuration.DevTunnelAccessMode.Anonymous ||
+        string.Equals(source.Authentication?.Scheme, RemoteAuthentication.AnonymousScheme, StringComparison.OrdinalIgnoreCase);
+
+    internal static IAccessBroker RequireAccessBroker(IAccessBroker? broker) =>
+        broker ?? throw new InvalidOperationException("The host access broker is required for relay access.");
+
+    internal static Func<AccessPresentationScope> RequirePresentationScope(Func<AccessPresentationScope>? presentationScope) =>
+        presentationScope ?? throw new DevTunnelCredentialAccessException(AccessErrorCode.UnsupportedRequest);
+
+    internal static DevTunnelConnectCredentialAccessRequest CreateConnectRequest(
+        DevTunnelAccessDescriptor tunnel,
+        RemoteAuthentication? authentication,
+        DevTunnelIdentityRoute? configuredRoute,
+        CredentialUseKind useKind,
+        string purpose,
+        Func<AccessPresentationScope> presentationScope)
+    {
+        if (tunnel.Endpoint is { } endpoint &&
+            (endpoint.UserInfo.Length != 0 || endpoint.Query.Length != 0 || endpoint.Fragment.Length != 0))
+        {
+            throw new InvalidOperationException("Relay endpoints cannot contain credential-bearing URL components.");
+        }
+        var requestor = new AccessRequestor
+        {
+            Kind = AccessRequestorKind.Application,
+            Identifier = CredentialIdentityFactory.CreateRequestorIdentifier(AccessRequestorKind.Application, purpose),
+            SafeDisplayName = useKind == CredentialUseKind.Repository ? "Repository" : "Agent persistence",
+        };
+        var resource = tunnel.Name ?? tunnel.Endpoint?.AbsoluteUri ?? string.Empty;
+        var lineage = new CredentialUseLineage
+        {
+            ProviderConfiguration = CredentialIdentityFactory.CreateLineageIdentifier("relay-resource", resource),
+        };
+        var use = new CredentialUseDescriptor
+        {
+            Kind = useKind,
+            Lineage = lineage,
+            Fingerprint = CredentialIdentityFactory.CreateUseFingerprint(useKind, lineage, requestor.Identifier, purpose),
+            SafeDisplayName = useKind == CredentialUseKind.Repository ? "Access repository relay" : "Access persistence relay",
+            MemoryScopes = [ReleaseMemoryScopeKind.AllowOnce, ReleaseMemoryScopeKind.ExactUse, ReleaseMemoryScopeKind.AllUses],
+        };
+        var scope = RequirePresentationScope(presentationScope)();
+        DevTunnelIdentityRoute route;
+        if (tunnel.Access == DevTunnelAccessKind.Anonymous)
+        {
+            route = new AnonymousDevTunnelIdentityRoute();
+        }
+        else if (configuredRoute is not null)
+        {
+            if (configuredRoute is AnonymousDevTunnelIdentityRoute ||
+                authentication is not null && !string.Equals(authentication.Scheme, configuredRoute.Scheme.ToString(), StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("The configured identity route does not match relay authentication.");
+            }
+            route = configuredRoute;
+        }
+        else if (authentication is null || string.Equals(authentication.Scheme, RemoteAuthentication.GithubScheme, StringComparison.OrdinalIgnoreCase))
+        {
+            route = new GitHubDevTunnelIdentityRoute
+            {
+                Credential = GitHubCredentialAccessRequest.Create(
+                    GitHubCredentialPurpose.DevTunnelIdentity, requestor, lineage, purpose, scope),
+            };
+        }
+        else
+        {
+            throw new InvalidOperationException("A configured typed identity route is required for this relay authentication scheme.");
+        }
+        return DevTunnelConnectCredentialAccessRequest.Create(tunnel, route, requestor, use, scope);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref this.disposalStarted, 1) != 0)
+        {
+            await this.disposal.Task.ConfigureAwait(false);
+            return;
+        }
+
+        try
+        {
+            await DisposeLayerAsync(this.underlyingDataAccessLayer).ConfigureAwait(false);
+            this.disposal.TrySetResult();
+        }
+        catch (Exception exception)
+        {
+            this.disposal.TrySetException(exception);
+            throw;
+        }
+    }
+
+    private static async ValueTask DisposeLayerAsync(IDataAccessLayer layer)
+    {
+        if (layer is IAsyncDisposable asynchronous) { await asynchronous.DisposeAsync().ConfigureAwait(false); }
+        else if (layer is IDisposable synchronous) { synchronous.Dispose(); }
     }
 
     private static async Task<IDataAccessLayer> CreateMongoDbDataAccessLayerAsync(

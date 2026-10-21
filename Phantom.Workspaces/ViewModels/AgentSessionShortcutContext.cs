@@ -158,8 +158,12 @@ public sealed class AgentSessionShortcutContext
             return this.agentPersistenceStoreTask;
         }
 
-        this.agentPersistenceStoreTask = AgentPersistenceStoreSourceFactory.CreateForRepositorySourceAsync(
-            mainWindowViewModel.RepositorySource);
+        var repository = mainWindowViewModel.EntityBroker.EntityRepository;
+        this.agentPersistenceStoreTask = new AgentPersistenceStoreSourceFactory(
+            mainWindowViewModel.RepositorySource,
+            mainWindowViewModel.ApplicationServices.AccessBroker,
+            repository.DevTunnelIdentityRoute,
+            mainWindowViewModel.ApplicationServices.AccessPresentationScope).CreateAsync(CancellationToken.None);
         return this.agentPersistenceStoreTask;
     }
 }

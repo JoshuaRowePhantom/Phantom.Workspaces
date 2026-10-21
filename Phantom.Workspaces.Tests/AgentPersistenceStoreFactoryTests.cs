@@ -14,8 +14,8 @@ public sealed class AgentPersistenceStoreFactoryTests
     [Fact]
     public async Task AgentPersistenceStoreFactory_CreateForRepositorySource_Web()
     {
-        var store = await AgentPersistenceStoreSourceFactory.CreateForRepositorySourceAsync(
-            new WebRepositorySource("https://web.example/agent/"));
+        var store = await new AgentPersistenceStoreSourceFactory(
+            new WebRepositorySource("https://web.example/agent/")).CreateAsync(TestContext.Current.CancellationToken);
 
         Assert.IsType<WebClientAgentPersistenceStore>(store);
     }
@@ -24,22 +24,22 @@ public sealed class AgentPersistenceStoreFactoryTests
     public async Task AgentPersistenceStoreFactory_CreateForRepositorySource_Web_BlankEndpointThrows()
     {
         await Assert.ThrowsAsync<System.InvalidOperationException>(
-            () => AgentPersistenceStoreSourceFactory.CreateForRepositorySourceAsync(
-                new WebRepositorySource(string.Empty)));
+            () => new AgentPersistenceStoreSourceFactory(
+                new WebRepositorySource(string.Empty)).CreateAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public async Task AgentPersistenceStoreFactory_CreateForRepositorySource_MongoDbAndDevTunnelAndInMemory()
     {
         // Unknown source -> in-memory store.
-        var unknownStore = await AgentPersistenceStoreSourceFactory.CreateForRepositorySourceAsync(
-            new UnknownRepositorySource());
+        var unknownStore = await new AgentPersistenceStoreSourceFactory(
+            new UnknownRepositorySource()).CreateAsync(TestContext.Current.CancellationToken);
         Assert.IsType<InMemoryAgentPersistenceStore>(unknownStore);
 
         // MongoDB source with missing container/collection falls back to the in-memory store (the
         // same guard the old inline switch applied), so no MongoDB container is required.
-        var mongoStore = await AgentPersistenceStoreSourceFactory.CreateForRepositorySourceAsync(
-            new MongoDbRepositorySource(ContainerName: string.Empty, RootCollectionName: string.Empty));
+        var mongoStore = await new AgentPersistenceStoreSourceFactory(
+            new MongoDbRepositorySource(ContainerName: string.Empty, RootCollectionName: string.Empty)).CreateAsync(TestContext.Current.CancellationToken);
         Assert.IsType<InMemoryAgentPersistenceStore>(mongoStore);
 
         // The DevTunnel branch is routed by the same switch; it establishes a live tunnel connection

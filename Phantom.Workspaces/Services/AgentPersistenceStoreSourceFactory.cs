@@ -1,7 +1,10 @@
 using System;
 using System.Threading.Tasks;
+using System.Threading;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.Interfaces.Access;
+using Phantom.Workspaces.Services.DevTunnel;
 
 namespace Phantom.Workspaces.Services;
 
@@ -13,89 +16,124 @@ namespace Phantom.Workspaces.Services;
 /// auth-token resolution, DevTunnel reconnection, and chat-history-provider wiring — is preserved
 /// exactly from the previous inline implementation.
 /// </summary>
-public static class AgentPersistenceStoreSourceFactory
+public sealed class AgentPersistenceStoreSourceFactory
 {
     private const string AgentSessionCollectionSuffix = "-agent-sessions";
+    private readonly RepositorySource repositorySource;
+    private readonly IAccessBroker? accessBroker;
+    private readonly DevTunnelIdentityRoute? identityRoute;
+    private readonly Func<AccessPresentationScope>? presentationScope;
+    private readonly IAuthenticatedHttpClientFactory httpClientFactory;
+
+    public AgentPersistenceStoreSourceFactory(
+        RepositorySource repositorySource,
+        IAccessBroker? accessBroker = null,
+        DevTunnelIdentityRoute? identityRoute = null,
+        Func<AccessPresentationScope>? presentationScope = null)
+        : this(repositorySource, accessBroker, identityRoute, presentationScope, new AuthenticatedHttpClientFactory())
+    {
+    }
+
+    internal AgentPersistenceStoreSourceFactory(
+        RepositorySource repositorySource,
+        IAccessBroker? accessBroker,
+        DevTunnelIdentityRoute? identityRoute,
+        Func<AccessPresentationScope>? presentationScope,
+        IAuthenticatedHttpClientFactory httpClientFactory)
+    {
+        this.repositorySource = repositorySource;
+        this.accessBroker = accessBroker;
+        this.identityRoute = identityRoute;
+        this.presentationScope = presentationScope;
+        this.httpClientFactory = httpClientFactory;
+    }
 
     /// <summary>
     /// Creates the persistence store for the supplied repository source. Web / DevTunnel / MongoDB
     /// sources build their respective stores; any other source resolves to an in-memory store.
     /// </summary>
-    public static async Task<IAgentPersistenceStore> CreateForRepositorySourceAsync(
-        RepositorySource repositorySource)
+    public async Task<IAgentPersistenceStore> CreateAsync(CancellationToken cancellationToken)
     {
-        return repositorySource switch
+        cancellationToken.ThrowIfCancellationRequested();
+        return this.repositorySource switch
         {
-            WebRepositorySource webSource => CreateWeb(webSource),
-            DevTunnelNameRepositorySource devTunnelSource => await CreateDevTunnelAsync(devTunnelSource).ConfigureAwait(false),
+            WebRepositorySource webSource => this.CreateWeb(webSource),
+            DevTunnelNameRepositorySource devTunnelSource => await this.CreateDevTunnelAsync(devTunnelSource, cancellationToken).ConfigureAwait(false),
             MongoDbRepositorySource mongoSource => await CreateMongoDbAsync(mongoSource).ConfigureAwait(false),
             _ => AgentPersistenceStoreFactory.CreateInMemory(),
         };
     }
 
-    private static IAgentPersistenceStore CreateWeb(WebRepositorySource repositorySource)
+    private IAgentPersistenceStore CreateWeb(WebRepositorySource repositorySource)
     {
         if (string.IsNullOrWhiteSpace(repositorySource.Endpoint))
         {
             throw new InvalidOperationException("Web repository source requires an endpoint URL.");
         }
 
-        // The shared DevTunnelAuthenticationHandler (issue #1456) attaches/refreshes the GitHub
-        // token per request; this store no longer knows about tunnels or tokens.
-        if (!repositorySource.UseGitHubAuthToken)
+        if (!EntityRepository.RequiresTunnelAuthentication(repositorySource))
         {
             return new Data.Web.Client.WebClientAgentPersistenceStore(repositorySource.Endpoint);
         }
 
-        var initialToken = Phantom.Workspaces.Llm.GitHubAuthTokenResolver.Resolve();
-        if (string.IsNullOrWhiteSpace(initialToken))
-        {
-            throw new InvalidOperationException(
-                "A GitHub authentication token is required to connect to the dev tunnel endpoint. Set the GITHUB_TOKEN environment variable or sign in with 'gh auth login'.");
-        }
-
-        var tokenProvider = new Services.DevTunnel.DelegateDevTunnelConnectTokenProvider(
-            acquire: _ => new ValueTask<string?>(Phantom.Workspaces.Llm.GitHubAuthTokenResolver.Resolve()),
-            refresh: _ => new ValueTask<string?>(Phantom.Workspaces.Llm.GitHubAuthTokenResolver.Resolve()));
-        var httpClient = new Services.DevTunnel.AuthenticatedHttpClientFactory()
-            .CreateClient(new Uri(repositorySource.Endpoint), tokenProvider);
-        return new Data.Web.Client.WebClientAgentPersistenceStore(repositorySource.Endpoint, httpClient);
+        var broker = EntityRepository.RequireAccessBroker(this.accessBroker);
+        var scope = EntityRepository.RequirePresentationScope(this.presentationScope);
+        var endpoint = new Uri(repositorySource.Endpoint, UriKind.Absolute);
+        var request = EntityRepository.CreateConnectRequest(
+            new DevTunnelAccessDescriptor { Access = DevTunnelAccessKind.Private, Endpoint = endpoint },
+            repositorySource.Authentication, this.identityRoute, CredentialUseKind.Application, "agent-persistence", scope);
+        var httpClient = this.httpClientFactory.CreateClient(endpoint, broker, request, scope);
+        return new Data.Web.Client.WebClientAgentPersistenceStore(repositorySource.Endpoint, httpClient, ownsHttpClient: true);
     }
 
-    private static async Task<IAgentPersistenceStore> CreateDevTunnelAsync(
-        DevTunnelNameRepositorySource repositorySource)
+    private async Task<IAgentPersistenceStore> CreateDevTunnelAsync(
+        DevTunnelNameRepositorySource repositorySource,
+        CancellationToken cancellationToken)
     {
-        // The reconnecting wrapper owns endpoint-DROP re-resolution; AUTH (a relay 401) is owned by
-        // the shared DevTunnelAuthenticationHandler (issue #1456) inside each built store's HTTP
-        // pipeline, which attaches the Connect token per request and re-mints/retries once on 401.
-        var resolver = new Services.DevTunnel.DevTunnelServiceFactory()
-            .CreateEndpointResolver();
-        var authenticatedHttpClientFactory = new Services.DevTunnel.AuthenticatedHttpClientFactory();
+        var broker = EntityRepository.RequireAccessBroker(this.accessBroker);
+        var scope = EntityRepository.RequirePresentationScope(this.presentationScope);
+        var anonymous = EntityRepository.IsAnonymous(repositorySource);
+        var request = EntityRepository.CreateConnectRequest(
+            new DevTunnelAccessDescriptor
+            {
+                Access = anonymous ? DevTunnelAccessKind.Anonymous : DevTunnelAccessKind.Private,
+                Name = repositorySource.TunnelName,
+            },
+            repositorySource.Authentication, this.identityRoute, CredentialUseKind.Application, "agent-persistence", scope);
+        var identity = DevTunnelIdentityCredentialAccessRequest.Create(
+            request.IdentityRoute, request.Requestor, request.Use, request.PresentationScope);
+        var resolver = new DevTunnelServiceFactory(
+            broker, identity, scope).CreateEndpointResolver(request);
 
         var reconnectingStore = new Services.DevTunnel.ReconnectingWebAgentPersistenceStore(
             resolveEndpointAsync: cancellationToken => resolver.ResolveAsync(
                 repositorySource.TunnelName,
-                repositorySource.AccessMode,
+                anonymous ? Configuration.DevTunnelAccessMode.Anonymous : Configuration.DevTunnelAccessMode.Private,
                 cancellationToken),
             buildAgentPersistenceStore: resolution =>
             {
-                var authorization = Services.DevTunnel.DevTunnelClientAuthorization.Resolve(
-                    resolution,
-                    repositorySource.AccessMode);
-
-                // Wave 2 (#1456): the token-provider seam wraps the resolution's Connect token; the
-                // concrete Management-API minting/refresh provider lands in Wave 3 (#1458).
-                var tokenProvider = new Services.DevTunnel.DelegateDevTunnelConnectTokenProvider(
-                    acquire: _ => new ValueTask<string?>(authorization.Token));
-                var httpClient = authenticatedHttpClientFactory.CreateClient(resolution.BaseUri, tokenProvider);
+                var httpClient = this.httpClientFactory.CreateClient(resolution.BaseUri, broker, request, scope);
                 return new Data.Web.Client.WebClientAgentPersistenceStore(
                     resolution.BaseUri.ToString(),
-                    httpClient);
+                    httpClient,
+                    ownsHttpClient: true);
             },
             delayScheduler: Services.DevTunnel.RealDelayScheduler.Instance);
 
-        await reconnectingStore.StartAsync().ConfigureAwait(false);
-        return reconnectingStore;
+        var initialized = false;
+        try
+        {
+            await reconnectingStore.StartAsync(cancellationToken).ConfigureAwait(false);
+            initialized = true;
+            return reconnectingStore;
+        }
+        finally
+        {
+            if (!initialized)
+            {
+                await reconnectingStore.DisposeAsync().ConfigureAwait(false);
+            }
+        }
     }
 
     private static async Task<IAgentPersistenceStore> CreateMongoDbAsync(
