@@ -8,6 +8,75 @@ namespace Phantom.Workspaces.Tests.Access;
 
 public sealed class GitHubSelectedSourcePolicyTests
 {
+    [Fact]
+    public async Task EnvironmentAppearsWhilePending_SelectedVerifiedCliIdentityRemainsAuthorized()
+    {
+        var directory = Path.Combine(Environment.CurrentDirectory, ".access-selected-github-recovery-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var accountB = CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.GitHub, "cli-b");
+            var source = new Source { Account = accountB, HasEnvironment = false };
+            var executor = new GitHubCredentialAccessExecutor(source);
+            var policy = new ObservedPolicy(new ReleaseAuthorizationPolicy(
+                new ReleaseMemoryStore(Path.Combine(directory, "memory.json"))));
+            var registry = new UserAuthorizationRegistry();
+            var executors = new CredentialAccessExecutorRegistry();
+            executors.Add<GitHubCredentialAccessRequest, GitHubCredentialAccessResult>(executor);
+            await using var broker = new AccessBroker(policy, executors, new ProviderAcquisitionCoordinator(), registry);
+            var warm = broker.AcquireAsync(Request(CredentialSourceKind.GitHubCli), TestContext.Current.CancellationToken);
+            await ApproveCli();
+            await using var initial = Assert.IsType<AccessSucceeded<GitHubCredentialAccessResult>>(
+                await warm.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).Result;
+            var request = Request(null);
+            var cli = request.Sources.Single(choice => choice.Kind == CredentialSourceKind.GitHubCli).Identifier;
+            var before = await executor.InspectAsync(request, TestContext.Current.CancellationToken);
+            Assert.Equal(accountB, before.Credential.AccountIdentifier);
+            Assert.Equal(accountB, before.AcquisitionKeys[cli].Account);
+            ReleasePolicyRequest? recoveryPolicyRequest = null;
+            policy.AfterCommit = (decision, _, _) =>
+            {
+                recoveryPolicyRequest = decision.Request;
+                return ValueTask.CompletedTask;
+            };
+            var pending = broker.AcquireAsync(request, TestContext.Current.CancellationToken);
+            Assert.False(pending.IsCompleted);
+            source.HasEnvironment = true;
+            var after = await executor.InspectAsync(request, TestContext.Current.CancellationToken);
+            Assert.Null(after.Credential.AccountIdentifier);
+            Assert.Equal(before.Credential with { AccountIdentifier = null }, after.Credential);
+            Assert.Equal(before.CachedGenerations[cli], after.CachedGenerations[cli]);
+            Assert.Equal(before.AcquisitionKeys[cli], after.AcquisitionKeys[cli]);
+            await broker.RefreshPendingSourcesAsync(TestContext.Current.CancellationToken);
+            await ApproveCli();
+            var outcome = await pending.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            Assert.True(outcome is AccessSucceeded<GitHubCredentialAccessResult>,
+                $"Expected selected CLI recovery. Actual: {outcome}; policy committed: {recoveryPolicyRequest is not null}.");
+            await using var recovered = Assert.IsType<AccessSucceeded<GitHubCredentialAccessResult>>(outcome).Result;
+            Assert.Equal(accountB, recoveryPolicyRequest!.Credential.AccountIdentifier);
+            Assert.Equal(CredentialSourceKind.GitHubCli, Assert.Single(source.Acquisitions));
+            Assert.Empty(await policy.ListAsync(TestContext.Current.CancellationToken));
+
+            Task ApproveCli()
+            {
+                var current = registry.GetSnapshot().Single(row => row.State == UserAuthorizationState.Pending);
+                return registry.ActAsync(new ApplyUserAuthorizationAction
+                {
+                    RequestIdentifier = current.Identifier,
+                    ExpectedRevision = current.Revision,
+                    Source = current.SourceOptions.Single(choice => choice.Kind == CredentialSourceKind.GitHubCli).Identifier,
+                    Memory = current.MemoryOptions.Single(option => option.Scope == ReleaseMemoryScopeKind.AllowOnce).Identifier,
+                }, TestContext.Current.CancellationToken);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
     [Theory]
     [InlineData(ReleaseMemoryScopeKind.ExactUse, 0)]
     [InlineData(ReleaseMemoryScopeKind.AllUses, 0)]
