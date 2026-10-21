@@ -3,8 +3,8 @@
   "worktree": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020",
   "branch": "integration/access-arc-ready-v2-20261020",
   "baseline": "e8ed98d70fe885ce37b12410e82f63317a923db5",
-  "status": "CLEAN coherent checkpoint extended through a171c3dd: b382 provider ownership paired with exact temporary GitHub caller-capture removal, now explicitly proved through REAL production tunnel caller by rejected-resource exact counts, async-first/sync fallback, original cleanup-fault propagation and successful caller-only ownership with usable copied lease. Exact2d92 stale-handle test-only leaf also integrated/reviewed. Latest focused121 pass plus ten consecutive121 stability passes and independent actual paired-net review clear. Previous75x10, root200x10/Core171x10 evidence remains historical. Generic concurrent disposal, GitHub canonical/final-await, stale401 and other owner followups remain open; not whole-arc acceptance.",
-  "reviewedCodeCheckpoint": "a171c3dd540c433bb6fa7341edf10f439d513d24",
+  "status": "CLEAN coherent checkpoint extended through af3c4a47: cleared canonical MCP absent-pin matching integrated additively; actual merged MCP lifecycle/admin/catalog/discovery/root99 passed plus ten consecutive99 stability passes. Prior real-caller GitHub ownership121x10 and paired-net review remain historicala171c3dd evidence. Generic disposal, Entra final-await, configured Audience and stale401 readied leaves await integrator intake; GitHub canonical/final-await owner correction, latest requested c4d UI review and direct Core deletion dependency remain pending. Not whole-arc acceptance.",
+  "reviewedCodeCheckpoint": "af3c4a47ed231101bb4bee4edcceac517dd43794",
   "sourceToLocal": {
     "19acd7f6b1940290d08c43dfc4e9f535d56d03f3": "ac151c04",
     "083c040727028de4694192bd378e6d23d9b96529": "9202d011",
@@ -29,7 +29,8 @@
     "aa7a5ca07b516c2687d148a51f8705d6a12428f1": "920642c6",
     "e44b3d2e4481e3f5f63bbe557acc85fa24aaa8bf": "079f20811faa410455c15c5035d51783355de1cd",
     "b382e62dc48c371ae58978eb07e04946ab88b42a": "0aa7f5f7b070e3cb365887b9a157ad6947d0d6ff",
-    "2d92b627c5b1ef094daa6082894d52c25128d14b": "a171c3dd540c433bb6fa7341edf10f439d513d24 (exact test-only delta consumed once alongside owned regressions)"
+    "2d92b627c5b1ef094daa6082894d52c25128d14b": "a171c3dd540c433bb6fa7341edf10f439d513d24 (exact test-only delta consumed once alongside owned regressions)",
+    "9cbb95f5ad23c182143def0a3d48a3b394a09370": "af3c4a47ed231101bb4bee4edcceac517dd43794"
   },
   "gitHubOwnershipPair20261021": {
     "coherentCodeCheckpoint": "cbce2a686879be78873d45f232bac3dc735e3ca0",
@@ -58,6 +59,14 @@
     "uiRequestedSourceReview": "PENDING new bounded c4d review assigned by parent. No c4d fa2 clearance claimed until actual receipt. Prior independent integration-delta reviewer inspected UI deletion/replacement tests; that historical bounded review is not substituted for this newly requested source receipt.",
     "uiScope": "Only disconnected old UI/dialog/host/enumeration/converter/tests retired. Preserve actual native store/backend, provider caches and Core contracts; do not restore old UI fallback.",
     "coreDependency": "Per latest direct parent instruction, SDK Core ISecretProvider/GitHubAuthTokenResolver production deletion remains BLOCKED on immutable35ff App SecretProvider removal. Do not delete other owners' classes or treat earlier broad legacy handback wording as permission to bypass this dependency. No such production deletions made here."
+  },
+  "mcpCanonicalMatching20261021": {
+    "source": "9cbb95f5ad23c182143def0a3d48a3b394a09370",
+    "local": "af3c4a47ed231101bb4bee4edcceac517dd43794",
+    "sourceReview": "5de7f913-a07a-44fc-9e60-35119996432a independently source-cleared exact four-file correction against e44 parent. No significant new issues; reviewer did not build/test. Resolves canonical absent authority/token wildcard Medium, not whole discovery/root/arc acceptance.",
+    "intake": "Normal conflict-free additive cherry-pick. Catalog, actual canonical factory and test blobs exactly equal cleared9cbb. Existing newer MCP executor changed ONLY by adding BindToCallerDeclarations record property; all d42/ac9/b515 native disposal, work admission, cache administration and registry sharing preserved.",
+    "behavior": "Canonical direct/delegate factories bind explicit absence to null authority/token metadata; immutable registration rejects policy rebind, identity/source/cache remain separately partitioned, trusted advanced override policy remains explicit and multiple matches fail closed.",
+    "validation": "Actual merged MCP catalog/discovery/attempt/commit/admin/executor/native ownership plus same registered root graph99/99 and ten consecutive99 stability passes. No dumps or failures."
   },
   "equivalentSkipped": {
     "245e6b6f2e55098c1221b0a04381d7fc5009577d": "Already satisfied by baseline770d28be unique isolated policy path, optional explicit path plus causal row observation. Conflict inspected; skipped duplicate rather than replacing newer fixture.",
@@ -140,6 +149,16 @@
       "provenance": "Fresh explicit-project121 build/run, then prescribed existing Skills stability runner ten consecutive full/NoBuild121 passes. Exact source committed unchanged after execution/review. Zero dumps before/after. Earlier incremental82 and87 selections also passed, but only final121 evidence is claimed here.",
       "review": "Fresh independent read-only review of actual paired net48e0b75a..46c74b2a plus exact a171c3dd source delta, including three observation modifiers, all real-caller exact-count/fault/transfer cases and exact2d92 test-only leaf: no significant issues found. No reviewer edits/builds/tests; canonical GitHub/final-await and prior pending shared/root/OAuth/MCP issues expressly excluded."
     },
+    "mcpCanonicalMatching": {
+      "codeCheckpoint": "af3c4a47ed231101bb4bee4edcceac517dd43794",
+      "passed": 99,
+      "failed": 0,
+      "stabilityRuns": 10,
+      "passedPerRun": 99,
+      "log": ".scratch\\integration-v2-mcp-canonical-matching-tests.log",
+      "stability": ".scratch\\integration-v2-mcp-canonical-matching-stability.log",
+      "selectors": "McpOAuthCredentialRequestCatalogTests,McpOAuthCacheAdministrationTests,McpOAuthCredentialAccessExecutorTests,McpOAuthCredentialAccessExecutorOwnershipTests,McpOAuthProviderDiscoveryTests,McpOAuthAttemptTests,McpOAuthCacheCommitCoordinatorTests,AccessHostServicesTests,HostConfiguredAccessGraphTests"
+    },
     "runner": "Only existing scripts\\run-tests.ps1 explicit TestProject/unquoted comma-separated TestNames and existing Skills run-tests-stability.ps1 Runs10 Modefull NoBuild with explicit TestProject default; no direct dotnet test.",
     "dumps": "Recursive scans before runners and during validation found no .dmp files; none discarded."
   },
@@ -158,18 +177,18 @@
     "remainingFinding": "MEDIUM: generic OAuthCredentialAccessExecutor.DisposeAsync returns immediately for a second concurrent disposer while the first remains pending and the native binding is undisposed. Reviewer identifies the disposed early return at source line420 and deterministic real Kestrel gate regression.",
     "owner": "497ddd2f-332e-4a55-8aea-337b84fc0e2c",
     "requiredDelivery": "Await immutable shared-disposal-completion followup and regression plus actual bounded clearance. Candidate bd1 is not final generic clearance and remains unimported.",
+    "latestReadiness": "Historical remainingFinding/requiredDelivery are superseded by current parent authority: owner78a17ed9 committed9d470c2f6e8ce25f695c7116be0c3ab75a6a5ce1 then04fca10642f1630dc2f8d95c79a95a3d4f8542c4, both SOURCE-CLEAR reviewer9138. Generic-only bd1/3a prerequisites plus9d/04 now await exclusive integrator intake; preserve MCP lifecycle. No false waiting-on-owner claim.",
     "preserveMcp": "Existing independently cleared MCP d42 shared completion plus active-work/whole-acquisition/native cleanup barrier remains intact; no old bd1 MCP file or lifecycle replacement.",
     "acceptanceBoundary": "Reviewer performed no builds/tests/edits. This metadata update makes no new runtime or whole-arc acceptance claim."
   },
   "openOwnerWork": [
-    "Generic OAuth pending binding-startup join and cleanup faults: consume only cleared generic hunks when authorized; preserve independently cleared MCP lifecycle.",
+    "Generic OAuth lifecycle9d/04 plus generic-only bd1/3a prerequisites are ready/source-cleared by current parent authority; intake and merged validation now integrator-owned. Preserve independently cleared MCP lifecycle.",
     "GitHub full canonical async validation and post-final-await generation/expiry remain provider owner35ff pending. Narrow b382 unpublished TResult ownership is now integrated with paired caller cleanup removal, and exact owner fixture prerequisites resolve14 fabricated-account cases. Candidate0879 production remains unimported and uncleared.",
-    "Root owner5a25 asked for concrete immutable stale401 fixture replay correction; no dirty snapshot consumed.",
-    "MCP missing-authority/token metadata canonical matching pending owner.",
-    "Configured OAuth factory independent Audience correction pending owner.",
+    "Root05d80103 stale exact-generation Management/relay401 correction and Entra8817846e final-await expiry correction are ready/source-cleared per current parent authority; intake/merged validation now integrator-owned. No dirty snapshot consumed.",
+    "Configured OAuth factory independent Audience97c08ca8 is SOURCE-CLEAR per current authoritative decision; intake/merged validation now integrator-owned, not waiting on owner implementation.",
     "UI fa2 integrated after root978; newly parent-assigned c4d bounded SOURCE review PENDING per direct01:00:11 instruction. Historical independent integration-delta review remains distinct and is not represented as this pending source receipt. SDK Core ISecretProvider/GitHubAuthTokenResolver production deletion still awaits immutable35ff App SecretProvider removal; preserve active native/provider caches and Core contracts, no cross-owner classes deleted."
   ],
   "executionEvidenceManifest": ".scratch\\integration-v2-execution-evidence-20261020.json",
-  "cleanState": "All source code is immutable through a171c3dd540c433bb6fa7341edf10f439d513d24; final metadata commit records this handoff and evidence only. No active cherry-pick/revert/unmerged paths; git diff --check clean; exact submodule pins preserved.",
+  "cleanState": "All source code is immutable through af3c4a47ed231101bb4bee4edcceac517dd43794; final metadata commit records this handoff and evidence only. No active cherry-pick/revert/unmerged paths; git diff --check clean; exact submodule pins preserved.",
   "safety": "No live checkout, auth, browser/UI/provider actions, features advancement, push/release/closure or rewritten history. Normal submodule init preserves Dock8c8d11 and MXC29702c3."
 }

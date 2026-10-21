@@ -1,5 +1,6 @@
 {
-  "codeCheckpoint": "a171c3dd540c433bb6fa7341edf10f439d513d24",
+  "codeCheckpoint": "af3c4a47ed231101bb4bee4edcceac517dd43794",
+  "historicalGitHubRealCallerCodeCheckpoint": "a171c3dd540c433bb6fa7341edf10f439d513d24",
   "historicalGitHubOwnershipPairCodeCheckpoint": "cbce2a686879be78873d45f232bac3dc735e3ca0",
   "historicalRootCoreCodeCheckpoint": "079f20811faa410455c15c5035d51783355de1cd",
   "baseline": "e8ed98d70fe885ce37b12410e82f63317a923db5",
@@ -18,8 +19,21 @@
   "gitHubRealCallerOwnershipPassed": 121,
   "gitHubRealCallerOwnershipStabilityRuns": 10,
   "gitHubRealCallerOwnershipStabilityPassedPerRun": 121,
+  "mcpCanonicalMatchingPassed": 99,
+  "mcpCanonicalMatchingStabilityRuns": 10,
+  "mcpCanonicalMatchingStabilityPassedPerRun": 99,
   "dumpCount": 0,
   "logs": [
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-mcp-canonical-matching-tests.log",
+      "bytes": 6276,
+      "sha256": "562A38BEAD48CA86680FA67F025DE84EA495D0D36AA314F9B8B0B1D53F951B52"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-mcp-canonical-matching-stability.log",
+      "bytes": 3012,
+      "sha256": "68DDE01DA8633385984432E69F30D7534182B745BD3E78E66773A5F87AF79EDF"
+    },
     {
       "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-github-ownership-regression-tests.log",
       "bytes": 6277,
