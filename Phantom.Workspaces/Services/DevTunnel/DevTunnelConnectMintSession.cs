@@ -98,12 +98,13 @@ internal sealed class DevTunnelConnectMintSession(
                     ? failed.ErrorCode : AccessErrorCode.ProviderFailure,
             };
         }
+        mintedMaterial.Release(success.Result);
+        using var ownedResult = success.Result as IDisposable;
         if (success.Result is DevTunnelConnectManagementUnauthorized)
         {
             await gitHub.GetGenerationCache(source.Identifier)
                 .InvalidateGenerationAsync(success.Generation, cancellationToken).ConfigureAwait(false);
         }
-        mintedMaterial.Release(success.Result);
         return Complete(success.Result, success.AccountIdentifier);
     }
 
@@ -178,6 +179,7 @@ internal sealed class DevTunnelConnectMintSession(
         {
             return new DevTunnelConnectMintFailed { ErrorCode = AccessErrorCode.InvalidGeneration };
         }
+        using var ownedResult = success.Result as IDisposable;
         if (success.Result is DevTunnelConnectManagementUnauthorized)
         {
             await session.InvalidateGenerationAsync(metadata.Generation, cancellationToken).ConfigureAwait(false);
@@ -239,6 +241,7 @@ internal sealed class DevTunnelConnectMintSession(
         {
             return new DevTunnelConnectMintFailed { ErrorCode = AccessErrorCode.InvalidGeneration };
         }
+        using var ownedResult = success.Result as IDisposable;
         if (success.Result is DevTunnelConnectManagementUnauthorized)
         {
             await provider.InvalidateGenerationAsync(identityRequest, metadata.Generation, cancellationToken).ConfigureAwait(false);
@@ -252,16 +255,13 @@ internal sealed class DevTunnelConnectMintSession(
     {
         if (outcome is DevTunnelConnectManagementSucceeded success)
         {
-            using (success)
+            return new DevTunnelConnectMintSucceeded
             {
-                return new DevTunnelConnectMintSucceeded
-                {
-                    Material = success.Material.ToArray(),
-                    Account = account,
-                    Endpoint = success.Endpoint,
-                    ExpiresOn = success.ExpiresOn,
-                };
-            }
+                Material = success.Material.ToArray(),
+                Account = account,
+                Endpoint = success.Endpoint,
+                ExpiresOn = success.ExpiresOn,
+            };
         }
         return outcome is DevTunnelConnectManagementUnauthorized
             ? new DevTunnelConnectMintUnauthorized()
