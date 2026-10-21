@@ -33,6 +33,10 @@
             <TextBox PlaceholderText="Explicit provider resource audience" Text="{Binding Audience}" />
         </StackPanel>
         <StackPanel Spacing="4">
+            <TextBlock Text="Resource endpoint pin (optional)" />
+            <TextBox PlaceholderText="https://resource.example/" Text="{Binding Endpoint}" />
+        </StackPanel>
+        <StackPanel Spacing="4">
             <TextBlock Text="Client id" />
             <TextBox PlaceholderText="client-id" Text="{Binding ClientId}" />
         </StackPanel>

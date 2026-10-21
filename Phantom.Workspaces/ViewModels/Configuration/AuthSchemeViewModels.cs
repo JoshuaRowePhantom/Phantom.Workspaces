@@ -137,6 +137,7 @@ public sealed class OAuthAuthSchemeViewModel : AuthSchemeViewModel
 {
     private readonly RemoteAuthentication original = new(RemoteAuthentication.OAuthScheme);
     private string? authority;
+    private string? endpoint;
     private string? accountEndpoint;
     private OAuthAccountIdentifierClaim? accountIdentifierClaim;
     private string? audience;
@@ -157,6 +158,7 @@ public sealed class OAuthAuthSchemeViewModel : AuthSchemeViewModel
         ArgumentNullException.ThrowIfNull(authentication);
         this.original = authentication;
         this.authority = authentication.Authority;
+        this.endpoint = authentication.Endpoint;
         this.accountEndpoint = authentication.AccountEndpoint;
         this.accountIdentifierClaim = authentication.AccountIdentifierClaim;
         this.audience = authentication.Audience;
@@ -195,6 +197,12 @@ public sealed class OAuthAuthSchemeViewModel : AuthSchemeViewModel
     {
         get => this.audience;
         set => this.SetValidatedProperty(ref this.audience, value);
+    }
+
+    public string? Endpoint
+    {
+        get => this.endpoint;
+        set => this.SetValidatedProperty(ref this.endpoint, value);
     }
 
     /// <summary>OAuth authorization endpoint URL. Required.</summary>
@@ -276,6 +284,18 @@ public sealed class OAuthAuthSchemeViewModel : AuthSchemeViewModel
                 return "OAuth requires an explicit Audience.";
             }
 
+            if (!string.IsNullOrWhiteSpace(this.Endpoint) && !Uri.TryCreate(this.Endpoint, UriKind.Absolute, out _))
+            {
+                return "The optional OAuth resource pin must be an absolute URI.";
+            }
+
+            if (!string.IsNullOrWhiteSpace(this.ClientSecret) &&
+                !(this.ClientSecret.StartsWith("${", StringComparison.Ordinal) &&
+                  this.ClientSecret.EndsWith("}", StringComparison.Ordinal) && this.ClientSecret.Length > 3))
+            {
+                return "OAuth client secrets must use a credential reference.";
+            }
+
             return null;
         }
     }
@@ -285,6 +305,7 @@ public sealed class OAuthAuthSchemeViewModel : AuthSchemeViewModel
     {
         Scheme = RemoteAuthentication.OAuthScheme,
         Authority = AuthSchemeScopes.NullIfBlank(this.Authority),
+        Endpoint = AuthSchemeScopes.NullIfBlank(this.Endpoint),
         ClientId = AuthSchemeScopes.NullIfBlank(this.ClientId),
         ClientSecret = AuthSchemeScopes.NullIfBlank(this.ClientSecret),
         AuthorizationEndpoint = AuthSchemeScopes.NullIfBlank(this.AuthorizationEndpoint),

@@ -161,6 +161,61 @@ public sealed class OAuthPrincipalConfigurationTests
         Assert.Equal(OAuthAccountIdentifierClaim.Identifier, viewModel.ToRemoteAuthentication().AccountIdentifierClaim);
     }
 
+    [Fact]
+    public void ConfigurationViewModel_EndpointEditingRetainsSeparateRequiredAudienceAndOtherMetadata()
+    {
+        var original = Configuration() with { Remember = true, TokenCacheKey = "configured-cache" };
+        var viewModel = new OAuthAuthSchemeViewModel(original)
+        {
+            Endpoint = "https://pinned-resource.test/",
+        };
+        Assert.True(viewModel.IsValid);
+        var saved = viewModel.ToRemoteAuthentication();
+        Assert.Equal(viewModel.Endpoint, saved.Endpoint);
+        Assert.Equal(original.Audience, saved.Audience);
+        Assert.Equal(original.Authority, saved.Authority);
+        Assert.Equal(original.AccountEndpoint, saved.AccountEndpoint);
+        Assert.Equal(original.AccountIdentifierClaim, saved.AccountIdentifierClaim);
+        Assert.Equal(original.Remember, saved.Remember);
+        Assert.Equal(original.TokenCacheKey, saved.TokenCacheKey);
+
+        viewModel.Endpoint = null;
+        Assert.True(viewModel.IsValid);
+        Assert.Null(viewModel.ToRemoteAuthentication().Endpoint);
+        Assert.Equal(original.Audience, viewModel.ToRemoteAuthentication().Audience);
+        viewModel.Audience = null;
+        Assert.False(viewModel.IsValid);
+    }
+
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData("", true)]
+    [InlineData("https://resource.test/", true)]
+    [InlineData("relative/resource", false)]
+    public void ConfigurationViewModel_OptionalEndpointMustBeAbsolute(string? endpoint, bool valid)
+    {
+        var viewModel = new OAuthAuthSchemeViewModel(Configuration()) { Endpoint = endpoint };
+        Assert.Equal(valid, viewModel.IsValid);
+    }
+
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData("", true)]
+    [InlineData("${SECRET:configured}", true)]
+    [InlineData("${CONFIGURED_CLIENT_SECRET}", true)]
+    [InlineData("private-secret-marker", false)]
+    [InlineData("${}", false)]
+    [InlineData("${incomplete", false)]
+    public void ConfigurationViewModel_ClientSecretRequiresReferenceEnvelope(string? secret, bool valid)
+    {
+        var viewModel = new OAuthAuthSchemeViewModel(Configuration()) { ClientSecret = secret };
+        Assert.Equal(valid, viewModel.IsValid);
+        if (!valid)
+        {
+            Assert.DoesNotContain(secret!, viewModel.ValidationMessage!);
+        }
+    }
+
     internal static RemoteAuthentication Configuration() => new(
         RemoteAuthentication.OAuthScheme,
         Endpoint: "https://resource.test/",
