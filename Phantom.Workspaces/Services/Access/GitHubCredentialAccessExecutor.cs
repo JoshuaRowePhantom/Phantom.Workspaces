@@ -70,6 +70,7 @@ internal interface IGitHubCredentialAccessSource
 internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor<GitHubCredentialAccessRequest, GitHubCredentialAccessResult>, IAsyncDisposable, ICredentialCacheAdministration
 {
     private readonly IGitHubCredentialAccessSource source;
+    private readonly TimeProvider timeProvider;
     private readonly ExecutorCredentialCacheAdministration administration;
     private readonly Dictionary<CredentialSourceIdentifier, GenerationCache> caches = [];
     private readonly object gate = new();
@@ -80,9 +81,12 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
     {
     }
 
-    internal GitHubCredentialAccessExecutor(IGitHubCredentialAccessSource source)
+    internal GitHubCredentialAccessExecutor(
+        IGitHubCredentialAccessSource source,
+        TimeProvider? timeProvider = null)
     {
         this.source = source;
+        this.timeProvider = timeProvider ?? TimeProvider.System;
         this.administration = new ExecutorCredentialCacheAdministration(
             CredentialProviderKind.GitHub,
             CredentialKind.AccessToken,
@@ -332,7 +336,7 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
             return new GitHubPrivateCredentialUseDenied<TResult>();
         }
         using var snapshot = cache.Copy(generation);
-        if (snapshot is null || !await cache.IsCurrentGenerationAsync(generation, cancellationToken).ConfigureAwait(false))
+        if (snapshot is null)
         {
             return new GitHubPrivateCredentialUseFailed<TResult> { ErrorCode = AccessErrorCode.InvalidGeneration, CanRetry = true };
         }
@@ -340,6 +344,10 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
         if (!await parentGenerationPermit.AuthorizesPrivateUseAsync(context, cancellationToken).ConfigureAwait(false))
         {
             return new GitHubPrivateCredentialUseDenied<TResult>();
+        }
+        if (!cache.IsCurrentGeneration(generation))
+        {
+            return new GitHubPrivateCredentialUseFailed<TResult> { ErrorCode = AccessErrorCode.InvalidGeneration, CanRetry = true };
         }
         TResult result;
         try
@@ -357,6 +365,10 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
             if (!await parentGenerationPermit.AuthorizesPrivateUseAsync(context, cancellationToken).ConfigureAwait(false))
             {
                 return new GitHubPrivateCredentialUseDenied<TResult>();
+            }
+            if (!cache.IsCurrentGeneration(generation))
+            {
+                return new GitHubPrivateCredentialUseFailed<TResult> { ErrorCode = AccessErrorCode.InvalidGeneration, CanRetry = true };
             }
             var succeeded = new GitHubPrivateCredentialUseSucceeded<TResult>
             {
@@ -492,7 +504,7 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
             ObjectDisposedException.ThrowIf(this.disposed, this);
             if (!this.caches.TryGetValue(source, out var cache))
             {
-                cache = new GenerationCache();
+                cache = new GenerationCache(this.timeProvider);
                 this.caches.Add(source, cache);
             }
             return cache;
@@ -593,7 +605,7 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
         public void Dispose() => CryptographicOperations.ZeroMemory(MemoryMarshal.AsBytes(this.Material.AsSpan()));
     }
 
-    private sealed class GenerationCache : ICredentialGenerationCache
+    private sealed class GenerationCache(TimeProvider timeProvider) : ICredentialGenerationCache
     {
         private readonly object gate = new();
         private Snapshot? current;
@@ -655,7 +667,7 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
         {
             lock (this.gate)
             {
-                return this.current is not { } current || current.Generation != generation || current.ExpiresOn <= DateTimeOffset.UtcNow ? null : new Snapshot
+                return this.current is not { } current || current.Generation != generation || current.ExpiresOn <= timeProvider.GetUtcNow() ? null : new Snapshot
                 {
                     Material = current.Material.ToArray(),
                     Generation = current.Generation,
@@ -670,7 +682,7 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
             cancellationToken.ThrowIfCancellationRequested();
             lock (this.gate)
             {
-                return ValueTask.FromResult(this.current is not { } current || current.ExpiresOn <= DateTimeOffset.UtcNow
+                return ValueTask.FromResult(this.current is not { } current || current.ExpiresOn <= timeProvider.GetUtcNow()
                     ? null : new CredentialGenerationInspection
                     {
                         Generation = current.Generation,
@@ -685,9 +697,14 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.FromResult(this.IsCurrentGeneration(generation));
+        }
+
+        public bool IsCurrentGeneration(CredentialMaterialGenerationIdentifier generation)
+        {
             lock (this.gate)
             {
-                return ValueTask.FromResult(this.current?.Generation == generation && !(this.current.ExpiresOn <= DateTimeOffset.UtcNow));
+                return this.current?.Generation == generation && !(this.current.ExpiresOn <= timeProvider.GetUtcNow());
             }
         }
 

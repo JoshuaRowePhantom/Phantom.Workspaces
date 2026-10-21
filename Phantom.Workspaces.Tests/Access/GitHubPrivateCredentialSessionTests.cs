@@ -1,3 +1,5 @@
+using System.Reflection;
+using Microsoft.Extensions.Time.Testing;
 using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Llm.Interfaces.Access.Execution;
 using Phantom.Workspaces.Llm.Interfaces.Authorization;
@@ -8,6 +10,191 @@ namespace Phantom.Workspaces.Tests.Access;
 
 public sealed class GitHubPrivateCredentialSessionTests
 {
+    public static TheoryData<bool, int, bool, bool> GenerationBoundaryCases
+    {
+        get
+        {
+            var cases = new TheoryData<bool, int, bool, bool>();
+            foreach (var afterCallback in new[] { false, true })
+            foreach (var change in new[] { 0, 1, 2 })
+            foreach (var knownAccount in new[] { false, true })
+            foreach (var asynchronousResult in new[] { false, true })
+            {
+                cases.Add(afterCallback, change, knownAccount, asynchronousResult);
+            }
+            return cases;
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(GenerationBoundaryCases))]
+    public Task PrivateMaterialUse_FinalPolicyAwaitRechecksExactUsableGeneration(
+        bool afterCallback,
+        int change,
+        bool knownAccount,
+        bool asynchronousResult) =>
+        VerifyGenerationBoundaryAsync(afterCallback, change, knownAccount, asynchronousResult, false);
+
+    [Theory]
+    [InlineData(0, false)]
+    [InlineData(0, true)]
+    [InlineData(1, false)]
+    [InlineData(1, true)]
+    [InlineData(2, false)]
+    [InlineData(2, true)]
+    public Task PrivateMaterialUse_StaleResultCleanupFaultIsRetained(
+        int change,
+        bool asynchronousResult) =>
+        VerifyGenerationBoundaryAsync(true, change, true, asynchronousResult, true);
+
+    private static async Task VerifyGenerationBoundaryAsync(
+        bool afterCallback,
+        int change,
+        bool knownAccount,
+        bool asynchronousResult,
+        bool cleanupThrows)
+    {
+        var events = new List<string>();
+        var clock = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var source = new Source(events) { ExpiresOn = clock.GetUtcNow().AddHours(1) };
+        var provider = new GitHubCredentialAccessExecutor(source, clock);
+        var parent = new ParentExecutor(provider, events)
+        {
+            IdentityRequest = new()
+            {
+                Source = CredentialSourceKind.GitHubCli,
+                AccountIdentifier = knownAccount ? source.Account : null,
+            },
+        };
+        var path = System.IO.Path.Combine(
+            Environment.CurrentDirectory, ".access-private-isolated-policy", Guid.NewGuid().ToString("N"), "memory.json");
+        var policy = new PausingAcquisitionPolicy(new ReleaseAuthorizationPolicy(new ReleaseMemoryStore(path)));
+        var (broker, registry) = Create(provider, parent, policy);
+        await using var owned = broker;
+        var callbackCalls = 0;
+        var cleanupCalls = 0;
+        char[]? borrowedMaterial = null;
+        var cleanupFault = new InvalidOperationException("Derived result cleanup failed.");
+        void Cleanup()
+        {
+            cleanupCalls++;
+            Assert.NotNull(borrowedMaterial);
+            Assert.All(borrowedMaterial, character => Assert.Equal('\0', character));
+            if (cleanupThrows)
+            {
+                throw cleanupFault;
+            }
+        }
+        var asynchronous = new BoundaryAsyncResult(Cleanup);
+        var synchronous = new BoundarySyncResult(Cleanup);
+        object derived = asynchronousResult ? asynchronous : synchronous;
+        var callbackEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        parent.BodyOverride = async (context, commit, cancellationToken) =>
+        {
+            var inspection = await provider.InspectPrivateAsync(parent.IdentityRequest, cancellationToken);
+            var acquisition = provider.CreatePrivateAcquisition(parent.IdentityRequest, inspection.Source, context);
+            var acquired = Assert.IsType<ProviderAcquisitionSucceeded>(
+                await context.ExecutePrivateProviderDependencyAsync(acquisition, commit.InteractionPermit, cancellationToken));
+            var cache = provider.GetGenerationCache(inspection.Source.Identifier);
+            var beforeCallback = policy.Arm(3);
+            PolicyBarrier? afterCallbackBarrier = null;
+            var use = provider.UseGenerationAsync(
+                inspection.Source, acquired.CommittedGeneration, context, commit.InteractionPermit,
+                (material, account, _) =>
+                {
+                    callbackCalls++;
+                    Assert.Equal("identity-material", material);
+                    Assert.Equal(source.Account, account);
+                    Assert.True(afterCallback, "Stale identity must not reach the callback.");
+                    afterCallbackBarrier = policy.Arm(1);
+                    callbackEntered.SetResult();
+                    return ValueTask.FromResult(derived);
+                }, cancellationToken).AsTask();
+            await beforeCallback.Reached.Task.WaitAsync(cancellationToken);
+            Assert.False(use.IsCompleted);
+            Assert.Equal(ReleaseAuthorizationValidation.Valid, beforeCallback.Validation);
+            // Observe the independent borrowed buffer without adding a production test hook.
+            var stateMachine = use.GetType().GetField("StateMachine")!.GetValue(use)!;
+            var snapshot = stateMachine.GetType().GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)
+                .Single(field => field.FieldType.Name == "Snapshot").GetValue(stateMachine)!;
+            borrowedMaterial = Assert.IsType<char[]>(snapshot.GetType().GetProperty("Material")!.GetValue(snapshot));
+            Assert.Equal("identity-material", new string(borrowedMaterial));
+            var boundary = beforeCallback;
+            if (afterCallback)
+            {
+                beforeCallback.Continue.SetResult();
+                // The callback arms the next actual policy await before signalling completion.
+                await callbackEntered.Task.WaitAsync(cancellationToken);
+                boundary = Assert.IsType<PolicyBarrier>(afterCallbackBarrier);
+                await boundary.Reached.Task.WaitAsync(cancellationToken);
+                Assert.Equal(1, callbackCalls);
+                Assert.All(borrowedMaterial, character => Assert.Equal('\0', character));
+                Assert.Equal(0, cleanupCalls);
+            }
+            Assert.False(use.IsCompleted);
+            Assert.Equal(ReleaseAuthorizationValidation.Valid, boundary.Validation);
+            CredentialMaterialGenerationIdentifier? replacement = null;
+            try
+            {
+                if (change == 2)
+                {
+                    clock.SetUtcNow(source.ExpiresOn!.Value);
+                    Assert.Equal(source.ExpiresOn, clock.GetUtcNow());
+                }
+                else
+                {
+                    Assert.Equal(CredentialGenerationInvalidationOutcome.Invalidated,
+                        await cache.InvalidateGenerationAsync(acquired.CommittedGeneration, cancellationToken));
+                    if (change == 1)
+                    {
+                        source.Material = "replacement-identity-material";
+                        var rotation = broker.AcquireAsync(
+                            GitHubCredentialAccessExecutorTests.Request(CredentialSourceKind.GitHubCli), cancellationToken);
+                        await AllowAsync(registry);
+                        await Assert.IsType<AccessSucceeded<GitHubCredentialAccessResult>>(await rotation).Result.DisposeAsync();
+                        replacement = (await cache.InspectGenerationAsync(cancellationToken))!.Generation;
+                        Assert.NotEqual(acquired.CommittedGeneration, replacement);
+                    }
+                }
+            }
+            finally
+            {
+                boundary.Continue.TrySetResult();
+            }
+            if (cleanupThrows)
+            {
+                Assert.Same(cleanupFault, await Assert.ThrowsAsync<InvalidOperationException>(() => use));
+            }
+            else
+            {
+                var failure = Assert.IsType<GitHubPrivateCredentialUseFailed<object>>(await use);
+                Assert.Equal(AccessErrorCode.InvalidGeneration, failure.ErrorCode);
+                Assert.True(failure.CanRetry);
+            }
+            Assert.Equal(afterCallback ? 1 : 0, callbackCalls);
+            Assert.Equal(afterCallback ? 1 : 0, cleanupCalls);
+            Assert.Equal(afterCallback && asynchronousResult ? 1 : 0, asynchronous.AsyncDisposals);
+            Assert.Equal(0, asynchronous.SyncDisposals);
+            Assert.Equal(afterCallback && !asynchronousResult ? 1 : 0, synchronous.Disposals);
+            Assert.All(borrowedMaterial, character => Assert.Equal('\0', character));
+            Assert.Equal(change == 1 ? 2 : 1, source.Acquisitions);
+            Assert.Equal(replacement, (await cache.InspectGenerationAsync(cancellationToken))?.Generation);
+            Assert.Equal(source.Account, (await provider.InspectPrivateAsync(parent.IdentityRequest, cancellationToken)).Source.RetainedAccountIdentifier);
+            // The genuine, still-active Connect proof remains valid despite the GitHub rejection.
+            Assert.True(await commit.InteractionPermit.AuthorizesPrivateUseAsync(context, cancellationToken));
+            return new ProviderAcquisitionFailed { ErrorCode = AccessErrorCode.InvalidGeneration };
+        };
+        var request = Request();
+        if (knownAccount)
+        {
+            request = request with { Credential = request.Credential with { AccountIdentifier = source.Account } };
+        }
+        var task = broker.AcquireAsync(request, TestContext.Current.CancellationToken);
+        await AllowAsync(registry);
+        Assert.Equal(AccessErrorCode.InvalidGeneration, Assert.IsType<AccessFailed<ParentResult>>(await task).ErrorCode);
+        Assert.DoesNotContain("connect committed", events);
+    }
+
     [Fact]
     public async Task PrivateMaterialUse_SuccessTransfersDisposableCallbackResultToCaller()
     {
@@ -709,7 +896,8 @@ public sealed class GitHubPrivateCredentialSessionTests
 
     private static (AccessBroker Broker, UserAuthorizationRegistry Registry) Create(
         GitHubCredentialAccessExecutor provider,
-        ParentExecutor parent)
+        ParentExecutor parent,
+        IReleaseAuthorizationPolicy? policy = null)
     {
         var registry = new UserAuthorizationRegistry();
         var executors = new CredentialAccessExecutorRegistry();
@@ -717,7 +905,7 @@ public sealed class GitHubPrivateCredentialSessionTests
         executors.Add<ParentRequest, ParentResult>(parent);
         var path = System.IO.Path.Combine(
             Environment.CurrentDirectory, ".access-private-isolated-policy", Guid.NewGuid().ToString("N"), "memory.json");
-        return (new AccessBroker(new ReleaseAuthorizationPolicy(new ReleaseMemoryStore(path)), executors, new ProviderAcquisitionCoordinator(), registry), registry);
+        return (new AccessBroker(policy ?? new ReleaseAuthorizationPolicy(new ReleaseMemoryStore(path)), executors, new ProviderAcquisitionCoordinator(), registry), registry);
     }
 
     private static async Task AllowAsync(UserAuthorizationRegistry registry)
@@ -917,6 +1105,80 @@ public sealed class GitHubPrivateCredentialSessionTests
         }
     }
 
+    private sealed class PolicyBarrier
+    {
+        public TaskCompletionSource Reached { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Continue { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public ReleaseAuthorizationValidation? Validation { get; set; }
+    }
+
+    private sealed class PausingAcquisitionPolicy(ReleaseAuthorizationPolicy policy) :
+        IReleaseAuthorizationPolicy, IProviderAcquisitionAuthorizationPolicy, IAsyncDisposable
+    {
+        private int remainingValidations;
+        private PolicyBarrier? barrier;
+
+        public PolicyBarrier Arm(int validations)
+        {
+            this.remainingValidations = validations;
+            return this.barrier = new PolicyBarrier();
+        }
+
+        public async ValueTask<ReleaseAuthorizationValidation> ValidateAcquisitionAuthorizationAsync(
+            ReleaseAuthorization authorization,
+            ReleasePolicyRequest request,
+            CancellationToken cancellationToken)
+        {
+            var validation = await ((IProviderAcquisitionAuthorizationPolicy)policy)
+                .ValidateAcquisitionAuthorizationAsync(authorization, request, cancellationToken);
+            if (this.barrier is { } pending && --this.remainingValidations == 0)
+            {
+                this.barrier = null;
+                pending.Validation = validation;
+                pending.Reached.SetResult();
+                await pending.Continue.Task.WaitAsync(cancellationToken);
+            }
+            return validation;
+        }
+
+        public ValueTask<ReleasePolicyEvaluation> EvaluateAsync(ReleasePolicyRequest request, CancellationToken cancellationToken = default) =>
+            policy.EvaluateAsync(request, cancellationToken);
+        public ValueTask<ReleaseAuthorization> CommitAsync(ReleasePolicyDecision decision, CancellationToken cancellationToken = default) =>
+            policy.CommitAsync(decision, cancellationToken);
+        public ValueTask<ReleaseAuthorizationValidation> ValidateAsync(ReleaseAuthorizationIdentifier identifier, ReleasePolicyRequest request, CancellationToken cancellationToken = default) =>
+            policy.ValidateAsync(identifier, request, cancellationToken);
+        public ValueTask FinalizeCredentialIdentityAsync(ReleaseAuthorizationIdentifier identifier, ResolvedCredentialIdentity identity, CancellationToken cancellationToken = default) =>
+            policy.FinalizeCredentialIdentityAsync(identifier, identity, cancellationToken);
+        public ValueTask<IReadOnlyList<ReleaseMemoryDescriptor>> ListAsync(CancellationToken cancellationToken = default) =>
+            policy.ListAsync(cancellationToken);
+        public ValueTask ForgetAsync(ReleaseMemoryIdentifier identifier, CancellationToken cancellationToken = default) =>
+            policy.ForgetAsync(identifier, cancellationToken);
+        public ValueTask DisposeAsync() => policy.DisposeAsync();
+    }
+
+    private sealed class BoundarySyncResult(Action cleanup) : IDisposable
+    {
+        public int Disposals { get; private set; }
+        public void Dispose()
+        {
+            this.Disposals++;
+            cleanup();
+        }
+    }
+
+    private sealed class BoundaryAsyncResult(Action cleanup) : IAsyncDisposable, IDisposable
+    {
+        public int AsyncDisposals { get; private set; }
+        public int SyncDisposals { get; private set; }
+        public async ValueTask DisposeAsync()
+        {
+            this.AsyncDisposals++;
+            await Task.Yield();
+            cleanup();
+        }
+        public void Dispose() => this.SyncDisposals++;
+    }
+
     private sealed class DerivedResult : IAsyncDisposable, IDisposable
     {
         public int AsyncDisposals { get; private set; }
@@ -951,6 +1213,7 @@ public sealed class GitHubPrivateCredentialSessionTests
         public int Acquisitions { get; private set; }
         public CredentialAccountIdentifier Account { get; set; } = CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.GitHub, "identity-account");
         public string Material { get; set; } = "identity-material";
+        public DateTimeOffset? ExpiresOn { get; init; }
         public Func<CancellationToken, ValueTask>? BeforeReturn { get; set; }
         public bool EnvironmentExists() => throw new InvalidOperationException("Forced CLI must not inspect another source.");
 
@@ -968,6 +1231,7 @@ public sealed class GitHubPrivateCredentialSessionTests
             {
                 Material = this.Material.ToCharArray(),
                 Account = this.Account,
+                ExpiresOn = this.ExpiresOn,
             };
             if (this.BeforeReturn is { } beforeReturn)
             {
