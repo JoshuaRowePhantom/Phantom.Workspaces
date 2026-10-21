@@ -260,6 +260,52 @@ public sealed class EntraPrivateCapabilityTests
             (value, _) => ValueTask.FromResult(value.Length), TestContext.Current.CancellationToken));
     }
 
+    [Fact]
+    public async Task EntraPrivateUse_CompletedParentDisposesReturnedResultWithIndependentCancellation()
+    {
+        var connect = new ConnectExecutor();
+        await using var fixture = new Fixture(connect);
+        await using var exported = await fixture.WarmAsync();
+        var session = fixture.Entra.GetSession(fixture.Request);
+        var generation = (await session.InspectGenerationAsync(TestContext.Current.CancellationToken))!.Generation;
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var returned = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var unclaimed = new CallbackResult();
+        ReadOnlyMemory<char> observed = default;
+        connect.Use = async (context, _, _, active, groupCancellation) =>
+        {
+            using var registration = groupCancellation.Register(() => stopped.TrySetResult());
+            var used = await session.UseGenerationAsync(
+                generation, context, active, async (material, independentCancellation) =>
+                {
+                    observed = material;
+                    started.TrySetResult();
+                    await finish.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+                    Assert.False(independentCancellation.IsCancellationRequested);
+                    return unclaimed;
+                }, TestContext.Current.CancellationToken);
+            Assert.IsType<EntraGenerationUseDenied<CallbackResult>>(used);
+            Assert.Equal(1, unclaimed.Disposals);
+            returned.TrySetResult();
+            return 0;
+        };
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var pending = fixture.Broker.AcquireAsync(fixture.CreateConnectRequest(), cancellation.Token);
+        await fixture.ApplyAsync(fixture.Registry.GetSnapshot().Last());
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        cancellation.Cancel();
+        await stopped.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        finish.TrySetResult();
+        await returned.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        Assert.IsType<AccessCancelled<ConnectResult>>(
+            await pending.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+        Assert.Equal(1, unclaimed.Disposals);
+        Assert.All(observed.ToArray(), character => Assert.Equal('\0', character));
+        Assert.True(await session.IsCurrentGenerationAsync(generation, TestContext.Current.CancellationToken));
+    }
+
     private sealed class Fixture : IAsyncDisposable
     {
         private readonly string directory = Path.Combine(
