@@ -21,6 +21,7 @@ internal sealed record GitHubPrivateCredentialSource
     public required CredentialSourceIdentifier Identifier { get; init; }
     public required CredentialSourceKind Kind { get; init; }
     public CredentialAccountIdentifier? ExpectedAccountIdentifier { get; init; }
+    public CredentialAccountIdentifier? RetainedAccountIdentifier { get; init; }
 }
 
 internal sealed record GitHubPrivateCredentialInspection
@@ -253,11 +254,13 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
             cache.Clear();
         }
         var metadata = await cache.InspectGenerationAsync(cancellationToken).ConfigureAwait(false);
+        var retainedAccount = cache.AccountIdentifier;
         var source = new GitHubPrivateCredentialSource
         {
             Identifier = choice.Identifier,
             Kind = choice.Kind,
-            ExpectedAccountIdentifier = request.AccountIdentifier ?? cache.AccountIdentifier,
+            ExpectedAccountIdentifier = request.AccountIdentifier ?? retainedAccount,
+            RetainedAccountIdentifier = retainedAccount,
         };
         return new GitHubPrivateCredentialInspection
         {
@@ -278,21 +281,30 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
     {
         if (context.PolicyRequest?.Credential is not { Provider: CredentialProviderKind.DevTunnel, Kind: CredentialKind.ConnectToken } ||
             !IsPrivateSource(source) || request.Source != source.Kind ||
-            request.AccountIdentifier is { } expected && source.ExpectedAccountIdentifier != expected)
+            request.AccountIdentifier is { } expected && source.ExpectedAccountIdentifier != expected ||
+            request.AccountIdentifier is null && source.ExpectedAccountIdentifier != source.RetainedAccountIdentifier)
         {
             throw new InvalidOperationException("The private GitHub acquisition does not match the Connect execution.");
         }
-        return new Acquisition(this, this.GetCache(source.Identifier), source.Kind, CreatePrivateKey(source), context);
+        var cache = this.GetCache(source.Identifier);
+        if (!cache.MatchesRetainedAccount(source.RetainedAccountIdentifier))
+        {
+            throw new ReleaseIdentityMismatchException();
+        }
+        return new Acquisition(this, cache, source.Kind, CreatePrivateKey(source), context,
+            new PrivateAccountBinding { RetainedAccountIdentifier = source.RetainedAccountIdentifier });
     }
 
     internal async ValueTask<GitHubPrivateCredentialUseOutcome<TResult>> UseGenerationAsync<TResult>(
         GitHubPrivateCredentialSource source,
         CredentialMaterialGenerationIdentifier generation,
+        ICredentialExecutionContext context,
+        ProviderInteractionPermit parentGenerationPermit,
         Func<string, CredentialAccountIdentifier, CancellationToken, ValueTask<TResult>> operation,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (!IsPrivateSource(source))
+        if (!IsApprovedConnectGeneration(context, parentGenerationPermit) || !IsPrivateSource(source))
         {
             return new GitHubPrivateCredentialUseDenied<TResult>();
         }
@@ -311,12 +323,20 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
         {
             return new GitHubPrivateCredentialUseFailed<TResult> { ErrorCode = AccessErrorCode.IdentityMismatch, CanRetry = false };
         }
+        if (!IsApprovedConnectGeneration(context, parentGenerationPermit))
+        {
+            return new GitHubPrivateCredentialUseDenied<TResult>();
+        }
         using var snapshot = cache.Copy(generation);
         if (snapshot is null || !await cache.IsCurrentGenerationAsync(generation, cancellationToken).ConfigureAwait(false))
         {
             return new GitHubPrivateCredentialUseFailed<TResult> { ErrorCode = AccessErrorCode.InvalidGeneration, CanRetry = true };
         }
         cancellationToken.ThrowIfCancellationRequested();
+        if (!IsApprovedConnectGeneration(context, parentGenerationPermit))
+        {
+            return new GitHubPrivateCredentialUseDenied<TResult>();
+        }
         return new GitHubPrivateCredentialUseSucceeded<TResult>
         {
             Result = await operation(new string(snapshot.Material), snapshot.Account, cancellationToken).ConfigureAwait(false),
@@ -328,6 +348,25 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
     private static bool IsPrivateSource(GitHubPrivateCredentialSource source) =>
         source.Kind is CredentialSourceKind.Environment or CredentialSourceKind.GitHubCli &&
         source.Identifier == GitHubCredentialAccessRequest.CreateSource(source.Kind).Identifier;
+
+    private static bool IsApprovedConnectGeneration(
+        ICredentialExecutionContext context,
+        ProviderInteractionPermit permit)
+    {
+        if (context.PolicyRequest is not { Credential.Provider: CredentialProviderKind.DevTunnel, Credential.Kind: CredentialKind.ConnectToken } request)
+        {
+            return false;
+        }
+        var key = new ProviderAcquisitionKey
+        {
+            Configuration = request.Credential.LogicalIdentifier,
+            Source = request.SourceIdentifier,
+            Account = request.Credential.AccountIdentifier,
+            Protocol = ProviderProtocolKind.TunnelConnect,
+        };
+        return permit.AuthorizesProvider(CredentialExecutorKind.DevTunnelConnect, key) &&
+            permit.Authorizes(context.RequestIdentifier, context.Revision, CredentialExecutorKind.DevTunnelConnect, context.AcquisitionGeneration, key);
+    }
 
     private static ProviderAcquisitionKey CreatePrivateKey(GitHubPrivateCredentialSource source) => new()
     {
@@ -345,8 +384,7 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (context.PolicyRequest?.Credential is not { Provider: CredentialProviderKind.DevTunnel, Kind: CredentialKind.ConnectToken } ||
-            !parentGenerationPermit.BelongsToGeneration(context.RequestIdentifier, context.Revision, context.AcquisitionGeneration) ||
+        if (!IsApprovedConnectGeneration(context, parentGenerationPermit) ||
             request.Source is not (CredentialSourceKind.Environment or CredentialSourceKind.GitHubCli))
         {
             return new GitHubPrivateCredentialUseDenied<TResult>();
@@ -381,11 +419,12 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
             generation = inspection.CachedGeneration!.Generation;
         }
 
-        if (!parentGenerationPermit.BelongsToGeneration(context.RequestIdentifier, context.Revision, context.AcquisitionGeneration))
+        if (!IsApprovedConnectGeneration(context, parentGenerationPermit))
         {
             return new GitHubPrivateCredentialUseDenied<TResult>();
         }
-        return await this.UseGenerationAsync(inspection.Source, generation, (material, _, token) => operation(material, token), cancellationToken).ConfigureAwait(false);
+        return await this.UseGenerationAsync(inspection.Source, generation, context, parentGenerationPermit,
+            (material, _, token) => operation(material, token), cancellationToken).ConfigureAwait(false);
     }
 
     internal async ValueTask<IReadOnlyDictionary<CredentialSourceIdentifier, CredentialGenerationInspection>> InspectCachedGenerationsAsync(CancellationToken cancellationToken)
@@ -455,7 +494,8 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
         GenerationCache cache,
         CredentialSourceKind source,
         ProviderAcquisitionKey key,
-        ICredentialExecutionContext context) : IProviderAcquisitionOperation
+        ICredentialExecutionContext context,
+        PrivateAccountBinding? privateAccount = null) : IProviderAcquisitionOperation
     {
         public ProviderAcquisitionKey CompatibilityKey => key;
         public UserAuthorizationRequestIdentifier RequestIdentifier => context.RequestIdentifier;
@@ -471,6 +511,10 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
             {
                 return new ProviderAcquisitionDenied();
             }
+            if (privateAccount is not null && !cache.MatchesRetainedAccount(privateAccount.RetainedAccountIdentifier))
+            {
+                return new ProviderAcquisitionFailed { ErrorCode = AccessErrorCode.IdentityMismatch };
+            }
             try
             {
                 using var acquired = await executor.source.AcquireAsync(source, commitContext.InteractionPermit, key, cancellationToken).ConfigureAwait(false);
@@ -485,9 +529,20 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
                 var generation = new CredentialMaterialGenerationIdentifier { Value = Guid.NewGuid() };
                 return await commitContext.CommitAsync(generation, _ =>
                 {
-                    cache.Commit(acquired, generation);
+                    if (privateAccount is null)
+                    {
+                        cache.Commit(acquired, generation);
+                    }
+                    else
+                    {
+                        cache.CommitPrivate(acquired, generation, privateAccount);
+                    }
                     return ValueTask.CompletedTask;
                 }).ConfigureAwait(false);
+            }
+            catch (ReleaseIdentityMismatchException)
+            {
+                return new ProviderAcquisitionFailed { ErrorCode = AccessErrorCode.IdentityMismatch };
             }
             catch (System.ComponentModel.Win32Exception)
             {
@@ -502,6 +557,11 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
                 return new ProviderAcquisitionFailed { ErrorCode = AccessErrorCode.ProviderFailure };
             }
         }
+    }
+
+    private sealed record PrivateAccountBinding
+    {
+        public CredentialAccountIdentifier? RetainedAccountIdentifier { get; init; }
     }
 
     private sealed class Snapshot : IDisposable
@@ -527,6 +587,29 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
                 {
                     return this.accountIdentifier;
                 }
+            }
+        }
+
+        public bool MatchesRetainedAccount(CredentialAccountIdentifier? account)
+        {
+            lock (this.gate)
+            {
+                return this.accountIdentifier == account;
+            }
+        }
+
+        public void CommitPrivate(
+            GitHubCredentialMaterial material,
+            CredentialMaterialGenerationIdentifier generation,
+            PrivateAccountBinding binding)
+        {
+            lock (this.gate)
+            {
+                if (this.accountIdentifier != binding.RetainedAccountIdentifier)
+                {
+                    throw new ReleaseIdentityMismatchException();
+                }
+                this.Commit(material, generation);
             }
         }
 
