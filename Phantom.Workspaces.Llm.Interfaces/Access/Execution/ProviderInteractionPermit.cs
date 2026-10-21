@@ -18,6 +18,7 @@ internal sealed record ProviderExecutionAuthorizationBinding
     public required IReleaseAuthorizationPolicy Policy { get; init; }
     public required ReleaseAuthorization Authorization { get; init; }
     public required ReleasePolicyRequest Request { get; init; }
+    public required ProviderAcquisitionKey AcquisitionKey { get; init; }
 }
 
 internal interface IProviderAcquisitionAuthorizationPolicy
@@ -26,6 +27,85 @@ internal interface IProviderAcquisitionAuthorizationPolicy
         ReleaseAuthorization authorization,
         ReleasePolicyRequest request,
         CancellationToken cancellationToken);
+}
+
+internal sealed record ProviderAcquisitionParticipant(ProviderInteractionPermit Permit, CancellationToken Cancellation);
+
+internal sealed class ProviderAcquisitionAuthorizationGroup
+{
+    private readonly object gate = new();
+    private readonly List<ProviderAcquisitionParticipant> members = new();
+    private bool closed;
+
+    internal void Add(ProviderAcquisitionParticipant participant)
+    {
+        lock (this.gate)
+        {
+            if (this.closed)
+            {
+                throw new InvalidOperationException("A completed acquisition cannot admit participants.");
+            }
+            this.members.Add(participant);
+        }
+    }
+
+    internal int Remove(ProviderAcquisitionParticipant participant)
+    {
+        lock (this.gate)
+        {
+            this.members.Remove(participant);
+            return this.members.Count;
+        }
+    }
+
+    internal void Close()
+    {
+        lock (this.gate)
+        {
+            this.closed = true;
+            this.members.Clear();
+        }
+    }
+
+    internal async ValueTask<bool> AuthorizesAsync(
+        ProviderInteractionPermit executionPermit,
+        CancellationToken cancellationToken)
+    {
+        if (!executionPermit.IsBoundTo(this))
+        {
+            return false;
+        }
+
+        bool IsMember(ProviderAcquisitionParticipant participant)
+        {
+            bool member;
+            lock (this.gate)
+            {
+                member = !this.closed && !participant.Cancellation.IsCancellationRequested &&
+                    this.members.Contains(participant);
+            }
+            return member && executionPermit.IsBoundTo(this);
+        }
+
+        ProviderAcquisitionParticipant[] snapshot;
+        lock (this.gate)
+        {
+            snapshot = this.members.ToArray();
+        }
+
+        foreach (var member in snapshot)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (IsMember(member) &&
+                await member.Permit.AuthorizesGroupMemberAsync(executionPermit, cancellationToken).ConfigureAwait(false) &&
+                IsMember(member))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }
 
 internal sealed record PrivateProviderDependencyBinding
@@ -44,10 +124,11 @@ internal sealed class ProviderInteractionPermit
     private readonly ProviderAcquisitionKey key;
     private readonly Func<bool> isCurrent;
     private readonly ProviderExecutionAuthorizationBinding? authorizationBinding;
-    private readonly PrivateProviderDependencyBinding? privateDependencyBinding;
     private int consumed;
     private bool executionBound;
     private CancellationToken executionCancellation;
+    private ProviderAcquisitionAuthorizationGroup? authorizationGroup;
+    private readonly PrivateProviderDependencyBinding? privateDependencyBinding;
 
     internal ProviderInteractionPermit(
         UserAuthorizationRequestIdentifier requestIdentifier,
@@ -99,6 +180,11 @@ internal sealed class ProviderInteractionPermit
 
     internal CancellationToken ExecutionCancellation => this.executionCancellation;
 
+    internal bool IsBoundTo(ProviderAcquisitionAuthorizationGroup group) =>
+        ReferenceEquals(this.authorizationGroup, group) && this.executionBound &&
+        Volatile.Read(ref this.consumed) == 1 && !this.executionCancellation.IsCancellationRequested &&
+        this.isCurrent();
+
     internal bool AuthorizesActiveExecution(
         UserAuthorizationRequestIdentifier requestIdentifier,
         long revision,
@@ -131,17 +217,20 @@ internal sealed class ProviderInteractionPermit
             return false;
         }
 
-        var expectedKey = new ProviderAcquisitionKey
-        {
-            Configuration = request.Credential.LogicalIdentifier,
-            Source = request.SourceIdentifier,
-            Account = request.Credential.AccountIdentifier,
-            Protocol = ProviderProtocolKind.TunnelConnect,
-        };
-        return this.AuthorizesActiveExecution(
+        return this.HasExactAcquisitionBinding() && this.AuthorizesActiveExecution(
             context.RequestIdentifier, context.Revision, CredentialExecutorKind.DevTunnelConnect,
-            context.AcquisitionGeneration, expectedKey);
+            context.AcquisitionGeneration, binding.AcquisitionKey);
     }
+
+    // A captured accountless key is exact, not a wildcard; the policy account still pins private use.
+    private bool HasExactAcquisitionBinding() =>
+        this.authorizationBinding is { } binding && this.key == binding.AcquisitionKey &&
+        this.key.Configuration == binding.Request.Credential.LogicalIdentifier &&
+        this.key.Source == binding.Request.SourceIdentifier &&
+        this.key.Protocol == ProviderProtocolKind.TunnelConnect &&
+        (this.key.Account is not { } issuedAccount ||
+            binding.Request.Credential.AccountIdentifier is not { } policyAccount ||
+            issuedAccount == policyAccount);
 
     internal async ValueTask<bool> AuthorizesPrivateUseAsync(
         ICredentialExecutionContext? context,
@@ -155,31 +244,94 @@ internal sealed class ProviderInteractionPermit
             return false;
         }
 
-        var validation = await policy.ValidateAcquisitionAuthorizationAsync(
-            binding.Authorization, binding.Request, cancellationToken).ConfigureAwait(false);
+        // The operation context stays pinned; another admitted grant authorizes shared work, not caller release.
+        var authorized = this.authorizationGroup is { } group
+            ? await group.AuthorizesAsync(this, cancellationToken).ConfigureAwait(false)
+            : await policy.ValidateAcquisitionAuthorizationAsync(
+                binding.Authorization, binding.Request, cancellationToken).ConfigureAwait(false) ==
+                    ReleaseAuthorizationValidation.Valid;
         cancellationToken.ThrowIfCancellationRequested();
-        return validation == ReleaseAuthorizationValidation.Valid && this.IsActivePrivateExecution(context);
+        return authorized && this.IsActivePrivateExecution(context);
     }
 
-    internal async ValueTask<bool> AuthorizesProviderExecutionAsync(CancellationToken cancellationToken)
+    internal async ValueTask<bool> AuthorizesGroupMemberAsync(
+        ProviderInteractionPermit executionPermit,
+        CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (!this.IsCurrentAdmission)
+        if (executionPermit.privateDependencyBinding is { } originalDependency)
+        {
+            bool IsExactDependency() =>
+                !this.executionBound && Volatile.Read(ref this.consumed) == 1 && this.isCurrent() &&
+                this.executor == executionPermit.executor && this.key == executionPermit.key &&
+                this.privateDependencyBinding is { } dependency &&
+                ReferenceEquals(dependency.Context.Policy, originalDependency.Context.Policy) &&
+                dependency.Context.PolicyRequest?.Credential.AccountIdentifier ==
+                    originalDependency.Context.PolicyRequest?.Credential.AccountIdentifier &&
+                this.requestIdentifier == dependency.Context.RequestIdentifier &&
+                this.revision == dependency.Context.Revision &&
+                this.generation == dependency.Context.AcquisitionGeneration &&
+                (dependency.Context.PolicyRequest?.Credential.AccountIdentifier is not { } account ||
+                    this.key.Account == account);
+
+            return IsExactDependency() &&
+                await this.privateDependencyBinding!.ParentPermit.AuthorizesPrivateUseAsync(
+                    this.privateDependencyBinding.Context, cancellationToken).ConfigureAwait(false) &&
+                IsExactDependency();
+        }
+
+        bool IsExactMember()
+        {
+            var binding = this.authorizationBinding;
+            return !this.executionBound && Volatile.Read(ref this.consumed) == 1 && this.isCurrent() &&
+                binding is not null && executionPermit.authorizationBinding is { } origin &&
+                ReferenceEquals(binding.Policy, origin.Policy) &&
+                binding.Request.Credential == origin.Request.Credential &&
+                this.executor == executionPermit.executor && this.key == executionPermit.key &&
+                binding.Authorization.RequestIdentifier == this.requestIdentifier &&
+                binding.Authorization.RequestGeneration == this.revision &&
+                binding.Request.RequestIdentifier == this.requestIdentifier &&
+                binding.Request.RequestGeneration == this.revision &&
+                binding.Request.Credential.Provider == CredentialProviderKind.DevTunnel &&
+                binding.Request.Credential.Kind == CredentialKind.ConnectToken &&
+                this.HasExactAcquisitionBinding();
+        }
+
+        if (!IsExactMember() || this.authorizationBinding!.Policy is not IProviderAcquisitionAuthorizationPolicy policy)
         {
             return false;
         }
 
-        return this.privateDependencyBinding is not { } dependency ||
-            (await dependency.ParentPermit.AuthorizesPrivateUseAsync(dependency.Context, cancellationToken).ConfigureAwait(false) &&
-                this.isCurrent());
+        var validation = await policy.ValidateAcquisitionAuthorizationAsync(
+            this.authorizationBinding.Authorization, this.authorizationBinding.Request, cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        return validation == ReleaseAuthorizationValidation.Valid && IsExactMember();
     }
 
-    internal bool IsCurrentAdmission =>
-        !this.executionBound && Volatile.Read(ref this.consumed) == 1 && this.isCurrent();
+    internal async ValueTask<bool> AuthorizesAcquisitionAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!this.executionBound || this.executionCancellation.IsCancellationRequested || !this.isCurrent())
+        {
+            return false;
+        }
+
+        if (this.privateDependencyBinding is not null)
+        {
+            return this.authorizationGroup is { } childGroup &&
+                await childGroup.AuthorizesAsync(this, cancellationToken).ConfigureAwait(false) &&
+                !this.executionCancellation.IsCancellationRequested && this.isCurrent();
+        }
+
+        return this.executor != CredentialExecutorKind.DevTunnelConnect || this.authorizationBinding is null ||
+            this.authorizationGroup is { } group &&
+                await group.AuthorizesAsync(this, cancellationToken).ConfigureAwait(false) &&
+                !this.executionCancellation.IsCancellationRequested && this.isCurrent();
+    }
 
     internal ProviderInteractionPermit BindExecution(
         Func<bool> isActive,
-        CancellationToken executionCancellation = default)
+        CancellationToken executionCancellation = default,
+        ProviderAcquisitionAuthorizationGroup? authorizationGroup = null)
     {
         var permit = new ProviderInteractionPermit(
             this.requestIdentifier, this.revision, this.executor, this.generation, this.key, isActive,
@@ -187,6 +339,7 @@ internal sealed class ProviderInteractionPermit
         permit.consumed = 1;
         permit.executionBound = true;
         permit.executionCancellation = executionCancellation;
+        permit.authorizationGroup = authorizationGroup;
         return permit;
     }
 

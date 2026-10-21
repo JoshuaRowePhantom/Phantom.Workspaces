@@ -43,6 +43,7 @@ internal static class EntraSessionTestAuthorization
                 Policy = context.Policy,
                 Authorization = authorization,
                 Request = request,
+                AcquisitionKey = key,
             }).BindExecution(isActive ?? (() => true));
         return (context, permit);
     }

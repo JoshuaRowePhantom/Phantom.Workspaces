@@ -69,6 +69,11 @@ internal sealed class ProviderAcquisitionCommitContext
         await this.commitGate.WaitAsync(this.cancellationToken).ConfigureAwait(false);
         try
         {
+            if (!await this.InteractionPermit.AuthorizesAcquisitionAsync(this.cancellationToken).ConfigureAwait(false))
+            {
+                return new ProviderAcquisitionDenied();
+            }
+
             if (!this.isActive() || this.cancellationToken.IsCancellationRequested)
             {
                 return new ProviderAcquisitionCancelled();

@@ -37,6 +37,7 @@ public sealed class EntraPrivateCapabilityTests
             var key = ConnectExecutor.Key(context.PolicyRequest!);
             var binding = new ProviderExecutionAuthorizationBinding
             {
+                AcquisitionKey = key,
                 Policy = context.Policy,
                 Authorization = authorization,
                 Request = context.PolicyRequest!,
@@ -250,8 +251,8 @@ public sealed class EntraPrivateCapabilityTests
         };
         var pending = fixture.Broker.AcquireAsync(fixture.CreateConnectRequest(), TestContext.Current.CancellationToken);
         await fixture.ApplyAsync(fixture.Registry.GetSnapshot().Last(), ReleaseMemoryScopeKind.AllUses);
-        Assert.IsType<AccessAuthorizationRequired<ConnectResult>>(
-            await pending.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+        Assert.Equal(AccessErrorCode.ProviderFailure, Assert.IsType<AccessFailed<ConnectResult>>(
+            await pending.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).ErrorCode);
         Assert.True(await session.IsCurrentGenerationAsync(generation, TestContext.Current.CancellationToken));
         Assert.Equal(1, fixture.Acquirer.Calls);
         Assert.Equal(1, callbackCalls);

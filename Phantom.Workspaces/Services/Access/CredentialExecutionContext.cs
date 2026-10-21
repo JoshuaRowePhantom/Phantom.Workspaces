@@ -86,9 +86,7 @@ internal sealed class CredentialExecutionContext : ICredentialExecutionContext
         if (!this.canPerform || this.PolicyRequest is null || parentGenerationPermit is null ||
             operation.RequestIdentifier != this.RequestIdentifier ||
             operation.Revision != this.Revision || operation.AcquisitionGeneration != this.AcquisitionGeneration ||
-            operation.ExecutorKind == CredentialExecutorKind.DevTunnelConnect ||
-            operation.CompatibilityKey.Protocol == ProviderProtocolKind.TunnelConnect ||
-            !parentGenerationPermit.IsActivePrivateExecution(this) ||
+            !await parentGenerationPermit.AuthorizesPrivateUseAsync(this, cancellationToken).ConfigureAwait(false) ||
             (this.PolicyRequest.Credential.AccountIdentifier is { } account &&
                 operation.CompatibilityKey.Account != account))
         {
@@ -97,11 +95,6 @@ internal sealed class CredentialExecutionContext : ICredentialExecutionContext
 
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken, parentGenerationPermit.ExecutionCancellation);
-        if (!await parentGenerationPermit.AuthorizesPrivateUseAsync(this, cancellation.Token).ConfigureAwait(false))
-        {
-            return new ProviderAcquisitionDenied();
-        }
-
         var permit = new ProviderInteractionPermit(
             this.RequestIdentifier,
             this.Revision,
@@ -109,11 +102,7 @@ internal sealed class CredentialExecutionContext : ICredentialExecutionContext
             this.AcquisitionGeneration,
             operation.CompatibilityKey,
             () => parentGenerationPermit.IsActivePrivateExecution(this),
-            privateDependencyBinding: new PrivateProviderDependencyBinding
-            {
-                Context = this,
-                ParentPermit = parentGenerationPermit,
-            });
+            privateDependencyBinding: new() { Context = this, ParentPermit = parentGenerationPermit });
         var outcome = await this.ExecuteProviderAcquisitionAsync(operation, permit, cancellation.Token).ConfigureAwait(false);
         return await parentGenerationPermit.AuthorizesPrivateUseAsync(this, cancellation.Token).ConfigureAwait(false)
             ? outcome

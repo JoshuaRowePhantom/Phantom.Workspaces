@@ -254,6 +254,7 @@ internal sealed class AccessBroker : IAccessBroker
                                     Policy = this.Policy,
                                     Authorization = authorization,
                                     Request = policyRequest,
+                                    AcquisitionKey = key,
                                 });
                         }
 
