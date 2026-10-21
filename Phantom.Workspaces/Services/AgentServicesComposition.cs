@@ -141,6 +141,7 @@ public static class AgentServicesComposition
             applicationServices.McpOAuthOptions,
             loggerFactory) with
         {
+            AccessBroker = applicationServices.AccessBroker,
             AgentPersistenceStoreOverride = agentPersistenceStore,
             ToolsetFactory = toolsetFactory,
             ToolResourceFactory = toolResourceFactory,
