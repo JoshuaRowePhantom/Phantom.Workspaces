@@ -42,7 +42,7 @@ public sealed class GitHubPrivateCredentialSessionTests
                 context.AcquisitionGeneration,
                 proofKind == 3 ? key with { Configuration = new() { Digest = new string('e', 64) } } : key,
                 () => true);
-            proof = proofKind == 1 ? candidate : candidate.BindExecution(() => true);
+            proof = proofKind == 1 ? candidate : candidate.BindExecution(() => true, TestContext.Current.CancellationToken);
         }
         Assert.IsType<GitHubPrivateCredentialUseDenied<int>>(await provider.UseGenerationAsync<int>(
             inspection.Source, inspection.CachedGeneration!.Generation, context, proof,

@@ -1,0 +1,37 @@
+{
+  "owner": "2042d708-200b-4ec9-8ea0-4ac52e4d8646",
+  "worktree": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020",
+  "branch": "integration/access-arc-ready-v2-20261020",
+  "baseline": "e8ed98d70fe885ce37b12410e82f63317a923db5",
+  "status": "Integration implemented; actual merged validation in progress. Not whole-arc acceptance.",
+  "sourceToLocal": {
+    "19acd7f6b1940290d08c43dfc4e9f535d56d03f3": "ac151c04",
+    "083c040727028de4694192bd378e6d23d9b96529": "9202d011",
+    "9784130df73a4af2776619f7c503fa74b29c269d": "a885edb6",
+    "468781d89dd34d41eb4c6d085c3e1a0e89c0c3ca": "4f752615",
+    "2be864f2ffc73b0d9bff38488d367f208003507f": "4f752615",
+    "941f5853b7e8028a83974aa07a7540a668fedb4f": "4f752615",
+    "8bcd65967ce2208d1b29e729fac6d648f352e4c9": "d134eac",
+    "ac9cd093781a9977aec2a854b66571d29ee49a49": "af5636e9",
+    "b515694601fe1a3e8f4a887fd6694742fbcf803b": "ec4b0a2a",
+    "517a389c881b6e8db81b845ca20025939d1c744a": "14cea9d9",
+    "83ebf2bdbe86455ad1245db83a8d2e7760886d62": "4a6739d9",
+    "eccf369b45038ee0a02f0a2d62d98cd2285add92": "dd0610ac",
+    "51b247b7589d6ea3d9b584fb846278c49fb38002": "9e367e38"
+  },
+  "sharedReconciliation": "Only excluded 99405fc9 and 6f247104 deltas were reversed in index, without committing an intermediate rollback; accepted468/2be/941/8bc were applied in exact order. A test helper conflict preserved both independent RefineInspection and accepted InspectOverride. The three permit/context/coordinator production files exactly match accepted8bc. Independent broker renewal, cancellation, lifetime and root changes retained.",
+  "rootMerge": "Preserved typed caller RequirePresentationScope fail-closed exception, exact ownsHttpClient lifetimes, source-pinned Connect key and Perform publication barrier. Integrated actual source-route rebound, same registered OAuth/MCP graph and live delegate. SDK five typed arguments retain remote catalog; AccessPresentationScopeProvider remains alias to root delegate. MCP cache aggregate already includes same registered object through existing OfType projection; explicit root identity regression added.",
+  "validation": {
+    "initial": "0 tests; duplicate MainWindow import diagnosed by isolated read-only specialist and removed.",
+    "second": "0 tests; accepted BindExecution optional cancellation token exposed xUnit1051 in four provider fixture files. Isolated read-only diagnosis; explicit TestContext token added without assertion changes.",
+    "third": "Running; MCP recording decorator lacks real acquisition-policy interface and causes deterministic early AccessDenied plus downstream barrier timeouts. Isolated read-only diagnosis; forward exact actual wrapped policy interface. No retry/sleep/assertion weakening."
+  },
+  "openOwnerWork": [
+    "Generic OAuth pending binding-startup join and cleanup faults: consume only cleared generic hunks when authorized; preserve independently cleared MCP lifecycle.",
+    "GitHub full canonical async validation and unpublished TResult ownership pending provider owner.",
+    "MCP missing-authority/token metadata canonical matching pending owner.",
+    "Configured OAuth factory independent Audience correction pending owner.",
+    "UI and SDK/App-provider dead legacy removals require actual ready commits and bounded review."
+  ],
+  "safety": "No live checkout, auth, browser/UI/provider actions, features advancement, push/release/closure or rewritten history. Normal submodule init preserves Dock8c8d11 and MXC29702c3."
+}

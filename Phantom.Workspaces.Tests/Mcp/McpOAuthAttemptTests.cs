@@ -51,20 +51,20 @@ public sealed partial class McpOAuthRedirectHandlerTests
         foreach (var permit in new[]
         {
             AttemptPermit(operation),
-            AttemptPermit(operation, revision: 2).BindExecution(() => true),
-            AttemptPermit(operation, generation: Guid.NewGuid()).BindExecution(() => true),
-            AttemptPermit(operation, requestIdentifier: new() { Value = Guid.NewGuid() }).BindExecution(() => true),
-            AttemptPermit(operation, executor: CredentialExecutorKind.Entra).BindExecution(() => true),
-            AttemptPermit(operation, executor: CredentialExecutorKind.OAuth).BindExecution(() => true),
+            AttemptPermit(operation, revision: 2).BindExecution(() => true, TestContext.Current.CancellationToken),
+            AttemptPermit(operation, generation: Guid.NewGuid()).BindExecution(() => true, TestContext.Current.CancellationToken),
+            AttemptPermit(operation, requestIdentifier: new() { Value = Guid.NewGuid() }).BindExecution(() => true, TestContext.Current.CancellationToken),
+            AttemptPermit(operation, executor: CredentialExecutorKind.Entra).BindExecution(() => true, TestContext.Current.CancellationToken),
+            AttemptPermit(operation, executor: CredentialExecutorKind.OAuth).BindExecution(() => true, TestContext.Current.CancellationToken),
             AttemptPermit(operation, key: operation.CompatibilityKey with
             {
                 Source = new() { Digest = new string('c', 64) },
-            }).BindExecution(() => true),
+            }).BindExecution(() => true, TestContext.Current.CancellationToken),
             AttemptPermit(operation, key: operation.CompatibilityKey with
             {
                 Account = new() { Digest = new string('d', 64) },
-            }).BindExecution(() => true),
-            AttemptPermit(operation).BindExecution(() => false),
+            }).BindExecution(() => true, TestContext.Current.CancellationToken),
+            AttemptPermit(operation).BindExecution(() => false, TestContext.Current.CancellationToken),
         })
         {
             var browser = new FakeSystemBrowserLauncher();
@@ -80,7 +80,7 @@ public sealed partial class McpOAuthRedirectHandlerTests
         var browser = new FakeSystemBrowserLauncher();
         var operation = new AttemptOperation();
         await using var attempt = await BoundAttemptAsync(browser, AuthUri("private-state"), operation);
-        var result = attempt.ExecuteAsync(AttemptPermit(operation).BindExecution(() => true), CancellationToken.None);
+        var result = attempt.ExecuteAsync(AttemptPermit(operation).BindExecution(() => true, TestContext.Current.CancellationToken), CancellationToken.None);
         await attempt.DisposeAsync();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => result);
         Assert.False(attempt.IsListenerBound);
@@ -89,7 +89,7 @@ public sealed partial class McpOAuthRedirectHandlerTests
             new Uri(operation.RedirectUri, "?state=private-state&code=late"),
             TestContext.Current.CancellationToken));
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            attempt.ExecuteAsync(AttemptPermit(operation).BindExecution(() => true), CancellationToken.None));
+            attempt.ExecuteAsync(AttemptPermit(operation).BindExecution(() => true, TestContext.Current.CancellationToken), CancellationToken.None));
         Assert.Equal(1, browser.OpenCount);
     }
 
@@ -107,7 +107,7 @@ public sealed partial class McpOAuthRedirectHandlerTests
             {
                 cancellation.Cancel();
             }
-            var result = attempt.ExecuteAsync(AttemptPermit(operation).BindExecution(() => true), cancellation.Token);
+            var result = attempt.ExecuteAsync(AttemptPermit(operation).BindExecution(() => true, TestContext.Current.CancellationToken), cancellation.Token);
             if (!cancelBeforeLaunch)
             {
                 await attempt.DisposeAsync();
@@ -126,7 +126,7 @@ public sealed partial class McpOAuthRedirectHandlerTests
         var operation = new AttemptOperation();
         await using var attempt = await BoundAttemptAsync(browser, AuthUri("private-state"), operation);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            attempt.ExecuteAsync(AttemptPermit(operation).BindExecution(() => true), cancellation.Token));
+            attempt.ExecuteAsync(AttemptPermit(operation).BindExecution(() => true, TestContext.Current.CancellationToken), cancellation.Token));
         Assert.False(attempt.IsListenerBound);
         Assert.Equal(1, browser.OpenCount);
     }
@@ -137,7 +137,7 @@ public sealed partial class McpOAuthRedirectHandlerTests
         var browser = new FakeSystemBrowserLauncher();
         var operation = new AttemptOperation();
         await using var attempt = await BoundAttemptAsync(browser, AuthUri("private-state"), operation);
-        var proof = AttemptPermit(operation).BindExecution(() => true);
+        var proof = AttemptPermit(operation).BindExecution(() => true, TestContext.Current.CancellationToken);
         var first = attempt.ExecuteAsync(proof, CancellationToken.None);
         await Assert.ThrowsAsync<InvalidOperationException>(() => attempt.ExecuteAsync(proof, CancellationToken.None));
         Assert.Equal(1, browser.OpenCount);
@@ -153,8 +153,8 @@ public sealed partial class McpOAuthRedirectHandlerTests
         var browser = new FakeSystemBrowserLauncher();
         await using var first = await BoundAttemptAsync(browser, AuthUri("first-state"), firstOperation);
         await using var second = await BoundAttemptAsync(browser, AuthUri("second-state"), secondOperation);
-        var firstResult = first.ExecuteAsync(AttemptPermit(firstOperation).BindExecution(() => true), CancellationToken.None);
-        var secondResult = second.ExecuteAsync(AttemptPermit(secondOperation).BindExecution(() => true), CancellationToken.None);
+        var firstResult = first.ExecuteAsync(AttemptPermit(firstOperation).BindExecution(() => true, TestContext.Current.CancellationToken), CancellationToken.None);
+        var secondResult = second.ExecuteAsync(AttemptPermit(secondOperation).BindExecution(() => true, TestContext.Current.CancellationToken), CancellationToken.None);
         await SendCallbackAsync(firstOperation.RedirectUri, "state=second-state&code=wrong");
         Assert.False(firstResult.IsCompleted);
         Assert.False(secondResult.IsCompleted);
@@ -176,7 +176,7 @@ public sealed partial class McpOAuthRedirectHandlerTests
         };
         await using var attempt = await BoundAttemptAsync(browser, AuthUri("private-state"), operation);
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            attempt.ExecuteAsync(AttemptPermit(operation).BindExecution(() => true), CancellationToken.None));
+            attempt.ExecuteAsync(AttemptPermit(operation).BindExecution(() => true, TestContext.Current.CancellationToken), CancellationToken.None));
         await browser.LastCallbackTask!;
         Assert.Equal("OAuth authorization failed.", exception.Message);
         Assert.Empty(exception.Data);
@@ -189,7 +189,7 @@ public sealed partial class McpOAuthRedirectHandlerTests
     {
         var operation = new AttemptOperation();
         var active = true;
-        var proof = AttemptPermit(operation).BindExecution(() => active);
+        var proof = AttemptPermit(operation).BindExecution(() => active, TestContext.Current.CancellationToken);
         await using var binding = await new OAuthCallbackBindingFactory().BindAsync(
             operation, proof, TestContext.Current.CancellationToken);
         operation.RedirectUri = binding.RedirectUri;
@@ -205,7 +205,7 @@ public sealed partial class McpOAuthRedirectHandlerTests
     private static async ValueTask<OAuthCallbackBinding> BindAttemptAsync(AttemptOperation operation)
     {
         var binding = await new OAuthCallbackBindingFactory().BindAsync(
-            operation, AttemptPermit(operation).BindExecution(() => true), TestContext.Current.CancellationToken);
+            operation, AttemptPermit(operation).BindExecution(() => true, TestContext.Current.CancellationToken), TestContext.Current.CancellationToken);
         operation.RedirectUri = binding.RedirectUri;
         return binding;
     }

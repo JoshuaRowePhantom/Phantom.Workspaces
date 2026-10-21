@@ -6,6 +6,7 @@ using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Llm.Interfaces.Authorization;
 using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Services.Access;
+using Phantom.Workspaces.Services.Mcp;
 using Phantom.Workspaces.Tools;
 using Phantom.Workspaces.ViewModels;
 
@@ -60,6 +61,16 @@ public sealed class AccessHostServicesTests : IDisposable
         Assert.Contains(typeof(DevTunnelConnectCredentialAccessRequest), requests);
         Assert.Contains(typeof(CliOwnedAuthorizationRequest), requests);
         Assert.All(requests, request => Assert.True(request.IsSealed));
+
+        var mcpRegistration = registrations[typeof(McpOAuthCredentialUseRequest)]!;
+        var mcpExecutor = Assert.Single(mcpRegistration.GetType()
+            .GetFields(BindingFlags.Instance | BindingFlags.NonPublic)
+            .Select(field => field.GetValue(mcpRegistration)).OfType<McpOAuthCredentialAccessExecutor>());
+        var facets = Assert.IsType<ICredentialCacheAdministration[]>(
+            typeof(CredentialCacheAdministration).GetField("facets", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(host.CredentialCacheAdministration));
+        Assert.Same(mcpExecutor, Assert.Single(facets.OfType<McpOAuthCredentialAccessExecutor>()));
+        Assert.False((object)mcpExecutor is IProviderGrantAdministration);
     }
 
     [Fact]

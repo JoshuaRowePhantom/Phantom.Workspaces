@@ -23,7 +23,6 @@ using Dock.Model.Mvvm.Controls;
 using Dock.Serializer.SystemTextJson;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Configuration;
-using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Web.Client;
 using Phantom.Workspaces.Llm;

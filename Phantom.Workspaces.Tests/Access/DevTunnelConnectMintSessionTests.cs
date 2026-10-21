@@ -73,7 +73,7 @@ public sealed class DevTunnelConnectMintSessionTests
             CredentialExecutorKind.DevTunnelConnect, generation, key, () => true);
         if (bindExecution)
         {
-            permit = permit.BindExecution(() => true);
+            permit = permit.BindExecution(() => true, TestContext.Current.CancellationToken);
         }
         Assert.IsType<DevTunnelConnectMintDenied>(await fixture.Session.MintAsync(
             fixture.Request, source, nullContext ? null! : context.Object, key, permit,

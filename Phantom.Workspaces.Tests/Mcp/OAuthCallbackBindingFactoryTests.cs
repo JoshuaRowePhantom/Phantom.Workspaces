@@ -48,7 +48,7 @@ public sealed class OAuthCallbackBindingFactoryTests
             operation.AcquisitionGeneration, operation.CompatibilityKey, () => true);
         await Assert.ThrowsAsync<InvalidOperationException>(() => factory.BindAsync(operation, rowPermit, TestContext.Current.CancellationToken).AsTask());
         var wrong = new ProviderInteractionPermit(operation.RequestIdentifier, operation.Revision, CredentialExecutorKind.McpOAuth,
-            operation.AcquisitionGeneration, operation.CompatibilityKey, () => true).BindExecution(() => true);
+            operation.AcquisitionGeneration, operation.CompatibilityKey, () => true).BindExecution(() => true, TestContext.Current.CancellationToken);
         await Assert.ThrowsAsync<InvalidOperationException>(() => factory.BindAsync(operation, wrong, TestContext.Current.CancellationToken).AsTask());
     }
 
@@ -83,7 +83,7 @@ public sealed class OAuthCallbackBindingFactoryTests
 
     private static ProviderInteractionPermit Proof(Operation operation) => new ProviderInteractionPermit(
         operation.RequestIdentifier, operation.Revision, operation.ExecutorKind,
-        operation.AcquisitionGeneration, operation.CompatibilityKey, () => true).BindExecution(() => true);
+        operation.AcquisitionGeneration, operation.CompatibilityKey, () => true).BindExecution(() => true, TestContext.Current.CancellationToken);
 
     private sealed class Operation(CredentialExecutorKind kind) : IProviderAcquisitionOperation
     {

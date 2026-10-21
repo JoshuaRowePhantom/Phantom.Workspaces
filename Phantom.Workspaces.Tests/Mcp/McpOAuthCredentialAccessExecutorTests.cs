@@ -735,7 +735,7 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
         }
     }
 
-    private sealed class RecordingPolicy : IReleaseAuthorizationPolicy, IAsyncDisposable
+    private sealed class RecordingPolicy : IReleaseAuthorizationPolicy, IProviderAcquisitionAuthorizationPolicy, IAsyncDisposable
     {
         private readonly List<string> events;
         private readonly ReleaseAuthorizationPolicy policy;
@@ -758,6 +758,10 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
         }
         public ValueTask<ReleaseAuthorizationValidation> ValidateAsync(ReleaseAuthorizationIdentifier identifier, ReleasePolicyRequest request, CancellationToken cancellationToken) =>
             this.policy.ValidateAsync(identifier, request, cancellationToken);
+        public ValueTask<ReleaseAuthorizationValidation> ValidateAcquisitionAuthorizationAsync(
+            ReleaseAuthorizationIdentifier identifier, ReleasePolicyRequest request, CancellationToken cancellationToken) =>
+            ((IProviderAcquisitionAuthorizationPolicy)this.policy)
+                .ValidateAcquisitionAuthorizationAsync(identifier, request, cancellationToken);
         public async ValueTask FinalizeCredentialIdentityAsync(ReleaseAuthorizationIdentifier identifier, ResolvedCredentialIdentity identity, CancellationToken cancellationToken)
         {
             await this.policy.FinalizeCredentialIdentityAsync(identifier, identity, cancellationToken);
