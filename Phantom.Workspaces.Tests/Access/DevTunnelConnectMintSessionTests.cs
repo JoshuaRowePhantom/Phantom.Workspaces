@@ -260,8 +260,7 @@ public sealed class DevTunnelConnectMintSessionTests
             Environment.CurrentDirectory, ".access-tunnel-mint-tests", Guid.NewGuid().ToString("N"));
         private readonly EntraCredentialAccessExecutor entra = new();
         private readonly OAuthCredentialAccessExecutor oauth = new(
-            new OAuthProviderRegistry(new Phantom.Workspaces.Llm.Secrets.NullPlatformSecretStore(),
-                () => new Uri("http://localhost:51234/")),
+            new OAuthProviderRegistry(new Phantom.Workspaces.Llm.Secrets.NullPlatformSecretStore()),
             new Mock<ISystemBrowserLauncher>().Object);
         public Fixture()
         {

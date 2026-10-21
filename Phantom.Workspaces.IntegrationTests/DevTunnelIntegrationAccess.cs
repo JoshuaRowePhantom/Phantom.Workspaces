@@ -47,8 +47,7 @@ internal sealed class DevTunnelIntegrationAccess : IAsyncDisposable
         var github = new GitHubCredentialAccessExecutor(new IntegrationGitHubSource());
         var entra = new EntraCredentialAccessExecutor();
         var oauth = new OAuthCredentialAccessExecutor(
-            new OAuthProviderRegistry(new Phantom.Workspaces.Llm.Secrets.NullPlatformSecretStore(),
-                () => new Uri("http://localhost:51234/")), new NoBrowser());
+            new OAuthProviderRegistry(new Phantom.Workspaces.Llm.Secrets.NullPlatformSecretStore()), new NoBrowser());
         var executors = new CredentialAccessExecutorRegistry();
         executors.Add<GitHubCredentialAccessRequest, GitHubCredentialAccessResult>(github);
         executors.Add<EntraCredentialAccessRequest, EntraCredentialAccessResult>(entra);

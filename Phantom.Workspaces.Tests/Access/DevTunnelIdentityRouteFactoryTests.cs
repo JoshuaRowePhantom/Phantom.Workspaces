@@ -148,8 +148,7 @@ public sealed class DevTunnelIdentityRouteFactoryTests
         internal Fixture()
         {
             this.Registry = new OAuthProviderRegistry(this.Store.Object,
-                () => throw new InvalidOperationException("Route mapping cannot bind a callback."),
-                () => throw new InvalidOperationException("Route mapping cannot perform HTTP."));
+                createHttpHandler: () => throw new InvalidOperationException("Route mapping cannot perform HTTP."));
             this.factory = new DevTunnelIdentityRouteFactory(this.Registry);
         }
 
