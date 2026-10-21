@@ -15,11 +15,13 @@ using Phantom.Workspaces.Services.DevTunnel;
 
 namespace Phantom.Workspaces.IntegrationTests;
 
-// Live tests explicitly opt in to their own in-memory release decisions, never production UI consent.
+// Live tests explicitly opt in to fixture-local release decisions, never production UI consent.
 internal sealed class DevTunnelIntegrationAccess : IAsyncDisposable
 {
     internal static bool HasConfiguredCredential => IntegrationGitHubSource.Exists();
     private readonly UserAuthorizationRegistry registry = new();
+    private readonly string policyDirectory = Path.Combine(
+        Environment.CurrentDirectory, ".access-tunnel-integration-tests", Guid.NewGuid().ToString("N"));
     private readonly ConcurrentBag<Task> decisions = [];
     private readonly ConcurrentBag<HttpMessageHandler> handlers = [];
     private readonly HashSet<(UserAuthorizationRequestIdentifier, long)> acted = [];
@@ -56,7 +58,8 @@ internal sealed class DevTunnelIntegrationAccess : IAsyncDisposable
         executors.Add<DevTunnelConnectCredentialAccessRequest, DevTunnelConnectCredentialAccessResult>(
             new DevTunnelConnectCredentialAccessExecutor(
                 new DevTunnelConnectMintSession(github, entra, oauth, new DevTunnelConnectManagementApi()), this.registry));
-        this.Broker = new AccessBroker(new ReleaseAuthorizationPolicy(new ReleaseMemoryStore()), executors,
+        this.Broker = new AccessBroker(new ReleaseAuthorizationPolicy(
+            new ReleaseMemoryStore(Path.Combine(this.policyDirectory, "release-memory.json"))), executors,
             new ProviderAcquisitionCoordinator(), this.registry);
         this.IdentityRoute = new GitHubDevTunnelIdentityRoute
         {
@@ -121,9 +124,19 @@ internal sealed class DevTunnelIntegrationAccess : IAsyncDisposable
         }
         finally
         {
-            foreach (var handler in this.handlers)
+            try
             {
-                handler.Dispose();
+                foreach (var handler in this.handlers)
+                {
+                    handler.Dispose();
+                }
+            }
+            finally
+            {
+                if (Directory.Exists(this.policyDirectory))
+                {
+                    Directory.Delete(this.policyDirectory, recursive: true);
+                }
             }
         }
     }

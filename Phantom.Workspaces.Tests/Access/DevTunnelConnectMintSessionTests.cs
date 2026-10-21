@@ -17,6 +17,28 @@ namespace Phantom.Workspaces.Tests.Access;
 
 public sealed class DevTunnelConnectMintSessionTests
 {
+    [Fact]
+    public async Task ConnectMint_FixturePolicyIsProjectLocalAndRemovedAfterDisposal()
+    {
+        string policyPath;
+        await using (var fixture = new Fixture())
+        {
+            policyPath = fixture.PolicyPath;
+            Assert.StartsWith(Path.GetFullPath(Environment.CurrentDirectory) + Path.DirectorySeparatorChar,
+                Path.GetFullPath(policyPath));
+            var request = DevTunnelIdentityCredentialAccessRequest.Create(fixture.Request.IdentityRoute,
+                fixture.Request.Requestor, fixture.Request.Use with
+                {
+                    MemoryScopes = [ReleaseMemoryScopeKind.AllowOnce, ReleaseMemoryScopeKind.AllUses],
+                });
+            var pending = fixture.Broker.AcquireAsync(request, TestContext.Current.CancellationToken);
+            await fixture.ApproveUntilCompletedAsync(pending);
+            await using var identity = Assert.IsType<AccessSucceeded<DevTunnelIdentityCredentialAccessResult>>(await pending).Result;
+            Assert.True(File.Exists(policyPath));
+        }
+        Assert.False(File.Exists(policyPath));
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]
@@ -159,6 +181,8 @@ public sealed class DevTunnelConnectMintSessionTests
 
     private sealed class Fixture : IAsyncDisposable
     {
+        private readonly string directory = Path.Combine(
+            Environment.CurrentDirectory, ".access-tunnel-mint-tests", Guid.NewGuid().ToString("N"));
         private readonly EntraCredentialAccessExecutor entra = new();
         private readonly OAuthCredentialAccessExecutor oauth = new(
             new OAuthProviderRegistry(new Phantom.Workspaces.Llm.Secrets.NullPlatformSecretStore(),
@@ -207,7 +231,7 @@ public sealed class DevTunnelConnectMintSessionTests
             executors.Add<DevTunnelIdentityCredentialAccessRequest, DevTunnelIdentityCredentialAccessResult>(
                 new DevTunnelIdentityCredentialAccessExecutor(this.GitHub, this.entra, this.oauth));
             executors.Add<DevTunnelConnectCredentialAccessRequest, DevTunnelConnectCredentialAccessResult>(executor);
-            this.Broker = new AccessBroker(new ReleaseAuthorizationPolicy(new ReleaseMemoryStore()),
+            this.Broker = new AccessBroker(new ReleaseAuthorizationPolicy(new ReleaseMemoryStore(this.PolicyPath)),
                 executors, new ProviderAcquisitionCoordinator(), this.Registry);
             var template = ReleaseAuthorizationContractTests.Request();
             var requestor = new AccessRequestor
@@ -228,6 +252,7 @@ public sealed class DevTunnelConnectMintSessionTests
         }
 
         public string ConnectToken { get; }
+        public string PolicyPath => Path.Combine(this.directory, "release-memory.json");
         public Source Source { get; } = new();
         public GitHubCredentialAccessExecutor GitHub { get; }
         public UserAuthorizationRegistry Registry { get; } = new();
@@ -300,7 +325,20 @@ public sealed class DevTunnelConnectMintSessionTests
             }, TestContext.Current.CancellationToken);
         }
 
-        public ValueTask DisposeAsync() => this.Broker.DisposeAsync();
+        public async ValueTask DisposeAsync()
+        {
+            try
+            {
+                await this.Broker.DisposeAsync();
+            }
+            finally
+            {
+                if (Directory.Exists(this.directory))
+                {
+                    Directory.Delete(this.directory, recursive: true);
+                }
+            }
+        }
     }
 
     private sealed class Source : IGitHubCredentialAccessSource
