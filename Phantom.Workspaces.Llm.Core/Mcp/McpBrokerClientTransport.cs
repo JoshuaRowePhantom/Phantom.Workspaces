@@ -47,6 +47,9 @@ internal sealed class McpBrokerClientTransport : IClientTransport, IAsyncDisposa
             throw new InvalidOperationException("MCP credential use requires an HTTPS endpoint.");
         }
 
+        var serverName = tool.ServerName ?? tool.Name ?? "(mcp server)";
+        services.McpCredentialStatusReporter?.Invoke(serverName, $"Gathering credentials for {serverName}");
+
         var requestor = services.AccessRequestor ?? new AccessRequestor
         {
             Identifier = CredentialIdentityFactory.CreateRequestorIdentifier(

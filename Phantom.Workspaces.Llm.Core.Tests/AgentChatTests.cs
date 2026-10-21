@@ -5,9 +5,8 @@ using Microsoft.Extensions.Time.Testing;
 using Moq;
 using MongoDB.Bson;
 using Phantom.Workspaces.Llm.Interfaces;
-using Phantom.Workspaces.Llm.Secrets;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Transport;
-using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using System.Security;
@@ -2295,11 +2294,15 @@ public sealed class AgentChatTests
     {
         // #1430: while an OAuth MCP server resolves its credentials during background connection, a
         // "gathering credentials" running item is surfaced so the otherwise-ready session shows the
-        // in-flight authentication. The credential resolver signals and then throws so the assertion
+        // in-flight authentication. The credential catalog signals and then throws so the assertion
         // is deterministic and no network connection is attempted.
-        const string clientIdPlaceholder = "${SECRET:OAuthClientId}";
         var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var resolver = new SignalingThenThrowingSecretResolver(clientIdPlaceholder, reached);
+        var catalog = new Mock<IMcpOAuthCredentialRequestCatalog>();
+        catalog.Setup(value => value.CreateRequest(
+                It.IsAny<McpTool>(), It.IsAny<AccessRequestor>(),
+                It.IsAny<CredentialUseDescriptor>(), It.IsAny<AccessPresentationScope>()))
+            .Callback(() => reached.TrySetResult())
+            .Throws(new InvalidOperationException("credential configuration failed (test)."));
 
         var seenRunningTexts = new List<string>();
         void Capture(AgentChat chat)
@@ -2329,7 +2332,7 @@ public sealed class AgentChatTests
                 Connection = new OAuthConnection
                 {
                     Endpoint = "https://example.test/mcp",
-                    ClientId = clientIdPlaceholder,
+                    ClientId = "public-test-client",
                 },
             },
         ];
@@ -2339,15 +2342,19 @@ public sealed class AgentChatTests
             ConfiguredStore = new InMemoryAgentPersistenceStore(),
             ClientOverride = CreateEchoClient(),
             DisplayNameOverride = "test-chat",
-            AgentServices = new AgentServices { SecretPlaceholderResolver = resolver },
+            AgentServices = new AgentServices
+            {
+                AccessBroker = Mock.Of<IAccessBroker>(),
+                McpOAuthCredentials = catalog.Object,
+            },
         };
 
         await using var chat = await AgentChat.CreateAsync(request, Capture);
 
         // The background init reached credential resolution, and Initialization completes (the OAuth
         // failure is caught per-server).
-        await reached.Task;
         await chat.Initialization;
+        Assert.True(reached.Task.IsCompletedSuccessfully);
 
         List<string> Snapshot()
         {
@@ -2357,40 +2364,8 @@ public sealed class AgentChatTests
             }
         }
 
-        await WaitForConditionAsync(
-            chat.RunningItems,
-            () => Snapshot().Any(text => text.Contains("Gathering credentials for oauth-server", StringComparison.Ordinal)),
-            "a 'gathering credentials' running item to be surfaced during OAuth connection");
-    }
-
-    // Resolves the given placeholder to a retriever that signals it was reached and then throws, so a
-    // test can deterministically observe that credential resolution began (and the "gathering
-    // credentials" status was reported) without attempting any real network connection (issue #1430).
-    private sealed class SignalingThenThrowingSecretResolver : ISecretPlaceholderResolver
-    {
-        private readonly string placeholder;
-        private readonly TaskCompletionSource reached;
-
-        public SignalingThenThrowingSecretResolver(string placeholder, TaskCompletionSource reached)
-        {
-            this.placeholder = placeholder;
-            this.reached = reached;
-        }
-
-        public bool TryResolve(string candidate, [NotNullWhen(true)] out Phantom.Workspaces.Llm.Interfaces.Access.SensitiveValueLease? retriever)
-        {
-            if (!string.Equals(candidate, this.placeholder, StringComparison.Ordinal))
-            {
-                retriever = null;
-                return false;
-            }
-
-            retriever = null;
-            this.reached.TrySetResult();
-            throw new InvalidOperationException("credential resolution failed (test).");
-        }
-
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        Assert.Contains(Snapshot(),
+            text => text.Contains("Gathering credentials for oauth-server", StringComparison.Ordinal));
     }
 
     private static string GetText(IReadOnlyList<AIContent> contents)
