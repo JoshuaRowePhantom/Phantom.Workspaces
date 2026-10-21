@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http;
 using Phantom.Workspaces.Llm.Interfaces.Access;
+using Phantom.Workspaces.Llm.Interfaces.Access.Execution;
 
 namespace Phantom.Workspaces.Services.DevTunnel;
 
@@ -44,7 +45,11 @@ public sealed class DevTunnelAuthenticationHandler : DelegatingHandler
             return response;
         }
         response.Dispose();
-        await credential.InvalidateRejectedGenerationAsync(cancellationToken).ConfigureAwait(false);
+        if (await credential.InvalidateRejectedGenerationAsync(cancellationToken).ConfigureAwait(false) !=
+            CredentialGenerationInvalidationOutcome.Invalidated)
+        {
+            throw new DevTunnelCredentialAccessException(AccessErrorCode.InvalidGeneration);
+        }
 
         // A missing Connect generation causes the broker to wait for a new explicit Perform.
         await using var renewed = await DevTunnelCredentialAccessException.RequireAsync(

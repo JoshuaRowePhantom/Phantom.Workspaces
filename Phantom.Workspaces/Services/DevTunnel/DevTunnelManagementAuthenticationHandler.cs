@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Net;
 using Microsoft.DevTunnels.Contracts;
 using Phantom.Workspaces.Llm.Interfaces.Access;
+using Phantom.Workspaces.Llm.Interfaces.Access.Execution;
 
 namespace Phantom.Workspaces.Services.DevTunnel;
 
@@ -34,7 +35,11 @@ internal sealed class DevTunnelManagementAuthenticationHandler(
             return response;
         }
         response.Dispose();
-        await identity.InvalidateRejectedGenerationAsync(cancellationToken).ConfigureAwait(false);
+        if (await identity.InvalidateRejectedGenerationAsync(cancellationToken).ConfigureAwait(false) !=
+            CredentialGenerationInvalidationOutcome.Invalidated)
+        {
+            throw new DevTunnelCredentialAccessException(AccessErrorCode.InvalidGeneration);
+        }
         await using var renewed = await DevTunnelCredentialAccessException.RequireAsync(
             await broker.AcquireAsync(CurrentRequest(), cancellationToken).ConfigureAwait(false),
             cancellationToken).ConfigureAwait(false);

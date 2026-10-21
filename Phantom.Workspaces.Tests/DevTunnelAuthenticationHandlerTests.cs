@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http;
 using Phantom.Workspaces.Llm.Interfaces.Access;
+using Phantom.Workspaces.Llm.Interfaces.Access.Execution;
 using Phantom.Workspaces.Llm.Interfaces.Authorization;
 using Phantom.Workspaces.Services.DevTunnel;
 using Phantom.Workspaces.Tests.Access;
@@ -201,6 +202,49 @@ public sealed class DevTunnelAuthenticationHandlerTests
     }
 
     [Fact]
+    public async Task DevTunnelAuthenticationHandler_StaleInFlight401CannotReplayOrInvalidateReplacement()
+    {
+        await using var fixture = new DevTunnelConnectCredentialAccessExecutorTests.Fixture();
+        await using var initial = await fixture.AcquireAsync();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var content = new TrackedContent();
+        var sends = 0;
+        using var client = new HttpClient(new DevTunnelAuthenticationHandler(
+            fixture.Broker, fixture.Request, new AsyncRecordingHandler(async (_, token) =>
+            {
+                sends++;
+                entered.TrySetResult();
+                await release.Task.WaitAsync(token);
+                return new HttpResponseMessage(HttpStatusCode.Unauthorized) { Content = content };
+            }), () => AccessPresentationScope.Runtime));
+        var sending = client.GetAsync(fixture.Session.Endpoint, TestContext.Current.CancellationToken);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        DevTunnelConnectCredentialAccessResult replacement;
+        try
+        {
+            Assert.Equal(CredentialGenerationInvalidationOutcome.Invalidated,
+                await initial.InvalidateRejectedGenerationAsync(TestContext.Current.CancellationToken));
+            replacement = await fixture.AcquireAsync();
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+        await using var ownedReplacement = replacement;
+        var exception = await Assert.ThrowsAsync<DevTunnelCredentialAccessException>(() => sending);
+        Assert.Equal(AccessErrorCode.InvalidGeneration, exception.ErrorCode);
+        Assert.Equal(1, sends);
+        Assert.Equal(2, fixture.Session.Mints);
+        Assert.True(content.Disposed);
+        Assert.Equal(CredentialGenerationInvalidationOutcome.NoLongerCurrent,
+            await initial.InvalidateRejectedGenerationAsync(TestContext.Current.CancellationToken));
+        Assert.NotEqual(initial.ConnectToken!.MaterialGeneration, replacement.ConnectToken!.MaterialGeneration);
+        Assert.IsType<SensitiveValueUseSucceeded<int>>(await replacement.ConnectToken.UseAsync(
+            (_, _) => ValueTask.FromResult(42), TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task DevTunnelAuthenticationHandler_CancelledReplayInvalidationDisposesUnpublishedResponse()
     {
         await using var fixture = new DevTunnelConnectCredentialAccessExecutorTests.Fixture();
@@ -294,5 +338,12 @@ public sealed class DevTunnelAuthenticationHandlerTests
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
             Task.FromResult(callback(request));
+    }
+
+    private sealed class AsyncRecordingHandler(
+        Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> callback) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            callback(request, cancellationToken);
     }
 }
