@@ -3,7 +3,7 @@
   "worktree": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020",
   "branch": "integration/access-arc-ready-v2-20261020",
   "baseline": "e8ed98d70fe885ce37b12410e82f63317a923db5",
-  "status": "CLEAN coherent checkpoint through0434a855: cleared MCP9cbb, Entra881, explicit Audience97c, exact-generation HTTP05d and complete generic-only bd1/3a/9d/04 integrated without MCP lifecycle replacement. MCP/root99x10, Core Entra43x10, generic native/MCP/root105x10 pass; fresh selective generic integration review clear. UI fa2 now has actual c4d bounded source CLEAR against978, separate from prior integration review. Full provider/HTTP App239 initial and stability1-4 pass, BUT run5 exposed root broker shutdown outcome race; isolated diagnosis complete, root5a25 owns correction and no239x10 claim. GitHub canonical/final-await High and latest direct Core dependency remain pending. Not whole-arc acceptance.",
+  "status": "CLEAN unchanged source0434a855: independent actual CLI/root/host-broker worker151 initial plus151x10 and real hermetic worker Transport-project round-trips11 initial plus11x10 now pass, beyond prior Core-only metadata coverage. MCP99x10, EntraCore43x10, generic105x10 and UI source-clear receipts preserved. Full provider/HTTP239 stability still blocked by diagnosed run5 root broker shutdown outcome race assigned5a25; no239x10 claim. GitHub canonical/final-await High and latest direct Core-removal dependency remain pending. No live CLI/provider/auth/UI or OS-process acceptance claimed; not whole-arc acceptance.",
   "reviewedCodeCheckpoint": "0434a8550f4a8977d9451c38be585adfbb0bfb71",
   "sourceToLocal": {
     "19acd7f6b1940290d08c43dfc4e9f535d56d03f3": "ac151c04",
@@ -224,6 +224,31 @@
       "selectors": "Phantom.Workspaces.Tests.Access.OAuthCredentialAccessExecutorTests,OAuthCallbackBindingFactoryTests,McpOAuthRedirectHandlerTests,McpOAuthCredentialAccessExecutorOwnershipTests,McpOAuthCacheAdministrationTests,McpOAuthCredentialRequestCatalogTests,AccessHostServicesTests,HostConfiguredAccessGraphTests",
       "boundary": "Exact generic-only full-drain/native factory/MCP compatibility matrix. Known root broker identity shutdown race remains documented; not whole provider/arc acceptance."
     },
+    "cliWorkerRoot": {
+      "codeCheckpoint": "0434a8550f4a8977d9451c38be585adfbb0bfb71",
+      "testProject": "Phantom.Workspaces.Tests\\Phantom.Workspaces.Tests.csproj",
+      "passed": 151,
+      "failed": 0,
+      "stabilityRuns": 10,
+      "passedPerRun": 151,
+      "log": ".scratch\\integration-v2-cli-worker-root-tests.log",
+      "stability": ".scratch\\integration-v2-cli-worker-root-stability.log",
+      "selectors": "RunVsCodeTunnelToolTests,VsCodeTunnelDiscoveryToolTests,VsCodeTunnelStatusResolverTests,VsCodeTunnelProcessEvidenceTests,VsCodeTunnelAuthorizationTests,ScheduledToolRegistryTests,VsCodeCliInvokerTests,VsCodeCliLocatorTests,WorkerCopilotProviderBrokerTests,AccessHostServicesTests,HostConfiguredAccessGraphTests",
+      "scope": "Actual CLI completion executor/broker/authorization rows and typed restart/recurrence behavior using deterministic fake process runner/child, actual same registered root graph, real host broker worker-provider binding with release-before-material/SDK and forgotten-release rejection. No live code CLI, authentication/browser/provider/user checkout action."
+    },
+    "workerTransport": {
+      "codeCheckpoint": "0434a8550f4a8977d9451c38be585adfbb0bfb71",
+      "testProject": "Phantom.Workspaces.Transport.Tests\\Phantom.Workspaces.Transport.Tests.csproj",
+      "passed": 11,
+      "failed": 0,
+      "stabilityRuns": 10,
+      "passedPerRun": 11,
+      "log": ".scratch\\integration-v2-worker-transport-tests.log",
+      "stability": ".scratch\\integration-v2-worker-transport-stability.log",
+      "selectors": "RemoteCopilotSdkSessionTests,Scenario3_RemoteCopilotSdkTests,RemoteSplitSession_Byok_AtoB_CompletesRoundTripAndClearsRunningItems,RemoteSplitSession_Byok_BtoA_CompletesReciprocalRoundTripAndClearsRunningItems,RemoteSplitSession_Byok_CtoAtoB_RelaysRoundTripAndClearsRunningItems,RemoteSplitSession_Byok_CallerLease_RemainsUnreadAcrossRemoteProviderBinding,RemoteSplitSession_Byok_CtoAtoB_EmitsCorrelatedSafeHopEvents,RemoteSplitSession_Byok_AtoB_ToolCallExecutesOnExecutorAndGuiCallbackReturnsToSource",
+      "scope": "Actual Transport project, not only Core/unit metadata: in-process separate caller/hub/worker profile instances over real reverse HTTP/hub/session routing, fake SDK turn source/remote tool routing, session persistence/resume, reciprocal/relayed turns, caller lease remains unread and correlated safe-hop diagnostics.",
+      "safetyBoundary": "Explicit hermetic method selectors exclude WebView/RealByokCli scenarios. No external Copilot CLI, live provider/authentication/browser, physical OS-process worker or live BYOK-wire acceptance claimed. Existing scripts only; no source/test edits, new tools or dependencies."
+    },
     "runner": "Only existing scripts\\run-tests.ps1 explicit TestProject/unquoted comma-separated TestNames and existing Skills run-tests-stability.ps1 Runs10 Modefull NoBuild with explicit TestProject default; no direct dotnet test.",
     "dumps": "Recursive scans before runners and during validation found no .dmp files; none discarded."
   },
@@ -252,7 +277,7 @@
     "GitHub full canonical async validation and post-final-await generation/expiry remain provider owner35ff pending. Narrow b382 unpublished TResult ownership is now integrated with paired caller cleanup removal, and exact owner fixture prerequisites resolve14 fabricated-account cases. Candidate0879 production remains unimported and uncleared.",
     "Root broker shutdown outcome race found by actual239 stability run5; isolated read-only diagnosis completed and root5a25 now exclusively owns immutable correction/regression. No broker/identity fixture edits by integrator; full239x10 acceptance BLOCKED.",
     "UI fa2 integrated after root978 and actual requested c4d bounded SOURCE review now CLEAR at01:32:53; no UI source-review blocker remains. SDK Core ISecretProvider/GitHubAuthTokenResolver production deletion still awaits immutable35ff App SecretProvider removal per latest direct parent instruction; preserve active native/provider caches and Core contracts, no cross-owner classes deleted.",
-    "After root/GitHub corrections and required legacy prerequisites, final integrator acceptance still requires combined complete actual private/HTTP target, registered CLI authorization selectors and relevant worker transport round-trip project selectors. Current bounded checkpoints are not that full acceptance."
+    "Independent registered CLI/root/worker-broker151x10 and real hermetic Transport-project worker round-trips11x10 now executed at0434a855. After root/GitHub corrections and required legacy prerequisites, rerun the complete actual private/HTTP target and relevant affected final-source graph selectors; current earlier-checkpoint passes do not substitute for final full acceptance."
   ],
   "executionEvidenceManifest": ".scratch\\integration-v2-execution-evidence-20261020.json",
   "cleanState": "All source code is immutable through0434a8550f4a8977d9451c38be585adfbb0bfb71; final metadata commit records this handoff and evidence only. No active cherry-pick/revert/unmerged paths; git diff --check clean; exact submodule pins preserved.",

@@ -33,8 +33,35 @@
   "genericShutdownPassed": 105,
   "genericShutdownStabilityRuns": 10,
   "genericShutdownStabilityPassedPerRun": 105,
+  "cliWorkerRootPassed": 151,
+  "cliWorkerRootStabilityRuns": 10,
+  "cliWorkerRootStabilityPassedPerRun": 151,
+  "workerTransportPassed": 11,
+  "workerTransportStabilityRuns": 10,
+  "workerTransportStabilityPassedPerRun": 11,
+  "workerTransportBoundary": "Actual Transport project hermetic real routing/round-trips and fake SDK, not only Core metadata. Explicit selectors exclude real CLI/WebView; no live auth/provider/browser or OS-process acceptance.",
   "dumpCount": 0,
   "logs": [
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-cli-worker-root-tests.log",
+      "bytes": 722,
+      "sha256": "C731300A736EE18B9C2015F6E0B670BA8F7B150E8EB8EE113EDA79073CFED4E3"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-cli-worker-root-stability.log",
+      "bytes": 3060,
+      "sha256": "4FAA1BE444F646B860CFA027AE11E9249E150A7C58A787AD44286539A8A750E3"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-worker-transport-tests.log",
+      "bytes": 6136,
+      "sha256": "D84F00CEF1F93AE818FB34B5F66173798F2DF043FA7458CD62261B0CDD935C20"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-worker-transport-stability.log",
+      "bytes": 3524,
+      "sha256": "234A5CB1EEAB20FA40BD3331D5FA4F8B952566D0A042BFEFD9DE600B637B58C0"
+    },
     {
       "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-generic-shutdown-tests.log",
       "bytes": 6278,
