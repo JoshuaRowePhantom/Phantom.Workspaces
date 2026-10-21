@@ -26,9 +26,9 @@ internal sealed class RemoteOAuthCredentialRequestFactory(OAuthProviderRegistry 
             !TryHttps(authentication.TokenEndpoint, out var tokenEndpoint) ||
             !TryHttps(authentication.AccountEndpoint, out var accountEndpoint) ||
             authentication.AccountIdentifierClaim is not { } claim || !Enum.IsDefined(claim) ||
+            !Uri.TryCreate(authentication.Audience, UriKind.Absolute, out var configuredAudience) ||
             audience is null || !audience.IsAbsoluteUri ||
-            (authentication.Endpoint is not null &&
-                (!Uri.TryCreate(authentication.Endpoint, UriKind.Absolute, out var pinnedAudience) || pinnedAudience != audience)))
+            configuredAudience != audience)
         {
             throw new OAuthCredentialConfigurationException();
         }
@@ -40,7 +40,7 @@ internal sealed class RemoteOAuthCredentialRequestFactory(OAuthProviderRegistry 
             TokenEndpoint = tokenEndpoint!,
             AccountEndpoint = accountEndpoint!,
             AccountIdentifierClaim = claim,
-            Audience = audience.AbsoluteUri,
+            Audience = configuredAudience.AbsoluteUri,
         }, clientAuthentication, (authentication.Scopes ?? []).Select(scope => new OAuthScope { Value = scope }).ToArray(),
             requestor, use, presentationScope);
     }

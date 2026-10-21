@@ -109,6 +109,49 @@ public sealed class OAuthPrincipalConfigurationTests
     }
 
     [Theory]
+    [InlineData("https://transport.test/mcp")]
+    [InlineData(null)]
+    public void ActualConfigurationFactory_BindsExplicitAudienceIndependentlyFromEndpoint(string? endpoint)
+    {
+        var store = new Mock<IPlatformSecretStore>(MockBehavior.Strict);
+        var registry = new OAuthProviderRegistry(store.Object,
+            createHttpHandler: () => throw new InvalidOperationException("Metadata must not create provider HTTP."));
+        var configuration = Configuration() with { Endpoint = endpoint, Audience = "https://oauth-resource.test/" };
+        var context = Context();
+
+        var request = new RemoteOAuthCredentialRequestFactory(registry).CreateRequest(
+            configuration, new PublicOAuthClient { Client = new() { Value = configuration.ClientId! } },
+            new Uri(configuration.Audience!), context.Requestor, context.Use, AccessPresentationScope.Runtime);
+
+        Assert.Equal(configuration.Audience, request.Provider.Audience);
+        Assert.Single(registry.SnapshotConfigurations());
+        store.VerifyNoOtherCalls();
+    }
+
+    [Theory]
+    [InlineData("https://oauth-resource.test/", "https://transport.test/mcp")]
+    [InlineData(null, "https://transport.test/mcp")]
+    [InlineData("", "https://transport.test/mcp")]
+    [InlineData("relative-resource", "https://transport.test/mcp")]
+    public void ActualConfigurationFactory_RejectsWrongOrMissingAudienceWithoutEndpointFallback(
+        string? configuredAudience, string suppliedAudience)
+    {
+        var store = new Mock<IPlatformSecretStore>(MockBehavior.Strict);
+        var registry = new OAuthProviderRegistry(store.Object,
+            createHttpHandler: () => throw new InvalidOperationException("Invalid metadata must not create provider HTTP."));
+        var configuration = Configuration() with { Endpoint = suppliedAudience, Audience = configuredAudience };
+        var context = Context();
+
+        Assert.Throws<OAuthCredentialConfigurationException>(() =>
+            new RemoteOAuthCredentialRequestFactory(registry).CreateRequest(
+                configuration, new PublicOAuthClient { Client = new() { Value = configuration.ClientId! } },
+                new Uri(suppliedAudience), context.Requestor, context.Use, AccessPresentationScope.Runtime));
+
+        Assert.Empty(registry.SnapshotConfigurations());
+        store.VerifyNoOtherCalls();
+    }
+
+    [Theory]
     [InlineData("${SECRET:configured-A}", "different-B")]
     [InlineData("${SECRET:configured-A}", "configured-a")]
     [InlineData("${ENV:configured-A}", "configured-A")]

@@ -161,7 +161,7 @@ public sealed class OAuthCredentialAccessExecutorTests
         await using var fixture = new Fixture();
         var configuration = JsonSerializer.Deserialize<RemoteAuthentication>(
             """
-            {"scheme":"oauth","endpoint":"https://resource.test/","authority":"https://authority.test/",
+            {"scheme":"oauth","endpoint":"https://resource.test/","audience":"https://resource.test/","authority":"https://authority.test/",
              "authorizationEndpoint":"https://authority.test/authorize","tokenEndpoint":"https://authority.test/token",
              "accountEndpoint":"https://authority.test/account","accountIdentifierClaim":"Subject",
              "clientId":"private-client","scopes":["read"]}
