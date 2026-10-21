@@ -25,10 +25,10 @@ public sealed class NamedAnonymousDevTunnelConsumerTests
         var source = Source(explicitAnonymousAuthentication);
         var registry = new UserAuthorizationRegistry();
         var executors = new CredentialAccessExecutorRegistry();
+        var mint = new Mock<IDevTunnelConnectMintSession>(MockBehavior.Strict);
+        mint.Setup(session => session.DisposeAsync()).Returns(ValueTask.CompletedTask);
         executors.Add<DevTunnelConnectCredentialAccessRequest, DevTunnelConnectCredentialAccessResult>(
-            new DevTunnelConnectCredentialAccessExecutor(
-                Mock.Of<IDevTunnelConnectMintSession>(MockBehavior.Strict),
-                registry));
+            new DevTunnelConnectCredentialAccessExecutor(mint.Object, registry));
         await using var broker = new AccessBroker(
             new ReleaseAuthorizationPolicy(new ReleaseMemoryStore(Path.Combine(
                 Environment.CurrentDirectory, ".named-anonymous-tests", Guid.NewGuid().ToString("N"), "memory.json"))),
