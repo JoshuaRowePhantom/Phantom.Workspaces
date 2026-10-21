@@ -3,8 +3,8 @@
   "worktree": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020",
   "branch": "integration/access-arc-ready-v2-20261020",
   "baseline": "e8ed98d70fe885ce37b12410e82f63317a923db5",
-  "status": "CLEAN unchanged source0434a855: independent actual CLI/root/host-broker worker151 initial plus151x10 and real hermetic worker Transport-project round-trips11 initial plus11x10 now pass, beyond prior Core-only metadata coverage. MCP99x10, EntraCore43x10, generic105x10 and UI source-clear receipts preserved. Full provider/HTTP239 stability still blocked by diagnosed run5 root broker shutdown outcome race assigned5a25; no239x10 claim. GitHub canonical/final-await High and latest direct Core-removal dependency remain pending. No live CLI/provider/auth/UI or OS-process acceptance claimed; not whole-arc acceptance.",
-  "reviewedCodeCheckpoint": "0434a8550f4a8977d9451c38be585adfbb0bfb71",
+  "status": "CLEAN checkpointceb8000f: current BOTH Management/Connect exact-generation HTTP guards confirmed unchanged from owned1e9923ef; fresh real-broker regressions now prove one handler acquisition, exact rejectedA lease disposed, old response disposed and independently rotatedB usable. HTTP82 initial plus82x10 and fresh two-handler net review clear; no duplicate production fix or withdrawn HEAD used. Prior CLI/root151x10, Transport11x10, MCP99x10, Core43x10 and generic105x10 preserved with exact source provenance. Separate broker shutdown239 run5, GitHub final-await High and latest direct Core App prerequisite remain blockers. Not whole-arc acceptance.",
+  "reviewedCodeCheckpoint": "ceb8000fcb0bab5c7fafdde802ee0ae09c881230",
   "sourceToLocal": {
     "19acd7f6b1940290d08c43dfc4e9f535d56d03f3": "ac151c04",
     "083c040727028de4694192bd378e6d23d9b96529": "9202d011",
@@ -92,6 +92,18 @@
     "audience": "Actual configured factory requires independent absolute Audience and exact supplied resource match before registration; no Endpoint fallback. No external757 model prerequisite imported.",
     "http": "Management and relay401 renewal/replay require successful exact-generation invalidation. Stale rejected A cannot borrow, invalidate or replay with separately published B. Full actual private mint/Management/Connect classes, including former stale401 failure, now pass in239 initial and first four stability runs.",
     "validationBoundary": "Core43 initial plus ten43 passes. App239 initial and stability1-4 pass; run5 fails ONLY separate identity nested shutdown outcome. Do not claim239x10 or whole-arc green."
+  },
+  "httpExactGenerationVerification20261021": {
+    "canonicalProductionFix": "1e9923ef6b018e629b19e7c3539aec9c714ac74e",
+    "approvedImmutableSource": "05d80103b5285ca79e07d0f1b6ac0db08cabee4a",
+    "ownedRegressionCheckpoint": "ceb8000fcb0bab5c7fafdde802ee0ae09c881230",
+    "verification": "Parent requested independent confirmation of an old4d runtime report. Read current canonical two-handler source and verified both files exactly equal existing owned1e9923ef; issue already fixed here. No withdrawn moving HEAD/unreviewed candidate or duplicate equivalent production fix consumed.",
+    "behavior": "Both first401 paths dispose old response, then require exact CredentialGenerationInvalidationOutcome.Invalidated before any renewed broker acquisition/replay. Current enum alternatives NoLongerCurrent/Missing (unavailable exact generation) take typed InvalidGeneration; cancellation propagates. No invented Unavailable enum or token/provider fallback. Independently publishedB is never substituted by staleA's401. Existing legitimate newly broker-authorized Perform, single replay, repeated401 handling, destination/header sanitization and borrowed/owned HTTP lifetimes preserved.",
+    "realProof": "Retain both actual Management and Connect A-in-flight401/independentB rotation cases. New ObservedHttpAccessBroker delegates unchanged real broker and records actual successful result objects, without fake policy/lease/generation. Assert exactly ONE handler acquisition, captured handler-owned rejectedA lease is Disposed, old response disposed, no more than one send, only original+independent replacement source acquisitions/mints, distinct real material generations and replacementB still usable. Observer borrows broker and never disposes it.",
+    "fixturePrerequisite": "Previously integrated immutable root1ea-equivalent73042 preserved; no duplicate internal PolicyRequest/Moq fixture intake.",
+    "review": "Fresh independent read-only review of actual1e9923ef two-handler net plus exact three owned regression files: no significant issues in either handler or real-broker ownership/replay additions. Reviewer ran no builds/tests and did not assess excluded shared/provider/root shutdown races.",
+    "validation": "Fresh explicit-project HTTP82 pass and ten consecutive82 full/NoBuild stability passes. Current tests unchanged after execution/review; zero dumps.",
+    "boundary": "Resolves requested stale401 confirmation/proof, NOT the separate root broker normal-completion-versus-shutdown outcome race or pending GitHub canonical final-await High."
   },
   "rootShutdownOutcomeFailure20261021": {
     "sourceCheckpoint": "1e9923ef6b018e629b19e7c3539aec9c714ac74e",
@@ -258,6 +270,18 @@
       "scope": "Actual Transport project, not only Core/unit metadata: in-process separate caller/hub/worker profile instances over real reverse HTTP/hub/session routing, fake SDK turn source/remote tool routing, session persistence/resume, reciprocal/relayed turns, caller lease remains unread and correlated safe-hop diagnostics.",
       "safetyBoundary": "Explicit hermetic method selectors exclude WebView/RealByokCli scenarios. No external Copilot CLI, live provider/authentication/browser, physical OS-process worker or live BYOK-wire acceptance claimed. Existing scripts only; no source/test edits, new tools or dependencies."
     },
+    "httpExactGeneration": {
+      "codeCheckpoint": "ceb8000fcb0bab5c7fafdde802ee0ae09c881230",
+      "productionFixCheckpoint": "1e9923ef6b018e629b19e7c3539aec9c714ac74e",
+      "passed": 82,
+      "failed": 0,
+      "stabilityRuns": 10,
+      "passedPerRun": 82,
+      "log": ".scratch\\integration-v2-exact-generation-http-tests.log",
+      "stability": ".scratch\\integration-v2-exact-generation-http-stability.log",
+      "selectors": "DevTunnelAuthenticationHandlerTests,DevTunnelConnectMintSessionTests,DevTunnelClientAuthorizationTests,DevTunnelCredentialConsumerTests,DevTunnelConnectManagementApiTests",
+      "boundary": "Full named HTTP/mint/client-authorization/consumer/management API classes, including real stale401 and legitimate/cancel/replay/sanitization/ownership cases. Does not replace known failed239 provider matrix or clear root/GitHub blockers."
+    },
     "runner": "Only existing scripts\\run-tests.ps1 explicit TestProject/unquoted comma-separated TestNames and existing Skills run-tests-stability.ps1 Runs10 Modefull NoBuild with explicit TestProject default; no direct dotnet test.",
     "dumps": "Recursive scans before runners and during validation found no .dmp files; none discarded."
   },
@@ -268,7 +292,8 @@
     "Fresh read-only bounded review48e0b75a..0aa7f5f7 plus cbce2a68 exact caller/fixture delta: no significant issues in provider unpublished callback-result ownership, paired caller fallback removal or truthful fixture. Canonical GitHub/final-await followups expressly excluded; no builds/tests/edits.",
     "Fresh independent read-only actual paired-net review through a171c3dd: no significant issues in provider/caller ownership, exact-count real production caller regressions, async-first/fault/transfer handling, three internal observation modifiers or exact2d92 stale-handle test-only leaf. No builds/tests/edits; no canonical/final-await or whole-arc clearance.",
     "Fresh independent read-only generic-only integration compatibility review of selected bd1/3a/9d/04 intake through0434a855, preserved explicit Audience fixture and untouched newer MCP lifecycle/catalog/admin: no significant issues. Existing source-clear algorithms not reopened; no reviewer edits/builds/tests.",
-    "Requested c4d bounded SOURCE reviewfa2b26f0 against9784130d now CLEAR at01:32:53: no significant introduced defects in disconnected UI retirement or actual shared-host navigation replacement tests. Native contracts/store/picker/providers/caches retained. No builds/tests/live interaction; no new root978 or whole-arc clearance."
+    "Requested c4d bounded SOURCE reviewfa2b26f0 against9784130d now CLEAR at01:32:53: no significant introduced defects in disconnected UI retirement or actual shared-host navigation replacement tests. Native contracts/store/picker/providers/caches retained. No builds/tests/live interaction; no new root978 or whole-arc clearance.",
+    "Fresh parent-requested two-handler HTTP review: no significant issues in actual1e9923ef Management/Connect exact-invalidation net or three owned real-broker regression files committedceb8000f. Actual rejected-A disposal/no-B-substitution and current source checked; no reviewer builds/tests, no broader shared/GitHub/root shutdown clearance."
   ],
   "genericOAuthShutdownReview20261021": {
     "reviewer": "9138ee92-e671-4e53-b882-67573927d963",
@@ -289,6 +314,6 @@
     "Independent registered CLI/root/worker-broker151x10 and real hermetic Transport-project worker round-trips11x10 now executed at0434a855. After root/GitHub corrections and required legacy prerequisites, rerun the complete actual private/HTTP target and relevant affected final-source graph selectors; current earlier-checkpoint passes do not substitute for final full acceptance."
   ],
   "executionEvidenceManifest": ".scratch\\integration-v2-execution-evidence-20261020.json",
-  "cleanState": "All source code is immutable through0434a8550f4a8977d9451c38be585adfbb0bfb71; final metadata commit records this handoff and evidence only. No active cherry-pick/revert/unmerged paths; git diff --check clean; exact submodule pins preserved.",
+  "cleanState": "All source/test code is immutable throughceb8000fcb0bab5c7fafdde802ee0ae09c881230; production remains unchanged since0434a855 and both HTTP guards since1e9923ef. Final metadata commit records handoff/evidence only. No active cherry-pick/revert/unmerged paths; git diff --check clean; exact submodule pins preserved.",
   "safety": "No live checkout, auth, browser/UI/provider actions, features advancement, push/release/closure or rewritten history. Normal submodule init preserves Dock8c8d11 and MXC29702c3."
 }

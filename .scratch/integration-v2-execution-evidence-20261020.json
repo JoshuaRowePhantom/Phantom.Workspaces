@@ -1,5 +1,6 @@
 {
-  "codeCheckpoint": "0434a8550f4a8977d9451c38be585adfbb0bfb71",
+  "codeCheckpoint": "ceb8000fcb0bab5c7fafdde802ee0ae09c881230",
+  "productionCheckpoint": "0434a8550f4a8977d9451c38be585adfbb0bfb71",
   "historicalMcpMatchingCodeCheckpoint": "af3c4a47ed231101bb4bee4edcceac517dd43794",
   "readyProviderCodeCheckpoint": "1e9923ef6b018e629b19e7c3539aec9c714ac74e",
   "historicalGitHubRealCallerCodeCheckpoint": "a171c3dd540c433bb6fa7341edf10f439d513d24",
@@ -40,8 +41,22 @@
   "workerTransportStabilityRuns": 10,
   "workerTransportStabilityPassedPerRun": 11,
   "workerTransportBoundary": "Actual Transport project hermetic real routing/round-trips and fake SDK, not only Core metadata. Explicit selectors exclude real CLI/WebView; no live auth/provider/browser or OS-process acceptance.",
+  "httpExactGenerationPassed": 82,
+  "httpExactGenerationStabilityRuns": 10,
+  "httpExactGenerationStabilityPassedPerRun": 82,
+  "httpExactGenerationProductionFix": "1e9923ef6b018e629b19e7c3539aec9c714ac74e",
   "dumpCount": 0,
   "logs": [
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-exact-generation-http-tests.log",
+      "bytes": 6275,
+      "sha256": "6E371BAF1263E5B13860DFAEC8A9B0B90B5855F46C6ACDA22AB36E5D775C967B"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-exact-generation-http-stability.log",
+      "bytes": 2748,
+      "sha256": "24975588F910795624449A7B11CF03A453F9E898629B60697482BCC72CD7A6F9"
+    },
     {
       "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-cli-worker-root-tests.log",
       "bytes": 722,
