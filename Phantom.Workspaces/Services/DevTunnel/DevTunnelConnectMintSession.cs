@@ -29,7 +29,7 @@ internal sealed class DevTunnelConnectMintSession(
         ProviderInteractionPermit parentGenerationPermit,
         CancellationToken cancellationToken)
     {
-        if (parentAcquisitionKey is null || parentGenerationPermit is null ||
+        if (context is null || parentAcquisitionKey is null || parentGenerationPermit is null ||
             context.PolicyRequest is not { Credential: { Provider: CredentialProviderKind.DevTunnel, Kind: CredentialKind.ConnectToken } } policy ||
             policy.RequestIdentifier != context.RequestIdentifier ||
             policy.RequestGeneration != context.Revision ||
@@ -42,13 +42,15 @@ internal sealed class DevTunnelConnectMintSession(
             parentAcquisitionKey.Source != policy.SourceIdentifier ||
             parentAcquisitionKey.Account != policy.Credential.AccountIdentifier ||
             parentAcquisitionKey.Source != DevTunnelConnectCredentialAccessRequest.CreateSource(identitySource).Identifier ||
-            !parentGenerationPermit.Authorizes(context.RequestIdentifier, context.Revision,
-                CredentialExecutorKind.DevTunnelConnect, context.AcquisitionGeneration, parentAcquisitionKey) ||
-            !parentGenerationPermit.AuthorizesProvider(CredentialExecutorKind.DevTunnelConnect, parentAcquisitionKey) ||
+            !await parentGenerationPermit.AuthorizesPrivateUseAsync(context, cancellationToken).ConfigureAwait(false) ||
             !request.IdentityRoute.Sources.Any(source => source.Identifier == identitySource.Identifier))
         {
             return new DevTunnelConnectMintDenied();
         }
+        request = request with
+        {
+            Credential = request.Credential with { AccountIdentifier = policy.Credential.AccountIdentifier },
+        };
         return request.IdentityRoute switch
         {
             GitHubDevTunnelIdentityRoute => await this.MintGitHubAsync(
@@ -159,7 +161,7 @@ internal sealed class DevTunnelConnectMintSession(
         }
         if (metadata.AccountIdentifier is not { } account ||
             (identityRequest.Credential.AccountIdentifier is { } expected && expected != account) ||
-            !permit.BelongsToGeneration(context.RequestIdentifier, context.Revision, context.AcquisitionGeneration))
+            !await permit.AuthorizesPrivateUseAsync(context, cancellationToken).ConfigureAwait(false))
         {
             return new DevTunnelConnectMintFailed { ErrorCode = AccessErrorCode.IdentityMismatch };
         }

@@ -17,6 +17,81 @@ namespace Phantom.Workspaces.Tests.Access;
 
 public sealed class DevTunnelConnectMintSessionTests
 {
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    public async Task ConnectMint_NullOrUnboundParentCannotReachPrivateProvider(bool nullContext, bool bindExecution)
+    {
+        await using var fixture = new Fixture();
+        var source = Assert.Single(fixture.Request.IdentityRoute.Sources);
+        var policy = new ReleasePolicyRequest
+        {
+            RequestIdentifier = new() { Value = Guid.NewGuid() },
+            RequestGeneration = 1,
+            Credential = fixture.Request.Credential,
+            SourceIdentifier = DevTunnelConnectCredentialAccessRequest.CreateSource(source).Identifier,
+            RequestorIdentifier = fixture.Request.Requestor.Identifier,
+            Use = fixture.Request.Use,
+        };
+        var generation = Guid.NewGuid();
+        var key = new ProviderAcquisitionKey
+        {
+            Configuration = policy.Credential.LogicalIdentifier,
+            Source = policy.SourceIdentifier,
+            Account = policy.Credential.AccountIdentifier,
+            Protocol = ProviderProtocolKind.TunnelConnect,
+        };
+        var context = new Mock<ICredentialExecutionContext>();
+        context.SetupGet(value => value.PolicyRequest).Returns(policy);
+        context.SetupGet(value => value.RequestIdentifier).Returns(policy.RequestIdentifier);
+        context.SetupGet(value => value.Revision).Returns(policy.RequestGeneration);
+        context.SetupGet(value => value.AcquisitionGeneration).Returns(generation);
+        context.SetupGet(value => value.Requestor).Returns(fixture.Request.Requestor);
+        context.SetupGet(value => value.Use).Returns(fixture.Request.Use);
+        var permit = new ProviderInteractionPermit(policy.RequestIdentifier, policy.RequestGeneration,
+            CredentialExecutorKind.DevTunnelConnect, generation, key, () => true);
+        if (bindExecution)
+        {
+            permit = permit.BindExecution(() => true);
+        }
+        Assert.IsType<DevTunnelConnectMintDenied>(await fixture.Session.MintAsync(
+            fixture.Request, source, nullContext ? null! : context.Object, key, permit,
+            TestContext.Current.CancellationToken));
+        Assert.Equal(0, fixture.Source.Acquisitions);
+        Assert.Equal(0, fixture.ManagementCalls);
+    }
+
+    [Fact]
+    public async Task ConnectMint_PreservesApprovedKnownAccountWhenPrivateIdentityMustBeReacquired()
+    {
+        await using var fixture = new Fixture();
+        var identityRequest = DevTunnelIdentityCredentialAccessRequest.Create(fixture.Request.IdentityRoute,
+            fixture.Request.Requestor, fixture.Request.Use with
+            {
+                MemoryScopes = [ReleaseMemoryScopeKind.AllowOnce, ReleaseMemoryScopeKind.AllUses],
+            });
+        var warming = fixture.Broker.AcquireAsync(identityRequest, TestContext.Current.CancellationToken);
+        await fixture.ApproveUntilCompletedAsync(warming);
+        await using var identity = Assert.IsType<AccessSucceeded<DevTunnelIdentityCredentialAccessResult>>(await warming).Result;
+        var identityLease = Assert.IsType<SensitiveValueLease>(identity.AccessToken);
+        fixture.BeforeMint = async (key, cancellationToken) =>
+        {
+            Assert.Equal(fixture.Source.Account, key.Account);
+            await fixture.GitHub.GetGenerationCache(
+                Assert.Single(fixture.Request.IdentityRoute.Sources).Identifier)
+                .InvalidateGenerationAsync(identityLease.MaterialGeneration, cancellationToken);
+        };
+        var pending = fixture.Broker.AcquireAsync(fixture.Request, TestContext.Current.CancellationToken);
+        await fixture.PerformAsync();
+        await using var connected = Assert.IsType<AccessSucceeded<DevTunnelConnectCredentialAccessResult>>(
+            await pending.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).Result;
+        Assert.Equal(2, fixture.Source.Acquisitions);
+        Assert.Equal(fixture.Source.Account,
+            Assert.IsType<ProviderAcquisitionKey>(fixture.Source.LastAcquisitionKey).Account);
+        Assert.Equal(1, fixture.ManagementCalls);
+    }
+
     [Fact]
     public async Task ConnectMint_FixturePolicyIsProjectLocalAndRemovedAfterDisposal()
     {
@@ -222,8 +297,8 @@ public sealed class DevTunnelConnectMintSessionTests
                     });
                 return client.Object;
             });
-            var executor = new DevTunnelConnectCredentialAccessExecutor(
-                new DevTunnelConnectMintSession(this.GitHub, this.entra, this.oauth, managementApi), this.Registry);
+            this.Session = new DevTunnelConnectMintSession(this.GitHub, this.entra, this.oauth, managementApi);
+            var executor = new DevTunnelConnectCredentialAccessExecutor(new InterceptingSession(this), this.Registry);
             var executors = new CredentialAccessExecutorRegistry();
             executors.Add<GitHubCredentialAccessRequest, GitHubCredentialAccessResult>(this.GitHub);
             executors.Add<EntraCredentialAccessRequest, EntraCredentialAccessResult>(this.entra);
@@ -255,6 +330,8 @@ public sealed class DevTunnelConnectMintSessionTests
         public string PolicyPath => Path.Combine(this.directory, "release-memory.json");
         public Source Source { get; } = new();
         public GitHubCredentialAccessExecutor GitHub { get; }
+        public DevTunnelConnectMintSession Session { get; }
+        public Func<ProviderAcquisitionKey, CancellationToken, ValueTask>? BeforeMint { get; set; }
         public UserAuthorizationRegistry Registry { get; } = new();
         public AccessBroker Broker { get; }
         public DevTunnelConnectCredentialAccessRequest Request { get; }
@@ -315,7 +392,8 @@ public sealed class DevTunnelConnectMintSessionTests
 
         public Task PerformAsync()
         {
-            var row = Assert.Single(this.Registry.GetSnapshot());
+            var row = Assert.Single(this.Registry.GetSnapshot().Where(value =>
+                value.State is UserAuthorizationState.Pending or UserAuthorizationState.RenewalNeeded));
             return this.Registry.ActAsync(new ApplyUserAuthorizationAction
             {
                 RequestIdentifier = row.Identifier,
@@ -341,9 +419,33 @@ public sealed class DevTunnelConnectMintSessionTests
         }
     }
 
+    private sealed class InterceptingSession(Fixture fixture) : IDevTunnelConnectMintSession
+    {
+        public ValueTask<CredentialInspection> InspectIdentityAsync(
+            DevTunnelIdentityRoute route, CancellationToken cancellationToken) =>
+            fixture.Session.InspectIdentityAsync(route, cancellationToken);
+
+        public async ValueTask<DevTunnelConnectMintOutcome> MintAsync(
+            DevTunnelConnectCredentialAccessRequest request,
+            CredentialSourceChoiceDescriptor identitySource,
+            ICredentialExecutionContext context,
+            ProviderAcquisitionKey parentAcquisitionKey,
+            ProviderInteractionPermit parentGenerationPermit,
+            CancellationToken cancellationToken)
+        {
+            if (fixture.BeforeMint is { } beforeMint)
+            {
+                await beforeMint(parentAcquisitionKey, cancellationToken);
+            }
+            return await fixture.Session.MintAsync(request, identitySource, context,
+                parentAcquisitionKey, parentGenerationPermit, cancellationToken);
+        }
+    }
+
     private sealed class Source : IGitHubCredentialAccessSource
     {
         public int Acquisitions { get; private set; }
+        public ProviderAcquisitionKey? LastAcquisitionKey { get; private set; }
         public char[]? LastMaterial { get; private set; }
         public CredentialAccountIdentifier Account { get; } =
             CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.GitHub, "authoritative principal");
@@ -355,6 +457,7 @@ public sealed class DevTunnelConnectMintSessionTests
             CancellationToken cancellationToken)
         {
             Assert.True(permit.AuthorizesProvider(CredentialExecutorKind.GitHub, key));
+            this.LastAcquisitionKey = key;
             this.Acquisitions++;
             this.LastMaterial = "management identity only".ToCharArray();
             return ValueTask.FromResult<GitHubCredentialMaterial?>(new GitHubCredentialMaterial
