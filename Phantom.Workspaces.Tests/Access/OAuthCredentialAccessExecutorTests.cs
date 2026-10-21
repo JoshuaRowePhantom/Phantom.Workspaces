@@ -426,6 +426,57 @@ public sealed class OAuthCredentialAccessExecutorTests
     }
 
     [Fact]
+    public async Task WarmPrivateUse_RealUnconsumedBrokerAdmissionCannotReadOrAcquire()
+    {
+        await using var fixture = new Fixture(derived: true);
+        var original = fixture.Request();
+        var warming = fixture.Broker.AcquireAsync(original, TestContext.Current.CancellationToken);
+        await fixture.AllowAsync();
+        await using var warm = Assert.IsType<AccessSucceeded<OAuthCredentialAccessResult>>(await warming).Result;
+        var reads = fixture.Store.Reads;
+        fixture.Derived!.ProbeAdmission = true;
+        var parent = fixture.Broker.AcquireAsync(fixture.Derived.Request(original), TestContext.Current.CancellationToken);
+        await fixture.AllowAsync();
+        Assert.IsType<AccessFailed<DerivedResult>>(await parent);
+        Assert.IsType<OAuthGenerationUseDenied<int>>(fixture.Derived.AdmissionUse);
+        Assert.IsType<ProviderAcquisitionDenied>(fixture.Derived.AdmissionAcquisition);
+        Assert.False(fixture.Derived.AdmissionCallbackInvoked);
+        Assert.Equal(reads, fixture.Store.Reads);
+        Assert.Equal(1, fixture.Store.Writes);
+        Assert.Equal(1, fixture.Browser.Opens);
+    }
+
+    [Fact]
+    public async Task PrivateUseAndAcquisition_RequireExactActiveFinalConnectExecutionProof()
+    {
+        await using var fixture = new Fixture(derived: true);
+        fixture.Derived!.ProbeExecutionProofs = true;
+        var parent = fixture.Broker.AcquireAsync(fixture.Derived.Request(fixture.Request()), TestContext.Current.CancellationToken);
+        await fixture.AllowAsync();
+        await using var result = Assert.IsType<AccessSucceeded<DerivedResult>>(await parent).Result;
+        Assert.Equal(42, result.Value);
+        Assert.Equal(1, fixture.Store.Reads);
+        Assert.Equal(1, fixture.Store.Writes);
+        Assert.Equal(1, fixture.Browser.Opens);
+        Assert.IsType<OAuthGenerationUseDenied<int>>(await fixture.Derived.LateUse!(TestContext.Current.CancellationToken));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PrivateUse_ProofExpiresDuringGenerationValidation_PreventsCallbackOrPublication(bool afterCallback)
+    {
+        await using var fixture = new Fixture(derived: true);
+        fixture.Derived!.ValidationRaceAfterCallback = afterCallback;
+        var parent = fixture.Broker.AcquireAsync(fixture.Derived.Request(fixture.Request()), TestContext.Current.CancellationToken);
+        await fixture.AllowAsync();
+        await using var result = Assert.IsType<AccessSucceeded<DerivedResult>>(await parent).Result;
+        Assert.Equal(afterCallback, fixture.Derived.RaceCallbackInvoked);
+        Assert.Equal(afterCallback ? 1 : 0, fixture.Derived.RaceDisposalsOnReturn);
+        Assert.Equal(1, fixture.Derived.ValidationRaceResult!.Disposals);
+    }
+
+    [Fact]
     public async Task ProviderFailure_IsSanitizedAndActualFailedWriteCannotPublishReceipt()
     {
         await using var fixture = new Fixture();
@@ -484,7 +535,7 @@ public sealed class OAuthCredentialAccessExecutorTests
                 ? new CycleExecutor(this.Request()) : new StoredSecretAccessExecutor(this.Secret));
             if (derived)
             {
-                this.Derived = new DerivedExecutor(this.Executor);
+                this.Derived = new DerivedExecutor(this.Executor, this.Clock);
                 executors.Add<DerivedRequest, DerivedResult>(this.Derived);
             }
             this.Broker = new AccessBroker(new RecordingPolicy(this.Events), executors, this.Acquisitions, this.Registry);
@@ -560,7 +611,12 @@ public sealed class OAuthCredentialAccessExecutorTests
     private sealed class Clock : TimeProvider
     {
         private DateTimeOffset now = DateTimeOffset.UtcNow;
-        public override DateTimeOffset GetUtcNow() => this.now;
+        internal Action? OnGetUtcNow { get; set; }
+        public override DateTimeOffset GetUtcNow()
+        {
+            this.OnGetUtcNow?.Invoke();
+            return this.now;
+        }
         internal void Advance(TimeSpan amount) => this.now += amount;
     }
 
@@ -748,7 +804,7 @@ public sealed class OAuthCredentialAccessExecutorTests
         internal required int Value { get; init; }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
-    private sealed class DerivedExecutor(IOAuthPrivateCredentialProvider identity) : ICredentialAccessExecutor<DerivedRequest, DerivedResult>
+    private sealed class DerivedExecutor(IOAuthPrivateCredentialProvider identity, Clock clock) : ICredentialAccessExecutor<DerivedRequest, DerivedResult>
     {
         internal Func<CancellationToken, ValueTask<OAuthGenerationUseOutcome<int>>>? LateUse { get; private set; }
         internal bool ProbeCallbackCancellation { get; set; }
@@ -756,6 +812,15 @@ public sealed class OAuthCredentialAccessExecutorTests
         internal string? CallbackScenario { get; set; }
         internal TrackedSynchronousResult? CompletedCallbackResult { get; private set; }
         internal bool CallbackPublished { get; private set; }
+        internal bool ProbeAdmission { get; set; }
+        internal bool ProbeExecutionProofs { get; set; }
+        internal bool AdmissionCallbackInvoked { get; private set; }
+        internal OAuthGenerationUseOutcome<int>? AdmissionUse { get; private set; }
+        internal ProviderAcquisitionOutcome? AdmissionAcquisition { get; private set; }
+        internal bool? ValidationRaceAfterCallback { get; set; }
+        internal bool RaceCallbackInvoked { get; private set; }
+        internal int RaceDisposalsOnReturn { get; private set; }
+        internal TrackedSynchronousResult? ValidationRaceResult { get; private set; }
         public CredentialExecutorKind Kind => CredentialExecutorKind.DevTunnelConnect;
         internal DerivedRequest Request(OAuthCredentialAccessRequest oauth) => new()
         {
@@ -787,20 +852,87 @@ public sealed class OAuthCredentialAccessExecutorTests
             ProviderInteractionPermit? interactionPermit, ICredentialExecutionContext context, CancellationToken cancellationToken)
         {
             if (interactionPermit is null) { return new CredentialExecutionInteractionRequired<DerivedResult>(); }
+            if (this.ProbeAdmission)
+            {
+                var warm = (await identity.InspectGenerationAsync(request.Identity, cancellationToken))!;
+                this.AdmissionUse = await identity.UseGenerationAsync(
+                    request.Identity, warm.Generation, warm.AccountIdentifier!, context, Key(request), interactionPermit,
+                    (_, _) =>
+                    {
+                        this.AdmissionCallbackInvoked = true;
+                        return ValueTask.FromResult(1);
+                    }, cancellationToken);
+                this.AdmissionAcquisition = await identity.AcquirePrivateAsync(
+                    request.Identity, context, Key(request), interactionPermit, cancellationToken);
+                return new CredentialExecutionFailed<DerivedResult> { ErrorCode = AccessErrorCode.ProviderFailure, CanRetry = true };
+            }
             CredentialAccountIdentifier? account = null;
             var count = 0;
             var acquired = await context.ExecuteProviderAcquisitionAsync(new Operation(context, Key(request), async (commit, token) =>
             {
-                var dependency = await identity.AcquirePrivateAsync(request.Identity, context, commit.InteractionPermit, token);
+                var dependency = await identity.AcquirePrivateAsync(request.Identity, context, Key(request), commit.InteractionPermit, token);
                 if (dependency is not ProviderAcquisitionSucceeded receipt) { return dependency; }
                 var metadata = await identity.InspectGenerationAsync(request.Identity, token);
                 account = metadata!.AccountIdentifier;
+                if (this.ProbeExecutionProofs)
+                {
+                    var parentKey = Key(request);
+                    ProviderInteractionPermit Proof(CredentialExecutorKind kind, ProviderAcquisitionKey key, bool active = true) =>
+                        new ProviderInteractionPermit(context.RequestIdentifier, context.Revision, kind,
+                            context.AcquisitionGeneration, key, () => active).BindExecution(() => active);
+                    foreach (var candidate in new[]
+                    {
+                        (Proof(CredentialExecutorKind.OAuth, parentKey), parentKey),
+                        (Proof(CredentialExecutorKind.DevTunnelConnect, parentKey with { Source = new() { Digest = new string('e', 64) } }), parentKey),
+                        (commit.InteractionPermit, parentKey with { Configuration = new() { Digest = new string('f', 64) } }),
+                        (Proof(CredentialExecutorKind.DevTunnelConnect, parentKey, active: false), parentKey),
+                        (Proof(CredentialExecutorKind.DevTunnelConnect, parentKey with { Account = new() { Digest = new string('d', 64) } }), parentKey),
+                        (new ProviderInteractionPermit(new() { Value = Guid.NewGuid() }, context.Revision, CredentialExecutorKind.DevTunnelConnect,
+                            context.AcquisitionGeneration, parentKey, () => true).BindExecution(() => true), parentKey),
+                        (new ProviderInteractionPermit(context.RequestIdentifier, context.Revision + 1, CredentialExecutorKind.DevTunnelConnect,
+                            context.AcquisitionGeneration, parentKey, () => true).BindExecution(() => true), parentKey),
+                        (new ProviderInteractionPermit(context.RequestIdentifier, context.Revision, CredentialExecutorKind.DevTunnelConnect,
+                            Guid.NewGuid(), parentKey, () => true).BindExecution(() => true), parentKey),
+                    })
+                    {
+                        Assert.IsType<OAuthGenerationUseDenied<int>>(await identity.UseGenerationAsync<int>(
+                            request.Identity, receipt.CommittedGeneration, account!, context, candidate.Item2, candidate.Item1,
+                            (_, _) => throw new InvalidOperationException("An invalid parent proof must not invoke the callback."), token));
+                        Assert.IsType<ProviderAcquisitionDenied>(await identity.AcquirePrivateAsync(
+                            request.Identity, context, candidate.Item2, candidate.Item1, token));
+                    }
+                }
+                if (this.ValidationRaceAfterCallback is { } afterCallback)
+                {
+                    var active = true;
+                    var proof = new ProviderInteractionPermit(context.RequestIdentifier, context.Revision, CredentialExecutorKind.DevTunnelConnect,
+                        context.AcquisitionGeneration, Key(request), () => active).BindExecution(() => active);
+                    var reads = 0;
+                    var pending = this.ValidationRaceResult = new TrackedSynchronousResult();
+                    if (!afterCallback)
+                        clock.OnGetUtcNow = () => { if (++reads == 2) { active = false; } };
+                    try
+                    {
+                        var validationOutcome = await identity.UseGenerationAsync(
+                            request.Identity, receipt.CommittedGeneration, account!, context, Key(request), proof,
+                            (_, _) =>
+                            {
+                                this.RaceCallbackInvoked = true;
+                                clock.OnGetUtcNow = () => active = false;
+                                return ValueTask.FromResult(pending);
+                            }, token);
+                        Assert.IsType<OAuthGenerationUseUnavailable<TrackedSynchronousResult>>(validationOutcome);
+                        this.RaceDisposalsOnReturn = pending.Disposals;
+                        if (!this.RaceCallbackInvoked) { pending.Dispose(); }
+                    }
+                    finally { clock.OnGetUtcNow = null; }
+                }
                 if (this.ProbeCallbackCancellation)
                 {
                     using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
                     var unpublished = this.CancelledResult = new TrackedCallbackResult();
                     await Assert.ThrowsAnyAsync<OperationCanceledException>(() => identity.UseGenerationAsync(
-                        request.Identity, receipt.CommittedGeneration, account!, context, commit.InteractionPermit,
+                        request.Identity, receipt.CommittedGeneration, account!, context, Key(request), commit.InteractionPermit,
                         (_, _) =>
                         {
                             cancellation.Cancel();
@@ -819,14 +951,14 @@ public sealed class OAuthCredentialAccessExecutorTests
                         ThrowOnDispose = scenario == "cleanup-failure",
                     };
                     var pendingUse = identity.UseGenerationAsync(
-                        request.Identity, receipt.CommittedGeneration, account!, context, proof,
+                        request.Identity, receipt.CommittedGeneration, account!, context, Key(request), proof,
                         async (_, cancellation) =>
                         {
                             if (scenario is "proof" or "cleanup-failure") { proofActive = false; }
                             if (scenario == "rotation")
                             {
                                 receipt = Assert.IsType<ProviderAcquisitionSucceeded>(await identity.AcquirePrivateAsync(
-                                    request.Identity, context, commit.InteractionPermit, cancellation));
+                                    request.Identity, context, Key(request), commit.InteractionPermit, cancellation));
                             }
                             return pending;
                         }, token).AsTask();
@@ -853,16 +985,16 @@ public sealed class OAuthCredentialAccessExecutorTests
                     }
                 }
                 Assert.IsType<OAuthGenerationUseUnavailable<int>>(await identity.UseGenerationAsync<int>(
-                    request.Identity, new() { Value = Guid.NewGuid() }, account!, context, commit.InteractionPermit,
+                    request.Identity, new() { Value = Guid.NewGuid() }, account!, context, Key(request), commit.InteractionPermit,
                     (_, _) => throw new InvalidOperationException("A stale generation must not invoke the callback."), token));
                 Assert.IsType<OAuthGenerationUseUnavailable<int>>(await identity.UseGenerationAsync<int>(
-                    request.Identity, receipt.CommittedGeneration, new() { Digest = new string('f', 64) }, context, commit.InteractionPermit,
+                    request.Identity, receipt.CommittedGeneration, new() { Digest = new string('f', 64) }, context, Key(request), commit.InteractionPermit,
                     (_, _) => throw new InvalidOperationException("A different account must not invoke the callback."), token));
                 this.LateUse = cancellation => identity.UseGenerationAsync(
-                    request.Identity, receipt.CommittedGeneration, account!, context, commit.InteractionPermit,
+                    request.Identity, receipt.CommittedGeneration, account!, context, Key(request), commit.InteractionPermit,
                     (_, _) => ValueTask.FromResult(1), cancellation);
                 var used = await identity.UseGenerationAsync(
-                    request.Identity, receipt.CommittedGeneration, account!, context, commit.InteractionPermit,
+                    request.Identity, receipt.CommittedGeneration, account!, context, Key(request), commit.InteractionPermit,
                     (value, _) =>
                     {
                         Assert.StartsWith("private-access-", value);
