@@ -276,43 +276,19 @@ internal sealed class EntraCredentialSession : IEntraCredentialSession
             return new EntraGenerationUseUnavailable<TResult>();
         }
 
-        var request = parentContext?.PolicyRequest;
-        if (parentContext is null || parentExecutionPermit is null || request is null ||
-            request.Credential.Provider != CredentialProviderKind.DevTunnel ||
-            request.Credential.Kind != CredentialKind.ConnectToken ||
-            request.RequestIdentifier != parentContext.RequestIdentifier ||
-            request.RequestGeneration != parentContext.Revision ||
-            request.RequestorIdentifier != parentContext.Requestor.Identifier ||
-            request.Use.Fingerprint != parentContext.Use.Fingerprint)
+        if (parentContext is null || parentExecutionPermit is null ||
+            !await parentExecutionPermit.AuthorizesPrivateUseAsync(parentContext, cancellationToken).ConfigureAwait(false))
         {
             return new EntraGenerationUseDenied<TResult>();
         }
 
-        var key = new ProviderAcquisitionKey
-        {
-            Configuration = request.Credential.LogicalIdentifier,
-            Source = request.SourceIdentifier,
-            Account = request.Credential.AccountIdentifier,
-            Protocol = ProviderProtocolKind.TunnelConnect,
-        };
-        var requestIdentifier = parentContext.RequestIdentifier;
-        var revision = parentContext.Revision;
-        var acquisitionGeneration = parentContext.AcquisitionGeneration;
-        bool IsAuthorized() =>
-            parentExecutionPermit.Authorizes(
-                requestIdentifier, revision, CredentialExecutorKind.DevTunnelConnect, acquisitionGeneration, key) &&
-            parentExecutionPermit.AuthorizesProvider(CredentialExecutorKind.DevTunnelConnect, key);
-        if (!IsAuthorized())
-        {
-            return new EntraGenerationUseDenied<TResult>();
-        }
-
+        var expectedAccount = parentContext.PolicyRequest!.Credential.AccountIdentifier;
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, this.lifetime.Token);
         await this.useGate.WaitAsync(cancellation.Token).ConfigureAwait(false);
         try
         {
             cancellation.Token.ThrowIfCancellationRequested();
-            if (!IsAuthorized())
+            if (!await parentExecutionPermit.AuthorizesPrivateUseAsync(parentContext, cancellation.Token).ConfigureAwait(false))
             {
                 return new EntraGenerationUseDenied<TResult>();
             }
@@ -324,9 +300,19 @@ internal sealed class EntraCredentialSession : IEntraCredentialSession
                 return new EntraGenerationUseUnavailable<TResult>();
             }
 
-            if (key.Account is { } account && metadata.AccountIdentifier != account)
+            if (expectedAccount is { } account && metadata.AccountIdentifier != account)
             {
                 return new EntraGenerationUseDenied<TResult>();
+            }
+
+            if (!await parentExecutionPermit.AuthorizesPrivateUseAsync(parentContext, cancellation.Token).ConfigureAwait(false))
+            {
+                return new EntraGenerationUseDenied<TResult>();
+            }
+
+            if (this.timeProvider.GetUtcNow() >= expiresOn)
+            {
+                return new EntraGenerationUseUnavailable<TResult>();
             }
 
             using var material = this.provider.CopyBrokerGeneration(generation);
@@ -335,14 +321,19 @@ internal sealed class EntraCredentialSession : IEntraCredentialSession
                 return new EntraGenerationUseUnavailable<TResult>();
             }
 
-            if (!IsAuthorized())
+            if (!await parentExecutionPermit.AuthorizesPrivateUseAsync(parentContext, cancellation.Token).ConfigureAwait(false))
             {
                 return new EntraGenerationUseDenied<TResult>();
             }
 
+            if (this.timeProvider.GetUtcNow() >= expiresOn)
+            {
+                return new EntraGenerationUseUnavailable<TResult>();
+            }
+
             var result = await operation(material.Token, cancellation.Token).ConfigureAwait(false);
             cancellation.Token.ThrowIfCancellationRequested();
-            return IsAuthorized()
+            return await parentExecutionPermit.AuthorizesPrivateUseAsync(parentContext, cancellation.Token).ConfigureAwait(false)
                 ? new EntraGenerationUseSucceeded<TResult> { Result = result }
                 : new EntraGenerationUseDenied<TResult>();
         }

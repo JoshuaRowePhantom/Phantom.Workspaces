@@ -21,6 +21,7 @@ public sealed class EntraPrivateCapabilityTests
         var session = fixture.Entra.GetSession(fixture.Request);
         var generation = (await session.InspectGenerationAsync(TestContext.Current.CancellationToken))!.Generation;
         var callbackCalls = 0;
+        var childExecutions = 0;
         Assert.IsType<EntraGenerationUseDenied<int>>(await session.UseGenerationAsync<int>(
             generation, null, null,
             (_, _) => throw new InvalidOperationException("Warm cache is not a private authorization."),
@@ -34,6 +35,12 @@ public sealed class EntraPrivateCapabilityTests
             capturedContext = context;
             capturedProof = active;
             var key = ConnectExecutor.Key(context.PolicyRequest!);
+            var binding = new ProviderExecutionAuthorizationBinding
+            {
+                Policy = context.Policy,
+                Authorization = authorization,
+                Request = context.PolicyRequest!,
+            };
             Assert.True(active.Authorizes(
                 context.RequestIdentifier, context.Revision, CredentialExecutorKind.DevTunnelConnect,
                 context.AcquisitionGeneration, key));
@@ -45,7 +52,7 @@ public sealed class EntraPrivateCapabilityTests
                 long? revision = null,
                 Guid? acquisitionGeneration = null) => new(
                     identifier ?? context.RequestIdentifier, revision ?? context.Revision, kind,
-                    acquisitionGeneration ?? context.AcquisitionGeneration, candidateKey, () => true);
+                    acquisitionGeneration ?? context.AcquisitionGeneration, candidateKey, () => true, binding);
             ProviderInteractionPermit Bound(
                 CredentialExecutorKind kind,
                 ProviderAcquisitionKey candidateKey,
@@ -69,6 +76,15 @@ public sealed class EntraPrivateCapabilityTests
                 Bound(CredentialExecutorKind.DevTunnelConnect, key, acquisitionGeneration: Guid.NewGuid()),
             })
             {
+                Assert.False(denied is not null &&
+                    await denied.AuthorizesPrivateUseAsync(context, cancellationToken));
+                Assert.IsType<ProviderAcquisitionDenied>(await context.ExecutePrivateProviderDependencyAsync(
+                    new ChildOperation(context, key with
+                    {
+                        Configuration = new() { Digest = new string('a', 64) },
+                        Protocol = ProviderProtocolKind.Sdk,
+                    }, () => childExecutions++),
+                    denied!, cancellationToken));
                 Assert.IsType<EntraGenerationUseDenied<int>>(await session.UseGenerationAsync(
                     generation, context, denied, (_, _) =>
                     {
@@ -78,6 +94,41 @@ public sealed class EntraPrivateCapabilityTests
             }
 
             Assert.Equal(0, callbackCalls);
+            Assert.Equal(0, childExecutions);
+            var unbound = new ProviderInteractionPermit(
+                context.RequestIdentifier, context.Revision, CredentialExecutorKind.DevTunnelConnect,
+                context.AcquisitionGeneration, key, () => true).BindExecution(() => true);
+            Assert.False(await unbound.AuthorizesPrivateUseAsync(context, cancellationToken));
+            Assert.IsType<EntraGenerationUseDenied<int>>(await session.UseGenerationAsync<int>(
+                generation, context, unbound,
+                (_, _) => throw new InvalidOperationException("An execution shape without a committed binding cannot read material."),
+                cancellationToken));
+            Assert.IsType<ProviderAcquisitionDenied>(await context.ExecutePrivateProviderDependencyAsync(
+                new ChildOperation(context, key with { Protocol = ProviderProtocolKind.Sdk }, () => childExecutions++),
+                unbound, cancellationToken));
+            var forged = new ProviderInteractionPermit(
+                context.RequestIdentifier, context.Revision, CredentialExecutorKind.DevTunnelConnect,
+                context.AcquisitionGeneration, key, () => true,
+                binding with { Authorization = authorization with { Identifier = new() { Value = Guid.NewGuid() } } })
+                .BindExecution(() => true);
+            Assert.False(await forged.AuthorizesPrivateUseAsync(context, cancellationToken));
+            Assert.IsType<EntraGenerationUseDenied<int>>(await session.UseGenerationAsync<int>(
+                generation, context, forged,
+                (_, _) => throw new InvalidOperationException("A forged grant cannot read material."),
+                cancellationToken));
+            Assert.IsType<ProviderAcquisitionDenied>(await context.ExecutePrivateProviderDependencyAsync(
+                new ChildOperation(context, key with { Protocol = ProviderProtocolKind.Sdk }, () => childExecutions++),
+                forged, cancellationToken));
+            Assert.Equal(0, childExecutions);
+            Assert.True(await active.AuthorizesPrivateUseAsync(context, cancellationToken));
+            var child = new ChildOperation(context, key with
+            {
+                Configuration = new() { Digest = new string('a', 64) },
+                Protocol = ProviderProtocolKind.Sdk,
+            }, () => childExecutions++);
+            Assert.Equal(child.Generation, Assert.IsType<ProviderAcquisitionSucceeded>(
+                await context.ExecutePrivateProviderDependencyAsync(child, active, cancellationToken)).CommittedGeneration);
+            Assert.Equal(1, childExecutions);
             Assert.Null(await session.CopyGenerationAsync(generation, authorization, context, cancellationToken));
             ReadOnlyMemory<char> observed = default;
             var used = Assert.IsType<EntraGenerationUseSucceeded<int>>(await session.UseGenerationAsync(
@@ -100,12 +151,20 @@ public sealed class EntraPrivateCapabilityTests
         Assert.Equal(1, callbackCalls);
         Assert.NotNull(capturedContext);
         Assert.NotNull(capturedProof);
+        Assert.False(await capturedProof.AuthorizesPrivateUseAsync(capturedContext, TestContext.Current.CancellationToken));
+        Assert.IsType<ProviderAcquisitionDenied>(await capturedContext.ExecutePrivateProviderDependencyAsync(
+            new ChildOperation(capturedContext, ConnectExecutor.Key(capturedContext.PolicyRequest!) with
+            {
+                Protocol = ProviderProtocolKind.Sdk,
+            }, () => childExecutions++),
+            capturedProof, TestContext.Current.CancellationToken));
         Assert.IsType<EntraGenerationUseDenied<int>>(await session.UseGenerationAsync<int>(
             generation, capturedContext, capturedProof,
             (_, _) => throw new InvalidOperationException("A completed generation cannot authorize a late callback."),
             TestContext.Current.CancellationToken));
         Assert.True(await session.IsCurrentGenerationAsync(generation, TestContext.Current.CancellationToken));
         Assert.Equal(1, fixture.Acquirer.Calls);
+        Assert.Equal(1, childExecutions);
         Assert.Equal(2, fixture.Registry.GetSnapshot().Count);
     }
 
@@ -154,6 +213,48 @@ public sealed class EntraPrivateCapabilityTests
             await queued.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
         Assert.True(await session.IsCurrentGenerationAsync(generation, TestContext.Current.CancellationToken));
         Assert.Equal(1, fixture.Acquirer.Calls);
+    }
+
+    [Fact]
+    public async Task EntraPrivateUse_RevokedGrantDeniesPublicationAndFurtherWarmCallbacks()
+    {
+        var connect = new ConnectExecutor();
+        await using var fixture = new Fixture(connect);
+        await using var exported = await fixture.WarmAsync();
+        var session = fixture.Entra.GetSession(fixture.Request);
+        var generation = (await session.InspectGenerationAsync(TestContext.Current.CancellationToken))!.Generation;
+        var callbackCalls = 0;
+        connect.Use = async (context, authorization, _, active, cancellationToken) =>
+        {
+            ReadOnlyMemory<char> observed = default;
+            Assert.IsType<EntraGenerationUseDenied<int>>(await session.UseGenerationAsync(
+                generation, context, active, async (material, token) =>
+                {
+                    callbackCalls++;
+                    observed = material;
+                    Assert.NotNull(authorization.MemoryIdentifier);
+                    await context.Policy.ForgetAsync(authorization.MemoryIdentifier, token);
+                    return material.Length;
+                }, cancellationToken));
+            Assert.Equal(1, callbackCalls);
+            Assert.All(observed.ToArray(), character => Assert.Equal('\0', character));
+            Assert.True(active.IsActivePrivateExecution(context));
+            Assert.False(await active.AuthorizesPrivateUseAsync(context, cancellationToken));
+            Assert.IsType<EntraGenerationUseDenied<int>>(await session.UseGenerationAsync<int>(
+                generation, context, active,
+                (_, _) => throw new InvalidOperationException("Revoked parent approval cannot read warm identity material."),
+                cancellationToken));
+            return 0;
+        };
+        var pending = fixture.Broker.AcquireAsync(fixture.CreateConnectRequest(), TestContext.Current.CancellationToken);
+        await fixture.ApplyAsync(fixture.Registry.GetSnapshot().Last(), ReleaseMemoryScopeKind.AllUses);
+        Assert.IsType<AccessAuthorizationRequired<ConnectResult>>(
+            await pending.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+        Assert.True(await session.IsCurrentGenerationAsync(generation, TestContext.Current.CancellationToken));
+        Assert.Equal(1, fixture.Acquirer.Calls);
+        Assert.Equal(1, callbackCalls);
+        Assert.IsType<SensitiveValueUseSucceeded<int>>(await exported.AccessToken.UseAsync(
+            (value, _) => ValueTask.FromResult(value.Length), TestContext.Current.CancellationToken));
     }
 
     private sealed class Fixture : IAsyncDisposable
@@ -208,12 +309,14 @@ public sealed class EntraPrivateCapabilityTests
             }],
         };
 
-        internal Task ApplyAsync(UserAuthorizationSnapshot snapshot) => this.Registry.ActAsync(new ApplyUserAuthorizationAction
+        internal Task ApplyAsync(
+            UserAuthorizationSnapshot snapshot,
+            ReleaseMemoryScopeKind? scope = null) => this.Registry.ActAsync(new ApplyUserAuthorizationAction
         {
             RequestIdentifier = snapshot.Identifier,
             ExpectedRevision = snapshot.Revision,
             Source = snapshot.SelectedSource,
-            Memory = snapshot.SelectedMemory,
+            Memory = scope is null ? snapshot.SelectedMemory : snapshot.MemoryOptions.Single(option => option.Scope == scope).Identifier,
         }, TestContext.Current.CancellationToken);
 
         public async ValueTask DisposeAsync()
@@ -336,6 +439,36 @@ public sealed class EntraPrivateCapabilityTests
                 Token = new("private-token", DateTimeOffset.UtcNow.AddHours(1)),
                 AccountIdentifier = this.Account,
             });
+        }
+
+    }
+
+    private sealed class ChildOperation(
+        ICredentialExecutionContext context,
+        ProviderAcquisitionKey key,
+        Action execute) : IProviderAcquisitionOperation
+    {
+        internal CredentialMaterialGenerationIdentifier Generation { get; } = new() { Value = Guid.NewGuid() };
+        private CredentialMaterialGenerationIdentifier? committedGeneration;
+        public ProviderAcquisitionKey CompatibilityKey => key;
+        public UserAuthorizationRequestIdentifier RequestIdentifier => context.RequestIdentifier;
+        public long Revision => context.Revision;
+        public CredentialExecutorKind ExecutorKind => CredentialExecutorKind.Entra;
+        public Guid AcquisitionGeneration => context.AcquisitionGeneration;
+
+        public async ValueTask<ProviderAcquisitionOutcome> ExecuteAsync(
+            ProviderAcquisitionCommitContext commitContext,
+            CancellationToken cancellationToken)
+        {
+            execute();
+            Assert.True(commitContext.InteractionPermit.AuthorizesProvider(this.ExecutorKind, key));
+            var outcome = await commitContext.CommitAsync(this.Generation, _ =>
+            {
+                this.committedGeneration = this.Generation;
+                return ValueTask.CompletedTask;
+            });
+            Assert.Equal(this.Generation, this.committedGeneration);
+            return outcome;
         }
     }
 }

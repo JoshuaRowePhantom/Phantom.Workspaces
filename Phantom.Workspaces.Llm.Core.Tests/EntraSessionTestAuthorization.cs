@@ -1,4 +1,3 @@
-using Moq;
 using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Llm.Interfaces.Access.Execution;
 
@@ -27,9 +26,22 @@ internal static class EntraSessionTestAuthorization
             Account = request.Credential.AccountIdentifier,
             Protocol = ProviderProtocolKind.TunnelConnect,
         };
+        var authorization = new ReleaseAuthorization
+        {
+            Identifier = new() { Value = Guid.NewGuid() },
+            RequestIdentifier = request.RequestIdentifier,
+            RequestGeneration = request.RequestGeneration,
+            Scope = ReleaseMemoryScopeKind.AllowOnce,
+        };
         var permit = new ProviderInteractionPermit(
             context.RequestIdentifier, context.Revision, CredentialExecutorKind.DevTunnelConnect,
-            context.AcquisitionGeneration, key, () => true).BindExecution(() => true);
+            context.AcquisitionGeneration, key, () => true,
+            new ProviderExecutionAuthorizationBinding
+            {
+                Policy = context.Policy,
+                Authorization = authorization,
+                Request = request,
+            }).BindExecution(() => true);
         return (context, permit);
     }
 
@@ -68,15 +80,40 @@ internal static class EntraSessionTestAuthorization
         ReleasePolicyRequest request,
         ReleaseAuthorizationValidation validation)
     {
-        var policy = new Mock<IReleaseAuthorizationPolicy>(MockBehavior.Strict);
-        policy.Setup(value => value.ValidateAsync(
-                It.IsAny<ReleaseAuthorizationIdentifier>(), request, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(validation);
-        return new ExecutionContext(configuration, request, policy.Object);
+        return new ExecutionContext(configuration, request, new Policy(validation));
     }
 
     private static CredentialAccountIdentifier DefaultAccount() =>
         CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.Entra, "stable-test-account");
+
+    private sealed class Policy(ReleaseAuthorizationValidation validation) :
+        IReleaseAuthorizationPolicy, IProviderAcquisitionAuthorizationPolicy
+    {
+        public ValueTask<ReleaseAuthorizationValidation> ValidateAsync(
+            ReleaseAuthorizationIdentifier identifier,
+            ReleasePolicyRequest request,
+            CancellationToken cancellationToken = default) => ValueTask.FromResult(validation);
+
+        public ValueTask<ReleaseAuthorizationValidation> ValidateAcquisitionAuthorizationAsync(
+            ReleaseAuthorization authorization,
+            ReleasePolicyRequest request,
+            CancellationToken cancellationToken) => ValueTask.FromResult(validation);
+
+        public ValueTask<ReleasePolicyEvaluation> EvaluateAsync(
+            ReleasePolicyRequest request,
+            CancellationToken cancellationToken = default) => throw new InvalidOperationException();
+        public ValueTask<ReleaseAuthorization> CommitAsync(
+            ReleasePolicyDecision decision,
+            CancellationToken cancellationToken = default) => throw new InvalidOperationException();
+        public ValueTask FinalizeCredentialIdentityAsync(
+            ReleaseAuthorizationIdentifier identifier,
+            ResolvedCredentialIdentity identity,
+            CancellationToken cancellationToken = default) => throw new InvalidOperationException();
+        public ValueTask<IReadOnlyList<ReleaseMemoryDescriptor>> ListAsync(CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException();
+        public ValueTask ForgetAsync(ReleaseMemoryIdentifier identifier, CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException();
+    }
 
     private sealed class ExecutionContext(
         EntraCredentialAccessRequest configuration,
