@@ -37,6 +37,7 @@ internal sealed class DevTunnelConnectManagementApi
             }, identity);
         ITunnelManagementClient? client = null;
         HttpMessageHandler? ownedHandler = null;
+        DevTunnelConnectManagementSucceeded? unpublished = null;
         try
         {
             if (this.createClient is { } factory)
@@ -85,12 +86,13 @@ internal sealed class DevTunnelConnectManagementApi
             {
                 return new DevTunnelConnectManagementFailed { ErrorCode = AccessErrorCode.ProviderFailure };
             }
-            return new DevTunnelConnectManagementSucceeded
+            unpublished = new DevTunnelConnectManagementSucceeded
             {
                 Material = token.ToCharArray(),
                 Endpoint = endpoint,
                 ExpiresOn = expiresOn,
             };
+            return unpublished;
         }
         catch (DevTunnelCredentialAccessException)
         {
@@ -119,20 +121,32 @@ internal sealed class DevTunnelConnectManagementApi
         }
         finally
         {
+            var cleanupCompleted = false;
             try
             {
-                if (client is IAsyncDisposable asynchronous)
+                try
                 {
-                    await asynchronous.DisposeAsync().ConfigureAwait(false);
+                    if (client is IAsyncDisposable asynchronous)
+                    {
+                        await asynchronous.DisposeAsync().ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        (client as IDisposable)?.Dispose();
+                    }
                 }
-                else
+                finally
                 {
-                    (client as IDisposable)?.Dispose();
+                    ownedHandler?.Dispose();
                 }
+                cleanupCompleted = true;
             }
             finally
             {
-                ownedHandler?.Dispose();
+                if (!cleanupCompleted)
+                {
+                    unpublished?.Dispose();
+                }
             }
         }
     }

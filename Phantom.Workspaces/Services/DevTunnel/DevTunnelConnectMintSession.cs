@@ -103,6 +103,7 @@ internal sealed class DevTunnelConnectMintSession(
             await gitHub.GetGenerationCache(source.Identifier)
                 .InvalidateGenerationAsync(success.Generation, cancellationToken).ConfigureAwait(false);
         }
+        mintedMaterial.Release(success.Result);
         return Complete(success.Result, success.AccountIdentifier);
     }
 
@@ -165,10 +166,9 @@ internal sealed class DevTunnelConnectMintSession(
         {
             return new DevTunnelConnectMintFailed { ErrorCode = AccessErrorCode.IdentityMismatch };
         }
-        using var mintedMaterial = new MintedMaterialOwner();
         var used = await session.UseGenerationAsync(metadata.Generation, context, permit,
-            (identity, token) => mintedMaterial.CaptureAsync(
-                management.MintAsync(request.Tunnel, DevTunnelIdentityScheme.Entra, new string(identity.Span), token)),
+            (identity, token) =>
+                management.MintAsync(request.Tunnel, DevTunnelIdentityScheme.Entra, new string(identity.Span), token),
             cancellationToken).ConfigureAwait(false);
         if (used is EntraGenerationUseDenied<DevTunnelConnectManagementOutcome>)
         {
@@ -228,10 +228,9 @@ internal sealed class DevTunnelConnectMintSession(
         {
             return new DevTunnelConnectMintFailed { ErrorCode = AccessErrorCode.IdentityMismatch };
         }
-        using var mintedMaterial = new MintedMaterialOwner();
         var used = await provider.UseGenerationAsync(identityRequest, metadata.Generation, account, context, parentAcquisitionKey, permit,
-            (identity, token) => mintedMaterial.CaptureAsync(
-                management.MintAsync(request.Tunnel, DevTunnelIdentityScheme.OAuth, identity, token)),
+            (identity, token) =>
+                management.MintAsync(request.Tunnel, DevTunnelIdentityScheme.OAuth, identity, token),
             cancellationToken).ConfigureAwait(false);
         if (used is OAuthGenerationUseDenied<DevTunnelConnectManagementOutcome>)
         {
@@ -285,6 +284,14 @@ internal sealed class DevTunnelConnectMintSession(
         {
             this.outcome = await pending.ConfigureAwait(false);
             return this.outcome;
+        }
+
+        public void Release(DevTunnelConnectManagementOutcome published)
+        {
+            if (ReferenceEquals(this.outcome, published))
+            {
+                this.outcome = null;
+            }
         }
 
         public void Dispose() => (this.outcome as IDisposable)?.Dispose();

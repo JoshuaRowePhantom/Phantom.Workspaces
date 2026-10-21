@@ -13,6 +13,25 @@ namespace Phantom.Workspaces.Tests.Access;
 
 public sealed class DevTunnelConnectManagementApiTests
 {
+    [Fact]
+    public async Task ManagementApi_CleanupFailureDoesNotPublishMintedCredential()
+    {
+        var selected = Tunnel(Jwt(DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds()));
+        var management = Client(selected);
+        management.Setup(client => client.GetTunnelAsync(selected, It.IsAny<TunnelRequestOptions>(),
+            It.IsAny<CancellationToken>())).ReturnsAsync(selected);
+        var failure = new InvalidOperationException("Management cleanup failed.");
+        management.Setup(client => client.DisposeAsync()).Returns(ValueTask.FromException(failure));
+        var api = new DevTunnelConnectManagementApi(_ => management.Object);
+
+        Assert.Same(failure, await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await api.MintAsync(Descriptor(), DevTunnelIdentityScheme.GitHub, "identity",
+                TestContext.Current.CancellationToken)));
+        management.Verify(client => client.GetTunnelAsync(selected, It.IsAny<TunnelRequestOptions>(),
+            It.IsAny<CancellationToken>()), Times.Once);
+        management.Verify(client => client.DisposeAsync(), Times.Once);
+    }
+
     [Theory]
     [InlineData(DevTunnelIdentityScheme.GitHub, "github", false)]
     [InlineData(DevTunnelIdentityScheme.Entra, "aad", false)]
