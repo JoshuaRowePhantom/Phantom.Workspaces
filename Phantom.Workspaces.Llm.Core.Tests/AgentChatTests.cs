@@ -2305,6 +2305,7 @@ public sealed class AgentChatTests
             .Throws(new InvalidOperationException("credential configuration failed (test)."));
 
         var seenRunningTexts = new List<string>();
+        var gatheringCredentialsObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         void Capture(AgentChat chat)
             => ((System.Collections.Specialized.INotifyCollectionChanged)chat.RunningItems).CollectionChanged +=
                 (_, e) =>
@@ -2318,7 +2319,12 @@ public sealed class AgentChatTests
                     {
                         lock (seenRunningTexts)
                         {
-                            seenRunningTexts.Add(FirstDiagnosticText(item));
+                            var text = FirstDiagnosticText(item);
+                            seenRunningTexts.Add(text);
+                            if (text.Contains("Gathering credentials for oauth-server", StringComparison.Ordinal))
+                            {
+                                gatheringCredentialsObserved.TrySetResult();
+                            }
                         }
                     }
                 };
@@ -2355,6 +2361,9 @@ public sealed class AgentChatTests
         // failure is caught per-server).
         await chat.Initialization;
         Assert.True(reached.Task.IsCompletedSuccessfully);
+
+        // Initialization does not await the foreground collection notification.
+        await gatheringCredentialsObserved.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         List<string> Snapshot()
         {
