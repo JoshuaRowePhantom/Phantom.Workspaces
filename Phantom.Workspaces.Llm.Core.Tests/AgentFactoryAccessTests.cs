@@ -726,7 +726,6 @@ public sealed class AgentFactoryAccessTests
     {
         public Task<RemoteCopilotProviderMetadata?> GetMetadataAsync(
             string providerReference,
-            string modelId,
             CancellationToken cancellationToken) => throw new NotSupportedException("Service forwarding must not invoke the catalog.");
     }
 
