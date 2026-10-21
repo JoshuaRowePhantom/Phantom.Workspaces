@@ -341,7 +341,15 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
         {
             return new GitHubPrivateCredentialUseDenied<TResult>();
         }
-        var result = await operation(new string(snapshot.Material), snapshot.Account, cancellationToken).ConfigureAwait(false);
+        TResult result;
+        try
+        {
+            result = await operation(new string(snapshot.Material), snapshot.Account, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            snapshot.Dispose();
+        }
         var transferred = false;
         try
         {

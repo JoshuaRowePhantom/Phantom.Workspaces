@@ -8,6 +8,36 @@ namespace Phantom.Workspaces.Tests.Access;
 
 public sealed class GitHubPrivateCredentialSessionTests
 {
+    [Fact]
+    public async Task PrivateMaterialUse_SuccessTransfersDisposableCallbackResultToCaller()
+    {
+        var events = new List<string>();
+        var provider = new GitHubCredentialAccessExecutor(new Source(events));
+        var parent = new ParentExecutor(provider, events);
+        var (broker, registry) = Create(provider, parent);
+        await using var owned = broker;
+        var result = new DerivedResult();
+        var transferred = false;
+        parent.BodyOverride = async (context, commit, cancellationToken) =>
+        {
+            var used = await provider.UsePrivateAsync(
+                parent.IdentityRequest, context, commit.InteractionPermit,
+                (_, _) => ValueTask.FromResult(result), cancellationToken);
+            Assert.Same(result, Assert.IsType<GitHubPrivateCredentialUseSucceeded<DerivedResult>>(used).Result);
+            Assert.Equal(0, result.AsyncDisposals);
+            Assert.Equal(0, result.SyncDisposals);
+            transferred = true;
+            await result.DisposeAsync();
+            return new ProviderAcquisitionFailed { ErrorCode = AccessErrorCode.InvalidGeneration };
+        };
+        var task = broker.AcquireAsync(Request(), TestContext.Current.CancellationToken);
+        await AllowAsync(registry);
+        Assert.Equal(AccessErrorCode.InvalidGeneration, Assert.IsType<AccessFailed<ParentResult>>(await task).ErrorCode);
+        Assert.True(transferred);
+        Assert.Equal(1, result.AsyncDisposals);
+        Assert.Equal(0, result.SyncDisposals);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
