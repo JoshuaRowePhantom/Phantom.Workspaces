@@ -1,6 +1,19 @@
 {
-  "codeCheckpoint": "997f2d6e8f8d4a0f67abc9ebc1ec7b40932508c4",
-  "productionCheckpoint": "997f2d6e8f8d4a0f67abc9ebc1ec7b40932508c4",
+  "codeCheckpoint": "6efcbad52e20e98fd4a2ab9a631331b4241a7cde",
+  "productionCheckpoint": "6efcbad52e20e98fd4a2ab9a631331b4241a7cde",
+  "historicalFinalAccessPacketCheckpoint": "997f2d6e8f8d4a0f67abc9ebc1ec7b40932508c4",
+  "rootAudienceFollowthrough": {
+    "commits": [
+      "30183784f5494c76644115179a30178e1cc556a9",
+      "6efcbad52e20e98fd4a2ab9a631331b4241a7cde"
+    ],
+    "finalFocusedPassed": 84,
+    "actualRoot": "Declared absolute Audience independently of distinct/null Endpoint through actual AccessHostServices configured Repository/Application routes; six actual-root invalid values fail before registration/material access. Original blank/control checks retained.",
+    "review": "Complete127..6ef three-file new root delta independently reviewed read-only: no significant issues; .scratch\\integration-v2-root-audience-review-20261021.json.",
+    "historical301": "Targeted246 and complete794 initial+10x794 passed at301; preserved separate logs. Final6ef strict-text followup and extra control rejection are covered by final795, not inferred from301.",
+    "caseAccounting": "Final795 = prior766 +11 additional actual-root cases +18 newly selected route-factory cases (17 pre-existing plus1 added variant).",
+    "boundary": "Actual-root configuration/metadata routing, not live OAuth/provider/native/browser acceptance. Source997 prior766 and all original failure artifacts retained."
+  },
   "historicalPairedLegacyCheckpoint": "c9d203afc7638451a9f3147af2cbf9e0ecb0b80b",
   "historicalPreRetirementProductionCheckpoint": "0434a8550f4a8977d9451c38be585adfbb0bfb71",
   "historicalHttpExactGenerationCodeCheckpoint": "ceb8000fcb0bab5c7fafdde802ee0ae09c881230",
@@ -18,12 +31,12 @@
   "coreStabilityPassedPerRun": 171,
   "largerAppTargetInitialPassed": 312,
   "largerAppTargetStability": "Failed run5/10; exact causal fixture correction079f2081 subsequently targeted16 and root200x10 plus exact-final-source200 pass. Not claimed312x10.",
-  "knownRemainingFailures": "NONE in requested final targeted acceptance. Historical App239 run5 and pre-fix final751 (750 pass/1 original identity shutdown failure) remain preserved, never retrospectively called green. Separate isolated diagnosis reproduced normal completion beating cancellation propagation. Reviewed e69/84 now integratedd133/997; unchanged original identity assertion and15 new controls pass in full766+10x766. GitHub High closed by full0879/89/74 with actual caller/recovery execution; legacy/caller/HTTP corrections complete.",
+  "knownRemainingFailures": "NONE in requested final targeted acceptance. Historical App239 run5 and pre-fix final751 (750 pass/1 original identity shutdown failure) remain preserved, never retrospectively called green. Separate isolated diagnosis reproduced normal completion beating cancellation propagation. Reviewed e69/84 integratedd133/997; unchanged original identity assertion and15 new controls pass in preserved766 and current795+10x795. GitHub High closed by full0879/89/74 with actual caller/recovery execution; legacy/caller/HTTP corrections complete. Latest actual configured-root Audience requirement closed by independently reviewed301/6ef, with exact-source795/159/11 each initial+10 runs.",
   "finalAcceptance": {
-    "codeCheckpoint": "997f2d6e8f8d4a0f67abc9ebc1ec7b40932508c4",
-    "appInitialPassed": 766,
+    "codeCheckpoint": "6efcbad52e20e98fd4a2ab9a631331b4241a7cde",
+    "appInitialPassed": 795,
     "appStabilityRuns": 10,
-    "appPassedPerRun": 766,
+    "appPassedPerRun": 795,
     "coreInitialPassed": 159,
     "coreStabilityRuns": 10,
     "corePassedPerRun": 159,
@@ -32,7 +45,7 @@
     "transportPassedPerRun": 11,
     "failed": 0,
     "skipped": 0,
-    "review": "New legacy/usage delta, final provider/recovery merge, and final shutdown compatibility each independently reviewed read-only; no significant issues. No source edits after reviews/execution.",
+    "review": "New legacy/usage delta, final provider/recovery merge, shutdown compatibility and latest complete three-file actual-root Audience net each independently reviewed read-only; no significant issues. No source edits after final root review and exact-source795/159/11 execution.",
     "boundary": "Complete requested hermetic targeted matrices, not every repository suite/live provider/OS-process BYOK acceptance. Parent owns acceptance/publication decision. No features advancement, push, release or issue closure."
   },
   "gitHubOwnershipPairPassed": 75,
@@ -76,6 +89,61 @@
   "pairedLegacyBoundary": "Only coherent c9 endpoint accepted, never SDK-only81504 prefix. Actual missing095 usage prerequisite plus parent-authorized paired App/Core/modal/OAuth marker retirement; native contracts/caches preserved. Read-only new21-file review clear; source unchanged after116/133x10 and fresh final committed116/133.",
   "dumpCount": 0,
   "logs": [
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-root-audience-followthrough-tests.log",
+      "bytes": 6278,
+      "sha256": "F9E8D371D3D78CA0875F7A8487456E4B8984379A9F6225CF3409AC9FB35255E8"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-root-audience-301-app-tests.log",
+      "bytes": 6278,
+      "sha256": "C0E6169B7270E5988CECD1544AC0ECB383B3CD6AD6FEC82177A287E628D0CA93"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-root-audience-301-app-stability.log",
+      "bytes": 5162,
+      "sha256": "6205B5C7D1561C54F46C8680ECE3E09C60E56220CDBC449525CF8B9B7EC6BE3D"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-root-audience-focused-tests.log",
+      "bytes": 6278,
+      "sha256": "6EC766065AAAA92F89B24C76BBC2034D950D5A02498701AC181661EE63862C65"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-root-audience-complete-app-tests.log",
+      "bytes": 6278,
+      "sha256": "02FF5EFDB734814430992FA11AB354A3BA71B14D761F65C6641AFE9D3B85C774"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-root-audience-complete-app-stability.log",
+      "bytes": 5162,
+      "sha256": "663D0724111D9AA7F68644867D2D9F3C73555CECF63F1CA74E48D3929B6673B1"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-root-audience-complete-core-tests.log",
+      "bytes": 5986,
+      "sha256": "7975429C995C8EE54D4E59340E72D20DB2E28EFF4676EB98859C2A45CAEF93C3"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-root-audience-complete-core-stability.log",
+      "bytes": 3240,
+      "sha256": "21307CEEEE6B5906C448763178B872DA03E92498DFAE14FEB145D396CA66D5C6"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-root-audience-complete-transport-tests.log",
+      "bytes": 6136,
+      "sha256": "460AC5F09E58DB9AA38C10B63FCA8AD5FC734B931C71019EF8F7FB46B62A4640"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-root-audience-complete-transport-stability.log",
+      "bytes": 3524,
+      "sha256": "DAFD713ACBC994A04FB83ACACE6C8F2DE7FD6B1F81ADF1FAE4622292F3EA9FAC"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-root-audience-review-20261021.json",
+      "bytes": 3855,
+      "sha256": "378A68B0178DEB3AEE427D6F921934564F9A2C92B298B804A7111B71FB642C88"
+    },
     {
       "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-final-complete-app-stability.log",
       "bytes": 5090,

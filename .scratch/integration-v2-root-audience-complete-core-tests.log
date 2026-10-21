@@ -1,0 +1,38 @@
+  Phantom.Workspaces.Data.Core -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Data.Core\bin\Debug\net10.0\Phantom.Workspaces.Data.Core.dll
+  Phantom.Workspaces.Data.Offline -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Data.Offline\bin\Debug\net10.0\Phantom.Workspaces.Data.Offline.dll
+  Phantom.Workspaces.Llm.Interfaces -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Llm.Interfaces\bin\Debug\net10.0\Phantom.Workspaces.Llm.Interfaces.dll
+  Phantom.Workspaces.Data.Web.Client -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Data.Web.Client\bin\Debug\net10.0\Phantom.Workspaces.Data.Web.Client.dll
+  Phantom.Workspaces.Llm.Echo -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Llm.Echo\bin\Debug\net10.0\Phantom.Workspaces.Llm.Echo.dll
+  Phantom.Workspaces.Containers -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Containers\bin\Debug\net10.0\Phantom.Workspaces.Containers.dll
+  Phantom.Workspaces.Data.MongoDB -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Data.MongoDB\bin\Debug\net10.0\Phantom.Workspaces.Data.MongoDB.dll
+  Phantom.Workspaces.Transport -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Transport\bin\Debug\net10.0\Phantom.Workspaces.Transport.dll
+  mxc: building the native unit and generating C# P/Invoke bindings (cargo build -p mxc_ffi -p plm --features "dotnetsdk" --target x86_64-pc-windows-msvc )
+     Compiling mxc_ffi v0.8.0 (C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\microsoft\mxc\src\ffi\mxc_ffi)
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.38s
+  Microsoft.Mxc.Sdk -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\microsoft\mxc\sdk\dotnet\Microsoft.Mxc.Sdk\bin\Debug\net8.0\Microsoft.Mxc.Sdk.dll
+  Phantom.Workspaces.Llm.Core -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Llm.Core\bin\Debug\net10.0\Phantom.Workspaces.Llm.Core.dll
+  Phantom.Workspaces.Llm.Test.Mcp -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Llm.Test.Mcp\bin\Debug\net10.0\Phantom.Workspaces.Llm.Test.Mcp.dll
+  Phantom.Workspaces.Data.Web.Server -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Data.Web.Server\bin\Debug\net10.0\Phantom.Workspaces.Data.Web.Server.dll
+  Phantom.Workspaces.Logging -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Logging\bin\Debug\net10.0\Phantom.Workspaces.Logging.dll
+  Phantom.Workspaces.Web.Server -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Web.Server\bin\Debug\net10.0\Phantom.Workspaces.Web.Server.dll
+  Phantom.Dock.Avalonia.TabSwitching -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Dock.Avalonia.TabSwitching\Phantom.Dock.Avalonia.TabSwitching\bin\Debug\net10.0\Phantom.Dock.Avalonia.TabSwitching.dll
+  Phantom.Workspaces.Gui.Shared -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Gui.Shared\bin\Debug\net10.0\Phantom.Workspaces.Gui.Shared.dll
+  Phantom.Workspaces.Agent.Gui -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Agent.Gui\bin\Debug\net10.0\Phantom.Workspaces.Agent.Gui.dll
+  Phantom.Workspaces.Install -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Install\bin\Debug\net10.0\Phantom.Workspaces.Install.dll
+  Phantom.Workspaces.Copilot.Cli.Wrapper -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Copilot.Cli.Wrapper\bin\Debug\net10.0\phantom-copilot-wrapper.dll
+  Phantom.Workspaces -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces\bin\Debug\net10.0\Phantom.Workspaces.dll
+  Phantom.Workspaces.Testing -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Testing\bin\Debug\net10.0\Phantom.Workspaces.Testing.dll
+  Phantom.Workspaces.Test.WindowsProcessProbe -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Test.WindowsProcessProbe\bin\Debug\net10.0\Phantom.Workspaces.Test.WindowsProcessProbe.dll
+  Phantom.Workspaces.Llm.Core.Tests -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Llm.Core.Tests\bin\Debug\net10.0\Phantom.Workspaces.Llm.Core.Tests.dll
+Test run for C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Llm.Core.Tests\bin\Debug\net10.0\Phantom.Workspaces.Llm.Core.Tests.dll (.NETCoreApp,Version=v10.0)
+A total of 1 test files matched the specified pattern.
+[xUnit.net 00:00:01.23] Phantom.Workspaces.Llm.Core.Tests: Non-serializable data ('System.Object[]') found for 'Phantom.Workspaces.Llm.Core.Tests.CopilotSdkStreamAdapterTests.TranslateCopilotSdkSessionEvents_BenignLifecycleEvent_IsConsumedSilently'; falling back to single test case.
+Data collector 'Blame' message: All tests finished running, Sequence file will not be generated.
+Results File: C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Llm.Core.Tests\TestResults\jrowe_DAEMON_2026-10-21_04_20_20_net10.0.trx
+
+Passed!  - Failed:     0, Passed:   159, Skipped:     0, Total:   159, Duration: 634 ms - Phantom.Workspaces.Llm.Core.Tests.dll (net10.0)
+
+=== Test Run Summary ===
+Executed : 159
+Passed   : 159
+Failed   : 0

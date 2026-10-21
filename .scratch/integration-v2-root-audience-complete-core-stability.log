@@ -1,0 +1,84 @@
+Stability run: 10 consecutive passes required for: AgentFactoryAccessTests, AgentDefinitionSecretMaterializerTests, SecretModelTests, SecretUsageScannerTests, SecretUseScopePreimageTests, AgentManifestSecretUseMemoryFactoryTests, SecretRetrieverTests, AllowedSecretsStoreTests, NullPlatformSecretStoreTests, EntraCredentialSessionTests, EntraBrowserTokenAcquirerTests, CredentialManagerTokenCacheTests
+Worktree: C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020
+
+=== Run 1 / 10 ===
+
+=== Test Run Summary ===
+Executed : 159
+Passed   : 159
+Failed   : 0
+  Passed!  - Failed:     0, Passed:   159, Skipped:     0, Total:   159, Duration: 349 ms - Phantom.Workspaces.Llm.Core.Tests.dll (net10.0)
+
+=== Run 2 / 10 ===
+
+=== Test Run Summary ===
+Executed : 159
+Passed   : 159
+Failed   : 0
+  Passed!  - Failed:     0, Passed:   159, Skipped:     0, Total:   159, Duration: 390 ms - Phantom.Workspaces.Llm.Core.Tests.dll (net10.0)
+
+=== Run 3 / 10 ===
+
+=== Test Run Summary ===
+Executed : 159
+Passed   : 159
+Failed   : 0
+  Passed!  - Failed:     0, Passed:   159, Skipped:     0, Total:   159, Duration: 343 ms - Phantom.Workspaces.Llm.Core.Tests.dll (net10.0)
+
+=== Run 4 / 10 ===
+
+=== Test Run Summary ===
+Executed : 159
+Passed   : 159
+Failed   : 0
+  Passed!  - Failed:     0, Passed:   159, Skipped:     0, Total:   159, Duration: 367 ms - Phantom.Workspaces.Llm.Core.Tests.dll (net10.0)
+
+=== Run 5 / 10 ===
+
+=== Test Run Summary ===
+Executed : 159
+Passed   : 159
+Failed   : 0
+  Passed!  - Failed:     0, Passed:   159, Skipped:     0, Total:   159, Duration: 408 ms - Phantom.Workspaces.Llm.Core.Tests.dll (net10.0)
+
+=== Run 6 / 10 ===
+
+=== Test Run Summary ===
+Executed : 159
+Passed   : 159
+Failed   : 0
+  Passed!  - Failed:     0, Passed:   159, Skipped:     0, Total:   159, Duration: 602 ms - Phantom.Workspaces.Llm.Core.Tests.dll (net10.0)
+
+=== Run 7 / 10 ===
+
+=== Test Run Summary ===
+Executed : 159
+Passed   : 159
+Failed   : 0
+  Passed!  - Failed:     0, Passed:   159, Skipped:     0, Total:   159, Duration: 659 ms - Phantom.Workspaces.Llm.Core.Tests.dll (net10.0)
+
+=== Run 8 / 10 ===
+
+=== Test Run Summary ===
+Executed : 159
+Passed   : 159
+Failed   : 0
+  Passed!  - Failed:     0, Passed:   159, Skipped:     0, Total:   159, Duration: 678 ms - Phantom.Workspaces.Llm.Core.Tests.dll (net10.0)
+
+=== Run 9 / 10 ===
+
+=== Test Run Summary ===
+Executed : 159
+Passed   : 159
+Failed   : 0
+  Passed!  - Failed:     0, Passed:   159, Skipped:     0, Total:   159, Duration: 556 ms - Phantom.Workspaces.Llm.Core.Tests.dll (net10.0)
+
+=== Run 10 / 10 ===
+
+=== Test Run Summary ===
+Executed : 159
+Passed   : 159
+Failed   : 0
+  Passed!  - Failed:     0, Passed:   159, Skipped:     0, Total:   159, Duration: 419 ms - Phantom.Workspaces.Llm.Core.Tests.dll (net10.0)
+
+All 10 runs passed for: AgentFactoryAccessTests, AgentDefinitionSecretMaterializerTests, SecretModelTests, SecretUsageScannerTests, SecretUseScopePreimageTests, AgentManifestSecretUseMemoryFactoryTests, SecretRetrieverTests, AllowedSecretsStoreTests, NullPlatformSecretStoreTests, EntraCredentialSessionTests, EntraBrowserTokenAcquirerTests, CredentialManagerTokenCacheTests

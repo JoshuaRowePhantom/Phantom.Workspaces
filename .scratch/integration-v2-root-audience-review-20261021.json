@@ -1,0 +1,38 @@
+{
+  "owner": "2042d708-200b-4ec9-8ea0-4ac52e4d8646",
+  "base": "127e346def1ff512e2a39949bba9ce3c3c7a93ca",
+  "source": "6efcbad52e20e98fd4a2ab9a631331b4241a7cde",
+  "commits": [
+    "30183784f5494c76644115179a30178e1cc556a9",
+    "6efcbad52e20e98fd4a2ab9a631331b4241a7cde"
+  ],
+  "requestedAcceptance": "Verify independent configured Audience through the actual root with distinct Endpoint and null Endpoint, rather than relying on cleared97 factory-only tests.",
+  "concreteFinding": {
+    "path": "Phantom.Workspaces\\Services\\DevTunnel\\DevTunnelIdentityRouteFactory.cs",
+    "method": "CreateOAuth",
+    "behavior": "AccessHostServices uses this factory, not RemoteOAuthCredentialRequestFactory. Endpoint was already independent, but RequireText allowed a relative Audience, unlike the explicit absolute-URI contract in97.",
+    "priorEvidence": "The actual-root ConfiguredOAuthRoutesUseOneHostRegistryAndCurrentPresentation fixture at127 used relative configured-tunnel-audience and passed in the preserved source997 App766 matrix. No new failing/counterfactual execution is claimed.",
+    "correction": "RequireText retains blank/control rejection before Uri.TryCreate with UriKind.Absolute; the normalized AbsoluteUri is supplied to the same registry. Unsupported configuration fails before registration. Endpoint is neither fallback nor constraint.",
+    "unchanged": "No model/UI/external757, new graph, source selection, private authorization, provider algorithm, callback, native store or HTTP ownership changes."
+  },
+  "actualRootScenarios": {
+    "directHost": "Two distinct/null Endpoint cases retain one registry and current bootstrap/runtime presentation.",
+    "configuredSources": "Four DevTunnelNameRepositorySource cases: Repository/Application crossed with distinct/null Endpoint. The real AccessHostServices source overload registers the exact Audience and retains configuration/logical identity across runtime transition; strict native store receives zero calls.",
+    "invalidAudience": "Six actual configured-root cases: null, empty, whitespace, two relative values and absolute URI with trailing newline. Valid Endpoint cannot rescue them. Typed UnsupportedRequest, empty OAuth provider registry, empty authorization rows, zero strict-store calls.",
+    "unitSupport": "Existing route-factory HTTP bomb is unchanged. Legitimate absolute Audience fixture covers distinct/null Endpoint.",
+    "caseAccounting": "Final App795 is prior766 plus11 additional actual-root cases and18 newly selected route-factory cases (17 prior cases plus1 added Endpoint variant)."
+  },
+  "independentReview": {
+    "reviewer": "Independent read-only code-review specialist via task tool",
+    "initial": "root-audience-review: initial three-file301 delta, no significant issues found.",
+    "final": "final-root-audience-net-review: explicit complete127-to-working-tree three-file net, including retained RequireText and trailing-newline negative, no significant issues found.",
+    "finalSourceIdentity": "Final review and focused84 execution preceded commit6ef but covered the exact source subsequently committed6ef. No source edits afterward.",
+    "paths": [
+      "Phantom.Workspaces\\Services\\DevTunnel\\DevTunnelIdentityRouteFactory.cs",
+      "Phantom.Workspaces.Tests\\Access\\DevTunnelIdentityRouteFactoryTests.cs",
+      "Phantom.Workspaces.Tests\\Authorization\\HostConfiguredAccessGraphTests.cs"
+    ],
+    "exclusions": "No reviewer tests/builds/edits/live actions. Unchanged97 source clearance is not reopened or replaced. Review is new bounded root delta, not independent whole-arc acceptance."
+  },
+  "boundary": "Actual production-root metadata/configuration routing is exercised; no live OAuth, browser, native credential access, user checkout or provider network acceptance is claimed."
+}

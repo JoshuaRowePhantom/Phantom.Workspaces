@@ -3,8 +3,24 @@
   "worktree": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020",
   "branch": "integration/access-arc-ready-v2-20261020",
   "baseline": "e8ed98d70fe885ce37b12410e82f63317a923db5",
-  "status": "IMPLEMENTATION AND REQUESTED HERMETIC TARGETED ACCEPTANCE COMPLETE at997f2d6e: complete final GitHub0879/89/74, broker recovery327/6c/653, and reviewed root shutdowne69/84 are integrated with coherent legacy/usage cutovers. Final exact-source App766 initial+10x766, Core159 initial+10x159 and actual Transport11 initial+10x11 ALL PASS. Three independent new-delta reviews clear;56 execution artifacts hash-verified including original failed239/751 outcomes and TRX. Canonical shared blobs equal accepted8bc; GitHub executor equals final74. No remaining owned correction/legacy wait. Parent owns final acceptance/publication decision; no features advancement, push, release, issue closure or live provider/OS-process acceptance claimed.",
-  "reviewedCodeCheckpoint": "997f2d6e8f8d4a0f67abc9ebc1ec7b40932508c4",
+  "status": "IMPLEMENTATION AND REQUESTED HERMETIC TARGETED ACCEPTANCE COMPLETE at6efcbad5, including latest actual configured-root Audience requirement. Root independently uses declared absolute Audience with distinct or absent Endpoint; blank/relative/control values fail before registry/material access. All prior GitHub0879/89/74, recovery327/6c/653, shutdowne69/84, generic/MCP/Entra, HTTP and coherent legacy/usage cutovers retained. Final exact-source App795 initial+10x795, Core159 initial+10x159 and actual Transport11 initial+10x11 ALL PASS; bounded final three-file root-net review clear. All67 execution/review artifacts hash-verified, with prior766/794 and original failures preserved. No remaining owned correction/legacy wait. Parent owns final acceptance/publication; no features advancement, push, release, issue closure or live provider/OS-process acceptance claimed.",
+  "reviewedCodeCheckpoint": "6efcbad52e20e98fd4a2ab9a631331b4241a7cde",
+  "rootAudienceFollowthrough20261021": {
+    "base": "127e346def1ff512e2a39949bba9ce3c3c7a93ca",
+    "commits": [
+      "30183784f5494c76644115179a30178e1cc556a9",
+      "6efcbad52e20e98fd4a2ab9a631331b4241a7cde"
+    ],
+    "source": "6efcbad52e20e98fd4a2ab9a631331b4241a7cde",
+    "concreteFinding": "Actual AccessHostServices route delegates to DevTunnelIdentityRouteFactory.CreateOAuth, not the separate factory corrected by97. Endpoint was already independent, but RequireText accepted a relative Audience; the preserved old root fixture and source997 green execution establish prior behavior. No new failing/counterfactual run claimed.",
+    "correction": "One existing descriptor field now requires an absolute URI and uses AbsoluteUri before same registry registration. Original RequireText blank/control protection retained. No Endpoint fallback/constraint, model/UI/external757 intake, new graph, native/provider action or changes to cleared97.",
+    "actualRootScenarios": "Two direct-host distinct/null Endpoint cases plus four real configured DevTunnelNameRepositorySource Repository/Application cases preserve exact declared Audience and same configuration/logical identity across bootstrap/runtime. Six actual-root invalid Audience cases fail typed UnsupportedRequest before OAuth registration or authorization rows; strict native store receives zero calls.",
+    "execution": "Final exact-source focused84; complete App795 initial+10x795, Core159 initial+10x159 and actual Transport11 initial+10x11 all PASS, zero failed/skipped. App selection adds complete route-factory class and all actual-root cases while retaining original private/HTTP/stale401/worker scenarios.",
+    "intermediateEvidence": "Source301 targeted246 and complete794 initial+10x794 are separately preserved, not substituted for final6ef execution. Source6ef preserves previous control validation and adds actual-root trailing-newline rejection.",
+    "reviewArtifact": ".scratch\\integration-v2-root-audience-review-20261021.json",
+    "review": "Fresh independent read-only review of complete127-to-final three-file root net: no significant issues. No reviewer builds/tests/edits; no source changes after final review/execution.",
+    "boundary": "Actual production root metadata/configured-route coverage, not live OAuth/browser/native-secret/provider-network acceptance. Existing broader targeted fake-provider matrices recorded separately."
+  },
   "sourceToLocal": {
     "19acd7f6b1940290d08c43dfc4e9f535d56d03f3": "ac151c04",
     "083c040727028de4694192bd378e6d23d9b96529": "9202d011",
@@ -370,38 +386,38 @@
       "provenance": "Working source stayed unchanged after independent21-file review and116/133x10. Commits preserve that exact source; final coherent committed endpoint then freshly rebuilt/reran both116/133. No acceptance of incomplete81504 prefix."
     },
     "finalCompleteApp": {
-      "codeCheckpoint": "997f2d6e8f8d4a0f67abc9ebc1ec7b40932508c4",
+      "codeCheckpoint": "6efcbad52e20e98fd4a2ab9a631331b4241a7cde",
       "testProject": "Phantom.Workspaces.Tests\\Phantom.Workspaces.Tests.csproj",
-      "passed": 766,
+      "passed": 795,
       "failed": 0,
       "skipped": 0,
       "stabilityRuns": 10,
-      "passedPerRun": 766,
-      "log": ".scratch\\integration-v2-final-complete-app-tests.log",
-      "stability": ".scratch\\integration-v2-final-complete-app-stability.log",
-      "selectors": "GitHubActionsUsageProviderTests,GitHubCopilotUsageProviderTests,GitHubUsageProviderAccessTests,LegacyAuthorizationUiRemovalTests,AccessMigrationTests,GitHubPrivateCredentialSessionTests,GitHubCredentialAccessExecutorTests,GitHubSelectedSourcePolicyTests,AccessBrokerTests,ProviderCredentialCacheAdministrationTests,DevTunnelConnectMintSessionTests,DevTunnelAuthenticationHandlerTests,DevTunnelCredentialConsumerTests,DevTunnelConnectCredentialAccessExecutorTests,DevTunnelIdentityCredentialAccessExecutorTests,DevTunnelConnectManagementApiTests,DevTunnelClientAuthorizationTests,OAuthPrincipalConfigurationTests,OAuthCredentialAccessExecutorTests,EntraPrivateCapabilityTests,EntraCredentialAccessExecutorTests,AccessHostServicesTests,HostConfiguredAccessGraphTests,OAuthCallbackBindingFactoryTests,McpOAuthCredentialAccessExecutorOwnershipTests,McpOAuthCacheAdministrationTests,McpOAuthCredentialRequestCatalogTests,McpOAuthProviderDiscoveryTests,McpOAuthAttemptTests,McpOAuthCacheCommitCoordinatorTests,StoredSecretAccessExecutorTests,RunVsCodeTunnelToolTests,VsCodeTunnelDiscoveryToolTests,VsCodeTunnelStatusResolverTests,VsCodeTunnelProcessEvidenceTests,VsCodeTunnelAuthorizationTests,ScheduledToolRegistryTests,VsCodeCliInvokerTests,VsCodeCliLocatorTests,WorkerCopilotProviderBrokerTests",
+      "passedPerRun": 795,
+      "log": ".scratch\\integration-v2-root-audience-complete-app-tests.log",
+      "stability": ".scratch\\integration-v2-root-audience-complete-app-stability.log",
+      "selectors": "GitHubActionsUsageProviderTests,GitHubCopilotUsageProviderTests,GitHubUsageProviderAccessTests,LegacyAuthorizationUiRemovalTests,AccessMigrationTests,GitHubPrivateCredentialSessionTests,GitHubCredentialAccessExecutorTests,GitHubSelectedSourcePolicyTests,AccessBrokerTests,ProviderCredentialCacheAdministrationTests,DevTunnelConnectMintSessionTests,DevTunnelAuthenticationHandlerTests,DevTunnelCredentialConsumerTests,DevTunnelConnectCredentialAccessExecutorTests,DevTunnelIdentityCredentialAccessExecutorTests,DevTunnelConnectManagementApiTests,DevTunnelClientAuthorizationTests,OAuthPrincipalConfigurationTests,OAuthCredentialAccessExecutorTests,EntraPrivateCapabilityTests,EntraCredentialAccessExecutorTests,AccessHostServicesTests,HostConfiguredAccessGraphTests,OAuthCallbackBindingFactoryTests,McpOAuthCredentialAccessExecutorOwnershipTests,McpOAuthCacheAdministrationTests,McpOAuthCredentialRequestCatalogTests,McpOAuthProviderDiscoveryTests,McpOAuthAttemptTests,McpOAuthCacheCommitCoordinatorTests,StoredSecretAccessExecutorTests,RunVsCodeTunnelToolTests,VsCodeTunnelDiscoveryToolTests,VsCodeTunnelStatusResolverTests,VsCodeTunnelProcessEvidenceTests,VsCodeTunnelAuthorizationTests,ScheduledToolRegistryTests,VsCodeCliInvokerTests,VsCodeCliLocatorTests,WorkerCopilotProviderBrokerTests,DevTunnelIdentityRouteFactoryTests",
       "boundary": "Complete requested access-arc targeted selection, NOT every repository test. Includes unchanged formerly failing identity case, all current private/HTTP classes and actual CLI/host worker binding; deterministic fakes/no live provider or user checkout."
     },
     "finalCompleteCore": {
-      "codeCheckpoint": "997f2d6e8f8d4a0f67abc9ebc1ec7b40932508c4",
+      "codeCheckpoint": "6efcbad52e20e98fd4a2ab9a631331b4241a7cde",
       "testProject": "Phantom.Workspaces.Llm.Core.Tests\\Phantom.Workspaces.Llm.Core.Tests.csproj",
       "passed": 159,
       "failed": 0,
       "stabilityRuns": 10,
       "passedPerRun": 159,
-      "log": ".scratch\\integration-v2-final-complete-core-tests.log",
-      "stability": ".scratch\\integration-v2-final-complete-core-stability.log",
+      "log": ".scratch\\integration-v2-root-audience-complete-core-tests.log",
+      "stability": ".scratch\\integration-v2-root-audience-complete-core-stability.log",
       "selectors": "AgentFactoryAccessTests,AgentDefinitionSecretMaterializerTests,SecretModelTests,SecretUsageScannerTests,SecretUseScopePreimageTests,AgentManifestSecretUseMemoryFactoryTests,SecretRetrieverTests,AllowedSecretsStoreTests,NullPlatformSecretStoreTests,EntraCredentialSessionTests,EntraBrowserTokenAcquirerTests,CredentialManagerTokenCacheTests"
     },
     "finalCompleteTransport": {
-      "codeCheckpoint": "997f2d6e8f8d4a0f67abc9ebc1ec7b40932508c4",
+      "codeCheckpoint": "6efcbad52e20e98fd4a2ab9a631331b4241a7cde",
       "testProject": "Phantom.Workspaces.Transport.Tests\\Phantom.Workspaces.Transport.Tests.csproj",
       "passed": 11,
       "failed": 0,
       "stabilityRuns": 10,
       "passedPerRun": 11,
-      "log": ".scratch\\integration-v2-final-complete-transport-tests.log",
-      "stability": ".scratch\\integration-v2-final-complete-transport-stability.log",
+      "log": ".scratch\\integration-v2-root-audience-complete-transport-tests.log",
+      "stability": ".scratch\\integration-v2-root-audience-complete-transport-stability.log",
       "selectors": "RemoteCopilotSdkSessionTests,Scenario3_RemoteCopilotSdkTests,RemoteSplitSession_Byok_AtoB_CompletesRoundTripAndClearsRunningItems,RemoteSplitSession_Byok_BtoA_CompletesReciprocalRoundTripAndClearsRunningItems,RemoteSplitSession_Byok_CtoAtoB_RelaysRoundTripAndClearsRunningItems,RemoteSplitSession_Byok_CallerLease_RemainsUnreadAcrossRemoteProviderBinding,RemoteSplitSession_Byok_CtoAtoB_EmitsCorrelatedSafeHopEvents,RemoteSplitSession_Byok_AtoB_ToolCallExecutesOnExecutorAndGuiCallbackReturnsToSource",
       "boundary": "Actual Transport project, reciprocal/relayed real in-process separate-profile routing, fake SDK, persistence/resume/source tools and unread caller lease. Explicitly excludes WebView/RealByokCli methods; no OS-process/live authentication/provider-wire acceptance."
     },
@@ -420,7 +436,8 @@
     "DIRECT9138 source receipt2026-10-21T02:25:19-07:00 independently clears exact05d80103 vs60663d8b three-file candidate after explicit parent authorization. No significant issues in both exact-invalidation handlers and actual real-broker relay stale401 regression; static only, owner179 not rerun. Both current full handler blobs verified exactly equal reviewed05d. No duplicate equivalent intake or former-owner ownership restored; separate from integrator82x10 and local fresh net review.",
     "Fresh independent read-only code-review of complete21-file3f15a94a..c9 source delta: no significant issues in paired App/Core entry-point/modal/OAuth marker removal, missing immutable095 usage prerequisite, exact live root broker/scope forwarding, cancellation/late-result ownership and new negative guards. Native store/picker/cache/configuration preserved. No reviewer builds/tests/edits.",
     "Fresh independent read-only integration review988ff0e7..8e5a33e0: no significant issues in full final GitHub0879/89/74 packet, retained caller result ownership/fixtures or327/6c/653 recovery manual conflict reconciliation with newer root source allow-list/missing-source renewal. Unchanged cleared source algorithms not reopened; no builds/tests/edits.",
-    "Fresh independent read-only integration compatibility review8e5a33e0..997f2d6e: no significant issues in reviewed shutdowne69/84 pair with current independent recovery guards, root cancellation/lifetime and unclaimed-result/fault ownership. No source changes after review or complete766/159/11x10 executions; no reviewer builds/tests."
+    "Historical fresh independent read-only integration compatibility review8e5a33e0..997f2d6e: no significant issues in reviewed shutdowne69/84 pair with independent recovery guards, root cancellation/lifetime and unclaimed-result/fault ownership. Source remained unchanged through source997 complete766/159/11x10 executions; later root Audience followthrough reviewed separately. No reviewer builds/tests.",
+    "Fresh independent read-only final-root-audience-net-review of complete127..6ef three-file actual-root followthrough: no significant issues. Actual AccessHostServices configured Repository/Application routes, independent/null Endpoint, absolute Audience, retained control rejection and pre-registration/no-store guards covered. Cleared97/UI/models/private/provider algorithms not reopened. Final source6ef then795/159/11 each initial+10 all PASS, no source edits afterward; no reviewer builds/tests/edits."
   ],
   "genericOAuthShutdownReview20261021": {
     "reviewer": "9138ee92-e671-4e53-b882-67573927d963",
@@ -437,6 +454,6 @@
   "openOwnerWork": [],
   "remainingAcceptanceBoundary": "No known requested source correction or targeted runtime blocker remains. Parent must decide broader arc acceptance/publication using this immutable handoff; full repository/live authentication/native profile/OS-process BYOK acceptance was not performed or authorized. No local or remote features ref advanced.",
   "executionEvidenceManifest": ".scratch\\integration-v2-execution-evidence-20261020.json",
-  "cleanState": "Final immutable source/test/production997f2d6e8f8d4a0f67abc9ebc1ec7b40932508c4 includes all reviewed ready packets and coherent legacy endpointc9. Final766/159/11 each initial+10 stability runs passed with no source edits afterward. Metadata commit records evidence only; no active cherry-pick/revert/unmerged paths, diff checks clean, all56 artifact hashes verified and original submodule pins exact. Historical81504 remains an unaccepted partial prefix; final pair/c9 and descendants are coherent.",
+  "cleanState": "Final immutable source/test/production6efcbad52e20e98fd4a2ab9a631331b4241a7cde retains all reviewed ready packets/coherent legacy endpointc9 and adds independently reviewed actual-root Audience followthrough301/6ef. Final795/159/11 each initial+10 stability runs passed with no source edits afterward. Metadata commit records evidence only; no active cherry-pick/revert/unmerged paths, diff checks clean, all67 artifact hashes verified and original submodule pins exact. Prior source997766 and source301794 evidence retained. Historical81504 remains an unaccepted partial prefix; final pair/c9 and descendants are coherent.",
   "safety": "No live checkout, auth, browser/UI/provider actions, features advancement, push/release/closure or rewritten history. Normal submodule init preserves Dock8c8d11 and MXC29702c3."
 }
