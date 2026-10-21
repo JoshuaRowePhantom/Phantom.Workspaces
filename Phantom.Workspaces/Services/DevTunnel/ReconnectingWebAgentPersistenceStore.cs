@@ -43,12 +43,19 @@ public sealed class ReconnectingWebAgentPersistenceStore : IAgentPersistenceStor
                     cancellationToken.ThrowIfCancellationRequested();
                     previous = this.SwapCurrent(store, cancellationToken);
                 }
-                catch
+                catch (Exception connectionFailure)
                 {
-                    (store as IDisposable)?.Dispose();
+                    try
+                    {
+                        await DevTunnelOwnedResource.DisposeAsync(store).ConfigureAwait(false);
+                    }
+                    catch (Exception cleanupFailure)
+                    {
+                        throw new AggregateException(connectionFailure, cleanupFailure);
+                    }
                     throw;
                 }
-                (previous as IDisposable)?.Dispose();
+                await DevTunnelOwnedResource.DisposeAsync(previous).ConfigureAwait(false);
             },
             delayScheduler,
             reconnectOptions,
@@ -99,13 +106,24 @@ public sealed class ReconnectingWebAgentPersistenceStore : IAgentPersistenceStor
         {
             return;
         }
+        this.DisposeCurrentAsync().GetAwaiter().GetResult();
+        this.synchronousDisposal.Task.GetAwaiter().GetResult();
+    }
+
+    private async Task DisposeCurrentAsync()
+    {
         try
         {
+            Exception? cancellationFailure = null;
             try
             {
                 this.lifetime.Cancel();
             }
-            finally
+            catch (Exception exception)
+            {
+                cancellationFailure = exception;
+            }
+            try
             {
                 IAgentPersistenceStore? previous;
                 lock (this.swapGate)
@@ -113,7 +131,15 @@ public sealed class ReconnectingWebAgentPersistenceStore : IAgentPersistenceStor
                     previous = this.current;
                     this.current = null;
                 }
-                (previous as IDisposable)?.Dispose();
+                await DevTunnelOwnedResource.DisposeAsync(previous).ConfigureAwait(false);
+            }
+            catch (Exception cleanupFailure) when (cancellationFailure is not null)
+            {
+                throw new AggregateException(cancellationFailure, cleanupFailure);
+            }
+            if (cancellationFailure is not null)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(cancellationFailure).Throw();
             }
             this.synchronousDisposal.TrySetResult();
         }
@@ -121,7 +147,6 @@ public sealed class ReconnectingWebAgentPersistenceStore : IAgentPersistenceStor
         {
             this.synchronousDisposal.TrySetException(exception);
             _ = this.synchronousDisposal.Task.Exception;
-            throw;
         }
     }
 
@@ -136,9 +161,12 @@ public sealed class ReconnectingWebAgentPersistenceStore : IAgentPersistenceStor
     private async Task DisposeCoreAsync()
     {
         Exception? cancellationFailure = null;
+        if (Interlocked.Exchange(ref this.disposed, 1) == 0)
+        {
+            await this.DisposeCurrentAsync().ConfigureAwait(false);
+        }
         try
         {
-            this.Dispose();
             await this.synchronousDisposal.Task.ConfigureAwait(false);
         }
         catch (Exception exception)
@@ -156,6 +184,10 @@ public sealed class ReconnectingWebAgentPersistenceStore : IAgentPersistenceStor
         }
         catch (OperationCanceledException)
         {
+        }
+        catch (Exception pendingFailure) when (cancellationFailure is not null)
+        {
+            throw new AggregateException(cancellationFailure, pendingFailure);
         }
         finally
         {

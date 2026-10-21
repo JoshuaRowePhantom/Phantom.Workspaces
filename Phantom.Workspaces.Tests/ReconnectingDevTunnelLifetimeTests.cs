@@ -8,6 +8,161 @@ namespace Phantom.Workspaces.Tests;
 public sealed class ReconnectingDevTunnelLifetimeTests
 {
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task DisposeAsync_PrefersAsyncTransportCleanup_AndWaitsForCompletion(bool persistence, bool asyncOnly)
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var complete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fixture = Create(persistence,
+            _ => Task.FromResult(new DevTunnelEndpointResolution(new Uri("https://selected-8080.euw.devtunnels.ms/"))),
+            _ => Task.CompletedTask,
+            onDispose: () => throw new InvalidOperationException("Synchronous cleanup must not replace async cleanup."),
+            onDisposeAsync: async () =>
+            {
+                entered.TrySetResult();
+                await complete.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            }, asyncOnly: asyncOnly);
+        await using var owner = fixture.Owner;
+        await fixture.Start(TestContext.Current.CancellationToken);
+        var disposing = owner.DisposeAsync().AsTask();
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            Assert.False(disposing.IsCompleted);
+            complete.TrySetResult();
+            await disposing.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            await owner.DisposeAsync();
+            Assert.Equal(1, fixture.Disposals());
+        }
+        finally
+        {
+            complete.TrySetResult();
+        }
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task DisposeAsync_AwaitsAsyncCleanupOfUnpublishedTransport(bool persistence, bool asyncOnly)
+    {
+        var validating = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finishValidation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var disposingTransport = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finishDisposal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fixture = Create(persistence,
+            _ => Task.FromResult(new DevTunnelEndpointResolution(new Uri("https://selected-8080.euw.devtunnels.ms/"))),
+            async _ =>
+            {
+                validating.TrySetResult();
+                await finishValidation.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            },
+            onDispose: () => throw new InvalidOperationException("Synchronous cleanup must not replace async cleanup."),
+            onDisposeAsync: async () =>
+            {
+                disposingTransport.TrySetResult();
+                await finishDisposal.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            }, asyncOnly: asyncOnly);
+        await using var owner = fixture.Owner;
+        var starting = fixture.Start(TestContext.Current.CancellationToken);
+        await validating.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        var disposing = owner.DisposeAsync().AsTask();
+        try
+        {
+            finishValidation.TrySetResult();
+            await disposingTransport.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            Assert.False(starting.IsCompleted);
+            Assert.False(disposing.IsCompleted);
+            finishDisposal.TrySetResult();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => starting);
+            await disposing.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            Assert.Equal(1, fixture.Disposals());
+        }
+        finally
+        {
+            finishValidation.TrySetResult();
+            finishDisposal.TrySetResult();
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Reconnect_PrefersAsyncCleanupOfReplacedAndCurrentTransports(bool persistence)
+    {
+        var builds = 0;
+        var disposals = 0;
+        var delay = new Mock<IDelayScheduler>();
+        delay.Setup(value => value.DelayAsync(It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        Task<DevTunnelEndpointResolution> Resolve(CancellationToken _) =>
+            Task.FromResult(new DevTunnelEndpointResolution(new Uri("https://selected-8080.euw.devtunnels.ms/")));
+        ValueTask DisposeInner()
+        {
+            Interlocked.Increment(ref disposals);
+            return ValueTask.CompletedTask;
+        }
+        void RejectSynchronousCleanup() => throw new InvalidOperationException("Async cleanup must be preferred.");
+
+        if (persistence)
+        {
+            IAgentPersistenceStore Build(DevTunnelEndpointResolution _)
+            {
+                var inner = new Mock<IAgentPersistenceStore>();
+                if (builds++ == 0)
+                {
+                    inner.Setup(value => value.RestoreAsync(It.IsAny<RestoreRequest>(), It.IsAny<CancellationToken>()))
+                        .Returns(() => ValueTask.FromException<PersistedAgent?>(new HttpRequestException("Reconnect.")));
+                }
+                else
+                {
+                    inner.Setup(value => value.RestoreAsync(It.IsAny<RestoreRequest>(), It.IsAny<CancellationToken>()))
+                        .Returns(ValueTask.FromResult<PersistedAgent?>(null));
+                }
+                AttachDisposal(inner, RejectSynchronousCleanup, DisposeInner);
+                return inner.Object;
+            }
+            await using var owner = new ReconnectingWebAgentPersistenceStore(Resolve, Build, delay.Object,
+                validateConnectionAsync: (_, _) => Task.CompletedTask);
+            await owner.StartAsync(TestContext.Current.CancellationToken);
+            await owner.RestoreAsync(new RestoreRequest { AgentSessionId = "test" }, TestContext.Current.CancellationToken);
+            Assert.Equal(1, disposals);
+            await owner.DisposeAsync();
+        }
+        else
+        {
+            IDataAccessLayer Build(DevTunnelEndpointResolution _)
+            {
+                var inner = new Mock<IDataAccessLayer>();
+                if (builds++ == 0)
+                {
+                    inner.Setup(value => value.GetAsync(It.IsAny<GetRequest>(), It.IsAny<CancellationToken>()))
+                        .ThrowsAsync(new HttpRequestException("Reconnect."));
+                }
+                else
+                {
+                    inner.Setup(value => value.GetAsync(It.IsAny<GetRequest>(), It.IsAny<CancellationToken>()))
+                        .ReturnsAsync(new GetResult { Batches = [] });
+                }
+                AttachDisposal(inner, RejectSynchronousCleanup, DisposeInner);
+                return inner.Object;
+            }
+            await using var owner = new ReconnectingWebDataAccessLayer(Resolve, Build, delay.Object,
+                validateConnectionAsync: (_, _) => Task.CompletedTask);
+            await owner.StartAsync(TestContext.Current.CancellationToken);
+            await owner.GetAsync(new GetRequest { Entities = [] }, TestContext.Current.CancellationToken);
+            Assert.Equal(1, disposals);
+            await owner.DisposeAsync();
+        }
+        Assert.Equal(2, builds);
+        Assert.Equal(2, disposals);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task DisposeAsync_WaitsForConcurrentSynchronousTransportCleanup(bool persistence)
@@ -95,13 +250,25 @@ public sealed class ReconnectingDevTunnelLifetimeTests
         bool persistence,
         Func<CancellationToken, Task<DevTunnelEndpointResolution>> resolve,
         Func<CancellationToken, Task> validate,
-        Action? onDispose = null)
+        Action? onDispose = null,
+        Func<ValueTask>? onDisposeAsync = null,
+        bool asyncOnly = false)
     {
         var disposals = 0;
+        void DisposeInner()
+        {
+            Interlocked.Increment(ref disposals);
+            onDispose?.Invoke();
+        }
+        async ValueTask DisposeInnerAsync()
+        {
+            Interlocked.Increment(ref disposals);
+            await onDisposeAsync!().ConfigureAwait(false);
+        }
         if (persistence)
         {
             var inner = new Mock<IAgentPersistenceStore>();
-            inner.As<IDisposable>().Setup(store => store.Dispose()).Callback(() => { disposals++; onDispose?.Invoke(); });
+            AttachDisposal(inner, asyncOnly ? null : DisposeInner, onDisposeAsync is null ? null : DisposeInnerAsync);
             var owner = new ReconnectingWebAgentPersistenceStore(resolve, _ => inner.Object,
                 new Mock<IDelayScheduler>().Object, validateConnectionAsync: (_, token) => validate(token));
             return (owner, owner.StartAsync, () => disposals, () => owner.Status);
@@ -109,10 +276,23 @@ public sealed class ReconnectingDevTunnelLifetimeTests
         else
         {
             var inner = new Mock<IDataAccessLayer>();
-            inner.As<IDisposable>().Setup(layer => layer.Dispose()).Callback(() => { disposals++; onDispose?.Invoke(); });
+            AttachDisposal(inner, asyncOnly ? null : DisposeInner, onDisposeAsync is null ? null : DisposeInnerAsync);
             var owner = new ReconnectingWebDataAccessLayer(resolve, _ => inner.Object,
                 new Mock<IDelayScheduler>().Object, validateConnectionAsync: (_, token) => validate(token));
             return (owner, owner.StartAsync, () => disposals, () => owner.Status);
+        }
+    }
+
+    private static void AttachDisposal<T>(Mock<T> inner, Action? synchronous, Func<ValueTask>? asynchronous)
+        where T : class
+    {
+        if (synchronous is not null)
+        {
+            inner.As<IDisposable>().Setup(value => value.Dispose()).Callback(synchronous);
+        }
+        if (asynchronous is not null)
+        {
+            inner.As<IAsyncDisposable>().Setup(value => value.DisposeAsync()).Returns(asynchronous);
         }
     }
 }
