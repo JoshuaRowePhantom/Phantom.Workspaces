@@ -267,6 +267,8 @@ public sealed class AgentFactoryAccessTests
         Assert.Null(typeof(AgentFactory).GetMethod("ResolveApiKeyAsync", allMethods));
         Assert.Null(typeof(AgentFactory).GetMethod("ResolveRequiredSecretOrEnvAsync", allMethods));
         Assert.Null(typeof(AgentFactory).GetMethod("ResolveOptionalSecretOrEnvAsync", allMethods));
+        Assert.Null(typeof(AgentFactory).Assembly.GetType("Phantom.Workspaces.Llm.Secrets.ISecretProvider"));
+        Assert.Null(typeof(AgentFactory).Assembly.GetType("Phantom.Workspaces.Llm.GitHubAuthTokenResolver"));
         Assert.DoesNotContain(typeof(AgentFactory).GetMethods().SelectMany(method => method.GetParameters()),
             parameter => parameter.ParameterType.Name == "IApiKeyResolver");
     }
