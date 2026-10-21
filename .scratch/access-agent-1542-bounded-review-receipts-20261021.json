@@ -1,0 +1,55 @@
+{
+  "purpose": "Existing actual reviewer receipts for the already-delivered SDK correctives; not a new review, source change, test run or whole-arc acceptance.",
+  "reviewer": "7d3e5373-3f52-47e7-8724-e3ed91e4826f",
+  "provenance": "Verbatim excerpts from bounded read-only review messages delivered by the named reviewer in this SDK session, plus the reviewer's explicit final reconciliation. Historical pending statements about other findings are not current acceptance gates.",
+  "account": {
+    "source": "4bce452f31f6438c0a3066f95ae203cca4231cb1",
+    "sourceParent": "08e56d4ff867f8b9847c2b8354f87a09c0ef1c7e",
+    "currentIntegratedEquivalent": "121abf65d689ebea41c7ccc4f3933408060da247",
+    "result": "REVIEWED AND CLEARED",
+    "verbatimReceiptExcerpt": "Bounded READ-ONLY re-review complete of exact two-file 4bce452f31f6438c0a3066f95ae203cca4231cb1 delta: account required-action/row-loss Medium is addressed. Both actual required outcome types map to correct kind and exact RequestIdentifier; cancellation/fail-closed behavior and successful result ownership remain unchanged. Added regressions reach real initialization and assert no export/session plus unpublished-client cleanup. No significant introduced issues in this correction. No edits/builds/tests run.",
+    "selector": "CopilotSdkChatClient_AccountUpsert_PreservesRequiredActionAndRequestIdentifier",
+    "caseCount": 2,
+    "existingSourceEvidence": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-agent-1542-evidence\\sdk-account-required-row-passing.log",
+    "existingSourceValidation": "109/109 related Core SDK tests passed"
+  },
+  "streamingProduction": {
+    "source": "af29ecab7bc86888325d19782e4b0576c938355f",
+    "sourceParent": "4bce452f31f6438c0a3066f95ae203cca4231cb1",
+    "currentIntegratedEquivalent": "d55a6cf908175e8c9937d27d4f222f5e5d6ab1fd",
+    "result": "REVIEWED AND CLEARED",
+    "technicalFinding": "The cached session returned without a guard, then BeginTurn allocated event/dispatch/steering ownership before initial guarded Send. Credential refusal escaped the old IOException-only startup catch before RunStreamingTurn acquired the subscription, leaking listeners and permitting later Immediate input to be dequeued outside a live turn.",
+    "verbatimReceiptExcerpt": "Bounded immutable af29ecab7bc86888325d19782e4b0576c938355f re-review complete: original initial guarded-stream-send refusal subscription/lifetime Medium is addressed. Catch-all now cleans first-send refusal before turn-lock release, no credential retry; production cleanup detaches steering/event source, completes event channel, drains dispatch and finally releases router leases/clears currentRouter. Typed refusal is preserved directly normally and retained in AggregateException on independent cleanup fault. Reviewed all 3 changed files plus minimum immutable disposal/dispatch context; no significant introduced issues found. No edits/builds/tests run."
+  },
+  "streamingProof": {
+    "source": "351f515f809127cf450371f1f3cb6eb3b60040e5",
+    "sourceParent": "af29ecab7bc86888325d19782e4b0576c938355f",
+    "currentIntegratedEquivalent": "2f9d50e148e523dce45a22e4188733bd9e9adba6",
+    "result": "REVIEWED AND CLEARED",
+    "verbatimReceiptExcerpt": "Bounded re-review complete: 351f515f809127cf450371f1f3cb6eb3b60040e5 is test-only and meaningfully strengthens previously reviewed 4bce+af29 corrections. Each existing refusal case reuses same cached client for two refused enumerations, checks event baseline/0 SDK sends/router cleared after each, and retains queued Immediate input across attempts. Cancellation is triggered synchronously by actual session Subscribe before dispatch Task.Run/guarded initial Send, exercising af29 cancellation cleanup rather than pre-entry cancellation. No significant introduced issues found. BOTH original SDK Mediums remain CLEARED by production4bce+af29 with351f additional bounded proof.",
+    "selectors": [
+      "CopilotSdkChatClient_StreamingCredentialRefusal_DisposesTurnAndPreservesQueuedInput",
+      "CopilotSdkChatClient_InitialStreamingSendCancellation_DisposesTurnAndPreservesQueuedInput"
+    ],
+    "caseCount": 5,
+    "existingSourceEvidence": [
+      "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-agent-1542-evidence\\stream-refusal-repeated-cancellation-core-passing.log",
+      "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-agent-1542-evidence\\stream-refusal-repeated-cancellation-stability-final.log"
+    ],
+    "existingSourceValidation": "130/130 related Core cases passed; all5 boundary cases passed10 consecutive existing stability-runner runs",
+    "existingStabilityToolSession": "1926"
+  },
+  "explicitFinalReviewerReconciliation": {
+    "result": "All three reported corrective findings cleared; no outstanding review from this reviewer for these exact deltas.",
+    "verbatimExcerpt": "NO significant introduced issues in these corrective deltas. NO remaining corrective review from me for these three findings.",
+    "scannerCompanionAlreadyCleared": "a1f07389c4abf7f918376709abc27a9404616b1a",
+    "limits": "No full SDK/host/provider/arc acceptance claim. Clearances apply to exact unchanged reviewed source deltas; merged execution remains integrator-owned."
+  },
+  "actualCurrentProductionReadOnlyVerification": {
+    "production": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
+    "account": "Entire UpsertAccountAsync text exactly matches reviewed4bce;121abf65 is an ancestor and both typed required-outcome cases are present.",
+    "stream": "Entire GetReadyTurnAsync and production AsyncDelegateDisposable dispatch/steering/router teardown text exactly match reviewedaf29; existing proof introduced by2f9d50e1 is present.",
+    "actions": "SDK performed read-only Git/source comparison only. No fresh-integrator checkout edits, imports, test runs or new review requests.",
+    "next": "Integrator may reconcile stale implementation/review gates and refresh the existing exact selectors; no duplicate fix or unchanged-source re-review is needed."
+  }
+}

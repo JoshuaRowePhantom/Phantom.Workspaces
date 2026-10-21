@@ -15,7 +15,17 @@
     "rootDistinction": "Frozen rootc6a43bfd lacks352 according to root's separate verified report. This integration DOES contain exact352 fixture via its own8b562 baseline history; never inferred from root e099=>279f alias or whole-root intake.",
     "boundary": "No duplicate import, source edit or new stability execution. Existing source-specific execution evidence retained; named-anonymous gate remains OPEN."
   },
-  "status": "ACCEPTANCE REOPENED ONLY FOR NAMED-ANONYMOUS PARITY: sourceb007 repository/persistence Name-only anonymous requests are rejected by canonical endpoint guard; prior anonymous coverage is explicit WEB only. SDK account/stream/scanner gates CLOSED; parent-requested CURRENT seven-case account/stream union freshly7/7 PASS at23758f45 on unchangedb007. Prior scanner3/3 and full801/160/11 initial+10 retained.86 artifacts including existing root-review provenance. Await fresh parent-scoped named-anonymous correction/explicit behavior decision; no duplicate SDK packet/review/intake, features advancement or publication.",
+  "status": "ACCEPTANCE REOPENED ONLY FOR NAMED-ANONYMOUS PARITY: sourceb007 repository/persistence Name-only anonymous requests are rejected by canonical endpoint guard; prior anonymous coverage is explicit WEB only. SDK account/stream/scanner gates CLOSED; parent-requested CURRENT seven-case account/stream union freshly7/7 PASS at23758f45 on unchangedb007. Prior scanner3/3 and full801/160/11 initial+10 retained.87 artifacts including verbatim existing root/SDK review provenance. Await fresh parent-scoped named-anonymous correction/explicit behavior decision; no duplicate SDK packet/review/intake, features advancement or publication.",
+  "sdkConsolidatedSourceReviewProvenance20261021": {
+    "receipt": ".scratch\\access-agent-1542-bounded-review-receipts-20261021.json",
+    "sha256": "BAB4197569B4A8013DBE4E165782FE4C2D03F5718E234A9BC6DB624AF63E5EEC",
+    "bytes": 6086,
+    "reviewer": "7d3e5373-3f52-47e7-8724-e3ed91e4826f",
+    "scope": "Verbatim EXISTING separate two-file4bce account, three-fileaf29 stream production and test-only351 proof receipts plus explicit final reconciliation; not derived from0438 callback clearance. Receipt also identifies separately cleareda1f scanner companion.",
+    "mergedEvidence": "Current exact seven-case account/stream union already refreshed7/7 in a001a8b7 on unchangedb007; all5 stream cases included. Scanner actual counterexample3/3 and full801/160/11 initial+10 remain preserved.",
+    "preservation": "Original delivered6086 bytes archived unchanged with exact-path binary attribute; SHA256 preserved in Git.",
+    "limits": "Provenance consolidation only, no new review/source edit/runtime execution, no additional SDK packet awaited, no whole-host/provider/arc clearance. Named-anonymous gate remains OPEN."
+  },
   "currentMergedSdkRefresh20261021": {
     "requestedBy": "Direct parent2026-10-21T06:45:24.300-07:00 existingSdkGateClosure reconciliation",
     "executedAtMetadataCheckpoint": "23758f456381397dcf50f48e656f6145e11cb91d",
@@ -583,6 +593,6 @@
   ],
   "remainingAcceptanceBoundary": "NEW named-anonymous semantic/coverage gate OPEN; do not infer closure from prior WEB-only anonymous case or private named consumers. SDK account/stream/scanner closures remain CLEAR. Prior sourceb007801/160/11 initial+10 preserved; no features/publication or whole-arc acceptance.",
   "executionEvidenceManifest": ".scratch\\integration-v2-execution-evidence-20261020.json",
-  "cleanState": "Clean production/tests at sourceb007 unchanged; accepted SDK/root/shared/provider/caller/retirement corrections intact. CURRENT parent-requested SDK union freshly7PASS, all SDK gates CLOSED; scanner3PASS/full801/160/11 initial+10 retained. Named-anonymous gate OPEN without speculative code or duplicate writer.86 evidence hashes/pins retained, including original-byte root-review provenance. No new review, features advancement or publication.",
+  "cleanState": "Clean production/tests at sourceb007 unchanged; accepted SDK/root/shared/provider/caller/retirement corrections intact. CURRENT parent-requested SDK union freshly7PASS, all SDK gates CLOSED; scanner3PASS/full801/160/11 initial+10 retained. Named-anonymous gate OPEN without speculative code or duplicate writer.87 evidence hashes/pins retained, including original-byte root/SDK review provenance. No new review, features advancement or publication.",
   "safety": "No live checkout, auth, browser/UI/provider actions, features advancement, push/release/closure or rewritten history. Normal submodule init preserves Dock8c8d11 and MXC29702c3."
 }
