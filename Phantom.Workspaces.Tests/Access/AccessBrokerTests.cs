@@ -675,7 +675,21 @@ public sealed class AccessBrokerTests : IDisposable
         var executor = new Executor
         {
             IsUsable = () => true,
-            RefineInspection = inspection => inspection with { Credential = ++inspections == 1 ? original : changed },
+            RefineInspection = inspection =>
+            {
+                var credential = ++inspections == 1 ? original : changed;
+                return inspection with
+                {
+                    Credential = credential,
+                    AcquisitionKeys = inspection.AcquisitionKeys.ToDictionary(
+                        pair => pair.Key,
+                        pair => pair.Value with
+                        {
+                            Account = credential.AccountIdentifier,
+                            Configuration = credential.LogicalIdentifier,
+                        }),
+                };
+            },
             Execute = (_, _, _, _, _, _) => ValueTask.FromResult<CredentialExecutionOutcome<Result>>(
                 ++executions == 1
                     ? new CredentialExecutionMissing<Result>()
