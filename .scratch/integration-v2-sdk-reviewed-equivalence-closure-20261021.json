@@ -1,0 +1,58 @@
+{
+  "integrationOwner": "2042d708-200b-4ec9-8ea0-4ac52e4d8646",
+  "productionCheckpoint": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
+  "preReceiptCheckpoint": "1f3416818ebb72602feab745dee9617fc22372e5",
+  "status": "Account, initial-stream subscription and scanner-root findings CLOSED on actual inherited equivalents. No source edit, duplicate intake or new unchanged-source review.",
+  "reviewer": "7d3e5373-3f52-47e7-8724-e3ed91e4826f",
+  "receiptSources": {
+    "directAccountReceipt": "Root5a25ed1a-7c3f-4b1e-8467-f5b68994fef8 message received2026-10-21T05:48:03.778-07:00: exact two-file4bce account Medium independently RESOLVED/CLEAR; exact typed action and broker row preserved, cancellation/no fallback unchanged. This message alone does NOT close scanner or stream.",
+    "currentParentAuthority": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-integration-authority-v2-20261020.json existingSdkGateClosure supersedes queued pending status. Actual SDK turns257-259 verified full Upsert and both streaming cleanup regions; reviewer7d3 actualturn24 confirms separate4bce,af29 and351 closures. No different current defect identified.",
+    "currentSdkHandoff": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-agent-1542-handoff.json explicitly records independent4bce account,af29 streaming,351 proof and a1f scanner-root CLEAR receipts; no remaining7d3 review obligation for these findings.",
+    "reviewBoundary": "Existing independent immutable source clearances, not a new review or reviewer runtime execution; actual merged runtime recorded separately below."
+  },
+  "verifiedInheritedEquivalents": [
+    {
+      "scope": "Account AuthorizationRequired/ReacquisitionRequired exact action and broker row",
+      "source": "4bce452f31f6438c0a3066f95ae203cca4231cb1",
+      "localAncestor": "121abf65d689ebea41c7ccc4f3933408060da247",
+      "identicalStablePatchId": "28e74984b10a12c0b71ef5280974448fbc9c913f"
+    },
+    {
+      "scope": "Initial streaming send failure cleanup and independent failure preservation",
+      "source": "af29ecab7bc86888325d19782e4b0576c938355f",
+      "localAncestor": "d55a6cf908175e8c9937d27d4f222f5e5d6ab1fd",
+      "identicalStablePatchId": "f9836da8727a55f9cff4c79c6d8178a05a415031"
+    },
+    {
+      "scope": "Repeated cached-client refusals and Subscribe-before-send cancellation proof",
+      "source": "351f515f809127cf450371f1f3cb6eb3b60040e5",
+      "localAncestor": "2f9d50e148e523dce45a22e4188733bd9e9adba6",
+      "identicalStablePatchId": "209be542ef8ba3d8e6e7caa51042a0fbce2cb9cb"
+    },
+    {
+      "scope": "Actual serialized-root scanner exemption boundary",
+      "source": "a1f07389c4abf7f918376709abc27a9404616b1a",
+      "localAncestor": "c8d807922f39a76254f3fc6e55cc39d8f40aaca0",
+      "identicalStablePatchId": "f8b5676cdf054970787b975481e1eff291ffade9"
+    }
+  ],
+  "actualMergedInspection": "Current Upsert maps both required outcomes with exact action/row. Current subscription teardown suspends/detaches steering before dispatch, finally clears router/releases leases despite faults. Current GetReadyTurnAsync disposes initial-send failures, retains IOException-only bounded retry, preserves primary refusal/cancellation and independent cleanup errors. Current scanner requires agent.Parent is null. Newer legitimate source is preserved; no whole older file replacement.",
+  "freshCombinedExecution": {
+    "runner": "scripts\\run-tests.ps1",
+    "testProject": "Phantom.Workspaces.Llm.Core.Tests\\Phantom.Workspaces.Llm.Core.Tests.csproj",
+    "selectors": "CopilotSdkChatClient_AccountUpsert_PreservesRequiredActionAndRequestIdentifier,CopilotSdkChatClient_StreamingCredentialRefusal_DisposesTurnAndPreservesQueuedInput,CopilotSdkChatClient_InitialStreamingSendCancellation_DisposesTurnAndPreservesQueuedInput",
+    "passed": 7,
+    "failed": 0,
+    "skipped": 0,
+    "accountCases": 2,
+    "repeatedRefusalCases": 4,
+    "initialCancellationCases": 1,
+    "coverage": "Exact account action/row, zero export/session and unpublished SDK cleanup; two refused turns on each SAME warm client with normal/faulted dispatch, baseline subscribers, zero sends, cleared router and preserved two queued inputs; synchronous cancellation after Subscribe before guarded send preserves cancellation and queued input.",
+    "log": ".scratch\\integration-v2-sdk-account-stream-closure-tests.log",
+    "sha256": "246E34EE5EB456FC2ED25E7FB47A563218D5EA6BC5B4F8B61ED3ABC33934E536"
+  },
+  "existingSameSourceScannerExecution": "Exact nested full-Prompt model-options counterexample plus materializer/SDK boundary and genuine OAuth exclusion3/3 PASS, preserved integration-v2-scanner-actual-root-counterexample-tests.log. Independent a1f source receipt now reconciled; no new scanner writer/review required.",
+  "fullTargetedAcceptance": "Unchanged sourceb007 App801/Core160/Transport11 each initial plus ten stability runs PASS; all seven account/stream cases are within selected AgentFactoryAccessTests. New seven-case execution is an explicit affected-selector receipt, not a substitute for those source-specific matrices.",
+  "remainingRequiredCorrections": [],
+  "safetyBoundary": "Final required targeted integration handoff, not whole-repository/live-provider/OS-process acceptance. Parent approval still required before any features advancement/publication; none performed."
+}

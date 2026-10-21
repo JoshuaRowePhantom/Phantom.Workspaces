@@ -1,31 +1,32 @@
 {
   "codeCheckpoint": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
   "productionCheckpoint": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
-  "pendingRequiredCorrections": [
-    {
-      "owner": "3891b377-81d3-407b-b1f2-9baa3c3a36db",
-      "finding": "NEW reviewer7d3e Medium, root5a relay: independent Agent-purpose account Upsert drops AuthorizationRequired/ReacquisitionRequired row/kind through parameterless AgentCredentialAccessException.",
-      "status": "Actual4bce correction is already inherited as exact121ab patch-equivalent; current implementation and2 regressions verified, fresh2/2 PASS. Await actual7d3 bounded re-review receipt only; no duplicate intake or implementation."
-    },
-    {
-      "reportedScope": "Separate SDK initial-stream Medium, root5a direct relay.",
-      "status": "Exact symptom/current owner delivery details requested from SDK3891. No source investigation, guessed mechanism or duplicate writer. Does not conflate account outcome or scanner finding."
-    }
-  ],
+  "pendingRequiredCorrections": [],
+  "sdkReviewedEquivalenceClosure": {
+    "receipt": ".scratch\\integration-v2-sdk-reviewed-equivalence-closure-20261021.json",
+    "status": "Account4bce,streamaf29/proof351,scanner-roota1f independently CLEAR per current parent authority/SDK handoff; exact inherited patch-equivalents/ancestry verified. No duplicate source intake.",
+    "freshCombinedPassed": 7,
+    "freshCombinedFailed": 0,
+    "freshCombinedSkipped": 0,
+    "freshCombinedLog": ".scratch\\integration-v2-sdk-account-stream-closure-tests.log",
+    "cases": "2 account required action/row;4 repeated warm-client refusal/fault dispatch;1 Subscribe-before-initial-send cancellation. Actual current cleanup regions inspected, independent failure preservation/queued input/zero SDK send established.",
+    "sourceUnchanged": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
+    "boundary": "All7 cases also selected by prior same-source Core160 initial+10; existing scanner exact3PASS and full801/160/11 retained. No whole-repository/live-provider/OS-process acceptance or publication."
+  },
   "sdkAccountActualEquivalent": {
     "source": "4bce452f31f6438c0a3066f95ae203cca4231cb1",
     "localAncestor": "121abf65d689ebea41c7ccc4f3933408060da247",
     "identicalStablePatchId": "28e74984b10a12c0b71ef5280974448fbc9c913f",
     "freshRequiredOutcomeCasesPassed": 2,
     "scope": "Actual account initialization Authorization/Reacquisition retain exact required action/broker row, zero export/session and client cleanup. Already in prior Core160 class selection; no source changes.",
-    "remainingGate": "Actual7d3 bounded re-review receipt pending. Separate initial-stream report details/status requested; runtime is not substituted for review."
+    "remainingGate": "NONE: actual7d3 bounded4bce CLEAR receipt reconciled separately from fresh runtime. Stream/scanner closures use their own actual source receipts."
   },
   "scannerActualMergedCounterexample": {
     "source": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
     "companion": "a1f07389c4abf7f918376709abc27a9404616b1a",
     "freshPassed": 3,
     "cases": "Exact model.options.additionalProperties.payload fullPrompt/tools/MCP/OAuth scan+rewrite; matching actual materializer/SDK boundary; genuine provider-owned OAuth reference remains untouched.",
-    "result": "Reported08e-alone counterexample does not reproduce on actual merged root-anchored companion. No source change/review substitution; separate account/initial-stream gates stay OPEN."
+    "result": "Reported08e-alone counterexample does not reproduce with actual companion. Exacta1f source now independently CLEAR per current SDK handoff, inheritedc8d patch-id matches; separate account/stream receipts also reconciled. No source edit or global scanner review claim."
   },
   "historicalRootAudienceCheckpoint": "6efcbad52e20e98fd4a2ab9a631331b4241a7cde",
   "storedMissingSourceCorrection": {
@@ -79,7 +80,7 @@
   "coreStabilityPassedPerRun": 171,
   "largerAppTargetInitialPassed": 312,
   "largerAppTargetStability": "Failed run5/10; exact causal fixture correction079f2081 subsequently targeted16 and root200x10 plus exact-final-source200 pass. Not claimed312x10.",
-  "knownRemainingFailures": "Account sourcegap does NOT reproduce: actual4bce exact inherited121ab plus fresh2 required-row/action cases PASS; actual7d3 review receipt pending. Separately reported initial-stream Medium details/status requested. Scanner exact nested full-Prompt counterexample3/3 freshly PASS witha1. Prior801/160/11/historical failures preserved; no source intake or final arc claim.",
+  "knownRemainingFailures": "NONE in required targeted sourceb007 acceptance. SDK account/initial-stream/scanner findings separately source-cleared and actual inherited equivalents verified; fresh affected7PASS plus exact scanner3PASS. Full801/160/11 initial+10 and all historical failure/diagnosis artifacts preserved. No duplicate intake, features advancement or publication.",
   "finalAcceptance": {
     "codeCheckpoint": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
     "appInitialPassed": 801,
@@ -93,8 +94,9 @@
     "transportPassedPerRun": 11,
     "failed": 0,
     "skipped": 0,
-    "review": "Legacy/usage, provider/recovery, shutdown, actual-root Audience and latest exact two-file stored missing-source delta independently reviewed read-only; no significant issues. No source edits after final stored review and sourceb007801/160/11 each initial+10 execution.",
-    "boundary": "Sourceb007 matrices remain valid; exact account correction already inherited and fresh2PASS, actual7d3 review receipt pending. Separate stream details/status unresolved; merged scanner3PASS. No duplicate source intake/global arc/live-provider/OS-process acceptance or publication."
+    "review": "Legacy/usage, provider/recovery, shutdown, actual-root Audience and latest stored missing-source delta independently reviewed read-only. SDK7d3 exact4bce/af29/351/a1f existing CLEAR receipts now reconciled; identical inherited patches and actual merged regions verified. No source edits after sourceb007 full matrices.",
+    "sdkAffectedSelectorPassed": 7,
+    "boundary": "Required targeted integration complete on unchanged sourceb007: full801/160/11 initial+10, explicit fresh account/stream7PASS and scanner3PASS, no remaining owned correction/review gate. No whole-repository/live-provider/OS-process acceptance; publication/features advancement still requires parent approval."
   },
   "gitHubOwnershipPairPassed": 75,
   "gitHubOwnershipPairStabilityRuns": 10,
@@ -137,6 +139,16 @@
   "pairedLegacyBoundary": "Only coherent c9 endpoint accepted, never SDK-only81504 prefix. Actual missing095 usage prerequisite plus parent-authorized paired App/Core/modal/OAuth marker retirement; native contracts/caches preserved. Read-only new21-file review clear; source unchanged after116/133x10 and fresh final committed116/133.",
   "dumpCount": 0,
   "logs": [
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-sdk-reviewed-equivalence-closure-20261021.json",
+      "bytes": 5409,
+      "sha256": "CEF0876ED89F0FA3977C7A4DBADA4797D0AC3537F0A1F74ADA1A36E77D44625E"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-sdk-account-stream-closure-tests.log",
+      "bytes": 5982,
+      "sha256": "246E34EE5EB456FC2ED25E7FB47A563218D5EA6BC5B4F8B61ED3ABC33934E536"
+    },
     {
       "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-sdk-account-required-equivalence-tests.log",
       "bytes": 5982,
