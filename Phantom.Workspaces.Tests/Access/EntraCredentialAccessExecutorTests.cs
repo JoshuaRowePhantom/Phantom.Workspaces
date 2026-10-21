@@ -516,7 +516,8 @@ public sealed class EntraCredentialAccessExecutorTests
         public ValueTask DisposeAsync() => this.coordinator.DisposeAsync();
     }
 
-    private sealed class TrackingPolicy(ReleaseAuthorizationPolicy policy) : IReleaseAuthorizationPolicy, IAsyncDisposable
+    private sealed class TrackingPolicy(ReleaseAuthorizationPolicy policy)
+        : IReleaseAuthorizationPolicy, IProviderAcquisitionAuthorizationPolicy, IAsyncDisposable
     {
         internal int Commits { get; private set; }
         internal int Finalizations { get; private set; }
@@ -533,6 +534,10 @@ public sealed class EntraCredentialAccessExecutorTests
         public ValueTask<ReleaseAuthorizationValidation> ValidateAsync(
             ReleaseAuthorizationIdentifier identifier, ReleasePolicyRequest request, CancellationToken cancellationToken = default) =>
             policy.ValidateAsync(identifier, request, cancellationToken);
+        public ValueTask<ReleaseAuthorizationValidation> ValidateAcquisitionAuthorizationAsync(
+            ReleaseAuthorization authorization, ReleasePolicyRequest request, CancellationToken cancellationToken) =>
+            ((IProviderAcquisitionAuthorizationPolicy)policy).ValidateAcquisitionAuthorizationAsync(
+                authorization, request, cancellationToken);
         public async ValueTask FinalizeCredentialIdentityAsync(
             ReleaseAuthorizationIdentifier identifier, ResolvedCredentialIdentity identity, CancellationToken cancellationToken = default)
         {

@@ -217,7 +217,8 @@ internal sealed class ProviderInteractionPermit
             return false;
         }
 
-        return this.HasExactAcquisitionBinding() && this.AuthorizesActiveExecution(
+        return this.key.Protocol == ProviderProtocolKind.TunnelConnect &&
+            this.HasExactAcquisitionBinding() && this.AuthorizesActiveExecution(
             context.RequestIdentifier, context.Revision, CredentialExecutorKind.DevTunnelConnect,
             context.AcquisitionGeneration, binding.AcquisitionKey);
     }
@@ -227,7 +228,6 @@ internal sealed class ProviderInteractionPermit
         this.authorizationBinding is { } binding && this.key == binding.AcquisitionKey &&
         this.key.Configuration == binding.Request.Credential.LogicalIdentifier &&
         this.key.Source == binding.Request.SourceIdentifier &&
-        this.key.Protocol == ProviderProtocolKind.TunnelConnect &&
         (this.key.Account is not { } issuedAccount ||
             binding.Request.Credential.AccountIdentifier is not { } policyAccount ||
             issuedAccount == policyAccount);
@@ -258,15 +258,24 @@ internal sealed class ProviderInteractionPermit
         ProviderInteractionPermit executionPermit,
         CancellationToken cancellationToken)
     {
-        if (executionPermit.privateDependencyBinding is { } originalDependency)
+        var originPolicy = executionPermit.authorizationBinding?.Policy ??
+            executionPermit.privateDependencyBinding?.Context.Policy;
+        var originRequest = executionPermit.authorizationBinding?.Request ??
+            executionPermit.privateDependencyBinding?.Context.PolicyRequest;
+        if (originPolicy is null || originRequest is null)
+        {
+            return false;
+        }
+
+        // Compatible provider work can mix root and private callers; validate each member's own authority.
+        if (this.privateDependencyBinding is { } dependency)
         {
             bool IsExactDependency() =>
                 !this.executionBound && Volatile.Read(ref this.consumed) == 1 && this.isCurrent() &&
                 this.executor == executionPermit.executor && this.key == executionPermit.key &&
-                this.privateDependencyBinding is { } dependency &&
-                ReferenceEquals(dependency.Context.Policy, originalDependency.Context.Policy) &&
+                ReferenceEquals(dependency.Context.Policy, originPolicy) &&
                 dependency.Context.PolicyRequest?.Credential.AccountIdentifier ==
-                    originalDependency.Context.PolicyRequest?.Credential.AccountIdentifier &&
+                    originRequest.Credential.AccountIdentifier &&
                 this.requestIdentifier == dependency.Context.RequestIdentifier &&
                 this.revision == dependency.Context.Revision &&
                 this.generation == dependency.Context.AcquisitionGeneration &&
@@ -274,8 +283,8 @@ internal sealed class ProviderInteractionPermit
                     this.key.Account == account);
 
             return IsExactDependency() &&
-                await this.privateDependencyBinding!.ParentPermit.AuthorizesPrivateUseAsync(
-                    this.privateDependencyBinding.Context, cancellationToken).ConfigureAwait(false) &&
+                await dependency.ParentPermit.AuthorizesPrivateUseAsync(
+                    dependency.Context, cancellationToken).ConfigureAwait(false) &&
                 IsExactDependency();
         }
 
@@ -283,16 +292,15 @@ internal sealed class ProviderInteractionPermit
         {
             var binding = this.authorizationBinding;
             return !this.executionBound && Volatile.Read(ref this.consumed) == 1 && this.isCurrent() &&
-                binding is not null && executionPermit.authorizationBinding is { } origin &&
-                ReferenceEquals(binding.Policy, origin.Policy) &&
-                binding.Request.Credential == origin.Request.Credential &&
+                binding is not null && ReferenceEquals(binding.Policy, originPolicy) &&
+                binding.Request.Credential.AccountIdentifier == originRequest.Credential.AccountIdentifier &&
+                (executionPermit.authorizationBinding is not { } origin ||
+                    binding.Request.Credential == origin.Request.Credential) &&
                 this.executor == executionPermit.executor && this.key == executionPermit.key &&
                 binding.Authorization.RequestIdentifier == this.requestIdentifier &&
                 binding.Authorization.RequestGeneration == this.revision &&
                 binding.Request.RequestIdentifier == this.requestIdentifier &&
                 binding.Request.RequestGeneration == this.revision &&
-                binding.Request.Credential.Provider == CredentialProviderKind.DevTunnel &&
-                binding.Request.Credential.Kind == CredentialKind.ConnectToken &&
                 this.HasExactAcquisitionBinding();
         }
 
@@ -315,17 +323,14 @@ internal sealed class ProviderInteractionPermit
             return false;
         }
 
-        if (this.privateDependencyBinding is not null)
+        if (this.privateDependencyBinding is not null || this.authorizationBinding is not null)
         {
-            return this.authorizationGroup is { } childGroup &&
-                await childGroup.AuthorizesAsync(this, cancellationToken).ConfigureAwait(false) &&
+            return this.authorizationGroup is { } group &&
+                await group.AuthorizesAsync(this, cancellationToken).ConfigureAwait(false) &&
                 !this.executionCancellation.IsCancellationRequested && this.isCurrent();
         }
 
-        return this.executor != CredentialExecutorKind.DevTunnelConnect || this.authorizationBinding is null ||
-            this.authorizationGroup is { } group &&
-                await group.AuthorizesAsync(this, cancellationToken).ConfigureAwait(false) &&
-                !this.executionCancellation.IsCancellationRequested && this.isCurrent();
+        return true;
     }
 
     internal ProviderInteractionPermit BindExecution(
