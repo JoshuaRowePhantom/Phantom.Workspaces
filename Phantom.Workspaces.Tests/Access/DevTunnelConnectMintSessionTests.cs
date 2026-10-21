@@ -285,6 +285,72 @@ public sealed class DevTunnelConnectMintSessionTests
     }
 
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task ConnectMint_RealPrivateGitHubSessionRejectsCallbackReturningAfterGroupCancellation(
+        bool asynchronous, bool cleanupFails)
+    {
+        await using var fixture = new Fixture();
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var callbackReturning = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cleanupFailure = new InvalidOperationException("Management callback cleanup failed.");
+        fixture.AsynchronousManagementCleanup = asynchronous;
+        fixture.ManagementCleanupFailure = cleanupFails ? cleanupFailure : null;
+        fixture.BeforeManagementReturn = async callbackCancellation =>
+        {
+            var groupCancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var registration = callbackCancellation.Register(() => groupCancelled.TrySetResult());
+            cancellation.Cancel();
+            await groupCancelled.Task.WaitAsync(TestContext.Current.CancellationToken);
+            callbackReturning.SetResult();
+        };
+        var pending = fixture.Broker.AcquireAsync(fixture.Request, cancellation.Token);
+        await fixture.PerformAsync();
+        await callbackReturning.Task.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.IsType<AccessCancelled<DevTunnelConnectCredentialAccessResult>>(await pending);
+        var error = await fixture.MintCompleted.Task.WaitAsync(TestContext.Current.CancellationToken);
+        if (cleanupFails)
+        {
+            Assert.Same(cleanupFailure, error);
+        }
+        else
+        {
+            Assert.IsAssignableFrom<OperationCanceledException>(error);
+        }
+        var rejected = Assert.IsAssignableFrom<TrackedManagementSucceeded>(fixture.LastManagementResult);
+        Assert.Equal(asynchronous ? 1 : 0, (rejected as AsyncTrackedManagementSucceeded)?.AsyncDisposals ?? 0);
+        Assert.Equal(asynchronous ? 0 : 1, rejected.SyncDisposals);
+        Assert.All(rejected.Material, character => Assert.Equal('\0', character));
+        Assert.Equal(1, fixture.Source.Acquisitions);
+        Assert.Equal(1, fixture.ManagementCalls);
+        Assert.Equal(1, fixture.ManagementDisposals);
+        Assert.All(fixture.Source.LastMaterial!, character => Assert.Equal('\0', character));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ConnectMint_RealPrivateGitHubSessionSuccessKeepsCallerOwnership(bool asynchronous)
+    {
+        await using var fixture = new Fixture { AsynchronousManagementCleanup = asynchronous };
+        var pending = fixture.Broker.AcquireAsync(fixture.Request, TestContext.Current.CancellationToken);
+        await fixture.PerformAsync();
+        await using var result = Assert.IsType<AccessSucceeded<DevTunnelConnectCredentialAccessResult>>(await pending).Result;
+        Assert.Null(await fixture.MintCompleted.Task.WaitAsync(TestContext.Current.CancellationToken));
+        var transferred = Assert.IsAssignableFrom<TrackedManagementSucceeded>(fixture.LastManagementResult);
+        Assert.Equal(0, (transferred as AsyncTrackedManagementSucceeded)?.AsyncDisposals ?? 0);
+        Assert.Equal(1, transferred.SyncDisposals);
+        Assert.All(transferred.Material, character => Assert.Equal('\0', character));
+        Assert.Equal(fixture.ConnectToken, Assert.IsType<SensitiveValueUseSucceeded<string>>(
+            await result.ConnectToken!.UseAsync((material, _) => ValueTask.FromResult(material),
+                TestContext.Current.CancellationToken)).Result);
+        Assert.Equal(1, fixture.ManagementCalls);
+        Assert.Equal(1, fixture.ManagementDisposals);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task ConnectMint_Management401InvalidatesExactPrivateIdentity_AndRequiresExplicitRetry(bool rejectAgain)
@@ -385,7 +451,7 @@ public sealed class DevTunnelConnectMintSessionTests
                     AccessTokens = new Dictionary<string, string> { [TunnelAccessScopes.Connect] = this.ConnectToken },
                 };
                 var client = new Mock<ITunnelManagementClient>(MockBehavior.Strict);
-                client.Setup(value => value.DisposeAsync()).Returns(ValueTask.CompletedTask);
+                client.Setup(value => value.DisposeAsync()).Returns(this.DisposeManagementAsync);
                 client.Setup(value => value.ListTunnelsAsync(null, null, It.IsAny<TunnelRequestOptions>(), true,
                     It.IsAny<CancellationToken>())).ReturnsAsync([tunnel]);
                 client.Setup(value => value.GetTunnelAsync(tunnel, It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
@@ -400,7 +466,8 @@ public sealed class DevTunnelConnectMintSessionTests
                     });
                 return client.Object;
             });
-            this.Session = new DevTunnelConnectMintSession(this.GitHub, this.entra, this.oauth, managementApi);
+            this.Session = new DevTunnelConnectMintSession(this.GitHub, this.entra, this.oauth,
+                new TrackingManagementApi(this, managementApi));
             var executor = new DevTunnelConnectCredentialAccessExecutor(new InterceptingSession(this), this.Registry);
             var executors = new CredentialAccessExecutorRegistry();
             executors.Add<GitHubCredentialAccessRequest, GitHubCredentialAccessResult>(this.GitHub);
@@ -435,11 +502,24 @@ public sealed class DevTunnelConnectMintSessionTests
         public GitHubCredentialAccessExecutor GitHub { get; }
         public DevTunnelConnectMintSession Session { get; }
         public Func<ProviderAcquisitionKey, CancellationToken, ValueTask>? BeforeMint { get; set; }
+        public Func<CancellationToken, ValueTask>? BeforeManagementReturn { get; set; }
+        public bool AsynchronousManagementCleanup { get; set; }
+        public Exception? ManagementCleanupFailure { get; set; }
+        public TrackedManagementSucceeded? LastManagementResult { get; set; }
+        public TaskCompletionSource<Exception?> MintCompleted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         public UserAuthorizationRegistry Registry { get; } = new();
         public AccessBroker Broker { get; }
         public DevTunnelConnectCredentialAccessRequest Request { get; }
         public int ManagementCalls { get; private set; }
+        public int ManagementDisposals { get; private set; }
         public int RejectionsRemaining { get; set; }
+
+        private ValueTask DisposeManagementAsync()
+        {
+            this.ManagementDisposals++;
+            return ValueTask.CompletedTask;
+        }
 
         public async Task<UserAuthorizationSnapshot> WaitForActionAsync(CancellationToken cancellationToken)
         {
@@ -543,8 +623,89 @@ public sealed class DevTunnelConnectMintSessionTests
             {
                 await beforeMint(parentAcquisitionKey, cancellationToken);
             }
-            return await fixture.Session.MintAsync(request, identitySource, context,
-                parentAcquisitionKey, parentGenerationPermit, cancellationToken);
+            try
+            {
+                var outcome = await fixture.Session.MintAsync(request, identitySource, context,
+                    parentAcquisitionKey, parentGenerationPermit, cancellationToken);
+                fixture.MintCompleted.TrySetResult(null);
+                return outcome;
+            }
+            catch (Exception error)
+            {
+                fixture.MintCompleted.TrySetResult(error);
+                throw;
+            }
+        }
+    }
+
+    private sealed class TrackingManagementApi(Fixture fixture, DevTunnelConnectManagementApi inner)
+        : DevTunnelConnectManagementApi
+    {
+        internal override async ValueTask<DevTunnelConnectManagementOutcome> MintAsync(
+            DevTunnelAccessDescriptor descriptor,
+            DevTunnelIdentityScheme scheme,
+            string identity,
+            CancellationToken cancellationToken)
+        {
+            var outcome = await inner.MintAsync(descriptor, scheme, identity, cancellationToken);
+            if (outcome is not DevTunnelConnectManagementSucceeded success)
+            {
+                return outcome;
+            }
+            // Keep the real API's material, while counting cleanup at the caller/provider boundary.
+            TrackedManagementSucceeded tracked = fixture.AsynchronousManagementCleanup
+                ? new AsyncTrackedManagementSucceeded
+                {
+                    Material = success.Material,
+                    Endpoint = success.Endpoint,
+                    ExpiresOn = success.ExpiresOn,
+                    CleanupFailure = fixture.ManagementCleanupFailure,
+                }
+                : new TrackedManagementSucceeded
+                {
+                    Material = success.Material,
+                    Endpoint = success.Endpoint,
+                    ExpiresOn = success.ExpiresOn,
+                    CleanupFailure = fixture.ManagementCleanupFailure,
+                };
+            fixture.LastManagementResult = tracked;
+            if (fixture.BeforeManagementReturn is { } beforeReturn)
+            {
+                await beforeReturn(cancellationToken);
+            }
+            return tracked;
+        }
+    }
+
+    private record TrackedManagementSucceeded : DevTunnelConnectManagementSucceeded, IDisposable
+    {
+        public int SyncDisposals { get; private set; }
+        public Exception? CleanupFailure { get; init; }
+
+        void IDisposable.Dispose()
+        {
+            this.SyncDisposals++;
+            this.Dispose();
+            if (this.CleanupFailure is { } error)
+            {
+                throw error;
+            }
+        }
+    }
+
+    private sealed record AsyncTrackedManagementSucceeded : TrackedManagementSucceeded, IAsyncDisposable
+    {
+        public int AsyncDisposals { get; private set; }
+
+        public ValueTask DisposeAsync()
+        {
+            this.AsyncDisposals++;
+            this.Dispose();
+            if (this.CleanupFailure is { } error)
+            {
+                throw error;
+            }
+            return ValueTask.CompletedTask;
         }
     }
 

@@ -51,6 +51,149 @@ public sealed class GitHubPrivateCredentialSessionTests
     }
 
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task PrivateMaterialUse_RejectedResultCleanupIsJoinedAndFaultsPropagate(
+        bool asynchronous, bool cleanupFails)
+    {
+        var events = new List<string>();
+        var provider = new GitHubCredentialAccessExecutor(new Source(events));
+        var parent = new ParentExecutor(provider, events);
+        var (broker, registry) = Create(provider, parent);
+        await using var owned = broker;
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var cleanupStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowCleanup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cleanupFailure = new InvalidOperationException("Derived callback cleanup failed.");
+        IDisposable result = asynchronous
+            ? new DerivedResult
+            {
+                OnAsyncDispose = async () =>
+                {
+                    cleanupStarted.SetResult();
+                    await allowCleanup.Task.WaitAsync(TestContext.Current.CancellationToken);
+                    if (cleanupFails)
+                    {
+                        throw cleanupFailure;
+                    }
+                },
+            }
+            : new SynchronousDerivedResult
+            {
+                OnDispose = () =>
+                {
+                    cleanupStarted.SetResult();
+                    if (cleanupFails)
+                    {
+                        throw cleanupFailure;
+                    }
+                },
+            };
+        parent.BodyOverride = async (context, commit, groupCancellation) =>
+        {
+            try
+            {
+                var error = await Record.ExceptionAsync(async () =>
+                {
+                    await provider.UsePrivateAsync(
+                        parent.IdentityRequest, context, commit.InteractionPermit,
+                        async (_, callbackCancellation) =>
+                        {
+                            var groupCancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                            using var registration = callbackCancellation.Register(() => groupCancelled.TrySetResult());
+                            cancellation.Cancel();
+                            await groupCancelled.Task.WaitAsync(TestContext.Current.CancellationToken);
+                            return result;
+                        }, groupCancellation);
+                });
+                if (cleanupFails)
+                {
+                    Assert.Same(cleanupFailure, error);
+                }
+                else
+                {
+                    Assert.IsAssignableFrom<OperationCanceledException>(error);
+                }
+                AssertDisposals(result, asynchronous ? 1 : 0, asynchronous ? 0 : 1);
+                completed.SetResult();
+            }
+            catch (Exception error)
+            {
+                completed.SetException(error);
+            }
+            return new ProviderAcquisitionCancelled();
+        };
+        var pending = broker.AcquireAsync(Request(), cancellation.Token);
+        await AllowAsync(registry);
+        try
+        {
+            await cleanupStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
+            if (asynchronous)
+            {
+                Assert.False(completed.Task.IsCompleted);
+            }
+            AssertDisposals(result, asynchronous ? 1 : 0, asynchronous ? 0 : 1);
+        }
+        finally
+        {
+            allowCleanup.TrySetResult();
+        }
+        Assert.IsType<AccessCancelled<ParentResult>>(await pending);
+        await completed.Task.WaitAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PrivateMaterialUse_SuccessTransfersResultOwnershipToCaller(bool asynchronous)
+    {
+        var events = new List<string>();
+        var provider = new GitHubCredentialAccessExecutor(new Source(events));
+        var parent = new ParentExecutor(provider, events);
+        var (broker, registry) = Create(provider, parent);
+        await using var owned = broker;
+        IDisposable result = asynchronous ? new DerivedResult() : new SynchronousDerivedResult();
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        parent.BodyOverride = async (context, commit, cancellationToken) =>
+        {
+            try
+            {
+                var success = Assert.IsType<GitHubPrivateCredentialUseSucceeded<IDisposable>>(
+                    await provider.UsePrivateAsync(
+                        parent.IdentityRequest, context, commit.InteractionPermit,
+                        (_, _) => ValueTask.FromResult(result), cancellationToken));
+                Assert.Same(result, success.Result);
+                using (success.Result)
+                {
+                    AssertDisposals(result, 0, 0);
+                }
+                AssertDisposals(result, 0, 1);
+                completed.SetResult();
+            }
+            catch (Exception error)
+            {
+                completed.SetException(error);
+            }
+            return new ProviderAcquisitionFailed { ErrorCode = AccessErrorCode.ProviderFailure };
+        };
+        var pending = broker.AcquireAsync(Request(), TestContext.Current.CancellationToken);
+        await AllowAsync(registry);
+        Assert.Equal(AccessErrorCode.ProviderFailure, Assert.IsType<AccessFailed<ParentResult>>(await pending).ErrorCode);
+        await completed.Task.WaitAsync(TestContext.Current.CancellationToken);
+        AssertDisposals(result, 0, 1);
+    }
+
+    private static void AssertDisposals(IDisposable result, int asynchronous, int synchronous)
+    {
+        Assert.Equal(asynchronous, (result as DerivedResult)?.AsyncDisposals ?? 0);
+        Assert.Equal(synchronous, result is DerivedResult derived
+            ? derived.SyncDisposals : Assert.IsType<SynchronousDerivedResult>(result).Disposals);
+    }
+
+    [Theory]
     [InlineData(0)]
     [InlineData(1)]
     [InlineData(2)]
@@ -97,8 +240,10 @@ public sealed class GitHubPrivateCredentialSessionTests
         Assert.Equal(1, source.Acquisitions);
     }
 
-    [Fact]
-    public async Task PrivateAcquisition_StaleOriginallyUnpinnedHandleCannotEraseRetainedPrincipal()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PrivateAcquisition_StaleOriginallyUnpinnedHandleCannotEraseRetainedPrincipal(bool deleteMaterial)
     {
         var events = new List<string>();
         var source = new Source(events);
@@ -116,7 +261,10 @@ public sealed class GitHubPrivateCredentialSessionTests
         var accountA = source.Account;
         var cache = provider.GetGenerationCache(unpinned.Source.Identifier);
         var generation = (await cache.InspectGenerationAsync(TestContext.Current.CancellationToken))!.Generation;
-        await cache.InvalidateGenerationAsync(generation, TestContext.Current.CancellationToken);
+        if (deleteMaterial)
+        {
+            await cache.InvalidateGenerationAsync(generation, TestContext.Current.CancellationToken);
+        }
         source.Account = CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.GitHub, "stale-handle-principal-B");
         parent.BodyOverride = (context, _, _) =>
         {
@@ -127,7 +275,16 @@ public sealed class GitHubPrivateCredentialSessionTests
         await AllowAsync(registry);
         Assert.Equal(AccessErrorCode.IdentityMismatch, Assert.IsType<AccessFailed<ParentResult>>(await second).ErrorCode);
         Assert.Equal(1, source.Acquisitions);
-        Assert.Null(await cache.InspectGenerationAsync(TestContext.Current.CancellationToken));
+        var retainedGeneration = await cache.InspectGenerationAsync(TestContext.Current.CancellationToken);
+        if (deleteMaterial)
+        {
+            Assert.Null(retainedGeneration);
+        }
+        else
+        {
+            Assert.Equal(generation, retainedGeneration!.Generation);
+            Assert.Equal(accountA, retainedGeneration.AccountIdentifier);
+        }
         Assert.Equal(accountA, (await provider.InspectPrivateAsync(identityRequest, TestContext.Current.CancellationToken)).Source.ExpectedAccountIdentifier);
     }
 
@@ -678,12 +835,29 @@ public sealed class GitHubPrivateCredentialSessionTests
     {
         public int AsyncDisposals { get; private set; }
         public int SyncDisposals { get; private set; }
-        public ValueTask DisposeAsync()
+        public Func<ValueTask>? OnAsyncDispose { get; init; }
+
+        public async ValueTask DisposeAsync()
         {
             this.AsyncDisposals++;
-            return ValueTask.CompletedTask;
+            if (this.OnAsyncDispose is { } dispose)
+            {
+                await dispose();
+            }
         }
         public void Dispose() => this.SyncDisposals++;
+    }
+
+    private sealed class SynchronousDerivedResult : IDisposable
+    {
+        public int Disposals { get; private set; }
+        public Action? OnDispose { get; init; }
+
+        public void Dispose()
+        {
+            this.Disposals++;
+            this.OnDispose?.Invoke();
+        }
     }
 
     private sealed class Source(List<string> events) : IGitHubCredentialAccessSource

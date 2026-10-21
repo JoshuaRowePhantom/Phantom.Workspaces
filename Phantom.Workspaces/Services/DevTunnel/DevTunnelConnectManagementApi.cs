@@ -9,7 +9,7 @@ using Phantom.Workspaces.Llm.Interfaces.Access;
 
 namespace Phantom.Workspaces.Services.DevTunnel;
 
-internal sealed class DevTunnelConnectManagementApi
+internal class DevTunnelConnectManagementApi
 {
     private readonly Func<AuthenticationHeaderValue, ITunnelManagementClient>? createClient;
     private readonly Func<HttpMessageHandler> createTransport;
@@ -22,7 +22,7 @@ internal sealed class DevTunnelConnectManagementApi
         this.createTransport = createTransport ?? (() => new HttpClientHandler { AllowAutoRedirect = false });
     }
 
-    internal async ValueTask<DevTunnelConnectManagementOutcome> MintAsync(
+    internal virtual async ValueTask<DevTunnelConnectManagementOutcome> MintAsync(
         DevTunnelAccessDescriptor descriptor,
         DevTunnelIdentityScheme scheme,
         string identity,
@@ -215,7 +215,7 @@ internal sealed record DevTunnelConnectManagementFailed : DevTunnelConnectManage
 {
     public required AccessErrorCode ErrorCode { get; init; }
 }
-internal sealed record DevTunnelConnectManagementSucceeded : DevTunnelConnectManagementOutcome, IDisposable
+internal record DevTunnelConnectManagementSucceeded : DevTunnelConnectManagementOutcome, IDisposable
 {
     public required char[] Material { get; init; }
     public required Uri Endpoint { get; init; }
