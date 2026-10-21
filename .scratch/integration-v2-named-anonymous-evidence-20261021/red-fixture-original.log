@@ -1,0 +1,313 @@
+  Downloading Copilot CLI 1.0.83 for win32-x64...
+  Downloading from "https://github.com/github/copilot-cli/releases/download/v1.0.83/SHA256SUMS.txt" to "C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Llm.Core\obj\Debug\net10.0\copilot-cli\1.0.83\win32-x64\SHA256SUMS.txt" (1,740 bytes).
+  Downloading from "https://github.com/github/copilot-cli/releases/download/v1.0.83/github-copilot-1.0.83-win32-x64.tgz" to "C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Llm.Core\obj\Debug\net10.0\copilot-cli\1.0.83\win32-x64\copilot.tgz" (50,518,988 bytes).
+  Phantom.Workspaces.Data.Core -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Data.Core\bin\Debug\net10.0\Phantom.Workspaces.Data.Core.dll
+  Phantom.Workspaces.Llm.Interfaces -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Llm.Interfaces\bin\Debug\net10.0\Phantom.Workspaces.Llm.Interfaces.dll
+  Phantom.Workspaces.Data.Web.Client -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Data.Web.Client\bin\Debug\net10.0\Phantom.Workspaces.Data.Web.Client.dll
+  Phantom.Workspaces.Llm.Echo -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Llm.Echo\bin\Debug\net10.0\Phantom.Workspaces.Llm.Echo.dll
+  Phantom.Workspaces.Containers -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Containers\bin\Debug\net10.0\Phantom.Workspaces.Containers.dll
+  Phantom.Workspaces.Data.MongoDB -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Data.MongoDB\bin\Debug\net10.0\Phantom.Workspaces.Data.MongoDB.dll
+  Phantom.Workspaces.Transport -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Transport\bin\Debug\net10.0\Phantom.Workspaces.Transport.dll
+  mxc: building the native unit and generating C# P/Invoke bindings (cargo build -p mxc_ffi -p plm --features "dotnetsdk" --target x86_64-pc-windows-msvc )
+     Compiling proc-macro2 v1.0.106
+     Compiling quote v1.0.45
+     Compiling unicode-ident v1.0.24
+     Compiling windows-link v0.2.1
+     Compiling stable_deref_trait v1.2.1
+     Compiling version_check v0.9.5
+     Compiling getrandom v0.4.2
+     Compiling zmij v1.0.21
+     Compiling cfg-if v1.0.4
+     Compiling memchr v2.8.2
+     Compiling serde v1.0.228
+     Compiling serde_core v1.0.228
+     Compiling smallvec v1.15.2
+     Compiling writeable v0.6.3
+     Compiling litemap v0.8.2
+     Compiling typenum v1.20.1
+     Compiling icu_properties_data v2.2.0
+     Compiling utf8_iter v1.0.4
+     Compiling icu_normalizer_data v2.2.0
+     Compiling windows-sys v0.61.2
+     Compiling windows-strings v0.5.1
+     Compiling windows-result v0.4.1
+     Compiling windows_x86_64_msvc v0.52.6
+     Compiling itoa v1.0.18
+     Compiling serde_json v1.0.150
+     Compiling thiserror v2.0.18
+     Compiling generic-array v0.14.7
+     Compiling windows-threading v0.2.1
+     Compiling tracelogging_macros v1.2.3
+     Compiling unicode-general-category v1.1.0
+     Compiling percent-encoding v2.3.2
+     Compiling cpufeatures v0.2.17
+     Compiling form_urlencoded v1.2.2
+     Compiling getrandom v0.2.17
+     Compiling semver v1.0.28
+     Compiling base64 v0.22.1
+     Compiling windows-targets v0.52.6
+     Compiling cidr v0.3.2
+     Compiling uuid v1.23.3
+     Compiling windows-sys v0.59.0
+     Compiling widestring v1.2.1
+     Compiling rustc_version v0.4.1
+     Compiling fastrand v2.4.1
+     Compiling once_cell v1.21.4
+     Compiling once_cell_polyfill v1.70.2
+     Compiling parking_lot_core v0.9.12
+     Compiling utf8parse v0.2.2
+     Compiling anstyle v1.0.14
+     Compiling autocfg v1.5.1
+     Compiling anstyle-parse v1.0.0
+     Compiling crypto-common v0.1.7
+     Compiling block-buffer v0.10.4
+     Compiling syn v2.0.118
+     Compiling flatbuffers v25.12.19
+     Compiling mxc_telemetry v0.8.0 (C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\microsoft\mxc\src\mxc_telemetry)
+     Compiling winresource v0.1.31
+     Compiling digest v0.10.7
+     Compiling scopeguard v1.2.0
+     Compiling colorchoice v1.0.5
+     Compiling is_terminal_polyfill v1.70.2
+     Compiling anyhow v1.0.102
+     Compiling clap_lex v1.1.0
+     Compiling heck v0.5.0
+     Compiling mxc_build_common v0.8.0 (C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\microsoft\mxc\src\core\mxc_build_common)
+     Compiling lock_api v0.4.14
+     Compiling bitflags v2.13.0
+     Compiling sha2 v0.10.9
+     Compiling winapi-util v0.1.11
+     Compiling tempfile v3.27.0
+     Compiling num-traits v0.2.19
+     Compiling anstyle-wincon v3.0.11
+     Compiling anstyle-query v1.1.5
+     Compiling same-file v1.0.6
+     Compiling anstream v1.0.0
+     Compiling strsim v0.11.1
+     Compiling plm v0.1.0 (C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\microsoft\mxc\src\host\plm)
+     Compiling mio v1.2.1
+     Compiling socket2 v0.6.4
+     Compiling aho-corasick v1.1.4
+     Compiling pin-project-lite v0.2.17
+     Compiling clap_builder v4.6.0
+     Compiling tracelogging v1.2.4
+     Compiling regex-syntax v0.8.11
+     Compiling bytes v1.11.1
+     Compiling serde_path_to_error v0.1.20
+     Compiling parking_lot v0.12.5
+     Compiling sandbox_spec v0.8.0 (C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\microsoft\mxc\src\core\generated\base_container_specification)
+     Compiling process_security_environment_spec v0.8.0 (C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\microsoft\mxc\src\core\generated\process_security_environment_specification)
+     Compiling winreg v0.55.0
+     Compiling chrono v0.4.45
+     Compiling regex-automata v0.4.14
+     Compiling synstructure v0.13.2
+     Compiling zerofrom-derive v0.1.7
+     Compiling yoke-derive v0.8.2
+     Compiling zerovec-derive v0.11.3
+     Compiling displaydoc v0.2.6
+     Compiling serde_derive v1.0.228
+     Compiling windows-implement v0.60.2
+     Compiling windows-interface v0.59.3
+     Compiling thiserror-impl v2.0.18
+     Compiling clap_derive v4.6.1
+     Compiling tokio-macros v2.7.0
+     Compiling regex v1.12.4
+     Compiling csbindgen v1.9.8
+     Compiling tokio v1.52.3
+     Compiling windows-core v0.62.2
+     Compiling zerofrom v0.1.8
+     Compiling mxc_ffi v0.8.0 (C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\microsoft\mxc\src\ffi\mxc_ffi)
+     Compiling yoke v0.8.3
+     Compiling clap v4.6.1
+     Compiling zerovec v0.11.6
+     Compiling zerotrie v0.2.4
+     Compiling windows-numerics v0.3.1
+     Compiling windows-collections v0.3.2
+     Compiling windows-future v0.3.2
+     Compiling windows v0.62.2
+     Compiling tinystr v0.8.3
+     Compiling potential_utf v0.1.5
+     Compiling icu_collections v2.2.0
+     Compiling icu_locale_core v2.2.0
+     Compiling mxc_config_contract v0.8.0 (C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\microsoft\mxc\src\core\mxc_config_contract)
+     Compiling learning_mode_core v0.8.0 (C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\microsoft\mxc\src\core\learning_mode_core)
+     Compiling wxc_common v0.8.0 (C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\microsoft\mxc\src\core\wxc_common)
+     Compiling icu_provider v2.2.0
+     Compiling icu_properties v2.2.0
+     Compiling icu_normalizer v2.2.0
+     Compiling idna_adapter v1.2.2
+     Compiling idna v1.1.0
+     Compiling url v2.5.8
+     Compiling learning_mode_windows v0.8.0 (C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\microsoft\mxc\src\backends\learning_mode\windows)
+     Compiling windows_sandbox_common v0.8.0 (C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\microsoft\mxc\src\backends\windows_sandbox\common)
+     Compiling windows_sandbox_lifecycle v0.8.0 (C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\microsoft\mxc\src\backends\windows_sandbox\lifecycle)
+     Compiling appcontainer_common v0.8.0 (C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\microsoft\mxc\src\backends\appcontainer\common)
+     Compiling mxc_engine v0.8.0 (C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\microsoft\mxc\src\core\mxc_engine)
+     Compiling mxc-sdk v0.8.0 (C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\microsoft\mxc\src\core\mxc-sdk)
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 49s
+  Microsoft.Mxc.Sdk -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\microsoft\mxc\sdk\dotnet\Microsoft.Mxc.Sdk\bin\Debug\net8.0\Microsoft.Mxc.Sdk.dll
+  Phantom.Workspaces.Llm.Core -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Llm.Core\bin\Debug\net10.0\Phantom.Workspaces.Llm.Core.dll
+  Phantom.Workspaces.Gui.Shared -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Gui.Shared\bin\Debug\net10.0\Phantom.Workspaces.Gui.Shared.dll
+  Phantom.Workspaces.Logging -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Logging\bin\Debug\net10.0\Phantom.Workspaces.Logging.dll
+  Phantom.Dock.Avalonia.TabSwitching -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Dock.Avalonia.TabSwitching\Phantom.Dock.Avalonia.TabSwitching\bin\Debug\net10.0\Phantom.Dock.Avalonia.TabSwitching.dll
+  Phantom.Workspaces.Agent.Gui -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Agent.Gui\bin\Debug\net10.0\Phantom.Workspaces.Agent.Gui.dll
+  Phantom.Workspaces.Data.Offline -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Data.Offline\bin\Debug\net10.0\Phantom.Workspaces.Data.Offline.dll
+  Phantom.Workspaces.Testing -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Testing\bin\Debug\net10.0\Phantom.Workspaces.Testing.dll
+  Phantom.Workspaces.Test.WindowsProcessProbe -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Test.WindowsProcessProbe\bin\Debug\net10.0\Phantom.Workspaces.Test.WindowsProcessProbe.dll
+  Phantom.Workspaces.Data.Core.Tests -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Data.Core.Tests\bin\Debug\net10.0\Phantom.Workspaces.Data.Core.Tests.dll
+  Phantom.Workspaces.Data.MongoDB.Tests -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Data.MongoDB.Tests\bin\Debug\net10.0\Phantom.Workspaces.Data.MongoDB.Tests.dll
+  Phantom.Workspaces.Data.Web.Server -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Data.Web.Server\bin\Debug\net10.0\Phantom.Workspaces.Data.Web.Server.dll
+  Phantom.Workspaces.Install -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Install\bin\Debug\net10.0\Phantom.Workspaces.Install.dll
+  Phantom.Workspaces.Web.Server -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Web.Server\bin\Debug\net10.0\Phantom.Workspaces.Web.Server.dll
+  Phantom.Workspaces.Copilot.Cli.Wrapper -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Copilot.Cli.Wrapper\bin\Debug\net10.0\phantom-copilot-wrapper.dll
+  Phantom.Workspaces -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces\bin\Debug\net10.0\Phantom.Workspaces.dll
+  Phantom.Workspaces.ProcessAcceptance -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.ProcessAcceptance\bin\Debug\net10.0\Phantom.Workspaces.ProcessAcceptance.dll
+  Phantom.Workspaces.Testing.Gui -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Testing.Gui\bin\Debug\net10.0\Phantom.Workspaces.Testing.Gui.dll
+  Phantom.Workspaces.Tests -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Tests\bin\Debug\net10.0\Phantom.Workspaces.Tests.dll
+Test run for C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Tests\bin\Debug\net10.0\Phantom.Workspaces.Tests.dll (.NETCoreApp,Version=v10.0)
+A total of 1 test files matched the specified pattern.
+[xUnit.net 00:00:09.28]     Phantom.Workspaces.Tests.Access.NamedAnonymousDevTunnelConsumerTests.NamedAnonymous_ActualRootCreatesUnboundNonAnonymousManagementRoute(useKind: Application, explicitAnonymousAuthentication: True) [FAIL]
+[xUnit.net 00:00:09.32]     Phantom.Workspaces.Tests.Access.NamedAnonymousDevTunnelConsumerTests.NamedAnonymous_ActualRootCreatesUnboundNonAnonymousManagementRoute(useKind: Repository, explicitAnonymousAuthentication: False) [FAIL]
+[xUnit.net 00:00:09.32]     Phantom.Workspaces.Tests.Access.NamedAnonymousDevTunnelConsumerTests.NamedAnonymous_ActualRootCreatesUnboundNonAnonymousManagementRoute(useKind: Application, explicitAnonymousAuthentication: False) [FAIL]
+[xUnit.net 00:00:09.33]     Phantom.Workspaces.Tests.Access.NamedAnonymousDevTunnelConsumerTests.NamedAnonymous_ActualRootCreatesUnboundNonAnonymousManagementRoute(useKind: Repository, explicitAnonymousAuthentication: True) [FAIL]
+[xUnit.net 00:00:09.37]     Phantom.Workspaces.Tests.Access.NamedAnonymousDevTunnelConsumerTests.NamedAnonymous_ActualConsumerRequiresManagementAuthorizationBeforeDiscovery(persistence: False, explicitAnonymousAuthentication: False) [FAIL]
+[xUnit.net 00:00:09.39]     Phantom.Workspaces.Tests.Access.NamedAnonymousDevTunnelConsumerTests.NamedAnonymous_ActualConsumerRequiresManagementAuthorizationBeforeDiscovery(persistence: True, explicitAnonymousAuthentication: True) [FAIL]
+[xUnit.net 00:00:09.39]     Phantom.Workspaces.Tests.Access.NamedAnonymousDevTunnelConsumerTests.NamedAnonymous_ActualConsumerRequiresManagementAuthorizationBeforeDiscovery(persistence: False, explicitAnonymousAuthentication: True) [FAIL]
+[xUnit.net 00:00:09.39]     Phantom.Workspaces.Tests.Access.NamedAnonymousDevTunnelConsumerTests.NamedAnonymous_ActualConsumerRequiresManagementAuthorizationBeforeDiscovery(persistence: True, explicitAnonymousAuthentication: False) [FAIL]
+Data collector 'Blame' message: All tests finished running, Sequence file will not be generated.
+  Failed Phantom.Workspaces.Tests.Access.NamedAnonymousDevTunnelConsumerTests.NamedAnonymous_ActualRootCreatesUnboundNonAnonymousManagementRoute(useKind: Application, explicitAnonymousAuthentication: True) [571 ms]
+  Error Message:
+   Assert.IsType() Failure: Value is null
+Expected: typeof(Phantom.Workspaces.Llm.Interfaces.Access.GitHubDevTunnelIdentityRoute)
+Actual:   null
+  Stack Trace:
+     at Phantom.Workspaces.Tests.Access.NamedAnonymousDevTunnelConsumerTests.NamedAnonymous_ActualRootCreatesUnboundNonAnonymousManagementRoute(CredentialUseKind useKind, Boolean explicitAnonymousAuthentication) in C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Tests\Access\NamedAnonymousDevTunnelConsumerTests.cs:line 83
+   at Phantom.Workspaces.Tests.Access.NamedAnonymousDevTunnelConsumerTests.NamedAnonymous_ActualRootCreatesUnboundNonAnonymousManagementRoute(CredentialUseKind useKind, Boolean explicitAnonymousAuthentication) in C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Tests\Access\NamedAnonymousDevTunnelConsumerTests.cs:line 91
+--- End of stack trace from previous location ---
+  Failed Phantom.Workspaces.Tests.Access.NamedAnonymousDevTunnelConsumerTests.NamedAnonymous_ActualRootCreatesUnboundNonAnonymousManagementRoute(useKind: Repository, explicitAnonymousAuthentication: False) [1 ms]
+  Error Message:
+   Assert.IsType() Failure: Value is null
+Expected: typeof(Phantom.Workspaces.Llm.Interfaces.Access.GitHubDevTunnelIdentityRoute)
+Actual:   null
+  Stack Trace:
+     at Phantom.Workspaces.Tests.Access.NamedAnonymousDevTunnelConsumerTests.NamedAnonymous_ActualRootCreatesUnboundNonAnonymousManagementRoute(CredentialUseKind useKind, Boolean explicitAnonymousAuthentication) in C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Tests\Access\NamedAnonymousDevTunnelConsumerTests.cs:line 83
+   at Phantom.Workspaces.Tests.Access.NamedAnonymousDevTunnelConsumerTests.NamedAnonymous_ActualRootCreatesUnboundNonAnonymousManagementRoute(CredentialUseKind useKind, Boolean explicitAnonymousAuthentication) in C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Tests\Access\NamedAnonymousDevTunnelConsumerTests.cs:line 91
+--- End of stack trace from previous location ---
+  Failed Phantom.Workspaces.Tests.Access.NamedAnonymousDevTunnelConsumerTests.NamedAnonymous_ActualRootCreatesUnboundNonAnonymousManagementRoute(useKind: Application, explicitAnonymousAuthentication: False) [< 1 ms]
+  Error Message:
+   Assert.IsType() Failure: Value is null
+Expected: typeof(Phantom.Workspaces.Llm.Interfaces.Access.GitHubDevTunnelIdentityRoute)
+Actual:   null
+  Stack Trace:
+     at Phantom.Workspaces.Tests.Access.NamedAnonymousDevTunnelConsumerTests.NamedAnonymous_ActualRootCreatesUnboundNonAnonymousManagementRoute(CredentialUseKind useKind, Boolean explicitAnonymousAuthentication) in C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Tests\Access\NamedAnonymousDevTunnelConsumerTests.cs:line 83
+   at Phantom.Workspaces.Tests.Access.NamedAnonymousDevTunnelConsumerTests.NamedAnonymous_ActualRootCreatesUnboundNonAnonymousManagementRoute(CredentialUseKind useKind, Boolean explicitAnonymousAuthentication) in C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Tests\Access\NamedAnonymousDevTunnelConsumerTests.cs:line 91
+--- End of stack trace from previous location ---
+  Failed Phantom.Workspaces.Tests.Access.NamedAnonymousDevTunnelConsumerTests.NamedAnonymous_ActualRootCreatesUnboundNonAnonymousManagementRoute(useKind: Repository, explicitAnonymousAuthentication: True) [< 1 ms]
+  Error Message:
+   Assert.IsType() Failure: Value is null
+Expected: typeof(Phantom.Workspaces.Llm.Interfaces.Access.GitHubDevTunnelIdentityRoute)
+Actual:   null
+  Stack Trace:
+     at Phantom.Workspaces.Tests.Access.NamedAnonymousDevTunnelConsumerTests.NamedAnonymous_ActualRootCreatesUnboundNonAnonymousManagementRoute(CredentialUseKind useKind, Boolean explicitAnonymousAuthentication) in C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Tests\Access\NamedAnonymousDevTunnelConsumerTests.cs:line 83
+   at Phantom.Workspaces.Tests.Access.NamedAnonymousDevTunnelConsumerTests.NamedAnonymous_ActualRootCreatesUnboundNonAnonymousManagementRoute(CredentialUseKind useKind, Boolean explicitAnonymousAuthentication) in C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Tests\Access\NamedAnonymousDevTunnelConsumerTests.cs:line 91
+--- End of stack trace from previous location ---
+  Failed Phantom.Workspaces.Tests.Access.NamedAnonymousDevTunnelConsumerTests.NamedAnonymous_ActualConsumerRequiresManagementAuthorizationBeforeDiscovery(persistence: False, explicitAnonymousAuthentication: False) [77 ms]
+  Error Message:
+   System.AggregateException : Access shutdown did not complete cleanly. (One or more credential executors could not be disposed. (IAsyncDisposable.DisposeAsync() invocation failed with mock behavior Strict.
+All invocations on the mock must have a corresponding setup.))
+---- System.AggregateException : One or more credential executors could not be disposed. (IAsyncDisposable.DisposeAsync() invocation failed with mock behavior Strict.
+All invocations on the mock must have a corresponding setup.)
+-------- Moq.MockException : IAsyncDisposable.DisposeAsync() invocation failed with mock behavior Strict.
+All invocations on the mock must have a corresponding setup.
+  Stack Trace:
+     at Phantom.Workspaces.Services.Access.AccessBroker.DisposeAsync() in C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces\Services\Access\AccessBroker.cs:line 667
+   at Phantom.Workspaces.Tests.Access.NamedAnonymousDevTunnelConsumerTests.NamedAnonymous_ActualConsumerRequiresManagementAuthorizationBeforeDiscovery(Boolean persistence, Boolean explicitAnonymousAuthentication) in C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Tests\Access\NamedAnonymousDevTunnelConsumerTests.cs:line 59
+--- End of stack trace from previous location ---
+----- Inner Stack Trace -----
+   at Phantom.Workspaces.Services.Access.CredentialAccessExecutorRegistry.DisposeAsync() in C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces\Services\Access\CredentialAccessExecutorRegistry.cs:line 72
+   at Phantom.Workspaces.Services.Access.AccessBroker.CleanupAsync(Func`1 cleanup, List`1 failures) in C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces\Services\Access\AccessBroker.cs:line 677
+----- Inner Stack Trace -----
+   at Moq.FailForStrictMock.Handle(Invocation invocation, Mock mock) in /_/src/Moq/Interception/InterceptionAspects.cs:line 182
+   at Moq.Mock.Moq.IInterceptor.Intercept(Invocation invocation) in /_/src/Moq/Interception/Mock.cs:line 27
+   at Moq.CastleProxyFactory.Interceptor.Intercept(IInvocation underlying) in /_/src/Moq/Interception/CastleProxyFactory.cs:line 107
+   at Castle.DynamicProxy.AbstractInvocation.Proceed()
+   at Castle.Proxies.IDevTunnelConnectMintSessionProxy.DisposeAsync()
+   at Phantom.Workspaces.Services.DevTunnel.DevTunnelConnectCredentialAccessExecutor.DisposeAsync() in C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces\Services\DevTunnel\DevTunnelConnectCredentialAccessExecutor.cs:line 380
+   at Phantom.Workspaces.Services.Access.CredentialAccessExecutorRegistry.DisposeAsync() in C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces\Services\Access\CredentialAccessExecutorRegistry.cs:line 60
+  Failed Phantom.Workspaces.Tests.Access.NamedAnonymousDevTunnelConsumerTests.NamedAnonymous_ActualConsumerRequiresManagementAuthorizationBeforeDiscovery(persistence: True, explicitAnonymousAuthentication: True) [9 ms]
+  Error Message:
+   System.AggregateException : Access shutdown did not complete cleanly. (One or more credential executors could not be disposed. (IAsyncDisposable.DisposeAsync() invocation failed with mock behavior Strict.
+All invocations on the mock must have a corresponding setup.))
+---- System.AggregateException : One or more credential executors could not be disposed. (IAsyncDisposable.DisposeAsync() invocation failed with mock behavior Strict.
+All invocations on the mock must have a corresponding setup.)
+-------- Moq.MockException : IAsyncDisposable.DisposeAsync() invocation failed with mock behavior Strict.
+All invocations on the mock must have a corresponding setup.
+  Stack Trace:
+     at Phantom.Workspaces.Services.Access.AccessBroker.DisposeAsync() in C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces\Services\Access\AccessBroker.cs:line 667
+   at Phantom.Workspaces.Tests.Access.NamedAnonymousDevTunnelConsumerTests.NamedAnonymous_ActualConsumerRequiresManagementAuthorizationBeforeDiscovery(Boolean persistence, Boolean explicitAnonymousAuthentication) in C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Tests\Access\NamedAnonymousDevTunnelConsumerTests.cs:line 59
+--- End of stack trace from previous location ---
+----- Inner Stack Trace -----
+   at Phantom.Workspaces.Services.Access.CredentialAccessExecutorRegistry.DisposeAsync() in C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces\Services\Access\CredentialAccessExecutorRegistry.cs:line 72
+   at Phantom.Workspaces.Services.Access.AccessBroker.CleanupAsync(Func`1 cleanup, List`1 failures) in C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces\Services\Access\AccessBroker.cs:line 677
+----- Inner Stack Trace -----
+   at Moq.FailForStrictMock.Handle(Invocation invocation, Mock mock) in /_/src/Moq/Interception/InterceptionAspects.cs:line 182
+   at Moq.Mock.Moq.IInterceptor.Intercept(Invocation invocation) in /_/src/Moq/Interception/Mock.cs:line 27
+   at Moq.CastleProxyFactory.Interceptor.Intercept(IInvocation underlying) in /_/src/Moq/Interception/CastleProxyFactory.cs:line 107
+   at Castle.DynamicProxy.AbstractInvocation.Proceed()
+   at Castle.Proxies.IDevTunnelConnectMintSessionProxy.DisposeAsync()
+   at Phantom.Workspaces.Services.DevTunnel.DevTunnelConnectCredentialAccessExecutor.DisposeAsync() in C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces\Services\DevTunnel\DevTunnelConnectCredentialAccessExecutor.cs:line 380
+   at Phantom.Workspaces.Services.Access.CredentialAccessExecutorRegistry.DisposeAsync() in C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces\Services\Access\CredentialAccessExecutorRegistry.cs:line 60
+  Failed Phantom.Workspaces.Tests.Access.NamedAnonymousDevTunnelConsumerTests.NamedAnonymous_ActualConsumerRequiresManagementAuthorizationBeforeDiscovery(persistence: False, explicitAnonymousAuthentication: True) [< 1 ms]
+  Error Message:
+   System.AggregateException : Access shutdown did not complete cleanly. (One or more credential executors could not be disposed. (IAsyncDisposable.DisposeAsync() invocation failed with mock behavior Strict.
+All invocations on the mock must have a corresponding setup.))
+---- System.AggregateException : One or more credential executors could not be disposed. (IAsyncDisposable.DisposeAsync() invocation failed with mock behavior Strict.
+All invocations on the mock must have a corresponding setup.)
+-------- Moq.MockException : IAsyncDisposable.DisposeAsync() invocation failed with mock behavior Strict.
+All invocations on the mock must have a corresponding setup.
+  Stack Trace:
+     at Phantom.Workspaces.Services.Access.AccessBroker.DisposeAsync() in C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces\Services\Access\AccessBroker.cs:line 667
+   at Phantom.Workspaces.Tests.Access.NamedAnonymousDevTunnelConsumerTests.NamedAnonymous_ActualConsumerRequiresManagementAuthorizationBeforeDiscovery(Boolean persistence, Boolean explicitAnonymousAuthentication) in C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Tests\Access\NamedAnonymousDevTunnelConsumerTests.cs:line 59
+--- End of stack trace from previous location ---
+----- Inner Stack Trace -----
+   at Phantom.Workspaces.Services.Access.CredentialAccessExecutorRegistry.DisposeAsync() in C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces\Services\Access\CredentialAccessExecutorRegistry.cs:line 72
+   at Phantom.Workspaces.Services.Access.AccessBroker.CleanupAsync(Func`1 cleanup, List`1 failures) in C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces\Services\Access\AccessBroker.cs:line 677
+----- Inner Stack Trace -----
+   at Moq.FailForStrictMock.Handle(Invocation invocation, Mock mock) in /_/src/Moq/Interception/InterceptionAspects.cs:line 182
+   at Moq.Mock.Moq.IInterceptor.Intercept(Invocation invocation) in /_/src/Moq/Interception/Mock.cs:line 27
+   at Moq.CastleProxyFactory.Interceptor.Intercept(IInvocation underlying) in /_/src/Moq/Interception/CastleProxyFactory.cs:line 107
+   at Castle.DynamicProxy.AbstractInvocation.Proceed()
+   at Castle.Proxies.IDevTunnelConnectMintSessionProxy.DisposeAsync()
+   at Phantom.Workspaces.Services.DevTunnel.DevTunnelConnectCredentialAccessExecutor.DisposeAsync() in C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces\Services\DevTunnel\DevTunnelConnectCredentialAccessExecutor.cs:line 380
+   at Phantom.Workspaces.Services.Access.CredentialAccessExecutorRegistry.DisposeAsync() in C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces\Services\Access\CredentialAccessExecutorRegistry.cs:line 60
+  Failed Phantom.Workspaces.Tests.Access.NamedAnonymousDevTunnelConsumerTests.NamedAnonymous_ActualConsumerRequiresManagementAuthorizationBeforeDiscovery(persistence: True, explicitAnonymousAuthentication: False) [< 1 ms]
+  Error Message:
+   System.AggregateException : Access shutdown did not complete cleanly. (One or more credential executors could not be disposed. (IAsyncDisposable.DisposeAsync() invocation failed with mock behavior Strict.
+All invocations on the mock must have a corresponding setup.))
+---- System.AggregateException : One or more credential executors could not be disposed. (IAsyncDisposable.DisposeAsync() invocation failed with mock behavior Strict.
+All invocations on the mock must have a corresponding setup.)
+-------- Moq.MockException : IAsyncDisposable.DisposeAsync() invocation failed with mock behavior Strict.
+All invocations on the mock must have a corresponding setup.
+  Stack Trace:
+     at Phantom.Workspaces.Services.Access.AccessBroker.DisposeAsync() in C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces\Services\Access\AccessBroker.cs:line 667
+   at Phantom.Workspaces.Tests.Access.NamedAnonymousDevTunnelConsumerTests.NamedAnonymous_ActualConsumerRequiresManagementAuthorizationBeforeDiscovery(Boolean persistence, Boolean explicitAnonymousAuthentication) in C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Tests\Access\NamedAnonymousDevTunnelConsumerTests.cs:line 59
+--- End of stack trace from previous location ---
+----- Inner Stack Trace -----
+   at Phantom.Workspaces.Services.Access.CredentialAccessExecutorRegistry.DisposeAsync() in C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces\Services\Access\CredentialAccessExecutorRegistry.cs:line 72
+   at Phantom.Workspaces.Services.Access.AccessBroker.CleanupAsync(Func`1 cleanup, List`1 failures) in C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces\Services\Access\AccessBroker.cs:line 677
+----- Inner Stack Trace -----
+   at Moq.FailForStrictMock.Handle(Invocation invocation, Mock mock) in /_/src/Moq/Interception/InterceptionAspects.cs:line 182
+   at Moq.Mock.Moq.IInterceptor.Intercept(Invocation invocation) in /_/src/Moq/Interception/Mock.cs:line 27
+   at Moq.CastleProxyFactory.Interceptor.Intercept(IInvocation underlying) in /_/src/Moq/Interception/CastleProxyFactory.cs:line 107
+   at Castle.DynamicProxy.AbstractInvocation.Proceed()
+   at Castle.Proxies.IDevTunnelConnectMintSessionProxy.DisposeAsync()
+   at Phantom.Workspaces.Services.DevTunnel.DevTunnelConnectCredentialAccessExecutor.DisposeAsync() in C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces\Services\DevTunnel\DevTunnelConnectCredentialAccessExecutor.cs:line 380
+   at Phantom.Workspaces.Services.Access.CredentialAccessExecutorRegistry.DisposeAsync() in C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces\Services\Access\CredentialAccessExecutorRegistry.cs:line 60
+Results File: C:\dev\Phantom.Workspaces-Skills\worktrees\access-named-anonymous-parity-20261021\Phantom.Workspaces.Tests\TestResults\jrowe_DAEMON_2026-10-21_07_09_49_net10.0.trx
+
+Failed!  - Failed:     8, Passed:     0, Skipped:     0, Total:     8, Duration: 753 ms - Phantom.Workspaces.Tests.dll (net10.0)
+
+=== Test Run Summary ===
+Executed : 8
+Passed   : 0
+Failed   : 8

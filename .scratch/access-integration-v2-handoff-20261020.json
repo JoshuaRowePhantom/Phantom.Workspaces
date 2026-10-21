@@ -13,9 +13,46 @@
     "modelPumpStablePatchId": "e5b0351c94ca62a86fff0578ae4533e5eba13241",
     "review": "Current worker handoff records1b307 independent CLEAR of e099vs352 and352vsb887. Source review only; no new reviewer/runtime claim.",
     "rootDistinction": "Frozen rootc6a43bfd lacks352 according to root's separate verified report. This integration DOES contain exact352 fixture via its own8b562 baseline history; never inferred from root e099=>279f alias or whole-root intake.",
-    "boundary": "No duplicate import, source edit or new stability execution. Existing source-specific execution evidence retained; named-anonymous gate remains OPEN."
+    "boundary": "Inherited worker provenance only: no duplicate import, source edit or new stability execution. Existing source-specific evidence retained; subsequent named-anonymous closure has its own new correction/review/runtime receipt."
   },
-  "status": "ACCEPTANCE REOPENED ONLY FOR NAMED-ANONYMOUS PARITY: sourceb007 repository/persistence Name-only anonymous requests are rejected by canonical endpoint guard; prior anonymous coverage is explicit WEB only. SDK account/stream/scanner gates CLOSED; parent-requested CURRENT seven-case account/stream union freshly7/7 PASS at23758f45 on unchangedb007. Prior scanner3/3 and full801/160/11 initial+10 retained.87 artifacts including verbatim existing root/SDK review provenance. Await fresh parent-scoped named-anonymous correction/explicit behavior decision; no duplicate SDK packet/review/intake, features advancement or publication.",
+  "status": "IMPLEMENTATION AND REQUESTED TARGETED ACCEPTANCE COMPLETE atsource0cfb97c1: newly parent-assigned real named-anonymous repository+persistence parity implemented/integrated, fresh independent nine-file review CLEAR, expanded complete merged App867 initial+ten867 stability passes. Prior unchanged Core160/Transport11 initial+10, SDK7/scanner3 source-specific evidence retained, not falsely rerun. All source-owner work CLOSED. Prior90 local-features approval remains REVOKED; actual local features and detached live HEAD freshly recheckedd2 after stability. No fetch/ref advancement/publication. New explicit parent approval required.",
+  "requiredIntegration": "COMPLETE within requested targeted deterministic scope; no remaining implementation/source-review/merged-acceptance owner work. Publication is a separate explicit parent decision.",
+  "namedAnonymousCorrection20261021": {
+    "implementationBaseline": "babf909b9462989581d1842c2ba269c05833435c",
+    "sourceCommitOrder": [
+      "36d5d9423e519e78a65c439c6dff8eb88b7e9cb7",
+      "fc276a1c23bfd622361a26e7671176b37c5e8016",
+      "d12d07701930bef0d82fb0b474cb366496aef042"
+    ],
+    "localCommitOrder": [
+      "710412538dd92bac8f0ff5c9da93e424ce28a346",
+      "0ec01066bd2161e4dbca9e4c28dc3371c37b1764",
+      "0cfb97c193250ce4af80b0bf135185882224fa07"
+    ],
+    "sourceHandoff": ".scratch\\access-named-anonymous-correction-20261021.json",
+    "sourceHandoffSha256": "98884790D9608E50005886DCC068C531985237E226FF7082D1AE2F820B94F403",
+    "sourceEvidenceDirectory": ".scratch\\integration-v2-named-anonymous-evidence-20261021",
+    "sourceEvidenceManifest": ".scratch\\integration-v2-named-anonymous-evidence-20261021\\sha256-manifest-final.json",
+    "sourceEvidenceManifestSha256": "83D55B0D5DA2449F60B0BD39E55E2A86C992C891BB0E472E495A83960DD4A584",
+    "sourceEvidenceVerification": "All43 original evidence files and copied bytes independently verified against delivered manifest; final manifest also preserved byte-for-byte. Includes original masked/unmasked red, all failures/diagnoses and all ten stability TRX files.",
+    "artifactCoverage": "106 unique top-level byte-length/SHA256 records, retaining all87 originals unchanged, plus43 original source-owner evidence files bound by the archived nested manifest.",
+    "causalRed": "Second immutable test-onlyfc27 checkpoint on unchangedbab production executes8/8 failures: four actual named consumer canonical mismatches and four null actual-root Management routes. Earlier first red consumer errors were teardown-masked and preserved honestly.",
+    "semantics": "Named anonymous AccessMode or explicit anonymous relay authentication now independently authorizes a genuine typed non-anonymous Management identity, validates unique marker/name/single-port safe endpoint, cleans Management ownership, then reconstructs canonical accountless anonymous relay request. Both repository and persistence use exact existing broker/live scope; zero anonymous Connect mint/identity-to-relay fallback.",
+    "configuration": "Explicit GitHub/Entra/OAuth Management routes/pins retained for anonymous AccessMode; explicit anonymous auth/null selects actual unbound GitHub Management request, provider verifies real account. No fabricated account or unsupported-only substitution. Explicit anonymous Web/private flows retained.",
+    "review": ".scratch\\integration-v2-named-anonymous-review-20261021.json",
+    "reviewStatus": "Fresh independent read-only exact nine-file bab..d12 source review CLEAR; no reviewer execution or whole-arc/promotion claim.",
+    "ownerExecution": "228/228 initial plus ten228-case passes; distinct canonical merged complete affected target867/867 initial plus ten867-case passes.",
+    "mergedAcceptance": ".scratch\\integration-v2-named-anonymous-merged-acceptance-20261021.json",
+    "mergedAppInitialPassed": 867,
+    "mergedAppStabilityRuns": 10,
+    "mergedAppPassedPerRun": 867,
+    "mergedAppFailed": 0,
+    "mergedAppSkipped": 0,
+    "mergedBoundary": "Prior full801 +54 new named cases +12 retained endpoint/configuration/composition cases. Same reviewed0cf production source, no code edits after review/execution. Current raw initial and all ten distinct stability TRX preserved. Core/Interfaces/Transport production+tests unchangedb007, their prior source-specific160/11x10 evidence retained without new execution claim.",
+    "unrelatedBaselineFailures": "Two unchanged ReconnectingDevTunnelLifetimeTests fixture cases fail equally on clean exactbab; isolated diagnosis/actual baseline rerun preserved. Not repaired, hidden, or called green. Final owner228 excludes that unchanged class; new regressions exercise real reconnecting consumer paths.",
+    "promotionAbortReceipt": ".scratch\\integration-v2-local-features-90-advance-aborted-20261021.json",
+    "promotion": "Prior90 local-features approval REVOKED by actual current authority before any fetch. Actual local features and live detached HEAD bothd2a1a3b0752609321853f409d6fb1654fe17e7ff. New explicit approval required after correction/acceptance."
+  },
   "sdkConsolidatedSourceReviewProvenance20261021": {
     "receipt": ".scratch\\access-agent-1542-bounded-review-receipts-20261021.json",
     "sha256": "BAB4197569B4A8013DBE4E165782FE4C2D03F5718E234A9BC6DB624AF63E5EEC",
@@ -24,7 +61,7 @@
     "scope": "Verbatim EXISTING separate two-file4bce account, three-fileaf29 stream production and test-only351 proof receipts plus explicit final reconciliation; not derived from0438 callback clearance. Receipt also identifies separately cleareda1f scanner companion.",
     "mergedEvidence": "Current exact seven-case account/stream union already refreshed7/7 in a001a8b7 on unchangedb007; all5 stream cases included. Scanner actual counterexample3/3 and full801/160/11 initial+10 remain preserved.",
     "preservation": "Original delivered6086 bytes archived unchanged with exact-path binary attribute; SHA256 preserved in Git.",
-    "limits": "Provenance consolidation only, no new review/source edit/runtime execution, no additional SDK packet awaited, no whole-host/provider/arc clearance. Named-anonymous gate remains OPEN."
+    "limits": "Historical SDK provenance consolidation only, no new review/source edit/runtime execution, no additional SDK packet awaited or whole-host/provider/arc clearance inferred. Later named-anonymous correction/review/runtime closure is recorded separately."
   },
   "currentMergedSdkRefresh20261021": {
     "requestedBy": "Direct parent2026-10-21T06:45:24.300-07:00 existingSdkGateClosure reconciliation",
@@ -38,7 +75,7 @@
     "log": ".scratch\\integration-v2-sdk-account-stream-current-refresh-tests.log",
     "sha256": "FEFA1D47EA7145B1D20889693C942EF2E84E883C063BA4249996AE173B6F518F",
     "status": "SDK metadata gates CLOSED using existing independent4bce/af29/351 clearances plus fresh exact merged execution; no additional SDK source packet/review is awaited.",
-    "preserved": "Earlier seven-case evidence, scanner exact3/3 actual counterexample, full sourceb007801/160/11 initial+10, all historical failures and85 prior artifacts. No source changes or new source-review claim. Separate named-anonymous gate remains OPEN."
+    "preserved": "Historical seven-case evidence, scanner exact3/3 actual counterexample, full sourceb007801/160/11 initial+10, all historical failures and85 then-existing artifacts. No source changes or new source-review claim from that SDK refresh. Later named-anonymous closure uses its separate new receipt."
   },
   "hostCoherentReviewProvenance20261021": {
     "receipt": ".scratch\\access-host-coherent-review-receipt-20261020.json",
@@ -54,15 +91,15 @@
     "exactResult": "No significant issues found in the reviewed changes.",
     "timingAndScope": "Existing sync nonresumable read-only review inspected uncommitted production/test delta against539301, completed05:26:46.759Z; root committed19acd at05:28:55Z with exact parent539301 verified. Not falsely described as a newly launched post-commit review.",
     "preservation": "Original delivered receipt bytes archived unchanged; one exact-path binary attribute prevents core.autocrlf normalization from invalidating delivered SHA256.",
-    "limits": "No invented reviewer-agent ID, new review, build, root code import, or clearance of later provider/shared/source deltas, final integration or whole arc. Named-anonymous gate remains OPEN."
+    "limits": "Historical root provenance only: no invented reviewer-agent ID, new review, build, root code import, or clearance of later provider/shared/source deltas, final integration or whole arc inferred. Later named-anonymous closure has separate new review/runtime evidence."
   },
   "namedAnonymousAssessment20261021": {
     "receipt": ".scratch\\integration-v2-named-anonymous-assessment-20261021.json",
     "assessedCheckpoint": "90f130b37a98d0323c48610236438d1feeea971d",
-    "status": "Genuine source-confirmed caller/executor contract mismatch; acceptance coverage missing for named anonymous in both consumers.",
+    "status": "Historical source-only assessment at90, NOW RESOLVED by fresh parent-scoped real parity correctiond12=>0cf, causal8-case red, source228x10 and merged867x10 plus independent bounded source review.",
     "sourceBoundary": "Name-only Anonymous is noncanonical; Inspect returns no sources, actual broker maps to IdentityMismatch before row. This is direct current-source evidence, not a newly executed failing test.",
-    "resolutionBoundary": "Real independent typed Management name lookup followed by tokenless relay OR explicit typed unsupported-without-endpoint behavior. No anonymous/default Management account, identity-to-relay fallback, retired provider restoration or weakening of endpoint guard.",
-    "ownership": "Former4d stopped/root5a frozen remain unchanged. New root/configuration work requires fresh explicit parent scope; no overlapping implementation delegated or policy choice silently made.",
+    "resolutionBoundary": "Historical assessment alternatives were superseded by explicit parent assignment of REAL independently typed Management name lookup followed by tokenless relay. Implemented without anonymous/fabricated Management account, identity-to-relay fallback, retired provider restoration or weakening of endpoint guard. Original assessment artifact remains unchanged.",
+    "ownership": "Actual current parent authority explicitly assigned2042 correction; delegated implementation stayed in new normal exactbab isolated worktree, consumed immutable commits only. Former4d/root5a/provider35ff stayed frozen. No unsupported-only substitution.",
     "priorEvidence": "Sourceb007 full801/160/11 initial+10 and fresh SDK7/scanner3 remain valid bounded evidence; none proves named-anonymous parity."
   },
   "sdkReviewedEquivalenceClosure20261021": {
@@ -118,7 +155,7 @@
     "review": "Fresh independent read-only stored-missing-source-review of exact two-file new production/test delta: no significant issues; no reviewer builds/tests/edits.",
     "fullValidation": "Sourceb007 App801/Core160/real Transport11 each initial+10 stability ALL PASS, zero failed/skipped. App801 = prior795 +2 new missing-source cases +4 existing StoredSecretExecutionLifetimeTests. Full private/mint/HTTP/stale401/CLI/root/scanner/legacy scope retained. No source edits after bounded review/execution."
   },
-  "reviewedCodeCheckpoint": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
+  "reviewedCodeCheckpoint": "0cfb97c193250ce4af80b0bf135185882224fa07",
   "requiredLegacyConfirmation20261021": {
     "source": "6efcbad52e20e98fd4a2ab9a631331b4241a7cde",
     "coherentRetirement": "c9d203afc7638451a9f3147af2cbf9e0ecb0b80b",
@@ -150,6 +187,9 @@
     "boundary": "Actual production root metadata/configured-route coverage, not live OAuth/browser/native-secret/provider-network acceptance. Existing broader targeted fake-provider matrices recorded separately."
   },
   "sourceToLocal": {
+    "36d5d9423e519e78a65c439c6dff8eb88b7e9cb7": "710412538dd92bac8f0ff5c9da93e424ce28a346 (red tests only; never accepted standalone)",
+    "fc276a1c23bfd622361a26e7671176b37c5e8016": "0ec01066bd2161e4dbca9e4c28dc3371c37b1764 (unmasked causal red tests only; never accepted standalone)",
+    "d12d07701930bef0d82fb0b474cb366496aef042": "0cfb97c193250ce4af80b0bf135185882224fa07 (complete independently reviewed named-anonymous parity; exact entire source-tree equality at intake)",
     "3526186e6781e83e8de79cc08e83e8f84d0e93a4": "8b562107479947e919cf4337771dc33385063520 (separate inherited exact patch equivalent; ENTIRE current RemoteCopilotLifecycleTests.cs equals source352, diff exit0; independently1b307 CLEAR)",
     "e099710fcbcfec0887266445b0050402cc2f3b65": "e8ed98d70fe885ce37b12410e82f63317a923db5 (exact assigned baseline patch equivalent; current SetModel tracked StartOperation; independently1b307 CLEAR)",
     "4bce452f31f6438c0a3066f95ae203cca4231cb1": "121abf65d689ebea41c7ccc4f3933408060da247 (already-inherited exact patch equivalent; actual7d3 source CLEAR; fresh combined7PASS)",
@@ -519,7 +559,7 @@
       "logs": ".scratch\\integration-v2-paired-legacy-{core,app}-tests.log; .scratch\\integration-v2-paired-legacy-{core,app}-stability.log; .scratch\\integration-v2-paired-legacy-final-{core,app}-tests.log",
       "provenance": "Working source stayed unchanged after independent21-file review and116/133x10. Commits preserve that exact source; final coherent committed endpoint then freshly rebuilt/reran both116/133. No acceptance of incomplete81504 prefix."
     },
-    "finalCompleteApp": {
+    "historicalCompleteAppBeforeNamedParity": {
       "codeCheckpoint": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
       "testProject": "Phantom.Workspaces.Tests\\Phantom.Workspaces.Tests.csproj",
       "passed": 801,
@@ -531,6 +571,21 @@
       "stability": ".scratch\\integration-v2-stored-missing-source-complete-app-stability.log",
       "selectors": "GitHubActionsUsageProviderTests,GitHubCopilotUsageProviderTests,GitHubUsageProviderAccessTests,LegacyAuthorizationUiRemovalTests,AccessMigrationTests,GitHubPrivateCredentialSessionTests,GitHubCredentialAccessExecutorTests,GitHubSelectedSourcePolicyTests,AccessBrokerTests,ProviderCredentialCacheAdministrationTests,DevTunnelConnectMintSessionTests,DevTunnelAuthenticationHandlerTests,DevTunnelCredentialConsumerTests,DevTunnelConnectCredentialAccessExecutorTests,DevTunnelIdentityCredentialAccessExecutorTests,DevTunnelConnectManagementApiTests,DevTunnelClientAuthorizationTests,OAuthPrincipalConfigurationTests,OAuthCredentialAccessExecutorTests,EntraPrivateCapabilityTests,EntraCredentialAccessExecutorTests,AccessHostServicesTests,HostConfiguredAccessGraphTests,OAuthCallbackBindingFactoryTests,McpOAuthCredentialAccessExecutorOwnershipTests,McpOAuthCacheAdministrationTests,McpOAuthCredentialRequestCatalogTests,McpOAuthProviderDiscoveryTests,McpOAuthAttemptTests,McpOAuthCacheCommitCoordinatorTests,StoredSecretAccessExecutorTests,RunVsCodeTunnelToolTests,VsCodeTunnelDiscoveryToolTests,VsCodeTunnelStatusResolverTests,VsCodeTunnelProcessEvidenceTests,VsCodeTunnelAuthorizationTests,ScheduledToolRegistryTests,VsCodeCliInvokerTests,VsCodeCliLocatorTests,WorkerCopilotProviderBrokerTests,DevTunnelIdentityRouteFactoryTests,StoredSecretExecutionLifetimeTests",
       "boundary": "Complete requested access-arc targeted selection, NOT every repository test. Includes unchanged formerly failing identity case, all current private/HTTP classes and actual CLI/host worker binding; deterministic fakes/no live provider or user checkout."
+    },
+    "finalCompleteApp": {
+      "codeCheckpoint": "0cfb97c193250ce4af80b0bf135185882224fa07",
+      "testProject": "Phantom.Workspaces.Tests\\Phantom.Workspaces.Tests.csproj",
+      "passed": 867,
+      "failed": 0,
+      "skipped": 0,
+      "stabilityRuns": 10,
+      "passedPerRun": 867,
+      "log": ".scratch\\integration-v2-named-anonymous-complete-app-tests.log",
+      "stability": ".scratch\\integration-v2-named-anonymous-complete-app-stability.log",
+      "initialRawTrx": ".scratch\\integration-v2-named-anonymous-complete-app.trx.log",
+      "stabilityRawTrxDirectory": ".scratch\\integration-v2-named-anonymous-merged-trx-20261021",
+      "selectors": "AccessBrokerTests,AccessHostServicesTests,AccessMigrationTests,DevTunnelAuthenticationHandlerTests,DevTunnelClientAuthorizationTests,DevTunnelConfigurationTests,DevTunnelConnectCredentialAccessExecutorTests,DevTunnelConnectManagementApiTests,DevTunnelConnectMintSessionTests,DevTunnelCredentialConsumerTests,DevTunnelEndpointResolverTests,DevTunnelIdentityCredentialAccessExecutorTests,DevTunnelIdentityRouteFactoryTests,EntraCredentialAccessExecutorTests,EntraPrivateCapabilityTests,GitHubActionsUsageProviderTests,GitHubCopilotUsageProviderTests,GitHubCredentialAccessExecutorTests,GitHubPrivateCredentialSessionTests,GitHubSelectedSourcePolicyTests,GitHubUsageProviderAccessTests,HostConfiguredAccessGraphTests,HostDevTunnelCompositionTests,LegacyAuthorizationUiRemovalTests,McpOAuthAttemptTests,McpOAuthCacheAdministrationTests,McpOAuthCacheCommitCoordinatorTests,McpOAuthCredentialAccessExecutorOwnershipTests,McpOAuthCredentialRequestCatalogTests,McpOAuthProviderDiscoveryTests,NamedAnonymousDevTunnelConsumerTests,OAuthCallbackBindingFactoryTests,OAuthCredentialAccessExecutorTests,OAuthPrincipalConfigurationTests,ProviderCredentialCacheAdministrationTests,RunVsCodeTunnelToolTests,ScheduledToolRegistryTests,StoredSecretAccessExecutorTests,StoredSecretExecutionLifetimeTests,VsCodeCliInvokerTests,VsCodeCliLocatorTests,VsCodeTunnelAuthorizationTests,VsCodeTunnelDiscoveryToolTests,VsCodeTunnelProcessEvidenceTests,VsCodeTunnelStatusResolverTests,WorkerCopilotProviderBrokerTests",
+      "boundary": "Complete previous801 plus54 new named-anonymous and12 additional retained endpoint/configuration/composition cases;46 selectors. Actual final reviewed production0cf, no later source edits. All eleven current raw TRX preserved; ten stability counters independently867/867. Deterministic targeted acceptance only; separately disclosed inherited two-case reconnect-fixture failure outside this target, no whole-suite/live authentication claim."
     },
     "finalCompleteCore": {
       "codeCheckpoint": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
@@ -574,7 +629,8 @@
     "Historical fresh independent read-only final-root-audience-net-review of complete127..6ef three-file actual-root followthrough: no significant issues. Actual configured Repository/Application routes, independent/null Endpoint, absolute Audience, retained control rejection and pre-registration/no-store guards covered. Source6ef795/159/11 each initial+10 PASS; later StoredSecret correction reviewed separately. No reviewer builds/tests/edits.",
     "Fresh independent read-only stored-missing-source-review of exact8c..b007 two-file delta: no significant issues. Exact741/cba four-line missing-source invalidation restored while retaining current late-read/admin semantics; actual-broker two-source held-lease/callback/no-read regressions reviewed. Sourceb007 full801/160/11 each initial+10 PASS, no source edits after review/execution. No reviewer builds/tests/edits.",
     "Existing7d3e5373 bounded independent exact4bce account,af29 stream,351 proof and a1f scanner-root reviews CLEAR per current SDK handoff/parent authority. Identical inherited121ab/d55/2f9/c8d patch-ids/ancestry verified and actual current regions inspected; fresh merged account/stream7PASS, prior exact scanner3PASS. This reconciles existing source receipts, not a duplicate unchanged-source review or reviewer runtime claim.",
-    "Existing host-coherent-graph-review provenance archived verbatim: toolcall call_k1c9dy15zZho0sAT43WbhuNC, completionevent a99460d9-ddf5-41ca-8a30-4ee2998cc89f, exact result No significant issues found in the reviewed changes. Review inspected uncommitted539301-based delta later committed19acd, not a newly performed post-commit review. Sync nonresumable tool reported no separate agent_id; none invented. Root-source scope only, no later-source/full-arc clearance."
+    "Existing host-coherent-graph-review provenance archived verbatim: toolcall call_k1c9dy15zZho0sAT43WbhuNC, completionevent a99460d9-ddf5-41ca-8a30-4ee2998cc89f, exact result No significant issues found in the reviewed changes. Review inspected uncommitted539301-based delta later committed19acd, not a newly performed post-commit review. Sync nonresumable tool reported no separate agent_id; none invented. Root-source scope only, no later-source/full-arc clearance.",
+    "Fresh independent read-only named-anonymous-immutable-review: exactbabf909b..d12d0770 nine-file delta, all changed files and minimum unchanged context. Exact result No significant introduced issues found in the exact bounded delta. Entire integrated0cf tree equaled reviewed source endpoint before metadata additions. No reviewer builds/tests/live actions/edits, no invented separate agent_id or whole-arc/publication approval. Canonical merged867 initial+ten867 executions are distinct integrator evidence."
   ],
   "genericOAuthShutdownReview20261021": {
     "reviewer": "9138ee92-e671-4e53-b882-67573927d963",
@@ -588,11 +644,9 @@
     "preserveMcp": "Existing independently cleared MCP d42 shared completion plus active-work/whole-acquisition/native cleanup barrier remains intact; no old bd1 MCP file or lifecycle replacement.",
     "acceptanceBoundary": "Source reviewer performed no builds/tests/edits. Integrator105 plus ten105 executions are recorded separately, not attributed to reviewer. No whole-arc acceptance."
   },
-  "openOwnerWork": [
-    "Named-anonymous repository+persistence parity: source-confirmed Name-only/explicit-Endpoint contract mismatch. Fresh parent-scoped bounded correction or explicit unsupported behavior decision needed; actual named consumer regressions/review/affected acceptance remain open. No former4d/root5a writer restart or invented Management identity."
-  ],
-  "remainingAcceptanceBoundary": "NEW named-anonymous semantic/coverage gate OPEN; do not infer closure from prior WEB-only anonymous case or private named consumers. SDK account/stream/scanner closures remain CLEAR. Prior sourceb007801/160/11 initial+10 preserved; no features/publication or whole-arc acceptance.",
+  "openOwnerWork": [],
+  "remainingAcceptanceBoundary": "Requested targeted implementation/review/merged acceptance COMPLETE, including real named-anonymous parity. NEW EXPLICIT PARENT PROMOTION APPROVAL still required: current authority revokes prior90 approval. Two independently diagnosed inherited reconnect-fixture failures outside selected target remain disclosed. Core/Transport unchanged-project160/11x10 evidence retained fromb007, not newly executed. No whole-suite/live-provider/browser/OS-process/publication claim.",
   "executionEvidenceManifest": ".scratch\\integration-v2-execution-evidence-20261020.json",
-  "cleanState": "Clean production/tests at sourceb007 unchanged; accepted SDK/root/shared/provider/caller/retirement corrections intact. CURRENT parent-requested SDK union freshly7PASS, all SDK gates CLOSED; scanner3PASS/full801/160/11 initial+10 retained. Named-anonymous gate OPEN without speculative code or duplicate writer.87 evidence hashes/pins retained, including original-byte root/SDK review provenance. No new review, features advancement or publication.",
+  "cleanState": "Production/tests frozen at reviewed/tested0cfb97c1, complete named-anonymous correction integrated.867 initial+ten867 merged passes and43 owner evidence hashes preserved; all87 old artifact hashes retained. Original root/shared/provider/SDK/caller/retirement/CLI/worker corrections and exact pins unchanged. Final metadata/evidence checkpoint is append-only; no further source work pending. No features advancement/publication.",
   "safety": "No live checkout, auth, browser/UI/provider actions, features advancement, push/release/closure or rewritten history. Normal submodule init preserves Dock8c8d11 and MXC29702c3."
 }

@@ -1,0 +1,33 @@
+{
+  "head": "d12d07701930bef0d82fb0b474cb366496aef042",
+  "tree": "a71bd372149a9bcdf050d3fb5a15a9705b31d1ad",
+  "baseline": "babf909b9462989581d1842c2ba269c05833435c",
+  "productionB007Ancestor": true,
+  "status": [],
+  "baselineVerificationHead": "babf909b9462989581d1842c2ba269c05833435c",
+  "baselineVerificationStatus": [],
+  "submodules": [
+    " 8c8d11f948e10b86f375cf3e4e186e039450c8c9 Phantom.Dock.Avalonia.TabSwitching (heads/main)",
+    " 29702c3a408462a4e6be0f265328693a0d2169eb microsoft/mxc (v0.8.0-38-g29702c3a)"
+  ],
+  "changedPaths": [
+    "Phantom.Workspaces.Tests/Access/NamedAnonymousDevTunnelConsumerTests.cs",
+    "Phantom.Workspaces/EntityRepository.cs",
+    "Phantom.Workspaces/RepositorySource.cs",
+    "Phantom.Workspaces/Services/Access/AccessHostServices.cs",
+    "Phantom.Workspaces/Services/AgentPersistenceStoreSourceFactory.cs",
+    "Phantom.Workspaces/Services/DevTunnel/DevTunnelConnectManagementApi.cs",
+    "Phantom.Workspaces/Services/DevTunnel/DevTunnelNamedAnonymousEndpointResolver.cs",
+    "Phantom.Workspaces/Services/DevTunnel/DevTunnelServiceFactory.cs",
+    "docs/design/dev-tunnel-host-service.md"
+  ],
+  "sdkVersion": "10.0.303",
+  "testProject": "Phantom.Workspaces.Tests\\Phantom.Workspaces.Tests.csproj",
+  "dependencyManifestChanges": [],
+  "testRunnerSha256": "C2DAA2E47173261ADB4B3820E3C652015EB8AB56A9F0A0725ACC1ADA4B006647",
+  "stabilityRunnerSha256": "50ACCA52F202C1213A1FC395867B44AB1473CBE6E7DE2B60A3E6D04B6B4A9EDC",
+  "testProjectSha256": "270C20B1CE3002A3A2B8B06EE8F45E5DF98AF6C0ACB1E004951A844F413F0988",
+  "run228Count": 11,
+  "run228Failed": 0,
+  "dumpCount": 0
+}

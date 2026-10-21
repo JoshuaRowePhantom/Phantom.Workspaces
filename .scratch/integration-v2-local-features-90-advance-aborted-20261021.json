@@ -1,0 +1,27 @@
+{
+  "owner": "2042d708-200b-4ec9-8ea0-4ac52e4d8646",
+  "requestedTarget": "90f130b37a98d0323c48610236438d1feeea971d",
+  "requestedOperation": "Normal non-forced local fetch into actual C:\\dev\\Phantom.Workspaces refs/heads/features, conditional on safe current authority/ref/checkout rechecks.",
+  "result": "ABORTED BEFORE FETCH: actual current parent authority explicitly revokes local features approval because named-anonymous parity acceptance is open.",
+  "currentAuthority": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-integration-authority-v2-20261020.json",
+  "authorityPublication": "LOCAL FEATURES APPROVAL REVOKED: newer persisted named-anonymous repository/persistence parity assessment reopens acceptance on sourceb007.",
+  "newAssignment": "namedAnonymousCorrection assigns exclusive2042 bounded real independent typed Management discovery followed by validated tokenless anonymous relay for repository and persistence. No unsupported-only behavior substitution without further parent decision; no features promotion until new explicit approval.",
+  "readOnlyLivePrechecks": {
+    "repository": "C:\\dev\\Phantom.Workspaces",
+    "features": "d2a1a3b0752609321853f409d6fb1654fe17e7ff",
+    "head": "d2a1a3b0752609321853f409d6fb1654fe17e7ff",
+    "headDetached": true,
+    "featuresCheckedOutInAnyWorktree": false,
+    "scope": "Git rev-parse, symbolic-ref and worktree list with --no-optional-locks only. No live status/index refresh, source read/edit, checkout, process start/restart, authentication or browser action."
+  },
+  "healthySourcePrechecks": {
+    "repository": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\release-main-20261014",
+    "exactRequestedCommitPresent": true,
+    "d2IsAncestorOfRequested90": true,
+    "dock": "8c8d11f948e10b86f375cf3e4e186e039450c8c9",
+    "mxc": "29702c3a408462a4e6be0f265328693a0d2169eb"
+  },
+  "mutations": "NONE: no fetch, branch/ref creation/update, tracking update, maintenance/repair, source change, push, release, tag or issue closure.",
+  "integrationBaseline": "babf909b9462989581d1842c2ba269c05833435c",
+  "productionBaseline": "b0078d9284de95d76a228aa9f59b51282dff0ddc"
+}

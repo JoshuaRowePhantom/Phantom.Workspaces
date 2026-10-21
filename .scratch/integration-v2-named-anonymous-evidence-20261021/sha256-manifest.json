@@ -1,0 +1,197 @@
+[
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\affected-union240-initial-failures.log",
+    "bytes": 22537,
+    "sha256": "576B4C42C0211D1C3CF3AD73CB6BCB4C53F1C516AC8DB7C83DF51C4B0B047806"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\affected-union240-initial-failures.trx",
+    "bytes": 429913,
+    "sha256": "675777FA4CF31C8FCADE1A81E58674E598886C5BC950A73D081F55FCFBA6236B"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\baseline-missing-build.log",
+    "bytes": 72,
+    "sha256": "357A80FA7A4E43A91652C49637845A269689B02DA5983EFD5EE448F140F32EE4"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\corrected-targeted228.log",
+    "bytes": 6423,
+    "sha256": "6D65BBB7B629C503902A090CC4F8FF03ED2B748CDB4990DDB5E9A074E9160849"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\corrected-targeted228.trx",
+    "bytes": 380528,
+    "sha256": "A11C635E8C6CA7ADB40EE01BC91D65866D805073F939E80C41B35325F7CC4D80"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\corrected224.log",
+    "bytes": 6423,
+    "sha256": "7072D1C47589B15C0905F7FB9554A565BFD13C25B88927EBC554F6243D55B7EE"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\corrected224.trx",
+    "bytes": 373532,
+    "sha256": "B1DEEF08FA27008DFD3FCFB98618518CEF930E1A5DC97DA7805FF009D98238A6"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\green-build-analyzer-failure.log",
+    "bytes": 6083,
+    "sha256": "7BE731ABF078EA07876C0491135AAF912611C72083669F5E3422E0A29B5AF880"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\initial-corrected36.log",
+    "bytes": 6420,
+    "sha256": "A4CD232773A61BBA9ACD31148EABB6D0381F37E09028A2F8CF5D53C82C73A859"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\initial-corrected36.trx",
+    "bytes": 62972,
+    "sha256": "BC692B1F5FB9A04FDCEFD7398AFD4430D998C9110F161C927362672C710BD29A"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\initial-missing-build.log",
+    "bytes": 72,
+    "sha256": "357A80FA7A4E43A91652C49637845A269689B02DA5983EFD5EE448F140F32EE4"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\jrowe_DAEMON_2026-10-21_07_09_49_net10.0.trx",
+    "bytes": 55269,
+    "sha256": "3ED8DE4C59895793F5271BE606297FB63DCD0FD21121A0F1A74129A830C7E0BB"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\real-provider-fixture-compile-failure.log",
+    "bytes": 6513,
+    "sha256": "BD17C5D3ADEA210CBC3A478C002E4806F87277ED708444AF831A2A2B8B772D30"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\red-causal-baseline.log",
+    "bytes": 29666,
+    "sha256": "58405DA327E245AA927F6562448078587A55DB8D3B942FD1F8D59E07059E38C6"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\red-causal-baseline.trx",
+    "bytes": 62025,
+    "sha256": "B01EC9974975364DF40DAF04E7AAD66079EB55E5818A4B3DB0C588396101137C"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\red-fixture-original.log",
+    "bytes": 33038,
+    "sha256": "15EFBDD3D10211D9A4D087C699275D6955407580FEE3A8798D26ED084ECAFDC7"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\sdk-port-compile-failure.log",
+    "bytes": 5951,
+    "sha256": "3DA60B79B1BA2405BEC042F4701EC869A2F84EBB618A7E7C27E5FE9323982C73"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\sdk-transport-fixture-failure.log",
+    "bytes": 153534,
+    "sha256": "95C44C9BE02D6E40C6673B6701BD2D3CEE7CE9D47C6F326C2AAB1631B37982C2"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\sdk-transport-fixture-failure.trx",
+    "bytes": 363122,
+    "sha256": "6EA7030EC5B587F848A6CDE952ED577DDA30F6E74AA81AC4A3CFC35976666639"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\stability-final228.log",
+    "bytes": 733,
+    "sha256": "04F224B84418184F3D053255D3B52A329EE53B09A0662687A387FEC66297D5F1"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\unrelated-exact-baseline.log",
+    "bytes": 16584,
+    "sha256": "DEAA5973691FF565964AE10B27626FB3186FC772415021D37555E87449C6EED1"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\unrelated-exact-baseline.trx",
+    "bytes": 10923,
+    "sha256": "48CEF50AA3260703DBBB404B711866ED4786F94692D6551DA3D796FDC5D1492C"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\all-trx\\jrowe_DAEMON_2026-10-21_07_09_49_net10.0.trx",
+    "bytes": 55269,
+    "sha256": "3ED8DE4C59895793F5271BE606297FB63DCD0FD21121A0F1A74129A830C7E0BB"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\all-trx\\jrowe_DAEMON_2026-10-21_07_12_04_net10.0.trx",
+    "bytes": 62025,
+    "sha256": "B01EC9974975364DF40DAF04E7AAD66079EB55E5818A4B3DB0C588396101137C"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\all-trx\\jrowe_DAEMON_2026-10-21_07_19_19_net10.0.trx",
+    "bytes": 363122,
+    "sha256": "6EA7030EC5B587F848A6CDE952ED577DDA30F6E74AA81AC4A3CFC35976666639"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\all-trx\\jrowe_DAEMON_2026-10-21_07_21_15_net10.0.trx",
+    "bytes": 62972,
+    "sha256": "BC692B1F5FB9A04FDCEFD7398AFD4430D998C9110F161C927362672C710BD29A"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\all-trx\\jrowe_DAEMON_2026-10-21_07_27_06_net10.0.trx",
+    "bytes": 429913,
+    "sha256": "675777FA4CF31C8FCADE1A81E58674E598886C5BC950A73D081F55FCFBA6236B"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\all-trx\\jrowe_DAEMON_2026-10-21_07_31_02_net10.0.trx",
+    "bytes": 373532,
+    "sha256": "B1DEEF08FA27008DFD3FCFB98618518CEF930E1A5DC97DA7805FF009D98238A6"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\all-trx\\jrowe_DAEMON_2026-10-21_07_39_44_net10.0.trx",
+    "bytes": 380528,
+    "sha256": "A11C635E8C6CA7ADB40EE01BC91D65866D805073F939E80C41B35325F7CC4D80"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\all-trx\\jrowe_DAEMON_2026-10-21_07_40_26_net10.0.trx",
+    "bytes": 380528,
+    "sha256": "B168F440DD20B632A8094A4F4D76A88DCE6B5308297DE046E8F9888EDCACC3CC"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\all-trx\\jrowe_DAEMON_2026-10-21_07_40_45_net10.0.trx",
+    "bytes": 380528,
+    "sha256": "55326559D65AB8356CCCE146D01B241E7C7F754A969A36D8FA0AC0D522E2646E"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\all-trx\\jrowe_DAEMON_2026-10-21_07_41_04_net10.0.trx",
+    "bytes": 380528,
+    "sha256": "C9933055B1ADC384DCC591711B2C0CFF14045900FCE5E520B558AD4376A1E840"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\all-trx\\jrowe_DAEMON_2026-10-21_07_41_23_net10.0.trx",
+    "bytes": 380528,
+    "sha256": "A4161664461D858EF1195C647468DB183270D7213F6647C9639092172B6C09D0"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\all-trx\\jrowe_DAEMON_2026-10-21_07_41_40_net10.0.trx",
+    "bytes": 380528,
+    "sha256": "3B84F27399F2115E312CCAF469A0B2492608610F9E341098C25924D31113ACF6"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\all-trx\\jrowe_DAEMON_2026-10-21_07_41_58_net10.0.trx",
+    "bytes": 380528,
+    "sha256": "27C08243275C227C01ECEEEA76AC1B6E98F609E453F770A284F3A904081F66DA"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\all-trx\\jrowe_DAEMON_2026-10-21_07_42_20_net10.0.trx",
+    "bytes": 380528,
+    "sha256": "0F7B434B5698C5B5EF447D263344EC45EE86AF71ADB0FC1605361A1689FDBEA1"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\all-trx\\jrowe_DAEMON_2026-10-21_07_42_33_net10.0.trx",
+    "bytes": 380528,
+    "sha256": "C9A306BC533DF6613AF4CBB16EB9DF3DCB810E30C1BDCD38C40588875E1A3815"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\all-trx\\jrowe_DAEMON_2026-10-21_07_42_51_net10.0.trx",
+    "bytes": 380528,
+    "sha256": "EB415A9D1F219D87C93557FFE393F95B6E4A155A993097302E02C2495337D702"
+  },
+  {
+    "path": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021\\all-trx\\jrowe_DAEMON_2026-10-21_07_43_09_net10.0.trx",
+    "bytes": 380528,
+    "sha256": "278A203746FB46576765B16A5A7495E02CA026F9B8066AED5074F92C3198679F"
+  }
+]

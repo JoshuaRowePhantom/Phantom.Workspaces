@@ -1,12 +1,31 @@
 {
-  "codeCheckpoint": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
-  "productionCheckpoint": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
+  "codeCheckpoint": "0cfb97c193250ce4af80b0bf135185882224fa07",
+  "productionCheckpoint": "0cfb97c193250ce4af80b0bf135185882224fa07",
+  "namedAnonymousCorrection": {
+    "status": "COMPLETE: parent-scoped real repository+persistence parity implemented, immutable full stack integrated, fresh bounded independent review CLEAR, current complete merged App867 initial+ten867 stability PASS.",
+    "baseline": "babf909b9462989581d1842c2ba269c05833435c",
+    "source": "d12d07701930bef0d82fb0b474cb366496aef042",
+    "local": "0cfb97c193250ce4af80b0bf135185882224fa07",
+    "receipt": ".scratch\\integration-v2-named-anonymous-merged-acceptance-20261021.json",
+    "receiptSha256": "B35958F8361C9E92A51F623135EF928874F4D352847EB4AABFFFDCF0AAAFB064",
+    "review": ".scratch\\integration-v2-named-anonymous-review-20261021.json",
+    "ownerEvidence": ".scratch\\integration-v2-named-anonymous-evidence-20261021\\sha256-manifest-final.json",
+    "ownerEvidenceManifestSha256": "83D55B0D5DA2449F60B0BD39E55E2A86C992C891BB0E472E495A83960DD4A584",
+    "ownerEvidenceFiles": 43,
+    "ownerEvidenceRelocation": "Original absolute source-manifest paths map by identical relative suffix from parent.scratch\\access-named-anonymous-correction-evidence-20261021 to integration.scratch\\integration-v2-named-anonymous-evidence-20261021. All copied byte lengths/hashes independently verified; raw original manifest retained.",
+    "originalTopLevelArtifacts": 87,
+    "currentTopLevelArtifacts": 106,
+    "preservation": "All87 original records unchanged. Nineteen new top-level records include eleven raw merged TRX, review/source/acceptance/promotion receipts and source nested manifest; nested43 owner files retained with original red/intermediate/baseline failure/diagnosis evidence.",
+    "runtime": "Causal8/8 red on unchanged exactbab after separate teardown correction; source228 initial+ten228; canonical merged867 initial+ten867 with all ten distinct stability TRX independently parsed867/867. No code edits after review/execution,0dumps.",
+    "coreTransport": "Core/Interfaces/Transport production+tests unchanged fromb007, verified Git diff exit0. Their prior160/11 initial+ten stability plus SDK7/scanner3 evidence retained; no new execution claim.",
+    "publication": "HELD: actual parent authority still revokes90 promotion; new approval required. Rechecked actual local features/live detached HEAD bothd2 after stability. No fetch/ref mutation or live source actions."
+  },
   "sdkConsolidatedSourceReviewProvenance": {
     "receipt": ".scratch\\access-agent-1542-bounded-review-receipts-20261021.json",
     "sha256": "BAB4197569B4A8013DBE4E165782FE4C2D03F5718E234A9BC6DB624AF63E5EEC",
     "scope": "Verbatim existing independent7d3 exact4bce/af29/351 receipts and final reconciliation, not0438-derived clearance; separately cleareda1f companion identified.",
     "mergedClosure": "Already fresh current7/7 account/stream selector includes all5 stream cases on unchangedb007, archiveda001a8b7. Actual scanner3/3 preserved. No further SDK runtime/source/review wait.",
-    "boundary": "Original bytes preserved, no new review/test/source edit or whole-arc claim; only named-anonymous gate OPEN."
+    "boundary": "Historical SDK provenance consolidation: original bytes preserved, no new review/test/source edit or whole-arc claim. Subsequent named-anonymous closure has its own new receipt."
   },
   "currentMergedSdkRefresh": {
     "executedAtMetadataCheckpoint": "23758f456381397dcf50f48e656f6145e11cb91d",
@@ -18,7 +37,7 @@
     "skipped": 0,
     "log": ".scratch\\integration-v2-sdk-account-stream-current-refresh-tests.log",
     "status": "Fresh CURRENT merged execution satisfies direct parent affected-refresh request. Existing independent4bce/af29/351 source receipts retained, SDK gates CLOSED. No duplicate code/intake/review wait.",
-    "boundary": "Earlier7PASS and actual scanner3PASS plus full801/160/11 initial+10 remain separate preserved evidence. Only named-anonymous parity gate OPEN; no features advancement/publication."
+    "boundary": "Historical SDK refresh: earlier7PASS/scanner3PASS/fullb007801/160/11 initial+10 remain separate preserved evidence. Subsequent named-anonymous closure uses new correction/review/runtime receipt; no features advancement/publication."
   },
   "hostCoherentReviewProvenance": {
     "receipt": ".scratch\\access-host-coherent-review-receipt-20261020.json",
@@ -28,7 +47,7 @@
     "toolCallId": "call_k1c9dy15zZho0sAT43WbhuNC",
     "completionEventId": "a99460d9-ddf5-41ca-8a30-4ee2998cc89f",
     "exactResult": "No significant issues found in the reviewed changes.",
-    "boundary": "Existing pre-commit root delta review provenance only, sync/nonresumable/no separate agent_id. Original bytes preserved with exact-path binary attribute. No new review/runtime/source import or later-source/whole-arc clearance; named-anonymous gate OPEN."
+    "boundary": "Existing pre-commit root delta review provenance only, sync/nonresumable/no separate agent_id. Original bytes preserved with exact-path binary attribute. No new review/runtime/source import or later-source/whole-arc clearance inferred; later named-anonymous closure recorded separately."
   },
   "workerBaselineEquivalences": {
     "separateLifecycleSource": "3526186e6781e83e8de79cc08e83e8f84d0e93a4",
@@ -39,17 +58,9 @@
     "modelPumpLocal": "e8ed98d70fe885ce37b12410e82f63317a923db5",
     "modelPumpStablePatchId": "e5b0351c94ca62a86fff0578ae4533e5eba13241",
     "review": "Current worker handoff independently1b307 CLEAR exact e099vs352 and352vsb887.",
-    "boundary": "No new source/runtime execution or root import. All existing artifact hashes preserved; named-anonymous gate OPEN."
+    "boundary": "Inherited worker provenance only, no new source/runtime execution or root import. All existing hashes preserved; subsequent named-anonymous closure has its own new receipt."
   },
-  "pendingRequiredCorrections": [
-    {
-      "scope": "Named-anonymous repository and persistence endpoint discovery",
-      "status": "Source-confirmed Name-only Anonymous consumer request is rejected by canonical explicit-Endpoint guard before any row; source-supported IdentityMismatch, not new runtime reproduction.",
-      "receipt": ".scratch\\integration-v2-named-anonymous-assessment-20261021.json",
-      "ownership": "Fresh explicit parent scope/behavior decision required for root/configuration correction. Former4d remains stopped/root5a frozen; no new overlapping writer or invented Management identity.",
-      "acceptance": "Real independently typed Management lookup then tokenless relay OR explicit typed unsupported configuration; actual named tests/review/affected acceptance needed. Prior WEB-only anonymous case insufficient."
-    }
-  ],
+  "pendingRequiredCorrections": [],
   "sdkReviewedEquivalenceClosure": {
     "receipt": ".scratch\\integration-v2-sdk-reviewed-equivalence-closure-20261021.json",
     "status": "Account4bce,streamaf29/proof351,scanner-roota1f independently CLEAR per current parent authority/SDK handoff; exact inherited patch-equivalents/ancestry verified. No duplicate source intake.",
@@ -128,12 +139,15 @@
   "coreStabilityPassedPerRun": 171,
   "largerAppTargetInitialPassed": 312,
   "largerAppTargetStability": "Failed run5/10; exact causal fixture correction079f2081 subsequently targeted16 and root200x10 plus exact-final-source200 pass. Not claimed312x10.",
-  "knownRemainingFailures": "NEW source-confirmed named-anonymous caller/executor mismatch and missing actual named acceptance in both repository/persistence. Source-supported IdentityMismatch before row, NOT newly executed runtime failure. SDK gates stay CLEAR; prior full801/160/11 initial+10 and affected7/scanner3 evidence preserved. No source change, invented identity, features advancement or publication.",
+  "knownRemainingFailures": "NONE in final requested867-case target. Two inherited ReconnectingDevTunnelLifetimeTests synthetic-exception fixture cases independently fail on clean exactbab; source owner preserved actual baseline TRX/diagnosis, did not fix or call them green. Outside this target; full repository suite not claimed. Named-anonymous source/coverage gate CLOSED; promotion remains explicit parent decision.",
   "finalAcceptance": {
-    "codeCheckpoint": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
-    "appInitialPassed": 801,
+    "codeCheckpoint": "0cfb97c193250ce4af80b0bf135185882224fa07",
+    "appInitialPassed": 867,
     "appStabilityRuns": 10,
-    "appPassedPerRun": 801,
+    "appPassedPerRun": 867,
+    "coreEvidenceCheckpoint": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
+    "transportEvidenceCheckpoint": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
+    "unchangedProjectBoundary": "Core/Interfaces/Transport source+tests unchanged by new nine-file App correction; old source-specific initial+10 evidence retained, not falsely freshly executed.",
     "coreInitialPassed": 160,
     "coreStabilityRuns": 10,
     "corePassedPerRun": 160,
@@ -142,10 +156,10 @@
     "transportPassedPerRun": 11,
     "failed": 0,
     "skipped": 0,
-    "review": "Legacy/usage, provider/recovery, shutdown, actual-root Audience and latest stored missing-source delta independently reviewed read-only. SDK7d3 exact4bce/af29/351/a1f existing CLEAR receipts now reconciled; identical inherited patches and actual merged regions verified. No source edits after sourceb007 full matrices.",
+    "review": "Prior independent legacy/usage/provider/recovery/shutdown/Audience/stored-source and SDK exact source clearances retained. NEW independent named-anonymous-immutable-review clears exact nine-filebab..d12 delta, entire source tree equals local0cf at intake. No source edits after new review/current merged867 executions; reviewer static-only.",
     "sdkAffectedSelectorPassed": 7,
     "sdkCurrentMergedRefreshLog": ".scratch\\integration-v2-sdk-account-stream-current-refresh-tests.log",
-    "boundary": "Prior completed sourceb007 matrices/SDK affected selectors preserved, but NEW named-anonymous semantic/coverage gate OPEN. WEB-only anonymous and Private named cases do not establish anonymous name discovery. No new runtime reproduction, whole-arc acceptance, features advancement or publication."
+    "boundary": "Requested targeted implementation/review/acceptance COMPLETE including actual named-anonymous Management->tokenless relay parity. All prior evidence preserved. Two disclosed inherited fixture failures outside selected867; no whole-suite/live-provider/OS-process or publication claim. Prior90 approval REVOKED, new explicit parent approval required."
   },
   "gitHubOwnershipPairPassed": 75,
   "gitHubOwnershipPairStabilityRuns": 10,
@@ -188,6 +202,101 @@
   "pairedLegacyBoundary": "Only coherent c9 endpoint accepted, never SDK-only81504 prefix. Actual missing095 usage prerequisite plus parent-authorized paired App/Core/modal/OAuth marker retirement; native contracts/caches preserved. Read-only new21-file review clear; source unchanged after116/133x10 and fresh final committed116/133.",
   "dumpCount": 0,
   "logs": [
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-named-anonymous-merged-acceptance-20261021.json",
+      "bytes": 9256,
+      "sha256": "B35958F8361C9E92A51F623135EF928874F4D352847EB4AABFFFDCF0AAAFB064"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\access-named-anonymous-correction-20261021.json",
+      "bytes": 18423,
+      "sha256": "98884790D9608E50005886DCC068C531985237E226FF7082D1AE2F820B94F403"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-named-anonymous-evidence-20261021\\sha256-manifest-final.json",
+      "bytes": 11499,
+      "sha256": "83D55B0D5DA2449F60B0BD39E55E2A86C992C891BB0E472E495A83960DD4A584"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-named-anonymous-review-20261021.json",
+      "bytes": 1763,
+      "sha256": "2099AAAB8D589C18496D0AFAE43F15BE0A371CEF2AB62FFB2D5EA535C2C60ED4"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-local-features-90-advance-aborted-20261021.json",
+      "bytes": 2182,
+      "sha256": "4F1C365890DD7C389E13F900E597CBCC3CE9EACBDAE290406846336BCAE8B438"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-named-anonymous-complete-app-tests.log",
+      "bytes": 6278,
+      "sha256": "541A0EF37ACD4A3725F0728FA393B2EEDD1F0847DD91C26A99B6180CAA0D3B67"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-named-anonymous-complete-app.trx.log",
+      "bytes": 1409264,
+      "sha256": "99FCDC0F0E97BB267E18EA08239895803FAC8C04F55C8A3B59A939F2A9CE2C2F"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-named-anonymous-complete-app-stability.log",
+      "bytes": 5494,
+      "sha256": "FE8693E59348F83A4837052D5B7C063D0C9604980DCD8AECB53598A23BF7F0AC"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-named-anonymous-complete-app-stability-final.log",
+      "bytes": 723,
+      "sha256": "CC7AAB0075B8756EA1874F4FD98FDC9FB27E8864A1EE5B2EA8F3BEC4E6705F70"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-named-anonymous-merged-trx-20261021\\jrowe_DAEMON_2026-10-21_07_58_45_net10.0.trx",
+      "bytes": 1409264,
+      "sha256": "E9ACD34AF02ADBF7A0E5ECECC66605B913F7CD68FCCEB283FE6F567392BF5A02"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-named-anonymous-merged-trx-20261021\\jrowe_DAEMON_2026-10-21_07_59_26_net10.0.trx",
+      "bytes": 1409264,
+      "sha256": "515095980101C60A301B6C282797EFAC370C0F32C7A93EAD9FB51902667AEC31"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-named-anonymous-merged-trx-20261021\\jrowe_DAEMON_2026-10-21_08_00_12_net10.0.trx",
+      "bytes": 1409264,
+      "sha256": "0CAFA73305744D36B5FB88F28397C0D88F366532B4FBB18BCE8EBE6F94645067"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-named-anonymous-merged-trx-20261021\\jrowe_DAEMON_2026-10-21_08_00_48_net10.0.trx",
+      "bytes": 1409264,
+      "sha256": "0EBFFD1DABC599758BCC09027B8D34EF4D552F25F1531720BAAE44E46EDE053F"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-named-anonymous-merged-trx-20261021\\jrowe_DAEMON_2026-10-21_08_01_27_net10.0.trx",
+      "bytes": 1409264,
+      "sha256": "E9DE48174F4C2D257835BE46EEED62C5947FABADB7A42DDE2BBFC076E35F48DA"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-named-anonymous-merged-trx-20261021\\jrowe_DAEMON_2026-10-21_08_02_10_net10.0.trx",
+      "bytes": 1409264,
+      "sha256": "55A7453A445969611D67869399D721B974B819A18B7D597E76A58B0EEDC0BCEC"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-named-anonymous-merged-trx-20261021\\jrowe_DAEMON_2026-10-21_08_02_51_net10.0.trx",
+      "bytes": 1409264,
+      "sha256": "58C39B7AAC8ADC76F6660868654CA92036A0F795CCFEB8E2DB196C8CF578E1EC"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-named-anonymous-merged-trx-20261021\\jrowe_DAEMON_2026-10-21_08_03_32_net10.0.trx",
+      "bytes": 1409264,
+      "sha256": "AFD57C68ACE96AE8353AFFC583E43D85B5995D1AB0838AF8FD02A3DDCFC1C872"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-named-anonymous-merged-trx-20261021\\jrowe_DAEMON_2026-10-21_08_04_12_net10.0.trx",
+      "bytes": 1409264,
+      "sha256": "3974366653712CBC01507A79582F4792E1047AA98233C6CAC6AD94CAE4A42EEC"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-named-anonymous-merged-trx-20261021\\jrowe_DAEMON_2026-10-21_08_04_53_net10.0.trx",
+      "bytes": 1409264,
+      "sha256": "B604CA8C3C30B9045BBC4B1A4E1903DA49AB312A229100F9DCC329F832E75CE6"
+    },
     {
       "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\access-agent-1542-bounded-review-receipts-20261021.json",
       "bytes": 6086,

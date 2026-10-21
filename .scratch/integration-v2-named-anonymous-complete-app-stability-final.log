@@ -1,0 +1,11 @@
+Test run for C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Tests\bin\Debug\net10.0\Phantom.Workspaces.Tests.dll (.NETCoreApp,Version=v10.0)
+A total of 1 test files matched the specified pattern.
+Data collector 'Blame' message: All tests finished running, Sequence file will not be generated.
+Results File: C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Tests\TestResults\jrowe_DAEMON_2026-10-21_08_04_53_net10.0.trx
+
+Passed!  - Failed:     0, Passed:   867, Skipped:     0, Total:   867, Duration: 33 s - Phantom.Workspaces.Tests.dll (net10.0)
+
+=== Test Run Summary ===
+Executed : 867
+Passed   : 867
+Failed   : 0

@@ -1,0 +1,84 @@
+{
+  "owner": "2042d708-200b-4ec9-8ea0-4ac52e4d8646",
+  "status": "New named-anonymous implementation, bounded independent review and complete merged affected acceptance COMPLETE. Promotion remains held for new explicit parent approval.",
+  "baseline": "babf909b9462989581d1842c2ba269c05833435c",
+  "previousProduction": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
+  "sourceEndpoint": "d12d07701930bef0d82fb0b474cb366496aef042",
+  "integratedProduction": "0cfb97c193250ce4af80b0bf135185882224fa07",
+  "sourceToLocal": {
+    "36d5d9423e519e78a65c439c6dff8eb88b7e9cb7": "710412538dd92bac8f0ff5c9da93e424ce28a346",
+    "fc276a1c23bfd622361a26e7671176b37c5e8016": "0ec01066bd2161e4dbca9e4c28dc3371c37b1764",
+    "d12d07701930bef0d82fb0b474cb366496aef042": "0cfb97c193250ce4af80b0bf135185882224fa07"
+  },
+  "intake": "Normal append-only cherry-pick of full immutable three-commit stack. Entire final integration tree equals source endpoint d12 before metadata/evidence additions; never accepted either red-only prefix.",
+  "semantics": "Both named repository and persistence consumers now use real independently broker-authorized non-anonymous Management discovery, validate exact marker/name/unique single-port safe endpoint, dispose Management ownership, then rebuild canonical accountless tokenless anonymous relay request. Same real broker/catalog/live scope, no Connect mint or identity-to-relay fallback. Explicit anonymous Web and private Connect behavior preserved.",
+  "configuration": "Anonymous AccessMode retains configured GitHub/Entra/OAuth Management route/account pin. Explicit anonymous relay authentication or absent authentication uses genuine unbound default GitHub Management request; production provider verifies actual account through separately approved work. No fabricated account, hidden acquisition, retired API, new broker graph or unsupported-only substitution.",
+  "sourceOwnerProof": {
+    "handoff": ".scratch\\access-named-anonymous-correction-20261021.json",
+    "causalRed": "8/8 expected failures at test-onlyfc27 on unchanged exactbab production. First red's teardown-masked consumer errors separately preserved, never misrepresented.",
+    "corrected": "228/228 initial plus ten228-case stability passes;54 new cases and174 retained affected cases.",
+    "evidenceManifest": ".scratch\\integration-v2-named-anonymous-evidence-20261021\\sha256-manifest-final.json",
+    "manifestSha256": "83D55B0D5DA2449F60B0BD39E55E2A86C992C891BB0E472E495A83960DD4A584",
+    "files": 43,
+    "relocation": "Original manifest paths beginning C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021 map to integration .scratch\\integration-v2-named-anonymous-evidence-20261021 with identical relative suffixes. All43 copied files verified byte length and SHA256; original manifest preserved unchanged.",
+    "diagnoses": "All original red/fixture/analyzer/build/response-ownership failures independently diagnosed with required read-only skill; exact logs/TRX/diagnosis receipts retained."
+  },
+  "independentReview": {
+    "receipt": ".scratch\\integration-v2-named-anonymous-review-20261021.json",
+    "scope": "Fresh separate read-only code-review task named-anonymous-immutable-review, all nine changed files exactbab..d12 and minimum unchanged context.",
+    "result": "No significant introduced issues found in the exact bounded delta.",
+    "boundary": "Static source review only; reviewer did not execute tests or confer whole-arc/publication approval. Tool did not report separate agent_id; none invented."
+  },
+  "mergedExecution": {
+    "project": "Phantom.Workspaces.Tests\\Phantom.Workspaces.Tests.csproj",
+    "runner": "Existing scripts\\run-tests.ps1, explicit TestProject,46 deduplicated named selectors, Modefull.",
+    "selectors": "AccessBrokerTests,AccessHostServicesTests,AccessMigrationTests,DevTunnelAuthenticationHandlerTests,DevTunnelClientAuthorizationTests,DevTunnelConfigurationTests,DevTunnelConnectCredentialAccessExecutorTests,DevTunnelConnectManagementApiTests,DevTunnelConnectMintSessionTests,DevTunnelCredentialConsumerTests,DevTunnelEndpointResolverTests,DevTunnelIdentityCredentialAccessExecutorTests,DevTunnelIdentityRouteFactoryTests,EntraCredentialAccessExecutorTests,EntraPrivateCapabilityTests,GitHubActionsUsageProviderTests,GitHubCopilotUsageProviderTests,GitHubCredentialAccessExecutorTests,GitHubPrivateCredentialSessionTests,GitHubSelectedSourcePolicyTests,GitHubUsageProviderAccessTests,HostConfiguredAccessGraphTests,HostDevTunnelCompositionTests,LegacyAuthorizationUiRemovalTests,McpOAuthAttemptTests,McpOAuthCacheAdministrationTests,McpOAuthCacheCommitCoordinatorTests,McpOAuthCredentialAccessExecutorOwnershipTests,McpOAuthCredentialRequestCatalogTests,McpOAuthProviderDiscoveryTests,NamedAnonymousDevTunnelConsumerTests,OAuthCallbackBindingFactoryTests,OAuthCredentialAccessExecutorTests,OAuthPrincipalConfigurationTests,ProviderCredentialCacheAdministrationTests,RunVsCodeTunnelToolTests,ScheduledToolRegistryTests,StoredSecretAccessExecutorTests,StoredSecretExecutionLifetimeTests,VsCodeCliInvokerTests,VsCodeCliLocatorTests,VsCodeTunnelAuthorizationTests,VsCodeTunnelDiscoveryToolTests,VsCodeTunnelProcessEvidenceTests,VsCodeTunnelStatusResolverTests,WorkerCopilotProviderBrokerTests",
+    "caseAccounting": "Prior complete801 +54 new named-anonymous cases +12 additional retained endpoint/configuration/composition cases =867.",
+    "initial": {
+      "passed": 867,
+      "failed": 0,
+      "skipped": 0,
+      "log": ".scratch\\integration-v2-named-anonymous-complete-app-tests.log",
+      "rawTrx": ".scratch\\integration-v2-named-anonymous-complete-app.trx.log"
+    },
+    "stability": {
+      "runner": "Existing Skills scripts\\run-tests-stability.ps1, Runs10,Modefull,NoBuild, explicit App TestProject default.",
+      "runs": 10,
+      "passedPerRun": 867,
+      "failed": 0,
+      "skipped": 0,
+      "log": ".scratch\\integration-v2-named-anonymous-complete-app-stability.log",
+      "finalDetailedLog": ".scratch\\integration-v2-named-anonymous-complete-app-stability-final.log",
+      "rawTrxDirectory": ".scratch\\integration-v2-named-anonymous-merged-trx-20261021",
+      "rawTrxCount": 10,
+      "independentCounters": "Parsed all ten distinct raw stability TRX: each867total/867passed/0failed. Initial raw TRX independently867total/867passed/0failed/0notExecuted. Exact raw bytes protected by targeted binary attributes.",
+      "logBoundary": "Helper overwrites its successful per-run detailed log; full helper stdout, final detailed log and every raw TRX preserved. No claim separate intermediate detailed logs were generated."
+    },
+    "scope": "Actual real-broker named consumers, root configured route, private/HTTP/Connect/generic/recovery/shutdown/CLI/worker/legacy affected target, deterministic providers/HTTP. No live provider/browser/CLI sign-in, WebView, OS-process acceptance or whole-solution run.",
+    "dumps": 0
+  },
+  "retainedUnchangedEvidence": {
+    "proof": "git diff --exit-code b007 HEAD -- Core,Interfaces,Core.Tests,Transport,Transport.Tests returned0; no production or tests in those projects changed.",
+    "core": "Prior sourceb007 Core160 initial+ten160 stability plus later current7-case SDK and3-case scanner proof retained. Not claimed newly rerun on0cf.",
+    "transport": "Prior sourceb007 actual Transport11 initial+ten11 retained, explicit safe selectors exclude live/WebView/real CLI. Not claimed newly rerun on0cf.",
+    "oldArtifacts": 87,
+    "preservation": "All87 original top-level artifact byte lengths/SHA256 remain unchanged; historical failures retain actual limits and are not relabeled green."
+  },
+  "knownUnrelatedFailures": {
+    "test": "ReconnectingDevTunnelLifetimeTests.Reconnect_PrefersAsyncCleanupOfReplacedAndCurrentTransports",
+    "cases": 2,
+    "baseline": "Both fail identically in separate clean exactbab normal worktree; isolated read-only diagnosis retained.",
+    "mechanism": "Unchanged fixture throws plain HttpRequestException while unchanged default wrappers require typed connectivity failure. Fails before reconnect/disposal assertions.",
+    "disposition": "Outside requested target, no source/test repair or green claim. New54 regressions exercise real reconnecting consumer paths. Full repository suite not claimed green."
+  },
+  "pins": {
+    "Phantom.Dock.Avalonia.TabSwitching": "8c8d11f948e10b86f375cf3e4e186e039450c8c9",
+    "microsoft\\mxc": "29702c3a408462a4e6be0f265328693a0d2169eb"
+  },
+  "publication": {
+    "status": "HELD: latest actual parent authority still explicitly revokes prior90 promotion. New explicit approval required; completed correction/review does not self-authorize promotion.",
+    "receipt": ".scratch\\integration-v2-local-features-90-advance-aborted-20261021.json",
+    "latestReadOnlyRecheck": "Actual C:\\dev\\Phantom.Workspaces refs/heads/features and detached HEAD bothd2a1a3b0752609321853f409d6fb1654fe17e7ff after merged stability.",
+    "actions": "No fetch/ref mutation, live source/index/status refresh, checkout/restart/authentication, push, release, tag, issue closure, old metadata repair or history rewriting."
+  }
+}

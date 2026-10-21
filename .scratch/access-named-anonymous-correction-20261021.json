@@ -1,0 +1,182 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-21",
+  "delegatedIntegrator": "2042d708-200b-4ec9-8ea0-4ac52e4d8646",
+  "authority": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-integration-authority-v2-20261020.json",
+  "authorityDecision": "namedAnonymousCorrection: preserve supported named-anonymous repository AND persistence behavior through independently broker-authorized non-anonymous Management discovery followed by tokenless anonymous relay.",
+  "status": "IMPLEMENTED, committed, clean, affected acceptance green; pending parent's independent immutable bounded review. No publication or features advancement authorized.",
+  "worktree": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-named-anonymous-parity-20261021",
+  "branch": "fix/access-named-anonymous-parity-20261021",
+  "baseline": "babf909b9462989581d1842c2ba269c05833435c",
+  "productionBaseline": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
+  "finalCommit": "d12d07701930bef0d82fb0b474cb366496aef042",
+  "finalTree": "a71bd372149a9bcdf050d3fb5a15a9705b31d1ad",
+  "appendOnlyCommitOrder": [
+    {
+      "sha": "36d5d9423e519e78a65c439c6dff8eb88b7e9cb7",
+      "kind": "Intentional red tests only",
+      "result": "8 executed, 8 failed. Root routing failures were causal; four consumer errors were initially masked by strict-mock DisposeAsync teardown.",
+      "integrationWarning": "Immutable red evidence only, never an accepted standalone endpoint."
+    },
+    {
+      "sha": "fc276a1c23bfd622361a26e7671176b37c5e8016",
+      "kind": "Test-fixture teardown correction only, still intentional red",
+      "result": "8 executed, 8 failed against unchanged exact baseline production. Four actual repository/persistence cases fail before Management authorization with the anonymous name-only canonical mismatch; four actual root-route cases receive null.",
+      "integrationWarning": "Immutable unmasked causal red evidence only, never an accepted standalone endpoint."
+    },
+    {
+      "sha": "d12d07701930bef0d82fb0b474cb366496aef042",
+      "kind": "Complete production/test/documentation correction",
+      "result": "228 affected tests passed, followed by 10 consecutive 228-case passes with no build. Includes 54 named-anonymous cases and 174 retained affected cases.",
+      "integrationWarning": "Consume the full append-only stack; this is the clean corrective endpoint. All commits include the required Copilot coauthor trailer."
+    }
+  ],
+  "productionFlow": {
+    "root": "AccessHostServices.CreateDevTunnelIdentityRoute(RepositorySource,useKind) now creates a genuine Management route for named anonymous sources too, using the same host OAuth registry and real broker graph. Explicit anonymous Web endpoints still return no route and require no discovery.",
+    "consumers": "EntityRepository.CreateDevTunnelNameDataAccessLayerAsync and AgentPersistenceStoreSourceFactory.CreateDevTunnelAsync independently construct a named Management identity request for anonymous relay sources. Both pass the exact existing broker and live presentation callback through DevTunnelServiceFactory.",
+    "identity": "CreateNamedManagementIdentityRequest uses a resource-bound lineage and distinct management-discovery requestor/use fingerprint. Existing route rebinding logic is reused, retaining configured GitHub/Entra/OAuth credentials and their account pins. Null/default GitHub requests remain genuinely unbound; the actual provider must supply and verify the real account.",
+    "management": "DevTunnelServiceFactory uses its existing typed identityRequest when selecting the new internal DevTunnelNamedAnonymousEndpointResolver for anonymous name-only descriptors. The actual SDK ListTunnels call passes through the existing DevTunnelManagementAuthenticationHandler and production DevTunnelIdentityCredentialAccessExecutor. Exported identity and underlying provider release must be separately authorized before acquisition/send. Identity is borrowed only within the existing generation/policy-guarded lease callback at validated HTTPS Management destinations.",
+    "discovery": "Read-only Management listing requests IncludePorts and the Workspaces marker, never Connect token scopes. Exactly one marker/name match is required; auto selects the unique marker-bearing tunnel. Require exactly one nonzero typed port and reuse the existing safe endpoint validator from DevTunnelConnectManagementApi. Its only change is private-to-internal helper visibility; its algorithm is unchanged.",
+    "relay": "After discovery and Management cleanup, each consumer rebuilds its anonymous Connect request around the exact discovered endpoint, preserving the anonymous route and null account. This rebuild also recomputes the canonical logical credential identity for the endpoint. Actual relay sends remain independently broker-authorized via the existing canonical anonymous executor and DevTunnelAuthenticationHandler; no Connect mint or identity inspection is invoked for anonymous relay.",
+    "separation": "Management identity never enters the relay request. Both Authorization and X-Tunnel-Authorization are absent at anonymous relay transport. Management never receives X-Tunnel-Authorization. Unsafe SDK redirects to relay are rejected before forwarding identity.",
+    "lifetime": "Each discovery owns its SDK client, authentication pipeline, transport, and actual HTTP responses. A narrowly scoped response lifetime below the authentication handler drains SDK responses and sanitized request metadata because the SDK otherwise leaves successful/late response content undisposed. Existing identity leases, exact-generation replay guards and bounded retry behavior remain unchanged. Caller cancellation and broker shutdown discard late results before endpoint/relay publication.",
+    "errors": "Discovery mismatches remain typed IdentityMismatch. Transport/SDK malformed-response failures are sanitized to ProviderFailure without original transport text/inner exception. OperationCanceledException remains cancellation; no retry loops or sleeps were added."
+  },
+  "configurationSemantics": {
+    "unchangedProjection": "WorkspacesConfiguration.ToRepositorySource and its data-profile > tunnel-profile > legacy-default precedence are unchanged and exercised.",
+    "anonymousAccessMode": "AccessMode.Anonymous means tokenless relay, not anonymous Management. An explicitly configured github/entra/oauth Management identity is retained.",
+    "anonymousAuthentication": "RemoteAuthentication.AnonymousScheme is relay intent even when AccessMode is Private. For named discovery it selects the ordinary unbound GitHub Management request, not AnonymousDevTunnelIdentityRoute. The same default applies to null authentication. No verified/default account is fabricated.",
+    "explicitAnonymousWeb": "Unchanged: a supplied explicit Web endpoint with anonymous authentication needs neither Management discovery nor a broker.",
+    "private": "Private named and explicit-endpoint consumers retain the existing Connect path. The canonical anonymous explicit-safe-endpoint/null-account guard is untouched.",
+    "decisionBlocker": null
+  },
+  "scopeAndPreservation": {
+    "changedPaths": [
+      "Phantom.Workspaces\\EntityRepository.cs",
+      "Phantom.Workspaces\\RepositorySource.cs",
+      "Phantom.Workspaces\\Services\\Access\\AccessHostServices.cs",
+      "Phantom.Workspaces\\Services\\AgentPersistenceStoreSourceFactory.cs",
+      "Phantom.Workspaces\\Services\\DevTunnel\\DevTunnelConnectManagementApi.cs",
+      "Phantom.Workspaces\\Services\\DevTunnel\\DevTunnelNamedAnonymousEndpointResolver.cs",
+      "Phantom.Workspaces\\Services\\DevTunnel\\DevTunnelServiceFactory.cs",
+      "Phantom.Workspaces.Tests\\Access\\NamedAnonymousDevTunnelConsumerTests.cs",
+      "docs\\design\\dev-tunnel-host-service.md"
+    ],
+    "seams": "Only internal typed HttpMessageHandler factories for deterministic Management HTTP. No raw credential getter, provider fallback, retired API, new broker/default graph, or root/catalog replacement.",
+    "unchanged": "Required five-argument typed host composer and required ApplicationServices broker/live delegate; shared 468/2be/941/8bc/f121 authorization; all GitHub/Entra/OAuth provider algorithms and generation guards; recovery and shutdown corrections; retirements; private Connect mint session/executor; existing reconnect wrappers.",
+    "isolation": "Normal git worktree created from exact babf909b using healthy release-main-20261014 clone. Canonical integration worktree, C:\\dev\\Phantom.Workspaces and frozen owners were not edited or used for runners. A second normal exact-baseline verification worktree contains no source changes.",
+    "publication": "No push, tag, release, issue changes, features advancement, live authentication/status/browser/provider/process activity, manual Git/submodule metadata edits, history rewriting, or dirty source copying."
+  },
+  "validation": {
+    "testProject": "Phantom.Workspaces.Tests\\Phantom.Workspaces.Tests.csproj",
+    "mode": "full",
+    "runner": "scripts\\run-tests.ps1",
+    "causalRed": {
+      "production": "babf909b9462989581d1842c2ba269c05833435c unchanged",
+      "testCheckpoint": "fc276a1c23bfd622361a26e7671176b37c5e8016",
+      "executed": 8,
+      "passed": 0,
+      "failed": 8,
+      "log": "red-causal-baseline.log",
+      "trx": "red-causal-baseline.trx",
+      "limitation": "The prior 36d5 red run's four consumer failures were teardown-masked; that original evidence is preserved separately and not misrepresented as unmasked runtime proof."
+    },
+    "corrected": {
+      "executed": 228,
+      "passed": 228,
+      "failed": 0,
+      "namedAnonymousCases": 54,
+      "existingAffectedCases": 174,
+      "log": "corrected-targeted228.log",
+      "trx": "corrected-targeted228.trx"
+    },
+    "selectors": [
+      "NamedAnonymousDevTunnelConsumerTests",
+      "DevTunnelCredentialConsumerTests",
+      "HostConfiguredAccessGraphTests",
+      "DevTunnelEndpointResolverTests",
+      "DevTunnelIdentityCredentialAccessExecutorTests",
+      "DevTunnelIdentityRouteFactoryTests",
+      "DevTunnelConnectManagementApiTests",
+      "DevTunnelConnectMintSessionTests",
+      "DevTunnelConnectCredentialAccessExecutorTests",
+      "DevTunnelAuthenticationHandlerTests",
+      "DevTunnelConfigurationTests",
+      "DevTunnelClientAuthorizationTests",
+      "HostDevTunnelCompositionTests"
+    ],
+    "stability": {
+      "runner": "C:\\dev\\Phantom.Workspaces-Skills\\scripts\\run-tests-stability.ps1",
+      "runs": 10,
+      "mode": "full",
+      "noBuild": true,
+      "explicitProjectDefault": "$PSDefaultParameterValues['run-tests.ps1:TestProject'] = <worktree>\\Phantom.Workspaces.Tests\\Phantom.Workspaces.Tests.csproj",
+      "casesPerRun": 228,
+      "passed": 2280,
+      "failed": 0,
+      "log": "stability228x10.log",
+      "lastDetailedLog": "stability-final228.log",
+      "trx": "all-trx contains all ten distinct 228-case stability TRX files, in addition to the targeted 228-case run; source-validation-receipt and run-index verify eleven 228-case runs.",
+      "logBoundary": "The required existing stability helper overwrites scripts\\test-results.log on each successful iteration. Its complete stdout, final detailed log and all individual TRX results are retained; separate intermediate detailed successful logs were not produced by that helper."
+    },
+    "coverage": [
+      "Actual named repository and persistence creation, startup validation and a subsequent operation, using production reconnecting wrappers and relay authentication handler.",
+      "Anonymous AccessMode and explicit anonymous authentication; configuration projection; named and auto marker discovery; exact safe single-port endpoint.",
+      "Actual root-created default/unbound GitHub Management routes; actual configured root GitHub/Entra/OAuth routes retained on anonymous AccessMode.",
+      "Actual AccessHostServices broker/catalog/AuthorizationRows ownership for configured OAuth sources at Bootstrap and Runtime; deny before acquisition/send, strict fake secret store untouched.",
+      "Production AccessBroker, release policy, registry, coordinator, DevTunnelIdentityCredentialAccessExecutor and exported identity leases for successful paths, with deterministic provider executors and HTTP.",
+      "Four additional complete success cases use the actual production GitHubCredentialAccessExecutor with only its existing source interface faked: unknown unbound request becomes the source-verified account through genuine explicit provider Perform; raw acquisition buffers are zeroed, both remembered identity releases bind the verified account, relay remains accountless.",
+      "Management authorization before send and independent provider authorization before acquisition; Bootstrap Management and Runtime relay scope across a deterministic HTTP barrier.",
+      "Zero anonymous Connect mint/identity inspection; no identity headers on anonymous relay; no relay credential at Management; post-send request metadata sanitized.",
+      "Missing marker, ambiguous name, multiple ports, zero port and unsafe endpoint rejected before relay construction. SDK typed ports are ushort; no impossible above-ushort typed fixture is claimed.",
+      "Management transport/malformed-response errors are typed and sanitized; SDK redirect to relay never exports identity.",
+      "Management/provider denial, broker shutdown while provider approval is pending, relay denial without identity fallback, caller cancellation and shutdown with a deliberately late deterministic Management response.",
+      "Underlying identity leases unusable after discovery; SDK/transport/response-content cleanup, including late shutdown, exactly once.",
+      "Retained explicit anonymous Web/no-discovery behavior, private named/endpoint routing, current-generation guards, bounded 401 replay and cancellation behavior exercised by unchanged affected selectors."
+    ],
+    "boundaries": "No live provider, network, CLI/UI sign-in, or entire solution run. Successful production provider execution is represented by the actual GitHub executor with its existing deterministic fake source; Entra/OAuth successes use deterministic provider executors with the production broker and exported-identity executor. Actual root broker/catalog integration is additionally exercised through denial before provider work. No new source-level review was delegated; parent performs the required independent immutable review."
+  },
+  "unrelatedBaselineFailures": {
+    "notHiddenOrRepaired": true,
+    "initialUnion": "The initially broader 240-case union had 230 passes and 10 failures: eight new response-ownership assertions plus two existing reconnect-fixture cases. Original logs/TRX retained.",
+    "test": "ReconnectingDevTunnelLifetimeTests.Reconnect_PrefersAsyncCleanupOfReplacedAndCurrentTransports",
+    "cases": 2,
+    "mechanism": "Unchanged fixture injects plain HttpRequestException(\"Reconnect.\") without a connection-failure predicate; unchanged wrappers recognize only typed WebDataAccessRequestException.IsConnectivityFailure. It fails before reconnect/disposal assertions.",
+    "baselineWorktree": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-named-anonymous-baseline-20261021",
+    "baselineBranch": "verify/access-named-anonymous-baseline-20261021",
+    "baselineCommit": "babf909b9462989581d1842c2ba269c05833435c",
+    "baselineStatus": "clean",
+    "baselineExecuted": 2,
+    "baselineFailed": 2,
+    "log": "unrelated-exact-baseline.log",
+    "trx": "unrelated-exact-baseline.trx",
+    "disposition": "Read-only isolated diagnosis confirms inherited unrelated fixture mismatch; no unrelated wrapper/test changes. ReconnectingDevTunnelLifetimeTests was removed from the final affected selector union because these wrappers are unchanged; the new tests still exercise their actual consumer paths. This packet does not claim the broader 240-case selection or whole suite is green."
+  },
+  "diagnoses": {
+    "receipt": "diagnosis-receipts.json",
+    "sha256": "4BB65119382ED00364B48C82DEE967DA9BA42F06470D1221D6F2042285C81093",
+    "allFailures": "Every actual red/fixture/build/baseline failure was separately diagnosed via the required isolated read-only skill before correction or next runner. All original logs/TRX remain available.",
+    "dumps": "No .dmp files found before runners, during baseline diagnosis, or in final source receipt. No dumps lost to runner cleanup."
+  },
+  "dependencies": {
+    "dotnetSdk": "10.0.303",
+    "dependencyManifestChanges": [],
+    "installation": "No packages/tools manually installed. Fresh-tree -NoBuild runner probes first reported no runnable binaries; only then the existing selected run-tests.ps1 performed its standard restore/build.",
+    "submodules": {
+      "operation": "Normal git submodule update --init --recursive in each isolated normal worktree",
+      "Phantom.Dock.Avalonia.TabSwitching": "8c8d11f948e10b86f375cf3e4e186e039450c8c9",
+      "microsoft\\mxc": "29702c3a408462a4e6be0f265328693a0d2169eb"
+    }
+  },
+  "evidence": {
+    "directory": "C:\\dev\\Phantom.Workspaces-Skills\\.scratch\\access-named-anonymous-correction-evidence-20261021",
+    "manifest": "sha256-manifest-final.json",
+    "manifestSha256": "83D55B0D5DA2449F60B0BD39E55E2A86C992C891BB0E472E495A83960DD4A584",
+    "hashedFiles": 43,
+    "manifestBoundary": "Final manifest covers every existing evidence file, including original intermediate logs/TRX, all raw test result files, diagnoses, run index, source-validation receipt and prior generated manifest; final manifest does not hash itself.",
+    "sourceReceipt": "source-validation-receipt.json",
+    "runIndex": "run-index.json",
+    "cleanSource": "git status --short empty after moving artifacts outside the worktree; git diff --check passed. Final commit tree exactly contains the tested source. Baseline verification tree is also clean."
+  },
+  "remainingGate": "Parent independent bounded review of babf909b..d12d0770, followed by its integration decision. No source/configuration decision blocker remains. The two unrelated baseline fixture failures are disclosed separately. Prior90 promotion remains revoked; no features/publication action was taken."
+}

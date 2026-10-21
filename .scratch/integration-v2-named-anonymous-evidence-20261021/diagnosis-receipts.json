@@ -1,0 +1,98 @@
+{
+  "skill": "C:\\dev\\Phantom.Workspaces-Skills\\.github\\skills\\diagnose-unrelated-test-failure\\SKILL.md",
+  "issue": 1513,
+  "isolation": "Each invocation used a separate explore subagent with only ISSUE, WORKTREE and FAILING_TESTS inputs, the exact skill path, and read-only/no-edit/no-run/no-auth/no-network/no-provider/no-process/no-publication instructions. No implementation briefing or independent code-review request was supplied.",
+  "receipts": [
+    {
+      "name": "named-anonymous-readonly-diagnosis",
+      "failingTests": [
+        "NamedAnonymous_ActualConsumerRequiresManagementAuthorizationBeforeDiscovery",
+        "NamedAnonymous_ActualRootCreatesUnboundNonAnonymousManagementRoute"
+      ],
+      "classification": "related",
+      "evidence": "red-fixture-original.log",
+      "finding": "Four root-route cases receive null because AccessHostServices excludes anonymous named sources. Four consumer cases are masked by teardown: the strict IDevTunnelConnectMintSession mock lacks DisposeAsync setup. The original log does not establish those consumers' underlying failure.",
+      "resolution": "Append-only fc276a1c supplies only the missing strict-mock disposal setup. The first red commit remains immutable and is never a standalone accepted endpoint."
+    },
+    {
+      "name": "named-anonymous-causal-diagnosis",
+      "failingTests": [
+        "NamedAnonymous_ActualConsumerRequiresManagementAuthorizationBeforeDiscovery",
+        "NamedAnonymous_ActualRootCreatesUnboundNonAnonymousManagementRoute"
+      ],
+      "classification": "related",
+      "evidence": "red-causal-baseline.log",
+      "finding": "All eight fail on unchanged baseline production. Root routing returns null. Both consumers construct anonymous name-only Connect requests; the unchanged canonical executor requires an explicit endpoint, returns no sources, and the broker fails before Management authorization. PendingAsync propagates the actual DevTunnelCredentialAccessException.",
+      "limitation": "This independently diagnoses the actual eight-case runtime evidence, not any live service or provider execution."
+    },
+    {
+      "name": "named-anonymous-analyzer-diagnosis",
+      "failingTests": ["NamedAnonymousDevTunnelConsumerTests (build failure)"],
+      "classification": "related",
+      "evidence": "green-build-analyzer-failure.log",
+      "finding": "xUnit2031 rejects Assert.Single(memory.Where(...)); zero tests executed.",
+      "resolution": "Use the existing Assert.Single(collection, predicate) overload; keep the exact null-account assertion."
+    },
+    {
+      "name": "named-anonymous-sdk-fixture-diagnosis",
+      "failingTests": [
+        "NamedAnonymous_CancellationOrShutdownDiscardsLateManagementResponse",
+        "NamedAnonymous_InvalidDiscoveryNeverBuildsRelay",
+        "NamedAnonymous_RealBrokerIdentityLeaseDiscoversThenTokenlessRelay",
+        "NamedAnonymous_DeniedProviderOrPendingShutdownNeverSends",
+        "NamedAnonymous_ActualConfiguredRootPreservesManagementProvider",
+        "NamedAnonymous_ActualConsumerRequiresManagementAuthorizationBeforeDiscovery"
+      ],
+      "classification": "related",
+      "evidence": "sdk-transport-fixture-failure.log",
+      "finding": "All 32 failing cases stop in the SDK constructor: ManagementTransport directly derives from HttpMessageHandler, but this SDK requires a DelegatingHandler chain terminating in HttpClientHandler or SocketsHttpHandler.",
+      "resolution": "Use the existing repository fake-transport pattern: a deterministic DelegatingHandler ending in an unused HttpClientHandler with redirects disabled. No live HTTP is sent."
+    },
+    {
+      "name": "named-anonymous-port-diagnosis",
+      "failingTests": ["NamedAnonymous_InvalidDiscoveryNeverBuildsRelay (build failure)"],
+      "classification": "related",
+      "evidence": "sdk-port-compile-failure.log",
+      "finding": "CS0031: SDK TunnelPort.PortNumber is ushort; a typed fixture cannot assign 65536. Zero tests executed.",
+      "resolution": "Remove the unrepresentable typed fixture and redundant upper-bound predicate. Preserve actual zero-port, multiple-port, ambiguous, missing-marker and unsafe-endpoint rejection assertions. No production/private endpoint predicate is weakened."
+    },
+    {
+      "name": "named-anonymous-content-lifetime-diagnosis",
+      "failingTests": [
+        "NamedAnonymous_CancellationOrShutdownDiscardsLateManagementResponse",
+        "NamedAnonymous_RealBrokerIdentityLeaseDiscoversThenTokenlessRelay",
+        "Reconnect_PrefersAsyncCleanupOfReplacedAndCurrentTransports"
+      ],
+      "classification": "mixed",
+      "evidence": "affected-union240-initial-failures.log",
+      "related": "Six named-anonymous success cases and two shutdown-late cases reach the original content-disposal assertions with zero disposals, despite disposed transports. SDK-backed response ownership needs explicit application handling; the diagnosis did not claim a verified SDK internal disposal site.",
+      "resolution": "Keep the content-disposal assertions unchanged. A narrow discovery-owned response lifetime below the exported Management authentication handler records actual HTTP responses, drains them and sanitized request metadata after SDK use, and disposes the transport. Corrected success and late shutdown now dispose content exactly once.",
+      "unrelated": "Both unchanged Reconnect_PrefersAsyncCleanupOfReplacedAndCurrentTransports cases inject plain HttpRequestException but the unchanged wrapper default recognizes only typed WebDataAccessRequestException.IsConnectivityFailure. They fail before disposal assertions and do not exercise the new discovery flow.",
+      "limitation": "The first unrelated classification used unchanged-source comparison, then a separate exact-baseline runtime reproduction was obtained."
+    },
+    {
+      "name": "named-anonymous-baseline-only-diagnosis",
+      "worktree": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-named-anonymous-baseline-20261021",
+      "failingTests": ["Reconnect_PrefersAsyncCleanupOfReplacedAndCurrentTransports"],
+      "classification": "unrelated",
+      "evidence": "unrelated-exact-baseline.log",
+      "finding": "Both cases fail with the synthetic HttpRequestException(\"Reconnect.\") on the clean babf909b baseline. The fixture omits a custom connection-failure predicate, while both defaults accept only typed connectivity failures. No replacement/reconnect or disposal assertion is reached.",
+      "resolution": "No unrelated fixture or wrapper change in this packet. Parent may separately correct its synthetic exception or inject an appropriate predicate.",
+      "limitations": "Skill inspected existing baseline logs and current clean babf909b Git state without rerunning. Local features ref is absent, so baseline comparison used babf909b and the bounded branch rather than features...HEAD. No bug/issue publication was authorized or performed."
+    },
+    {
+      "name": "named-anonymous-real-provider-build-diagnosis",
+      "failingTests": ["NamedAnonymous_ProductionGitHubExecutorVerifiesUnboundAccountBeforeManagement (build failure)"],
+      "classification": "related",
+      "evidence": "real-provider-fixture-compile-failure.log",
+      "finding": "CS0053/CS0102: the new fixture's GitHubSource property collides with a same-named private nested class and exposes a less-accessible type. Zero tests executed.",
+      "resolution": "Rename the nested test-only type to TestGitHubSource with fixture-compatible accessibility. Production provider code remains unchanged."
+    }
+  ],
+  "prerequisiteProbes": {
+    "files": ["initial-missing-build.log", "baseline-missing-build.log"],
+    "classification": "Runner setup only: zero tests, no TRX, no prebuilt binaries in newly created normal worktrees. These were not reported as runtime test failures. Existing run-tests.ps1 subsequently performed its own standard restore/build; no manual package install or restore was used."
+  },
+  "dumps": "Checked before every explicit runner and before stability; no .dmp files were present. Baseline diagnosis found none. No dumps were deleted or lost.",
+  "publication": "No external diagnosis comments/issues created; parent prohibition overrides the skill's publication/archive side effects. All findings are persisted locally here."
+}
