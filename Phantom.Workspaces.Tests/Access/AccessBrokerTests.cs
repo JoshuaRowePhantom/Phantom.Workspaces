@@ -22,6 +22,218 @@ public sealed class AccessBrokerTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData(false, AccessErrorCode.Disposed, true)]
+    [InlineData(true, AccessErrorCode.Disposed, true)]
+    [InlineData(false, AccessErrorCode.ProviderFailure, true)]
+    [InlineData(true, AccessErrorCode.IdentityMismatch, true)]
+    [InlineData(false, AccessErrorCode.Disposed, false)]
+    [InlineData(true, AccessErrorCode.ProviderFailure, false)]
+    public async Task AccessBroker_ShutdownBoundary_NormalDispatchFailureCannotBeatLifetimeCancellation(
+        bool nested,
+        AccessErrorCode errorCode,
+        bool shutdown)
+    {
+        var finish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        CancellationToken executionCancellation = default;
+        var executor = new Executor
+        {
+            IsUsable = () => true,
+            Execute = async (_, _, _, _, _, cancellationToken) =>
+            {
+                executionCancellation = cancellationToken;
+                await finish.Task;
+                return new CredentialExecutionFailed<Result> { ErrorCode = errorCode, CanRetry = false };
+            },
+        };
+        var executors = new CredentialAccessExecutorRegistry();
+        executors.Add<RequestRecord, Result>(executor);
+        var policy = new Mock<IReleaseAuthorizationPolicy>(MockBehavior.Strict);
+        policy.Setup(value => value.EvaluateAsync(It.IsAny<ReleasePolicyRequest>(), It.IsAny<CancellationToken>()))
+            .Returns((ReleasePolicyRequest request, CancellationToken _) =>
+                ValueTask.FromResult<ReleasePolicyEvaluation>(new ReleasePolicyMatched
+                {
+                    Authorization = new()
+                    {
+                        Identifier = new() { Value = Guid.NewGuid() },
+                        RequestIdentifier = request.RequestIdentifier,
+                        RequestGeneration = request.RequestGeneration,
+                        Scope = ReleaseMemoryScopeKind.AllUses,
+                    },
+                }));
+        await using var boundary = new ShutdownBoundary(executors, policy.Object);
+        var pending = nested
+            ? boundary.Broker.AcquireNestedAsync(Request(), [], TestContext.Current.CancellationToken)
+            : boundary.Broker.AcquireAsync(Request(), TestContext.Current.CancellationToken);
+
+        if (shutdown)
+        {
+            await boundary.EnterShutdownAsync();
+        }
+
+        Assert.False(executionCancellation.IsCancellationRequested);
+        finish.SetResult();
+
+        var outcome = await pending.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        if (shutdown)
+        {
+            Assert.IsType<AccessShuttingDown<Result>>(outcome);
+        }
+        else
+        {
+            Assert.Equal(errorCode, Assert.IsType<AccessFailed<Result>>(outcome).ErrorCode);
+        }
+        Assert.False(executionCancellation.IsCancellationRequested);
+        Assert.Empty(boundary.Registry.GetSnapshot());
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public async Task AccessBroker_ShutdownBoundary_DisposesUnclaimedSuccessAsyncExactlyOnceAndRetainsCleanupFailure(
+        bool nested,
+        bool cleanupFails,
+        bool cancellationCleanupFails)
+    {
+        var finish = new TaskCompletionSource<BoundaryResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var result = new BoundaryResult
+        {
+            Failure = !cleanupFails ? null : cancellationCleanupFails
+                ? new OperationCanceledException("Unclaimed result cleanup was cancelled.")
+                : new IOException("Unclaimed result cleanup failed."),
+        };
+        CancellationToken executionCancellation = default;
+        var executor = BoundaryCompletionExecutor(cancellationToken =>
+            {
+                executionCancellation = cancellationToken;
+                return new ValueTask<BoundaryResult>(finish.Task);
+            });
+        var executors = new CredentialAccessExecutorRegistry();
+        executors.AddCompletion<BoundaryCompletionRequest, BoundaryResult>(executor);
+        await using var boundary = new ShutdownBoundary(executors, new Mock<IReleaseAuthorizationPolicy>(MockBehavior.Strict).Object);
+        var credentialRequest = Request();
+        var request = new BoundaryCompletionRequest
+        {
+            Requestor = credentialRequest.Requestor,
+            Use = credentialRequest.Use,
+            PresentationScope = AccessPresentationScope.Bootstrap,
+        };
+        var pending = nested
+            ? boundary.Broker.AcquireNestedAsync(request, [], TestContext.Current.CancellationToken)
+            : boundary.Broker.AcquireAsync(request, TestContext.Current.CancellationToken);
+
+        await boundary.EnterShutdownAsync();
+        Assert.False(executionCancellation.IsCancellationRequested);
+        finish.SetResult(result);
+        var completed = await Task.WhenAny(pending, result.DisposalStarted.Task)
+            .WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        Assert.Same(result.DisposalStarted.Task, completed);
+        Assert.False(pending.IsCompleted);
+        result.FinishDisposal.SetResult();
+
+        if (cleanupFails)
+        {
+            var failure = await Assert.ThrowsAnyAsync<Exception>(() => pending);
+            Assert.Same(result.Failure, failure);
+        }
+        else
+        {
+            Assert.IsType<AccessShuttingDown<BoundaryResult>>(await pending);
+        }
+
+        Assert.Equal(1, result.AsyncDisposals);
+        Assert.Equal(0, result.SyncDisposals);
+        Assert.False(executionCancellation.IsCancellationRequested);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AccessBroker_ShutdownBoundary_PreShutdownSuccessAndCallerCancellationRetainOwnership(
+        bool cancelCaller)
+    {
+        var finish = new TaskCompletionSource<BoundaryResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var result = new BoundaryResult();
+        var executor = BoundaryCompletionExecutor(_ => new ValueTask<BoundaryResult>(finish.Task));
+        var executors = new CredentialAccessExecutorRegistry();
+        executors.AddCompletion<BoundaryCompletionRequest, BoundaryResult>(executor);
+        await using var boundary = new ShutdownBoundary(executors, new Mock<IReleaseAuthorizationPolicy>(MockBehavior.Strict).Object);
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var request = Request();
+        var pending = boundary.Broker.AcquireAsync(new BoundaryCompletionRequest
+        {
+            Requestor = request.Requestor,
+            Use = request.Use,
+            PresentationScope = AccessPresentationScope.Bootstrap,
+        }, cancellation.Token);
+
+        if (cancelCaller)
+        {
+            await cancellation.CancelAsync();
+            Assert.IsType<AccessCancelled<BoundaryResult>>(await pending);
+        }
+
+        finish.SetResult(result);
+        if (cancelCaller)
+        {
+            await result.DisposalStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            result.FinishDisposal.SetResult();
+        }
+        else
+        {
+            Assert.Same(result, Assert.IsType<AccessSucceeded<BoundaryResult>>(await pending).Result);
+            Assert.Equal(0, result.AsyncDisposals);
+            result.FinishDisposal.SetResult();
+            await result.DisposeAsync();
+        }
+
+        Assert.Equal(1, result.AsyncDisposals);
+        Assert.Equal(0, result.SyncDisposals);
+    }
+
+    [Fact]
+    public async Task AccessBroker_ShutdownBoundary_DoesNotSuppressDispatchFaults()
+    {
+        var finish = new TaskCompletionSource<BoundaryResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var executor = BoundaryCompletionExecutor(_ => new ValueTask<BoundaryResult>(finish.Task));
+        var executors = new CredentialAccessExecutorRegistry();
+        executors.AddCompletion<BoundaryCompletionRequest, BoundaryResult>(executor);
+        await using var boundary = new ShutdownBoundary(executors, new Mock<IReleaseAuthorizationPolicy>(MockBehavior.Strict).Object);
+        var request = Request();
+        var pending = boundary.Broker.AcquireAsync(new BoundaryCompletionRequest
+        {
+            Requestor = request.Requestor,
+            Use = request.Use,
+            PresentationScope = AccessPresentationScope.Bootstrap,
+        }, TestContext.Current.CancellationToken);
+
+        await boundary.EnterShutdownAsync();
+        var failure = new InvalidOperationException("Executor failed.");
+        finish.SetException(failure);
+
+        Assert.Same(failure, await Assert.ThrowsAsync<InvalidOperationException>(() => pending));
+    }
+
+    private static ControlledCompletionExecutor<BoundaryCompletionRequest, BoundaryResult> BoundaryCompletionExecutor(
+        Func<CancellationToken, ValueTask<BoundaryResult>> complete)
+        => new(
+            _ => ValueTask.FromResult(new CompletionAuthorizationInspection
+            {
+                IsCompleted = true,
+                Source = UserAuthorizationRegistryTests.Snapshot().SourceOptions[0],
+                AcquisitionKey = new()
+                {
+                    Configuration = new() { Digest = new string('a', 64) },
+                    Source = UserAuthorizationRegistryTests.Snapshot().SelectedSource,
+                    Protocol = ProviderProtocolKind.Cli,
+                },
+            }),
+            complete);
+
     [Fact]
     public async Task AccessBroker_Disposal_PreservesEveryCleanupFailureAndRejectsNewRequests()
     {
@@ -2073,6 +2285,117 @@ public sealed class AccessBrokerTests : IDisposable
 
     private sealed record RequestRecord : CredentialAccessRequest<Result>;
     private sealed record IdentityRequestRecord : CredentialAccessRequest<Result>;
+    private sealed record BoundaryCompletionRequest : CompletionAuthorizationRequest<BoundaryResult>;
+
+    private sealed class ControlledCompletionExecutor<TRequest, TResult>(
+        Func<CancellationToken, ValueTask<CompletionAuthorizationInspection>> inspect,
+        Func<CancellationToken, ValueTask<TResult>> complete)
+        : ICompletionAuthorizationExecutor<TRequest, TResult>
+        where TRequest : CompletionAuthorizationRequest<TResult>
+        where TResult : IAccessResult
+    {
+        public CredentialExecutorKind Kind => CredentialExecutorKind.CliOwned;
+        public ValueTask<CompletionAuthorizationInspection> InspectAsync(
+            TRequest request,
+            CancellationToken cancellationToken) => inspect(cancellationToken);
+
+        public ValueTask<TResult> CreateCompletedResultAsync(CancellationToken cancellationToken) => complete(cancellationToken);
+
+        public ValueTask<CredentialExecutionOutcome<TResult>> ExecuteAsync(
+            TRequest request,
+            ProviderInteractionPermit permit,
+            ICredentialExecutionContext context,
+            CancellationToken cancellationToken) => throw new InvalidOperationException("Must not execute.");
+    }
+
+    private sealed class BoundaryResult : IAccessResult, IDisposable
+    {
+        public Exception? Failure { get; init; }
+        public int AsyncDisposals { get; private set; }
+        public int SyncDisposals { get; private set; }
+        public TaskCompletionSource DisposalStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource FinishDisposal { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void Dispose() => this.SyncDisposals++;
+
+        public async ValueTask DisposeAsync()
+        {
+            this.AsyncDisposals++;
+            this.DisposalStarted.TrySetResult();
+            await this.FinishDisposal.Task;
+            if (this.Failure is not null)
+            {
+                throw this.Failure;
+            }
+        }
+    }
+
+    private sealed class ShutdownBoundary : IAsyncDisposable
+    {
+        private readonly ManualResetEventSlim finishCancellation = new();
+        private readonly TaskCompletionSource cancellationEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<CompletionAuthorizationInspection> inspection = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private CancellationTokenRegistration registration;
+        private Task<AccessOutcome<CompletionResult>>? blocker;
+        private Task? shutdown;
+
+        public ShutdownBoundary(
+            CredentialAccessExecutorRegistry executors,
+            IReleaseAuthorizationPolicy policy)
+        {
+            var executor = new ControlledCompletionExecutor<CompletionRequest, CompletionResult>(
+                cancellationToken =>
+                {
+                    this.registration = cancellationToken.Register(() =>
+                    {
+                        this.cancellationEntered.TrySetResult();
+                        this.finishCancellation.Wait(TestContext.Current.CancellationToken);
+                    });
+                    return new ValueTask<CompletionAuthorizationInspection>(this.inspection.Task);
+                },
+                _ => throw new InvalidOperationException("Must not complete."));
+            executors.AddCompletion<CompletionRequest, CompletionResult>(executor);
+            this.Broker = new AccessBroker(policy, executors, new ProviderAcquisitionCoordinator(), this.Registry);
+        }
+
+        public AccessBroker Broker { get; }
+        public UserAuthorizationRegistry Registry { get; } = new();
+
+        public async Task EnterShutdownAsync()
+        {
+            var request = Request();
+            // This newer linked request's callback holds lifetime propagation before the target request.
+            this.blocker = this.Broker.AcquireAsync(new CompletionRequest
+            {
+                Requestor = request.Requestor,
+                Use = request.Use,
+                PresentationScope = AccessPresentationScope.Bootstrap,
+            }, TestContext.Current.CancellationToken);
+            this.shutdown = this.Broker.DisposeAsync().AsTask();
+            await this.cancellationEntered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            Assert.IsType<AccessShuttingDown<Result>>(
+                await this.Broker.AcquireAsync(request, TestContext.Current.CancellationToken));
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            this.finishCancellation.Set();
+            this.inspection.TrySetCanceled();
+            if (this.shutdown is not null)
+            {
+                await this.shutdown;
+            }
+
+            if (this.blocker is not null)
+            {
+                await this.blocker;
+            }
+
+            await this.registration.DisposeAsync();
+            await this.Broker.DisposeAsync();
+            this.finishCancellation.Dispose();
+        }
+    }
 
     private sealed class IdentityExecutor(
         ProviderAcquisitionKey key,
