@@ -8,14 +8,19 @@ namespace Phantom.Workspaces.Tests.Access;
 
 public sealed class GitHubSelectedSourcePolicyTests
 {
-    [Fact]
-    public async Task EnvironmentAppearsWhilePending_SelectedVerifiedCliIdentityRemainsAuthorized()
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task EnvironmentAppearsWhilePending_SelectedVerifiedCliIdentityRemainsAuthorized(
+        bool explicitPin, bool retireCachedGeneration)
     {
         var directory = Path.Combine(Environment.CurrentDirectory, ".access-selected-github-recovery-tests", Guid.NewGuid().ToString("N"));
         try
         {
-            var accountB = CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.GitHub, "cli-b");
-            var source = new Source { Account = accountB, HasEnvironment = false };
+            var accountA = CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.GitHub, "cli-a");
+            var source = new Source { Account = accountA, HasEnvironment = false };
             var executor = new GitHubCredentialAccessExecutor(source);
             var policy = new ObservedPolicy(new ReleaseAuthorizationPolicy(
                 new ReleaseMemoryStore(Path.Combine(directory, "memory.json"))));
@@ -27,11 +32,21 @@ public sealed class GitHubSelectedSourcePolicyTests
             await ApproveCli();
             await using var initial = Assert.IsType<AccessSucceeded<GitHubCredentialAccessResult>>(
                 await warm.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).Result;
+            if (retireCachedGeneration)
+            {
+                var cached = Assert.Single(await executor.ListAsync(TestContext.Current.CancellationToken));
+                await executor.DeleteAsync(cached.Identifier, TestContext.Current.CancellationToken);
+            }
             var request = Request(null);
+            request = request with
+            {
+                Credential = request.Credential with { AccountIdentifier = explicitPin ? accountA : null },
+            };
             var cli = request.Sources.Single(choice => choice.Kind == CredentialSourceKind.GitHubCli).Identifier;
             var before = await executor.InspectAsync(request, TestContext.Current.CancellationToken);
-            Assert.Equal(accountB, before.Credential.AccountIdentifier);
-            Assert.Equal(accountB, before.AcquisitionKeys[cli].Account);
+            Assert.Equal(accountA, before.Credential.AccountIdentifier);
+            Assert.Equal(accountA, before.AcquisitionKeys[cli].Account);
+            Assert.Equal(!retireCachedGeneration, before.CachedGenerations.ContainsKey(cli));
             ReleasePolicyRequest? recoveryPolicyRequest = null;
             policy.AfterCommit = (decision, _, _) =>
             {
@@ -42,9 +57,17 @@ public sealed class GitHubSelectedSourcePolicyTests
             Assert.False(pending.IsCompleted);
             source.HasEnvironment = true;
             var after = await executor.InspectAsync(request, TestContext.Current.CancellationToken);
-            Assert.Null(after.Credential.AccountIdentifier);
-            Assert.Equal(before.Credential with { AccountIdentifier = null }, after.Credential);
-            Assert.Equal(before.CachedGenerations[cli], after.CachedGenerations[cli]);
+            Assert.Equal(explicitPin ? accountA : null, after.Credential.AccountIdentifier);
+            Assert.Equal(before.Credential with { AccountIdentifier = null },
+                after.Credential with { AccountIdentifier = null });
+            if (retireCachedGeneration)
+            {
+                Assert.False(after.CachedGenerations.ContainsKey(cli));
+            }
+            else
+            {
+                Assert.Equal(before.CachedGenerations[cli], after.CachedGenerations[cli]);
+            }
             Assert.Equal(before.AcquisitionKeys[cli], after.AcquisitionKeys[cli]);
             await broker.RefreshPendingSourcesAsync(TestContext.Current.CancellationToken);
             await ApproveCli();
@@ -52,8 +75,9 @@ public sealed class GitHubSelectedSourcePolicyTests
             Assert.True(outcome is AccessSucceeded<GitHubCredentialAccessResult>,
                 $"Expected selected CLI recovery. Actual: {outcome}; policy committed: {recoveryPolicyRequest is not null}.");
             await using var recovered = Assert.IsType<AccessSucceeded<GitHubCredentialAccessResult>>(outcome).Result;
-            Assert.Equal(accountB, recoveryPolicyRequest!.Credential.AccountIdentifier);
-            Assert.Equal(CredentialSourceKind.GitHubCli, Assert.Single(source.Acquisitions));
+            Assert.Equal(accountA, recoveryPolicyRequest!.Credential.AccountIdentifier);
+            Assert.Equal(retireCachedGeneration ? 2 : 1, source.Acquisitions.Count);
+            Assert.All(source.Acquisitions, kind => Assert.Equal(CredentialSourceKind.GitHubCli, kind));
             Assert.Empty(await policy.ListAsync(TestContext.Current.CancellationToken));
 
             Task ApproveCli()
