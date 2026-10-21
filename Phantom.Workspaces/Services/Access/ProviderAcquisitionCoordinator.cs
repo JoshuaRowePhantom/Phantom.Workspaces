@@ -167,7 +167,8 @@ internal sealed class ProviderAcquisitionCoordinator : IProviderAcquisitionCoord
         }
 
         var context = new ProviderAcquisitionCommitContext(
-            IsActive, acquisition.Cancellation.Token, acquisition.CommitGate, permit.BindExecution(IsActive));
+            IsActive, acquisition.Cancellation.Token, acquisition.CommitGate,
+            permit.BindExecution(IsActive, acquisition.Cancellation.Token));
         try
         {
             if (!await this.HasAuthorizedAdmissionAsync(acquisition, operation.CompatibilityKey).ConfigureAwait(false))

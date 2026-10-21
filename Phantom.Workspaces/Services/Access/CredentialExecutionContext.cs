@@ -88,9 +88,16 @@ internal sealed class CredentialExecutionContext : ICredentialExecutionContext
             operation.Revision != this.Revision || operation.AcquisitionGeneration != this.AcquisitionGeneration ||
             operation.ExecutorKind == CredentialExecutorKind.DevTunnelConnect ||
             operation.CompatibilityKey.Protocol == ProviderProtocolKind.TunnelConnect ||
-            !await parentGenerationPermit.AuthorizesPrivateUseAsync(this, cancellationToken).ConfigureAwait(false) ||
+            !parentGenerationPermit.IsActivePrivateExecution(this) ||
             (this.PolicyRequest.Credential.AccountIdentifier is { } account &&
                 operation.CompatibilityKey.Account != account))
+        {
+            return new ProviderAcquisitionDenied();
+        }
+
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken, parentGenerationPermit.ExecutionCancellation);
+        if (!await parentGenerationPermit.AuthorizesPrivateUseAsync(this, cancellation.Token).ConfigureAwait(false))
         {
             return new ProviderAcquisitionDenied();
         }
@@ -107,8 +114,8 @@ internal sealed class CredentialExecutionContext : ICredentialExecutionContext
                 Context = this,
                 ParentPermit = parentGenerationPermit,
             });
-        var outcome = await this.ExecuteProviderAcquisitionAsync(operation, permit, cancellationToken).ConfigureAwait(false);
-        return await parentGenerationPermit.AuthorizesPrivateUseAsync(this, cancellationToken).ConfigureAwait(false)
+        var outcome = await this.ExecuteProviderAcquisitionAsync(operation, permit, cancellation.Token).ConfigureAwait(false);
+        return await parentGenerationPermit.AuthorizesPrivateUseAsync(this, cancellation.Token).ConfigureAwait(false)
             ? outcome
             : new ProviderAcquisitionDenied();
     }

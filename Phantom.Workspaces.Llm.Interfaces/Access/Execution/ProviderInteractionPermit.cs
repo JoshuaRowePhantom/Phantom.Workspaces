@@ -47,6 +47,7 @@ internal sealed class ProviderInteractionPermit
     private readonly PrivateProviderDependencyBinding? privateDependencyBinding;
     private int consumed;
     private bool executionBound;
+    private CancellationToken executionCancellation;
 
     internal ProviderInteractionPermit(
         UserAuthorizationRequestIdentifier requestIdentifier,
@@ -93,7 +94,10 @@ internal sealed class ProviderInteractionPermit
     internal bool AuthorizesProvider(
         CredentialExecutorKind executor,
         ProviderAcquisitionKey key) =>
-        this.executionBound && this.executor == executor && this.key == key && this.isCurrent();
+        this.executionBound && !this.executionCancellation.IsCancellationRequested &&
+        this.executor == executor && this.key == key && this.isCurrent();
+
+    internal CancellationToken ExecutionCancellation => this.executionCancellation;
 
     internal bool AuthorizesActiveExecution(
         UserAuthorizationRequestIdentifier requestIdentifier,
@@ -173,13 +177,16 @@ internal sealed class ProviderInteractionPermit
     internal bool IsCurrentAdmission =>
         !this.executionBound && Volatile.Read(ref this.consumed) == 1 && this.isCurrent();
 
-    internal ProviderInteractionPermit BindExecution(Func<bool> isActive)
+    internal ProviderInteractionPermit BindExecution(
+        Func<bool> isActive,
+        CancellationToken executionCancellation = default)
     {
         var permit = new ProviderInteractionPermit(
             this.requestIdentifier, this.revision, this.executor, this.generation, this.key, isActive,
             this.authorizationBinding, this.privateDependencyBinding);
         permit.consumed = 1;
         permit.executionBound = true;
+        permit.executionCancellation = executionCancellation;
         return permit;
     }
 

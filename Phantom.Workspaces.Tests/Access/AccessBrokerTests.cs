@@ -1145,6 +1145,83 @@ public sealed class AccessBrokerTests : IDisposable
         Assert.Equal(1, executions);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AccessBroker_PrivateChildQueuedStart_TracksActualParentGroupCancellationWithCallerNone(bool cancelAll)
+    {
+        var policy = new QueuedAcquisitionPolicy(new ReleaseAuthorizationPolicy(
+            new ReleaseMemoryStore(Path.Combine(this.directory, "parent-lifetime.json"))));
+        var coordinator = new ParticipantTrackingCoordinator();
+        var executions = 0;
+        var childGeneration = new CredentialMaterialGenerationIdentifier { Value = Guid.NewGuid() };
+        var executor = new Executor
+        {
+            Kind = CredentialExecutorKind.DevTunnelConnect,
+            Execute = async (_, inspection, _, admission, context, cancellationToken) =>
+            {
+                var key = inspection.AcquisitionKeys[inspection.SelectedSource!];
+                var parent = new GroupOperation(context, key, async (commit, _) =>
+                {
+                    var child = new Operation(context, key with
+                    {
+                        Configuration = new() { Digest = new string('e', 64) },
+                        Protocol = ProviderProtocolKind.Sdk,
+                    }, async childCommit =>
+                    {
+                        executions++;
+                        return await childCommit.CommitAsync(childGeneration, _ => ValueTask.CompletedTask);
+                    }, CredentialExecutorKind.Entra);
+                    Assert.Equal(childGeneration, Assert.IsType<ProviderAcquisitionSucceeded>(
+                        await context.ExecutePrivateProviderDependencyAsync(
+                            child, commit.InteractionPermit, CancellationToken.None)).CommittedGeneration);
+                    return await commit.CommitAsync(new() { Value = Guid.NewGuid() }, _ => ValueTask.CompletedTask);
+                });
+                Assert.NotNull(admission);
+                var outcome = await context.ExecuteProviderAcquisitionAsync(parent, admission, cancellationToken);
+                return outcome is ProviderAcquisitionSucceeded
+                    ? new CredentialExecutionReady<Result> { Materializer = new Materializer(() => new Result()) }
+                    : new CredentialExecutionFailed<Result> { ErrorCode = AccessErrorCode.ProviderFailure, CanRetry = false };
+            },
+        };
+        var (broker, registry) = this.Create(executor, coordinator, policy);
+        await using var owned = broker;
+        using var firstCancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var secondCancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var firstRequest = ConnectRequest(CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.Entra, "principal-a"));
+        var secondRequest = firstRequest with
+        {
+            Credential = firstRequest.Credential with { LogicalIdentifier = new() { Digest = new string('c', 64) } },
+        };
+        var first = broker.AcquireAsync(firstRequest, firstCancellation.Token);
+        await ApplyScopeAsync(registry, Assert.Single(registry.GetSnapshot()), ReleaseMemoryScopeKind.AllowOnce);
+        await policy.ChildQueued.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        var second = broker.AcquireAsync(secondRequest, secondCancellation.Token);
+        await ApplyScopeAsync(registry, registry.GetSnapshot().Last(), ReleaseMemoryScopeKind.AllowOnce);
+        await coordinator.ChildFollowerJoined.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        firstCancellation.Cancel();
+        await coordinator.ChildCancelled.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        Assert.IsType<AccessCancelled<Result>>(await first.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+        Assert.Equal(0, executions);
+        if (cancelAll)
+        {
+            secondCancellation.Cancel();
+            await policy.ChildStartCancelled.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            Assert.IsType<AccessCancelled<Result>>(
+                await second.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+            Assert.False(policy.Continue.Task.IsCompleted);
+            Assert.Equal(0, executions);
+        }
+        else
+        {
+            Assert.False(policy.ChildStartCancelled.Task.IsCompleted);
+            policy.Continue.TrySetResult();
+            await using var result = Assert.IsType<AccessSucceeded<Result>>(
+                await second.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).Result;
+            Assert.Equal(1, executions);
+        }
+    }
+
     private static Task ApplyScopeAsync(
         UserAuthorizationRegistry registry,
         UserAuthorizationSnapshot row,
@@ -1381,8 +1458,9 @@ public sealed class AccessBrokerTests : IDisposable
         private int children;
         internal TaskCompletionSource FollowerJoined { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource ChildFollowerJoined { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource ChildCancelled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public ValueTask<ProviderAcquisitionOutcome> ExecuteOrJoinAsync(
+        public async ValueTask<ProviderAcquisitionOutcome> ExecuteOrJoinAsync(
             IProviderAcquisitionOperation operation,
             ProviderInteractionPermit permit,
             CancellationToken cancellationToken)
@@ -1400,7 +1478,13 @@ public sealed class AccessBrokerTests : IDisposable
                 this.ChildFollowerJoined.TrySetResult();
             }
 
-            return pending;
+            var outcome = await pending.ConfigureAwait(false);
+            if (operation.ExecutorKind == CredentialExecutorKind.Entra && outcome is ProviderAcquisitionCancelled)
+            {
+                this.ChildCancelled.TrySetResult();
+            }
+
+            return outcome;
         }
 
         public ValueTask DisposeAsync() => this.coordinator.DisposeAsync();
@@ -1412,6 +1496,7 @@ public sealed class AccessBrokerTests : IDisposable
         private int validations;
         internal TaskCompletionSource ChildQueued { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource Continue { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource ChildStartCancelled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public async ValueTask<ReleaseAuthorizationValidation> ValidateAcquisitionAuthorizationAsync(
             ReleaseAuthorization authorization,
@@ -1421,7 +1506,15 @@ public sealed class AccessBrokerTests : IDisposable
             if (Interlocked.Increment(ref this.validations) == 2)
             {
                 this.ChildQueued.TrySetResult();
-                await this.Continue.Task.WaitAsync(cancellationToken);
+                try
+                {
+                    await this.Continue.Task.WaitAsync(cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    this.ChildStartCancelled.TrySetResult();
+                    throw;
+                }
             }
 
             return await ((IProviderAcquisitionAuthorizationPolicy)policy).ValidateAcquisitionAuthorizationAsync(
