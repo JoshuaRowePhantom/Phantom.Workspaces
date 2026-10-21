@@ -122,17 +122,24 @@ Note: `CopilotByokOptions` is not expressed directly in the agent JSON schema â€
 When a Copilot model has a non-local `model.options.additionalProperties.executor`, BYOK endpoint,
 key, headers, and provider configuration are never serialized into the split-session transport.
 Set `model.options.additionalProperties.remoteProvider` to an opaque reference such as
-`worker-byok`. The worker resolves that reference from its own process environment:
+`worker-byok`. The worker reads provider metadata from its own process environment:
 
 | Worker variable | Required | Meaning |
 |---|---|---|
 | `PHANTOM_COPILOT_PROVIDER_WORKER_BYOK_TYPE` | yes | `openai` or `azure`. |
 | `PHANTOM_COPILOT_PROVIDER_WORKER_BYOK_BASE_URL` | yes | Absolute worker-local HTTP(S) endpoint. |
-| `PHANTOM_COPILOT_PROVIDER_WORKER_BYOK_API_KEY` | no | Worker-local credential. |
+| `PHANTOM_COPILOT_PROVIDER_WORKER_BYOK_API_KEY` | yes | Worker-local credential acquired separately through the host access broker. |
 | `PHANTOM_COPILOT_PROVIDER_WORKER_BYOK_WIRE_API` | no | Wire API; defaults to `chat-completions`. |
 | `PHANTOM_COPILOT_PROVIDER_WORKER_BYOK_WIRE_MODEL` | no | Wire model override. |
 
-The reference is uppercased and `-` / `.` become `_` when constructing variable names. Unknown,
-malformed, or incompletely configured references fail closed. Headers are intentionally not accepted
-through this environment resolver; use a worker-local resolver supplied through
-`AgentServices.RemoteCopilotProviderResolver` when a provider requires them.
+The reference is uppercased and `-` / `.` become `_` when constructing variable names. The metadata
+catalog never reads the API key. The exact host access broker acquires it through an environment-only
+stored-secret request, requiring release authorization before the worker creates or starts its SDK
+client. Each later SDK use revalidates the same independently owned credential lease; forgetting
+authorization or replacing the credential requires an explicit new acquisition.
+
+Unknown, malformed, or incompletely configured references, missing host authorization services, and
+denied credential access fail closed. An explicit provider reference never falls back to native SDK
+authentication. Without a provider reference, native SDK/CLI-owned authentication remains separate
+and no Phantom credential is exported. Headers are not supported by this remote provider catalog;
+there is no credential-bearing provider resolver override.

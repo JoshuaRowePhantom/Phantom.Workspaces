@@ -1,5 +1,6 @@
 namespace Phantom.Workspaces.Llm.Interfaces.Access;
 
+/// <summary>Inspects worker-local provider metadata without acquiring credential material.</summary>
 internal interface IRemoteCopilotProviderCatalog
 {
     Task<RemoteCopilotProviderMetadata?> GetMetadataAsync(
@@ -7,7 +8,8 @@ internal interface IRemoteCopilotProviderCatalog
         CancellationToken cancellationToken);
 }
 
-internal sealed record RemoteCopilotProviderMetadata
+/// <summary>Worker-local configuration. This type must never be serialized into transport frames.</summary>
+internal sealed class RemoteCopilotProviderMetadata
 {
     public required string Type { get; init; }
     public required string BaseUrl { get; init; }

@@ -4,6 +4,7 @@ using Avalonia.Headless.XUnit;
 using Moq;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Core.Transport.Chat;
 using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Llm.Trust;
@@ -21,7 +22,8 @@ public sealed class AgentServicesCompositionTests
 {
     private static ApplicationServices CreateApplicationServices(
         IMcpOAuthCredentialRequestCatalog mcpOAuthCredentials,
-        Func<AccessPresentationScope>? accessPresentationScopeProvider = null)
+        Func<AccessPresentationScope>? accessPresentationScopeProvider = null,
+        IRemoteCopilotProviderCatalog? remoteCopilotProviderCatalog = null)
         => new(
             MainWindowIntegrationTests.CreateTestRunningAgentChatTable(),
             new AgentPersistenceStoreCache(),
@@ -31,8 +33,10 @@ public sealed class AgentServicesCompositionTests
             allowedSecretsStore: new AllowedSecretsStore(new AllowedSecretsStoreConfiguration()),
             platformSecretStore: new NullPlatformSecretStore(),
             mcpOAuthCredentials: mcpOAuthCredentials,
-            accessBroker: Mock.Of<IAccessBroker>(),
-            accessPresentationScope: accessPresentationScopeProvider);
+            accessPresentationScope: accessPresentationScopeProvider)
+        {
+            RemoteCopilotProviderCatalog = remoteCopilotProviderCatalog,
+        };
 
     [AvaloniaFact(Timeout = 15_000)]
     public async Task AgentServicesComposition_Compose_ProducesCompleteBundle()
@@ -40,7 +44,8 @@ public sealed class AgentServicesCompositionTests
         var mcpOAuthCredentials = Mock.Of<IMcpOAuthCredentialRequestCatalog>();
         var phase = AccessPresentationScope.Bootstrap;
         Func<AccessPresentationScope> presentationProvider = () => phase;
-        var applicationServices = CreateApplicationServices(mcpOAuthCredentials, presentationProvider);
+        var catalog = new EnvironmentRemoteCopilotProviderCatalog();
+        var applicationServices = CreateApplicationServices(mcpOAuthCredentials, presentationProvider, catalog);
         await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel(
             applicationServices: applicationServices);
         await viewModel.InitializeAsync();
@@ -65,7 +70,8 @@ public sealed class AgentServicesCompositionTests
         Assert.NotNull(services.AgentPersistenceStoreOverride);
         Assert.NotNull(services.ProcessExecutor);
         Assert.NotNull(services.TrustProfilePolicyCompiler);
-        Assert.NotNull(services.RemoteCopilotProviderResolver);
+        Assert.Same(catalog, services.RemoteCopilotProviderCatalog);
+        Assert.Same(catalog, services.GetService(typeof(IRemoteCopilotProviderCatalog)));
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -73,18 +79,37 @@ public sealed class AgentServicesCompositionTests
     {
         var accessBroker = Mock.Of<IAccessBroker>();
         var mcpOAuthCredentials = Mock.Of<IMcpOAuthCredentialRequestCatalog>();
+        var catalog = new EnvironmentRemoteCopilotProviderCatalog();
 
         var services = AgentServicesComposition.ComposeHostServices(
             accessBroker,
             NullLoggerFactory.Instance,
-            mcpOAuthCredentials: mcpOAuthCredentials);
+            mcpOAuthCredentials: mcpOAuthCredentials,
+            remoteCopilotProviderCatalog: catalog);
 
         Assert.Same(accessBroker, services.AccessBroker);
         Assert.Same(mcpOAuthCredentials, services.McpOAuthCredentials);
         Assert.NotNull(services.ProcessExecutor);
         Assert.NotNull(services.TrustProfilePolicyCompiler);
-        Assert.NotNull(services.RemoteCopilotProviderResolver);
+        Assert.Same(catalog, services.RemoteCopilotProviderCatalog);
+        Assert.Same(catalog, services.GetService(typeof(IRemoteCopilotProviderCatalog)));
         await Task.CompletedTask;
+    }
+
+    [Fact]
+    public void AgentServicesComposition_UnconfiguredCatalog_RemainsUnavailable()
+    {
+        var services = AgentServicesComposition.ComposeHostServices(Mock.Of<IAccessBroker>(), NullLoggerFactory.Instance);
+        Assert.Null(services.RemoteCopilotProviderCatalog);
+        Assert.Null(services.GetService(typeof(IRemoteCopilotProviderCatalog)));
+        Assert.Null(services.GetService(typeof(object)));
+    }
+
+    [Fact]
+    public void AgentServicesComposition_RejectsMissingHostBroker()
+    {
+        Assert.Throws<ArgumentNullException>(() =>
+            AgentServicesComposition.ComposeHostServices(null!, NullLoggerFactory.Instance));
     }
 
     [Fact]
@@ -147,9 +172,11 @@ public sealed class AgentServicesCompositionTests
     {
         var phase = AccessPresentationScope.Bootstrap;
         Func<AccessPresentationScope> presentationProvider = () => phase;
+        var catalog = new EnvironmentRemoteCopilotProviderCatalog();
         var applicationServices = CreateApplicationServices(
             Mock.Of<IMcpOAuthCredentialRequestCatalog>(),
-            presentationProvider);
+            presentationProvider,
+            catalog);
         await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel(
             applicationServices: applicationServices);
         await viewModel.InitializeAsync();
@@ -161,6 +188,8 @@ public sealed class AgentServicesCompositionTests
         Assert.Null(services.AgentPersistenceStoreOverride);
         Assert.Same(applicationServices.AccessBroker, services.AccessBroker);
         Assert.Same(applicationServices.McpOAuthCredentials, services.McpOAuthCredentials);
+        Assert.Same(catalog, services.RemoteCopilotProviderCatalog);
+        Assert.Same(catalog, services.GetService(typeof(IRemoteCopilotProviderCatalog)));
         Assert.Same(presentationProvider, services.AccessPresentationScopeProvider);
         Assert.Equal(AccessPresentationScope.Bootstrap, services.AccessPresentationScope);
         phase = AccessPresentationScope.Runtime;

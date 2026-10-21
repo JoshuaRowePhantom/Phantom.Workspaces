@@ -12,6 +12,8 @@ using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.Local;
 using Phantom.Workspaces.Transport.ReverseHttp;
 using Phantom.Workspaces.Llm.Core.Manifest;
+using Phantom.Workspaces.Testing;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
@@ -572,23 +574,25 @@ public sealed class RemoteCopilotLifecycleTests
         const string providerReference = "worker-byok";
         const string endpoint = "http://private-endpoint.invalid/v1";
         const string apiKey = "private-api-key";
-        var provider = new ProviderConfig
+        var provider = new RemoteCopilotProviderMetadata
         {
             Type = "openai",
             WireApi = "chat-completions",
             BaseUrl = endpoint,
-            ApiKey = apiKey,
-            ModelId = "gpt-test",
-            Headers = new Dictionary<string, string> { ["private-header"] = "private-value" },
+            EnvironmentKeyName = "WORKER_KEY",
         };
-        var resolver = new RecordingProviderResolver(provider);
+        var resolver = new RecordingProviderCatalog(provider);
+        await using var broker = new StoredSecretAccessTestBroker(apiKey);
         var sdkFactory = new ExecutorRoutingTestHarness.RecordingClientFactory();
         var logs = new LifecycleLoggerFactory();
         var listeners = new TransportRegistry();
         listeners.Register(new CopilotClientTransportListener(new AgentServices
         {
             CopilotClientFactory = sdkFactory,
-            RemoteCopilotProviderResolver = resolver,
+            RemoteCopilotProviderCatalog = resolver,
+            AccessBroker = broker,
+            AccessRequestor = broker.Requestor,
+            AccessLineage = broker.Lineage,
             LoggerFactory = logs,
         }));
         await using var transport = new LocalTransport(listeners);
@@ -611,8 +615,15 @@ public sealed class RemoteCopilotLifecycleTests
             TestToken());
 
         Assert.Equal(providerReference, resolver.Reference);
-        Assert.Equal("gpt-test", resolver.ModelId);
-        Assert.Same(provider, sdkFactory.Client.LastConfig!.Provider);
+        Assert.Equal("gpt-test", sdkFactory.Client.LastConfig!.Model);
+        Assert.Equal(endpoint, sdkFactory.Client.LastConfig!.Provider!.BaseUrl);
+        Assert.Equal(apiKey, sdkFactory.Client.LastConfig.Provider.ApiKey);
+        var acquisition = Assert.Single(broker.Requests);
+        Assert.Equal("WORKER_KEY", acquisition.Reference.Name);
+        Assert.Equal(CredentialSourceKind.Environment, Assert.Single(acquisition.Sources).Kind);
+        Assert.NotNull(acquisition.Use.Lineage.Session);
+        Assert.NotNull(acquisition.Use.Lineage.Key);
+        Assert.NotNull(acquisition.Use.Lineage.ProviderConfiguration);
         AssertLifecycleOrder(
             logs,
             "open-start",
@@ -624,9 +635,9 @@ public sealed class RemoteCopilotLifecycleTests
             logs,
             "request-received",
             "listener-entered",
+            "create-received",
             "cli-start-started",
             "cli-start-succeeded",
-            "create-received",
             "sdk-create-started",
             "sdk-created",
             "ack-write-started",
@@ -638,20 +649,23 @@ public sealed class RemoteCopilotLifecycleTests
     [Fact]
     public async Task RemoteSplitSession_ProviderReference_ResumeResolvesOnlyOnWorker()
     {
-        var provider = new ProviderConfig
+        var provider = new RemoteCopilotProviderMetadata
         {
             Type = "openai",
             BaseUrl = "http://worker-only.invalid",
-            ApiKey = "worker-only-key",
-            ModelId = "gpt-test",
+            EnvironmentKeyName = "WORKER_KEY",
         };
-        var resolver = new RecordingProviderResolver(provider);
+        var resolver = new RecordingProviderCatalog(provider);
+        await using var broker = new StoredSecretAccessTestBroker("worker-only-key");
         var sdkFactory = new ToolCapturingClientFactory();
         var listeners = new TransportRegistry();
         listeners.Register(new CopilotClientTransportListener(new AgentServices
         {
             CopilotClientFactory = sdkFactory,
-            RemoteCopilotProviderResolver = resolver,
+            RemoteCopilotProviderCatalog = resolver,
+            AccessBroker = broker,
+            AccessRequestor = broker.Requestor,
+            AccessLineage = broker.Lineage,
         }));
         await using var transport = new LocalTransport(listeners);
         await using var client = new CopilotClientOverTransport(
@@ -681,7 +695,8 @@ public sealed class RemoteCopilotLifecycleTests
             TestToken());
 
         Assert.Equal("resume-session", session.SessionId);
-        Assert.Same(provider, sdkFactory.Client.ResumeConfig!.Provider);
+        Assert.Equal(provider.BaseUrl, sdkFactory.Client.ResumeConfig!.Provider!.BaseUrl);
+        Assert.Equal("worker-only-key", sdkFactory.Client.ResumeConfig.Provider.ApiKey);
         Assert.Equal(
             "resume instructions",
             sdkFactory.Client.ResumeConfig.SystemMessage?.Content);
@@ -696,15 +711,19 @@ public sealed class RemoteCopilotLifecycleTests
     {
         const string resolverSecret =
             @"C:\private\provider.json https://private.example token=super-secret";
-        var resolver = new RecordingProviderResolver(
+        var resolver = new RecordingProviderCatalog(
             new InvalidOperationException(resolverSecret));
+        var broker = new StoredSecretAccessTestBroker("unused");
         var sdkFactory = new ExecutorRoutingTestHarness.RecordingClientFactory();
         var logs = new LifecycleLoggerFactory();
         var listeners = new TransportRegistry();
         listeners.Register(new CopilotClientTransportListener(new AgentServices
         {
             CopilotClientFactory = sdkFactory,
-            RemoteCopilotProviderResolver = resolver,
+            RemoteCopilotProviderCatalog = resolver,
+            AccessBroker = broker,
+            AccessRequestor = broker.Requestor,
+            AccessLineage = broker.Lineage,
             LoggerFactory = logs,
         }));
         await using var transport = new LocalTransport(listeners);
@@ -786,23 +805,26 @@ public sealed class RemoteCopilotLifecycleTests
     {
         const string secret =
             @"C:\private\provider.json https://private.example bearer-secret prompt-secret";
-        var provider = new ProviderConfig
+        var provider = new RemoteCopilotProviderMetadata
         {
             Type = "openai",
             BaseUrl = "http://worker-only.invalid",
-            ApiKey = "worker-only-key",
-            ModelId = "gpt-test",
+            EnvironmentKeyName = "WORKER_KEY",
         };
-        var resolver = new SequencedProviderResolver(
+        var resolver = new SequencedProviderCatalog(
             new InvalidOperationException(secret),
             provider);
+        var broker = new StoredSecretAccessTestBroker("worker-only-key");
         var sdkFactory = new ExecutorRoutingTestHarness.RecordingClientFactory();
         var logs = new LifecycleLoggerFactory();
         var listeners = new TransportRegistry();
         listeners.Register(new CopilotClientTransportListener(new AgentServices
         {
             CopilotClientFactory = sdkFactory,
-            RemoteCopilotProviderResolver = resolver,
+            RemoteCopilotProviderCatalog = resolver,
+            AccessBroker = broker,
+            AccessRequestor = broker.Requestor,
+            AccessLineage = broker.Lineage,
             LoggerFactory = logs,
         }));
         await using var transport = new LocalTransport(listeners);
@@ -839,8 +861,8 @@ public sealed class RemoteCopilotLifecycleTests
         }
         AssertOrdered("caller", "open-start", "open-complete", "create-write-start",
             "create-written", "ack-received");
-        AssertOrdered("worker", "request-received", "listener-entered", "cli-start-started",
-            "cli-start-succeeded", "create-received", "sdk-create-started", "sdk-created",
+        AssertOrdered("worker", "request-received", "listener-entered", "create-received", "cli-start-started",
+            "cli-start-succeeded", "sdk-create-started", "sdk-created",
             "ack-write-started", "ack-written");
         Assert.Contains(snapshot, entry => entry.CorrelationId == attempts[0]
             && entry.Role == "caller" && entry.Stage == "open-start");
@@ -868,17 +890,20 @@ public sealed class RemoteCopilotLifecycleTests
             if (!releaseWorkerLog.Wait(TimeSpan.FromSeconds(30)))
                 throw new TimeoutException("Worker acknowledgement logger was not released.");
         });
+        var broker = new StoredSecretAccessTestBroker(secret);
         var listeners = new TransportRegistry();
         listeners.Register(new CopilotClientTransportListener(new AgentServices
         {
             CopilotClientFactory = new ExecutorRoutingTestHarness.RecordingClientFactory(),
-            RemoteCopilotProviderResolver = new StaticProviderResolver(new ProviderConfig
+            RemoteCopilotProviderCatalog = new StaticProviderCatalog(new RemoteCopilotProviderMetadata
             {
                 Type = "openai",
                 BaseUrl = "http://worker-only.invalid",
-                ApiKey = secret,
-                ModelId = "gpt-test",
+                EnvironmentKeyName = "WORKER_KEY",
             }),
+            AccessBroker = broker,
+            AccessRequestor = broker.Requestor,
+            AccessLineage = broker.Lineage,
             LoggerFactory = logs,
         }));
         await using var transport = new LocalTransport(listeners);
@@ -1112,6 +1137,7 @@ public sealed class RemoteCopilotLifecycleTests
         {
             AdditionalProperties = additionalProperties,
         };
+        await using var callerCredential = AgentAccessTestBroker.CreateLease("caller-key");
         await using var client = new CopilotSdkChatClient(
             "gpt-test",
             "remote BYOK",
@@ -1121,7 +1147,7 @@ public sealed class RemoteCopilotLifecycleTests
             {
                 Provider = "openai",
                 BaseUrl = "http://caller-only.invalid",
-                ApiKeyLease = AgentAccessTestBroker.CreateLease("caller-key"),
+                ApiKeyLease = callerCredential,
             },
             modelOptions: options);
         var registry = new NeverConnectingRegistry();
@@ -1148,7 +1174,7 @@ public sealed class RemoteCopilotLifecycleTests
     }
 
     [Fact]
-    public async Task EnvironmentRemoteCopilotProviderResolver_ValidWorkerLocalReference_ResolvesAllowlistedFields()
+    public async Task EnvironmentRemoteCopilotProviderCatalog_ValidWorkerLocalReference_ReadsOnlyMetadata()
     {
         var variables = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -1159,22 +1185,27 @@ public sealed class RemoteCopilotLifecycleTests
             ["PHANTOM_COPILOT_PROVIDER_WORKER_BYOK_WIRE_MODEL"] = "wire-model",
             ["PHANTOM_COPILOT_PROVIDER_WORKER_BYOK_HEADERS"] = "must-not-be-read",
         };
-        var resolver = new EnvironmentRemoteCopilotProviderResolver(
-            name => variables.GetValueOrDefault(name));
+        var reads = new List<string>();
+        var resolver = new EnvironmentRemoteCopilotProviderCatalog(name =>
+        {
+            reads.Add(name);
+            Assert.DoesNotContain("API_KEY", name, StringComparison.Ordinal);
+            return variables.GetValueOrDefault(name);
+        });
 
-        var provider = await resolver.ResolveAsync(
+        var provider = await resolver.GetMetadataAsync(
             "worker-byok",
-            "gpt-test",
             TestToken());
 
         Assert.NotNull(provider);
         Assert.Equal("openai", provider!.Type);
         Assert.Equal("http://127.0.0.1:4242/", provider.BaseUrl);
-        Assert.Equal("worker-secret", provider.ApiKey);
+        Assert.Equal("PHANTOM_COPILOT_PROVIDER_WORKER_BYOK_API_KEY", provider.EnvironmentKeyName);
         Assert.Equal("responses", provider.WireApi);
         Assert.Equal("wire-model", provider.WireModel);
-        Assert.Equal("gpt-test", provider.ModelId);
-        Assert.Null(provider.Headers);
+        Assert.Equal(4, reads.Count);
+        Assert.DoesNotContain("worker-secret", provider.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(provider.BaseUrl, provider.ToString(), StringComparison.Ordinal);
     }
 
     [Theory]
@@ -1183,7 +1214,7 @@ public sealed class RemoteCopilotLifecycleTests
     [InlineData("openai", null)]
     [InlineData("openai", "file:///private/provider")]
     [InlineData("openai", "not-an-endpoint")]
-    public async Task EnvironmentRemoteCopilotProviderResolver_InvalidWorkerConfiguration_FailsClosed(
+    public async Task EnvironmentRemoteCopilotProviderCatalog_InvalidWorkerConfiguration_FailsClosed(
         string? providerType,
         string? baseUrl)
     {
@@ -1192,23 +1223,22 @@ public sealed class RemoteCopilotLifecycleTests
             ["PHANTOM_COPILOT_PROVIDER_WORKER_TYPE"] = providerType,
             ["PHANTOM_COPILOT_PROVIDER_WORKER_BASE_URL"] = baseUrl,
         };
-        var resolver = new EnvironmentRemoteCopilotProviderResolver(
+        var resolver = new EnvironmentRemoteCopilotProviderCatalog(
             name => variables.GetValueOrDefault(name));
 
-        var provider = await resolver.ResolveAsync("worker", "gpt-test", TestToken());
+        var provider = await resolver.GetMetadataAsync("worker", TestToken());
 
         Assert.Null(provider);
     }
 
     [Fact]
-    public async Task EnvironmentRemoteCopilotProviderResolver_InvalidReferenceFailsBeforeEnvironmentRead()
+    public async Task EnvironmentRemoteCopilotProviderCatalog_InvalidReferenceFailsBeforeEnvironmentRead()
     {
-        var resolver = new EnvironmentRemoteCopilotProviderResolver(
+        var resolver = new EnvironmentRemoteCopilotProviderCatalog(
             _ => throw new InvalidOperationException("Environment must not be read."));
 
-        var provider = await resolver.ResolveAsync(
+        var provider = await resolver.GetMetadataAsync(
             "../private",
-            "gpt-test",
             TestToken());
 
         Assert.Null(provider);
@@ -1394,55 +1424,49 @@ public sealed class RemoteCopilotLifecycleTests
         }
     }
 
-    private sealed class RecordingProviderResolver : IRemoteCopilotProviderResolver
+    private sealed class RecordingProviderCatalog : IRemoteCopilotProviderCatalog
     {
-        private readonly ProviderConfig? provider;
+        private readonly RemoteCopilotProviderMetadata? provider;
         private readonly Exception? exception;
 
-        public RecordingProviderResolver(ProviderConfig provider) => this.provider = provider;
+        public RecordingProviderCatalog(RemoteCopilotProviderMetadata provider) => this.provider = provider;
 
-        public RecordingProviderResolver(Exception exception) => this.exception = exception;
+        public RecordingProviderCatalog(Exception exception) => this.exception = exception;
 
         public string? Reference { get; private set; }
 
-        public string? ModelId { get; private set; }
-
-        public Task<ProviderConfig?> ResolveAsync(
+        public Task<RemoteCopilotProviderMetadata?> GetMetadataAsync(
             string providerReference,
-            string modelId,
             CancellationToken cancellationToken)
         {
             this.Reference = providerReference;
-            this.ModelId = modelId;
             return this.exception is null
                 ? Task.FromResult(this.provider)
-                : Task.FromException<ProviderConfig?>(this.exception);
+                : Task.FromException<RemoteCopilotProviderMetadata?>(this.exception);
         }
     }
 
-    private sealed class StaticProviderResolver(ProviderConfig provider)
-        : IRemoteCopilotProviderResolver
+    private sealed class StaticProviderCatalog(RemoteCopilotProviderMetadata provider)
+        : IRemoteCopilotProviderCatalog
     {
-        public Task<ProviderConfig?> ResolveAsync(
+        public Task<RemoteCopilotProviderMetadata?> GetMetadataAsync(
             string providerReference,
-            string modelId,
             CancellationToken cancellationToken)
-            => Task.FromResult<ProviderConfig?>(provider);
+            => Task.FromResult<RemoteCopilotProviderMetadata?>(provider);
     }
 
-    private sealed class SequencedProviderResolver(
+    private sealed class SequencedProviderCatalog(
         Exception firstFailure,
-        ProviderConfig provider) : IRemoteCopilotProviderResolver
+        RemoteCopilotProviderMetadata provider) : IRemoteCopilotProviderCatalog
     {
         private int attempt;
 
-        public Task<ProviderConfig?> ResolveAsync(
+        public Task<RemoteCopilotProviderMetadata?> GetMetadataAsync(
             string providerReference,
-            string modelId,
             CancellationToken cancellationToken)
             => Interlocked.Increment(ref this.attempt) == 1
-                ? Task.FromException<ProviderConfig?>(firstFailure)
-                : Task.FromResult<ProviderConfig?>(provider);
+                ? Task.FromException<RemoteCopilotProviderMetadata?>(firstFailure)
+                : Task.FromResult<RemoteCopilotProviderMetadata?>(provider);
     }
 
     private sealed class ToolCapturingClientFactory : Phantom.Workspaces.Llm.Copilot.ICopilotClientFactory

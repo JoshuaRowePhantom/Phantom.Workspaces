@@ -93,6 +93,8 @@ public sealed class ApplicationServices
     internal Func<RemoteAuthentication?, IAccessBroker, Func<AccessPresentationScope>,
         DevTunnel.IDevTunnelHostService>? DevTunnelHostServiceFactory { get; init; }
 
+    internal IRemoteCopilotProviderCatalog? RemoteCopilotProviderCatalog { get; init; }
+
     public IAgentPersistenceStoreCache AgentPersistenceStoreCache { get; }
 
     public IUpdateController? UpdateController { get; private set; }

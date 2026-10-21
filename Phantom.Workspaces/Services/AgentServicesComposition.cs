@@ -6,7 +6,6 @@ using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Llm.Processes;
 using Phantom.Workspaces.Llm.Trust;
-using Phantom.Workspaces.Llm.Core.Transport.Chat;
 using Phantom.Workspaces.Tools;
 using Phantom.Workspaces.ViewModels;
 using Microsoft.Extensions.Logging;
@@ -25,20 +24,21 @@ public static class AgentServicesComposition
     /// <c>App.axaml.cs</c> for the app-level <c>AgentChatFactory</c> seed and reused by
     /// <see cref="ComposeSessionServicesAsync"/> so the session path shares the same instances.
     /// </summary>
-    public static AgentServices ComposeHostServices(
-        IAccessBroker? accessBroker,
+    internal static AgentServices ComposeHostServices(
+        IAccessBroker accessBroker,
         ILoggerFactory loggerFactory,
         IMcpOAuthCredentialRequestCatalog? mcpOAuthCredentials = null,
+        IRemoteCopilotProviderCatalog? remoteCopilotProviderCatalog = null,
         Func<AccessPresentationScope>? accessPresentationScopeProvider = null)
         => new()
         {
-            AccessBroker = accessBroker,
+            AccessBroker = accessBroker ?? throw new ArgumentNullException(nameof(accessBroker)),
             McpOAuthCredentials = mcpOAuthCredentials,
             AccessPresentationScopeProvider = accessPresentationScopeProvider,
             LoggerFactory = loggerFactory,
             ProcessExecutor = new ProcessExecutor(),
             TrustProfilePolicyCompiler = new MxcTrustProfilePolicyCompiler(),
-            RemoteCopilotProviderResolver = new EnvironmentRemoteCopilotProviderResolver(),
+            RemoteCopilotProviderCatalog = remoteCopilotProviderCatalog,
         };
 
     /// <summary>
@@ -137,6 +137,7 @@ public static class AgentServicesComposition
             applicationServices.AccessBroker,
             loggerFactory,
             mcpOAuthCredentials: applicationServices.McpOAuthCredentials,
+            remoteCopilotProviderCatalog: applicationServices.RemoteCopilotProviderCatalog,
             accessPresentationScopeProvider: applicationServices.AccessPresentationScopeProvider) with
         {
             AccessBroker = applicationServices.AccessBroker,

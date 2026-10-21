@@ -427,19 +427,22 @@ public sealed class RemoteSplitSessionByokRoundTripTests
         stream.Complete();
 
         var definition = AgentDefinitionLoader.LoadAgentFromJson(AgentDefinitionJson);
-        var providerResolver = new FixedProviderResolver(new ProviderConfig
+        var providerCatalog = new FixedProviderCatalog(new RemoteCopilotProviderMetadata
         {
             Type = "openai",
             WireApi = "chat-completions",
             BaseUrl = server.BaseUrl,
-            ApiKey = "test-key",
-            ModelId = "gpt-test",
+            EnvironmentKeyName = "WORKER_KEY",
         });
         var peerIdentities = new TransportPeerIdentityProvider();
         var authenticatedCaller = Peer(ProfileA);
+        var providerBroker = new StoredSecretAccessTestBroker("test-key");
         var listener = new CopilotClientTransportListener(new AgentServices
         {
-            RemoteCopilotProviderResolver = providerResolver,
+            RemoteCopilotProviderCatalog = providerCatalog,
+            AccessBroker = providerBroker,
+            AccessRequestor = providerBroker.Requestor,
+            AccessLineage = providerBroker.Lineage,
         });
         var identityListener = new IdentityRecordingListener(listener, peerIdentities);
         var executorRegistry = new TransportRegistry();
@@ -527,7 +530,7 @@ public sealed class RemoteSplitSessionByokRoundTripTests
                 item => item.Contents.OfType<TextContent>().Any(
                     text => text.Text.Contains("real-byok-reply", StringComparison.Ordinal))),
             diagnostic);
-        Assert.Equal("worker-byok", providerResolver.Reference);
+        Assert.Equal("worker-byok", providerCatalog.Reference);
         Assert.Equal(ProfileA.ToString(), identityListener.ObservedIdentity?.UserComputerProfileEntityId);
         Assert.Equal(0, callerContext.Validations);
         Assert.DoesNotContain(
@@ -1032,19 +1035,17 @@ public sealed class RemoteSplitSessionByokRoundTripTests
             ["agent-definition"] = definition.ToJson(),
         });
 
-    private sealed class FixedProviderResolver(ProviderConfig provider)
-        : IRemoteCopilotProviderResolver
+    private sealed class FixedProviderCatalog(RemoteCopilotProviderMetadata provider)
+        : IRemoteCopilotProviderCatalog
     {
         public string? Reference { get; private set; }
 
-        public Task<ProviderConfig?> ResolveAsync(
+        public Task<RemoteCopilotProviderMetadata?> GetMetadataAsync(
             string providerReference,
-            string modelId,
             CancellationToken cancellationToken)
         {
             this.Reference = providerReference;
-            provider.ModelId = modelId;
-            return Task.FromResult<ProviderConfig?>(provider);
+            return Task.FromResult<RemoteCopilotProviderMetadata?>(provider);
         }
     }
 
@@ -1367,19 +1368,22 @@ public sealed class RemoteSplitSessionByokRoundTripTests
             SplitTraceFactories? diagnostics = null,
             SensitiveValueLease? callerCredential = null)
         {
+            var providerBroker = diagnostics is null ? null : new StoredSecretAccessTestBroker("private-worker-key");
             var listener = diagnostics is null
                 ? new CopilotClientTransportListener(new FakeCopilotClientFactory(remoteClient))
                 : new CopilotClientTransportListener(new AgentServices
                 {
                     CopilotClientFactory = new FakeCopilotClientFactory(remoteClient),
                     LoggerFactory = diagnostics.Worker,
-                    RemoteCopilotProviderResolver = new FixedProviderResolver(new ProviderConfig
+                    RemoteCopilotProviderCatalog = new FixedProviderCatalog(new RemoteCopilotProviderMetadata
                     {
                         Type = "openai",
-                        ModelId = "gpt-5",
                         BaseUrl = "http://private-worker.invalid",
-                        ApiKey = "private-worker-key",
+                        EnvironmentKeyName = "WORKER_KEY",
                     }),
+                    AccessBroker = providerBroker,
+                    AccessRequestor = providerBroker?.Requestor,
+                    AccessLineage = providerBroker?.Lineage,
                 });
             return await CreateCoreAsync(
                 source,

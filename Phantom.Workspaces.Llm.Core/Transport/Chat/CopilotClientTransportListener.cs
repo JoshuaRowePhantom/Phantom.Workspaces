@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using GitHub.Copilot;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Copilot;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Transport;
 using Microsoft.Extensions.Logging;
@@ -34,7 +35,11 @@ public sealed class CopilotClientTransportListener : ITransportListener
     private readonly IRemoteTrustProfileResolver? trustProfileResolver;
     private readonly ITrustProfileProcessPolicyCompiler? policyCompiler;
     private readonly ICopilotRuntimeConnectionFactory runtimeConnectionFactory;
-    private readonly IRemoteCopilotProviderResolver? providerResolver;
+    private readonly IRemoteCopilotProviderCatalog? providerCatalog;
+    private readonly IAccessBroker? accessBroker;
+    private readonly AccessRequestor? requestor;
+    private readonly CredentialUseLineage? accessLineage;
+    private readonly Func<AccessPresentationScope> presentationScope;
     private readonly ILoggerFactory? loggerFactory;
     private ILogger Logger => this.loggerFactory?.CreateLogger<CopilotClientTransportListener>()
         ?? NullLogger<CopilotClientTransportListener>.Instance;
@@ -47,8 +52,13 @@ public sealed class CopilotClientTransportListener : ITransportListener
             agentServices?.TrustProfileResolver as IRemoteTrustProfileResolver;
         this.policyCompiler =
             agentServices?.TrustProfilePolicyCompiler as ITrustProfileProcessPolicyCompiler;
-        this.providerResolver =
-            agentServices?.RemoteCopilotProviderResolver as IRemoteCopilotProviderResolver;
+        this.providerCatalog =
+            agentServices?.RemoteCopilotProviderCatalog;
+        this.accessBroker = agentServices?.AccessBroker;
+        this.requestor = agentServices?.AccessRequestor;
+        this.accessLineage = agentServices?.AccessLineage;
+        this.presentationScope = () => agentServices?.AccessPresentationScope
+            ?? AccessPresentationScope.Runtime;
         this.loggerFactory = agentServices?.LoggerFactory;
         this.runtimeConnectionFactory = new CopilotRuntimeConnectionFactory();
     }
@@ -59,7 +69,7 @@ public sealed class CopilotClientTransportListener : ITransportListener
             trustProfileResolver: null,
             policyCompiler: null,
             new CopilotRuntimeConnectionFactory(),
-            providerResolver: null,
+            providerCatalog: null,
             loggerFactory: null)
     {
     }
@@ -69,15 +79,23 @@ public sealed class CopilotClientTransportListener : ITransportListener
         IRemoteTrustProfileResolver? trustProfileResolver,
         ITrustProfileProcessPolicyCompiler? policyCompiler,
         ICopilotRuntimeConnectionFactory runtimeConnectionFactory,
-        IRemoteCopilotProviderResolver? providerResolver = null,
-        ILoggerFactory? loggerFactory = null)
+        IRemoteCopilotProviderCatalog? providerCatalog = null,
+        ILoggerFactory? loggerFactory = null,
+        IAccessBroker? accessBroker = null,
+        Func<AccessPresentationScope>? presentationScope = null,
+        AccessRequestor? requestor = null,
+        CredentialUseLineage? accessLineage = null)
     {
         this.clientFactory = clientFactory ?? throw new ArgumentNullException(nameof(clientFactory));
         this.trustProfileResolver = trustProfileResolver;
         this.policyCompiler = policyCompiler;
         this.runtimeConnectionFactory = runtimeConnectionFactory
             ?? throw new ArgumentNullException(nameof(runtimeConnectionFactory));
-        this.providerResolver = providerResolver;
+        this.providerCatalog = providerCatalog;
+        this.accessBroker = accessBroker;
+        this.requestor = requestor;
+        this.accessLineage = accessLineage;
+        this.presentationScope = presentationScope ?? (static () => AccessPresentationScope.Runtime);
         this.loggerFactory = loggerFactory;
     }
 
@@ -148,20 +166,29 @@ public sealed class CopilotClientTransportListener : ITransportListener
                 Mode = CopilotClientMode.CopilotCli,
                 Connection = selection?.Connection,
             };
-            stage = "client-creation";
-            client = this.clientFactory.Create(options);
-            stage = "cli-start";
-            lifecycle.Confirm("cli-start-started", "started");
-            await client.StartAsync(ct).ConfigureAwait(false);
-            lifecycle.Confirm("cli-start-succeeded");
+            if (providerReference is null)
+            {
+                stage = "client-creation";
+                client = this.clientFactory.Create(options);
+                stage = "cli-start";
+                lifecycle.Confirm("cli-start-started", "started");
+                await client.StartAsync(ct).ConfigureAwait(false);
+                lifecycle.Confirm("cli-start-succeeded");
+            }
             stage = "session-host";
             return new CopilotSessionTransportHost(
                 client,
+                this.clientFactory,
+                options,
                 channel,
                 ct,
                 selection,
                 providerReference,
-                this.providerResolver,
+                this.providerCatalog,
+                this.accessBroker,
+                this.requestor,
+                this.accessLineage,
+                this.presentationScope,
                 lifecycle);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -237,37 +264,57 @@ public sealed class CopilotClientTransportListener : ITransportListener
     /// <summary>Serves a single channel: reads client request frames and drives a local SDK session.</summary>
     private sealed class CopilotSessionTransportHost : IAsyncDisposable
     {
-        private readonly ICopilotClient client;
+        private ICopilotClient? client;
+        private readonly ICopilotClientFactory clientFactory;
+        private readonly CopilotClientOptions clientOptions;
         private readonly IMessageChannel channel;
         private readonly CancellationTokenSource cancellation;
         private readonly Task pump;
         private readonly CopilotRuntimeConnectionLease? runtimeConnectionSelection;
         private readonly string? providerReference;
-        private readonly IRemoteCopilotProviderResolver? providerResolver;
+        private readonly IRemoteCopilotProviderCatalog? providerCatalog;
+        private readonly IAccessBroker? accessBroker;
+        private readonly AccessRequestor? requestor;
+        private readonly CredentialUseLineage? accessLineage;
+        private readonly Func<AccessPresentationScope> presentationScope;
         private readonly RemoteCopilotLifecycleLog lifecycle;
+        private StoredSecretAccessResult? credentialOwner;
         private ICopilotSession? session;
         private IDisposable? subscription;
         private readonly ConcurrentDictionary<string, TaskCompletionSource<object?>> pendingToolCalls =
             new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<int, Task> activeOperations = new();
         private readonly SemaphoreSlim sessionOperationLock = new(1, 1);
+        private readonly TaskCompletionSource disposal = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int nextOperationId;
         private int disposed;
 
         public CopilotSessionTransportHost(
-            ICopilotClient client,
+            ICopilotClient? client,
+            ICopilotClientFactory clientFactory,
+            CopilotClientOptions clientOptions,
             IMessageChannel channel,
             CancellationToken ct,
             CopilotRuntimeConnectionLease? runtimeConnectionSelection,
             string? providerReference,
-            IRemoteCopilotProviderResolver? providerResolver,
+            IRemoteCopilotProviderCatalog? providerCatalog,
+            IAccessBroker? accessBroker,
+            AccessRequestor? requestor,
+            CredentialUseLineage? accessLineage,
+            Func<AccessPresentationScope> presentationScope,
             RemoteCopilotLifecycleLog lifecycle)
         {
             this.client = client;
+            this.clientFactory = clientFactory;
+            this.clientOptions = clientOptions;
             this.channel = channel;
             this.runtimeConnectionSelection = runtimeConnectionSelection;
             this.providerReference = providerReference;
-            this.providerResolver = providerResolver;
+            this.providerCatalog = providerCatalog;
+            this.accessBroker = accessBroker;
+            this.requestor = requestor;
+            this.accessLineage = accessLineage;
+            this.presentationScope = presentationScope;
             this.lifecycle = lifecycle;
             this.cancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
             this.pump = Task.Run(this.PumpAsync);
@@ -277,10 +324,31 @@ public sealed class CopilotClientTransportListener : ITransportListener
         {
             if (Interlocked.Exchange(ref this.disposed, 1) != 0)
             {
+                await this.disposal.Task.ConfigureAwait(false);
                 return;
             }
 
-            await this.cancellation.CancelAsync().ConfigureAwait(false);
+            try
+            {
+                await this.DisposeCoreAsync().ConfigureAwait(false);
+                this.disposal.TrySetResult();
+            }
+            catch (Exception exception)
+            {
+                this.disposal.TrySetException(exception);
+                throw;
+            }
+        }
+
+        private async Task DisposeCoreAsync()
+        {
+            try
+            {
+                await this.cancellation.CancelAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+            }
             await Task.WhenAll(this.activeOperations.Values).ConfigureAwait(false);
             try
             {
@@ -308,10 +376,23 @@ public sealed class CopilotClientTransportListener : ITransportListener
             }
             try
             {
-                await this.client.DisposeAsync().ConfigureAwait(false);
+                if (this.client is not null)
+                    await this.client.DisposeAsync().ConfigureAwait(false);
             }
             catch
             {
+            }
+            try
+            {
+                if (this.credentialOwner is not null)
+                    await this.credentialOwner.DisposeAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+            }
+            finally
+            {
+                this.credentialOwner = null;
             }
             try
             {
@@ -392,6 +473,22 @@ public sealed class CopilotClientTransportListener : ITransportListener
                         this.subscription = null;
                         await disposeSession.DisposeAsync().ConfigureAwait(false);
                         this.session = null;
+                    }
+                    if (this.credentialOwner is not null)
+                    {
+                        try
+                        {
+                            if (this.client is not null)
+                            {
+                                await this.client.DisposeAsync().ConfigureAwait(false);
+                            }
+                        }
+                        finally
+                        {
+                            this.client = null;
+                            await this.credentialOwner.DisposeAsync().ConfigureAwait(false);
+                            this.credentialOwner = null;
+                        }
                     }
 
                     break;
@@ -485,9 +582,10 @@ public sealed class CopilotClientTransportListener : ITransportListener
                         configElement,
                         this.CreateRemoteTool);
                 }
-                await this.ApplyWorkerProviderAsync(config, token).ConfigureAwait(false);
-                this.lifecycle.Confirm("sdk-create-started", "started");
-                this.session = await this.client.CreateSessionAsync(config, token).ConfigureAwait(false);
+                this.session = await this.CreateWorkerSessionAsync(
+                    config,
+                    operationToken => this.client!.CreateSessionAsync(config, operationToken),
+                    token).ConfigureAwait(false);
                 this.lifecycle.Confirm("sdk-created");
                 this.SubscribeSession(this.session);
                 await this.WriteSessionCreatedAsync(this.session.SessionId, token).ConfigureAwait(false);
@@ -533,9 +631,10 @@ public sealed class CopilotClientTransportListener : ITransportListener
                         configElement,
                         this.CreateRemoteTool);
                 }
-                await this.ApplyWorkerProviderAsync(config, token).ConfigureAwait(false);
-                this.lifecycle.Confirm("sdk-create-started", "started");
-                this.session = await this.client.ResumeSessionAsync(resumeId, config, token).ConfigureAwait(false);
+                this.session = await this.CreateWorkerSessionAsync(
+                    config,
+                    operationToken => this.client!.ResumeSessionAsync(resumeId, config, operationToken),
+                    token).ConfigureAwait(false);
                 this.lifecycle.Confirm("sdk-created");
                 this.SubscribeSession(this.session);
                 await this.WriteSessionCreatedAsync(this.session.SessionId, token).ConfigureAwait(false);
@@ -564,27 +663,67 @@ public sealed class CopilotClientTransportListener : ITransportListener
             }
         }
 
-        private async Task ApplyWorkerProviderAsync(
+        private async Task<ICopilotSession> CreateWorkerSessionAsync(
             SessionConfigBase config,
+            Func<CancellationToken, Task<ICopilotSession>> createSession,
             CancellationToken token)
         {
+            if (this.session is not null)
+            {
+                throw new RemoteProviderUnavailableException();
+            }
             if (this.providerReference is null)
             {
-                return;
+                this.lifecycle.Confirm("sdk-create-started", "started");
+                return await createSession(token).ConfigureAwait(false);
             }
 
             var modelId = config.Model;
-            if (this.providerResolver is null || string.IsNullOrWhiteSpace(modelId))
+            if (this.providerCatalog is null || this.accessBroker is null
+                || this.requestor is null || this.accessLineage?.Session is null
+                || string.IsNullOrWhiteSpace(modelId))
             {
                 throw new RemoteProviderUnavailableException();
             }
 
-            ProviderConfig? provider;
+            StoredSecretAccessResult? owner = null;
             try
             {
-                provider = await this.providerResolver
-                    .ResolveAsync(this.providerReference, modelId, token)
-                    .ConfigureAwait(false);
+                var metadata = await this.providerCatalog
+                    .GetMetadataAsync(this.providerReference, token).ConfigureAwait(false)
+                    ?? throw new RemoteProviderUnavailableException();
+                var request = this.CreateCredentialRequest(metadata, modelId);
+                var outcome = await this.accessBroker.AcquireAsync(request, token).ConfigureAwait(false);
+                owner = outcome is AccessSucceeded<StoredSecretAccessResult> succeeded
+                    ? succeeded.Result
+                    : throw new RemoteProviderUnavailableException();
+                var credentials = new AgentCredentialLeaseSet(owner.Lease, null, null);
+                if (this.client is null)
+                {
+                    this.client = await credentials.GuardAsync(
+                        _ => Task.FromResult(this.clientFactory.Create(this.clientOptions)),
+                        token).ConfigureAwait(false);
+                    this.lifecycle.Confirm("cli-start-started", "started");
+                    await credentials.GuardAsync(this.client.StartAsync, token).ConfigureAwait(false);
+                    this.lifecycle.Confirm("cli-start-succeeded");
+                }
+                var created = await credentials.UseAsync(async (material, _, operationToken) =>
+                {
+                    config.Provider = new ProviderConfig
+                    {
+                        Type = metadata.Type,
+                        BaseUrl = metadata.BaseUrl,
+                        ApiKey = material,
+                        WireApi = metadata.WireApi,
+                        WireModel = metadata.WireModel,
+                        ModelId = modelId,
+                    };
+                    this.lifecycle.Confirm("sdk-create-started", "started");
+                    return await createSession(operationToken).ConfigureAwait(false);
+                }, token).ConfigureAwait(false);
+                this.credentialOwner = owner;
+                owner = null;
+                return new CredentialBoundCopilotSession(created, credentials);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
@@ -594,8 +733,95 @@ public sealed class CopilotClientTransportListener : ITransportListener
             {
                 throw new RemoteProviderUnavailableException();
             }
+            finally
+            {
+                if (owner is not null)
+                {
+                    try
+                    {
+                        if (this.client is not null)
+                        {
+                            await this.client.DisposeAsync().ConfigureAwait(false);
+                        }
+                    }
+                    finally
+                    {
+                        this.client = null;
+                        await owner.DisposeAsync().ConfigureAwait(false);
+                    }
+                }
+            }
+        }
 
-            config.Provider = provider ?? throw new RemoteProviderUnavailableException();
+        private StoredSecretAccessRequest CreateCredentialRequest(
+            RemoteCopilotProviderMetadata metadata,
+            string modelId)
+        {
+            var environmentName = metadata.EnvironmentKeyName;
+            var configuration = new CredentialIdentityConfiguration
+            {
+                Provider = CredentialProviderKind.StoredSecret,
+                Kind = CredentialKind.Secret,
+                CredentialPartition = environmentName,
+                SourceCompatibility = CredentialSourceKind.Environment.ToString(),
+                Authority = metadata.Type,
+                Audience = metadata.BaseUrl,
+                ClientPartition = $"{metadata.WireApi}:{metadata.WireModel}",
+                Scopes = [],
+            };
+            var logicalIdentifier = CredentialIdentityFactory.CreateLogicalIdentifier(configuration);
+            var requestor = this.requestor!;
+            var lineage = this.accessLineage! with
+            {
+                Key = CredentialIdentityFactory.CreateLineageIdentifier("environment-key", environmentName),
+                ProviderConfiguration = CredentialIdentityFactory.CreateLineageIdentifier(
+                    "worker-provider",
+                    logicalIdentifier.Digest),
+            };
+            return new StoredSecretAccessRequest
+            {
+                Reference = new SecretReference { Name = environmentName },
+                Credential = new CredentialReference
+                {
+                    LogicalIdentifier = logicalIdentifier,
+                    Provider = CredentialProviderKind.StoredSecret,
+                    Kind = CredentialKind.Secret,
+                },
+                Sources =
+                [
+                    new CredentialSourceChoiceDescriptor
+                    {
+                        Identifier = CredentialIdentityFactory.CreateSourceIdentifier(
+                            CredentialProviderKind.StoredSecret,
+                            $"{CredentialSourceKind.Environment}:{environmentName}"),
+                        Kind = CredentialSourceKind.Environment,
+                        Provider = CredentialProviderKind.StoredSecret,
+                        Usability = CredentialSourceUsability.Missing,
+                        SafeDisplayName = "Worker environment",
+                    },
+                ],
+                Requestor = requestor,
+                Use = new CredentialUseDescriptor
+                {
+                    Fingerprint = CredentialIdentityFactory.CreateUseFingerprint(
+                        CredentialUseKind.Agent,
+                        lineage,
+                        requestor.Identifier,
+                        $"worker-model:{modelId}"),
+                    Kind = CredentialUseKind.Agent,
+                    Lineage = lineage,
+                    SafeDisplayName = "Remote Copilot model",
+                    MemoryScopes =
+                    [
+                        ReleaseMemoryScopeKind.AllowOnce,
+                        ReleaseMemoryScopeKind.ExactUse,
+                        ReleaseMemoryScopeKind.SessionIdentity,
+                        ReleaseMemoryScopeKind.KeyInSession,
+                        ReleaseMemoryScopeKind.AllUses,
+                    ],
+                },
+                PresentationScope = this.presentationScope(),
+            };
         }
 
         private AIFunction CreateRemoteTool(
@@ -739,6 +965,24 @@ public sealed class CopilotClientTransportListener : ITransportListener
         {
             this.subscription = liveSession.Subscribe(sessionEvent =>
             {
+                if (this.providerReference is not null)
+                {
+                    if (sessionEvent is SessionStartEvent or SessionResumeEvent)
+                    {
+                        return;
+                    }
+                    if (sessionEvent is SessionErrorEvent)
+                    {
+                        sessionEvent = new SessionErrorEvent
+                        {
+                            Data = new SessionErrorData
+                            {
+                                ErrorType = "provider-error",
+                                Message = "The remote Copilot provider operation failed.",
+                            },
+                        };
+                    }
+                }
                 var frame = new JsonObject
                 {
                     [CopilotSessionTransportFrames.TypeProperty] = CopilotSessionTransportFrames.SessionEventType,

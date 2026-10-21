@@ -11,6 +11,7 @@ using Phantom.Workspaces.Llm.Core.Manifest;
 using Phantom.Workspaces.Llm.Core.Tests;
 using Phantom.Workspaces.Llm.Core.Transport.Chat;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.AgentSessions;
@@ -481,20 +482,23 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
         {
             _ = CopilotCliLocator.FindOrThrow();
             var shadeIdentities = new TransportPeerIdentityProvider();
+            var providerBroker = new Phantom.Workspaces.Testing.StoredSecretAccessTestBroker("shade-test-key");
             var shadeListener = new IdentityRecordingListener(
                 new CopilotClientTransportListener(
                     new AgentServices
                     {
                         LoggerFactory = new SafeLoggerFactory(),
-                        RemoteCopilotProviderResolver = new FixedProviderResolver(
-                            new ProviderConfig
+                        RemoteCopilotProviderCatalog = new FixedProviderCatalog(
+                            new RemoteCopilotProviderMetadata
                             {
                                 Type = "openai",
                                 BaseUrl = providerBaseUrl,
-                                ApiKey = "shade-test-key",
+                                EnvironmentKeyName = "WORKER_KEY",
                                 WireApi = "chat-completions",
-                                ModelId = "gpt-test",
                             }),
+                        AccessBroker = providerBroker,
+                        AccessRequestor = providerBroker.Requestor,
+                        AccessLineage = providerBroker.Lineage,
                     }),
                 shadeIdentities);
             var shadeRegistry = new TransportRegistry();
@@ -903,18 +907,16 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
         }
     }
 
-    private sealed class FixedProviderResolver(ProviderConfig provider)
-        : IRemoteCopilotProviderResolver
+    private sealed class FixedProviderCatalog(RemoteCopilotProviderMetadata provider)
+        : IRemoteCopilotProviderCatalog
     {
-        public Task<ProviderConfig?> ResolveAsync(
+        public Task<RemoteCopilotProviderMetadata?> GetMetadataAsync(
             string providerReference,
-            string modelId,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult<ProviderConfig?>(
+            return Task.FromResult<RemoteCopilotProviderMetadata?>(
                 providerReference == "shade-byok"
-                    && modelId == "gpt-test"
                     ? provider
                     : null);
         }

@@ -1,10 +1,11 @@
 using System.Text.Json;
-using GitHub.Copilot;
 using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Llm.Core.Transport.Chat;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.ReverseHttp;
+using Phantom.Workspaces.Testing;
 
 var configurationLine = await Console.In.ReadLineAsync();
 var configuration = JsonSerializer.Deserialize<WorkerConfiguration>(configurationLine
@@ -12,11 +13,27 @@ var configuration = JsonSerializer.Deserialize<WorkerConfiguration>(configuratio
     ?? throw new InvalidOperationException("Worker configuration was invalid.");
 using var loggerFactory = new StructuredConsoleLoggerFactory();
 var identities = new TransportPeerIdentityProvider();
-var providerResolver = new FixedProviderResolver(configuration);
+var providerCatalog = new FixedProviderCatalog(configuration);
+const string providerEnvironmentName = "PHANTOM_COPILOT_TEST_WORKER_API_KEY";
+Environment.SetEnvironmentVariable(providerEnvironmentName, configuration.ProviderApiKey);
+await using var accessBroker = new StoredSecretAccessTestBroker(Environment.GetEnvironmentVariable)
+{
+    Requestor = new AccessRequestor
+    {
+        Identifier = CredentialIdentityFactory.CreateRequestorIdentifier(
+            AccessRequestorKind.Application,
+            configuration.WorkerEntityId),
+        Kind = AccessRequestorKind.Application,
+        SafeDisplayName = "Test worker",
+    },
+};
 var listener = new IdentityReportingListener(
     new CopilotClientTransportListener(new AgentServices
     {
-        RemoteCopilotProviderResolver = providerResolver,
+        RemoteCopilotProviderCatalog = providerCatalog,
+        AccessBroker = accessBroker,
+        AccessRequestor = accessBroker.Requestor,
+        AccessLineage = accessBroker.Lineage,
         LoggerFactory = loggerFactory,
     }),
     identities,
@@ -53,31 +70,28 @@ internal sealed record WorkerConfiguration(
     string WireApi,
     string ModelId);
 
-internal sealed class FixedProviderResolver(WorkerConfiguration configuration)
-    : IRemoteCopilotProviderResolver
+internal sealed class FixedProviderCatalog(WorkerConfiguration configuration)
+    : IRemoteCopilotProviderCatalog
 {
-    public Task<ProviderConfig?> ResolveAsync(
+    public Task<RemoteCopilotProviderMetadata?> GetMetadataAsync(
         string providerReference,
-        string modelId,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!string.Equals(
                 providerReference,
                 configuration.ProviderReference,
-                StringComparison.Ordinal)
-            || !string.Equals(modelId, configuration.ModelId, StringComparison.Ordinal))
+                StringComparison.Ordinal))
         {
-            return Task.FromResult<ProviderConfig?>(null);
+            return Task.FromResult<RemoteCopilotProviderMetadata?>(null);
         }
 
-        return Task.FromResult<ProviderConfig?>(new ProviderConfig
+        return Task.FromResult<RemoteCopilotProviderMetadata?>(new RemoteCopilotProviderMetadata
         {
             Type = configuration.ProviderType,
             BaseUrl = configuration.ProviderBaseUrl,
-            ApiKey = configuration.ProviderApiKey,
+            EnvironmentKeyName = "PHANTOM_COPILOT_TEST_WORKER_API_KEY",
             WireApi = configuration.WireApi,
-            ModelId = modelId,
         });
     }
 }
