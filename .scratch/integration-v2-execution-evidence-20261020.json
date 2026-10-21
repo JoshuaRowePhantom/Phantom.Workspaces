@@ -1,6 +1,17 @@
 {
   "codeCheckpoint": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
   "productionCheckpoint": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
+  "workerBaselineEquivalences": {
+    "separateLifecycleSource": "3526186e6781e83e8de79cc08e83e8f84d0e93a4",
+    "separateLifecycleLocal": "8b562107479947e919cf4337771dc33385063520",
+    "lifecycleStablePatchId": "735438c3e0fff3c683f5669eb52e4a0a145703dc",
+    "actualCurrentFixtureContentEquality": "At615f5735, entire Phantom.Workspaces.Llm.Core.Tests\\RemoteCopilotLifecycleTests.cs has git diff --exit-code352 HEAD exit0. Not inferred from root alias/e099 ancestry.",
+    "modelPumpSource": "e099710fcbcfec0887266445b0050402cc2f3b65",
+    "modelPumpLocal": "e8ed98d70fe885ce37b12410e82f63317a923db5",
+    "modelPumpStablePatchId": "e5b0351c94ca62a86fff0578ae4533e5eba13241",
+    "review": "Current worker handoff independently1b307 CLEAR exact e099vs352 and352vsb887.",
+    "boundary": "No new source/runtime execution or root import. All84 artifact hashes preserved; named-anonymous gate OPEN."
+  },
   "pendingRequiredCorrections": [
     {
       "scope": "Named-anonymous repository and persistence endpoint discovery",
