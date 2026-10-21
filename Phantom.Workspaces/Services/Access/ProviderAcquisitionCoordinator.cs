@@ -42,6 +42,8 @@ internal sealed class ProviderAcquisitionCoordinator : IProviderAcquisitionCoord
             }
 
             acquisition.Participants++;
+            acquisition.Admissions.Add(permit);
+            acquisition.AdmissionVersion++;
         }
 
         if (start)
@@ -67,6 +69,8 @@ internal sealed class ProviderAcquisitionCoordinator : IProviderAcquisitionCoord
                 lock (this.gate)
                 {
                     acquisition.Participants--;
+                    acquisition.Admissions.Remove(permit);
+                    acquisition.AdmissionVersion++;
                     if (acquisition.Participants == 0 && !acquisition.Completion.Task.IsCompleted)
                     {
                         acquisition.Tombstoned = true;
@@ -157,7 +161,8 @@ internal sealed class ProviderAcquisitionCoordinator : IProviderAcquisitionCoord
             lock (this.gate)
             {
                 return !this.disposed && !acquisition.Tombstoned &&
-                    !acquisition.Finished && !acquisition.Completion.Task.IsCompleted;
+                    !acquisition.Finished && !acquisition.Completion.Task.IsCompleted &&
+                    acquisition.Admissions.Any(admission => admission.IsCurrentAdmission);
             }
         }
 
@@ -165,6 +170,24 @@ internal sealed class ProviderAcquisitionCoordinator : IProviderAcquisitionCoord
             IsActive, acquisition.Cancellation.Token, acquisition.CommitGate, permit.BindExecution(IsActive));
         try
         {
+            if (!await this.HasAuthorizedAdmissionAsync(acquisition, operation.CompatibilityKey).ConfigureAwait(false))
+            {
+                lock (this.gate)
+                {
+                    if (this.acquisitions.TryGetValue(operation.CompatibilityKey, out var current) &&
+                        ReferenceEquals(current, acquisition))
+                    {
+                        this.acquisitions.Remove(operation.CompatibilityKey);
+                    }
+
+                    acquisition.Completion.TrySetResult(this.disposed
+                        ? new ProviderAcquisitionShuttingDown()
+                        : acquisition.Tombstoned ? new ProviderAcquisitionCancelled() : new ProviderAcquisitionDenied());
+                }
+
+                return;
+            }
+
             var outcome = await operation.ExecuteAsync(context, acquisition.Cancellation.Token).ConfigureAwait(false);
             if (outcome is ProviderAcquisitionSucceeded succeeded &&
                 succeeded.CommittedGeneration != context.CommittedGeneration)
@@ -219,12 +242,70 @@ internal sealed class ProviderAcquisitionCoordinator : IProviderAcquisitionCoord
         }
     }
 
+    private async ValueTask<bool> HasAuthorizedAdmissionAsync(
+        Acquisition acquisition,
+        ProviderAcquisitionKey key)
+    {
+        while (true)
+        {
+            ProviderInteractionPermit[] candidates;
+            long version;
+            lock (this.gate)
+            {
+                if (this.disposed || acquisition.Tombstoned || acquisition.Finished ||
+                    acquisition.Completion.Task.IsCompleted)
+                {
+                    return false;
+                }
+
+                candidates = acquisition.Admissions.ToArray();
+                version = acquisition.AdmissionVersion;
+            }
+
+            foreach (var candidate in candidates)
+            {
+                if (!await candidate.AuthorizesProviderExecutionAsync(acquisition.Cancellation.Token).ConfigureAwait(false))
+                {
+                    continue;
+                }
+
+                lock (this.gate)
+                {
+                    if (!this.disposed && !acquisition.Tombstoned && !acquisition.Finished &&
+                        !acquisition.Completion.Task.IsCompleted && acquisition.Admissions.Contains(candidate))
+                    {
+                        if (candidate.IsCurrentAdmission)
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            lock (this.gate)
+            {
+                if (version == acquisition.AdmissionVersion)
+                {
+                    if (this.acquisitions.TryGetValue(key, out var current) && ReferenceEquals(current, acquisition))
+                    {
+                        this.acquisitions.Remove(key);
+                    }
+
+                    acquisition.Completion.TrySetResult(new ProviderAcquisitionDenied());
+                    return false;
+                }
+            }
+        }
+    }
+
     private sealed class Acquisition
     {
         public CancellationTokenSource Cancellation { get; } = new();
         public SemaphoreSlim CommitGate { get; } = new(1, 1);
         public TaskCompletionSource<ProviderAcquisitionOutcome> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public int Participants { get; set; }
+        public List<ProviderInteractionPermit> Admissions { get; } = new();
+        public long AdmissionVersion { get; set; }
         public bool Tombstoned { get; set; }
         public bool Finished { get; set; }
     }

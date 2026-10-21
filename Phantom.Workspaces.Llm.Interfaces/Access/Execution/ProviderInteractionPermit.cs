@@ -28,6 +28,12 @@ internal interface IProviderAcquisitionAuthorizationPolicy
         CancellationToken cancellationToken);
 }
 
+internal sealed record PrivateProviderDependencyBinding
+{
+    public required ICredentialExecutionContext Context { get; init; }
+    public required ProviderInteractionPermit ParentPermit { get; init; }
+}
+
 [JsonConverter(typeof(SerializationGuard))]
 internal sealed class ProviderInteractionPermit
 {
@@ -38,6 +44,7 @@ internal sealed class ProviderInteractionPermit
     private readonly ProviderAcquisitionKey key;
     private readonly Func<bool> isCurrent;
     private readonly ProviderExecutionAuthorizationBinding? authorizationBinding;
+    private readonly PrivateProviderDependencyBinding? privateDependencyBinding;
     private int consumed;
     private bool executionBound;
 
@@ -48,7 +55,8 @@ internal sealed class ProviderInteractionPermit
         Guid generation,
         ProviderAcquisitionKey key,
         Func<bool> isCurrent,
-        ProviderExecutionAuthorizationBinding? authorizationBinding = null)
+        ProviderExecutionAuthorizationBinding? authorizationBinding = null,
+        PrivateProviderDependencyBinding? privateDependencyBinding = null)
     {
         this.requestIdentifier = requestIdentifier;
         this.revision = revision;
@@ -57,6 +65,7 @@ internal sealed class ProviderInteractionPermit
         this.key = key;
         this.isCurrent = isCurrent;
         this.authorizationBinding = authorizationBinding;
+        this.privateDependencyBinding = privateDependencyBinding;
     }
 
     internal bool Authorizes(
@@ -148,10 +157,27 @@ internal sealed class ProviderInteractionPermit
         return validation == ReleaseAuthorizationValidation.Valid && this.IsActivePrivateExecution(context);
     }
 
+    internal async ValueTask<bool> AuthorizesProviderExecutionAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!this.IsCurrentAdmission)
+        {
+            return false;
+        }
+
+        return this.privateDependencyBinding is not { } dependency ||
+            (await dependency.ParentPermit.AuthorizesPrivateUseAsync(dependency.Context, cancellationToken).ConfigureAwait(false) &&
+                this.isCurrent());
+    }
+
+    internal bool IsCurrentAdmission =>
+        !this.executionBound && Volatile.Read(ref this.consumed) == 1 && this.isCurrent();
+
     internal ProviderInteractionPermit BindExecution(Func<bool> isActive)
     {
         var permit = new ProviderInteractionPermit(
-            this.requestIdentifier, this.revision, this.executor, this.generation, this.key, isActive, this.authorizationBinding);
+            this.requestIdentifier, this.revision, this.executor, this.generation, this.key, isActive,
+            this.authorizationBinding, this.privateDependencyBinding);
         permit.consumed = 1;
         permit.executionBound = true;
         return permit;
