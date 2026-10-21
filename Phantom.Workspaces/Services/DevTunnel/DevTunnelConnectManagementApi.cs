@@ -45,7 +45,10 @@ internal sealed class DevTunnelConnectManagementApi
             var matches = (candidates ?? []).Where(tunnel =>
                 tunnel.Labels?.Contains(DevTunnelNaming.WorkspacesMarkerLabel, StringComparer.Ordinal) == true &&
                 (DevTunnelNaming.IsAuto(descriptor.Name) ||
-                    tunnel.Labels.Contains(descriptor.Name!, StringComparer.Ordinal))).ToArray();
+                    tunnel.Labels.Contains(descriptor.Name!, StringComparer.Ordinal)) &&
+                (descriptor.Endpoint is null ||
+                    (TryEndpoint(tunnel, out var candidateEndpoint) &&
+                        SameEndpoint(descriptor.Endpoint, candidateEndpoint)))).ToArray();
             if (matches.Length != 1 || !TryEndpoint(matches[0], out var endpoint) ||
                 (descriptor.Endpoint is { } configured && !SameEndpoint(configured, endpoint)))
             {
