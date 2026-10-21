@@ -3,8 +3,8 @@
   "worktree": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020",
   "branch": "integration/access-arc-ready-v2-20261020",
   "baseline": "e8ed98d70fe885ce37b12410e82f63317a923db5",
-  "status": "CLEAN coherent checkpoint extended through cbce2a68: cleared b382 provider unpublished-result ownership paired with removal of exactly the temporary GitHub caller capture, preserving successful-result ownership. Truthful immutable owner fixture prerequisites resolve the14 former fabricated-account failures. New targeted75 pass plus ten consecutive75 stability passes and fresh bounded review clear. Prior079f2081 root200x10/Core171x10 evidence remains explicitly historical. Generic concurrent disposal, GitHub canonical/final-await validation, stale401 replay and other owner-source followups remain open; not whole-arc acceptance.",
-  "reviewedCodeCheckpoint": "cbce2a686879be78873d45f232bac3dc735e3ca0",
+  "status": "CLEAN coherent checkpoint extended through a171c3dd: b382 provider ownership paired with exact temporary GitHub caller-capture removal, now explicitly proved through REAL production tunnel caller by rejected-resource exact counts, async-first/sync fallback, original cleanup-fault propagation and successful caller-only ownership with usable copied lease. Exact2d92 stale-handle test-only leaf also integrated/reviewed. Latest focused121 pass plus ten consecutive121 stability passes and independent actual paired-net review clear. Previous75x10, root200x10/Core171x10 evidence remains historical. Generic concurrent disposal, GitHub canonical/final-await, stale401 and other owner followups remain open; not whole-arc acceptance.",
+  "reviewedCodeCheckpoint": "a171c3dd540c433bb6fa7341edf10f439d513d24",
   "sourceToLocal": {
     "19acd7f6b1940290d08c43dfc4e9f535d56d03f3": "ac151c04",
     "083c040727028de4694192bd378e6d23d9b96529": "9202d011",
@@ -28,12 +28,17 @@
     "1ea4540c246d12864658a007978f2485c8541bdc": "73042c2e",
     "aa7a5ca07b516c2687d148a51f8705d6a12428f1": "920642c6",
     "e44b3d2e4481e3f5f63bbe557acc85fa24aaa8bf": "079f20811faa410455c15c5035d51783355de1cd",
-    "b382e62dc48c371ae58978eb07e04946ab88b42a": "0aa7f5f7b070e3cb365887b9a157ad6947d0d6ff"
+    "b382e62dc48c371ae58978eb07e04946ab88b42a": "0aa7f5f7b070e3cb365887b9a157ad6947d0d6ff",
+    "2d92b627c5b1ef094daa6082894d52c25128d14b": "a171c3dd540c433bb6fa7341edf10f439d513d24 (exact test-only delta consumed once alongside owned regressions)"
   },
   "gitHubOwnershipPair20261021": {
     "coherentCodeCheckpoint": "cbce2a686879be78873d45f232bac3dc735e3ca0",
     "providerSource": "b382e62dc48c371ae58978eb07e04946ab88b42a",
     "providerLocal": "0aa7f5f7b070e3cb365887b9a157ad6947d0d6ff",
+    "focusedRealCallerRegressionCheckpoint": "a171c3dd540c433bb6fa7341edf10f439d513d24",
+    "focusedRealCallerRegressions": "Actual DevTunnelConnectMintSession, concrete GitHub executor, real broker/coordinator/policy and actual management API over existing fake SDK client. Test decorator retains the actual returned material in a counting derived success record; late return awaits actual group-token cancellation. Four root rejection cases assert exact1 async/0sync for dual-interface or1sync for sync-only, zeroed material and SAME cleanup exception out actual Session. Two real successful root cases assert0 provider async/1 caller sync disposal and usable separately copied Connect-token lease. Private result matrix additionally gates asynchronous cleanup, proves no early completion and exact cleanup-fault propagation. No production result stubs or live credentials/providers.",
+    "observationSeam": "ONLY three internal modifiers changed in DevTunnelConnectManagementApi.cs: API made nonsealed, existing internal MintAsync virtual, successful outcome record nonsealed. Counting test decorator still invokes actual API and reimplements IDisposable/IAsyncDisposable on derived actual successful outcome. Production method bodies, instantiation, graph, credential caches and authorization semantics unchanged. This enables functional regression detection of a restored old caller capture: extra sync disposal becomes observable, including double sync cleanup for sync-only resources.",
+    "staleHandleLeaf": "Exact immutable2d92b627 test-only delta consumed once in a171c3dd; live retained A and deleted material retaining A both reject originally unpinned stale handle attempting B, preserving generation/principal. Fresh paired-net reviewer included this pending test-only source delta; no provider51b semantics changed.",
     "pairedCallerDelta": "cbce2a68 removes ONLY the GitHub MintedMaterialOwner non-success capture and its now-unused nested class; directly forwards the management callback. Successful results remain immediately owned by the existing using; exact unauthorized-generation invalidation and Complete material-copy ownership remain intact. This pair prevents former caller and new provider from disposing the same rejected callback result.",
     "selectiveFixturePrerequisite": {
       "source": "0879baedd16cdb44614d1251df604fd402f9a644",
@@ -113,6 +118,18 @@
       "selectors": "GitHubPrivateCredentialSessionTests,GitHubCredentialAccessExecutorTests,DevTunnelConnectMintSessionTests.ConnectMint_,DevTunnelConnectCredentialAccessExecutorTests,DevTunnelCredentialConsumerTests",
       "provenance": "Fresh explicit-project build/run followed by prescribed existing stability runner ten consecutive full/NoBuild passes against exactly the committed source. No further source edits after these executions. Recursive dump scans before and after found zero dumps."
     },
+    "gitHubOwnershipRealCaller": {
+      "codeCheckpoint": "a171c3dd540c433bb6fa7341edf10f439d513d24",
+      "passed": 121,
+      "failed": 0,
+      "stabilityRuns": 10,
+      "passedPerRun": 121,
+      "log": ".scratch\\integration-v2-github-ownership-regression-tests.log",
+      "stability": ".scratch\\integration-v2-github-ownership-regression-stability.log",
+      "selectors": "GitHubPrivateCredentialSessionTests,GitHubCredentialAccessExecutorTests,DevTunnelConnectMintSessionTests.ConnectMint_,DevTunnelConnectManagementApiTests,DevTunnelConnectCredentialAccessExecutorTests,DevTunnelCredentialConsumerTests",
+      "provenance": "Fresh explicit-project121 build/run, then prescribed existing Skills stability runner ten consecutive full/NoBuild121 passes. Exact source committed unchanged after execution/review. Zero dumps before/after. Earlier incremental82 and87 selections also passed, but only final121 evidence is claimed here.",
+      "review": "Fresh independent read-only review of actual paired net48e0b75a..46c74b2a plus exact a171c3dd source delta, including three observation modifiers, all real-caller exact-count/fault/transfer cases and exact2d92 test-only leaf: no significant issues found. No reviewer edits/builds/tests; canonical GitHub/final-await and prior pending shared/root/OAuth/MCP issues expressly excluded."
+    },
     "runner": "Only existing scripts\\run-tests.ps1 explicit TestProject/unquoted comma-separated TestNames and existing Skills run-tests-stability.ps1 Runs10 Modefull NoBuild with explicit TestProject default; no direct dotnet test.",
     "dumps": "Recursive scans before runners and during validation found no .dmp files; none discarded."
   },
@@ -120,7 +137,8 @@
     "Fresh read-only code-review e8ed98d7..db8c66b4: no significant NEW merged/conflict-resolution or coherent-graph issues; focused UI deletion/replacement tests also inspected. Already-cleared source implementations and known pending source blockers explicitly excluded.",
     "Fresh read-only code-review db8c66b4..0fcfd0d8 actual canonical selected-source A/B remint test: no significant issues. No builds/tests run by either reviewer.",
     "Fresh read-only code-review079f2081 exact three-line causal actual-token cancellation acknowledgment: no significant issues; no production changes.",
-    "Fresh read-only bounded review48e0b75a..0aa7f5f7 plus cbce2a68 exact caller/fixture delta: no significant issues in provider unpublished callback-result ownership, paired caller fallback removal or truthful fixture. Canonical GitHub/final-await followups expressly excluded; no builds/tests/edits."
+    "Fresh read-only bounded review48e0b75a..0aa7f5f7 plus cbce2a68 exact caller/fixture delta: no significant issues in provider unpublished callback-result ownership, paired caller fallback removal or truthful fixture. Canonical GitHub/final-await followups expressly excluded; no builds/tests/edits.",
+    "Fresh independent read-only actual paired-net review through a171c3dd: no significant issues in provider/caller ownership, exact-count real production caller regressions, async-first/fault/transfer handling, three internal observation modifiers or exact2d92 stale-handle test-only leaf. No builds/tests/edits; no canonical/final-await or whole-arc clearance."
   ],
   "genericOAuthShutdownReview20261021": {
     "reviewer": "9138ee92-e671-4e53-b882-67573927d963",
@@ -142,6 +160,6 @@
     "UI deletion integrated and independently bounded-review clear. SDK explicitly handed final Core ISecretProvider/GitHubAuthTokenResolver/test deletion scope back to integrator at23:54, but prerequisite App SecretProvider/test deletion remains35ff-owned; concrete immutable prerequisite/handback requested, no independent cross-owner deletion."
   ],
   "executionEvidenceManifest": ".scratch\\integration-v2-execution-evidence-20261020.json",
-  "cleanState": "All source code is immutable through cbce2a686879be78873d45f232bac3dc735e3ca0; final metadata commit records this handoff and evidence only. No active cherry-pick/revert/unmerged paths; git diff --check clean; exact submodule pins preserved.",
+  "cleanState": "All source code is immutable through a171c3dd540c433bb6fa7341edf10f439d513d24; final metadata commit records this handoff and evidence only. No active cherry-pick/revert/unmerged paths; git diff --check clean; exact submodule pins preserved.",
   "safety": "No live checkout, auth, browser/UI/provider actions, features advancement, push/release/closure or rewritten history. Normal submodule init preserves Dock8c8d11 and MXC29702c3."
 }
