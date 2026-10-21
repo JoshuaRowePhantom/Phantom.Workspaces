@@ -71,7 +71,7 @@ internal sealed class DevTunnelIntegrationAccess : IAsyncDisposable
     internal DevTunnelIdentityRoute IdentityRoute { get; }
     internal DevTunnelIdentityCredentialAccessRequest IdentityRequest { get; }
     internal IDevTunnelHostService CreateHostService() =>
-        new DevTunnelServiceFactory(this.Broker, this.IdentityRequest).CreateHostService();
+        new DevTunnelServiceFactory(this.Broker, this.IdentityRequest, () => AccessPresentationScope.Runtime).CreateHostService();
     internal DevTunnelConnectCredentialAccessRequest ConnectRequest(string name, Uri endpoint, bool anonymous = false) =>
         DevTunnelConnectCredentialAccessRequest.Create(new DevTunnelAccessDescriptor
         {

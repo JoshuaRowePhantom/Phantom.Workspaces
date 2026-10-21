@@ -27,32 +27,84 @@ public sealed class DevTunnelAuthenticationHandlerTests
         Assert.Equal(0, fixture.Session.Mints);
     }
 
-    [Fact]
-    public async Task DevTunnelClientAuthorization_IdentityToken_NeverReachesRelay()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DevTunnelClientAuthorization_IdentityToken_NeverReachesRelay(bool returnsCallerRequest)
     {
         await using var fixture = new DevTunnelConnectCredentialAccessExecutorTests.Fixture();
         await using var initial = await fixture.AcquireAsync();
+        using var message = new HttpRequestMessage(HttpMethod.Get, new Uri(fixture.Session.Endpoint, "data"));
+        message.Headers.Authorization = new("Bearer", "identity never allowed");
+        message.Headers.TryAddWithoutValidation("X-Tunnel-Authorization", "caller supplied header");
         var calls = 0;
         using var client = Client(fixture, request =>
         {
             calls++;
+            Assert.NotSame(message, request);
+            Assert.Equal("identity never allowed", message.Headers.Authorization!.Parameter);
+            Assert.Equal("caller supplied header", Header(message));
             Assert.Null(request.Headers.Authorization);
             Assert.Equal("tunnel private connect material", Header(request));
+            if (returnsCallerRequest)
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK) { RequestMessage = message };
+            }
             var sent = new HttpRequestMessage(request.Method, request.RequestUri);
             sent.Headers.TryAddWithoutValidation("X-Tunnel-Authorization", Header(request));
             return new HttpResponseMessage(HttpStatusCode.OK) { RequestMessage = sent };
         });
-        using var message = new HttpRequestMessage(HttpMethod.Get, new Uri(fixture.Session.Endpoint, "data"));
-        message.Headers.Authorization = new("Bearer", "identity never allowed");
         using var response = await client.SendAsync(message, TestContext.Current.CancellationToken);
         using var sent = response.RequestMessage;
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(1, calls);
-        Assert.Null(Header(message));
-        Assert.Null(message.Headers.Authorization);
+        Assert.Equal("caller supplied header", Header(message));
+        Assert.Equal("identity never allowed", message.Headers.Authorization!.Parameter);
         Assert.NotNull(sent);
+        Assert.NotSame(message, sent);
         Assert.Null(Header(sent));
         Assert.Null(sent.Headers.Authorization);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DevTunnelAuthenticationHandler_FailedSendPreservesCallerAndScrubsOwnedRequest(bool cancelled)
+    {
+        await using var fixture = new DevTunnelConnectCredentialAccessExecutorTests.Fixture();
+        await using var initial = await fixture.AcquireAsync();
+        using var message = new HttpRequestMessage(HttpMethod.Get, fixture.Session.Endpoint);
+        message.Headers.Authorization = new("Bearer", "caller identity");
+        message.Headers.TryAddWithoutValidation("X-Tunnel-Authorization", "caller supplied header");
+        HttpRequestMessage? outgoing = null;
+        using var client = Client(fixture, request =>
+        {
+            outgoing = request;
+            Assert.NotSame(message, request);
+            Assert.Equal("caller identity", message.Headers.Authorization!.Parameter);
+            Assert.Equal("caller supplied header", Header(message));
+            Assert.Equal("tunnel private connect material", Header(request));
+            Exception failure = cancelled
+                ? new OperationCanceledException(new CancellationToken(true))
+                : new HttpRequestException("transport failed");
+            throw failure;
+        });
+
+        if (cancelled)
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                client.SendAsync(message, TestContext.Current.CancellationToken));
+        }
+        else
+        {
+            await Assert.ThrowsAsync<HttpRequestException>(() =>
+                client.SendAsync(message, TestContext.Current.CancellationToken));
+        }
+        Assert.Equal("caller identity", message.Headers.Authorization!.Parameter);
+        Assert.Equal("caller supplied header", Header(message));
+        Assert.NotNull(outgoing);
+        Assert.Null(Header(outgoing));
+        Assert.Null(outgoing.Headers.Authorization);
     }
 
     [Theory]

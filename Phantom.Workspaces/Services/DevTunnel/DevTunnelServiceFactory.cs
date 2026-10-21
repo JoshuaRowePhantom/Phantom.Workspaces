@@ -8,12 +8,15 @@ namespace Phantom.Workspaces.Services.DevTunnel;
 public sealed class DevTunnelServiceFactory(
     IAccessBroker broker,
     DevTunnelIdentityCredentialAccessRequest identityRequest,
-    Func<AccessPresentationScope>? presentationScope = null)
+    Func<AccessPresentationScope> presentationScope)
 {
+    private readonly Func<AccessPresentationScope> getPresentationScope =
+        presentationScope ?? throw new ArgumentNullException(nameof(presentationScope));
+
     public IDevTunnelHostService CreateHostService()
     {
         var handler = new DevTunnelManagementAuthenticationHandler(
-            broker, identityRequest, new HttpClientHandler { AllowAutoRedirect = false }, presentationScope);
+            broker, identityRequest, new HttpClientHandler { AllowAutoRedirect = false }, this.getPresentationScope);
         var management = new TunnelManagementClient(
             new ProductInfoHeaderValue("Phantom.Workspaces", "1.0"),
             userTokenCallback: null,
@@ -26,7 +29,7 @@ public sealed class DevTunnelServiceFactory(
     }
 
     public IDevTunnelEndpointResolver CreateEndpointResolver(DevTunnelConnectCredentialAccessRequest request) =>
-        new DevTunnelEndpointResolver(broker, request, presentationScope);
+        new DevTunnelEndpointResolver(broker, request, this.getPresentationScope);
 
     private sealed class ManagementLifetime(TunnelManagementClient management, HttpMessageHandler handler) : IAsyncDisposable
     {

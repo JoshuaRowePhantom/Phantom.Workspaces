@@ -30,39 +30,101 @@ public sealed class DevTunnelIdentityCredentialAccessExecutorTests
     }
 
     [Theory]
-    [InlineData(DevTunnelIdentityScheme.GitHub, "github")]
-    [InlineData(DevTunnelIdentityScheme.Entra, "aad")]
-    [InlineData(DevTunnelIdentityScheme.OAuth, "Bearer")]
+    [InlineData(DevTunnelIdentityScheme.GitHub, "github", false)]
+    [InlineData(DevTunnelIdentityScheme.Entra, "aad", false)]
+    [InlineData(DevTunnelIdentityScheme.OAuth, "Bearer", false)]
+    [InlineData(DevTunnelIdentityScheme.GitHub, "github", true)]
+    [InlineData(DevTunnelIdentityScheme.Entra, "aad", true)]
+    [InlineData(DevTunnelIdentityScheme.OAuth, "Bearer", true)]
     public async Task DevTunnelIdentityExecutor_ManagementSendIsInsideLease_AndClearsHeaderAfterUse(
         DevTunnelIdentityScheme scheme,
-        string expectedScheme)
+        string expectedScheme,
+        bool returnsCallerRequest)
     {
         await using var fixture = new Fixture(scheme);
         await using var initial = await fixture.AcquireAsync();
+        using var original = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get,
+            "https://global.rel.tunnels.api.visualstudio.com/tunnels");
+        original.Headers.Authorization = new("Bearer", "caller identity");
+        original.Headers.TryAddWithoutValidation("X-Tunnel-Authorization", "tunnel must not reach management");
         using var client = new System.Net.Http.HttpClient(new DevTunnelManagementAuthenticationHandler(
             fixture.Broker, fixture.Request, new RecordingHandler(message =>
             {
+                Assert.NotSame(original, message);
+                Assert.Equal("caller identity", original.Headers.Authorization!.Parameter);
+                Assert.True(original.Headers.Contains("X-Tunnel-Authorization"));
                 Assert.Equal(expectedScheme, message.Headers.Authorization!.Scheme);
                 Assert.Equal("private material", message.Headers.Authorization.Parameter);
                 Assert.False(message.Headers.Contains("X-Tunnel-Authorization"));
                 return new(System.Net.HttpStatusCode.OK)
                 {
-                    RequestMessage = new System.Net.Http.HttpRequestMessage(message.Method, message.RequestUri)
+                    RequestMessage = returnsCallerRequest ? original : new System.Net.Http.HttpRequestMessage(message.Method, message.RequestUri)
                     {
                         Headers = { Authorization = message.Headers.Authorization },
                     },
                 };
             })));
-        using var message = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get,
-            "https://global.rel.tunnels.api.visualstudio.com/tunnels");
-        message.Headers.TryAddWithoutValidation("X-Tunnel-Authorization", "tunnel must not reach management");
-        using var response = await client.SendAsync(message, TestContext.Current.CancellationToken);
+        using var response = await client.SendAsync(original, TestContext.Current.CancellationToken);
         using var sent = response.RequestMessage;
         Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
-        Assert.Null(message.Headers.Authorization);
-        Assert.False(message.Headers.Contains("X-Tunnel-Authorization"));
+        Assert.Equal("caller identity", original.Headers.Authorization!.Parameter);
+        Assert.True(original.Headers.Contains("X-Tunnel-Authorization"));
         Assert.NotNull(sent);
+        Assert.NotSame(original, sent);
         Assert.Null(sent.Headers.Authorization);
+        Assert.False(sent.Headers.Contains("X-Tunnel-Authorization"));
+    }
+
+    [Fact]
+    public async Task DevTunnelIdentityExecutor_FactoryRequiresLivePresentationScope()
+    {
+        await using var fixture = new Fixture(DevTunnelIdentityScheme.GitHub);
+        Assert.Throws<ArgumentNullException>(() =>
+            new DevTunnelServiceFactory(fixture.Broker, fixture.Request, null!));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DevTunnelIdentityExecutor_FailedManagementSendPreservesCallerAndScrubsOwnedRequest(bool cancelled)
+    {
+        await using var fixture = new Fixture(DevTunnelIdentityScheme.GitHub);
+        await using var initial = await fixture.AcquireAsync();
+        using var original = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get,
+            "https://global.rel.tunnels.api.visualstudio.com/tunnels");
+        original.Headers.Authorization = new("Bearer", "caller identity");
+        original.Headers.TryAddWithoutValidation("X-Tunnel-Authorization", "caller tunnel header");
+        System.Net.Http.HttpRequestMessage? outgoing = null;
+        using var client = new System.Net.Http.HttpClient(new DevTunnelManagementAuthenticationHandler(
+            fixture.Broker, fixture.Request, new RecordingHandler(message =>
+            {
+                outgoing = message;
+                Assert.NotSame(original, message);
+                Assert.Equal("caller identity", original.Headers.Authorization!.Parameter);
+                Assert.True(original.Headers.Contains("X-Tunnel-Authorization"));
+                Assert.Equal("private material", message.Headers.Authorization!.Parameter);
+                Assert.False(message.Headers.Contains("X-Tunnel-Authorization"));
+                Exception failure = cancelled
+                    ? new OperationCanceledException(new CancellationToken(true))
+                    : new System.Net.Http.HttpRequestException("transport failed");
+                throw failure;
+            })));
+
+        if (cancelled)
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                client.SendAsync(original, TestContext.Current.CancellationToken));
+        }
+        else
+        {
+            await Assert.ThrowsAsync<System.Net.Http.HttpRequestException>(() =>
+                client.SendAsync(original, TestContext.Current.CancellationToken));
+        }
+        Assert.Equal("caller identity", original.Headers.Authorization!.Parameter);
+        Assert.True(original.Headers.Contains("X-Tunnel-Authorization"));
+        Assert.NotNull(outgoing);
+        Assert.Null(outgoing.Headers.Authorization);
+        Assert.False(outgoing.Headers.Contains("X-Tunnel-Authorization"));
     }
 
     [Fact]

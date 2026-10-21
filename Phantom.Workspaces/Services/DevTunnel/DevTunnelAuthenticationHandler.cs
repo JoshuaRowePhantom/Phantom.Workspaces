@@ -36,7 +36,8 @@ public sealed class DevTunnelAuthenticationHandler : DelegatingHandler
         }
         await using var credential = DevTunnelCredentialAccessException.Require(
             await this.broker.AcquireAsync(this.CurrentRequest(), cancellationToken).ConfigureAwait(false));
-        var response = await this.SendWithCredentialAsync(request, credential, cancellationToken).ConfigureAwait(false);
+        using var outgoing = await CloneRequestAsync(request, cancellationToken).ConfigureAwait(false);
+        var response = await this.SendWithCredentialAsync(outgoing, credential, cancellationToken).ConfigureAwait(false);
         if (response.StatusCode != HttpStatusCode.Unauthorized || credential.ConnectToken is null)
         {
             return response;
@@ -70,7 +71,9 @@ public sealed class DevTunnelAuthenticationHandler : DelegatingHandler
         request.Headers.Remove(TunnelAuthorizationHeader);
         if (credential.ConnectToken is null)
         {
-            return await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            var response = await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            SanitizeResponseRequest(response, request);
+            return response;
         }
         return DevTunnelCredentialAccessException.RequireUse(await credential.ConnectToken.UseAsync(
             async (material, token) =>
@@ -79,11 +82,7 @@ public sealed class DevTunnelAuthenticationHandler : DelegatingHandler
                 try
                 {
                     var response = await base.SendAsync(request, token).ConfigureAwait(false);
-                    if (response.RequestMessage is { } sent)
-                    {
-                        sent.Headers.Authorization = null;
-                        sent.Headers.Remove(TunnelAuthorizationHeader);
-                    }
+                    SanitizeResponseRequest(response, request);
                     return response;
                 }
                 finally
@@ -93,31 +92,63 @@ public sealed class DevTunnelAuthenticationHandler : DelegatingHandler
             }, cancellationToken).ConfigureAwait(false));
     }
 
+    internal static void SanitizeResponseRequest(HttpResponseMessage response, HttpRequestMessage request)
+    {
+        // A transport may return a caller-owned request or an authenticated copy.
+        response.RequestMessage = CloneRequestMetadata(response.RequestMessage ?? request);
+    }
+
     internal static async Task<HttpRequestMessage> CloneRequestAsync(
         HttpRequestMessage request,
         CancellationToken cancellationToken)
+    {
+        var clone = CloneRequestMetadata(request);
+        try
+        {
+            if (request.Content is not null)
+            {
+                clone.Content = new ByteArrayContent(await request.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false));
+                foreach (var header in request.Content.Headers)
+                {
+                    clone.Content.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                }
+            }
+            return clone;
+        }
+        catch
+        {
+            clone.Dispose();
+            throw;
+        }
+    }
+
+    private static HttpRequestMessage CloneRequestMetadata(HttpRequestMessage request)
     {
         var clone = new HttpRequestMessage(request.Method, request.RequestUri)
         {
             Version = request.Version,
             VersionPolicy = request.VersionPolicy,
         };
-        if (request.Content is not null)
+        try
         {
-            clone.Content = new ByteArrayContent(await request.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false));
-            foreach (var header in request.Content.Headers)
+            foreach (var header in request.Headers)
             {
-                clone.Content.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                if (!header.Key.Equals("Authorization", StringComparison.OrdinalIgnoreCase) &&
+                    !header.Key.Equals(TunnelAuthorizationHeader, StringComparison.OrdinalIgnoreCase))
+                {
+                    clone.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                }
             }
+            foreach (var option in request.Options)
+            {
+                ((IDictionary<string, object?>)clone.Options)[option.Key] = option.Value;
+            }
+            return clone;
         }
-        foreach (var header in request.Headers)
+        catch
         {
-            clone.Headers.TryAddWithoutValidation(header.Key, header.Value);
+            clone.Dispose();
+            throw;
         }
-        foreach (var option in request.Options)
-        {
-            ((IDictionary<string, object?>)clone.Options)[option.Key] = option.Value;
-        }
-        return clone;
     }
 }

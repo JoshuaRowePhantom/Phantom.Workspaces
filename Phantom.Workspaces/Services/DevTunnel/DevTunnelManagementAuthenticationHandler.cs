@@ -29,7 +29,8 @@ internal sealed class DevTunnelManagementAuthenticationHandler(
         }
         await using var identity = DevTunnelCredentialAccessException.Require(
             await broker.AcquireAsync(CurrentRequest(), cancellationToken).ConfigureAwait(false));
-        var response = await this.SendWithIdentityAsync(request, identity, cancellationToken).ConfigureAwait(false);
+        using var outgoing = await DevTunnelAuthenticationHandler.CloneRequestAsync(request, cancellationToken).ConfigureAwait(false);
+        var response = await this.SendWithIdentityAsync(outgoing, identity, cancellationToken).ConfigureAwait(false);
         if (response.StatusCode != HttpStatusCode.Unauthorized || identity.AccessToken is null)
         {
             return response;
@@ -60,7 +61,9 @@ internal sealed class DevTunnelManagementAuthenticationHandler(
         request.Headers.Remove("X-Tunnel-Authorization");
         if (identity.Scheme == DevTunnelIdentityScheme.Anonymous)
         {
-            return await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            var response = await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            DevTunnelAuthenticationHandler.SanitizeResponseRequest(response, request);
+            return response;
         }
         if (identity.AccessToken is null)
         {
@@ -78,11 +81,7 @@ internal sealed class DevTunnelManagementAuthenticationHandler(
                 try
                 {
                     var response = await base.SendAsync(request, token).ConfigureAwait(false);
-                    if (response.RequestMessage is { } sent)
-                    {
-                        sent.Headers.Authorization = null;
-                        sent.Headers.Remove("X-Tunnel-Authorization");
-                    }
+                    DevTunnelAuthenticationHandler.SanitizeResponseRequest(response, request);
                     return response;
                 }
                 finally
