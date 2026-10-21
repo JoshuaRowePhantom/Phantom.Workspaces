@@ -262,15 +262,37 @@ public sealed class CredentialManagerTokenCacheTests
         Assert.DoesNotContain(obsoleteKey, store.DeleteKeys);
     }
 
+    [Fact]
+    public async Task TokenCache_CancellationDuringAuthoritativeRead_PreventsLateInvalidation()
+    {
+        var store = new FakePlatformSecretStore();
+        var cache = new CredentialManagerTokenCache(store, KeyPrefix, ServerName);
+        await cache.StoreTokensAsync(SampleTokens(), CancellationToken.None);
+        var generations = (ICredentialGenerationCache)cache;
+        var metadata = (await generations.InspectGenerationAsync(CancellationToken.None))!;
+        using var cancellation = new CancellationTokenSource();
+        store.OnRead = cancellation.Cancel;
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            generations.InvalidateGenerationAsync(metadata.Generation, cancellation.Token).AsTask());
+
+        Assert.Empty(store.DeleteKeys);
+        Assert.Single(store.Secrets);
+        Assert.Equal(metadata.Generation,
+            (await generations.InspectGenerationAsync(CancellationToken.None))!.Generation);
+    }
+
     private sealed class FakePlatformSecretStore : IPlatformSecretStore
     {
         public Dictionary<string, SecureString> Secrets { get; } = new(StringComparer.Ordinal);
         public List<string> ReadKeys { get; } = [];
         public List<string> DeleteKeys { get; } = [];
+        public Action? OnRead { get; set; }
 
         public Task<SecureString?> ReadAsync(string name, CancellationToken ct)
         {
             this.ReadKeys.Add(name);
+            this.OnRead?.Invoke();
             return Task.FromResult(this.Secrets.TryGetValue(name, out var value) ? Copy(value) : null);
         }
 

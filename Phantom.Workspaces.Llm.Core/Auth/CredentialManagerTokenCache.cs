@@ -255,7 +255,9 @@ internal sealed class CredentialManagerTokenCache : ITokenCache, ICredentialGene
 
             // Check the generation in the authoritative private record too. Another owner may have
             // replaced the platform entry since this process last published safe metadata.
-            if (await this.ReadTokensAsync(generation, cancellationToken).ConfigureAwait(false) is null)
+            var tokens = await this.ReadTokensAsync(generation, cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (tokens is null)
             {
                 return this.partition.Metadata is null
                     ? CredentialGenerationInvalidationOutcome.Missing
