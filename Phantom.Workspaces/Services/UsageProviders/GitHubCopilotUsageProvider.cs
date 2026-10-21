@@ -7,7 +7,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
-using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Models;
 
 namespace Phantom.Workspaces.Services.UsageProviders;
@@ -23,7 +23,7 @@ namespace Phantom.Workspaces.Services.UsageProviders;
 public sealed class GitHubCopilotUsageProvider : IUsageProvider
 {
     private readonly HttpClient httpClient;
-    private readonly Func<string?> tokenResolver;
+    private readonly GitHubCredentialUsageAdapter credential;
     private readonly ILogger<GitHubCopilotUsageProvider> logger;
     private readonly TimeProvider timeProvider;
 
@@ -31,20 +31,13 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
 
     public GitHubCopilotUsageProvider(
         HttpClient httpClient,
+        IAccessBroker? accessBroker,
         ILogger<GitHubCopilotUsageProvider>? logger = null,
-        TimeProvider? timeProvider = null)
-        : this(httpClient, () => GitHubAuthTokenResolver.Resolve(), logger, timeProvider)
-    {
-    }
-
-    internal GitHubCopilotUsageProvider(
-        HttpClient httpClient,
-        Func<string?> tokenResolver,
-        ILogger<GitHubCopilotUsageProvider>? logger = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        Func<AccessPresentationScope>? presentationScope = null)
     {
         this.httpClient = httpClient;
-        this.tokenResolver = tokenResolver;
+        this.credential = new GitHubCredentialUsageAdapter(accessBroker, presentationScope);
         this.logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<GitHubCopilotUsageProvider>.Instance;
         this.timeProvider = timeProvider ?? TimeProvider.System;
     }
@@ -53,7 +46,6 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
         UsageAccount account,
         CancellationToken cancellationToken)
     {
-        var token = this.tokenResolver();
         var now = this.timeProvider.GetUtcNow();
 
         // Fetch org budgets first (#1188): they carry the current billing period, which
@@ -61,7 +53,7 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
         // bounded to the current period. Personal accounts (account.Org == null) skip
         // this call entirely.
         var budgets = account.Org is { Length: > 0 } org
-            ? await this.FetchOrgBudgetsAsync(org, account.UserName, token, cancellationToken).ConfigureAwait(false)
+            ? await this.FetchOrgBudgetsAsync(org, account.UserName, cancellationToken).ConfigureAwait(false)
             : Array.Empty<ScopedBudget>();
 
         // Discover the current period start / end. Prefer any budget that supplies
@@ -71,37 +63,36 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
 
         var url = BuildRequestUrl(account, periodStart);
 
-        // #1211: Log the fetch URL + period so the request the server received is
-        // reconstructable from the log stream alone (previously any usage
-        // discrepancy could only be root-caused with a debugger attached).
         this.logger.LogInformation(
             "GitHubCopilotUsageProvider fetching usage from {Endpoint} for period {PeriodStart:o}..{PeriodEnd:o}.",
-            url,
+            "/settings/billing/usage",
             periodStart,
             periodEnd);
 
-        var response = await this.SendRequestAsync(url, token, cancellationToken).ConfigureAwait(false);
+        var response = await this.SendRequestAsync(url, cancellationToken).ConfigureAwait(false);
 
         if (response.StatusCode == HttpStatusCode.Unauthorized)
         {
-            token = this.tokenResolver();
-            response = await this.SendRequestAsync(url, token, cancellationToken).ConfigureAwait(false);
+            response.Dispose();
+            response = await this.SendRequestAsync(url, cancellationToken).ConfigureAwait(false);
 
             if (response.StatusCode == HttpStatusCode.Unauthorized)
             {
+                response.Dispose();
                 throw new HttpRequestException(
-                    "GitHub Copilot API returned 401 after token refresh.",
+                    "GitHub Copilot API returned 401 after a credential retry.",
                     null,
                     HttpStatusCode.Unauthorized);
             }
         }
 
+        using var responseLifetime = response;
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             this.logger.LogWarning(
                 "GitHub Copilot usage provider returned {StatusCode} for {Endpoint}; returning empty metrics.",
                 (int)response.StatusCode,
-                url);
+                "/settings/billing/usage");
             return [];
         }
 
@@ -110,7 +101,7 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
             this.logger.LogWarning(
                 "GitHub Copilot usage provider returned {StatusCode} for {Endpoint}; the access token likely lacks the required 'Plan' user permission (read). Returning empty metrics.",
                 (int)response.StatusCode,
-                url);
+                "/settings/billing/usage");
             return [];
         }
 
@@ -119,31 +110,18 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
             this.logger.LogError(
                 "GitHub Copilot usage provider returned non-success {StatusCode} for {Endpoint}.",
                 (int)response.StatusCode,
-                url);
+                "/settings/billing/usage");
         }
 
         response.EnsureSuccessStatusCode();
 
         var json = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
-        // #1211: Success-path fetch observability. Information-level entries capture
-        // URL + status + body-size so a routine log grep confirms the fetch happened;
-        // the raw JSON body is only emitted at Debug to avoid log bloat. The
-        // Authorization header is set in SendRequestAsync and is deliberately never
-        // passed to the logger — the body itself does not contain credentials.
         this.logger.LogInformation(
             "GitHubCopilotUsageProvider received {StatusCode} for {Endpoint} ({ByteCount} bytes).",
             (int)response.StatusCode,
-            url,
+            "/settings/billing/usage",
             json.Length);
-
-        if (this.logger.IsEnabled(LogLevel.Debug))
-        {
-            this.logger.LogDebug(
-                "GitHubCopilotUsageProvider response body for {Endpoint}: {Body}",
-                url,
-                json);
-        }
 
         return ParseMetrics(json, account, budgets, now.UtcDateTime, periodStart, periodEnd);
     }
@@ -200,22 +178,25 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
         return (monthStart, null);
     }
 
-    private Task<HttpResponseMessage> SendRequestAsync(string url, string? token, CancellationToken cancellationToken)
+    private Task<HttpResponseMessage> SendRequestAsync(string url, CancellationToken cancellationToken)
     {
-        var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
-        request.Headers.Add("X-GitHub-Api-Version", "2026-03-10");
-        request.Headers.Add("User-Agent", "phantom-workspaces");
-        if (!string.IsNullOrWhiteSpace(token))
+        return this.credential.UseAsync(GitHubCredentialPurpose.CopilotUsage, async (token, operationCancellationToken) =>
         {
-            // #1211: Never pass `token` or `request.Headers.Authorization` to the logger.
-            // The URL, status, and body are sufficient for triage; the bearer token has
-            // no operational benefit in a log file and would leak into any attached
-            // bug-report snippet.
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
+            request.Headers.Add("X-GitHub-Api-Version", "2026-03-10");
+            request.Headers.Add("User-Agent", "phantom-workspaces");
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        }
 
-        return this.httpClient.SendAsync(request, cancellationToken);
+            try
+            {
+                return await this.httpClient.SendAsync(request, operationCancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                request.Headers.Authorization = null;
+            }
+        }, cancellationToken).AsTask();
     }
 
     private static IReadOnlyList<UsageMetric> ParseMetrics(
@@ -486,7 +467,6 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
     private async Task<IReadOnlyList<ScopedBudget>> FetchOrgBudgetsAsync(
         string org,
         string userName,
-        string? token,
         CancellationToken cancellationToken)
     {
         var results = new List<ScopedBudget>();
@@ -503,7 +483,7 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
             HttpResponseMessage response;
             try
             {
-                response = await this.SendRequestAsync(url, token, cancellationToken).ConfigureAwait(false);
+                response = await this.SendRequestAsync(url, cancellationToken).ConfigureAwait(false);
             }
             catch (HttpRequestException ex)
             {
@@ -514,6 +494,7 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
                 continue;
             }
 
+            using var responseLifetime = response;
             if (response.StatusCode == HttpStatusCode.Forbidden
                 || response.StatusCode == HttpStatusCode.NotFound)
             {

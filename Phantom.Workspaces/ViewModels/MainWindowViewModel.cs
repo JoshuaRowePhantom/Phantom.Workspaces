@@ -898,12 +898,16 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         {
             new Services.UsageProviders.GitHubCopilotUsageProvider(
                 new HttpClient(),
+                this.applicationServices.AccessBroker,
                 this.loggerFactory.CreateLogger<Services.UsageProviders.GitHubCopilotUsageProvider>(),
-                TimeProvider.System),
+                TimeProvider.System,
+                presentationScope: this.applicationServices.AccessPresentationScope),
             new Services.UsageProviders.GitHubActionsUsageProvider(
                 new HttpClient(),
+                this.applicationServices.AccessBroker,
                 this.loggerFactory.CreateLogger<Services.UsageProviders.GitHubActionsUsageProvider>(),
-                TimeProvider.System),
+                TimeProvider.System,
+                presentationScope: this.applicationServices.AccessPresentationScope),
         };
         this.usageMetricsService = new Services.UsageMetricsService(
             dataAccessLayer,

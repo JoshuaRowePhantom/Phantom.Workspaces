@@ -7,7 +7,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
-using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Models;
 
 namespace Phantom.Workspaces.Services.UsageProviders;
@@ -26,7 +26,7 @@ namespace Phantom.Workspaces.Services.UsageProviders;
 public sealed class GitHubActionsUsageProvider : IUsageProvider
 {
     private readonly HttpClient httpClient;
-    private readonly Func<string?> tokenResolver;
+    private readonly GitHubCredentialUsageAdapter credential;
     private readonly ILogger<GitHubActionsUsageProvider> logger;
     private readonly TimeProvider timeProvider;
 
@@ -34,20 +34,13 @@ public sealed class GitHubActionsUsageProvider : IUsageProvider
 
     public GitHubActionsUsageProvider(
         HttpClient httpClient,
+        IAccessBroker? accessBroker,
         ILogger<GitHubActionsUsageProvider>? logger = null,
-        TimeProvider? timeProvider = null)
-        : this(httpClient, () => GitHubAuthTokenResolver.Resolve(), logger, timeProvider)
-    {
-    }
-
-    internal GitHubActionsUsageProvider(
-        HttpClient httpClient,
-        Func<string?> tokenResolver,
-        ILogger<GitHubActionsUsageProvider>? logger = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        Func<AccessPresentationScope>? presentationScope = null)
     {
         this.httpClient = httpClient;
-        this.tokenResolver = tokenResolver;
+        this.credential = new GitHubCredentialUsageAdapter(accessBroker, presentationScope);
         this.logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<GitHubActionsUsageProvider>.Instance;
         this.timeProvider = timeProvider ?? TimeProvider.System;
     }
@@ -56,29 +49,30 @@ public sealed class GitHubActionsUsageProvider : IUsageProvider
         UsageAccount account,
         CancellationToken cancellationToken)
     {
-        var token = this.tokenResolver();
-        var response = await this.SendRequestAsync(account.UserName, token, cancellationToken).ConfigureAwait(false);
+        var response = await this.SendRequestAsync(account.UserName, cancellationToken).ConfigureAwait(false);
 
         if (response.StatusCode == HttpStatusCode.Unauthorized)
         {
-            token = this.tokenResolver();
-            response = await this.SendRequestAsync(account.UserName, token, cancellationToken).ConfigureAwait(false);
+            response.Dispose();
+            response = await this.SendRequestAsync(account.UserName, cancellationToken).ConfigureAwait(false);
 
             if (response.StatusCode == HttpStatusCode.Unauthorized)
             {
+                response.Dispose();
                 throw new HttpRequestException(
-                    "GitHub Actions billing API returned 401 after token refresh.",
+                    "GitHub Actions billing API returned 401 after a credential retry.",
                     null,
                     HttpStatusCode.Unauthorized);
             }
         }
 
+        using var responseLifetime = response;
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             this.logger.LogWarning(
                 "GitHub Actions usage provider returned {StatusCode} for {Endpoint}; returning empty metrics.",
                 (int)response.StatusCode,
-                $"https://api.github.com/users/{account.UserName}/settings/billing/actions");
+                "/settings/billing/actions");
             return [];
         }
 
@@ -87,7 +81,7 @@ public sealed class GitHubActionsUsageProvider : IUsageProvider
             this.logger.LogError(
                 "GitHub Actions usage provider returned non-success {StatusCode} for {Endpoint}.",
                 (int)response.StatusCode,
-                $"https://api.github.com/users/{account.UserName}/settings/billing/actions");
+                "/settings/billing/actions");
         }
 
         response.EnsureSuccessStatusCode();
@@ -98,21 +92,27 @@ public sealed class GitHubActionsUsageProvider : IUsageProvider
 
     private Task<HttpResponseMessage> SendRequestAsync(
         string userName,
-        string? token,
         CancellationToken cancellationToken)
     {
-        var request = new HttpRequestMessage(
-            HttpMethod.Get,
-            $"https://api.github.com/users/{Uri.EscapeDataString(userName)}/settings/billing/actions");
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
-        request.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
-        request.Headers.Add("User-Agent", "phantom-workspaces");
-        if (!string.IsNullOrWhiteSpace(token))
+        return this.credential.UseAsync(GitHubCredentialPurpose.ActionsUsage, async (token, operationCancellationToken) =>
         {
+            using var request = new HttpRequestMessage(
+                HttpMethod.Get,
+                $"https://api.github.com/users/{Uri.EscapeDataString(userName)}/settings/billing/actions");
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
+            request.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
+            request.Headers.Add("User-Agent", "phantom-workspaces");
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        }
 
-        return this.httpClient.SendAsync(request, cancellationToken);
+            try
+            {
+                return await this.httpClient.SendAsync(request, operationCancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                request.Headers.Authorization = null;
+            }
+        }, cancellationToken).AsTask();
     }
 
     private static IReadOnlyList<UsageMetric> ParseMetrics(string json, DateTime now)

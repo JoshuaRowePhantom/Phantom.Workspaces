@@ -95,7 +95,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             new HttpClient(handler),
-            () => "fake-token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"));
 
         var account = new UsageAccount
         {
@@ -126,7 +126,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             new HttpClient(handler),
-            () => "fake-token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"));
 
         var account = new UsageAccount
         {
@@ -146,7 +146,7 @@ public sealed class GitHubCopilotUsageProviderTests
     {
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, CopilotUsageItemsJson),
-            () => "fake-token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"));
 
         var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
 
@@ -178,7 +178,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, json),
-            () => "fake-token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"));
 
         var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
 
@@ -202,7 +202,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, json),
-            () => "fake-token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"));
 
         var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
 
@@ -217,19 +217,23 @@ public sealed class GitHubCopilotUsageProviderTests
     {
         HttpRequestMessage? capturedRequest = null;
         var handler = new RequestCapturingHandler(
-            req => capturedRequest = req,
+            req =>
+            {
+                Assert.Equal("Bearer", req.Headers.Authorization?.Scheme);
+                Assert.Equal("test-token", req.Headers.Authorization?.Parameter);
+                capturedRequest = req;
+            },
             HttpStatusCode.OK,
             """{ "usageItems": [] }""");
 
         var provider = new GitHubCopilotUsageProvider(
             new HttpClient(handler),
-            () => "test-token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "test-token"));
 
         await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
 
         Assert.NotNull(capturedRequest);
-        Assert.Equal("Bearer", capturedRequest!.Headers.Authorization?.Scheme);
-        Assert.Equal("test-token", capturedRequest.Headers.Authorization?.Parameter);
+        Assert.Null(capturedRequest!.Headers.Authorization);
         Assert.Contains(capturedRequest.Headers.Accept, h => h.MediaType == "application/vnd.github+json");
         Assert.True(capturedRequest.Headers.TryGetValues("X-GitHub-Api-Version", out var apiVersionValues));
         Assert.Contains("2026-03-10", apiVersionValues!);
@@ -242,7 +246,7 @@ public sealed class GitHubCopilotUsageProviderTests
     {
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.NotFound, string.Empty),
-            () => "fake-token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"));
 
         var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
 
@@ -255,7 +259,7 @@ public sealed class GitHubCopilotUsageProviderTests
         var logger = new TestLogger<GitHubCopilotUsageProvider>();
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.NotFound, string.Empty),
-            () => "fake-token",
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"),
             logger);
 
         var account = new UsageAccount
@@ -270,7 +274,7 @@ public sealed class GitHubCopilotUsageProviderTests
         var entry = Assert.Single(logger.Entries, e => e.Level == LogLevel.Warning);
         Assert.Contains("404", entry.Message, StringComparison.Ordinal);
         Assert.Contains(
-            "https://api.github.com/users/octocat/settings/billing/usage",
+            "/settings/billing/usage",
             entry.Message,
             StringComparison.Ordinal);
     }
@@ -281,7 +285,7 @@ public sealed class GitHubCopilotUsageProviderTests
         var logger = new TestLogger<GitHubCopilotUsageProvider>();
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.Forbidden, string.Empty),
-            () => "fake-token",
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"),
             logger);
 
         var account = new UsageAccount
@@ -299,7 +303,7 @@ public sealed class GitHubCopilotUsageProviderTests
         Assert.Contains("403", entry.Message, StringComparison.Ordinal);
         Assert.Contains("Plan", entry.Message, StringComparison.Ordinal);
         Assert.Contains(
-            "https://api.github.com/users/octocat/settings/billing/usage",
+            "/settings/billing/usage",
             entry.Message,
             StringComparison.Ordinal);
     }
@@ -310,7 +314,7 @@ public sealed class GitHubCopilotUsageProviderTests
         var logger = new TestLogger<GitHubCopilotUsageProvider>();
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.InternalServerError, string.Empty),
-            () => "fake-token",
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"),
             logger);
 
         await Assert.ThrowsAsync<HttpRequestException>(
@@ -330,11 +334,11 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             new HttpClient(handler),
-            () =>
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() =>
             {
                 Interlocked.Increment(ref callCount);
                 return "token";
-            });
+            }));
 
         var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
 
@@ -351,7 +355,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             new HttpClient(handler),
-            () => "token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "token"));
 
         await Assert.ThrowsAsync<HttpRequestException>(
             () => provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken));
@@ -362,7 +366,7 @@ public sealed class GitHubCopilotUsageProviderTests
     {
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, "{}"),
-            () => null);
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => null));
 
         Assert.Equal("github.com", provider.ProviderUri.Host);
         Assert.Equal("https", provider.ProviderUri.Scheme);
@@ -373,7 +377,7 @@ public sealed class GitHubCopilotUsageProviderTests
     {
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, """{ "usageItems": [] }"""),
-            () => "fake-token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"));
 
         var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
 
@@ -388,7 +392,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, CopilotUsageItemsJson),
-            () => "fake-token",
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"),
             logger: null,
             timeProvider: timeProvider);
 
@@ -406,7 +410,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, CopilotUsageItemsJson),
-            () => "fake-token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"));
 
         var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
 
@@ -430,7 +434,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, CopilotUsageItemsJson),
-            () => "fake-token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"));
 
         var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
         var costMetric = metrics.Single(m => m.Title == "Copilot AI Credits (Additional Usage)");
@@ -452,7 +456,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, json),
-            () => "fake-token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"));
 
         var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
         var costMetric = metrics.Single(m => m.Title == "Copilot AI Credits (Additional Usage)");
@@ -478,7 +482,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, json),
-            () => "fake-token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"));
 
         var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
 
@@ -507,7 +511,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, json),
-            () => "fake-token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"));
 
         var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
 
@@ -523,7 +527,7 @@ public sealed class GitHubCopilotUsageProviderTests
     {
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, CopilotUsageItemsJson),
-            () => "fake-token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"));
 
         var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
         var quantity = metrics.Single(m => m.Title == "Copilot AI Credits");
@@ -537,7 +541,7 @@ public sealed class GitHubCopilotUsageProviderTests
     {
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, CopilotUsageItemsJson),
-            () => "fake-token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"));
 
         var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
 
@@ -558,7 +562,7 @@ public sealed class GitHubCopilotUsageProviderTests
     {
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, CopilotUsageItemsJson),
-            () => "fake-token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"));
 
         var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
 
@@ -570,7 +574,7 @@ public sealed class GitHubCopilotUsageProviderTests
     {
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, CopilotUsageItemsJson),
-            () => "fake-token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"));
 
         var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
 
@@ -591,7 +595,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, CopilotUsageItemsJson),
-            () => "fake-token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"));
 
         var metrics = await provider.GetMetricsAsync(account, TestContext.Current.CancellationToken);
 
@@ -611,7 +615,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, CopilotUsageItemsJson),
-            () => "fake-token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"));
 
         var metrics = await provider.GetMetricsAsync(account, TestContext.Current.CancellationToken);
 
@@ -632,7 +636,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, CopilotUsageItemsJson),
-            () => "fake-token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"));
 
         var metrics = await provider.GetMetricsAsync(account, TestContext.Current.CancellationToken);
 
@@ -746,7 +750,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             new HttpClient(handler),
-            () => "token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "token"));
 
         await provider.GetMetricsAsync(OrgAccount(), TestContext.Current.CancellationToken);
 
@@ -786,7 +790,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             new HttpClient(handler),
-            () => "token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "token"));
 
         var metrics = await provider.GetMetricsAsync(OrgAccount(), TestContext.Current.CancellationToken);
 
@@ -819,7 +823,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             new HttpClient(handler),
-            () => "token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "token"));
 
         var metrics = await provider.GetMetricsAsync(OrgAccount(), TestContext.Current.CancellationToken);
 
@@ -840,7 +844,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             new HttpClient(handler),
-            () => "token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "token"));
 
         var metrics = await provider.GetMetricsAsync(
             OrgAccount(monthlyBudget: 750m),
@@ -858,7 +862,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             new HttpClient(handler),
-            () => "token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "token"));
 
         var account = new UsageAccount
         {
@@ -883,7 +887,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             new HttpClient(handler),
-            () => "token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "token"));
 
         var account = new UsageAccount
         {
@@ -907,7 +911,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             new HttpClient(handler),
-            () => "token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "token"));
 
         var account = new UsageAccount
         {
@@ -962,7 +966,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             new HttpClient(handler),
-            () => "token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "token"));
 
         var metrics = await provider.GetMetricsAsync(OrgAccount(), TestContext.Current.CancellationToken);
 
@@ -998,7 +1002,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, json),
-            () => "fake-token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"));
 
         var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
 
@@ -1040,7 +1044,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, json),
-            () => "fake-token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"));
 
         var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
 
@@ -1059,7 +1063,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, CopilotUsageItemsJson),
-            () => "fake-token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"));
 
         var account = new UsageAccount
         {
@@ -1090,7 +1094,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, CopilotUsageItemsJson),
-            () => "fake-token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"));
 
         var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
 
@@ -1110,7 +1114,7 @@ public sealed class GitHubCopilotUsageProviderTests
     {
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, AiCreditsOnlyUsageJson),
-            () => "fake-token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"));
 
         var account = new UsageAccount
         {
@@ -1136,7 +1140,7 @@ public sealed class GitHubCopilotUsageProviderTests
     {
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, CopilotUsageItemsJson),
-            () => "fake-token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"));
 
         var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
 
@@ -1175,7 +1179,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, json),
-            () => "token",
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "token"),
             logger: null,
             timeProvider: fakeTime);
 
@@ -1208,7 +1212,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, json),
-            () => "token",
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "token"),
             logger: null,
             timeProvider: fakeTime);
 
@@ -1238,7 +1242,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             new HttpClient(handler),
-            () => "token",
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "token"),
             logger: null,
             timeProvider: fakeTime);
 
@@ -1273,7 +1277,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, json),
-            () => "token",
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "token"),
             logger: null,
             timeProvider: fakeTime);
 
@@ -1303,7 +1307,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, json),
-            () => "token",
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "token"),
             logger: null,
             timeProvider: fakeTime);
 
@@ -1317,16 +1321,12 @@ public sealed class GitHubCopilotUsageProviderTests
     }
 
     [Fact]
-    public async Task GetMetricsAsync_WhenFetchingUsage_LogsRequestUrlAndResponseStatus()
+    public async Task GetMetricsAsync_WhenFetchingUsage_LogsSafeEndpointAndResponseStatus()
     {
-        // #1211: Success-path fetch observability. Without this, a user report of
-        // "additional usage is missing" cannot be triaged from logs alone — as
-        // happened with this bug. The Information line must include the URL and
-        // the response status code (200 here).
         var logger = new TestLogger<GitHubCopilotUsageProvider>();
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, """{ "usageItems": [] }"""),
-            () => "fake-token",
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"),
             logger);
 
         var account = new UsageAccount
@@ -1340,33 +1340,27 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var infos = logger.Entries.Where(e => e.Level == LogLevel.Information).ToList();
         Assert.Contains(infos, e => e.Message.Contains(
-            "https://api.github.com/users/octocat/settings/billing/usage",
+            "/settings/billing/usage",
             StringComparison.Ordinal));
         Assert.Contains(infos, e => e.Message.Contains("200", StringComparison.Ordinal)
-            && e.Message.Contains("https://api.github.com/users/octocat/settings/billing/usage", StringComparison.Ordinal));
+            && e.Message.Contains("/settings/billing/usage", StringComparison.Ordinal));
+        Assert.DoesNotContain(logger.Entries, entry => entry.Message.Contains("octocat", StringComparison.Ordinal));
     }
 
     [Fact]
-    public async Task GetMetricsAsync_WhenDebugLoggingEnabled_LogsRawJsonResponseBody()
+    public async Task GetMetricsAsync_WhenDebugLoggingEnabled_DoesNotLogRawProviderResponse()
     {
-        // #1211: Raw JSON body is the ground truth for triage. It is only emitted
-        // when Debug is enabled — TestLogger.IsEnabled returns true for every level,
-        // so this test verifies the Debug path is active and captures the body
-        // verbatim.
         const string body = """{ "usageItems": [ { "product": "copilot", "sku": "X" } ] }""";
 
         var logger = new TestLogger<GitHubCopilotUsageProvider>();
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, body),
-            () => "fake-token",
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"),
             logger);
 
         await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
 
-        var debugEntry = Assert.Single(
-            logger.Entries,
-            e => e.Level == LogLevel.Debug && e.Message.Contains(body, StringComparison.Ordinal));
-        Assert.NotNull(debugEntry);
+        Assert.DoesNotContain(logger.Entries, entry => entry.Message.Contains(body, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -1379,7 +1373,7 @@ public sealed class GitHubCopilotUsageProviderTests
         var logger = new TestLogger<GitHubCopilotUsageProvider>();
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, """{ "usageItems": [] }"""),
-            () => sentinel,
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => sentinel),
             logger);
 
         await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
@@ -1405,7 +1399,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             new HttpClient(handler),
-            () => "token",
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "token"),
             logger: null,
             timeProvider: fakeTime);
 
@@ -1436,7 +1430,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, json),
-            () => "token",
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "token"),
             logger: null,
             timeProvider: fakeTime);
 
@@ -1471,7 +1465,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, json),
-            () => "token",
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "token"),
             logger: null,
             timeProvider: fakeTime);
 
@@ -1508,7 +1502,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var provider = new GitHubCopilotUsageProvider(
             new HttpClient(handler),
-            () => "token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "token"));
 
         var metrics = await provider.GetMetricsAsync(OrgAccount(), TestContext.Current.CancellationToken);
 

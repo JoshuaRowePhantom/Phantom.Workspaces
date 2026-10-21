@@ -64,7 +64,7 @@ public sealed class GitHubActionsUsageProviderTests
 
         var provider = new GitHubActionsUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, json),
-            () => "fake-token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"));
 
         var metrics = await provider.GetMetricsAsync(TestAccount, CancellationToken.None);
 
@@ -97,7 +97,7 @@ public sealed class GitHubActionsUsageProviderTests
 
         var provider = new GitHubActionsUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, json),
-            () => "fake-token",
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"),
             logger: null,
             timeProvider: timeProvider);
 
@@ -122,7 +122,7 @@ public sealed class GitHubActionsUsageProviderTests
 
         var provider = new GitHubActionsUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, json),
-            () => "fake-token",
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"),
             logger: null,
             timeProvider: timeProvider);
 
@@ -139,7 +139,7 @@ public sealed class GitHubActionsUsageProviderTests
     {
         var provider = new GitHubActionsUsageProvider(
             MakeHttpClient(HttpStatusCode.NotFound, string.Empty),
-            () => "fake-token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"));
 
         var metrics = await provider.GetMetricsAsync(TestAccount, CancellationToken.None);
 
@@ -152,7 +152,7 @@ public sealed class GitHubActionsUsageProviderTests
         var logger = new TestLogger<GitHubActionsUsageProvider>();
         var provider = new GitHubActionsUsageProvider(
             MakeHttpClient(HttpStatusCode.NotFound, string.Empty),
-            () => "fake-token",
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"),
             logger);
 
         await provider.GetMetricsAsync(TestAccount, CancellationToken.None);
@@ -160,7 +160,7 @@ public sealed class GitHubActionsUsageProviderTests
         var entry = Assert.Single(logger.Entries, e => e.Level == Microsoft.Extensions.Logging.LogLevel.Warning);
         Assert.Contains("404", entry.Message, StringComparison.Ordinal);
         Assert.Contains("settings/billing/actions", entry.Message, StringComparison.Ordinal);
-        Assert.Contains("alice", entry.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("alice", entry.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -179,11 +179,11 @@ public sealed class GitHubActionsUsageProviderTests
 
         var provider = new GitHubActionsUsageProvider(
             new HttpClient(handler),
-            () =>
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() =>
             {
                 Interlocked.Increment(ref callCount);
                 return "token";
-            });
+            }));
 
         var metrics = await provider.GetMetricsAsync(TestAccount, CancellationToken.None);
 
@@ -200,7 +200,7 @@ public sealed class GitHubActionsUsageProviderTests
 
         var provider = new GitHubActionsUsageProvider(
             new HttpClient(handler),
-            () => "token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "token"));
 
         await Assert.ThrowsAsync<HttpRequestException>(
             () => provider.GetMetricsAsync(TestAccount, CancellationToken.None));
@@ -211,7 +211,7 @@ public sealed class GitHubActionsUsageProviderTests
     {
         var provider = new GitHubActionsUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, "{}"),
-            () => null);
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => null));
 
         Assert.Equal("github.com", provider.ProviderUri.Host);
         Assert.Equal("https", provider.ProviderUri.Scheme);
@@ -230,7 +230,7 @@ public sealed class GitHubActionsUsageProviderTests
 
         var provider = new GitHubActionsUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, json),
-            () => "fake-token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"));
 
         var metrics = await provider.GetMetricsAsync(TestAccount, CancellationToken.None);
 
@@ -252,7 +252,7 @@ public sealed class GitHubActionsUsageProviderTests
 
         var provider = new GitHubActionsUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, json),
-            () => "fake-token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"));
 
         var metrics = await provider.GetMetricsAsync(TestAccount, CancellationToken.None);
 
@@ -278,12 +278,12 @@ public sealed class GitHubActionsUsageProviderTests
 
         var provider = new GitHubActionsUsageProvider(
             new HttpClient(handler),
-            () =>
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() =>
             {
                 Assert.False(httpCalled, "Token resolver must be called before HTTP request");
                 tokenCalled = true;
                 return "token";
-            });
+            }));
 
         await provider.GetMetricsAsync(TestAccount, CancellationToken.None);
         httpCalled = true;
@@ -303,7 +303,7 @@ public sealed class GitHubActionsUsageProviderTests
 
         var provider = new GitHubActionsUsageProvider(
             client,
-            () => "token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "token"));
 
         var account = new UsageAccount
         {
@@ -338,7 +338,7 @@ public sealed class GitHubActionsUsageProviderTests
 
         var provider = new GitHubActionsUsageProvider(
             MakeHttpClient(HttpStatusCode.OK, json),
-            () => "fake-token");
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"));
 
         var metrics = await provider.GetMetricsAsync(TestAccount, CancellationToken.None);
 
