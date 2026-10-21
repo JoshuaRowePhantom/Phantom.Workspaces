@@ -120,7 +120,7 @@ public sealed class McpOAuthCredentialRequestCatalogTests
         var context = StoredSecretAccessExecutorTests.Request();
         var request = new McpOAuthCredentialRequestCatalog([configuration])
             .CreateRequest(Tool(false), context.Requestor, context.Use, context.PresentationScope)!;
-        var catalog = McpOAuthComposition.CreateCatalog();
+        var catalog = McpOAuthComposition.CreateCatalog(_ => null);
         await using var registrations = new CredentialAccessExecutorRegistry();
         var executor = McpOAuthComposition.RegisterExecutor(registrations, catalog, new MetadataOnlyBrowser());
         Assert.Empty((await executor.InspectAsync(request, TestContext.Current.CancellationToken)).Sources);
@@ -164,6 +164,40 @@ public sealed class McpOAuthCredentialRequestCatalogTests
         ((OAuthScope[])request.Scopes)[0] = new() { Value = "changed" };
         var later = catalog.CreateRequest(Tool(false), context.Requestor, context.Use, context.PresentationScope)!;
         Assert.Equal("read", Assert.Single(later.Scopes).Value);
+    }
+
+    [Fact]
+    public async Task McpOAuthCatalog_FirstToolUse_RegistersThroughActualMetadataFactoryAndLazyExecutor()
+    {
+        var configuration = Configuration(false);
+        var calls = 0;
+        var catalog = McpOAuthComposition.CreateCatalog(_ =>
+        {
+            calls++;
+            return configuration;
+        });
+        await using var registrations = new CredentialAccessExecutorRegistry();
+        var executor = McpOAuthComposition.RegisterExecutor(registrations, catalog, new MetadataOnlyBrowser());
+        Assert.Empty(catalog.GetConfigurations());
+        var context = StoredSecretAccessExecutorTests.Request();
+        var first = catalog.CreateRequest(Tool(false), context.Requestor, context.Use, context.PresentationScope)!;
+        var second = catalog.CreateRequest(Tool(false), context.Requestor, context.Use, context.PresentationScope)!;
+        Assert.Equal(1, calls);
+        Assert.Equal(first.ProviderConfiguration, second.ProviderConfiguration);
+        Assert.Single(catalog.GetConfigurations());
+        Assert.Single((await executor.InspectAsync(first, TestContext.Current.CancellationToken)).Sources);
+    }
+
+    [Fact]
+    public void McpOAuthCatalog_MetadataFactory_CannotSubstituteAnotherToolBinding()
+    {
+        var catalog = McpOAuthComposition.CreateCatalog(_ => Configuration(false) with
+        {
+            Endpoint = new Uri("https://other.test/mcp"),
+        });
+        var context = StoredSecretAccessExecutorTests.Request();
+        Assert.Null(catalog.CreateRequest(Tool(false), context.Requestor, context.Use, context.PresentationScope));
+        Assert.Empty(catalog.GetConfigurations());
     }
 
     private static McpTool Tool(bool confidential) => new()

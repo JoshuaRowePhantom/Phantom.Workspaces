@@ -1,3 +1,4 @@
+using AgentSchema;
 using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Llm.Mcp;
 using Phantom.Workspaces.Services.Access;
@@ -6,7 +7,8 @@ namespace Phantom.Workspaces.Services.Mcp;
 
 internal static class McpOAuthComposition
 {
-    internal static McpOAuthCredentialRequestCatalog CreateCatalog() => new();
+    internal static McpOAuthCredentialRequestCatalog CreateCatalog(
+        Func<McpTool, McpOAuthProviderConfiguration?> configurationFactory) => new(configurationFactory);
 
     internal static McpOAuthCredentialAccessExecutor RegisterExecutor(
         CredentialAccessExecutorRegistry executors,

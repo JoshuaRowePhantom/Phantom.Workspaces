@@ -9,6 +9,7 @@ internal sealed class McpOAuthCredentialRequestCatalog : IMcpOAuthCredentialRequ
 {
     private readonly object gate = new();
     private readonly Dictionary<McpProviderConfigurationIdentifier, McpOAuthProviderConfiguration> configurations = [];
+    private readonly Func<McpTool, McpOAuthProviderConfiguration?>? configurationFactory;
 
     internal McpOAuthCredentialRequestCatalog(IEnumerable<McpOAuthProviderConfiguration>? configurations = null)
     {
@@ -16,6 +17,11 @@ internal sealed class McpOAuthCredentialRequestCatalog : IMcpOAuthCredentialRequ
         {
             this.RegisterConfiguration(configuration);
         }
+    }
+
+    internal McpOAuthCredentialRequestCatalog(Func<McpTool, McpOAuthProviderConfiguration?> configurationFactory)
+    {
+        this.configurationFactory = configurationFactory;
     }
 
     internal void RegisterConfiguration(McpOAuthProviderConfiguration configuration)
@@ -75,12 +81,21 @@ internal sealed class McpOAuthCredentialRequestCatalog : IMcpOAuthCredentialRequ
             McpHttpTransport.Auto => HttpTransportMode.AutoDetect,
             _ => HttpTransportMode.StreamableHttp,
         };
-        var configuration = this.GetConfigurations().SingleOrDefault(candidate =>
+        bool Matches(McpOAuthProviderConfiguration candidate) =>
             candidate.Endpoint == endpoint && MatchesAuthority(candidate.AuthorizationServer, connection) &&
-            candidate.TransportMode == transport &&
-            MatchesClient(candidate.ClientAuthentication, connection) &&
+            candidate.TransportMode == transport && MatchesClient(candidate.ClientAuthentication, connection) &&
             candidate.Scopes.Select(scope => scope.Value).Order(StringComparer.Ordinal)
-                .SequenceEqual((connection.Scopes ?? []).Order(StringComparer.Ordinal)));
+                .SequenceEqual((connection.Scopes ?? []).Order(StringComparer.Ordinal));
+        var configuration = this.GetConfigurations().SingleOrDefault(Matches);
+        if (configuration is null && this.configurationFactory is { } createConfiguration)
+        {
+            var created = createConfiguration(tool);
+            if (created is not null && Matches(created))
+            {
+                this.RegisterConfiguration(created);
+                configuration = this.FindConfiguration(created.Identifier);
+            }
+        }
         if (configuration is null)
         {
             return null;
