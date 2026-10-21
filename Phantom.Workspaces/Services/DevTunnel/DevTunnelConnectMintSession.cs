@@ -25,14 +25,27 @@ internal sealed class DevTunnelConnectMintSession(
         DevTunnelConnectCredentialAccessRequest request,
         CredentialSourceChoiceDescriptor identitySource,
         ICredentialExecutionContext context,
+        ProviderAcquisitionKey parentAcquisitionKey,
         ProviderInteractionPermit parentGenerationPermit,
         CancellationToken cancellationToken)
     {
-        if (context.PolicyRequest?.Credential is not { Provider: CredentialProviderKind.DevTunnel, Kind: CredentialKind.ConnectToken } ||
-            !parentGenerationPermit.BelongsToGeneration(context.RequestIdentifier, context.Revision, context.AcquisitionGeneration) ||
+        if (parentAcquisitionKey is null || parentGenerationPermit is null ||
+            context.PolicyRequest is not { Credential: { Provider: CredentialProviderKind.DevTunnel, Kind: CredentialKind.ConnectToken } } policy ||
+            policy.RequestIdentifier != context.RequestIdentifier ||
+            policy.RequestorIdentifier != context.Requestor.Identifier ||
+            policy.RequestorIdentifier != request.Requestor.Identifier ||
+            policy.Use != context.Use || policy.Use != request.Use ||
+            parentAcquisitionKey.Protocol != ProviderProtocolKind.TunnelConnect ||
+            parentAcquisitionKey.Configuration != policy.Credential.LogicalIdentifier ||
+            parentAcquisitionKey.Configuration != DevTunnelConnectCredentialAccessRequest.CreateLogicalIdentifier(request.Tunnel, request.IdentityRoute) ||
+            parentAcquisitionKey.Source != policy.SourceIdentifier ||
+            parentAcquisitionKey.Source != DevTunnelConnectCredentialAccessRequest.CreateSource(identitySource).Identifier ||
+            !parentGenerationPermit.Authorizes(context.RequestIdentifier, context.Revision,
+                CredentialExecutorKind.DevTunnelConnect, context.AcquisitionGeneration, parentAcquisitionKey) ||
+            !parentGenerationPermit.AuthorizesProvider(CredentialExecutorKind.DevTunnelConnect, parentAcquisitionKey) ||
             !request.IdentityRoute.Sources.Any(source => source.Identifier == identitySource.Identifier))
         {
-            return new DevTunnelConnectMintFailed { ErrorCode = AccessErrorCode.IdentityMismatch };
+            return new DevTunnelConnectMintDenied();
         }
         return request.IdentityRoute switch
         {
@@ -41,7 +54,7 @@ internal sealed class DevTunnelConnectMintSession(
             EntraDevTunnelIdentityRoute microsoft => await this.MintEntraAsync(
                 request, microsoft.Credential, identitySource, context, parentGenerationPermit, cancellationToken).ConfigureAwait(false),
             OAuthDevTunnelIdentityRoute configured => await this.MintOAuthAsync(
-                request, configured.Credential, context, parentGenerationPermit, cancellationToken).ConfigureAwait(false),
+                request, configured.Credential, context, parentAcquisitionKey, parentGenerationPermit, cancellationToken).ConfigureAwait(false),
             _ => new DevTunnelConnectMintFailed { ErrorCode = AccessErrorCode.ProviderFailure },
         };
     }
@@ -168,6 +181,7 @@ internal sealed class DevTunnelConnectMintSession(
         DevTunnelConnectCredentialAccessRequest request,
         OAuthCredentialAccessRequest identityRequest,
         ICredentialExecutionContext context,
+        ProviderAcquisitionKey parentAcquisitionKey,
         ProviderInteractionPermit permit,
         CancellationToken cancellationToken)
     {
@@ -182,7 +196,11 @@ internal sealed class DevTunnelConnectMintSession(
         var metadata = await provider.InspectGenerationAsync(identityRequest, cancellationToken).ConfigureAwait(false);
         if (metadata?.AccountIdentifier is null || metadata.ExpiresOn <= DateTimeOffset.UtcNow)
         {
-            var acquired = await provider.AcquirePrivateAsync(identityRequest, context, permit, cancellationToken).ConfigureAwait(false);
+            var acquired = await provider.AcquirePrivateAsync(identityRequest, context, parentAcquisitionKey, permit, cancellationToken).ConfigureAwait(false);
+            if (acquired is ProviderAcquisitionDenied)
+            {
+                return new DevTunnelConnectMintDenied();
+            }
             if (acquired is not ProviderAcquisitionSucceeded receipt)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -203,10 +221,14 @@ internal sealed class DevTunnelConnectMintSession(
             return new DevTunnelConnectMintFailed { ErrorCode = AccessErrorCode.IdentityMismatch };
         }
         using var mintedMaterial = new MintedMaterialOwner();
-        var used = await provider.UseGenerationAsync(identityRequest, metadata.Generation, account, context, permit,
+        var used = await provider.UseGenerationAsync(identityRequest, metadata.Generation, account, context, parentAcquisitionKey, permit,
             (identity, token) => mintedMaterial.CaptureAsync(
                 management.MintAsync(request.Tunnel, DevTunnelIdentityScheme.OAuth, identity, token)),
             cancellationToken).ConfigureAwait(false);
+        if (used is OAuthGenerationUseDenied<DevTunnelConnectManagementOutcome>)
+        {
+            return new DevTunnelConnectMintDenied();
+        }
         if (used is not OAuthGenerationUseSucceeded<DevTunnelConnectManagementOutcome> success)
         {
             return new DevTunnelConnectMintFailed { ErrorCode = AccessErrorCode.InvalidGeneration };

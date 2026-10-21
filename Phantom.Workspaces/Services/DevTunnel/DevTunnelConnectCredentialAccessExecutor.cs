@@ -33,6 +33,7 @@ internal interface IDevTunnelConnectMintSession : IAsyncDisposable
         DevTunnelConnectCredentialAccessRequest request,
         CredentialSourceChoiceDescriptor identitySource,
         ICredentialExecutionContext context,
+        ProviderAcquisitionKey parentAcquisitionKey,
         ProviderInteractionPermit parentGenerationPermit,
         CancellationToken cancellationToken);
 }
@@ -504,7 +505,7 @@ internal sealed class DevTunnelConnectCredentialAccessExecutor :
                 return new ProviderAcquisitionDenied();
             }
             var outcome = await executor.session.MintAsync(
-                request, source, context, commitContext.InteractionPermit, cancellationToken).ConfigureAwait(false);
+                request, source, context, this.CompatibilityKey, commitContext.InteractionPermit, cancellationToken).ConfigureAwait(false);
             if (outcome is DevTunnelConnectMintDenied)
             {
                 return new ProviderAcquisitionDenied();
@@ -524,6 +525,7 @@ internal sealed class DevTunnelConnectCredentialAccessExecutor :
             {
                 if (minted.Material.Length == 0 || minted.ExpiresOn <= executor.timeProvider.GetUtcNow() ||
                     (request.Credential.AccountIdentifier is { } expected && expected != minted.Account) ||
+                    (key.Account is { } approvedAccount && approvedAccount != minted.Account) ||
                     !IsRelayEndpoint(minted.Endpoint) ||
                     (request.Tunnel.Endpoint is { } endpoint &&
                         !string.Equals(endpoint.GetLeftPart(UriPartial.Authority),

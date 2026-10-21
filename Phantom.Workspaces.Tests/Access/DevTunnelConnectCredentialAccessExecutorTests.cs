@@ -188,6 +188,24 @@ public sealed class DevTunnelConnectCredentialAccessExecutorTests
     }
 
     [Fact]
+    public async Task ConnectExecutor_SafelyInspectedAccountPinsCommitEvenWhenOriginalRequestIsUnpinned()
+    {
+        await using var fixture = new Fixture();
+        fixture.Session.InspectedAccount = CredentialIdentityFactory.CreateAccountIdentifier(
+            CredentialProviderKind.GitHub, "approved principal");
+        fixture.Session.MintedAccount = CredentialIdentityFactory.CreateAccountIdentifier(
+            CredentialProviderKind.GitHub, "different principal");
+        Assert.Null(fixture.Request.Credential.AccountIdentifier);
+        var pending = fixture.Broker.AcquireAsync(fixture.Request, TestContext.Current.CancellationToken);
+        await fixture.ApplyAsync(Assert.Single(fixture.Registry.GetSnapshot()));
+
+        Assert.Equal(AccessErrorCode.IdentityMismatch,
+            Assert.IsType<AccessFailed<DevTunnelConnectCredentialAccessResult>>(await pending).ErrorCode);
+        Assert.All(fixture.Session.LastMaterial!, character => Assert.Equal('\0', character));
+        Assert.Empty(await fixture.Executor.ListAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task ConnectExecutor_ShutdownCancelsBlockedMintWithoutPublishingMaterial()
     {
         await using var fixture = new Fixture();
@@ -403,6 +421,9 @@ public sealed class DevTunnelConnectCredentialAccessExecutorTests
         public int Inspections { get; private set; }
         public int UnauthorizedRemaining { get; set; }
         public bool DenyUse { get; set; }
+        public CredentialAccountIdentifier? InspectedAccount { get; set; }
+        public CredentialAccountIdentifier MintedAccount { get; set; } =
+            CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.GitHub, "private principal");
         public char[]? LastMaterial { get; private set; }
         public TaskCompletionSource? MintEntered { get; set; }
         public TaskCompletionSource? ContinueMint { get; set; }
@@ -416,7 +437,10 @@ public sealed class DevTunnelConnectCredentialAccessExecutorTests
             return ValueTask.FromResult(new CredentialInspection
             {
                 InspectionIdentifier = Guid.NewGuid(),
-                Credential = route.Reference!,
+                Credential = route.Reference! with
+                {
+                    AccountIdentifier = this.InspectedAccount ?? route.Reference!.AccountIdentifier,
+                },
                 Sources = route.Sources,
             });
         }
@@ -425,12 +449,18 @@ public sealed class DevTunnelConnectCredentialAccessExecutorTests
             DevTunnelConnectCredentialAccessRequest request,
             CredentialSourceChoiceDescriptor identitySource,
             ICredentialExecutionContext context,
+            ProviderAcquisitionKey parentAcquisitionKey,
             ProviderInteractionPermit parentGenerationPermit,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            Assert.True(parentGenerationPermit.BelongsToGeneration(
-                context.RequestIdentifier, context.Revision, context.AcquisitionGeneration));
+            Assert.Equal(ProviderProtocolKind.TunnelConnect, parentAcquisitionKey.Protocol);
+            Assert.Equal(context.PolicyRequest!.Credential.LogicalIdentifier, parentAcquisitionKey.Configuration);
+            Assert.Equal(context.PolicyRequest.SourceIdentifier, parentAcquisitionKey.Source);
+            Assert.True(parentGenerationPermit.Authorizes(
+                context.RequestIdentifier, context.Revision, CredentialExecutorKind.DevTunnelConnect,
+                context.AcquisitionGeneration, parentAcquisitionKey));
+            Assert.True(parentGenerationPermit.AuthorizesProvider(CredentialExecutorKind.DevTunnelConnect, parentAcquisitionKey));
             this.Mints++;
             if (this.DenyUse)
             {
@@ -450,7 +480,7 @@ public sealed class DevTunnelConnectCredentialAccessExecutorTests
             return new DevTunnelConnectMintSucceeded
             {
                 Material = this.LastMaterial,
-                Account = CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.GitHub, "private principal"),
+                Account = this.MintedAccount,
                 ExpiresOn = DateTimeOffset.UtcNow.AddHours(1),
                 Endpoint = this.Endpoint,
             };
