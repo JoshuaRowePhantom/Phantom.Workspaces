@@ -122,7 +122,9 @@ public sealed class AuthorizationEndToEndTests
     public async Task MainWindowViewModel_DisposeAsync_IsExactlyOnceAndPreventsLateInitialization()
     {
         var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
-        await viewModel.InitializeAsync();
+        var initialization = viewModel.InitializeAsync();
+        Assert.Same(initialization, viewModel.InitializeAsync());
+        await initialization;
         await viewModel.DisposeAsync();
         await viewModel.DisposeAsync();
 

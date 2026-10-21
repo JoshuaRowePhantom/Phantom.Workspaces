@@ -96,6 +96,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private Services.Access.AccessHostServices? ownedAccessHost;
     private readonly CancellationTokenSource lifetime = new();
     private readonly TaskCompletionSource disposal = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly object initializationGate = new();
     private Task? initializationTask;
     private int disposalStarted;
     private readonly Services.Logging.ILogDirectoryProvider? logDirectoryProvider;
@@ -675,8 +676,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     public Task InitializeAsync()
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref this.disposalStarted) != 0, this);
-        return this.initializationTask ??= this.InitializeCoreAsync();
+        lock (this.initializationGate)
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref this.disposalStarted) != 0, this);
+            return this.initializationTask ??= this.InitializeCoreAsync();
+        }
     }
 
     private async Task InitializeCoreAsync()
@@ -4963,6 +4967,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
+        Task startup;
+        lock (this.initializationGate)
+        {
+            startup = this.initializationTask ?? this.entityBrokerTask;
+        }
         var failures = new List<Exception>();
         void Clean(Action cleanup)
         {
@@ -4979,7 +4988,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         if (this.ownedAccessHost is not null) { await CleanAsync(this.ownedAccessHost.DisposeAsync); }
         try
         {
-            await (this.initializationTask ?? this.entityBrokerTask);
+            await startup;
         }
         catch (OperationCanceledException) when (this.lifetime.IsCancellationRequested) { }
         catch (Exception exception) { failures.Add(exception); }
