@@ -66,9 +66,10 @@ internal interface IGitHubCredentialAccessSource
         CancellationToken cancellationToken);
 }
 
-internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor<GitHubCredentialAccessRequest, GitHubCredentialAccessResult>, IAsyncDisposable
+internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor<GitHubCredentialAccessRequest, GitHubCredentialAccessResult>, IAsyncDisposable, ICredentialCacheAdministration
 {
     private readonly IGitHubCredentialAccessSource source;
+    private readonly ExecutorCredentialCacheAdministration administration;
     private readonly Dictionary<CredentialSourceIdentifier, GenerationCache> caches = [];
     private readonly object gate = new();
     private bool disposed;
@@ -81,6 +82,11 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
     internal GitHubCredentialAccessExecutor(IGitHubCredentialAccessSource source)
     {
         this.source = source;
+        this.administration = new ExecutorCredentialCacheAdministration(
+            CredentialProviderKind.GitHub,
+            CredentialKind.AccessToken,
+            this.InspectCachedGenerationsAsync,
+            this.GetGenerationCache);
     }
 
     public CredentialExecutorKind Kind => CredentialExecutorKind.GitHub;
@@ -225,6 +231,14 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
     }
 
     internal ICredentialGenerationCache GetGenerationCache(CredentialSourceIdentifier source) => this.GetCache(source);
+
+    public ValueTask<IReadOnlyList<CredentialCacheDescriptor>> ListAsync(CancellationToken cancellationToken = default) =>
+        this.administration.ListAsync(cancellationToken);
+
+    public ValueTask DeleteAsync(
+        CredentialCacheIdentifier identifier,
+        CancellationToken cancellationToken = default) =>
+        this.administration.DeleteAsync(identifier, cancellationToken);
 
     internal async ValueTask<GitHubPrivateCredentialInspection> InspectPrivateAsync(
         GitHubPrivateCredentialRequest request,
@@ -398,6 +412,7 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
         lock (this.gate)
         {
             this.disposed = true;
+            this.administration.Disable();
             foreach (var cache in this.caches.Values)
             {
                 cache.Clear();

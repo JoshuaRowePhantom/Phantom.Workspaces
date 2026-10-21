@@ -19,9 +19,10 @@ internal interface IStoredSecretAccessSource
         CancellationToken cancellationToken);
 }
 
-internal sealed class StoredSecretAccessExecutor : ICredentialAccessExecutor<StoredSecretAccessRequest, StoredSecretAccessResult>, IAsyncDisposable
+internal sealed class StoredSecretAccessExecutor : ICredentialAccessExecutor<StoredSecretAccessRequest, StoredSecretAccessResult>, IAsyncDisposable, ICredentialCacheAdministration
 {
     private readonly IStoredSecretAccessSource source;
+    private readonly ExecutorCredentialCacheAdministration administration;
     private readonly Dictionary<CredentialSourceIdentifier, GenerationCache> caches = [];
     private readonly object gate = new();
     private bool disposed;
@@ -34,6 +35,11 @@ internal sealed class StoredSecretAccessExecutor : ICredentialAccessExecutor<Sto
     internal StoredSecretAccessExecutor(IStoredSecretAccessSource source)
     {
         this.source = source;
+        this.administration = new ExecutorCredentialCacheAdministration(
+            CredentialProviderKind.StoredSecret,
+            CredentialKind.Secret,
+            this.InspectCachedGenerationsAsync,
+            this.GetGenerationCache);
     }
 
     public CredentialExecutorKind Kind => CredentialExecutorKind.StoredSecret;
@@ -117,11 +123,39 @@ internal sealed class StoredSecretAccessExecutor : ICredentialAccessExecutor<Sto
 
     internal ICredentialGenerationCache GetGenerationCache(CredentialSourceIdentifier source) => this.GetCache(source);
 
+    public ValueTask<IReadOnlyList<CredentialCacheDescriptor>> ListAsync(CancellationToken cancellationToken = default) =>
+        this.administration.ListAsync(cancellationToken);
+
+    public ValueTask DeleteAsync(
+        CredentialCacheIdentifier identifier,
+        CancellationToken cancellationToken = default) =>
+        this.administration.DeleteAsync(identifier, cancellationToken);
+
+    internal async ValueTask<IReadOnlyDictionary<CredentialSourceIdentifier, CredentialGenerationInspection>> InspectCachedGenerationsAsync(CancellationToken cancellationToken)
+    {
+        KeyValuePair<CredentialSourceIdentifier, GenerationCache>[] snapshot;
+        lock (this.gate)
+        {
+            ObjectDisposedException.ThrowIf(this.disposed, this);
+            snapshot = this.caches.ToArray();
+        }
+        var generations = new Dictionary<CredentialSourceIdentifier, CredentialGenerationInspection>();
+        foreach (var entry in snapshot)
+        {
+            if (await entry.Value.InspectGenerationAsync(cancellationToken).ConfigureAwait(false) is { } generation)
+            {
+                generations.Add(entry.Key, generation);
+            }
+        }
+        return generations;
+    }
+
     public ValueTask DisposeAsync()
     {
         lock (this.gate)
         {
             this.disposed = true;
+            this.administration.Disable();
             foreach (var cache in this.caches.Values)
             {
                 cache.Clear();
