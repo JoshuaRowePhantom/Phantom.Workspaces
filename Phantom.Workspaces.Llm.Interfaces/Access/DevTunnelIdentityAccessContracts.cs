@@ -1,3 +1,5 @@
+using Phantom.Workspaces.Llm.Interfaces.Access.Execution;
+
 namespace Phantom.Workspaces.Llm.Interfaces.Access;
 
 public enum DevTunnelIdentityScheme { Anonymous, GitHub, Entra, OAuth }
@@ -32,6 +34,14 @@ public sealed record AnonymousDevTunnelIdentityRoute : DevTunnelIdentityRoute
     internal override DevTunnelIdentityScheme Scheme => DevTunnelIdentityScheme.Anonymous;
     internal override CredentialReference? Reference => null;
     internal override IReadOnlyList<CredentialSourceChoiceDescriptor> Sources => [];
+}
+
+public sealed record OAuthDevTunnelIdentityRoute : DevTunnelIdentityRoute
+{
+    public required OAuthCredentialAccessRequest Credential { get; init; }
+    internal override DevTunnelIdentityScheme Scheme => DevTunnelIdentityScheme.OAuth;
+    internal override CredentialReference Reference => this.Credential.Credential;
+    internal override IReadOnlyList<CredentialSourceChoiceDescriptor> Sources => this.Credential.Sources;
 }
 
 public sealed record DevTunnelIdentityCredentialAccessRequest : CredentialAccessRequest<DevTunnelIdentityCredentialAccessResult>
@@ -95,16 +105,24 @@ public sealed record DevTunnelIdentityCredentialAccessRequest : CredentialAccess
 
 public sealed class DevTunnelIdentityCredentialAccessResult : ICredentialAccessResult
 {
+    private readonly Func<CancellationToken, ValueTask<CredentialGenerationInvalidationOutcome>>? invalidate;
+
     internal DevTunnelIdentityCredentialAccessResult(
         SensitiveValueLease? accessToken,
-        DevTunnelIdentityScheme scheme)
+        DevTunnelIdentityScheme scheme,
+        Func<CancellationToken, ValueTask<CredentialGenerationInvalidationOutcome>>? invalidate = null)
     {
         this.AccessToken = accessToken;
         this.Scheme = scheme;
+        this.invalidate = invalidate;
     }
 
     public SensitiveValueLease? AccessToken { get; }
     public DevTunnelIdentityScheme Scheme { get; }
+
+    internal ValueTask<CredentialGenerationInvalidationOutcome> InvalidateRejectedGenerationAsync(
+        CancellationToken cancellationToken) => this.invalidate?.Invoke(cancellationToken) ??
+        ValueTask.FromResult(CredentialGenerationInvalidationOutcome.Missing);
 
     public ValueTask DisposeAsync() => this.AccessToken?.DisposeAsync() ?? ValueTask.CompletedTask;
 }
