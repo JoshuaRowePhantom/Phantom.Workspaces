@@ -127,7 +127,8 @@ public sealed class ReconnectingDevTunnelLifetimeTests
                 return inner.Object;
             }
             await using var owner = new ReconnectingWebAgentPersistenceStore(Resolve, Build, delay.Object,
-                validateConnectionAsync: (_, _) => Task.CompletedTask);
+                validateConnectionAsync: (_, _) => Task.CompletedTask,
+                isConnectionFailure: exception => exception is HttpRequestException);
             await owner.StartAsync(TestContext.Current.CancellationToken);
             await owner.RestoreAsync(new RestoreRequest { AgentSessionId = "test" }, TestContext.Current.CancellationToken);
             Assert.Equal(1, disposals);
@@ -152,7 +153,8 @@ public sealed class ReconnectingDevTunnelLifetimeTests
                 return inner.Object;
             }
             await using var owner = new ReconnectingWebDataAccessLayer(Resolve, Build, delay.Object,
-                validateConnectionAsync: (_, _) => Task.CompletedTask);
+                validateConnectionAsync: (_, _) => Task.CompletedTask,
+                isConnectionFailure: exception => exception is HttpRequestException);
             await owner.StartAsync(TestContext.Current.CancellationToken);
             await owner.GetAsync(new GetRequest { Entities = [] }, TestContext.Current.CancellationToken);
             Assert.Equal(1, disposals);
