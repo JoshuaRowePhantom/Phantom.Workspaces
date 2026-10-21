@@ -238,11 +238,10 @@ internal sealed class OAuthCredentialAccessExecutor :
     public async ValueTask<ProviderAcquisitionOutcome> AcquirePrivateAsync(
         OAuthCredentialAccessRequest request,
         ICredentialExecutionContext parentContext,
-        ProviderAcquisitionKey parentAcquisitionKey,
         ProviderInteractionPermit parentPermit,
         CancellationToken cancellationToken)
     {
-        if (!IsApprovedPrivateParent(parentContext, parentAcquisitionKey, parentPermit))
+        if (parentPermit is null || !await parentPermit.AuthorizesPrivateUseAsync(parentContext, cancellationToken).ConfigureAwait(false))
         {
             return new ProviderAcquisitionDenied();
         }
@@ -254,11 +253,11 @@ internal sealed class OAuthCredentialAccessExecutor :
         try
         {
             var metadata = await provider.InspectGenerationAsync(cancellationToken).ConfigureAwait(false);
-            if (!IsApprovedPrivateParent(parentContext, parentAcquisitionKey, parentPermit))
+            if (!await parentPermit.AuthorizesPrivateUseAsync(parentContext, cancellationToken).ConfigureAwait(false))
             {
                 return new ProviderAcquisitionDenied();
             }
-            var approvedAccount = parentContext.PolicyRequest!.Credential.AccountIdentifier ?? parentAcquisitionKey.Account;
+            var approvedAccount = parentContext.PolicyRequest!.Credential.AccountIdentifier;
             if (request.Credential.AccountIdentifier is { } requestedAccount &&
                 approvedAccount is not null && requestedAccount != approvedAccount)
             {
@@ -300,18 +299,16 @@ internal sealed class OAuthCredentialAccessExecutor :
         CredentialMaterialGenerationIdentifier generation,
         CredentialAccountIdentifier expectedAccount,
         ICredentialExecutionContext parentContext,
-        ProviderAcquisitionKey parentAcquisitionKey,
         ProviderInteractionPermit parentPermit,
         Func<string, CancellationToken, ValueTask<TResult>> operation,
         CancellationToken cancellationToken)
     {
-        bool IsApproved() => IsApprovedPrivateParent(parentContext, parentAcquisitionKey, parentPermit) &&
-            (parentContext.PolicyRequest!.Credential.AccountIdentifier is not { } approvedAccount || approvedAccount == expectedAccount) &&
-            (parentAcquisitionKey.Account is not { } boundAccount || boundAccount == expectedAccount);
-        if (!IsApproved())
+        if (parentPermit is null || !await parentPermit.AuthorizesPrivateUseAsync(parentContext, cancellationToken).ConfigureAwait(false))
         {
             return new OAuthGenerationUseDenied<TResult>();
         }
+        if (parentContext.PolicyRequest!.Credential.AccountIdentifier is { } approvedAccount && approvedAccount != expectedAccount)
+            return new OAuthGenerationUseDenied<TResult>();
         var provider = this.FindProvider(request);
         if (provider is null) { return new OAuthGenerationUseDenied<TResult>(); }
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, this.lifetime.Token);
@@ -322,7 +319,8 @@ internal sealed class OAuthCredentialAccessExecutor :
         {
             return new OAuthGenerationUseUnavailable<TResult>();
         }
-        if (!IsApproved()) { return new OAuthGenerationUseDenied<TResult>(); }
+        if (!await parentPermit.AuthorizesPrivateUseAsync(parentContext, cancellation.Token).ConfigureAwait(false))
+            return new OAuthGenerationUseDenied<TResult>();
         TokenContainer? tokens;
         try
         {
@@ -332,8 +330,10 @@ internal sealed class OAuthCredentialAccessExecutor :
         {
             return new OAuthGenerationUseUnavailable<TResult>();
         }
-        async ValueTask<bool> IsCurrentApprovedAsync() => IsApproved() &&
-            await provider.IsCurrentGenerationAsync(generation, cancellation.Token).ConfigureAwait(false) && IsApproved();
+        async ValueTask<bool> IsCurrentApprovedAsync() =>
+            await parentPermit.AuthorizesPrivateUseAsync(parentContext, cancellation.Token).ConfigureAwait(false) &&
+            await provider.IsCurrentGenerationAsync(generation, cancellation.Token).ConfigureAwait(false) &&
+            await parentPermit.AuthorizesPrivateUseAsync(parentContext, cancellation.Token).ConfigureAwait(false);
         if (tokens is null || !await IsCurrentApprovedAsync().ConfigureAwait(false))
         {
             return new OAuthGenerationUseUnavailable<TResult>();
@@ -360,24 +360,6 @@ internal sealed class OAuthCredentialAccessExecutor :
             }
         }
     }
-
-    private static bool IsApprovedPrivateParent(
-        ICredentialExecutionContext context,
-        ProviderAcquisitionKey acquisitionKey,
-        ProviderInteractionPermit permit) =>
-        acquisitionKey is not null && permit is not null &&
-        context.PolicyRequest is { } policyRequest &&
-        policyRequest.RequestIdentifier == context.RequestIdentifier &&
-        policyRequest.Credential.Provider == CredentialProviderKind.DevTunnel &&
-        policyRequest.Credential.Kind == CredentialKind.ConnectToken &&
-        acquisitionKey.Protocol == ProviderProtocolKind.TunnelConnect &&
-        acquisitionKey.Configuration == policyRequest.Credential.LogicalIdentifier &&
-        acquisitionKey.Source == policyRequest.SourceIdentifier &&
-        (policyRequest.Credential.AccountIdentifier is null || acquisitionKey.Account is null ||
-            policyRequest.Credential.AccountIdentifier == acquisitionKey.Account) &&
-        permit.AuthorizesProvider(CredentialExecutorKind.DevTunnelConnect, acquisitionKey) &&
-        permit.Authorizes(context.RequestIdentifier, context.Revision, CredentialExecutorKind.DevTunnelConnect,
-            context.AcquisitionGeneration, acquisitionKey);
 
     public async ValueTask<IReadOnlyList<CredentialCacheDescriptor>> ListAsync(CancellationToken cancellationToken = default)
     {

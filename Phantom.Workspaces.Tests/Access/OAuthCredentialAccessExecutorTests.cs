@@ -488,6 +488,39 @@ public sealed class OAuthCredentialAccessExecutorTests
         Assert.IsType<OAuthGenerationUseDenied<int>>(await fixture.Derived.LateUse!(TestContext.Current.CancellationToken));
     }
 
+    [Fact]
+    public async Task PrivateIdentity_UsesActualCommittedKnownParentGrantAndSameCheckedPrimitive()
+    {
+        await using var fixture = new Fixture(derived: true);
+        var identity = fixture.Request();
+        var first = fixture.Broker.AcquireAsync(identity, TestContext.Current.CancellationToken);
+        await fixture.AllowAsync();
+        await using var exported = Assert.IsType<AccessSucceeded<OAuthCredentialAccessResult>>(await first).Result;
+        var metadata = (await fixture.Executor.InspectGenerationAsync(identity, TestContext.Current.CancellationToken))!;
+        var parent = fixture.Derived!.Request(identity);
+        parent = parent with { Credential = parent.Credential with { AccountIdentifier = metadata.AccountIdentifier } };
+        var acquisition = fixture.Broker.AcquireAsync(parent, TestContext.Current.CancellationToken);
+        await fixture.AllowAsync();
+        await using var result = Assert.IsType<AccessSucceeded<DerivedResult>>(await acquisition).Result;
+        Assert.Equal(42, result.Value);
+        Assert.Equal(2, fixture.Store.Writes);
+    }
+
+    [Fact]
+    public async Task PrivateIdentity_NullPermitOrContextCannotAdmitWorkOrMaterial()
+    {
+        await using var fixture = new Fixture();
+        var request = fixture.Request();
+        Assert.IsType<ProviderAcquisitionDenied>(
+            await fixture.Executor.AcquirePrivateAsync(request, null!, null!, TestContext.Current.CancellationToken));
+        Assert.IsType<OAuthGenerationUseDenied<int>>(await fixture.Executor.UseGenerationAsync<int>(
+            request, new() { Value = Guid.NewGuid() }, new() { Digest = new string('a', 64) },
+            null!, null!, (_, _) => throw new InvalidOperationException("Invalid authority must not invoke a callback."),
+            TestContext.Current.CancellationToken));
+        Assert.Empty(fixture.Events);
+        Assert.Equal(0, fixture.Store.Reads);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -883,21 +916,21 @@ public sealed class OAuthCredentialAccessExecutorTests
             {
                 var warm = (await identity.InspectGenerationAsync(request.Identity, cancellationToken))!;
                 this.AdmissionUse = await identity.UseGenerationAsync(
-                    request.Identity, warm.Generation, warm.AccountIdentifier!, context, Key(request), interactionPermit,
+                    request.Identity, warm.Generation, warm.AccountIdentifier!, context, interactionPermit,
                     (_, _) =>
                     {
                         this.AdmissionCallbackInvoked = true;
                         return ValueTask.FromResult(1);
                     }, cancellationToken);
                 this.AdmissionAcquisition = await identity.AcquirePrivateAsync(
-                    request.Identity, context, Key(request), interactionPermit, cancellationToken);
+                    request.Identity, context, interactionPermit, cancellationToken);
                 return new CredentialExecutionFailed<DerivedResult> { ErrorCode = AccessErrorCode.ProviderFailure, CanRetry = true };
             }
             CredentialAccountIdentifier? account = null;
             var count = 0;
             var acquired = await context.ExecuteProviderAcquisitionAsync(new Operation(context, Key(request), async (commit, token) =>
             {
-                var dependency = await identity.AcquirePrivateAsync(request.Identity, context, Key(request), commit.InteractionPermit, token);
+                var dependency = await identity.AcquirePrivateAsync(request.Identity, context, commit.InteractionPermit, token);
                 if (dependency is not ProviderAcquisitionSucceeded receipt) { return dependency; }
                 var metadata = await identity.InspectGenerationAsync(request.Identity, token);
                 account = metadata!.AccountIdentifier;
@@ -911,7 +944,6 @@ public sealed class OAuthCredentialAccessExecutorTests
                     {
                         (Proof(CredentialExecutorKind.OAuth, parentKey), parentKey),
                         (Proof(CredentialExecutorKind.DevTunnelConnect, parentKey with { Source = new() { Digest = new string('e', 64) } }), parentKey),
-                        (commit.InteractionPermit, parentKey with { Configuration = new() { Digest = new string('f', 64) } }),
                         (Proof(CredentialExecutorKind.DevTunnelConnect, parentKey, active: false), parentKey),
                         (Proof(CredentialExecutorKind.DevTunnelConnect, parentKey with { Account = new() { Digest = new string('d', 64) } }), parentKey),
                         (new ProviderInteractionPermit(new() { Value = Guid.NewGuid() }, context.Revision, CredentialExecutorKind.DevTunnelConnect,
@@ -923,17 +955,16 @@ public sealed class OAuthCredentialAccessExecutorTests
                     })
                     {
                         Assert.IsType<OAuthGenerationUseDenied<int>>(await identity.UseGenerationAsync<int>(
-                            request.Identity, receipt.CommittedGeneration, account!, context, candidate.Item2, candidate.Item1,
+                            request.Identity, receipt.CommittedGeneration, account!, context, candidate.Item1,
                             (_, _) => throw new InvalidOperationException("An invalid parent proof must not invoke the callback."), token));
                         Assert.IsType<ProviderAcquisitionDenied>(await identity.AcquirePrivateAsync(
-                            request.Identity, context, candidate.Item2, candidate.Item1, token));
+                            request.Identity, context, candidate.Item1, token));
                     }
                 }
                 if (this.ValidationRaceAfterCallback is { } afterCallback)
                 {
                     var active = true;
-                    var proof = new ProviderInteractionPermit(context.RequestIdentifier, context.Revision, CredentialExecutorKind.DevTunnelConnect,
-                        context.AcquisitionGeneration, Key(request), () => active).BindExecution(() => active);
+                    var proof = commit.InteractionPermit.BindExecution(() => active);
                     var reads = 0;
                     var pending = this.ValidationRaceResult = new TrackedSynchronousResult();
                     if (!afterCallback)
@@ -941,7 +972,7 @@ public sealed class OAuthCredentialAccessExecutorTests
                     try
                     {
                         var validationOutcome = await identity.UseGenerationAsync(
-                            request.Identity, receipt.CommittedGeneration, account!, context, Key(request), proof,
+                            request.Identity, receipt.CommittedGeneration, account!, context, proof,
                             (_, _) =>
                             {
                                 this.RaceCallbackInvoked = true;
@@ -959,7 +990,7 @@ public sealed class OAuthCredentialAccessExecutorTests
                     using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
                     var unpublished = this.CancelledResult = new TrackedCallbackResult();
                     await Assert.ThrowsAnyAsync<OperationCanceledException>(() => identity.UseGenerationAsync(
-                        request.Identity, receipt.CommittedGeneration, account!, context, Key(request), commit.InteractionPermit,
+                        request.Identity, receipt.CommittedGeneration, account!, context, commit.InteractionPermit,
                         (_, _) =>
                         {
                             cancellation.Cancel();
@@ -969,23 +1000,21 @@ public sealed class OAuthCredentialAccessExecutorTests
                 if (this.CallbackScenario is { } scenario)
                 {
                     var proofActive = true;
-                    var proof = scenario is "proof" or "cleanup-failure" ? new ProviderInteractionPermit(
-                        context.RequestIdentifier, context.Revision, CredentialExecutorKind.DevTunnelConnect,
-                        context.AcquisitionGeneration, Key(request), () => proofActive).BindExecution(() => proofActive)
+                    var proof = scenario is "proof" or "cleanup-failure" ? commit.InteractionPermit.BindExecution(() => proofActive)
                         : commit.InteractionPermit;
                     var pending = this.CompletedCallbackResult = new TrackedSynchronousResult
                     {
                         ThrowOnDispose = scenario == "cleanup-failure",
                     };
                     var pendingUse = identity.UseGenerationAsync(
-                        request.Identity, receipt.CommittedGeneration, account!, context, Key(request), proof,
+                        request.Identity, receipt.CommittedGeneration, account!, context, proof,
                         async (_, cancellation) =>
                         {
                             if (scenario is "proof" or "cleanup-failure") { proofActive = false; }
                             if (scenario == "rotation")
                             {
                                 receipt = Assert.IsType<ProviderAcquisitionSucceeded>(await identity.AcquirePrivateAsync(
-                                    request.Identity, context, Key(request), commit.InteractionPermit, cancellation));
+                                    request.Identity, context, commit.InteractionPermit, cancellation));
                             }
                             return pending;
                         }, token).AsTask();
@@ -1012,16 +1041,20 @@ public sealed class OAuthCredentialAccessExecutorTests
                     }
                 }
                 Assert.IsType<OAuthGenerationUseUnavailable<int>>(await identity.UseGenerationAsync<int>(
-                    request.Identity, new() { Value = Guid.NewGuid() }, account!, context, Key(request), commit.InteractionPermit,
+                    request.Identity, new() { Value = Guid.NewGuid() }, account!, context, commit.InteractionPermit,
                     (_, _) => throw new InvalidOperationException("A stale generation must not invoke the callback."), token));
-                Assert.IsType<OAuthGenerationUseUnavailable<int>>(await identity.UseGenerationAsync<int>(
-                    request.Identity, receipt.CommittedGeneration, new() { Digest = new string('f', 64) }, context, Key(request), commit.InteractionPermit,
-                    (_, _) => throw new InvalidOperationException("A different account must not invoke the callback."), token));
+                var differentAccount = await identity.UseGenerationAsync<int>(
+                    request.Identity, receipt.CommittedGeneration, new() { Digest = new string('f', 64) }, context, commit.InteractionPermit,
+                    (_, _) => throw new InvalidOperationException("A different account must not invoke the callback."), token);
+                if (context.PolicyRequest!.Credential.AccountIdentifier is null)
+                    Assert.IsType<OAuthGenerationUseUnavailable<int>>(differentAccount);
+                else
+                    Assert.IsType<OAuthGenerationUseDenied<int>>(differentAccount);
                 this.LateUse = cancellation => identity.UseGenerationAsync(
-                    request.Identity, receipt.CommittedGeneration, account!, context, Key(request), commit.InteractionPermit,
+                    request.Identity, receipt.CommittedGeneration, account!, context, commit.InteractionPermit,
                     (_, _) => ValueTask.FromResult(1), cancellation);
                 var used = await identity.UseGenerationAsync(
-                    request.Identity, receipt.CommittedGeneration, account!, context, Key(request), commit.InteractionPermit,
+                    request.Identity, receipt.CommittedGeneration, account!, context, commit.InteractionPermit,
                     (value, _) =>
                     {
                         Assert.StartsWith("private-access-", value);
@@ -1078,6 +1111,7 @@ public sealed class OAuthCredentialAccessExecutorTests
         {
             Configuration = request.Credential.LogicalIdentifier,
             Source = request.Sources[0].Identifier,
+            Account = request.Credential.AccountIdentifier,
             Protocol = ProviderProtocolKind.TunnelConnect,
         };
     }
@@ -1099,7 +1133,7 @@ public sealed class OAuthCredentialAccessExecutorTests
         public ValueTask<ProviderAcquisitionOutcome> ExecuteAsync(ProviderAcquisitionCommitContext commitContext, CancellationToken cancellationToken) =>
             execute(commitContext, cancellationToken);
     }
-    private sealed class RecordingPolicy : IReleaseAuthorizationPolicy, IAsyncDisposable
+    private sealed class RecordingPolicy : IReleaseAuthorizationPolicy, IProviderAcquisitionAuthorizationPolicy, IAsyncDisposable
     {
         private readonly List<string> events;
         private readonly string directory = Path.Combine(Environment.CurrentDirectory, ".oauth-policy-fixtures", Guid.NewGuid().ToString("N"));
@@ -1123,6 +1157,11 @@ public sealed class OAuthCredentialAccessExecutorTests
         }
         public ValueTask<ReleaseAuthorizationValidation> ValidateAsync(ReleaseAuthorizationIdentifier identifier, ReleasePolicyRequest request, CancellationToken cancellationToken) =>
             this.Policy.ValidateAsync(identifier, request, cancellationToken);
+        public ValueTask<ReleaseAuthorizationValidation> ValidateAcquisitionAuthorizationAsync(
+            ReleaseAuthorization authorization,
+            ReleasePolicyRequest request,
+            CancellationToken cancellationToken) =>
+            ((IProviderAcquisitionAuthorizationPolicy)this.Policy).ValidateAcquisitionAuthorizationAsync(authorization, request, cancellationToken);
         public async ValueTask FinalizeCredentialIdentityAsync(ReleaseAuthorizationIdentifier identifier, ResolvedCredentialIdentity identity, CancellationToken cancellationToken)
         {
             await this.Policy.FinalizeCredentialIdentityAsync(identifier, identity, cancellationToken);

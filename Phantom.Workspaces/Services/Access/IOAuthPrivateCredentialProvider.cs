@@ -12,7 +12,6 @@ internal interface IOAuthPrivateCredentialProvider
     ValueTask<ProviderAcquisitionOutcome> AcquirePrivateAsync(
         OAuthCredentialAccessRequest request,
         ICredentialExecutionContext parentContext,
-        ProviderAcquisitionKey parentAcquisitionKey,
         ProviderInteractionPermit parentPermit,
         CancellationToken cancellationToken);
 
@@ -26,7 +25,6 @@ internal interface IOAuthPrivateCredentialProvider
         CredentialMaterialGenerationIdentifier generation,
         CredentialAccountIdentifier expectedAccount,
         ICredentialExecutionContext parentContext,
-        ProviderAcquisitionKey parentAcquisitionKey,
         ProviderInteractionPermit parentPermit,
         Func<string, CancellationToken, ValueTask<TResult>> operation,
         CancellationToken cancellationToken);
