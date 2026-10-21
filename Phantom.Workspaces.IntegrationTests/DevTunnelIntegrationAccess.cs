@@ -12,6 +12,7 @@ using Phantom.Workspaces.Llm.Mcp;
 using Phantom.Workspaces.Services.Access;
 using Phantom.Workspaces.Services.Authorization;
 using Phantom.Workspaces.Services.DevTunnel;
+using Phantom.Workspaces.Services.Mcp;
 
 namespace Phantom.Workspaces.IntegrationTests;
 
