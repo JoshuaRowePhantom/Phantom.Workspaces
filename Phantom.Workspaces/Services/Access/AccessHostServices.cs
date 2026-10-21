@@ -20,8 +20,8 @@ public sealed class AccessHostServices : IAsyncDisposable
     public required IUserAuthorizationRegistry AuthorizationRegistry { get; init; }
     public required AuthorizationRequestRowsViewModel AuthorizationRows { get; init; }
     public required IReleaseMemoryAdministration ReleaseMemoryAdministration { get; init; }
-    public required ICredentialCacheAdministration CredentialCacheAdministration { get; init; }
-    public required IProviderGrantAdministration ProviderGrantAdministration { get; init; }
+    public required CredentialCacheAdministration CredentialCacheAdministration { get; init; }
+    public required ProviderGrantAdministration ProviderGrantAdministration { get; init; }
     public AccessPresentationScope PresentationScope => Volatile.Read(ref this.runtimePresentation) == 0
         ? AccessPresentationScope.Bootstrap : AccessPresentationScope.Runtime;
 
@@ -98,6 +98,24 @@ public sealed class AccessHostServices : IAsyncDisposable
         try
         {
             this.AuthorizationRows.Dispose();
+        }
+        catch (Exception exception)
+        {
+            failures.Add(exception);
+        }
+
+        try
+        {
+            await this.CredentialCacheAdministration.DisposeAsync().ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            failures.Add(exception);
+        }
+
+        try
+        {
+            await this.ProviderGrantAdministration.DisposeAsync().ConfigureAwait(false);
         }
         catch (Exception exception)
         {

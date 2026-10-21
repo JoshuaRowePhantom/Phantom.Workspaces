@@ -10,8 +10,9 @@ public sealed class AccessAdministrationWindow : Window, IAsyncDisposable
     private readonly ReleaseMemoryAdministrationViewModel releaseMemory;
     private readonly CredentialCacheAdministrationViewModel caches;
     private readonly ProviderGrantAdministrationViewModel grants;
-    private bool disposed;
-    internal bool IsDisposed => this.disposed;
+    private readonly TaskCompletionSource disposal = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private int disposalStarted;
+    internal bool IsDisposed => Volatile.Read(ref this.disposalStarted) != 0;
 
     public AccessAdministrationWindow(AccessHostServices host)
     {
@@ -49,6 +50,7 @@ public sealed class AccessAdministrationWindow : Window, IAsyncDisposable
 
     public async Task RefreshAsync(CancellationToken cancellationToken = default)
     {
+        if (this.IsDisposed) { return; }
         await this.releaseMemory.RefreshAsync(cancellationToken);
         await this.caches.RefreshAsync(cancellationToken);
         await this.grants.RefreshAsync(cancellationToken);
@@ -56,8 +58,11 @@ public sealed class AccessAdministrationWindow : Window, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        if (this.disposed) { return; }
-        this.disposed = true;
+        if (Interlocked.Exchange(ref this.disposalStarted, 1) != 0)
+        {
+            await this.disposal.Task;
+            return;
+        }
         var failures = new List<Exception>();
         foreach (var viewModel in new IAsyncDisposable[] { this.releaseMemory, this.caches, this.grants })
         {
@@ -66,7 +71,10 @@ public sealed class AccessAdministrationWindow : Window, IAsyncDisposable
         }
         if (failures.Count > 0)
         {
-            throw new AggregateException("Access administration shutdown did not complete cleanly.", failures);
+            var failure = new AggregateException("Access administration shutdown did not complete cleanly.", failures);
+            this.disposal.TrySetException(failure);
+            throw failure;
         }
+        this.disposal.TrySetResult();
     }
 }

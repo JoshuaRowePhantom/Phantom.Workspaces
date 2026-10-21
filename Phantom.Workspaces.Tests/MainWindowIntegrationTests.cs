@@ -432,6 +432,10 @@ public sealed class MainWindowIntegrationTests
 
             dialog.Close();
             Dispatcher.UIThread.RunJobs();
+            await dialog.DisposeAsync();
+            await dialog.DisposeAsync();
+            Assert.True(dialog.IsDisposed);
+            await dialog.RefreshAsync(TestContext.Current.CancellationToken);
         }
         finally
         {

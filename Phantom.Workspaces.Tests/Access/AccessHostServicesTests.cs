@@ -110,6 +110,10 @@ public sealed class AccessHostServicesTests : IDisposable
         Assert.Empty(host.AuthorizationRegistry.GetSnapshot());
         Assert.Empty(host.AuthorizationRows.Rows);
         Assert.Throws<ObjectDisposedException>(host.EnterRuntime);
+        await Assert.ThrowsAsync<ObjectDisposedException>(() =>
+            host.CredentialCacheAdministration.ListAsync(TestContext.Current.CancellationToken).AsTask());
+        await Assert.ThrowsAsync<ObjectDisposedException>(() =>
+            host.ProviderGrantAdministration.ListAsync(TestContext.Current.CancellationToken).AsTask());
     }
 
     [Fact]
