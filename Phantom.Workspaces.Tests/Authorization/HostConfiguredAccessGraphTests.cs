@@ -1,16 +1,72 @@
 using System.IO;
+using System.Security;
+using ModelContextProtocol.Authentication;
 using Moq;
 using AgentSchema;
 using Phantom.Workspaces.Llm.Interfaces.Access;
+using Phantom.Workspaces.Llm.Interfaces.Access.Execution;
 using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Services.Access;
 using Phantom.Workspaces.Services.DevTunnel;
+using Phantom.Workspaces.Services.Mcp;
 using Phantom.Workspaces.Llm.Interfaces.Authorization;
 
 namespace Phantom.Workspaces.Tests.Authorization;
 
 public sealed class HostConfiguredAccessGraphTests
 {
+    [Fact]
+    public async Task ActualHostAggregateAdministersLateRegisteredMcpCacheWithoutChangingAuthorization()
+    {
+        using var store = new CachedPlatformStore();
+        await using var host = AccessHostServices.Create(new AccessHostOptions
+        {
+            PlatformSecretStore = store,
+            Dispatch = action => action(),
+            ReleaseMemoryFilePath = Path.Combine(Environment.CurrentDirectory, ".nonexistent-host-mcp-administration",
+                Guid.NewGuid().ToString("N"), "release-memory.json"),
+        });
+        var (requestor, use) = CreateUse();
+        var request = Assert.IsType<McpOAuthCredentialUseRequest>(host.McpOAuthCredentials.CreateRequest(
+            new McpTool
+            {
+                ServerName = "late-root-cache",
+                Connection = new OAuthConnection
+                {
+                    Endpoint = "https://mcp.invalid/",
+                    ClientId = "root-public-client",
+                    Scopes = ["read"],
+                },
+            }, requestor, use, host.GetPresentationScope()));
+        var configuration = Assert.IsType<McpOAuthCredentialRequestCatalog>(host.McpOAuthCredentials)
+            .FindConfiguration(request.ProviderConfiguration);
+        Assert.NotNull(configuration);
+        var generation = new CredentialMaterialGenerationIdentifier { Value = Guid.NewGuid() };
+        await configuration.Cache.ReserveGenerationAsync(generation, TestContext.Current.CancellationToken);
+        await configuration.Cache.StoreGenerationAsync(new TokenContainer
+        {
+            AccessToken = "test-cache-material",
+            TokenType = "Bearer",
+            ObtainedAt = DateTimeOffset.UtcNow,
+            ExpiresIn = 3600,
+        }, generation, TestContext.Current.CancellationToken);
+        var reads = store.Reads;
+
+        var descriptor = Assert.Single(await host.CredentialCacheAdministration.ListAsync(
+            TestContext.Current.CancellationToken));
+        Assert.Equal(CredentialProviderKind.McpOAuth, descriptor.Provider);
+        Assert.Equal(generation, descriptor.Generation);
+        Assert.Equal(reads, store.Reads);
+        await host.CredentialCacheAdministration.DeleteAsync(descriptor.Identifier, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, store.Deletes);
+        Assert.Null(await ((ICredentialGenerationCache)configuration.Cache)
+            .InspectGenerationAsync(TestContext.Current.CancellationToken));
+        Assert.Empty(await host.CredentialCacheAdministration.ListAsync(TestContext.Current.CancellationToken));
+        Assert.Empty(host.AuthorizationRegistry.GetSnapshot());
+        Assert.Empty(await host.ReleaseMemoryAdministration.ListAsync(TestContext.Current.CancellationToken));
+    }
+
     [Fact]
     public async Task ActualHostMcpCatalogRegistersFirstUseWithoutMaterialOrProviderWork()
     {
@@ -155,6 +211,42 @@ public sealed class HostConfiguredAccessGraphTests
             }));
         Assert.Equal(0, scopeReads);
         Assert.Empty(host.AuthorizationRegistry.GetSnapshot());
+    }
+
+    private sealed class CachedPlatformStore : IPlatformSecretStore, IDisposable
+    {
+        private readonly Dictionary<string, SecureString> values = [];
+        internal int Reads { get; private set; }
+        internal int Deletes { get; private set; }
+
+        public Task<SecureString?> ReadAsync(string name, CancellationToken cancellationToken)
+        {
+            this.Reads++;
+            return Task.FromResult(this.values.TryGetValue(name, out var value) ? value.Copy() : null);
+        }
+
+        public Task WriteAsync(string name, SecureString value, CancellationToken cancellationToken)
+        {
+            if (this.values.Remove(name, out var previous)) { previous.Dispose(); }
+            this.values.Add(name, value.Copy());
+            return Task.CompletedTask;
+        }
+
+        public Task DeleteAsync(string name, CancellationToken cancellationToken)
+        {
+            this.Deletes++;
+            if (this.values.Remove(name, out var value)) { value.Dispose(); }
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<string>> EnumerateNamesAsync(string prefix, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<string>>(this.values.Keys.Where(name => name.StartsWith(prefix, StringComparison.Ordinal)).ToArray());
+
+        public void Dispose()
+        {
+            foreach (var value in this.values.Values) { value.Dispose(); }
+            this.values.Clear();
+        }
     }
 
     private static AccessHostServices CreateHost() => AccessHostServices.Create(new AccessHostOptions
