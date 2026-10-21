@@ -1,0 +1,37 @@
+{
+  "purpose": "Requested provenance extraction of an EXISTING independent review; no new review or source changes.",
+  "repository": "JoshuaRowePhantom/Phantom.Workspaces",
+  "worktree": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-host-lifecycle-20261020",
+  "reviewedBase": "539301bd2f50196647f4e2114c4ebd50f9f17ee4",
+  "subsequentlyCommittedDelta": "19acd7f6b1940290d08c43dfc4e9f535d56d03f3",
+  "verifiedCommitParent": "539301bd2f50196647f4e2114c4ebd50f9f17ee4",
+  "commitTimestamp": "2026-10-20T22:28:55-07:00",
+  "reviewer": {
+    "type": "code-review",
+    "displayName": "host-coherent-graph-review",
+    "description": "Review coherent root cutover",
+    "model": "gpt-6.1-sol",
+    "executionMode": "sync",
+    "resumable": false,
+    "separateAgentIdReported": null,
+    "identifierExplanation": "The existing synchronous non-resumable task receipt reports no separate agent_id. The exact tool-call identifier and session event identifiers below identify this review; event IDs are not invented reviewer-agent IDs.",
+    "toolCallId": "call_k1c9dy15zZho0sAT43WbhuNC",
+    "parentAgentId": "5a25ed1a-7c3f-4b1e-8467-f5b68994fef8"
+  },
+  "existingTranscript": {
+    "path": "C:\\Users\\jrowe.PHANTOM\\.copilot\\session-state\\03a24cfe-628d-40d7-a71b-cffa69dead7a\\events.jsonl",
+    "toolStartEventId": "3ae37ae9-e2fa-4f26-bbb1-e56d79ec499f",
+    "subagentStartedEventId": "6f26ddde-c17e-402e-bb33-3c8378a4568c",
+    "subagentCompletedEventId": "1d85dc30-476d-4da5-9922-62e0a887fed0",
+    "toolCompleteEventId": "a99460d9-ddf5-41ca-8a30-4ee2998cc89f",
+    "startedAt": "2026-10-21T05:22:32.301Z",
+    "completedAt": "2026-10-21T05:26:46.759Z",
+    "success": true,
+    "exactResult": "No significant issues found in the reviewed changes."
+  },
+  "requestedReviewScope": "Actual uncommitted production/test delta against HEAD539301bd, then committed directly as19acd. Real root startup/runtime/shutdown graph; singleton broker/policy/registry/rows, shared GitHub/Entra/OAuth executors, store-backed MCP and worker catalogs, live presentation delegate, required broker, typed repository/persistence callers with HTTP ownership, atomic row cancellation, partial-startup unwind and shutdown. Read-only instructions explicitly prohibited builds/tests/runners, edits, live providers and nested agents.",
+  "scopeLimit": "Not clearance of unchanged private-provider/foundation prerequisites, later source deltas, the final integration checkout, or the whole access architecture.",
+  "currentAuthority": "Root lane remains frozen under current integration authority decisionVersion2 and host-composition authority decisionVersion1. This receipt is provenance only; no source import, build, new review, root commit or final acceptance is implied.",
+  "alreadyCompletedLegacyDefaultAppend": "9784130df73a4af2776619f7c503fa74b29c269d",
+  "remainingLegacyOwnership": "Current exclusive integrator2042 owns paired final App/Core retirement; UI deletionfa2 is independently owned and delivered. Historical requests do not reopen frozen root source ownership."
+}
