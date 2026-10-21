@@ -210,7 +210,17 @@ internal sealed class AccessBroker : IAccessBroker
                 {
                     var inspection = await executor.InspectAsync(request, cancellation.Token).ConfigureAwait(false);
                     var source = inspection.Sources.SingleOrDefault(option => option.Identifier == decision.Source);
-                    if (!IsValidInspection(request, inspection, initialInspection.Credential))
+                    // Other candidates can change the common account without changing the selected source.
+                    var initialSourceCredential = initialInspection.Credential with
+                    {
+                        AccountIdentifier = SelectedSourceAccount(request.Credential, initialInspection, decision.Source),
+                    };
+                    var currentSourceCredential = inspection.Credential with
+                    {
+                        AccountIdentifier = SelectedSourceAccount(request.Credential, inspection, decision.Source),
+                    };
+                    if (!SameCredential(request.Credential, inspection.Credential) ||
+                        !IsValidInspection(request, inspection with { Credential = currentSourceCredential }, initialSourceCredential))
                     {
                         outcome = Failure<TResult>(AccessErrorCode.IdentityMismatch);
                     }

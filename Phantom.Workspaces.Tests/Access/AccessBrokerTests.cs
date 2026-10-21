@@ -1923,6 +1923,81 @@ public sealed class AccessBrokerTests : IDisposable
         Assert.Equal(expectedAccount is null ? 0 : 1, (await broker.Policy.ListAsync(TestContext.Current.CancellationToken)).Count);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task AccessBroker_SelectedSourceAccount_RejectsChangedOrLostKnownPin(
+        bool explicitPin, bool lostIdentity)
+    {
+        var accountA = CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.StoredSecret, "selected-a");
+        var accountB = CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.StoredSecret, "selected-b");
+        var request = Request();
+        request = request with
+        {
+            Credential = request.Credential with { AccountIdentifier = explicitPin ? accountA : null },
+        };
+        var changed = false;
+        var executions = 0;
+        CredentialAccountIdentifier? CurrentAccount() => changed ? lostIdentity ? null : accountB : accountA;
+        var executor = new Executor
+        {
+            InspectOverride = candidate => new CredentialInspection
+            {
+                InspectionIdentifier = Guid.NewGuid(),
+                Credential = candidate.Credential with
+                {
+                    AccountIdentifier = explicitPin ? CurrentAccount() : null,
+                },
+                Sources = candidate.Sources,
+                CachedGenerations = changed
+                    ? new Dictionary<CredentialSourceIdentifier, CredentialGenerationInspection>()
+                    : new Dictionary<CredentialSourceIdentifier, CredentialGenerationInspection>
+                    {
+                        [candidate.Sources[0].Identifier] = new()
+                        {
+                            Generation = new() { Value = Guid.NewGuid() },
+                            AccountIdentifier = accountA,
+                        },
+                    },
+                AcquisitionKeys = new Dictionary<CredentialSourceIdentifier, ProviderAcquisitionKey>
+                {
+                    [candidate.Sources[0].Identifier] = new()
+                    {
+                        Configuration = candidate.Credential.LogicalIdentifier,
+                        Source = candidate.Sources[0].Identifier,
+                        Account = CurrentAccount(),
+                        Protocol = ProviderProtocolKind.OAuth,
+                    },
+                },
+            },
+            Execute = (_, _, _, _, _, _) =>
+            {
+                executions++;
+                return ValueTask.FromResult<CredentialExecutionOutcome<Result>>(new CredentialExecutionMissing<Result>());
+            },
+        };
+        var (broker, registry) = this.Create(executor);
+        await using var owned = broker;
+        var pending = broker.AcquireAsync(request, TestContext.Current.CancellationToken);
+        Assert.False(pending.IsCompleted);
+        changed = true;
+        await broker.RefreshPendingSourcesAsync(TestContext.Current.CancellationToken);
+        var current = Assert.Single(registry.GetSnapshot());
+        await registry.ActAsync(new ApplyUserAuthorizationAction
+        {
+            RequestIdentifier = current.Identifier,
+            ExpectedRevision = current.Revision,
+            Source = current.SelectedSource,
+            Memory = current.MemoryOptions.Single(option => option.Scope == ReleaseMemoryScopeKind.AllUses).Identifier,
+        }, TestContext.Current.CancellationToken);
+        var outcome = await pending.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        Assert.Equal(AccessErrorCode.IdentityMismatch, Assert.IsType<AccessFailed<Result>>(outcome).ErrorCode);
+        Assert.Equal(0, executions);
+        Assert.Empty(await broker.Policy.ListAsync(TestContext.Current.CancellationToken));
+    }
+
     private static RequestRecord ConnectRequest(CredentialAccountIdentifier? account)
     {
         var original = Request();
