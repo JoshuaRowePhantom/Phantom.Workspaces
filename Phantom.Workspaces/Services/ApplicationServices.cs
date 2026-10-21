@@ -90,7 +90,8 @@ public sealed class ApplicationServices
 
     public IAccessBroker? AccessBroker { get; }
     public Func<AccessPresentationScope>? AccessPresentationScope { get; }
-    internal DevTunnel.DevTunnelIdentityRouteFactory? DevTunnelIdentityRoutes { get; init; }
+    internal Func<RemoteAuthentication?, IAccessBroker, Func<AccessPresentationScope>,
+        DevTunnel.IDevTunnelHostService>? DevTunnelHostServiceFactory { get; init; }
 
     public IAgentPersistenceStoreCache AgentPersistenceStoreCache { get; }
 

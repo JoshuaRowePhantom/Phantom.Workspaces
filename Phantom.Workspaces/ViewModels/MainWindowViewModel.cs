@@ -119,44 +119,23 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     {
         var services = applicationServices ?? CreateDefaultApplicationServices();
         this.applicationServices = services;
-        this.DevTunnelHostServiceFactory = () =>
-        {
-            if (services.AccessBroker is not { } broker ||
-                services.DevTunnelIdentityRoutes is not { } routes ||
-                services.AccessPresentationScope is not { } presentationScope)
-            {
-                throw new DevTunnelCredentialAccessException(AccessErrorCode.UnsupportedRequest);
-            }
-
-            var requestor = new AccessRequestor
-            {
-                Identifier = CredentialIdentityFactory.CreateRequestorIdentifier(
-                    AccessRequestorKind.Application, "devtunnel-host"),
-                Kind = AccessRequestorKind.Application,
-                SafeDisplayName = "Dev Tunnel host",
-            };
-            var lineage = new CredentialUseLineage();
-            var use = new CredentialUseDescriptor
-            {
-                Kind = CredentialUseKind.Tunnel,
-                Lineage = lineage,
-                Fingerprint = CredentialIdentityFactory.CreateUseFingerprint(
-                    CredentialUseKind.Tunnel, lineage, requestor.Identifier, "devtunnel-host"),
-                SafeDisplayName = "Manage Dev Tunnel",
-                MemoryScopes = [ReleaseMemoryScopeKind.AllowOnce, ReleaseMemoryScopeKind.AllUses],
-            };
-            var scope = presentationScope();
-            var identity = DevTunnelIdentityCredentialAccessRequest.Create(
-                routes.Create(this.configuration?.DevTunnel?.Authentication, requestor, use, scope),
-                requestor, use, scope);
-            return new DevTunnelServiceFactory(broker, identity, presentationScope).CreateHostService();
-        };
         this.ownsLoggerFactory = applicationServices is null;
         this.loggerFactory = services.LoggerFactory;
         this.logDirectoryProvider = services.LogDirectoryProvider;
         this.configurationPersistence = services.ConfigurationPersistence;
         this.RepositorySource = repositorySource;
         this.configuration = configuration;
+        this.DevTunnelHostServiceFactory = () =>
+        {
+            var factory = services.DevTunnelHostServiceFactory
+                ?? throw new InvalidOperationException("Dev tunnel hosting access is not configured.");
+            if (services.AccessBroker is not { } broker ||
+                services.AccessPresentationScope is not { } presentationScope)
+            {
+                throw new DevTunnelCredentialAccessException(AccessErrorCode.UnsupportedRequest);
+            }
+            return factory(this.configuration?.DevTunnel?.Authentication, broker, presentationScope);
+        };
         this.entityBrokerTask = EntityBroker.CreateInitializedAsync(
             repositorySource,
             userComputerProfileOverride: configuration?.UserComputerProfileOverride);
