@@ -206,6 +206,34 @@ public sealed class DevTunnelConnectCredentialAccessExecutorTests
     }
 
     [Fact]
+    public async Task ConnectExecutor_ForwardsUnpinnedExactKeyAlongsideSafelySelectedSourceAccount()
+    {
+        var clock = new TestClock();
+        await using var fixture = new Fixture(multipleIdentitySources: true, timeProvider: clock);
+        var source = fixture.Request.Sources[0].Identifier;
+        await using var original = await fixture.AcquireAsync(source);
+        var account = fixture.Session.MintedAccount;
+        clock.Now = clock.Now.AddHours(2);
+        fixture.Session.ExpiresOn = clock.Now.AddHours(1);
+        fixture.Session.MintedAccount = CredentialIdentityFactory.CreateAccountIdentifier(
+            CredentialProviderKind.GitHub, "different principal");
+        fixture.Session.MintProofObserved = (context, key) =>
+        {
+            Assert.Null(key.Account);
+            Assert.Equal(account, context.PolicyRequest!.Credential.AccountIdentifier);
+        };
+        var pending = fixture.Broker.AcquireAsync(fixture.Request, TestContext.Current.CancellationToken);
+        await fixture.ApplyAsync(fixture.Registry.GetSnapshot().Last(row =>
+            row.State is UserAuthorizationState.Pending or UserAuthorizationState.RenewalNeeded), source);
+
+        Assert.Equal(AccessErrorCode.IdentityMismatch,
+            Assert.IsType<AccessFailed<DevTunnelConnectCredentialAccessResult>>(await pending).ErrorCode);
+        Assert.All(fixture.Session.LastMaterial!, character => Assert.Equal('\0', character));
+        Assert.DoesNotContain(await fixture.Executor.ListAsync(TestContext.Current.CancellationToken),
+            descriptor => descriptor.Generation != original.ConnectToken!.MaterialGeneration);
+    }
+
+    [Fact]
     public async Task ConnectExecutor_ShutdownCancelsBlockedMintWithoutPublishingMaterial()
     {
         await using var fixture = new Fixture();
@@ -307,7 +335,8 @@ public sealed class DevTunnelConnectCredentialAccessExecutorTests
         private readonly string directory = Path.Combine(
             Environment.CurrentDirectory, ".access-tunnel-connect-tests", Guid.NewGuid().ToString("N"));
 
-        public Fixture(bool anonymous = false, bool discoverEndpoint = false)
+        public Fixture(bool anonymous = false, bool discoverEndpoint = false,
+            bool multipleIdentitySources = false, TimeProvider? timeProvider = null)
         {
             var template = ReleaseAuthorizationContractTests.Request();
             var requestor = new AccessRequestor
@@ -318,7 +347,7 @@ public sealed class DevTunnelConnectCredentialAccessExecutorTests
             };
             var github = GitHubCredentialAccessRequest.Create(
                 GitHubCredentialPurpose.DevTunnelIdentity, requestor, template.Use.Lineage, "management",
-                source: CredentialSourceKind.GitHubCli);
+                source: multipleIdentitySources ? null : CredentialSourceKind.GitHubCli);
             this.Request = DevTunnelConnectCredentialAccessRequest.Create(new DevTunnelAccessDescriptor
             {
                 Access = anonymous ? DevTunnelAccessKind.Anonymous : DevTunnelAccessKind.Private,
@@ -327,7 +356,7 @@ public sealed class DevTunnelConnectCredentialAccessExecutorTests
             }, anonymous ? new AnonymousDevTunnelIdentityRoute() : new GitHubDevTunnelIdentityRoute { Credential = github },
                 requestor, template.Use with { Kind = CredentialUseKind.Tunnel });
             this.Policy = new ReleaseAuthorizationPolicy(new ReleaseMemoryStore(Path.Combine(this.directory, "policy.json")));
-            this.Executor = new DevTunnelConnectCredentialAccessExecutor(this.Session, this.Registry);
+            this.Executor = new DevTunnelConnectCredentialAccessExecutor(this.Session, this.Registry, timeProvider);
             var executors = new CredentialAccessExecutorRegistry();
             executors.Add<DevTunnelConnectCredentialAccessRequest, DevTunnelConnectCredentialAccessResult>(this.Executor);
             this.Broker = new AccessBroker(this.Policy, executors, new ObservedCoordinator(this.AcquisitionJoined), this.Registry);
@@ -341,10 +370,10 @@ public sealed class DevTunnelConnectCredentialAccessExecutorTests
         public AccessBroker Broker { get; }
         public TaskCompletionSource AcquisitionJoined { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public async Task<DevTunnelConnectCredentialAccessResult> AcquireAsync()
+        public async Task<DevTunnelConnectCredentialAccessResult> AcquireAsync(CredentialSourceIdentifier? source = null)
         {
             var pending = this.Broker.AcquireAsync(this.Request, TestContext.Current.CancellationToken);
-            await this.ApplyAsync(this.Registry.GetSnapshot().Last(row => row.State == UserAuthorizationState.Pending));
+            await this.ApplyAsync(this.Registry.GetSnapshot().Last(row => row.State == UserAuthorizationState.Pending), source);
             return Assert.IsType<AccessSucceeded<DevTunnelConnectCredentialAccessResult>>(
                 await pending.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).Result;
         }
@@ -368,12 +397,12 @@ public sealed class DevTunnelConnectCredentialAccessExecutorTests
             public ValueTask DisposeAsync() => this.inner.DisposeAsync();
         }
 
-        public Task ApplyAsync(UserAuthorizationSnapshot row) => this.Registry.ActAsync(new ApplyUserAuthorizationAction
+        public Task ApplyAsync(UserAuthorizationSnapshot row, CredentialSourceIdentifier? source = null) => this.Registry.ActAsync(new ApplyUserAuthorizationAction
         {
             RequestIdentifier = row.Identifier,
             ExpectedRevision = row.Revision,
             Memory = row.MemoryOptions.Single(option => option.Scope == ReleaseMemoryScopeKind.AllUses).Identifier,
-            Source = row.SelectedSource,
+            Source = source ?? row.SelectedSource,
         }, TestContext.Current.CancellationToken);
 
         public async Task<UserAuthorizationSnapshot> WaitForStateAsync(
@@ -414,6 +443,12 @@ public sealed class DevTunnelConnectCredentialAccessExecutorTests
         }
     }
 
+    private sealed class TestClock : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = DateTimeOffset.UtcNow;
+        public override DateTimeOffset GetUtcNow() => this.Now;
+    }
+
     internal sealed class MintSession : IDevTunnelConnectMintSession
     {
         public Uri Endpoint { get; set; } = new("https://tunnel-123.euw.devtunnels.ms/");
@@ -424,6 +459,8 @@ public sealed class DevTunnelConnectCredentialAccessExecutorTests
         public CredentialAccountIdentifier? InspectedAccount { get; set; }
         public CredentialAccountIdentifier MintedAccount { get; set; } =
             CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.GitHub, "private principal");
+        public DateTimeOffset ExpiresOn { get; set; } = DateTimeOffset.UtcNow.AddHours(1);
+        public Action<ICredentialExecutionContext, ProviderAcquisitionKey>? MintProofObserved { get; set; }
         public char[]? LastMaterial { get; private set; }
         public TaskCompletionSource? MintEntered { get; set; }
         public TaskCompletionSource? ContinueMint { get; set; }
@@ -461,6 +498,7 @@ public sealed class DevTunnelConnectCredentialAccessExecutorTests
                 context.RequestIdentifier, context.Revision, CredentialExecutorKind.DevTunnelConnect,
                 context.AcquisitionGeneration, parentAcquisitionKey));
             Assert.True(parentGenerationPermit.AuthorizesProvider(CredentialExecutorKind.DevTunnelConnect, parentAcquisitionKey));
+            this.MintProofObserved?.Invoke(context, parentAcquisitionKey);
             this.Mints++;
             if (this.DenyUse)
             {
@@ -481,7 +519,7 @@ public sealed class DevTunnelConnectCredentialAccessExecutorTests
             {
                 Material = this.LastMaterial,
                 Account = this.MintedAccount,
-                ExpiresOn = DateTimeOffset.UtcNow.AddHours(1),
+                ExpiresOn = this.ExpiresOn,
                 Endpoint = this.Endpoint,
             };
         }
