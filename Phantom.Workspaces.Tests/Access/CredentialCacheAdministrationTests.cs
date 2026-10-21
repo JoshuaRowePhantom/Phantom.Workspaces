@@ -248,8 +248,9 @@ public sealed class CredentialCacheAdministrationTests
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         facet.Delete = (_, cancellationToken) =>
         {
-            Assert.Equal(cancellation.Token, cancellationToken);
+            Assert.True(cancellationToken.CanBeCanceled);
             cancellation.Cancel();
+            Assert.True(cancellationToken.IsCancellationRequested);
             return ValueTask.FromCanceled(cancellationToken);
         };
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
@@ -269,9 +270,123 @@ public sealed class CredentialCacheAdministrationTests
         Assert.Equal(0, facet.ListCalls);
         Assert.Single(await aggregate.ListAsync(TestContext.Current.CancellationToken));
         Assert.Equal(0, facet.DisposeCalls);
-        Assert.False(typeof(IAsyncDisposable).IsAssignableFrom(aggregate.GetType()));
+        Assert.True(typeof(IAsyncDisposable).IsAssignableFrom(aggregate.GetType()));
         Assert.Throws<ArgumentException>(() => new CredentialCacheAdministration([facet, facet]));
         Assert.Throws<ArgumentNullException>(() => new CredentialCacheAdministration(null!));
         Assert.Empty(await new CredentialCacheAdministration([]).ListAsync(TestContext.Current.CancellationToken));
+        await aggregate.DisposeAsync();
+        await aggregate.DisposeAsync();
+        Assert.Equal(0, facet.DisposeCalls);
+        AssertCleared(aggregate);
+        await Assert.ThrowsAsync<ObjectDisposedException>(() =>
+            aggregate.ListAsync(TestContext.Current.CancellationToken).AsTask());
+        await Assert.ThrowsAsync<ObjectDisposedException>(() =>
+            aggregate.DeleteAsync(new() { Value = Guid.NewGuid() }, TestContext.Current.CancellationToken).AsTask());
+    }
+
+    [Fact]
+    public async Task DisposeCancelsActiveRefreshAndQueuedActionWithoutDisposingFacet()
+    {
+        var descriptor = Descriptor();
+        var facet = new Facet { Entries = [descriptor] };
+        var aggregate = new CredentialCacheAdministration([facet]);
+        var selected = Assert.Single(await aggregate.ListAsync(TestContext.Current.CancellationToken));
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completion = new TaskCompletionSource<IReadOnlyList<CredentialCacheDescriptor>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        facet.Inspect = async cancellationToken =>
+        {
+            entered.SetResult();
+            return await completion.Task.WaitAsync(cancellationToken);
+        };
+        var refreshing = aggregate.ListAsync(TestContext.Current.CancellationToken).AsTask();
+        await entered.Task.WaitAsync(TestContext.Current.CancellationToken);
+        var deleting = aggregate.DeleteAsync(selected.Identifier, TestContext.Current.CancellationToken).AsTask();
+        Assert.False(deleting.IsCompleted);
+        await aggregate.DisposeAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => refreshing);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => deleting);
+        Assert.Empty(facet.Deleted);
+        Assert.Equal(0, facet.DisposeCalls);
+        AssertCleared(aggregate);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LateMetadataAfterDisposalCannotPublishBindingsOrStartDeletion(
+        bool beforeDelete)
+    {
+        var descriptor = Descriptor();
+        var facet = new Facet { Entries = [descriptor] };
+        var aggregate = new CredentialCacheAdministration([facet]);
+        var selected = Assert.Single(await aggregate.ListAsync(TestContext.Current.CancellationToken));
+        var completion = new TaskCompletionSource<IReadOnlyList<CredentialCacheDescriptor>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        facet.Inspect = _ => new(completion.Task);
+        Task pending = beforeDelete
+            ? aggregate.DeleteAsync(selected.Identifier, TestContext.Current.CancellationToken).AsTask()
+            : aggregate.ListAsync(TestContext.Current.CancellationToken).AsTask();
+        await aggregate.DisposeAsync();
+        AssertCleared(aggregate);
+        completion.SetResult([descriptor]);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        Assert.Empty(facet.Deleted);
+        Assert.Equal(0, facet.DisposeCalls);
+        AssertCleared(aggregate);
+    }
+
+    [Fact]
+    public async Task DisposeCancelsAnAlreadyStartedProviderDeletion()
+    {
+        var facet = new Facet { Entries = [Descriptor()] };
+        var aggregate = new CredentialCacheAdministration([facet]);
+        var selected = Assert.Single(await aggregate.ListAsync(TestContext.Current.CancellationToken));
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        facet.Delete = async (_, cancellationToken) =>
+        {
+            entered.SetResult();
+            await completion.Task.WaitAsync(cancellationToken);
+        };
+        var deleting = aggregate.DeleteAsync(selected.Identifier, TestContext.Current.CancellationToken).AsTask();
+        await entered.Task.WaitAsync(TestContext.Current.CancellationToken);
+        await aggregate.DisposeAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => deleting);
+        Assert.Single(facet.Deleted);
+        Assert.Single(facet.Entries);
+        Assert.Equal(0, facet.DisposeCalls);
+        AssertCleared(aggregate);
+    }
+
+    [Fact]
+    public async Task AdmittedDeletionGrantedDuringShutdownAlwaysCancelsBeforeProviderDispatch()
+    {
+        var facet = new Facet { Entries = [Descriptor()] };
+        var aggregate = new CredentialCacheAdministration([facet]);
+        var selected = Assert.Single(await aggregate.ListAsync(TestContext.Current.CancellationToken));
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var gate = Assert.IsType<SemaphoreSlim>(aggregate.GetType().GetField("gate", flags)!.GetValue(aggregate));
+        var lifetimeGate = aggregate.GetType().GetField("lifetimeGate", flags)!.GetValue(aggregate)!;
+        await gate.WaitAsync(TestContext.Current.CancellationToken);
+        var deleting = aggregate.DeleteAsync(selected.Identifier, TestContext.Current.CancellationToken).AsTask();
+        Assert.False(deleting.IsCompleted);
+        ValueTask disposal;
+        lock (lifetimeGate)
+        {
+            gate.Release();
+            disposal = aggregate.DisposeAsync();
+            Assert.True(disposal.IsCompletedSuccessfully);
+        }
+        await disposal;
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => deleting);
+        Assert.Equal(1, facet.ListCalls);
+        Assert.Empty(facet.Deleted);
+        AssertCleared(aggregate);
+    }
+
+    private static void AssertCleared(object aggregate)
+    {
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        Assert.Empty((System.Collections.IDictionary)aggregate.GetType().GetField("bindings", flags)!.GetValue(aggregate)!);
+        Assert.Empty((Array)aggregate.GetType().GetField("facets", flags)!.GetValue(aggregate)!);
     }
 }

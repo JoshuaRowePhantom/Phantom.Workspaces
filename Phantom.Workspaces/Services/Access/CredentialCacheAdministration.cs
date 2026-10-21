@@ -7,11 +7,14 @@ using Phantom.Workspaces.Llm.Interfaces.Access;
 
 namespace Phantom.Workspaces.Services.Access;
 
-public sealed class CredentialCacheAdministration : ICredentialCacheAdministration
+public sealed class CredentialCacheAdministration : ICredentialCacheAdministration, IAsyncDisposable
 {
-    private readonly ICredentialCacheAdministration[] facets;
+    private ICredentialCacheAdministration[] facets;
     private readonly SemaphoreSlim gate = new(1, 1);
+    private readonly object lifetimeGate = new();
+    private readonly CancellationTokenSource shutdown = new();
     private Dictionary<CredentialCacheIdentifier, Binding> bindings = new();
+    private bool disposed;
 
     public CredentialCacheAdministration(
         IEnumerable<ICredentialCacheAdministration> facets)
@@ -28,18 +31,35 @@ public sealed class CredentialCacheAdministration : ICredentialCacheAdministrati
     public async ValueTask<IReadOnlyList<CredentialCacheDescriptor>> ListAsync(
         CancellationToken cancellationToken = default)
     {
-        await this.gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        using var operation = this.CreateOperationCancellation(cancellationToken);
+        var operationToken = operation.Token;
+        await this.gate.WaitAsync(operationToken).ConfigureAwait(false);
         try
         {
+            ICredentialCacheAdministration[] facets;
+            Binding[] previous;
+            lock (this.lifetimeGate)
+            {
+                this.ThrowIfStopped(operationToken);
+                facets = this.facets;
+                previous = this.bindings.Values.ToArray();
+            }
             var descriptors = new List<CredentialCacheDescriptor>();
             var refreshed = new Dictionary<CredentialCacheIdentifier, Binding>();
-            foreach (var facet in this.facets)
+            foreach (var facet in facets)
             {
-                var snapshot = await facet.ListAsync(cancellationToken).ConfigureAwait(false);
+                ValueTask<IReadOnlyList<CredentialCacheDescriptor>> inspection;
+                lock (this.lifetimeGate)
+                {
+                    this.ThrowIfStopped(operationToken);
+                    inspection = facet.ListAsync(operationToken);
+                }
+                var snapshot = await inspection.ConfigureAwait(false);
+                operationToken.ThrowIfCancellationRequested();
                 ValidateIdentifiers(snapshot);
                 foreach (var descriptor in snapshot)
                 {
-                    var identifier = this.bindings.Values.FirstOrDefault(binding =>
+                    var identifier = previous.FirstOrDefault(binding =>
                         ReferenceEquals(binding.Facet, facet) && binding.Descriptor == descriptor)?.Identifier
                         ?? new CredentialCacheIdentifier { Value = Guid.NewGuid() };
                     refreshed.Add(identifier, new Binding
@@ -52,8 +72,11 @@ public sealed class CredentialCacheAdministration : ICredentialCacheAdministrati
                 }
             }
 
-            cancellationToken.ThrowIfCancellationRequested();
-            this.bindings = refreshed;
+            lock (this.lifetimeGate)
+            {
+                this.ThrowIfStopped(operationToken);
+                this.bindings = refreshed;
+            }
             return descriptors.AsReadOnly();
         }
         finally
@@ -66,32 +89,83 @@ public sealed class CredentialCacheAdministration : ICredentialCacheAdministrati
         CredentialCacheIdentifier identifier,
         CancellationToken cancellationToken = default)
     {
-        await this.gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        using var operation = this.CreateOperationCancellation(cancellationToken);
+        var operationToken = operation.Token;
+        await this.gate.WaitAsync(operationToken).ConfigureAwait(false);
         try
         {
-            if (!this.bindings.TryGetValue(identifier, out var binding))
+            Binding binding;
+            ValueTask<IReadOnlyList<CredentialCacheDescriptor>> inspection;
+            lock (this.lifetimeGate)
             {
-                throw new CredentialAdministrationException(CredentialAdministrationFailure.NoLongerCurrent);
+                this.ThrowIfStopped(operationToken);
+                if (!this.bindings.TryGetValue(identifier, out binding!))
+                {
+                    throw new CredentialAdministrationException(CredentialAdministrationFailure.NoLongerCurrent);
+                }
+                inspection = binding.Facet.ListAsync(operationToken);
             }
 
             // Revalidate metadata, but always dispatch the original backend identifier.
             // The facet's compare-and-invalidate contract closes rotation races after this inspection.
-            var snapshot = await binding.Facet.ListAsync(cancellationToken).ConfigureAwait(false);
+            var snapshot = await inspection.ConfigureAwait(false);
+            operationToken.ThrowIfCancellationRequested();
             ValidateIdentifiers(snapshot);
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!snapshot.Contains(binding.Descriptor))
+            ValueTask deletion;
+            lock (this.lifetimeGate)
             {
-                this.bindings.Remove(identifier);
-                throw new CredentialAdministrationException(CredentialAdministrationFailure.NoLongerCurrent);
+                this.ThrowIfStopped(operationToken);
+                if (!snapshot.Contains(binding.Descriptor))
+                {
+                    this.bindings.Remove(identifier);
+                    throw new CredentialAdministrationException(CredentialAdministrationFailure.NoLongerCurrent);
+                }
+                deletion = binding.Facet.DeleteAsync(binding.Descriptor.Identifier, operationToken);
             }
 
-            await binding.Facet.DeleteAsync(binding.Descriptor.Identifier, cancellationToken).ConfigureAwait(false);
-            this.bindings.Remove(identifier);
+            await deletion.ConfigureAwait(false);
+            operationToken.ThrowIfCancellationRequested();
+            lock (this.lifetimeGate)
+            {
+                this.ThrowIfStopped(operationToken);
+                this.bindings.Remove(identifier);
+            }
         }
         finally
         {
             this.gate.Release();
         }
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        lock (this.lifetimeGate)
+        {
+            if (this.disposed) { return ValueTask.CompletedTask; }
+            this.disposed = true;
+            this.bindings.Clear();
+            this.facets = [];
+        }
+        try { this.shutdown.Cancel(); }
+        finally { this.shutdown.Dispose(); }
+        return ValueTask.CompletedTask;
+    }
+
+    private CancellationTokenSource CreateOperationCancellation(
+        CancellationToken cancellationToken)
+    {
+        lock (this.lifetimeGate)
+        {
+            ObjectDisposedException.ThrowIf(this.disposed, this);
+            return CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, this.shutdown.Token);
+        }
+    }
+
+    private void ThrowIfStopped(CancellationToken operationToken)
+    {
+        // Admission happened before shutdown; cancellation is consistent even before Cancel propagates.
+        if (this.disposed) { throw new OperationCanceledException(operationToken); }
+        operationToken.ThrowIfCancellationRequested();
     }
 
     private static void ValidateIdentifiers(

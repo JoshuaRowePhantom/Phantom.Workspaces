@@ -226,8 +226,9 @@ public sealed class ProviderGrantAdministrationTests
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         facet.Revoke = (_, cancellationToken) =>
         {
-            Assert.Equal(cancellation.Token, cancellationToken);
+            Assert.True(cancellationToken.CanBeCanceled);
             cancellation.Cancel();
+            Assert.True(cancellationToken.IsCancellationRequested);
             return ValueTask.FromCanceled(cancellationToken);
         };
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
@@ -269,8 +270,122 @@ public sealed class ProviderGrantAdministrationTests
         Assert.Equal(CredentialAdministrationFailure.NoLongerCurrent, failure.Failure);
         Assert.Empty(facet.Revoked);
         Assert.Equal(0, facet.DisposeCalls);
-        Assert.False(typeof(IAsyncDisposable).IsAssignableFrom(aggregate.GetType()));
+        Assert.True(typeof(IAsyncDisposable).IsAssignableFrom(aggregate.GetType()));
         Assert.Throws<ArgumentException>(() => new ProviderGrantAdministration([facet, facet]));
         Assert.Throws<ArgumentNullException>(() => new ProviderGrantAdministration(null!));
+        await aggregate.DisposeAsync();
+        await aggregate.DisposeAsync();
+        Assert.Equal(0, facet.DisposeCalls);
+        AssertCleared(aggregate);
+        await Assert.ThrowsAsync<ObjectDisposedException>(() =>
+            aggregate.ListAsync(TestContext.Current.CancellationToken).AsTask());
+        await Assert.ThrowsAsync<ObjectDisposedException>(() =>
+            aggregate.RevokeAsync(new() { Value = Guid.NewGuid() }, TestContext.Current.CancellationToken).AsTask());
+    }
+
+    [Fact]
+    public async Task DisposeCancelsActiveRefreshAndQueuedRevokeWithoutOwningFacet()
+    {
+        var descriptor = Descriptor();
+        var facet = new Facet { Entries = [descriptor] };
+        var aggregate = new ProviderGrantAdministration([facet]);
+        var selected = Assert.Single(await aggregate.ListAsync(TestContext.Current.CancellationToken));
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completion = new TaskCompletionSource<IReadOnlyList<ProviderGrantDescriptor>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        facet.Inspect = async cancellationToken =>
+        {
+            entered.SetResult();
+            return await completion.Task.WaitAsync(cancellationToken);
+        };
+        var refreshing = aggregate.ListAsync(TestContext.Current.CancellationToken).AsTask();
+        await entered.Task.WaitAsync(TestContext.Current.CancellationToken);
+        var revoking = aggregate.RevokeAsync(selected.Identifier, TestContext.Current.CancellationToken).AsTask();
+        Assert.False(revoking.IsCompleted);
+        await aggregate.DisposeAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => refreshing);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => revoking);
+        Assert.Empty(facet.Revoked);
+        Assert.Equal(0, facet.DisposeCalls);
+        AssertCleared(aggregate);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LateMetadataCannotRestoreBindingsOrBeginRevocationAfterDisposal(
+        bool beforeRevoke)
+    {
+        var descriptor = Descriptor();
+        var facet = new Facet { Entries = [descriptor] };
+        var aggregate = new ProviderGrantAdministration([facet]);
+        var selected = Assert.Single(await aggregate.ListAsync(TestContext.Current.CancellationToken));
+        var completion = new TaskCompletionSource<IReadOnlyList<ProviderGrantDescriptor>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        facet.Inspect = _ => new(completion.Task);
+        Task pending = beforeRevoke
+            ? aggregate.RevokeAsync(selected.Identifier, TestContext.Current.CancellationToken).AsTask()
+            : aggregate.ListAsync(TestContext.Current.CancellationToken).AsTask();
+        await aggregate.DisposeAsync();
+        AssertCleared(aggregate);
+        completion.SetResult([descriptor]);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        Assert.Empty(facet.Revoked);
+        Assert.Equal(0, facet.DisposeCalls);
+        AssertCleared(aggregate);
+    }
+
+    [Fact]
+    public async Task DisposeCancelsAnAlreadyStartedRemoteRevocation()
+    {
+        var facet = new Facet { Entries = [Descriptor()] };
+        var aggregate = new ProviderGrantAdministration([facet]);
+        var selected = Assert.Single(await aggregate.ListAsync(TestContext.Current.CancellationToken));
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        facet.Revoke = async (_, cancellationToken) =>
+        {
+            entered.SetResult();
+            await completion.Task.WaitAsync(cancellationToken);
+        };
+        var revoking = aggregate.RevokeAsync(selected.Identifier, TestContext.Current.CancellationToken).AsTask();
+        await entered.Task.WaitAsync(TestContext.Current.CancellationToken);
+        await aggregate.DisposeAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => revoking);
+        Assert.Single(facet.Revoked);
+        Assert.Single(facet.Entries);
+        Assert.Equal(0, facet.DisposeCalls);
+        AssertCleared(aggregate);
+    }
+
+    [Fact]
+    public async Task AdmittedRevokeGrantedDuringShutdownAlwaysCancelsBeforeProviderDispatch()
+    {
+        var facet = new Facet { Entries = [Descriptor()] };
+        var aggregate = new ProviderGrantAdministration([facet]);
+        var selected = Assert.Single(await aggregate.ListAsync(TestContext.Current.CancellationToken));
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var gate = Assert.IsType<SemaphoreSlim>(aggregate.GetType().GetField("gate", flags)!.GetValue(aggregate));
+        var lifetimeGate = aggregate.GetType().GetField("lifetimeGate", flags)!.GetValue(aggregate)!;
+        await gate.WaitAsync(TestContext.Current.CancellationToken);
+        var revoking = aggregate.RevokeAsync(selected.Identifier, TestContext.Current.CancellationToken).AsTask();
+        Assert.False(revoking.IsCompleted);
+        ValueTask disposal;
+        lock (lifetimeGate)
+        {
+            gate.Release();
+            disposal = aggregate.DisposeAsync();
+            Assert.True(disposal.IsCompletedSuccessfully);
+        }
+        await disposal;
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => revoking);
+        Assert.Equal(1, facet.ListCalls);
+        Assert.Empty(facet.Revoked);
+        AssertCleared(aggregate);
+    }
+
+    private static void AssertCleared(object aggregate)
+    {
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        Assert.Empty((System.Collections.IDictionary)aggregate.GetType().GetField("bindings", flags)!.GetValue(aggregate)!);
+        Assert.Empty((Array)aggregate.GetType().GetField("facets", flags)!.GetValue(aggregate)!);
     }
 }
