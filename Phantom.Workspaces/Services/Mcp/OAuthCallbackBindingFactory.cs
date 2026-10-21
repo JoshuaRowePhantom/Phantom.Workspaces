@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Llm.Interfaces.Access.Execution;
 
 namespace Phantom.Workspaces.Services.Mcp;
@@ -25,7 +26,7 @@ internal sealed class OAuthCallbackBindingFactory
             executionProof.Authorizes(operation.RequestIdentifier, operation.Revision, operation.ExecutorKind,
                 operation.AcquisitionGeneration, operation.CompatibilityKey);
         if (!IsAuthorized()) { throw new InvalidOperationException("OAuth callback binding is not authorized."); }
-        var binding = await OAuthCallbackBinding.StartAsync(cancellationToken).ConfigureAwait(false);
+        var binding = await OAuthCallbackBinding.StartAsync(operation, executionProof, cancellationToken).ConfigureAwait(false);
         if (!IsAuthorized() || cancellationToken.IsCancellationRequested)
         {
             await binding.DisposeAsync().ConfigureAwait(false);
@@ -39,22 +40,52 @@ internal sealed class OAuthCallbackBindingFactory
 internal sealed class OAuthCallbackBinding : IAsyncDisposable
 {
     private readonly WebApplication application;
+    private readonly CredentialExecutorKind executorKind;
+    private readonly ProviderAcquisitionKey acquisitionKey;
+    private readonly UserAuthorizationRequestIdentifier requestIdentifier;
+    private readonly long revision;
+    private readonly Guid acquisitionGeneration;
+    private readonly ProviderInteractionPermit executionProof;
     private readonly CancellationTokenSource lifetime = new();
     private readonly Channel<OAuthCallbackRequest> requests = Channel.CreateBounded<OAuthCallbackRequest>(
         new BoundedChannelOptions(1) { AllowSynchronousContinuations = false, SingleReader = true });
     private readonly object gate = new();
-    private Task stopping = Task.CompletedTask;
-    private Task? disposal;
+    private readonly TaskCompletionSource stopping = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private TaskCompletionSource? disposal;
     private CancellationTokenRegistration cancellationRegistration;
     private bool closed;
     private Uri? redirectUri;
 
-    private OAuthCallbackBinding(WebApplication application) => this.application = application;
+    private OAuthCallbackBinding(
+        WebApplication application,
+        IProviderAcquisitionOperation operation,
+        ProviderInteractionPermit executionProof)
+    {
+        this.application = application;
+        this.executorKind = operation.ExecutorKind;
+        this.acquisitionKey = operation.CompatibilityKey;
+        this.requestIdentifier = operation.RequestIdentifier;
+        this.revision = operation.Revision;
+        this.acquisitionGeneration = operation.AcquisitionGeneration;
+        this.executionProof = executionProof;
+    }
 
     internal Uri RedirectUri => this.redirectUri ?? throw new InvalidOperationException("OAuth callback binding is not ready.");
     internal bool IsListening { get { lock (this.gate) { return !this.closed && this.redirectUri is not null; } } }
+    internal bool IsActive => this.IsListening &&
+        this.executionProof.AuthorizesProvider(this.executorKind, this.acquisitionKey) &&
+        this.executionProof.Authorizes(this.requestIdentifier, this.revision, this.executorKind,
+            this.acquisitionGeneration, this.acquisitionKey);
 
-    internal static async ValueTask<OAuthCallbackBinding> StartAsync(CancellationToken cancellationToken)
+    internal bool Authorizes(IProviderAcquisitionOperation operation) => this.IsActive &&
+        this.executorKind == operation.ExecutorKind && this.acquisitionKey == operation.CompatibilityKey &&
+        this.requestIdentifier == operation.RequestIdentifier && this.revision == operation.Revision &&
+        this.acquisitionGeneration == operation.AcquisitionGeneration;
+
+    internal static async ValueTask<OAuthCallbackBinding> StartAsync(
+        IProviderAcquisitionOperation operation,
+        ProviderInteractionPermit executionProof,
+        CancellationToken cancellationToken)
     {
         var builder = WebApplication.CreateSlimBuilder();
         builder.Configuration.Sources.Clear();
@@ -66,14 +97,14 @@ internal sealed class OAuthCallbackBinding : IAsyncDisposable
             options.Limits.RequestHeadersTimeout = TimeSpan.FromSeconds(5);
         });
         var application = builder.Build();
-        var binding = new OAuthCallbackBinding(application);
+        var binding = new OAuthCallbackBinding(application, operation, executionProof);
         application.Run(binding.HandleAsync);
         try
         {
             await application.StartAsync(cancellationToken).ConfigureAwait(false);
             var addresses = application.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()?.Addresses;
             var address = addresses?.SingleOrDefault() ?? throw new InvalidOperationException("OAuth callback binding is unavailable.");
-            binding.redirectUri = new Uri(new Uri(address), "/oauth/callback");
+            binding.redirectUri = new Uri(new Uri(address), "/callback");
             binding.cancellationRegistration = cancellationToken.Register(binding.Close);
             cancellationToken.ThrowIfCancellationRequested();
             return binding;
@@ -93,27 +124,60 @@ internal sealed class OAuthCallbackBinding : IAsyncDisposable
         {
             if (this.closed) { return; }
             this.closed = true;
-            this.lifetime.Cancel();
-            this.requests.Writer.TryComplete();
-            this.stopping = this.application.StopAsync();
         }
+        _ = this.StopCoreAsync();
     }
 
     public ValueTask DisposeAsync()
     {
-        lock (this.gate) { return new ValueTask(this.disposal ??= this.DisposeCoreAsync()); }
+        TaskCompletionSource? leader = null;
+        Task task;
+        lock (this.gate)
+        {
+            if (this.disposal is null)
+            {
+                this.disposal = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                leader = this.disposal;
+            }
+            task = this.disposal.Task;
+        }
+        if (leader is not null) { _ = this.DisposeCoreAsync(leader); }
+        return new ValueTask(task);
     }
 
-    private async Task DisposeCoreAsync()
+    private async Task StopCoreAsync()
     {
-        this.Close();
-        try { await this.stopping.ConfigureAwait(false); }
-        finally
+        try
         {
-            await this.application.DisposeAsync().ConfigureAwait(false);
-            await this.cancellationRegistration.DisposeAsync().ConfigureAwait(false);
-            this.lifetime.Dispose();
+            try { await this.lifetime.CancelAsync().ConfigureAwait(false); }
+            finally
+            {
+                this.requests.Writer.TryComplete();
+                await this.application.StopAsync().ConfigureAwait(false);
+            }
+            this.stopping.TrySetResult();
         }
+        catch (Exception exception) { this.stopping.TrySetException(exception); }
+    }
+
+    private async Task DisposeCoreAsync(TaskCompletionSource completion)
+    {
+        try
+        {
+            this.Close();
+            try { await this.stopping.Task.ConfigureAwait(false); }
+            finally
+            {
+                try { await this.application.DisposeAsync().ConfigureAwait(false); }
+                finally
+                {
+                    try { await this.cancellationRegistration.DisposeAsync().ConfigureAwait(false); }
+                    finally { this.lifetime.Dispose(); }
+                }
+            }
+            completion.TrySetResult();
+        }
+        catch (Exception exception) { completion.TrySetException(exception); }
     }
 
     private async Task HandleAsync(HttpContext context)

@@ -1,5 +1,3 @@
-using System.Net;
-using System.Net.Sockets;
 using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Llm.Interfaces.Access.Execution;
 using Phantom.Workspaces.Services.Access;
@@ -14,7 +12,7 @@ public sealed partial class McpOAuthRedirectHandlerTests
     {
         var browser = new FakeSystemBrowserLauncher();
         var operation = new AttemptOperation();
-        await using var attempt = new McpOAuthAttempt(browser, AuthUri("private-state"), operation.RedirectUri, operation);
+        await using var attempt = await BoundAttemptAsync(browser, AuthUri("private-state"), operation);
         browser.OnOpenSideEffect = () =>
         {
             Assert.True(attempt.Ready.IsCompletedSuccessfully);
@@ -39,7 +37,7 @@ public sealed partial class McpOAuthRedirectHandlerTests
     {
         var browser = new FakeSystemBrowserLauncher();
         var operation = new AttemptOperation();
-        await using var attempt = new McpOAuthAttempt(browser, AuthUri("private-state"), operation.RedirectUri, operation);
+        await using var attempt = await BoundAttemptAsync(browser, AuthUri("private-state"), operation);
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             attempt.ExecuteAsync(null!, TestContext.Current.CancellationToken));
         Assert.Equal(0, browser.OpenCount);
@@ -70,7 +68,7 @@ public sealed partial class McpOAuthRedirectHandlerTests
         })
         {
             var browser = new FakeSystemBrowserLauncher();
-            await using var attempt = new McpOAuthAttempt(browser, AuthUri("private-state"), AttemptRedirectUri(), operation);
+            await using var attempt = await BoundAttemptAsync(browser, AuthUri("private-state"), operation);
             await Assert.ThrowsAsync<InvalidOperationException>(() => attempt.ExecuteAsync(permit, CancellationToken.None));
             Assert.Equal(0, browser.OpenCount);
         }
@@ -81,7 +79,7 @@ public sealed partial class McpOAuthRedirectHandlerTests
     {
         var browser = new FakeSystemBrowserLauncher();
         var operation = new AttemptOperation();
-        await using var attempt = new McpOAuthAttempt(browser, AuthUri("private-state"), operation.RedirectUri, operation);
+        await using var attempt = await BoundAttemptAsync(browser, AuthUri("private-state"), operation);
         var result = attempt.ExecuteAsync(AttemptPermit(operation).BindExecution(() => true), CancellationToken.None);
         await attempt.DisposeAsync();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => result);
@@ -103,7 +101,8 @@ public sealed partial class McpOAuthRedirectHandlerTests
             var browser = new FakeSystemBrowserLauncher();
             using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider());
             var operation = new AttemptOperation();
-            await using var attempt = handler.CreateAttempt(AuthUri("private-state"), operation.RedirectUri, operation);
+            await using var binding = await BindAttemptAsync(operation);
+            await using var attempt = handler.CreateAttempt(AuthUri("private-state"), binding, operation);
             using var cancellation = new CancellationTokenSource();
             if (cancelBeforeLaunch)
             {
@@ -126,7 +125,7 @@ public sealed partial class McpOAuthRedirectHandlerTests
         using var cancellation = new CancellationTokenSource();
         var browser = new FakeSystemBrowserLauncher { OnOpenSideEffect = cancellation.Cancel };
         var operation = new AttemptOperation();
-        await using var attempt = new McpOAuthAttempt(browser, AuthUri("private-state"), operation.RedirectUri, operation);
+        await using var attempt = await BoundAttemptAsync(browser, AuthUri("private-state"), operation);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             attempt.ExecuteAsync(AttemptPermit(operation).BindExecution(() => true), cancellation.Token));
         Assert.False(attempt.IsListenerBound);
@@ -138,7 +137,7 @@ public sealed partial class McpOAuthRedirectHandlerTests
     {
         var browser = new FakeSystemBrowserLauncher();
         var operation = new AttemptOperation();
-        await using var attempt = new McpOAuthAttempt(browser, AuthUri("private-state"), operation.RedirectUri, operation);
+        await using var attempt = await BoundAttemptAsync(browser, AuthUri("private-state"), operation);
         var proof = AttemptPermit(operation).BindExecution(() => true);
         var first = attempt.ExecuteAsync(proof, CancellationToken.None);
         await Assert.ThrowsAsync<InvalidOperationException>(() => attempt.ExecuteAsync(proof, CancellationToken.None));
@@ -153,8 +152,8 @@ public sealed partial class McpOAuthRedirectHandlerTests
         var firstOperation = new AttemptOperation();
         var secondOperation = new AttemptOperation();
         var browser = new FakeSystemBrowserLauncher();
-        await using var first = new McpOAuthAttempt(browser, AuthUri("first-state"), firstOperation.RedirectUri, firstOperation);
-        await using var second = new McpOAuthAttempt(browser, AuthUri("second-state"), secondOperation.RedirectUri, secondOperation);
+        await using var first = await BoundAttemptAsync(browser, AuthUri("first-state"), firstOperation);
+        await using var second = await BoundAttemptAsync(browser, AuthUri("second-state"), secondOperation);
         var firstResult = first.ExecuteAsync(AttemptPermit(firstOperation).BindExecution(() => true), CancellationToken.None);
         var secondResult = second.ExecuteAsync(AttemptPermit(secondOperation).BindExecution(() => true), CancellationToken.None);
         await SendCallbackAsync(firstOperation.RedirectUri, "state=second-state&code=wrong");
@@ -176,7 +175,7 @@ public sealed partial class McpOAuthRedirectHandlerTests
             OnOpen = _ => SendCallbackAsync(operation.RedirectUri,
                 "state=private-state&error=private-error&error_description=private-description"),
         };
-        await using var attempt = new McpOAuthAttempt(browser, AuthUri("private-state"), operation.RedirectUri, operation);
+        await using var attempt = await BoundAttemptAsync(browser, AuthUri("private-state"), operation);
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             attempt.ExecuteAsync(AttemptPermit(operation).BindExecution(() => true), CancellationToken.None));
         await browser.LastCallbackTask!;
@@ -186,13 +185,44 @@ public sealed partial class McpOAuthRedirectHandlerTests
         Assert.False(attempt.IsListenerBound);
     }
 
-    private static Uri AttemptRedirectUri()
+    [Fact]
+    public async Task McpOAuthAttempt_RevokedBindingProofCannotPublishLateCallback()
     {
-        var reservation = new TcpListener(IPAddress.Loopback, 0);
-        reservation.Start();
-        var port = ((IPEndPoint)reservation.LocalEndpoint).Port;
-        reservation.Stop();
-        return new Uri($"http://localhost:{port}/callback");
+        var operation = new AttemptOperation();
+        var active = true;
+        var proof = AttemptPermit(operation).BindExecution(() => active);
+        await using var binding = await new OAuthCallbackBindingFactory().BindAsync(
+            operation, proof, TestContext.Current.CancellationToken);
+        operation.RedirectUri = binding.RedirectUri;
+        var browser = new FakeSystemBrowserLauncher();
+        await using var attempt = new McpOAuthAttempt(browser, AuthUri("private-state"), binding, operation);
+        var completion = attempt.ExecuteAsync(proof, TestContext.Current.CancellationToken);
+        active = false;
+        await SendCallbackAsync(operation.RedirectUri, "state=private-state&code=private-code");
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => completion);
+        Assert.False(attempt.IsListenerBound);
+    }
+
+    private static async ValueTask<OAuthCallbackBinding> BindAttemptAsync(AttemptOperation operation)
+    {
+        var binding = await new OAuthCallbackBindingFactory().BindAsync(
+            operation, AttemptPermit(operation).BindExecution(() => true), TestContext.Current.CancellationToken);
+        operation.RedirectUri = binding.RedirectUri;
+        return binding;
+    }
+
+    private static async ValueTask<McpOAuthAttempt> BoundAttemptAsync(
+        ISystemBrowserLauncher browser,
+        Uri authorizationUri,
+        AttemptOperation operation)
+    {
+        var binding = await BindAttemptAsync(operation);
+        try { return new McpOAuthAttempt(browser, authorizationUri, binding, operation); }
+        catch
+        {
+            await binding.DisposeAsync();
+            throw;
+        }
     }
 
     private static ProviderInteractionPermit AttemptPermit(
@@ -211,7 +241,7 @@ public sealed partial class McpOAuthRedirectHandlerTests
 
     private sealed class AttemptOperation : IProviderAcquisitionOperation
     {
-        public Uri RedirectUri { get; set; } = AttemptRedirectUri();
+        public Uri RedirectUri { get; set; } = null!;
         public Func<ProviderAcquisitionCommitContext, CancellationToken, ValueTask<ProviderAcquisitionOutcome>>? Execute { get; set; }
         public ProviderAcquisitionKey CompatibilityKey { get; } = new()
         {

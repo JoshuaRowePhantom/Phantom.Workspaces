@@ -65,6 +65,22 @@ public sealed class OAuthCallbackBindingFactoryTests
         Assert.False(binding.IsListening);
     }
 
+    [Fact]
+    public async Task Binding_CannotAuthorizeAnAttemptFromAnotherAcquisitionGeneration()
+    {
+        var operation = new Operation(CredentialExecutorKind.OAuth);
+        var other = new Operation(CredentialExecutorKind.OAuth);
+        await using var binding = await new OAuthCallbackBindingFactory().BindAsync(operation, Proof(operation), TestContext.Current.CancellationToken);
+        Assert.Throws<InvalidOperationException>(() => new McpOAuthAttempt(
+            new Browser(), new Uri("https://authority.test/authorize?state=private-state"), binding, other));
+        Assert.True(binding.IsListening);
+    }
+
+    private sealed class Browser : ISystemBrowserLauncher
+    {
+        public void Open(Uri uri) => throw new InvalidOperationException("Binding validation must not open a browser.");
+    }
+
     private static ProviderInteractionPermit Proof(Operation operation) => new ProviderInteractionPermit(
         operation.RequestIdentifier, operation.Revision, operation.ExecutorKind,
         operation.AcquisitionGeneration, operation.CompatibilityKey, () => true).BindExecution(() => true);

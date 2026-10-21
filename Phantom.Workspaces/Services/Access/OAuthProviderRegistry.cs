@@ -2,6 +2,7 @@ using System.Net.Http;
 using Phantom.Workspaces.Llm.Auth;
 using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Llm.Secrets;
+using Phantom.Workspaces.Services.Mcp;
 
 namespace Phantom.Workspaces.Services.Access;
 
@@ -19,18 +20,18 @@ internal sealed class OAuthProviderRegistry
     private readonly object gate = new();
     private readonly Dictionary<LogicalCredentialIdentifier, OAuthProviderConfiguration> configurations = [];
     private readonly IPlatformSecretStore store;
-    private readonly Func<Uri> createRedirectUri;
+    private readonly OAuthCallbackBindingFactory callbackBindings;
     private readonly Func<HttpMessageHandler> createHttpHandler;
     private readonly TimeProvider timeProvider;
 
     internal OAuthProviderRegistry(
         IPlatformSecretStore store,
-        Func<Uri> createRedirectUri,
+        OAuthCallbackBindingFactory? callbackBindings = null,
         Func<HttpMessageHandler>? createHttpHandler = null,
         TimeProvider? timeProvider = null)
     {
         this.store = store;
-        this.createRedirectUri = createRedirectUri;
+        this.callbackBindings = callbackBindings ?? new OAuthCallbackBindingFactory();
         this.createHttpHandler = createHttpHandler ?? (() => new SocketsHttpHandler { AllowAutoRedirect = false });
         this.timeProvider = timeProvider ?? TimeProvider.System;
     }
@@ -53,7 +54,7 @@ internal sealed class OAuthProviderRegistry
                     ClientAuthentication = clientAuthentication,
                     Scopes = canonicalScopes,
                     Cache = new CredentialManagerTokenCache(this.store, "oauth:", credential.LogicalIdentifier.Digest),
-                    CreateRedirectUri = this.createRedirectUri,
+                    CallbackBindings = this.callbackBindings,
                     CreateHttpHandler = this.createHttpHandler,
                     TimeProvider = this.timeProvider,
                 };

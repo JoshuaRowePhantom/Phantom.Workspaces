@@ -137,7 +137,7 @@ public sealed class McpOAuthRedirectHandler : IDisposable
 
     internal McpOAuthAttempt CreateAttempt(
         Uri authorizationUri,
-        Uri redirectUri,
+        OAuthCallbackBinding binding,
         IProviderAcquisitionOperation operation)
     {
         lock (this.gate)
@@ -146,7 +146,7 @@ public sealed class McpOAuthRedirectHandler : IDisposable
             var attempt = new McpOAuthAttempt(
                 this.browserLauncher,
                 authorizationUri,
-                redirectUri,
+                binding,
                 operation,
                 this.RemoveAttempt);
             this.attempts.Add(attempt);

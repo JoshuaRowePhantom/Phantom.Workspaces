@@ -25,7 +25,7 @@ internal sealed record McpOAuthProviderConfiguration
     public required IReadOnlyList<OAuthScope> Scopes { get; init; }
     public required CredentialSourceIdentifier Source { get; init; }
     public required CredentialManagerTokenCache Cache { get; init; }
-    public required Func<Uri> CreateRedirectUri { get; init; }
+    public OAuthCallbackBindingFactory CallbackBindings { get; init; } = new();
     public Func<HttpMessageHandler> CreateHttpHandler { get; init; } = () => new SocketsHttpHandler { AllowAutoRedirect = false };
 }
 
@@ -319,7 +319,8 @@ internal sealed class McpOAuthCredentialAccessExecutor :
             return new ProviderAcquisitionFailed { ErrorCode = AccessErrorCode.ProviderFailure };
         }
         var cache = new AcquisitionTokenCache(configuration.Cache, provider.Commits, generation);
-        var redirectUri = configuration.CreateRedirectUri();
+        await using var binding = await configuration.CallbackBindings.BindAsync(
+            operation, commitContext.InteractionPermit, cancellationToken).ConfigureAwait(false);
         var options = new ClientOAuthOptions
         {
             ClientId = configuration.ClientAuthentication switch
@@ -329,13 +330,15 @@ internal sealed class McpOAuthCredentialAccessExecutor :
                 _ => null,
             },
             ClientSecret = clientSecret,
-            RedirectUri = redirectUri,
+            RedirectUri = binding.RedirectUri,
             Scopes = configuration.Scopes.Select(scope => scope.Value).ToArray(),
             AuthServerSelector = servers => servers.FirstOrDefault(server => server == configuration.AuthorizationServer),
             TokenCache = cache,
             AuthorizationRedirectDelegate = async (authorizationUri, callbackUri, cancellation) =>
             {
-                await using var attempt = new McpOAuthAttempt(this.browserLauncher, authorizationUri, callbackUri, operation);
+                if (callbackUri != binding.RedirectUri)
+                    throw new InvalidOperationException("OAuth callback binding does not match the approved attempt.");
+                await using var attempt = new McpOAuthAttempt(this.browserLauncher, authorizationUri, binding, operation);
                 await attempt.Ready.ConfigureAwait(false);
                 var callback = await attempt.ExecuteAsync(commitContext.InteractionPermit, cancellation).ConfigureAwait(false);
                 return System.Web.HttpUtility.ParseQueryString(callback.Query)["code"];

@@ -410,7 +410,6 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
                 Scopes = [new() { Value = "read" }],
                 Source = new() { Digest = new string('b', 64) },
                 Cache = new CredentialManagerTokenCache(this.Store, "mcp-oauth:", "private-cache"),
-                CreateRedirectUri = RedirectUri,
                 CreateHttpHandler = () => createHttpHandler?.Invoke(this.Server) ?? new Handler(this.Server),
             };
             this.Executor = new McpOAuthCredentialAccessExecutor([this.Configuration], this.Browser);
@@ -514,14 +513,6 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
             }
         }
 
-        private static Uri RedirectUri()
-        {
-            var reservation = new TcpListener(IPAddress.Loopback, 0);
-            reservation.Start();
-            var port = ((IPEndPoint)reservation.LocalEndpoint).Port;
-            reservation.Stop();
-            return new Uri($"http://localhost:{port}/");
-        }
     }
 
     private sealed class Browser(List<string> events) : ISystemBrowserLauncher
@@ -535,6 +526,10 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
         {
             this.OpenCount++;
             events.Add("browser");
+            var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+            var competing = new TcpListener(IPAddress.Loopback, new Uri(query["redirect_uri"]!).Port);
+            try { Assert.Throws<SocketException>(competing.Start); }
+            finally { competing.Stop(); }
             this.Callback = this.CallbackAsync(uri);
             this.Opened.TrySetResult();
         }

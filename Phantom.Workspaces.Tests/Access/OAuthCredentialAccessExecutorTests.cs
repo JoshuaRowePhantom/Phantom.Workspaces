@@ -511,7 +511,7 @@ public sealed class OAuthCredentialAccessExecutorTests
             this.Store = new MemoryStore(this.Events);
             this.Server = new Server(this.Events);
             this.Browser = new Browser(this.Events, this.Server);
-            this.Providers = new OAuthProviderRegistry(this.Store, RedirectUri, () => new Handler(this.Server), this.Clock);
+            this.Providers = new OAuthProviderRegistry(this.Store, new OAuthCallbackBindingFactory(), () => new Handler(this.Server), this.Clock);
             this.Executor = new OAuthCredentialAccessExecutor(this.Providers, this.Browser);
             this.Configuration = this.Providers.RegisterProvider(
                 new OAuthProviderDescriptor
@@ -598,14 +598,6 @@ public sealed class OAuthCredentialAccessExecutorTests
             finally { this.Registry.Changed -= Refresh; }
         }
         public ValueTask DisposeAsync() => this.Broker.DisposeAsync();
-        private static Uri RedirectUri()
-        {
-            var reservation = new TcpListener(IPAddress.Loopback, 0);
-            reservation.Start();
-            var port = ((IPEndPoint)reservation.LocalEndpoint).Port;
-            reservation.Stop();
-            return new($"http://localhost:{port}/");
-        }
     }
 
     private sealed class Clock : TimeProvider
@@ -659,6 +651,9 @@ public sealed class OAuthCredentialAccessExecutorTests
             this.Opens++;
             events.Add("browser");
             var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+            var competing = new TcpListener(IPAddress.Loopback, new Uri(query["redirect_uri"]!).Port);
+            try { Assert.Throws<SocketException>(competing.Start); }
+            finally { competing.Stop(); }
             server.Challenge = query["code_challenge"];
             Assert.Equal("S256", query["code_challenge_method"]);
             Assert.Equal("code", query["response_type"]);

@@ -23,7 +23,7 @@ internal sealed record OAuthProviderConfiguration
     public CredentialSourceIdentifier Source => OAuthCredentialAccessExecutor.CreateSourceIdentifier(
         this.Provider, this.ClientAuthentication, this.Scopes);
     public required CredentialManagerTokenCache Cache { get; init; }
-    public required Func<Uri> CreateRedirectUri { get; init; }
+    public OAuthCallbackBindingFactory CallbackBindings { get; init; } = new();
     public Func<HttpMessageHandler> CreateHttpHandler { get; init; } =
         () => new SocketsHttpHandler { AllowAutoRedirect = false };
     public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
@@ -547,7 +547,9 @@ internal sealed class OAuthCredentialAccessExecutor :
         var generation = await commits.BeginGenerationAsync(commitContext, cancellation.Token).ConfigureAwait(false);
         var verifier = Base64Url(RandomNumberGenerator.GetBytes(32));
         var state = Base64Url(RandomNumberGenerator.GetBytes(32));
-        var redirect = configuration.CreateRedirectUri();
+        await using var binding = await configuration.CallbackBindings.BindAsync(
+            operation, commitContext.InteractionPermit, cancellation.Token).ConfigureAwait(false);
+        var redirect = binding.RedirectUri;
         var authorization = new UriBuilder(descriptor.AuthorizationEndpoint);
         var query = System.Web.HttpUtility.ParseQueryString(authorization.Query);
         query["response_type"] = "code";
@@ -559,7 +561,7 @@ internal sealed class OAuthCredentialAccessExecutor :
         query["code_challenge"] = Base64Url(SHA256.HashData(Encoding.ASCII.GetBytes(verifier)));
         query["code_challenge_method"] = "S256";
         authorization.Query = query.ToString();
-        await using var attempt = new McpOAuthAttempt(this.browserLauncher, authorization.Uri, redirect, operation, this.RemoveAttempt);
+        await using var attempt = new McpOAuthAttempt(this.browserLauncher, authorization.Uri, binding, operation, this.RemoveAttempt);
         lock (this.gate)
         {
             if (this.disposed) { throw new OperationCanceledException(cancellation.Token); }

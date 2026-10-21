@@ -1,7 +1,6 @@
 using System.ComponentModel;
-using System.Net;
 using System.Security.Cryptography;
-using System.Text;
+using System.Threading.Channels;
 using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Llm.Interfaces.Access.Execution;
 using Phantom.Workspaces.Llm.Mcp;
@@ -11,7 +10,7 @@ namespace Phantom.Workspaces.Services.Mcp;
 internal sealed class McpOAuthAttempt : IAsyncDisposable
 {
     private readonly object gate = new();
-    private readonly HttpListener listener = new();
+    private readonly OAuthCallbackBinding binding;
     private readonly ISystemBrowserLauncher browserLauncher;
     private readonly Uri authorizationUri;
     private readonly Uri redirectUri;
@@ -26,21 +25,24 @@ internal sealed class McpOAuthAttempt : IAsyncDisposable
     private readonly Task acceptLoop;
     private bool executing;
     private bool closed;
+    private TaskCompletionSource? disposal;
 
     internal McpOAuthAttempt(
         ISystemBrowserLauncher browserLauncher,
         Uri authorizationUri,
-        Uri redirectUri,
+        OAuthCallbackBinding binding,
         IProviderAcquisitionOperation operation,
         Action<McpOAuthAttempt>? onClosed = null)
     {
-        if (!redirectUri.IsLoopback || redirectUri.Scheme != Uri.UriSchemeHttp ||
+        var redirectUri = binding.RedirectUri;
+        if (!binding.Authorizes(operation) || !redirectUri.IsLoopback || redirectUri.Scheme != Uri.UriSchemeHttp ||
             !string.IsNullOrEmpty(redirectUri.Query) || !string.IsNullOrEmpty(redirectUri.Fragment))
         {
             throw new InvalidOperationException("OAuth requires a local HTTP callback.");
         }
 
         this.browserLauncher = browserLauncher;
+        this.binding = binding;
         this.redirectUri = redirectUri;
         this.requestIdentifier = operation.RequestIdentifier;
         this.revision = operation.Revision;
@@ -62,17 +64,6 @@ internal sealed class McpOAuthAttempt : IAsyncDisposable
                     (authorizationUri.Query.Length == 0 ? "" : "&") + "state=" + Uri.EscapeDataString(this.state),
             }.Uri
             : authorizationUri;
-        this.listener.Prefixes.Add(redirectUri.GetLeftPart(UriPartial.Authority) + "/");
-        try
-        {
-            this.listener.Start();
-        }
-        catch (HttpListenerException)
-        {
-            this.listener.Close();
-            throw new InvalidOperationException("OAuth callback listener could not start.");
-        }
-
         this.acceptLoop = this.AcceptAsync();
     }
 
@@ -80,7 +71,11 @@ internal sealed class McpOAuthAttempt : IAsyncDisposable
 
     internal bool IsListenerBound
     {
-        get { lock (this.gate) { return !this.closed && this.listener.IsListening; } }
+        get
+        {
+            lock (this.gate) { if (this.closed) { return false; } }
+            return this.binding.IsListening;
+        }
     }
 
     public async Task<Uri> ExecuteAsync(
@@ -96,79 +91,97 @@ internal sealed class McpOAuthAttempt : IAsyncDisposable
                 throw new InvalidOperationException("OAuth attempt is no longer available.");
             }
 
+            this.executing = true;
+        }
+
+        try
+        {
             if (permit is null ||
+                !this.binding.IsActive ||
                 !permit.AuthorizesProvider(this.executorKind, this.acquisitionKey) ||
                 !permit.Authorizes(this.requestIdentifier, this.revision, this.executorKind,
                     this.acquisitionGeneration, this.acquisitionKey))
             {
-                this.Close();
                 throw new InvalidOperationException("OAuth interaction is not authorized.");
             }
 
-            this.executing = true;
+            cancellationToken.ThrowIfCancellationRequested();
             try
             {
                 this.browserLauncher.Open(this.authorizationUri);
             }
             catch (Exception exception) when (exception is Win32Exception or InvalidOperationException)
             {
-                this.Close();
                 throw new InvalidOperationException("OAuth browser launch failed.");
             }
-        }
-
-        try
-        {
             return await this.completion.Task.ConfigureAwait(false);
         }
         finally
         {
-            this.Close();
+            try { this.Close(); }
+            finally { await this.binding.DisposeAsync().ConfigureAwait(false); }
         }
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        this.Close();
-        await this.acceptLoop.ConfigureAwait(false);
+        TaskCompletionSource? leader = null;
+        Task task;
+        lock (this.gate)
+        {
+            if (this.disposal is null)
+            {
+                this.disposal = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                leader = this.disposal;
+            }
+            task = this.disposal.Task;
+        }
+        if (leader is not null) { _ = this.DisposeCoreAsync(leader); }
+        return new ValueTask(task);
+    }
+
+    private async Task DisposeCoreAsync(TaskCompletionSource completion)
+    {
+        try
+        {
+            try
+            {
+                this.Close();
+                await this.acceptLoop.ConfigureAwait(false);
+            }
+            finally { await this.binding.DisposeAsync().ConfigureAwait(false); }
+            completion.TrySetResult();
+        }
+        catch (Exception exception) { completion.TrySetException(exception); }
     }
 
     private async Task AcceptAsync()
     {
         while (true)
         {
-            HttpListenerContext context;
+            OAuthCallbackRequest request;
             try
             {
-                context = await this.listener.GetContextAsync().ConfigureAwait(false);
+                request = await this.binding.ReceiveAsync().ConfigureAwait(false);
             }
-            catch (Exception exception) when (exception is HttpListenerException or ObjectDisposedException)
+            catch (Exception exception) when (exception is OperationCanceledException or ChannelClosedException or ObjectDisposedException)
             {
                 this.Close();
                 return;
             }
 
-            var callback = context.Request.Url;
-            var matched = callback is not null &&
+            var callback = request.Uri;
+            var matched =
                 callback.AbsolutePath == this.redirectUri.AbsolutePath &&
                 QueryValue(callback, "state") == this.state;
-            try
-            {
-                context.Response.StatusCode = matched ? 200 : 400;
-                context.Response.ContentType = "text/html; charset=utf-8";
-                var payload = Encoding.UTF8.GetBytes("<html><body>You may close this window.</body></html>");
-                context.Response.ContentLength64 = payload.Length;
-                await context.Response.OutputStream.WriteAsync(payload).ConfigureAwait(false);
-            }
-            catch (Exception exception) when (exception is HttpListenerException or IOException or ObjectDisposedException)
-            {
-                // A disconnected browser cannot change the private protocol result.
-            }
-            finally
-            {
-                context.Response.Close();
-            }
+            await request.CompleteAsync(matched).ConfigureAwait(false);
 
+            if (!this.binding.IsActive)
+            {
+                this.Close();
+                return;
+            }
+            var completed = false;
             lock (this.gate)
             {
                 if (!this.closed && this.executing && matched)
@@ -182,10 +195,10 @@ internal sealed class McpOAuthAttempt : IAsyncDisposable
                         this.completion.TrySetResult(callback!);
                     }
 
-                    this.Close();
-                    return;
+                    completed = true;
                 }
             }
+            if (completed) { this.Close(); return; }
         }
     }
 
@@ -200,9 +213,9 @@ internal sealed class McpOAuthAttempt : IAsyncDisposable
 
             this.closed = true;
             this.completion.TrySetCanceled();
-            this.listener.Close();
-            this.onClosed?.Invoke(this);
         }
+        this.binding.Close();
+        this.onClosed?.Invoke(this);
     }
 
     private static string? QueryValue(
