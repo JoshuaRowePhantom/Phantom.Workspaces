@@ -7,6 +7,7 @@ using Phantom.Workspaces.Llm.Interfaces.Authorization;
 namespace Phantom.Workspaces.Services.DevTunnel;
 
 internal abstract record DevTunnelConnectMintOutcome;
+internal sealed record DevTunnelConnectMintDenied : DevTunnelConnectMintOutcome;
 internal sealed record DevTunnelConnectMintUnauthorized : DevTunnelConnectMintOutcome;
 internal sealed record DevTunnelConnectMintFailed : DevTunnelConnectMintOutcome
 {
@@ -504,6 +505,10 @@ internal sealed class DevTunnelConnectCredentialAccessExecutor :
             }
             var outcome = await executor.session.MintAsync(
                 request, source, context, commitContext.InteractionPermit, cancellationToken).ConfigureAwait(false);
+            if (outcome is DevTunnelConnectMintDenied)
+            {
+                return new ProviderAcquisitionDenied();
+            }
             if (outcome is DevTunnelConnectMintUnauthorized)
             {
                 return new ProviderAcquisitionRenewalRequired();

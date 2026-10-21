@@ -15,14 +15,17 @@ public sealed class DevTunnelHostService : IDevTunnelHostService
 {
     private readonly IDevTunnelManagementClient managementClient;
     private readonly IDevTunnelRelayHost relayHost;
+    private readonly IAsyncDisposable? managementLifetime;
     private DevTunnelDescriptor? descriptor;
 
     public DevTunnelHostService(
         IDevTunnelManagementClient managementClient,
-        IDevTunnelRelayHost relayHost)
+        IDevTunnelRelayHost relayHost,
+        IAsyncDisposable? managementLifetime = null)
     {
         this.managementClient = managementClient ?? throw new ArgumentNullException(nameof(managementClient));
         this.relayHost = relayHost ?? throw new ArgumentNullException(nameof(relayHost));
+        this.managementLifetime = managementLifetime;
         this.relayHost.ConnectionStateChanged += this.OnRelayConnectionStateChanged;
     }
 
@@ -43,7 +46,7 @@ public sealed class DevTunnelHostService : IDevTunnelHostService
                 .SetSingleForwardedPortAsync(this.descriptor.TunnelId, localPort, protocol, cancellationToken)
                 .ConfigureAwait(false);
 
-            var connectToken = await this.managementClient
+            await this.managementClient
                 .ApplyAccessModeAsync(this.descriptor.TunnelId, configuration.AccessMode, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -60,7 +63,6 @@ public sealed class DevTunnelHostService : IDevTunnelHostService
                 accessPointUrl,
                 this.descriptor.TunnelId,
                 configuration.AccessMode,
-                ConnectToken: connectToken,
                 LastError: null));
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -70,8 +72,7 @@ public sealed class DevTunnelHostService : IDevTunnelHostService
                 AccessPointUrl: null,
                 this.descriptor?.TunnelId,
                 configuration.AccessMode,
-                ConnectToken: null,
-                exception.Message));
+                LastError: "Dev Tunnel hosting could not complete."));
             throw;
         }
     }
@@ -94,7 +95,6 @@ public sealed class DevTunnelHostService : IDevTunnelHostService
             AccessPointUrl: null,
             this.descriptor?.TunnelId,
             this.Status.AccessMode,
-            ConnectToken: null,
             LastError: null));
     }
 
@@ -106,8 +106,24 @@ public sealed class DevTunnelHostService : IDevTunnelHostService
         // DisposeAsync on the wrapper is a no-op once StopAsync has torn the SDK host down, but we
         // still call it to transfer ownership cleanly.
         this.relayHost.ConnectionStateChanged -= this.OnRelayConnectionStateChanged;
-        await this.StopAsync().ConfigureAwait(false);
-        await this.relayHost.DisposeAsync().ConfigureAwait(false);
+        try
+        {
+            await this.StopAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            try
+            {
+                await this.relayHost.DisposeAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                if (this.managementLifetime is not null)
+                {
+                    await this.managementLifetime.DisposeAsync().ConfigureAwait(false);
+                }
+            }
+        }
     }
 
     /// <summary>

@@ -5,6 +5,7 @@ using Microsoft.DevTunnels.Contracts;
 using Microsoft.DevTunnels.Management;
 using Moq;
 using Phantom.Workspaces.Llm.Auth;
+using Phantom.Workspaces.Llm.Mcp;
 using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Llm.Interfaces.Access.Execution;
 using Phantom.Workspaces.Llm.Interfaces.Authorization;
@@ -16,6 +17,53 @@ namespace Phantom.Workspaces.Tests.Access;
 
 public sealed class DevTunnelConnectMintSessionTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExportedManagementIdentity_401InvalidatesExactGeneration_AndReplaysOnlyOnce(bool rejectAgain)
+    {
+        await using var fixture = new Fixture();
+        var identityRequest = DevTunnelIdentityCredentialAccessRequest.Create(fixture.Request.IdentityRoute,
+            fixture.Request.Requestor, fixture.Request.Use with
+            {
+                MemoryScopes = [ReleaseMemoryScopeKind.AllowOnce, ReleaseMemoryScopeKind.AllUses],
+            });
+        var initial = fixture.Broker.AcquireAsync(identityRequest, TestContext.Current.CancellationToken);
+        await fixture.ApproveUntilCompletedAsync(initial);
+        await using var first = Assert.IsType<AccessSucceeded<DevTunnelIdentityCredentialAccessResult>>(await initial).Result;
+        var sends = 0;
+        using var client = new HttpClient(new DevTunnelManagementAuthenticationHandler(
+            fixture.Broker, identityRequest, new ManagementHandler(async (message, token) =>
+            {
+                Assert.Equal("github", message.Headers.Authorization!.Scheme);
+                Assert.Equal("management identity only", message.Headers.Authorization.Parameter);
+                Assert.Equal("buffered request", await message.Content!.ReadAsStringAsync(token));
+                return new(++sends == 1 || rejectAgain ? HttpStatusCode.Unauthorized : HttpStatusCode.OK);
+            })));
+        var sending = client.PostAsync("https://global.rel.tunnels.api.visualstudio.com/tunnels",
+            new StringContent("buffered request"), TestContext.Current.CancellationToken);
+        var renewal = await fixture.WaitForActionAsync(TestContext.Current.CancellationToken);
+        Assert.False(sending.IsCompleted);
+        Assert.Equal(1, sends);
+        Assert.Empty(await fixture.GitHub.InspectCachedGenerationsAsync(TestContext.Current.CancellationToken));
+        await fixture.ApplyRememberedAsync(renewal);
+        await fixture.ApproveUntilCompletedAsync(sending);
+        using var response = await sending;
+        Assert.Equal(rejectAgain ? HttpStatusCode.Unauthorized : HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(2, sends);
+        Assert.Equal(2, fixture.Source.Acquisitions);
+        Assert.Equal(rejectAgain ? CredentialGenerationInvalidationOutcome.Missing :
+                CredentialGenerationInvalidationOutcome.NoLongerCurrent,
+            await first.InvalidateRejectedGenerationAsync(TestContext.Current.CancellationToken));
+    }
+
+    private sealed class ManagementHandler(
+        Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> callback) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            callback(request, cancellationToken);
+    }
+
     [Fact]
     public async Task ConnectMint_RealPrivateGitHubSessionWaitsForFinalRelease_AndPublishesOnlyConnectMaterial()
     {
@@ -78,6 +126,10 @@ public sealed class DevTunnelConnectMintSessionTests
     private sealed class Fixture : IAsyncDisposable
     {
         private readonly EntraCredentialAccessExecutor entra = new();
+        private readonly OAuthCredentialAccessExecutor oauth = new(
+            new OAuthProviderRegistry(new Phantom.Workspaces.Llm.Secrets.NullPlatformSecretStore(),
+                () => new Uri("http://localhost:51234/")),
+            new Mock<ISystemBrowserLauncher>().Object);
         public Fixture()
         {
             this.ConnectToken = "e30." + Convert.ToBase64String(Encoding.UTF8.GetBytes(
@@ -113,10 +165,13 @@ public sealed class DevTunnelConnectMintSessionTests
                 return client.Object;
             });
             var executor = new DevTunnelConnectCredentialAccessExecutor(
-                new DevTunnelConnectMintSession(this.GitHub, this.entra, managementApi), this.Registry);
+                new DevTunnelConnectMintSession(this.GitHub, this.entra, this.oauth, managementApi), this.Registry);
             var executors = new CredentialAccessExecutorRegistry();
             executors.Add<GitHubCredentialAccessRequest, GitHubCredentialAccessResult>(this.GitHub);
             executors.Add<EntraCredentialAccessRequest, EntraCredentialAccessResult>(this.entra);
+            executors.Add<OAuthCredentialAccessRequest, OAuthCredentialAccessResult>(this.oauth);
+            executors.Add<DevTunnelIdentityCredentialAccessRequest, DevTunnelIdentityCredentialAccessResult>(
+                new DevTunnelIdentityCredentialAccessExecutor(this.GitHub, this.entra, this.oauth));
             executors.Add<DevTunnelConnectCredentialAccessRequest, DevTunnelConnectCredentialAccessResult>(executor);
             this.Broker = new AccessBroker(new ReleaseAuthorizationPolicy(new ReleaseMemoryStore()),
                 executors, new ProviderAcquisitionCoordinator(), this.Registry);
@@ -146,6 +201,58 @@ public sealed class DevTunnelConnectMintSessionTests
         public DevTunnelConnectCredentialAccessRequest Request { get; }
         public int ManagementCalls { get; private set; }
         public int RejectionsRemaining { get; set; }
+
+        public async Task<UserAuthorizationSnapshot> WaitForActionAsync(CancellationToken cancellationToken)
+        {
+            var ready = new TaskCompletionSource<UserAuthorizationSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
+            void Find()
+            {
+                var row = this.Registry.GetSnapshot().LastOrDefault(row =>
+                    row.State is UserAuthorizationState.Pending or UserAuthorizationState.RenewalNeeded);
+                if (row is not null)
+                {
+                    ready.TrySetResult(row);
+                }
+            }
+            EventHandler changed = (_, _) => Find();
+            this.Registry.Changed += changed;
+            try
+            {
+                Find();
+                return await ready.Task.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
+            }
+            finally
+            {
+                this.Registry.Changed -= changed;
+            }
+        }
+
+        public Task ApplyRememberedAsync(UserAuthorizationSnapshot row) =>
+            this.Registry.ActAsync(new ApplyUserAuthorizationAction
+            {
+                RequestIdentifier = row.Identifier,
+                ExpectedRevision = row.Revision,
+                Memory = row.MemoryOptions.Single(option => option.Scope == ReleaseMemoryScopeKind.AllUses).Identifier,
+                Source = row.SelectedSource,
+            }, TestContext.Current.CancellationToken);
+
+        public async Task ApproveUntilCompletedAsync(Task operation)
+        {
+            for (var approvals = 0; approvals < 4 && !operation.IsCompleted; approvals++)
+            {
+                using var stopWaiting = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+                var next = this.WaitForActionAsync(stopWaiting.Token);
+                if (await Task.WhenAny(operation, next).WaitAsync(TimeSpan.FromSeconds(10),
+                    TestContext.Current.CancellationToken) == operation)
+                {
+                    await stopWaiting.CancelAsync();
+                    try { await next; } catch (OperationCanceledException) { }
+                    break;
+                }
+                await this.ApplyRememberedAsync(await next);
+            }
+            await operation.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        }
 
         public Task PerformAsync()
         {

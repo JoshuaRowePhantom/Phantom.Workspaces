@@ -10,6 +10,7 @@ using Microsoft.DevTunnels.Contracts;
 using Microsoft.DevTunnels.Management;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Services.DevTunnel;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Transport.ReverseHttp;
 using Phantom.Workspaces.Web.Server;
 
@@ -18,8 +19,8 @@ namespace Phantom.Workspaces.IntegrationTests;
 /// <summary>
 /// xUnit async-lifetime fixture that creates and hosts a real dev tunnel in Private access mode,
 /// starts a local Kestrel server with the transport reverse WebSocket endpoint
-/// (<c>/reverse-transport/connect</c>), and exposes the API-issued connect token from
-/// <see cref="ConnectToken"/>. Requires <c>PHANTOM_INTEGRATION_GITHUB_TOKEN</c> to be set; if absent
+/// (<c>/reverse-transport/connect</c>), using broker-owned Connect leases for clients.
+/// Requires <c>PHANTOM_INTEGRATION_GITHUB_TOKEN</c> to be set; if absent
 /// the fixture initialises silently so individual tests can skip gracefully with <c>[IntegrationFact]</c>.
 /// </summary>
 public sealed class InProcessDevTunnelPrivateFixture : IAsyncLifetime
@@ -39,12 +40,11 @@ public sealed class InProcessDevTunnelPrivateFixture : IAsyncLifetime
     /// <summary>The local TCP port the Kestrel server listens on; 0 when not started.</summary>
     public int LocalPort { get; private set; }
 
-    /// <summary>
-    /// The API-issued connect-scope tunnel token for Private mode. Clients send this in
-    /// <c>X-Tunnel-Authorization: tunnel &lt;ConnectToken&gt;</c> to authenticate against the relay.
-    /// Null when the fixture was not initialised (missing PHANTOM_INTEGRATION_GITHUB_TOKEN).
-    /// </summary>
-    public string? ConnectToken { get; private set; }
+    internal DevTunnelIntegrationAccess? Access { get; private set; }
+    internal DevTunnelConnectCredentialAccessRequest? ConnectRequest { get; private set; }
+
+    public HttpClient CreateAuthenticatedClient() => new AuthenticatedHttpClientFactory()
+        .CreateClient(this.RelayBaseUri!, this.Access!.Broker, this.ConnectRequest!);
 
     /// <summary>The name label of the hosted tunnel; null when not started.</summary>
     public string? TunnelName { get; private set; }
@@ -54,8 +54,7 @@ public sealed class InProcessDevTunnelPrivateFixture : IAsyncLifetime
 
     public async ValueTask InitializeAsync()
     {
-        var token = Environment.GetEnvironmentVariable("PHANTOM_INTEGRATION_GITHUB_TOKEN");
-        if (string.IsNullOrEmpty(token))
+        if (!DevTunnelIntegrationAccess.HasConfiguredCredential)
         {
             // No credentials: initialise silently so tests can skip via [IntegrationFact].
             return;
@@ -73,11 +72,8 @@ public sealed class InProcessDevTunnelPrivateFixture : IAsyncLifetime
         app.MapTransportReverseEndpoints(new ReverseHttpServerTransportFactory(StatusRegistry), StatusRegistry);
         await app.StartAsync(appLifetime.Token).ConfigureAwait(false);
 
-        // Create and host the dev tunnel pointing at LocalPort in Private mode.
-        // ApplyAccessModeAsync will re-fetch the tunnel with TokenScopes=[Connect] so the host
-        // can expose the connect token and clients can use it without manual configuration.
-        var factory = new DevTunnelServiceFactory(new StaticTokenProvider(token));
-        hostService = factory.CreateHostService();
+        this.Access = new DevTunnelIntegrationAccess();
+        hostService = this.Access.CreateHostService();
         await hostService.StartAsync(
             LocalPort,
             protocol: "http",
@@ -89,15 +85,12 @@ public sealed class InProcessDevTunnelPrivateFixture : IAsyncLifetime
             CancellationToken.None).ConfigureAwait(false);
 
         tunnelId = hostService.Status.TunnelId;
-        ConnectToken = hostService.Status.ConnectToken;
         RelayBaseUri = new Uri(hostService.Status.AccessPointUrl
             ?? throw new InvalidOperationException("Tunnel started but AccessPointUrl was null."));
+        this.ConnectRequest = this.Access.ConnectRequest(this.TunnelName!, this.RelayBaseUri);
 
         // A separate management client for best-effort tunnel deletion on disposal.
-        managementClient = new TunnelManagementClient(
-            UserAgent,
-            async () => new AuthenticationHeaderValue(TunnelAuthenticationSchemes.GitHub, token),
-            ManagementApiVersions.Version20230927Preview);
+        managementClient = this.Access.CreateManagementClient();
     }
 
     public async ValueTask DisposeAsync()
@@ -122,6 +115,14 @@ public sealed class InProcessDevTunnelPrivateFixture : IAsyncLifetime
             }
         }
 
+        if (managementClient is not null)
+        {
+            await managementClient.DisposeAsync();
+        }
+        if (this.Access is not null)
+        {
+            await this.Access.DisposeAsync();
+        }
         await appLifetime.CancelAsync().ConfigureAwait(false);
 
         if (app is not null)
@@ -147,9 +148,4 @@ public sealed class InProcessDevTunnelPrivateFixture : IAsyncLifetime
         }
     }
 
-    private sealed class StaticTokenProvider(string token) : IDevTunnelAuthTokenProvider
-    {
-        public Task<string> GetAccessTokenAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult(token);
-    }
 }

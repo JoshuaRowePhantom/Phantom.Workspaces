@@ -32,6 +32,7 @@ public sealed class InProcessDevTunnelFixture : IAsyncLifetime
     private ITunnelManagementClient? managementClient;
     private string? tunnelId;
     private readonly CancellationTokenSource appLifetime = new();
+    private DevTunnelIntegrationAccess? access;
 
     /// <summary>The relay base URI that dev-tunnel clients connect through.</summary>
     public Uri? RelayBaseUri { get; private set; }
@@ -50,8 +51,7 @@ public sealed class InProcessDevTunnelFixture : IAsyncLifetime
 
     public async ValueTask InitializeAsync()
     {
-        var token = Environment.GetEnvironmentVariable("PHANTOM_INTEGRATION_GITHUB_TOKEN");
-        if (string.IsNullOrEmpty(token))
+        if (!DevTunnelIntegrationAccess.HasConfiguredCredential)
         {
             // No credentials: initialise silently so tests can skip via Skip.If.
             return;
@@ -70,8 +70,8 @@ public sealed class InProcessDevTunnelFixture : IAsyncLifetime
         await app.StartAsync(appLifetime.Token).ConfigureAwait(false);
 
         // Create and host the dev tunnel pointing at LocalPort (Anonymous mode: no connect token).
-        var factory = new DevTunnelServiceFactory(new StaticTokenProvider(token));
-        hostService = factory.CreateHostService();
+        this.access = new DevTunnelIntegrationAccess();
+        hostService = this.access.CreateHostService();
         await hostService.StartAsync(
             LocalPort,
             protocol: "http",
@@ -87,10 +87,7 @@ public sealed class InProcessDevTunnelFixture : IAsyncLifetime
             ?? throw new InvalidOperationException("Tunnel started but AccessPointUrl was null."));
 
         // A separate management client for best-effort tunnel deletion on disposal.
-        managementClient = new TunnelManagementClient(
-            UserAgent,
-            async () => new AuthenticationHeaderValue(TunnelAuthenticationSchemes.GitHub, token),
-            ManagementApiVersions.Version20230927Preview);
+        managementClient = this.access.CreateManagementClient();
     }
 
     public async ValueTask DisposeAsync()
@@ -115,6 +112,14 @@ public sealed class InProcessDevTunnelFixture : IAsyncLifetime
             }
         }
 
+        if (managementClient is not null)
+        {
+            await managementClient.DisposeAsync();
+        }
+        if (this.access is not null)
+        {
+            await this.access.DisposeAsync();
+        }
         await appLifetime.CancelAsync().ConfigureAwait(false);
 
         if (app is not null)
@@ -140,9 +145,4 @@ public sealed class InProcessDevTunnelFixture : IAsyncLifetime
         }
     }
 
-    private sealed class StaticTokenProvider(string token) : IDevTunnelAuthTokenProvider
-    {
-        public Task<string> GetAccessTokenAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult(token);
-    }
 }

@@ -10,14 +10,14 @@ using Phantom.Workspaces.Configuration;
 namespace Phantom.Workspaces.Services.DevTunnel;
 
 /// <summary>
-/// Concrete <see cref="IDevTunnelManagementClient"/> / <see cref="IDevTunnelLookupClient"/> that wraps
+/// Concrete <see cref="IDevTunnelManagementClient"/> that wraps
 /// the Dev Tunnels SDK <see cref="ITunnelManagementClient"/>. This is thin SDK glue — all orchestration
 /// and resolution logic (and their tests) live in <see cref="DevTunnelHostService"/> /
 /// <see cref="DevTunnelEndpointResolver"/> behind the seams; this type just maps the seam calls onto the
 /// SDK. The current SDK <see cref="Tunnel"/> object is cached so port/access/url operations reuse the
 /// rich SDK state keyed by the domain-level tunnel id.
 /// </summary>
-internal sealed class DevTunnelManagementClientWrapper : IDevTunnelManagementClient, IDevTunnelLookupClient
+internal sealed class DevTunnelManagementClientWrapper : IDevTunnelManagementClient
 {
     private readonly ITunnelManagementClient managementClient;
     private Tunnel? currentTunnel;
@@ -144,7 +144,7 @@ internal sealed class DevTunnelManagementClientWrapper : IDevTunnelManagementCli
             .ConfigureAwait(false);
     }
 
-    public async Task<string?> ApplyAccessModeAsync(
+    public async Task ApplyAccessModeAsync(
         string tunnelId,
         DevTunnelAccessMode accessMode,
         CancellationToken cancellationToken = default)
@@ -175,21 +175,6 @@ internal sealed class DevTunnelManagementClientWrapper : IDevTunnelManagementCli
             .UpdateTunnelAsync(tunnel, CreateHostRequestOptions(), cancellationToken)
             .ConfigureAwait(false);
 
-        if (accessMode == DevTunnelAccessMode.Anonymous)
-        {
-            return null;
-        }
-
-        // Re-fetch the tunnel with a connect-scope token so the host can expose it to operators
-        // for cross-account distribution. Connect tokens are short-lived — re-fetched on each start.
-        // Reuses the same helper as the client-side lookup path so there is a single implementation
-        // of "fetch a tunnel with a Connect-scope token" (see #1297).
-        var withConnectToken = await this
-            .RetrieveTunnelWithConnectScopeAsync(this.currentTunnel, tunnelId, cancellationToken)
-            .ConfigureAwait(false);
-
-        withConnectToken.AccessTokens!.TryGetValue(TunnelAccessScopes.Connect, out var connectToken);
-        return connectToken;
     }
 
     public async Task<string> GetAccessPointUrlAsync(
@@ -225,44 +210,6 @@ internal sealed class DevTunnelManagementClientWrapper : IDevTunnelManagementCli
         throw new InvalidOperationException($"Dev tunnel '{tunnelId}' did not expose a public access point for port {localPort}.");
     }
 
-    public async Task<DevTunnelLookupResult> LookupByNameAsync(string tunnelName, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(tunnelName);
-
-        var markerTunnels = await this.ListWorkspacesTunnelsAsync(CreateConnectRequestOptions(tunnelName), cancellationToken)
-            .ConfigureAwait(false);
-        var tunnel = markerTunnels.FirstOrDefault(candidate => HasLabel(candidate, tunnelName))
-            ?? throw new InvalidOperationException($"Dev tunnel '{tunnelName}' was not found.");
-
-        // The Microsoft.DevTunnels.Management SDK's ListTunnelsAsync never populates
-        // Tunnel.AccessTokens even when TokenScopes is set; only GetTunnelAsync honors it. Re-fetch
-        // the matched tunnel so AccessTokens[Connect] is populated (see #1297).
-        var withConnect = await this
-            .RetrieveTunnelWithConnectScopeAsync(tunnel, tunnelName, cancellationToken)
-            .ConfigureAwait(false);
-        return ToLookupResult(withConnect);
-    }
-
-    public async Task<DevTunnelLookupResult> DiscoverSingleAsync(CancellationToken cancellationToken = default)
-    {
-        var markerTunnels = await this.ListWorkspacesTunnelsAsync(CreateConnectRequestOptions(), cancellationToken)
-            .ConfigureAwait(false);
-        Tunnel matched = markerTunnels.Count switch
-        {
-            0 => throw new InvalidOperationException(
-                "No Workspaces dev tunnel was found to connect to automatically; host one, or set a specific dev tunnel name."),
-            1 => markerTunnels[0],
-            _ => throw new InvalidOperationException(
-                "Multiple Workspaces dev tunnels were found; set a specific dev tunnel name instead of \"auto\"."),
-        };
-
-        // Re-fetch to obtain AccessTokens[Connect] — the list call cannot mint tokens (see #1297).
-        var withConnect = await this
-            .RetrieveTunnelWithConnectScopeAsync(matched, matched.TunnelId ?? "auto", cancellationToken)
-            .ConfigureAwait(false);
-        return ToLookupResult(withConnect);
-    }
-
     /// <summary>
     /// Lists the caller's tunnels and keeps only Workspaces-owned ones (carrying the marker label),
     /// filtering client-side so the result is correct regardless of server-side label-filter support.
@@ -277,64 +224,6 @@ internal sealed class DevTunnelManagementClientWrapper : IDevTunnelManagementCli
         return (ownedTunnels ?? [])
             .Where(candidate => HasLabel(candidate, DevTunnelNaming.WorkspacesMarkerLabel))
             .ToList();
-    }
-
-    /// <summary>
-    /// Re-fetches <paramref name="matched"/> via <see cref="ITunnelManagementClient.GetTunnelAsync"/>
-    /// with <c>TokenScopes=[Connect]</c> so <see cref="Tunnel.AccessTokens"/> is populated with a
-    /// Connect-scope tunnel access token. <see cref="ITunnelManagementClient.ListTunnelsAsync"/> does
-    /// not honor <see cref="TunnelRequestOptions.TokenScopes"/>, so listing alone never yields a
-    /// Connect token; both the client lookup path and the host access-mode path funnel through this
-    /// helper (see #1297). Throws an ownership-specific exception if the fetched tunnel carries no
-    /// Connect token (typically because the caller's GitHub identity lacks <c>connect</c> permission
-    /// on the tunnel), worded distinctly from the generic relay-side #1293 fail-fast so operators can
-    /// tell the two symptoms apart.
-    /// </summary>
-    private async Task<Tunnel> RetrieveTunnelWithConnectScopeAsync(
-        Tunnel matched,
-        string tunnelDisplay,
-        CancellationToken cancellationToken)
-    {
-        var fetched = await this.managementClient
-            .GetTunnelAsync(
-                matched,
-                new TunnelRequestOptions
-                {
-                    IncludePorts = true,
-                    TokenScopes = [TunnelAccessScopes.Connect],
-                },
-                cancellationToken)
-            .ConfigureAwait(false)
-            ?? throw new InvalidOperationException(
-                $"Dev tunnel '{tunnelDisplay}' could not be fetched from the Management API.");
-
-        if (fetched.AccessTokens is null
-            || !fetched.AccessTokens.TryGetValue(TunnelAccessScopes.Connect, out var connectToken)
-            || string.IsNullOrEmpty(connectToken))
-        {
-            throw new InvalidOperationException(
-                $"Dev tunnel '{tunnelDisplay}' was found, but the Management API did not mint a " +
-                "Connect-scope tunnel access token for the current GitHub identity. This typically " +
-                "means the caller's identity does not own the tunnel or lacks 'connect' permission " +
-                "on it. Sign in as the tunnel owner (GITHUB_TOKEN / `gh auth token`), or have the " +
-                "owner grant this identity access.");
-        }
-
-        return fetched;
-    }
-
-    private static DevTunnelLookupResult ToLookupResult(Tunnel tunnel)
-    {
-        var forwardedPorts = (tunnel.Ports ?? [])
-            .Select(port => (int)port.PortNumber)
-            .ToArray();
-        string? connectToken = null;
-        tunnel.AccessTokens?.TryGetValue(TunnelAccessScopes.Connect, out connectToken);
-        return new DevTunnelLookupResult(
-            tunnel.TunnelId ?? string.Empty,
-            tunnel.ClusterId ?? string.Empty,
-            forwardedPorts,
-            connectToken);
     }
 
     private static string[] BuildLabels(string? nameLabel)
@@ -364,15 +253,6 @@ internal sealed class DevTunnelManagementClientWrapper : IDevTunnelManagementCli
             IncludePorts = true,
             IncludeAccessControl = true,
             TokenScopes = [TunnelAccessScopes.Manage, TunnelAccessScopes.Host],
-            Labels = BuildLabels(nameLabel),
-            RequireAllLabels = true,
-        };
-
-    private static TunnelRequestOptions CreateConnectRequestOptions(string? nameLabel = null)
-        => new()
-        {
-            IncludePorts = true,
-            TokenScopes = [TunnelAccessScopes.Connect],
             Labels = BuildLabels(nameLabel),
             RequireAllLabels = true,
         };

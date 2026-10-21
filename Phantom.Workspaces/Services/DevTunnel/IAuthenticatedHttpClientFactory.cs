@@ -1,5 +1,6 @@
 using System;
 using System.Net.Http;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 
 namespace Phantom.Workspaces.Services.DevTunnel;
 
@@ -14,7 +15,8 @@ public interface IAuthenticatedHttpClientFactory
 {
     /// <summary>
     /// Creates an authenticated <see cref="HttpClient"/> bound to <paramref name="baseAddress"/> that
-    /// attaches and refreshes the Connect token from <paramref name="tokenProvider"/>.
+    /// exercises only a broker-owned Connect lease for <paramref name="request"/>.
     /// </summary>
-    HttpClient CreateClient(Uri baseAddress, IDevTunnelConnectTokenProvider tokenProvider);
+    HttpClient CreateClient(Uri baseAddress, IAccessBroker broker, DevTunnelConnectCredentialAccessRequest request,
+        Func<AccessPresentationScope>? presentationScope = null);
 }

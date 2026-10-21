@@ -1,11 +1,13 @@
 using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Llm.Interfaces.Access.Execution;
+using Phantom.Workspaces.Services.Access;
 
 namespace Phantom.Workspaces.Services.DevTunnel;
 
 internal sealed class DevTunnelIdentityCredentialAccessExecutor(
     ICredentialAccessExecutor<GitHubCredentialAccessRequest, GitHubCredentialAccessResult> gitHub,
-    ICredentialAccessExecutor<EntraCredentialAccessRequest, EntraCredentialAccessResult> entra) :
+    ICredentialAccessExecutor<EntraCredentialAccessRequest, EntraCredentialAccessResult> entra,
+    ICredentialAccessExecutor<OAuthCredentialAccessRequest, OAuthCredentialAccessResult> oauth) :
     ICredentialAccessExecutor<DevTunnelIdentityCredentialAccessRequest, DevTunnelIdentityCredentialAccessResult>
 {
     public CredentialExecutorKind Kind => CredentialExecutorKind.DevTunnelIdentity;
@@ -30,6 +32,8 @@ internal sealed class DevTunnelIdentityCredentialAccessExecutor(
             GitHubDevTunnelIdentityRoute route => await gitHub.InspectAsync(
                 route.Credential, cancellationToken).ConfigureAwait(false),
             EntraDevTunnelIdentityRoute route => await entra.InspectAsync(
+                route.Credential, cancellationToken).ConfigureAwait(false),
+            OAuthDevTunnelIdentityRoute route => await oauth.InspectAsync(
                 route.Credential, cancellationToken).ConfigureAwait(false),
             AnonymousDevTunnelIdentityRoute => null,
             _ => throw new InvalidOperationException("Unsupported Dev Tunnel identity route."),
@@ -87,6 +91,8 @@ internal sealed class DevTunnelIdentityCredentialAccessExecutor(
                 request, route.Credential, result => result.Lease, authorization, context, cancellationToken).ConfigureAwait(false),
             EntraDevTunnelIdentityRoute route => await AcquireDependencyAsync(
                 request, route.Credential, result => result.AccessToken, authorization, context, cancellationToken).ConfigureAwait(false),
+            OAuthDevTunnelIdentityRoute route => await AcquireDependencyAsync(
+                request, route.Credential, result => result.AccessToken, authorization, context, cancellationToken).ConfigureAwait(false),
             AnonymousDevTunnelIdentityRoute => new CredentialExecutionReady<DevTunnelIdentityCredentialAccessResult>
             {
                 Materializer = new AnonymousMaterializer(),
@@ -102,7 +108,7 @@ internal sealed class DevTunnelIdentityCredentialAccessExecutor(
         request.Credential.LogicalIdentifier == DevTunnelIdentityCredentialAccessRequest.CreateLogicalIdentifier(request.Route) &&
         (request.Route is not AnonymousDevTunnelIdentityRoute || request.Credential.AccountIdentifier is null);
 
-    private static async ValueTask<CredentialExecutionOutcome<DevTunnelIdentityCredentialAccessResult>> AcquireDependencyAsync<TResult>(
+    private async ValueTask<CredentialExecutionOutcome<DevTunnelIdentityCredentialAccessResult>> AcquireDependencyAsync<TResult>(
         DevTunnelIdentityCredentialAccessRequest request,
         CredentialAccessRequest<TResult> dependency,
         Func<TResult, SensitiveValueLease> selectLease,
@@ -171,7 +177,10 @@ internal sealed class DevTunnelIdentityCredentialAccessExecutor(
                     RequestIdentifier = policyRequest.RequestIdentifier,
                     RequestGeneration = policyRequest.RequestGeneration,
                 },
-                Materializer = new Materializer(lease, success.Result, request.Route.Scheme, authorization, context),
+                Materializer = new Materializer(lease, success.Result, request.Route.Scheme, authorization, context,
+                    token => success.Result is EntraCredentialAccessResult microsoft
+                        ? microsoft.RejectGenerationAsync(token)
+                        : this.InvalidateAsync(request.Route, source.Identifier, lease.MaterialGeneration, token)),
             };
             ownsResult = false;
             return ready;
@@ -184,6 +193,19 @@ internal sealed class DevTunnelIdentityCredentialAccessExecutor(
             }
         }
     }
+
+    private ValueTask<CredentialGenerationInvalidationOutcome> InvalidateAsync(
+        DevTunnelIdentityRoute route,
+        CredentialSourceIdentifier source,
+        CredentialMaterialGenerationIdentifier generation,
+        CancellationToken cancellationToken) => route switch
+        {
+            GitHubDevTunnelIdentityRoute when gitHub is GitHubCredentialAccessExecutor executor =>
+                executor.GetGenerationCache(source).InvalidateGenerationAsync(generation, cancellationToken),
+            OAuthDevTunnelIdentityRoute configured when oauth is IOAuthPrivateCredentialProvider provider =>
+                provider.InvalidateGenerationAsync(configured.Credential, generation, cancellationToken),
+            _ => ValueTask.FromResult(CredentialGenerationInvalidationOutcome.Missing),
+        };
 
     private sealed class AnonymousMaterializer : IAccessResultMaterializer<DevTunnelIdentityCredentialAccessResult>
     {
@@ -201,7 +223,9 @@ internal sealed class DevTunnelIdentityCredentialAccessExecutor(
         IAsyncDisposable owner,
         DevTunnelIdentityScheme scheme,
         ReleaseAuthorization authorization,
-        ICredentialExecutionContext context) : IAccessResultMaterializer<DevTunnelIdentityCredentialAccessResult>
+        ICredentialExecutionContext context,
+        Func<CancellationToken, ValueTask<CredentialGenerationInvalidationOutcome>> invalidate) :
+        IAccessResultMaterializer<DevTunnelIdentityCredentialAccessResult>
     {
         private readonly object gate = new();
         private IAsyncDisposable? owner = owner;
@@ -213,7 +237,7 @@ internal sealed class DevTunnelIdentityCredentialAccessExecutor(
             {
                 ObjectDisposedException.ThrowIf(this.owner is null, this);
                 var view = SensitiveValueLease.CreateAuthorizedView(lease, this.owner, authorization.Identifier, context);
-                var result = new DevTunnelIdentityCredentialAccessResult(view, scheme);
+                var result = new DevTunnelIdentityCredentialAccessResult(view, scheme, invalidate);
                 this.owner = null;
                 return ValueTask.FromResult(result);
             }

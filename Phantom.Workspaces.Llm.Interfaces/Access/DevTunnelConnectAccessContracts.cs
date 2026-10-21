@@ -94,6 +94,16 @@ public sealed class DevTunnelConnectCredentialAccessResult : ICredentialAccessRe
     public SensitiveValueLease? ConnectToken { get; }
     public Uri Endpoint { get; }
 
+    internal Func<CancellationToken, ValueTask>? CreateGenerationInvalidation()
+    {
+        var cache = this.cache;
+        var generation = this.generation;
+        return cache is null || generation is null ? null : async cancellationToken =>
+        {
+            await cache.InvalidateGenerationAsync(generation, cancellationToken).ConfigureAwait(false);
+        };
+    }
+
     internal ValueTask<CredentialGenerationInvalidationOutcome> InvalidateRejectedGenerationAsync(
         CancellationToken cancellationToken) => this.cache is not null && this.generation is not null
         ? this.cache.InvalidateGenerationAsync(this.generation, cancellationToken)

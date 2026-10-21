@@ -13,7 +13,7 @@ namespace Phantom.Workspaces.Services.DevTunnel;
 /// workspace. Reconnection is driven by the deterministic <see cref="DevTunnelConnectionMonitor"/>; all
 /// data operations are retried against the freshly reconnected inner layer.
 /// </summary>
-public sealed class ReconnectingWebDataAccessLayer : IDataAccessLayer, IDisposable
+public sealed class ReconnectingWebDataAccessLayer : IDataAccessLayer, IDisposable, IAsyncDisposable
 {
     private readonly DevTunnelConnectionMonitor monitor;
     private readonly Func<Exception, bool> isConnectionFailure;
@@ -21,6 +21,11 @@ public sealed class ReconnectingWebDataAccessLayer : IDataAccessLayer, IDisposab
     private readonly object reconnectGate = new();
     private IDataAccessLayer? current;
     private Task? reconnectTask;
+    private Task? startTask;
+    private Task? disposeTask;
+    private readonly CancellationTokenSource lifetime = new();
+    private readonly TaskCompletionSource synchronousDisposal = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private int disposed;
 
     public ReconnectingWebDataAccessLayer(
         Func<CancellationToken, Task<DevTunnelEndpointResolution>> resolveEndpointAsync,
@@ -40,17 +45,19 @@ public sealed class ReconnectingWebDataAccessLayer : IDataAccessLayer, IDisposab
             async (resolution, cancellationToken) =>
             {
                 var layer = buildDataAccessLayer(resolution);
+                IDataAccessLayer? previous;
                 try
                 {
                     await validate(layer, cancellationToken).ConfigureAwait(false);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    previous = this.SwapCurrent(layer, cancellationToken);
                 }
                 catch
                 {
                     (layer as IDisposable)?.Dispose();
                     throw;
                 }
-
-                this.SwapCurrent(layer);
+                (previous as IDisposable)?.Dispose();
             },
             delayScheduler,
             reconnectOptions,
@@ -68,7 +75,20 @@ public sealed class ReconnectingWebDataAccessLayer : IDataAccessLayer, IDisposab
     }
 
     /// <summary>Resolves the tunnel and establishes the initial connection. Throws if it cannot connect.</summary>
-    public Task StartAsync(CancellationToken cancellationToken = default) => this.monitor.StartAsync(cancellationToken);
+    public Task StartAsync(CancellationToken cancellationToken = default)
+    {
+        lock (this.reconnectGate)
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref this.disposed) != 0, this);
+            return this.startTask ??= this.StartCoreAsync(cancellationToken);
+        }
+    }
+
+    private async Task StartCoreAsync(CancellationToken cancellationToken)
+    {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, this.lifetime.Token);
+        await this.monitor.StartAsync(linked.Token).ConfigureAwait(false);
+    }
 
     public Task<UpdateResult> UpdateAsync(UpdateRequest request, CancellationToken cancellationToken = default)
         => this.ExecuteAsync(layer => layer.UpdateAsync(request, cancellationToken), cancellationToken);
@@ -92,10 +112,75 @@ public sealed class ReconnectingWebDataAccessLayer : IDataAccessLayer, IDisposab
 
     public void Dispose()
     {
-        lock (this.swapGate)
+        if (Interlocked.Exchange(ref this.disposed, 1) != 0)
         {
-            (this.current as IDisposable)?.Dispose();
-            this.current = null;
+            return;
+        }
+        try
+        {
+            try
+            {
+                this.lifetime.Cancel();
+            }
+            finally
+            {
+                IDataAccessLayer? previous;
+                lock (this.swapGate)
+                {
+                    previous = this.current;
+                    this.current = null;
+                }
+                (previous as IDisposable)?.Dispose();
+            }
+            this.synchronousDisposal.TrySetResult();
+        }
+        catch (Exception exception)
+        {
+            this.synchronousDisposal.TrySetException(exception);
+            _ = this.synchronousDisposal.Task.Exception;
+            throw;
+        }
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        lock (this.reconnectGate)
+        {
+            return new ValueTask(this.disposeTask ??= this.DisposeCoreAsync());
+        }
+    }
+
+    private async Task DisposeCoreAsync()
+    {
+        Exception? cancellationFailure = null;
+        try
+        {
+            this.Dispose();
+            await this.synchronousDisposal.Task.ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            cancellationFailure = exception;
+        }
+        Task[] pending;
+        lock (this.reconnectGate)
+        {
+            pending = new[] { this.startTask, this.reconnectTask }.OfType<Task>().ToArray();
+        }
+        try
+        {
+            await Task.WhenAll(pending).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        finally
+        {
+            this.lifetime.Dispose();
+        }
+        if (cancellationFailure is not null)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(cancellationFailure).Throw();
         }
     }
 
@@ -103,6 +188,7 @@ public sealed class ReconnectingWebDataAccessLayer : IDataAccessLayer, IDisposab
     {
         while (true)
         {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref this.disposed) != 0, this);
             var layer = this.current
                 ?? throw new InvalidOperationException($"{nameof(ReconnectingWebDataAccessLayer)} must be started before use.");
             try
@@ -128,23 +214,31 @@ public sealed class ReconnectingWebDataAccessLayer : IDataAccessLayer, IDisposab
         {
             if (this.reconnectTask is null || this.reconnectTask.IsCompleted)
             {
-                this.reconnectTask = this.monitor.HandleConnectionFailedAsync(failure, cancellationToken);
+                ObjectDisposedException.ThrowIf(Volatile.Read(ref this.disposed) != 0, this);
+                this.reconnectTask = this.ReconnectCoreAsync(failure, cancellationToken);
             }
 
             return this.reconnectTask;
         }
     }
 
-    private void SwapCurrent(IDataAccessLayer layer)
+    private async Task ReconnectCoreAsync(Exception failure, CancellationToken cancellationToken)
+    {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, this.lifetime.Token);
+        await this.monitor.HandleConnectionFailedAsync(failure, linked.Token).ConfigureAwait(false);
+    }
+
+    private IDataAccessLayer? SwapCurrent(IDataAccessLayer layer, CancellationToken cancellationToken)
     {
         lock (this.swapGate)
         {
+            if (Volatile.Read(ref this.disposed) != 0)
+            {
+                throw new OperationCanceledException(cancellationToken);
+            }
             var previous = this.current;
             this.current = layer;
-            if (!ReferenceEquals(previous, layer))
-            {
-                (previous as IDisposable)?.Dispose();
-            }
+            return ReferenceEquals(previous, layer) ? null : previous;
         }
     }
 

@@ -8,6 +8,7 @@ namespace Phantom.Workspaces.Services.DevTunnel;
 internal sealed class DevTunnelConnectMintSession(
     GitHubCredentialAccessExecutor gitHub,
     EntraCredentialAccessExecutor entra,
+    OAuthCredentialAccessExecutor oauth,
     DevTunnelConnectManagementApi management) : IDevTunnelConnectMintSession
 {
     public ValueTask<CredentialInspection> InspectIdentityAsync(
@@ -16,6 +17,7 @@ internal sealed class DevTunnelConnectMintSession(
         {
             GitHubDevTunnelIdentityRoute github => gitHub.InspectAsync(github.Credential, cancellationToken),
             EntraDevTunnelIdentityRoute microsoft => entra.InspectAsync(microsoft.Credential, cancellationToken),
+            OAuthDevTunnelIdentityRoute configured => oauth.InspectAsync(configured.Credential, cancellationToken),
             _ => throw new InvalidOperationException("A private Dev Tunnel requires a supported identity route."),
         };
 
@@ -38,6 +40,8 @@ internal sealed class DevTunnelConnectMintSession(
                 request, identitySource, context, parentGenerationPermit, cancellationToken).ConfigureAwait(false),
             EntraDevTunnelIdentityRoute microsoft => await this.MintEntraAsync(
                 request, microsoft.Credential, identitySource, context, parentGenerationPermit, cancellationToken).ConfigureAwait(false),
+            OAuthDevTunnelIdentityRoute configured => await this.MintOAuthAsync(
+                request, configured.Credential, context, parentGenerationPermit, cancellationToken).ConfigureAwait(false),
             _ => new DevTunnelConnectMintFailed { ErrorCode = AccessErrorCode.ProviderFailure },
         };
     }
@@ -49,12 +53,20 @@ internal sealed class DevTunnelConnectMintSession(
         ProviderInteractionPermit permit,
         CancellationToken cancellationToken)
     {
+        if (source.Provider != CredentialProviderKind.GitHub ||
+            source.Kind is not (CredentialSourceKind.Environment or CredentialSourceKind.GitHubCli) ||
+            source.Identifier != GitHubCredentialAccessRequest.CreateSource(source.Kind).Identifier)
+        {
+            return new DevTunnelConnectMintFailed { ErrorCode = AccessErrorCode.IdentityMismatch };
+        }
+        using var mintedMaterial = new MintedMaterialOwner();
         var used = await gitHub.UsePrivateAsync(new GitHubPrivateCredentialRequest
         {
             Source = source.Kind,
             AccountIdentifier = request.Credential.AccountIdentifier,
         }, context, permit,
-            (identity, token) => management.MintAsync(request.Tunnel, DevTunnelIdentityScheme.GitHub, identity, token),
+            (identity, token) => mintedMaterial.CaptureAsync(
+                management.MintAsync(request.Tunnel, DevTunnelIdentityScheme.GitHub, identity, token)),
             cancellationToken).ConfigureAwait(false);
         if (used is not GitHubPrivateCredentialUseSucceeded<DevTunnelConnectManagementOutcome> success)
         {
@@ -89,16 +101,28 @@ internal sealed class DevTunnelConnectMintSession(
             },
             Sources = [source],
         };
-        var inspection = await entra.InspectAsync(identityRequest, cancellationToken).ConfigureAwait(false);
-        if (entra.FindCache(identityRequest.CreateLogicalIdentifier(), source.Identifier) is not IEntraCredentialSession session)
+        if (source.Provider != CredentialProviderKind.Entra ||
+            source.Identifier != identityRequest.CreateSourceIdentifier())
         {
-            return new DevTunnelConnectMintFailed { ErrorCode = AccessErrorCode.InvalidGeneration };
+            return new DevTunnelConnectMintFailed { ErrorCode = AccessErrorCode.IdentityMismatch };
         }
-        var metadata = await session.InspectGenerationAsync(cancellationToken).ConfigureAwait(false);
-        if (metadata?.ExpiresOn is not { } expiry || expiry <= DateTimeOffset.UtcNow)
+        var session = entra.GetSession(identityRequest);
+        var inspection = await session.InspectCacheAsync(identityRequest, cancellationToken).ConfigureAwait(false);
+        identityRequest = identityRequest with
+        {
+            Credential = identityRequest.Credential with
+            {
+                AccountIdentifier = identityRequest.Credential.AccountIdentifier ?? inspection.AccountIdentifier,
+            },
+        };
+        var metadata = inspection.Generation;
+        if (metadata?.AccountIdentifier is null || metadata.ExpiresOn <= DateTimeOffset.UtcNow)
         {
             var acquired = await context.ExecutePrivateProviderDependencyAsync(new EntraAcquisition(
-                identityRequest, session, inspection.AcquisitionKeys[source.Identifier], context),
+                identityRequest, session, inspection.AcquisitionKey with
+                {
+                    Account = identityRequest.Credential.AccountIdentifier,
+                }, context),
                 permit, cancellationToken).ConfigureAwait(false);
             if (acquired is not ProviderAcquisitionSucceeded receipt)
             {
@@ -120,9 +144,15 @@ internal sealed class DevTunnelConnectMintSession(
         {
             return new DevTunnelConnectMintFailed { ErrorCode = AccessErrorCode.IdentityMismatch };
         }
+        using var mintedMaterial = new MintedMaterialOwner();
         var used = await session.UseGenerationAsync(metadata.Generation, context, permit,
-            (identity, token) => management.MintAsync(request.Tunnel, DevTunnelIdentityScheme.Entra, new string(identity.Span), token),
+            (identity, token) => mintedMaterial.CaptureAsync(
+                management.MintAsync(request.Tunnel, DevTunnelIdentityScheme.Entra, new string(identity.Span), token)),
             cancellationToken).ConfigureAwait(false);
+        if (used is EntraGenerationUseDenied<DevTunnelConnectManagementOutcome>)
+        {
+            return new DevTunnelConnectMintDenied();
+        }
         if (used is not EntraGenerationUseSucceeded<DevTunnelConnectManagementOutcome> success)
         {
             return new DevTunnelConnectMintFailed { ErrorCode = AccessErrorCode.InvalidGeneration };
@@ -130,6 +160,60 @@ internal sealed class DevTunnelConnectMintSession(
         if (success.Result is DevTunnelConnectManagementUnauthorized)
         {
             await session.InvalidateGenerationAsync(metadata.Generation, cancellationToken).ConfigureAwait(false);
+        }
+        return Complete(success.Result, account);
+    }
+
+    private async ValueTask<DevTunnelConnectMintOutcome> MintOAuthAsync(
+        DevTunnelConnectCredentialAccessRequest request,
+        OAuthCredentialAccessRequest identityRequest,
+        ICredentialExecutionContext context,
+        ProviderInteractionPermit permit,
+        CancellationToken cancellationToken)
+    {
+        identityRequest = identityRequest with
+        {
+            Credential = identityRequest.Credential with
+            {
+                AccountIdentifier = request.Credential.AccountIdentifier ?? identityRequest.Credential.AccountIdentifier,
+            },
+        };
+        IOAuthPrivateCredentialProvider provider = oauth;
+        var metadata = await provider.InspectGenerationAsync(identityRequest, cancellationToken).ConfigureAwait(false);
+        if (metadata?.AccountIdentifier is null || metadata.ExpiresOn <= DateTimeOffset.UtcNow)
+        {
+            var acquired = await provider.AcquirePrivateAsync(identityRequest, context, permit, cancellationToken).ConfigureAwait(false);
+            if (acquired is not ProviderAcquisitionSucceeded receipt)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return new DevTunnelConnectMintFailed
+                {
+                    ErrorCode = acquired is ProviderAcquisitionFailed failed ? failed.ErrorCode : AccessErrorCode.ProviderFailure,
+                };
+            }
+            metadata = await provider.InspectGenerationAsync(identityRequest, cancellationToken).ConfigureAwait(false);
+            if (metadata?.Generation != receipt.CommittedGeneration)
+            {
+                return new DevTunnelConnectMintFailed { ErrorCode = AccessErrorCode.InvalidGeneration };
+            }
+        }
+        if (metadata.AccountIdentifier is not { } account ||
+            (identityRequest.Credential.AccountIdentifier is { } expected && expected != account))
+        {
+            return new DevTunnelConnectMintFailed { ErrorCode = AccessErrorCode.IdentityMismatch };
+        }
+        using var mintedMaterial = new MintedMaterialOwner();
+        var used = await provider.UseGenerationAsync(identityRequest, metadata.Generation, account, context, permit,
+            (identity, token) => mintedMaterial.CaptureAsync(
+                management.MintAsync(request.Tunnel, DevTunnelIdentityScheme.OAuth, identity, token)),
+            cancellationToken).ConfigureAwait(false);
+        if (used is not OAuthGenerationUseSucceeded<DevTunnelConnectManagementOutcome> success)
+        {
+            return new DevTunnelConnectMintFailed { ErrorCode = AccessErrorCode.InvalidGeneration };
+        }
+        if (success.Result is DevTunnelConnectManagementUnauthorized)
+        {
+            await provider.InvalidateGenerationAsync(identityRequest, metadata.Generation, cancellationToken).ConfigureAwait(false);
         }
         return Complete(success.Result, account);
     }
@@ -161,6 +245,20 @@ internal sealed class DevTunnelConnectMintSession(
 
     // Provider executors are borrowed from the broker registry, which owns their lifetimes.
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+    private sealed class MintedMaterialOwner : IDisposable
+    {
+        private DevTunnelConnectManagementOutcome? outcome;
+
+        public async ValueTask<DevTunnelConnectManagementOutcome> CaptureAsync(
+            ValueTask<DevTunnelConnectManagementOutcome> pending)
+        {
+            this.outcome = await pending.ConfigureAwait(false);
+            return this.outcome;
+        }
+
+        public void Dispose() => (this.outcome as IDisposable)?.Dispose();
+    }
 
     private sealed class EntraAcquisition(
         EntraCredentialAccessRequest request,

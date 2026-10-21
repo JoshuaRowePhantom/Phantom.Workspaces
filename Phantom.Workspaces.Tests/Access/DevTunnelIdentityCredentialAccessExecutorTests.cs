@@ -12,8 +12,85 @@ namespace Phantom.Workspaces.Tests.Access;
 public sealed class DevTunnelIdentityCredentialAccessExecutorTests
 {
     [Theory]
+    [InlineData(AccessPresentationScope.Bootstrap, true)]
+    [InlineData(AccessPresentationScope.Runtime, false)]
+    public async Task DevTunnelIdentityExecutor_ManagementHandlerUsesCurrentPresentationScope(
+        AccessPresentationScope scope, bool bootstrap)
+    {
+        await using var fixture = new Fixture(DevTunnelIdentityScheme.GitHub);
+        using var client = new System.Net.Http.HttpClient(new DevTunnelManagementAuthenticationHandler(
+            fixture.Broker, fixture.Request, new RecordingHandler(_ =>
+                throw new InvalidOperationException("Unapproved identity reached transport.")), () => scope));
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var pending = client.GetAsync("https://global.rel.tunnels.api.visualstudio.com/tunnels", cancellation.Token);
+        Assert.Equal(bootstrap, Assert.Single(fixture.Registry.GetSnapshot()).IsBootstrapBlocking);
+        await cancellation.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        Assert.Equal(0, fixture.Executions);
+    }
+
+    [Theory]
+    [InlineData(DevTunnelIdentityScheme.GitHub, "github")]
+    [InlineData(DevTunnelIdentityScheme.Entra, "aad")]
+    [InlineData(DevTunnelIdentityScheme.OAuth, "Bearer")]
+    public async Task DevTunnelIdentityExecutor_ManagementSendIsInsideLease_AndClearsHeaderAfterUse(
+        DevTunnelIdentityScheme scheme,
+        string expectedScheme)
+    {
+        await using var fixture = new Fixture(scheme);
+        await using var initial = await fixture.AcquireAsync();
+        using var client = new System.Net.Http.HttpClient(new DevTunnelManagementAuthenticationHandler(
+            fixture.Broker, fixture.Request, new RecordingHandler(message =>
+            {
+                Assert.Equal(expectedScheme, message.Headers.Authorization!.Scheme);
+                Assert.Equal("private material", message.Headers.Authorization.Parameter);
+                Assert.False(message.Headers.Contains("X-Tunnel-Authorization"));
+                return new(System.Net.HttpStatusCode.OK)
+                {
+                    RequestMessage = new System.Net.Http.HttpRequestMessage(message.Method, message.RequestUri)
+                    {
+                        Headers = { Authorization = message.Headers.Authorization },
+                    },
+                };
+            })));
+        using var message = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get,
+            "https://global.rel.tunnels.api.visualstudio.com/tunnels");
+        message.Headers.TryAddWithoutValidation("X-Tunnel-Authorization", "tunnel must not reach management");
+        using var response = await client.SendAsync(message, TestContext.Current.CancellationToken);
+        using var sent = response.RequestMessage;
+        Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
+        Assert.Null(message.Headers.Authorization);
+        Assert.False(message.Headers.Contains("X-Tunnel-Authorization"));
+        Assert.NotNull(sent);
+        Assert.Null(sent.Headers.Authorization);
+    }
+
+    [Fact]
+    public async Task DevTunnelIdentityExecutor_ManagementIdentityCannotBeSentToRelayOrOtherAuthority()
+    {
+        await using var fixture = new Fixture(DevTunnelIdentityScheme.GitHub);
+        using var client = new System.Net.Http.HttpClient(new DevTunnelManagementAuthenticationHandler(
+            fixture.Broker, fixture.Request, new RecordingHandler(_ =>
+                throw new InvalidOperationException("Identity must never reach this transport."))));
+        await Assert.ThrowsAsync<DevTunnelCredentialAccessException>(() =>
+            client.GetAsync("https://tunnel.euw.devtunnels.ms/", TestContext.Current.CancellationToken));
+        Assert.Equal(0, fixture.Executions);
+        Assert.Empty(fixture.Registry.GetSnapshot());
+    }
+
+    private sealed class RecordingHandler(
+        Func<System.Net.Http.HttpRequestMessage, System.Net.Http.HttpResponseMessage> callback) :
+        System.Net.Http.HttpMessageHandler
+    {
+        protected override Task<System.Net.Http.HttpResponseMessage> SendAsync(
+            System.Net.Http.HttpRequestMessage request,
+            CancellationToken cancellationToken) => Task.FromResult(callback(request));
+    }
+
+    [Theory]
     [InlineData(DevTunnelIdentityScheme.GitHub)]
     [InlineData(DevTunnelIdentityScheme.Entra)]
+    [InlineData(DevTunnelIdentityScheme.OAuth)]
     public async Task DevTunnelIdentityExecutor_TypedRoute_PreservesIndependentReleaseAndLineage(
         DevTunnelIdentityScheme scheme)
     {
@@ -201,10 +278,31 @@ public sealed class DevTunnelIdentityCredentialAccessExecutorTests
                 AccessToken = lease,
                 ExpiresOn = DateTimeOffset.MaxValue,
             });
+            this.OAuth = new(CredentialExecutorKind.OAuth, lease => new OAuthCredentialAccessResult { AccessToken = lease });
+            var oauthRequest = new OAuthCredentialAccessRequest
+            {
+                Provider = new OAuthProviderDescriptor
+                {
+                    Authority = new Uri("https://provider.example/"),
+                    AuthorizationEndpoint = new Uri("https://provider.example/authorize"),
+                    TokenEndpoint = new Uri("https://provider.example/token"),
+                    AccountEndpoint = new Uri("https://provider.example/account"),
+                    Audience = "management",
+                    AccountIdentifierClaim = OAuthAccountIdentifierClaim.Subject,
+                },
+                ClientAuthentication = new PublicOAuthClient { Client = new() { Value = "test-client" } },
+                Scopes = [new() { Value = "management" }],
+                Credential = entraRequest.Credential with { Provider = CredentialProviderKind.OAuth },
+                Sources = entraRequest.Sources.Select(source => source with { Provider = CredentialProviderKind.OAuth }).ToArray(),
+                Requestor = requestor,
+                Use = template.Use,
+                PresentationScope = AccessPresentationScope.Runtime,
+            };
             DevTunnelIdentityRoute route = scheme switch
             {
                 DevTunnelIdentityScheme.GitHub => new GitHubDevTunnelIdentityRoute { Credential = gitHubRequest },
                 DevTunnelIdentityScheme.Entra => new EntraDevTunnelIdentityRoute { Credential = entraRequest },
+                DevTunnelIdentityScheme.OAuth => new OAuthDevTunnelIdentityRoute { Credential = oauthRequest },
                 _ => new AnonymousDevTunnelIdentityRoute(),
             };
             this.Request = DevTunnelIdentityCredentialAccessRequest.Create(
@@ -213,8 +311,9 @@ public sealed class DevTunnelIdentityCredentialAccessExecutorTests
             var executors = new CredentialAccessExecutorRegistry();
             executors.Add<GitHubCredentialAccessRequest, GitHubCredentialAccessResult>(this.GitHub);
             executors.Add<EntraCredentialAccessRequest, EntraCredentialAccessResult>(this.Entra);
+            executors.Add<OAuthCredentialAccessRequest, OAuthCredentialAccessResult>(this.OAuth);
             executors.Add<DevTunnelIdentityCredentialAccessRequest, DevTunnelIdentityCredentialAccessResult>(
-                new DevTunnelIdentityCredentialAccessExecutor(this.GitHub, this.Entra));
+                new DevTunnelIdentityCredentialAccessExecutor(this.GitHub, this.Entra, this.OAuth));
             this.Broker = new AccessBroker(this.Policy, executors, new ProviderAcquisitionCoordinator(), this.Registry);
         }
 
@@ -224,9 +323,10 @@ public sealed class DevTunnelIdentityCredentialAccessExecutorTests
         public UserAuthorizationRegistry Registry { get; } = new();
         public DependencyExecutor<GitHubCredentialAccessRequest, GitHubCredentialAccessResult> GitHub { get; }
         public DependencyExecutor<EntraCredentialAccessRequest, EntraCredentialAccessResult> Entra { get; }
-        public int Executions => this.GitHub.Executions + this.Entra.Executions;
-        public AccessRequestor? LastRequestor => this.GitHub.LastRequestor ?? this.Entra.LastRequestor;
-        public CredentialUseDescriptor? LastUse => this.GitHub.LastUse ?? this.Entra.LastUse;
+        public DependencyExecutor<OAuthCredentialAccessRequest, OAuthCredentialAccessResult> OAuth { get; }
+        public int Executions => this.GitHub.Executions + this.Entra.Executions + this.OAuth.Executions;
+        public AccessRequestor? LastRequestor => this.GitHub.LastRequestor ?? this.Entra.LastRequestor ?? this.OAuth.LastRequestor;
+        public CredentialUseDescriptor? LastUse => this.GitHub.LastUse ?? this.Entra.LastUse ?? this.OAuth.LastUse;
 
         public async Task<DevTunnelIdentityCredentialAccessResult> AcquireAsync()
         {

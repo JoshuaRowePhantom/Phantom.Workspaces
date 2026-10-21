@@ -4,7 +4,7 @@ using Microsoft.Extensions.AI;
 
 namespace Phantom.Workspaces.Services.DevTunnel;
 
-public sealed class ReconnectingWebAgentPersistenceStore : IAgentPersistenceStore, IDisposable
+public sealed class ReconnectingWebAgentPersistenceStore : IAgentPersistenceStore, IDisposable, IAsyncDisposable
 {
     private readonly DevTunnelConnectionMonitor monitor;
     private readonly Func<Exception, bool> isConnectionFailure;
@@ -12,6 +12,11 @@ public sealed class ReconnectingWebAgentPersistenceStore : IAgentPersistenceStor
     private readonly object reconnectGate = new();
     private IAgentPersistenceStore? current;
     private Task? reconnectTask;
+    private Task? startTask;
+    private Task? disposeTask;
+    private readonly CancellationTokenSource lifetime = new();
+    private readonly TaskCompletionSource synchronousDisposal = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private int disposed;
 
     public ReconnectingWebAgentPersistenceStore(
         Func<CancellationToken, Task<DevTunnelEndpointResolution>> resolveEndpointAsync,
@@ -31,17 +36,19 @@ public sealed class ReconnectingWebAgentPersistenceStore : IAgentPersistenceStor
             async (resolution, cancellationToken) =>
             {
                 var store = buildAgentPersistenceStore(resolution);
+                IAgentPersistenceStore? previous;
                 try
                 {
                     await validate(store, cancellationToken).ConfigureAwait(false);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    previous = this.SwapCurrent(store, cancellationToken);
                 }
                 catch
                 {
                     (store as IDisposable)?.Dispose();
                     throw;
                 }
-
-                this.SwapCurrent(store);
+                (previous as IDisposable)?.Dispose();
             },
             delayScheduler,
             reconnectOptions,
@@ -56,7 +63,20 @@ public sealed class ReconnectingWebAgentPersistenceStore : IAgentPersistenceStor
         remove => this.monitor.StatusChanged -= value;
     }
 
-    public Task StartAsync(CancellationToken cancellationToken = default) => this.monitor.StartAsync(cancellationToken);
+    public Task StartAsync(CancellationToken cancellationToken = default)
+    {
+        lock (this.reconnectGate)
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref this.disposed) != 0, this);
+            return this.startTask ??= this.StartCoreAsync(cancellationToken);
+        }
+    }
+
+    private async Task StartCoreAsync(CancellationToken cancellationToken)
+    {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, this.lifetime.Token);
+        await this.monitor.StartAsync(linked.Token).ConfigureAwait(false);
+    }
 
     public ValueTask StoreAsync(StoreRequestAgent request, CancellationToken cancellationToken = default)
         => this.ExecuteAsync(store => store.StoreAsync(request, cancellationToken), cancellationToken);
@@ -75,10 +95,75 @@ public sealed class ReconnectingWebAgentPersistenceStore : IAgentPersistenceStor
 
     public void Dispose()
     {
-        lock (this.swapGate)
+        if (Interlocked.Exchange(ref this.disposed, 1) != 0)
         {
-            (this.current as IDisposable)?.Dispose();
-            this.current = null;
+            return;
+        }
+        try
+        {
+            try
+            {
+                this.lifetime.Cancel();
+            }
+            finally
+            {
+                IAgentPersistenceStore? previous;
+                lock (this.swapGate)
+                {
+                    previous = this.current;
+                    this.current = null;
+                }
+                (previous as IDisposable)?.Dispose();
+            }
+            this.synchronousDisposal.TrySetResult();
+        }
+        catch (Exception exception)
+        {
+            this.synchronousDisposal.TrySetException(exception);
+            _ = this.synchronousDisposal.Task.Exception;
+            throw;
+        }
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        lock (this.reconnectGate)
+        {
+            return new ValueTask(this.disposeTask ??= this.DisposeCoreAsync());
+        }
+    }
+
+    private async Task DisposeCoreAsync()
+    {
+        Exception? cancellationFailure = null;
+        try
+        {
+            this.Dispose();
+            await this.synchronousDisposal.Task.ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            cancellationFailure = exception;
+        }
+        Task[] pending;
+        lock (this.reconnectGate)
+        {
+            pending = new[] { this.startTask, this.reconnectTask }.OfType<Task>().ToArray();
+        }
+        try
+        {
+            await Task.WhenAll(pending).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        finally
+        {
+            this.lifetime.Dispose();
+        }
+        if (cancellationFailure is not null)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(cancellationFailure).Throw();
         }
     }
 
@@ -86,6 +171,7 @@ public sealed class ReconnectingWebAgentPersistenceStore : IAgentPersistenceStor
     {
         while (true)
         {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref this.disposed) != 0, this);
             var store = this.current
                 ?? throw new InvalidOperationException($"{nameof(ReconnectingWebAgentPersistenceStore)} must be started before use.");
             try
@@ -107,6 +193,7 @@ public sealed class ReconnectingWebAgentPersistenceStore : IAgentPersistenceStor
     {
         while (true)
         {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref this.disposed) != 0, this);
             var store = this.current
                 ?? throw new InvalidOperationException($"{nameof(ReconnectingWebAgentPersistenceStore)} must be started before use.");
             try
@@ -131,23 +218,31 @@ public sealed class ReconnectingWebAgentPersistenceStore : IAgentPersistenceStor
         {
             if (this.reconnectTask is null || this.reconnectTask.IsCompleted)
             {
-                this.reconnectTask = this.monitor.HandleConnectionFailedAsync(failure, cancellationToken);
+                ObjectDisposedException.ThrowIf(Volatile.Read(ref this.disposed) != 0, this);
+                this.reconnectTask = this.ReconnectCoreAsync(failure, cancellationToken);
             }
 
             return this.reconnectTask;
         }
     }
 
-    private void SwapCurrent(IAgentPersistenceStore store)
+    private async Task ReconnectCoreAsync(Exception failure, CancellationToken cancellationToken)
+    {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, this.lifetime.Token);
+        await this.monitor.HandleConnectionFailedAsync(failure, linked.Token).ConfigureAwait(false);
+    }
+
+    private IAgentPersistenceStore? SwapCurrent(IAgentPersistenceStore store, CancellationToken cancellationToken)
     {
         lock (this.swapGate)
         {
+            if (Volatile.Read(ref this.disposed) != 0)
+            {
+                throw new OperationCanceledException(cancellationToken);
+            }
             var previous = this.current;
             this.current = store;
-            if (!ReferenceEquals(previous, store))
-            {
-                (previous as IDisposable)?.Dispose();
-            }
+            return ReferenceEquals(previous, store) ? null : previous;
         }
     }
 

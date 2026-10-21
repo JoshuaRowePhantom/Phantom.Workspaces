@@ -111,7 +111,7 @@ public sealed class DevTunnelHostServiceTests
 
         Assert.Equal("sign-in required", exception.Message);
         Assert.Equal(DevTunnelHostState.Error, service.Status.State);
-        Assert.Equal("sign-in required", service.Status.LastError);
+        Assert.Equal("Dev Tunnel hosting could not complete.", service.Status.LastError);
         Assert.False(relayHost.IsRunning);
     }
 
@@ -134,49 +134,42 @@ public sealed class DevTunnelHostServiceTests
     }
 
     [Fact]
-    public async Task StartAsync_PrivateMode_StatusIncludesConnectTokenFromManagementClient()
+    public async Task StartAsync_PrivateMode_StatusHasNoCredentialSurface()
     {
-        var managementClient = new FakeManagementClient(new DevTunnelDescriptor("tunnel-123", "my-tunnel"))
-        {
-            ConnectToken = "api-issued-connect-token",
-        };
+        var managementClient = new FakeManagementClient(new DevTunnelDescriptor("tunnel-123", "my-tunnel"));
         var relayHost = new FakeRelayHost();
         var service = new DevTunnelHostService(managementClient, relayHost);
 
         await service.StartAsync(localPort: 5280, protocol: "https", new DevTunnelConfiguration { AccessMode = DevTunnelAccessMode.Private }, TestContext.Current.CancellationToken);
 
-        Assert.Equal("api-issued-connect-token", service.Status.ConnectToken);
+        Assert.Null(typeof(DevTunnelHostStatus).GetProperty("ConnectToken"));
+        Assert.Equal(DevTunnelHostState.Hosting, service.Status.State);
     }
 
     [Fact]
-    public async Task StartAsync_AnonymousMode_StatusConnectTokenIsNull()
+    public async Task StartAsync_AnonymousMode_StatusHasNoCredentialSurface()
     {
-        var managementClient = new FakeManagementClient(new DevTunnelDescriptor("tunnel-123", "my-tunnel"))
-        {
-            ConnectToken = null,  // Anonymous: management client returns null
-        };
+        var managementClient = new FakeManagementClient(new DevTunnelDescriptor("tunnel-123", "my-tunnel"));
         var relayHost = new FakeRelayHost();
         var service = new DevTunnelHostService(managementClient, relayHost);
 
         await service.StartAsync(localPort: 5280, protocol: "https", new DevTunnelConfiguration { AccessMode = DevTunnelAccessMode.Anonymous }, TestContext.Current.CancellationToken);
 
-        Assert.Null(service.Status.ConnectToken);
+        Assert.Null(typeof(DevTunnelHostStatus).GetProperty("ConnectToken"));
+        Assert.Equal(DevTunnelAccessMode.Anonymous, service.Status.AccessMode);
     }
 
     [Fact]
-    public async Task StopAsync_ClearsConnectToken()
+    public async Task StopAsync_ClearsPublicEndpoint()
     {
-        var managementClient = new FakeManagementClient(new DevTunnelDescriptor("tunnel-123", "my-tunnel"))
-        {
-            ConnectToken = "api-issued-connect-token",
-        };
+        var managementClient = new FakeManagementClient(new DevTunnelDescriptor("tunnel-123", "my-tunnel"));
         var relayHost = new FakeRelayHost();
         var service = new DevTunnelHostService(managementClient, relayHost);
 
         await service.StartAsync(localPort: 5280, protocol: "https", new DevTunnelConfiguration { AccessMode = DevTunnelAccessMode.Private }, TestContext.Current.CancellationToken);
         await service.StopAsync(TestContext.Current.CancellationToken);
 
-        Assert.Null(service.Status.ConnectToken);
+        Assert.Null(service.Status.AccessPointUrl);
     }
 
     [Fact]
@@ -271,9 +264,6 @@ public sealed class DevTunnelHostServiceTests
 
         public DevTunnelAccessMode? AppliedAccessMode { get; private set; }
 
-        /// <summary>The connect token returned by <see cref="ApplyAccessModeAsync"/>; null by default (Anonymous).</summary>
-        public string? ConnectToken { get; init; }
-
         public Task<DevTunnelDescriptor> EnsureTunnelAsync(string? tunnelId, string? tunnelName, CancellationToken cancellationToken = default)
         {
             this.EnsureCallCount++;
@@ -292,10 +282,10 @@ public sealed class DevTunnelHostServiceTests
             return Task.CompletedTask;
         }
 
-        public Task<string?> ApplyAccessModeAsync(string tunnelId, DevTunnelAccessMode accessMode, CancellationToken cancellationToken = default)
+        public Task ApplyAccessModeAsync(string tunnelId, DevTunnelAccessMode accessMode, CancellationToken cancellationToken = default)
         {
             this.AppliedAccessMode = accessMode;
-            return Task.FromResult(this.ConnectToken);
+            return Task.CompletedTask;
         }
 
         public Task<string> GetAccessPointUrlAsync(string tunnelId, int localPort, CancellationToken cancellationToken = default)

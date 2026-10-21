@@ -65,6 +65,7 @@ public sealed class SensitiveValueLease : IAsyncDisposable
     private int disposed;
 
     internal CredentialAccountIdentifier? AccountIdentifier => this.binding.Request.Credential.AccountIdentifier;
+    internal CredentialMaterialGenerationIdentifier MaterialGeneration => this.binding.MaterialGeneration;
 
     public SensitiveValueLease(
         ReadOnlyMemory<char> material,

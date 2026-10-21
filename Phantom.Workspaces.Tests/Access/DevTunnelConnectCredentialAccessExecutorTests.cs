@@ -12,6 +12,20 @@ namespace Phantom.Workspaces.Tests.Access;
 public sealed class DevTunnelConnectCredentialAccessExecutorTests
 {
     [Fact]
+    public async Task ConnectExecutor_PrivateCapabilityDenial_DoesNotPublishOrRetryMint()
+    {
+        await using var fixture = new Fixture();
+        fixture.Session.DenyUse = true;
+        var pending = fixture.Broker.AcquireAsync(fixture.Request, TestContext.Current.CancellationToken);
+        await fixture.ApplyAsync(Assert.Single(fixture.Registry.GetSnapshot()));
+
+        Assert.IsType<AccessDenied<DevTunnelConnectCredentialAccessResult>>(await pending);
+        Assert.Equal(1, fixture.Session.Mints);
+        Assert.Null(fixture.Session.LastMaterial);
+        Assert.Empty(await fixture.Executor.ListAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task ConnectExecutor_InspectionAndPendingRelease_DoNotMintOrExposeProtocolData()
     {
         await using var fixture = new Fixture();
@@ -174,6 +188,68 @@ public sealed class DevTunnelConnectCredentialAccessExecutorTests
     }
 
     [Fact]
+    public async Task ConnectExecutor_ShutdownCancelsBlockedMintWithoutPublishingMaterial()
+    {
+        await using var fixture = new Fixture();
+        fixture.Session.MintEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.Session.ContinueMint = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pending = fixture.Broker.AcquireAsync(fixture.Request, TestContext.Current.CancellationToken);
+        var approval = fixture.ApplyAsync(Assert.Single(fixture.Registry.GetSnapshot()));
+        await fixture.Session.MintEntered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        await fixture.Broker.DisposeAsync();
+        await approval;
+        Assert.IsType<AccessShuttingDown<DevTunnelConnectCredentialAccessResult>>(await pending);
+        Assert.Null(fixture.Session.LastMaterial);
+        Assert.Empty(fixture.Registry.GetSnapshot());
+    }
+
+    [Theory]
+    [InlineData("http://tunnel-123.euw.devtunnels.ms/")]
+    [InlineData("https://attacker.example/")]
+    [InlineData("https://tunnel-123.euw.devtunnels.ms:444/")]
+    public async Task ConnectExecutor_AnonymousCannotAuthorizeAnUnsafeRelay(string endpoint)
+    {
+        await using var fixture = new Fixture(anonymous: true);
+        var request = DevTunnelConnectCredentialAccessRequest.Create(fixture.Request.Tunnel with
+        {
+            Endpoint = new Uri(endpoint),
+        }, fixture.Request.IdentityRoute, fixture.Request.Requestor, fixture.Request.Use);
+        var inspection = await fixture.Executor.InspectAsync(request, TestContext.Current.CancellationToken);
+        Assert.Empty(inspection.Sources);
+        Assert.Equal(0, fixture.Session.Inspections);
+        Assert.Equal(0, fixture.Session.Mints);
+    }
+
+    [Fact]
+    public async Task ConnectExecutor_ApprovedFollowerKeepsCoalescedMintAliveAfterLeaderCancels()
+    {
+        await using var fixture = new Fixture();
+        fixture.Session.MintEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.Session.ContinueMint = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var leaderCancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var leader = fixture.Broker.AcquireAsync(fixture.Request, leaderCancellation.Token);
+        var first = Assert.Single(fixture.Registry.GetSnapshot());
+        var firstApproval = fixture.ApplyAsync(first);
+        await fixture.Session.MintEntered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        var follower = fixture.Broker.AcquireAsync(fixture.Request, TestContext.Current.CancellationToken);
+        var second = fixture.Registry.GetSnapshot().Single(row => row.Identifier != first.Identifier);
+        var secondApproval = fixture.ApplyAsync(second);
+        await fixture.AcquisitionJoined.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await leaderCancellation.CancelAsync();
+        Assert.Equal(1, fixture.Session.Mints);
+        fixture.Session.ContinueMint.TrySetResult();
+
+        await Task.WhenAll(firstApproval, secondApproval);
+        Assert.IsType<AccessCancelled<DevTunnelConnectCredentialAccessResult>>(await leader);
+        await using var result = Assert.IsType<AccessSucceeded<DevTunnelConnectCredentialAccessResult>>(
+            await follower.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).Result;
+        Assert.Equal(1, fixture.Session.Mints);
+        Assert.IsType<SensitiveValueUseSucceeded<int>>(await result.ConnectToken!.UseAsync(
+            (_, _) => ValueTask.FromResult(42), TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task ConnectExecutor_AdministrationEnumeratesMetadataAndRejectsStaleDelete()
     {
         await using var fixture = new Fixture();
@@ -208,12 +284,12 @@ public sealed class DevTunnelConnectCredentialAccessExecutorTests
         Assert.Null(Assert.Single(await fixture.Policy.ListAsync(TestContext.Current.CancellationToken)).AccountIdentifier);
     }
 
-    private sealed class Fixture : IAsyncDisposable
+    internal sealed class Fixture : IAsyncDisposable
     {
         private readonly string directory = Path.Combine(
             Environment.CurrentDirectory, ".access-tunnel-connect-tests", Guid.NewGuid().ToString("N"));
 
-        public Fixture(bool anonymous = false)
+        public Fixture(bool anonymous = false, bool discoverEndpoint = false)
         {
             var template = ReleaseAuthorizationContractTests.Request();
             var requestor = new AccessRequestor
@@ -229,14 +305,14 @@ public sealed class DevTunnelConnectCredentialAccessExecutorTests
             {
                 Access = anonymous ? DevTunnelAccessKind.Anonymous : DevTunnelAccessKind.Private,
                 Name = "test tunnel",
-                Endpoint = this.Session.Endpoint,
+                Endpoint = anonymous || !discoverEndpoint ? this.Session.Endpoint : null,
             }, anonymous ? new AnonymousDevTunnelIdentityRoute() : new GitHubDevTunnelIdentityRoute { Credential = github },
                 requestor, template.Use with { Kind = CredentialUseKind.Tunnel });
             this.Policy = new ReleaseAuthorizationPolicy(new ReleaseMemoryStore(Path.Combine(this.directory, "policy.json")));
             this.Executor = new DevTunnelConnectCredentialAccessExecutor(this.Session, this.Registry);
             var executors = new CredentialAccessExecutorRegistry();
             executors.Add<DevTunnelConnectCredentialAccessRequest, DevTunnelConnectCredentialAccessResult>(this.Executor);
-            this.Broker = new AccessBroker(this.Policy, executors, new ProviderAcquisitionCoordinator(), this.Registry);
+            this.Broker = new AccessBroker(this.Policy, executors, new ObservedCoordinator(this.AcquisitionJoined), this.Registry);
         }
 
         public DevTunnelConnectCredentialAccessRequest Request { get; }
@@ -245,6 +321,7 @@ public sealed class DevTunnelConnectCredentialAccessExecutorTests
         public DevTunnelConnectCredentialAccessExecutor Executor { get; }
         public ReleaseAuthorizationPolicy Policy { get; }
         public AccessBroker Broker { get; }
+        public TaskCompletionSource AcquisitionJoined { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public async Task<DevTunnelConnectCredentialAccessResult> AcquireAsync()
         {
@@ -252,6 +329,25 @@ public sealed class DevTunnelConnectCredentialAccessExecutorTests
             await this.ApplyAsync(this.Registry.GetSnapshot().Last(row => row.State == UserAuthorizationState.Pending));
             return Assert.IsType<AccessSucceeded<DevTunnelConnectCredentialAccessResult>>(
                 await pending.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).Result;
+        }
+
+        private sealed class ObservedCoordinator(TaskCompletionSource joined) : IProviderAcquisitionCoordinator
+        {
+            private readonly ProviderAcquisitionCoordinator inner = new();
+            private int participants;
+            public ValueTask<ProviderAcquisitionOutcome> ExecuteOrJoinAsync(
+                IProviderAcquisitionOperation operation,
+                ProviderInteractionPermit permit,
+                CancellationToken cancellationToken)
+            {
+                var result = this.inner.ExecuteOrJoinAsync(operation, permit, cancellationToken);
+                if (Interlocked.Increment(ref this.participants) == 2)
+                {
+                    joined.TrySetResult();
+                }
+                return result;
+            }
+            public ValueTask DisposeAsync() => this.inner.DisposeAsync();
         }
 
         public Task ApplyAsync(UserAuthorizationSnapshot row) => this.Registry.ActAsync(new ApplyUserAuthorizationAction
@@ -300,13 +396,16 @@ public sealed class DevTunnelConnectCredentialAccessExecutorTests
         }
     }
 
-    private sealed class MintSession : IDevTunnelConnectMintSession
+    internal sealed class MintSession : IDevTunnelConnectMintSession
     {
         public Uri Endpoint { get; set; } = new("https://tunnel-123.euw.devtunnels.ms/");
         public int Mints { get; private set; }
         public int Inspections { get; private set; }
         public int UnauthorizedRemaining { get; set; }
+        public bool DenyUse { get; set; }
         public char[]? LastMaterial { get; private set; }
+        public TaskCompletionSource? MintEntered { get; set; }
+        public TaskCompletionSource? ContinueMint { get; set; }
 
         public ValueTask<CredentialInspection> InspectIdentityAsync(
             DevTunnelIdentityRoute route,
@@ -322,7 +421,7 @@ public sealed class DevTunnelConnectCredentialAccessExecutorTests
             });
         }
 
-        public ValueTask<DevTunnelConnectMintOutcome> MintAsync(
+        public async ValueTask<DevTunnelConnectMintOutcome> MintAsync(
             DevTunnelConnectCredentialAccessRequest request,
             CredentialSourceChoiceDescriptor identitySource,
             ICredentialExecutionContext context,
@@ -333,19 +432,28 @@ public sealed class DevTunnelConnectCredentialAccessExecutorTests
             Assert.True(parentGenerationPermit.BelongsToGeneration(
                 context.RequestIdentifier, context.Revision, context.AcquisitionGeneration));
             this.Mints++;
+            if (this.DenyUse)
+            {
+                return new DevTunnelConnectMintDenied();
+            }
+            this.MintEntered?.TrySetResult();
+            if (this.ContinueMint is not null)
+            {
+                await this.ContinueMint.Task.WaitAsync(cancellationToken);
+            }
             if (this.UnauthorizedRemaining > 0)
             {
                 this.UnauthorizedRemaining--;
-                return ValueTask.FromResult<DevTunnelConnectMintOutcome>(new DevTunnelConnectMintUnauthorized());
+                return new DevTunnelConnectMintUnauthorized();
             }
             this.LastMaterial = "private connect material".ToCharArray();
-            return ValueTask.FromResult<DevTunnelConnectMintOutcome>(new DevTunnelConnectMintSucceeded
+            return new DevTunnelConnectMintSucceeded
             {
                 Material = this.LastMaterial,
                 Account = CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.GitHub, "private principal"),
                 ExpiresOn = DateTimeOffset.UtcNow.AddHours(1),
                 Endpoint = this.Endpoint,
-            });
+            };
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;

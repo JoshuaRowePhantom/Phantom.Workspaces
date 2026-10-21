@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Configuration;
@@ -14,9 +15,44 @@ public sealed class DevTunnelConnectionMonitorTests
         new(BaseDelay: TimeSpan.FromSeconds(1), MaxDelay: TimeSpan.FromSeconds(8), MaxAttempts: null, JitterFraction: 0.0);
 
     [Fact]
+    public async Task Reconnect_InvalidatesOnlyFailedResolutionsBeforeEachNewLookup()
+    {
+        var invalidated = new List<int>();
+        var resolveCount = 0;
+        var connectCount = 0;
+        var monitor = new DevTunnelConnectionMonitor(
+            resolveEndpoint: _ =>
+            {
+                Assert.Equal(resolveCount, invalidated.Count);
+                var generation = ++resolveCount;
+                return Task.FromResult(new DevTunnelEndpointResolution(
+                    new Uri($"https://t-{5000 + generation}.usw2.devtunnels.ms/"),
+                    _ =>
+                    {
+                        invalidated.Add(generation);
+                        return ValueTask.CompletedTask;
+                    }));
+            },
+            connect: (_, _) => ++connectCount == 2
+                ? throw new HttpRequestException("endpoint changed again")
+                : Task.CompletedTask,
+            delayScheduler: new RecordingDelayScheduler(),
+            options: NoJitterOptions);
+
+        await monitor.StartAsync(TestContext.Current.CancellationToken);
+        Assert.Empty(invalidated);
+        await monitor.HandleConnectionFailedAsync(new HttpRequestException("endpoint disappeared"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(new[] { 1, 2 }, invalidated);
+        Assert.Equal(3, resolveCount);
+        Assert.Equal(DevTunnelConnectionState.Connected, monitor.Status.State);
+    }
+
+    [Fact]
     public async Task StartAsync_ResolvesAndConnects_ReportsConnected()
     {
-        var resolution = new DevTunnelEndpointResolution(new Uri("https://t-5280.usw2.devtunnels.ms/"), null);
+        var resolution = new DevTunnelEndpointResolution(new Uri("https://t-5280.usw2.devtunnels.ms/"));
         var resolveCount = 0;
         var monitor = new DevTunnelConnectionMonitor(
             resolveEndpoint: _ => { resolveCount++; return Task.FromResult(resolution); },
@@ -37,8 +73,8 @@ public sealed class DevTunnelConnectionMonitorTests
     {
         var endpoints = new Queue<DevTunnelEndpointResolution>(
         [
-            new DevTunnelEndpointResolution(new Uri("https://t-5280.usw2.devtunnels.ms/"), null),
-            new DevTunnelEndpointResolution(new Uri("https://t-6000.usw2.devtunnels.ms/"), null),
+            new DevTunnelEndpointResolution(new Uri("https://t-5280.usw2.devtunnels.ms/")),
+            new DevTunnelEndpointResolution(new Uri("https://t-6000.usw2.devtunnels.ms/")),
         ]);
         var connectAttempts = 0;
         var monitor = new DevTunnelConnectionMonitor(
@@ -64,7 +100,7 @@ public sealed class DevTunnelConnectionMonitorTests
         var scheduler = new RecordingDelayScheduler();
         var connectAttempts = 0;
         var monitor = new DevTunnelConnectionMonitor(
-            resolveEndpoint: _ => Task.FromResult(new DevTunnelEndpointResolution(new Uri("https://t-5280.usw2.devtunnels.ms/"), null)),
+            resolveEndpoint: _ => Task.FromResult(new DevTunnelEndpointResolution(new Uri("https://t-5280.usw2.devtunnels.ms/"))),
             connect: (_, _) =>
             {
                 connectAttempts++;
@@ -93,7 +129,7 @@ public sealed class DevTunnelConnectionMonitorTests
     public async Task HandleConnectionFailedAsync_WhenMaxAttemptsExhausted_ReportsFailed()
     {
         var monitor = new DevTunnelConnectionMonitor(
-            resolveEndpoint: _ => Task.FromResult(new DevTunnelEndpointResolution(new Uri("https://t-5280.usw2.devtunnels.ms/"), null)),
+            resolveEndpoint: _ => Task.FromResult(new DevTunnelEndpointResolution(new Uri("https://t-5280.usw2.devtunnels.ms/"))),
             connect: (_, _) => throw new InvalidOperationException("always down"),
             delayScheduler: new RecordingDelayScheduler(),
             options: NoJitterOptions with { MaxAttempts = 3 },
@@ -109,7 +145,7 @@ public sealed class DevTunnelConnectionMonitorTests
     {
         var resolveCount = 0;
         var monitor = new DevTunnelConnectionMonitor(
-            resolveEndpoint: _ => { resolveCount++; return Task.FromResult(new DevTunnelEndpointResolution(new Uri("https://t-5280.usw2.devtunnels.ms/"), null)); },
+            resolveEndpoint: _ => { resolveCount++; return Task.FromResult(new DevTunnelEndpointResolution(new Uri("https://t-5280.usw2.devtunnels.ms/"))); },
             connect: (_, _) => Task.CompletedTask,
             delayScheduler: new RecordingDelayScheduler(),
             options: NoJitterOptions,

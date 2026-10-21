@@ -15,7 +15,7 @@ public sealed class ReconnectingWebDataAccessLayerTests
     private static readonly DevTunnelReconnectOptions NoJitterOptions =
         new(BaseDelay: TimeSpan.FromSeconds(1), MaxDelay: TimeSpan.FromSeconds(8), MaxAttempts: null, JitterFraction: 0.0);
 
-    private static DevTunnelEndpointResolution Endpoint(string uri) => new(new Uri(uri), TunnelAuthToken: null);
+    private static DevTunnelEndpointResolution Endpoint(string uri) => new(new Uri(uri));
 
     [Fact]
     public async Task Operation_WhenHealthy_ForwardsToInnerLayer_WithSingleResolution()

@@ -24,6 +24,7 @@ public sealed class DevTunnelConnectionMonitor
     private readonly IDelayScheduler delayScheduler;
     private readonly DevTunnelReconnectOptions options;
     private readonly Func<double> nextJitterSample;
+    private DevTunnelEndpointResolution? currentResolution;
 
     public DevTunnelConnectionMonitor(
         Func<CancellationToken, Task<DevTunnelEndpointResolution>> resolveEndpoint,
@@ -53,6 +54,7 @@ public sealed class DevTunnelConnectionMonitor
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
         var resolution = await this.resolveEndpoint(cancellationToken).ConfigureAwait(false);
+        this.currentResolution = resolution;
         await this.connect(resolution, cancellationToken).ConfigureAwait(false);
         this.SetStatus(new DevTunnelConnectionStatus(DevTunnelConnectionState.Connected, resolution.BaseUri, LastError: null));
     }
@@ -64,6 +66,7 @@ public sealed class DevTunnelConnectionMonitor
     /// </summary>
     public async Task HandleConnectionFailedAsync(Exception failure, CancellationToken cancellationToken = default)
     {
+        await this.InvalidateCurrentResolutionAsync(cancellationToken).ConfigureAwait(false);
         this.SetStatus(new DevTunnelConnectionStatus(
             DevTunnelConnectionState.Reconnecting,
             this.Status.CurrentBaseUri,
@@ -88,12 +91,14 @@ public sealed class DevTunnelConnectionMonitor
             try
             {
                 var resolution = await this.resolveEndpoint(cancellationToken).ConfigureAwait(false);
+                this.currentResolution = resolution;
                 await this.connect(resolution, cancellationToken).ConfigureAwait(false);
                 this.SetStatus(new DevTunnelConnectionStatus(DevTunnelConnectionState.Connected, resolution.BaseUri, LastError: null));
                 return;
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
+                await this.InvalidateCurrentResolutionAsync(cancellationToken).ConfigureAwait(false);
                 failure = exception;
                 this.SetStatus(new DevTunnelConnectionStatus(
                     DevTunnelConnectionState.Reconnecting,
@@ -103,6 +108,10 @@ public sealed class DevTunnelConnectionMonitor
             }
         }
     }
+
+    private ValueTask InvalidateCurrentResolutionAsync(CancellationToken cancellationToken) =>
+        Interlocked.Exchange(ref this.currentResolution, null)?.InvalidateForRefreshAsync(cancellationToken)
+            ?? ValueTask.CompletedTask;
 
     private TimeSpan ComputeDelay(int attempt)
     {

@@ -1,5 +1,6 @@
 using System;
 using System.Net.Http;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 
 namespace Phantom.Workspaces.Services.DevTunnel;
 
@@ -14,15 +15,17 @@ public sealed class AuthenticatedHttpClientFactory : IAuthenticatedHttpClientFac
 
     public AuthenticatedHttpClientFactory(Func<HttpMessageHandler>? innerHandlerFactory = null)
     {
-        this.innerHandlerFactory = innerHandlerFactory ?? (() => new HttpClientHandler());
+        this.innerHandlerFactory = innerHandlerFactory ?? (() => new HttpClientHandler { AllowAutoRedirect = false });
     }
 
-    public HttpClient CreateClient(Uri baseAddress, IDevTunnelConnectTokenProvider tokenProvider)
+    public HttpClient CreateClient(Uri baseAddress, IAccessBroker broker, DevTunnelConnectCredentialAccessRequest request,
+        Func<AccessPresentationScope>? presentationScope = null)
     {
         ArgumentNullException.ThrowIfNull(baseAddress);
-        ArgumentNullException.ThrowIfNull(tokenProvider);
+        ArgumentNullException.ThrowIfNull(broker);
+        ArgumentNullException.ThrowIfNull(request);
 
-        var handler = new DevTunnelAuthenticationHandler(tokenProvider, this.innerHandlerFactory());
+        var handler = new DevTunnelAuthenticationHandler(broker, request, this.innerHandlerFactory(), presentationScope);
         return new HttpClient(handler)
         {
             BaseAddress = baseAddress,
