@@ -9,17 +9,17 @@ public sealed class DevTunnelAuthenticationHandler : DelegatingHandler
     private const string TunnelAuthorizationHeader = "X-Tunnel-Authorization";
     private readonly IAccessBroker broker;
     private readonly DevTunnelConnectCredentialAccessRequest credentialRequest;
-    private readonly Func<AccessPresentationScope>? presentationScope;
+    private readonly Func<AccessPresentationScope> presentationScope;
 
     public DevTunnelAuthenticationHandler(
         IAccessBroker broker,
         DevTunnelConnectCredentialAccessRequest credentialRequest,
         HttpMessageHandler innerHandler,
-        Func<AccessPresentationScope>? presentationScope = null) : base(innerHandler)
+        Func<AccessPresentationScope> presentationScope) : base(innerHandler)
     {
         this.broker = broker;
         this.credentialRequest = credentialRequest;
-        this.presentationScope = presentationScope;
+        this.presentationScope = presentationScope ?? throw new ArgumentNullException(nameof(presentationScope));
     }
 
     protected override async Task<HttpResponseMessage> SendAsync(
@@ -66,8 +66,7 @@ public sealed class DevTunnelAuthenticationHandler : DelegatingHandler
     }
 
     private DevTunnelConnectCredentialAccessRequest CurrentRequest() =>
-        this.presentationScope is null ? this.credentialRequest :
-            this.credentialRequest with { PresentationScope = this.presentationScope() };
+        this.credentialRequest with { PresentationScope = this.presentationScope() };
 
     private async Task<HttpResponseMessage> SendWithCredentialAsync(
         HttpRequestMessage request,

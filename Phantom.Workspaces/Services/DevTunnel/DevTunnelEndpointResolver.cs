@@ -6,8 +6,11 @@ namespace Phantom.Workspaces.Services.DevTunnel;
 public sealed class DevTunnelEndpointResolver(
     IAccessBroker broker,
     DevTunnelConnectCredentialAccessRequest request,
-    Func<AccessPresentationScope>? presentationScope = null) : IDevTunnelEndpointResolver
+    Func<AccessPresentationScope> presentationScope) : IDevTunnelEndpointResolver
 {
+    private readonly Func<AccessPresentationScope> getPresentationScope =
+        presentationScope ?? throw new ArgumentNullException(nameof(presentationScope));
+
     public async Task<DevTunnelEndpointResolution> ResolveAsync(
         string tunnelName,
         DevTunnelAccessMode accessMode,
@@ -19,8 +22,8 @@ public sealed class DevTunnelEndpointResolver(
             throw new DevTunnelCredentialAccessException(AccessErrorCode.IdentityMismatch);
         }
         await using var result = DevTunnelCredentialAccessException.Require(
-            await broker.AcquireAsync(presentationScope is null ? request :
-                request with { PresentationScope = presentationScope() }, cancellationToken).ConfigureAwait(false));
+            await broker.AcquireAsync(request with { PresentationScope = this.getPresentationScope() },
+                cancellationToken).ConfigureAwait(false));
         return new DevTunnelEndpointResolution(result.Endpoint, result.CreateGenerationInvalidation());
     }
 }

@@ -13,7 +13,7 @@ public sealed class DevTunnelEndpointResolverTests
     {
         await using var fixture = new DevTunnelConnectCredentialAccessExecutorTests.Fixture(discoverEndpoint: true);
         await using var initial = await fixture.AcquireAsync();
-        var resolver = new DevTunnelEndpointResolver(fixture.Broker, fixture.Request);
+        var resolver = new DevTunnelEndpointResolver(fixture.Broker, fixture.Request, () => AccessPresentationScope.Runtime);
         var first = await resolver.ResolveAsync(fixture.Request.Tunnel.Name!, DevTunnelAccessMode.Private,
             TestContext.Current.CancellationToken);
         await first.InvalidateForRefreshAsync(TestContext.Current.CancellationToken);
@@ -43,7 +43,7 @@ public sealed class DevTunnelEndpointResolverTests
     {
         await using var fixture = new DevTunnelConnectCredentialAccessExecutorTests.Fixture();
         await using var initial = await fixture.AcquireAsync();
-        var resolver = new DevTunnelEndpointResolver(fixture.Broker, fixture.Request);
+        var resolver = new DevTunnelEndpointResolver(fixture.Broker, fixture.Request, () => AccessPresentationScope.Runtime);
         var resolution = await resolver.ResolveAsync(fixture.Request.Tunnel.Name!, DevTunnelAccessMode.Private,
             TestContext.Current.CancellationToken);
         using var cancellation = new CancellationTokenSource();
@@ -87,7 +87,7 @@ public sealed class DevTunnelEndpointResolverTests
     {
         await using var fixture = new DevTunnelConnectCredentialAccessExecutorTests.Fixture();
         await using var initial = await fixture.AcquireAsync();
-        var resolver = new DevTunnelEndpointResolver(fixture.Broker, fixture.Request);
+        var resolver = new DevTunnelEndpointResolver(fixture.Broker, fixture.Request, () => AccessPresentationScope.Runtime);
         var result = await resolver.ResolveAsync(fixture.Request.Tunnel.Name!, DevTunnelAccessMode.Private,
             TestContext.Current.CancellationToken);
         Assert.Equal(fixture.Session.Endpoint, result.BaseUri);
@@ -99,7 +99,7 @@ public sealed class DevTunnelEndpointResolverTests
     public async Task ResolveAsync_DifferentTunnelCannotUseAuthorizedDescriptor()
     {
         await using var fixture = new DevTunnelConnectCredentialAccessExecutorTests.Fixture();
-        var resolver = new DevTunnelEndpointResolver(fixture.Broker, fixture.Request);
+        var resolver = new DevTunnelEndpointResolver(fixture.Broker, fixture.Request, () => AccessPresentationScope.Runtime);
         await Assert.ThrowsAsync<DevTunnelCredentialAccessException>(() =>
             resolver.ResolveAsync("another tunnel", DevTunnelAccessMode.Private, TestContext.Current.CancellationToken));
         Assert.Empty(fixture.Registry.GetSnapshot());

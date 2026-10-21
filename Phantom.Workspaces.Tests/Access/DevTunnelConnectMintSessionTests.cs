@@ -25,11 +25,12 @@ public sealed class DevTunnelConnectMintSessionTests
         bool rejectAgain, bool cancelAfterReplay)
     {
         await using var fixture = new Fixture();
+        var presentationScope = AccessPresentationScope.Bootstrap;
         var identityRequest = DevTunnelIdentityCredentialAccessRequest.Create(fixture.Request.IdentityRoute,
             fixture.Request.Requestor, fixture.Request.Use with
             {
                 MemoryScopes = [ReleaseMemoryScopeKind.AllowOnce, ReleaseMemoryScopeKind.AllUses],
-            });
+            }, AccessPresentationScope.Bootstrap);
         var initial = fixture.Broker.AcquireAsync(identityRequest, TestContext.Current.CancellationToken);
         await fixture.ApproveUntilCompletedAsync(initial);
         await using var first = Assert.IsType<AccessSucceeded<DevTunnelIdentityCredentialAccessResult>>(await initial).Result;
@@ -43,6 +44,7 @@ public sealed class DevTunnelConnectMintSessionTests
                 Assert.Equal("management identity only", message.Headers.Authorization.Parameter);
                 Assert.Equal("buffered request", await message.Content!.ReadAsStringAsync(token));
                 var response = new HttpResponseMessage(++sends == 1 || rejectAgain ? HttpStatusCode.Unauthorized : HttpStatusCode.OK);
+                presentationScope = AccessPresentationScope.Runtime;
                 if (sends == 2)
                 {
                     response.Content = replayContent;
@@ -52,11 +54,12 @@ public sealed class DevTunnelConnectMintSessionTests
                     }
                 }
                 return response;
-            })));
+            }), () => presentationScope));
         var sending = client.PostAsync("https://global.rel.tunnels.api.visualstudio.com/tunnels",
             new StringContent("buffered request"), cancellation.Token);
         var renewal = await fixture.WaitForActionAsync(TestContext.Current.CancellationToken);
         Assert.False(sending.IsCompleted);
+        Assert.False(renewal.IsBootstrapBlocking);
         Assert.Equal(1, sends);
         Assert.Empty(await fixture.GitHub.InspectCachedGenerationsAsync(TestContext.Current.CancellationToken));
         await fixture.ApplyRememberedAsync(renewal);

@@ -19,11 +19,12 @@ public sealed class AuthenticatedHttpClientFactory : IAuthenticatedHttpClientFac
     }
 
     public HttpClient CreateClient(Uri baseAddress, IAccessBroker broker, DevTunnelConnectCredentialAccessRequest request,
-        Func<AccessPresentationScope>? presentationScope = null)
+        Func<AccessPresentationScope> presentationScope)
     {
         ArgumentNullException.ThrowIfNull(baseAddress);
         ArgumentNullException.ThrowIfNull(broker);
         ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(presentationScope);
 
         var handler = new DevTunnelAuthenticationHandler(broker, request, this.innerHandlerFactory(), presentationScope);
         return new HttpClient(handler)

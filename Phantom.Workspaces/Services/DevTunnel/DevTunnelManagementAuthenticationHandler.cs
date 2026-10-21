@@ -10,8 +10,11 @@ internal sealed class DevTunnelManagementAuthenticationHandler(
     IAccessBroker broker,
     DevTunnelIdentityCredentialAccessRequest identityRequest,
     HttpMessageHandler innerHandler,
-    Func<AccessPresentationScope>? presentationScope = null) : DelegatingHandler(innerHandler)
+    Func<AccessPresentationScope> presentationScope) : DelegatingHandler(innerHandler)
 {
+    private readonly Func<AccessPresentationScope> getPresentationScope =
+        presentationScope ?? throw new ArgumentNullException(nameof(presentationScope));
+
     protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
         CancellationToken cancellationToken)
@@ -63,8 +66,7 @@ internal sealed class DevTunnelManagementAuthenticationHandler(
     }
 
     private DevTunnelIdentityCredentialAccessRequest CurrentRequest() =>
-        presentationScope is null ? identityRequest :
-            identityRequest with { PresentationScope = presentationScope() };
+        identityRequest with { PresentationScope = this.getPresentationScope() };
 
     private async Task<HttpResponseMessage> SendWithIdentityAsync(
         HttpRequestMessage request,

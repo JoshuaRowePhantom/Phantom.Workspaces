@@ -16,7 +16,8 @@ public interface IAuthenticatedHttpClientFactory
     /// <summary>
     /// Creates an authenticated <see cref="HttpClient"/> bound to <paramref name="baseAddress"/> that
     /// exercises only a broker-owned Connect lease for <paramref name="request"/>.
+    /// The required live <paramref name="presentationScope"/> is evaluated before every acquisition.
     /// </summary>
     HttpClient CreateClient(Uri baseAddress, IAccessBroker broker, DevTunnelConnectCredentialAccessRequest request,
-        Func<AccessPresentationScope>? presentationScope = null);
+        Func<AccessPresentationScope> presentationScope);
 }

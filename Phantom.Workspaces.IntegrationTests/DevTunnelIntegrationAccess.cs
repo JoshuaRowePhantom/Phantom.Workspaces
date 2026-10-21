@@ -83,7 +83,7 @@ internal sealed class DevTunnelIntegrationAccess : IAsyncDisposable
     internal TunnelManagementClient CreateManagementClient()
     {
         var handler = new DevTunnelManagementAuthenticationHandler(this.Broker, this.IdentityRequest,
-            new HttpClientHandler { AllowAutoRedirect = false });
+            new HttpClientHandler { AllowAutoRedirect = false }, () => AccessPresentationScope.Runtime);
         this.handlers.Add(handler);
         return new(new ProductInfoHeaderValue("Phantom.Workspaces.IntegrationTests", "1.0"), null, null,
             handler, ManagementApiVersions.Version20230927Preview);

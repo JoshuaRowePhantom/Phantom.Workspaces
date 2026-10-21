@@ -63,7 +63,7 @@ public sealed class DevTunnelIdentityCredentialAccessExecutorTests
                         Headers = { Authorization = message.Headers.Authorization },
                     },
                 };
-            })));
+            }), () => AccessPresentationScope.Runtime));
         using var response = await client.SendAsync(original, TestContext.Current.CancellationToken);
         using var sent = response.RequestMessage;
         Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
@@ -108,7 +108,7 @@ public sealed class DevTunnelIdentityCredentialAccessExecutorTests
                     ? new OperationCanceledException(new CancellationToken(true))
                     : new System.Net.Http.HttpRequestException("transport failed");
                 throw failure;
-            })));
+            }), () => AccessPresentationScope.Runtime));
 
         if (cancelled)
         {
@@ -133,7 +133,7 @@ public sealed class DevTunnelIdentityCredentialAccessExecutorTests
         await using var fixture = new Fixture(DevTunnelIdentityScheme.GitHub);
         using var client = new System.Net.Http.HttpClient(new DevTunnelManagementAuthenticationHandler(
             fixture.Broker, fixture.Request, new RecordingHandler(_ =>
-                throw new InvalidOperationException("Identity must never reach this transport."))));
+                throw new InvalidOperationException("Identity must never reach this transport.")), () => AccessPresentationScope.Runtime));
         await Assert.ThrowsAsync<DevTunnelCredentialAccessException>(() =>
             client.GetAsync("https://tunnel.euw.devtunnels.ms/", TestContext.Current.CancellationToken));
         Assert.Equal(0, fixture.Executions);

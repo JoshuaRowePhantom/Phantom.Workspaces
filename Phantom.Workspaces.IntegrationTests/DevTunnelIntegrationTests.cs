@@ -1,4 +1,5 @@
 using Phantom.Workspaces.Configuration;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Services.DevTunnel;
 
 namespace Phantom.Workspaces.IntegrationTests;
@@ -11,7 +12,7 @@ public sealed class DevTunnelIntegrationTests(InProcessDevTunnelPrivateFixture f
     [Trait("Category", "Integration")]
     public async Task DevTunnelPrivateConnect_OwnerSameIdentity_UsesBrokerConnectLease()
     {
-        var resolver = new DevTunnelEndpointResolver(fixture.Access!.Broker, fixture.ConnectRequest!);
+        var resolver = new DevTunnelEndpointResolver(fixture.Access!.Broker, fixture.ConnectRequest!, () => AccessPresentationScope.Runtime);
         var resolution = await resolver.ResolveAsync(fixture.TunnelName!, DevTunnelAccessMode.Private,
             TestContext.Current.CancellationToken);
         Assert.Equal(fixture.RelayBaseUri, resolution.BaseUri);

@@ -44,7 +44,7 @@ public sealed class InProcessDevTunnelPrivateFixture : IAsyncLifetime
     internal DevTunnelConnectCredentialAccessRequest? ConnectRequest { get; private set; }
 
     public HttpClient CreateAuthenticatedClient() => new AuthenticatedHttpClientFactory()
-        .CreateClient(this.RelayBaseUri!, this.Access!.Broker, this.ConnectRequest!);
+        .CreateClient(this.RelayBaseUri!, this.Access!.Broker, this.ConnectRequest!, () => AccessPresentationScope.Runtime);
 
     /// <summary>The name label of the hosted tunnel; null when not started.</summary>
     public string? TunnelName { get; private set; }

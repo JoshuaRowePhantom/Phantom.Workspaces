@@ -9,6 +9,49 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class DevTunnelAuthenticationHandlerTests
 {
+    [Fact]
+    public async Task DevTunnelAuthenticationHandler_FactoryRejectsMissingLiveScopeBeforeCreatingTransport()
+    {
+        await using var fixture = new DevTunnelConnectCredentialAccessExecutorTests.Fixture();
+        var transports = 0;
+        var factory = new AuthenticatedHttpClientFactory(() =>
+        {
+            transports++;
+            return new RecordingHandler(_ => throw new InvalidOperationException("Missing scope reached transport."));
+        });
+        Assert.Throws<ArgumentNullException>(() =>
+            factory.CreateClient(fixture.Session.Endpoint, fixture.Broker, fixture.Request, null!));
+        Assert.Throws<ArgumentNullException>(() =>
+            new DevTunnelEndpointResolver(fixture.Broker, fixture.Request, null!));
+        Assert.Equal(0, transports);
+        Assert.Empty(fixture.Registry.GetSnapshot());
+    }
+
+    [Fact]
+    public async Task DevTunnelAuthenticationHandler_RetryUsesRuntimeScopeAfterSameGraphBootstrapHandoff()
+    {
+        await using var fixture = new DevTunnelConnectCredentialAccessExecutorTests.Fixture();
+        await using var initial = await fixture.AcquireAsync();
+        var scope = AccessPresentationScope.Bootstrap;
+        var sends = 0;
+        using var client = new AuthenticatedHttpClientFactory(() => new RecordingHandler(_ =>
+        {
+            scope = AccessPresentationScope.Runtime;
+            return new HttpResponseMessage(++sends == 1 ? HttpStatusCode.Unauthorized : HttpStatusCode.OK);
+        })).CreateClient(fixture.Session.Endpoint, fixture.Broker,
+            fixture.Request with { PresentationScope = AccessPresentationScope.Bootstrap }, () => scope);
+
+        var sending = client.GetAsync(fixture.Session.Endpoint, TestContext.Current.CancellationToken);
+        var renewal = fixture.Registry.GetSnapshot().Last(row =>
+            row.State is UserAuthorizationState.Pending or UserAuthorizationState.RenewalNeeded);
+        Assert.False(sending.IsCompleted);
+        Assert.False(renewal.IsBootstrapBlocking);
+        await fixture.ApplyAsync(renewal);
+        using var response = await sending.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(2, sends);
+    }
+
     [Theory]
     [InlineData(AccessPresentationScope.Bootstrap, true)]
     [InlineData(AccessPresentationScope.Runtime, false)]
@@ -220,7 +263,8 @@ public sealed class DevTunnelAuthenticationHandlerTests
     private static HttpClient Client(
         DevTunnelConnectCredentialAccessExecutorTests.Fixture fixture,
         Func<HttpRequestMessage, HttpResponseMessage> callback) =>
-        new(new DevTunnelAuthenticationHandler(fixture.Broker, fixture.Request, new RecordingHandler(callback)));
+        new(new DevTunnelAuthenticationHandler(fixture.Broker, fixture.Request, new RecordingHandler(callback),
+            () => AccessPresentationScope.Runtime));
 
     private static string? Header(HttpRequestMessage request) =>
         request.Headers.TryGetValues("X-Tunnel-Authorization", out var values) ? string.Join(",", values) : null;
