@@ -1,5 +1,13 @@
 # Design: `secret-store`
 
+> **Historical design:** The legacy secret-consent and credential-manager dialogs
+> described here have been removed. Current authorization uses the process-wide
+> typed access broker, shared authorization rows, and separate release-memory,
+> local-cache, and supported provider-grant administration controls. Forget,
+> Delete, and Revoke are distinct operations; the former mixed memory/saved-
+> credential enumeration is not a supported UI path. The native
+> `IPlatformSecretStore` backend and provider-owned credential caches remain in use.
+
 > **Bug title prefix:** `[secret-store]`
 >
 > **Authoritative source root:** `C:\dev\Phantom.Workspaces-Skills\features` (git worktree,
