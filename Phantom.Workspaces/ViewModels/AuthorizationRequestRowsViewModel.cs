@@ -38,8 +38,11 @@ public sealed class AuthorizationRequestRowsViewModel : IDisposable
             }
             catch
             {
-                this.disposed = true;
-                value.Changed -= this.OnChanged;
+                lock (this.snapshotGate)
+                {
+                    this.disposed = true;
+                    value.Changed -= this.OnChanged;
+                }
                 throw;
             }
         }
