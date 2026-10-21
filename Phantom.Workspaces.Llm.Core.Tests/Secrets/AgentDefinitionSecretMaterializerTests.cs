@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using System.Text.Json;
 using AgentSchema;
 using Moq;
 using Phantom.Workspaces.Llm.Interfaces.Access;
@@ -98,6 +99,57 @@ public sealed class AgentDefinitionSecretMaterializerTests
         Assert.False(result.Resolver.TryResolve("${SECRET:ProviderSecret}", out _));
         var tool = Assert.IsAssignableFrom<McpTool>(Assert.Single(Assert.IsType<PromptAgent>(definition).Tools!));
         Assert.Equal("${SECRET:ProviderSecret}", Assert.IsType<OAuthConnection>(tool.Connection).ClientSecret);
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_ArbitraryPromptShapedModelOptions_AcquiresManifestLeaseUsableAtSdkBoundary()
+    {
+        var definition = AgentDefinition.FromJson("""
+        {
+          "kind": "prompt",
+          "name": "test",
+          "model": {
+            "id": "m",
+            "provider": "p",
+            "apiType": "OpenAI",
+            "options": {
+              "additionalProperties": {
+                "payload": {
+                  "kind": "prompt",
+                  "tools": {
+                    "nested": {
+                      "kind": "mcp",
+                      "connection": {
+                        "kind": "oauth",
+                        "clientSecret": "${SECRET:ModelSecret}"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        """)!;
+        await using var broker = new ManifestAccessTestBroker();
+        await using var materialized = await new AgentDefinitionSecretMaterializer().MaterializeAsync(
+            definition,
+            broker,
+            new CredentialUseLineage(),
+            CancellationToken.None);
+        var request = Assert.Single(broker.Requests);
+        Assert.Equal("ModelSecret", request.Reference.Name);
+        var handle = Regex.Match(materialized.Definition.ToJson(), @"\$\{SECRET:[^}]+\}").Value;
+        Assert.True(materialized.Resolver.TryResolve(handle, out _));
+        var model = Assert.IsType<PromptAgent>(materialized.Definition).Model!;
+        var credentials = new AgentCredentialLeaseSet(null, model.Options, materialized.Resolver);
+
+        var sdkOptions = await credentials.UseAsync(
+            (_, options, _) => Task.FromResult(JsonSerializer.Serialize(options)),
+            CancellationToken.None);
+
+        Assert.Contains(broker.Material, sdkOptions);
+        Assert.DoesNotContain("${SECRET:", sdkOptions);
     }
 
     [Fact]

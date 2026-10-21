@@ -227,6 +227,50 @@ public sealed class SecretUsageScannerTests
     }
 
     [Fact]
+    public void Scan_ArbitraryPromptShapedModelOptions_AreScannedAndRewritten()
+    {
+        var definition = Load("""
+        {
+          "kind": "prompt",
+          "name": "test-agent",
+          "model": {
+            "id": "m",
+            "provider": "p",
+            "apiType": "OpenAI",
+            "options": {
+              "additionalProperties": {
+                "payload": {
+                  "kind": "prompt",
+                  "tools": {
+                    "nested": {
+                      "kind": "mcp",
+                      "connection": {
+                        "kind": "oauth",
+                        "clientSecret": "${SECRET:ModelSecret}"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        """);
+        var scanner = new SecretUsageScanner();
+
+        var usage = Assert.Single(scanner.Scan(definition));
+
+        Assert.Equal("ModelSecret", usage.SecretName);
+        Assert.Equal("definition.model.options.additionalProperties.payload.tools.nested.connection.clientSecret", usage.JsonPath);
+        scanner.RewritePlaceholders(definition, new Dictionary<SecretUsage, string>
+        {
+            [usage] = "opaque-model-handle",
+        });
+        Assert.Equal("opaque-model-handle", Assert.Single(scanner.Scan(definition)).SecretName);
+        Assert.DoesNotContain("${SECRET:ModelSecret}", definition.ToJson());
+    }
+
+    [Fact]
     public void RewritePlaceholders_OAuthClientSecret_CannotBeRewrittenThroughCallerSuppliedMap()
     {
         var definition = Load("""

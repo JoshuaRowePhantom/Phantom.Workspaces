@@ -148,6 +148,7 @@ public sealed partial class SecretUsageScanner
             && toolKindName == "mcp"
             && tool.Parent is JsonObject tools
             && tools.Parent is JsonObject agent
+            && agent.Parent is null
             && ReferenceEquals(agent["tools"], tools)
             && agent["kind"] is JsonValue agentKind
             && agentKind.TryGetValue<string>(out var agentKindName)
