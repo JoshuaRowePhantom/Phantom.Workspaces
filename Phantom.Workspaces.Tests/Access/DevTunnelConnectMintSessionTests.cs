@@ -177,6 +177,61 @@ public sealed class DevTunnelConnectMintSessionTests
             await first.InvalidateRejectedGenerationAsync(TestContext.Current.CancellationToken));
     }
 
+    [Fact]
+    public async Task ExportedManagementIdentity_StaleInFlight401CannotInvalidateRotatedIdentity()
+    {
+        await using var fixture = new Fixture();
+        var identityRequest = DevTunnelIdentityCredentialAccessRequest.Create(
+            fixture.Request.IdentityRoute, fixture.Request.Requestor,
+            fixture.Request.Use with
+            {
+                MemoryScopes = [ReleaseMemoryScopeKind.AllowOnce, ReleaseMemoryScopeKind.AllUses],
+            }, AccessPresentationScope.Runtime);
+        var initial = fixture.Broker.AcquireAsync(identityRequest, TestContext.Current.CancellationToken);
+        await fixture.ApproveUntilCompletedAsync(initial);
+        await using var first = Assert.IsType<AccessSucceeded<DevTunnelIdentityCredentialAccessResult>>(await initial).Result;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var rejectedContent = new TrackedContent();
+        var sends = 0;
+        using var client = new HttpClient(new DevTunnelManagementAuthenticationHandler(
+            fixture.Broker, identityRequest, new ManagementHandler(async (_, token) =>
+            {
+                sends++;
+                entered.SetResult();
+                await release.Task.WaitAsync(token);
+                return new HttpResponseMessage(HttpStatusCode.Unauthorized) { Content = rejectedContent };
+            }), () => AccessPresentationScope.Runtime));
+        var sending = client.GetAsync(
+            "https://global.rel.tunnels.api.visualstudio.com/tunnels", TestContext.Current.CancellationToken);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        DevTunnelIdentityCredentialAccessResult replacement;
+        try
+        {
+            Assert.Equal(CredentialGenerationInvalidationOutcome.Invalidated,
+                await first.InvalidateRejectedGenerationAsync(TestContext.Current.CancellationToken));
+            var rotating = fixture.Broker.AcquireAsync(identityRequest, TestContext.Current.CancellationToken);
+            await fixture.ApproveUntilCompletedAsync(rotating);
+            replacement = Assert.IsType<AccessSucceeded<DevTunnelIdentityCredentialAccessResult>>(await rotating).Result;
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+        await using var ownedReplacement = replacement;
+        var exception = await Assert.ThrowsAsync<DevTunnelCredentialAccessException>(() => sending);
+        Assert.Equal(AccessErrorCode.InvalidGeneration, exception.ErrorCode);
+        Assert.Equal(1, sends);
+        Assert.Equal(2, fixture.Source.Acquisitions);
+        Assert.True(rejectedContent.Disposed);
+        Assert.Equal(CredentialGenerationInvalidationOutcome.NoLongerCurrent,
+            await first.InvalidateRejectedGenerationAsync(TestContext.Current.CancellationToken));
+        Assert.NotEqual(first.AccessToken!.MaterialGeneration, replacement.AccessToken!.MaterialGeneration);
+        Assert.Equal("management identity only", Assert.IsType<SensitiveValueUseSucceeded<string>>(
+            await replacement.AccessToken!.UseAsync((material, _) => ValueTask.FromResult(material),
+                TestContext.Current.CancellationToken)).Result);
+    }
+
     private sealed class ManagementHandler(
         Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> callback) : HttpMessageHandler
     {
