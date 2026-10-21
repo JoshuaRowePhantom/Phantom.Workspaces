@@ -182,28 +182,76 @@ public sealed class AgentFactoryAccessTests
             });
         }
 
-        await using var updates = client.GetStreamingResponseAsync(
-            [new ChatMessage(ChatRole.User, "continue")]).GetAsyncEnumerator();
-        AgentCredentialAccessException refusal;
-        if (faultDispatch)
-        {
-            var aggregate = await Assert.ThrowsAsync<AggregateException>(async () => await updates.MoveNextAsync());
-            Assert.Equal(2, aggregate.InnerExceptions.Count);
-            refusal = Assert.IsType<AgentCredentialAccessException>(aggregate.InnerExceptions[0]);
-            Assert.Same(loggerFactory.Failure, aggregate.InnerExceptions[1]);
-        }
-        else
-        {
-            refusal = await Assert.ThrowsAsync<AgentCredentialAccessException>(async () => await updates.MoveNextAsync());
-        }
+        await AssertRefusedTurnAsync();
+        var pending = new AgentInputItem { Messages = [new ChatMessage(ChatRole.User, "preserve")] };
+        queues.Enqueue(queues.ImmediateQueue, [pending]);
+        Assert.Same(pending, Assert.Single(queues.ImmediateQueue.Items));
+        await AssertRefusedTurnAsync();
+        var later = new AgentInputItem { Messages = [new ChatMessage(ChatRole.User, "preserve later")] };
+        queues.Enqueue(queues.ImmediateQueue, [later]);
+        Assert.Equal(new[] { pending, later }, queues.ImmediateQueue.Items);
+        Assert.Single(broker.StoredRequests);
 
-        Assert.Equal(action, refusal.RequiredAction);
-        Assert.NotNull(refusal.RequestIdentifier);
+        async Task AssertRefusedTurnAsync()
+        {
+            await using var updates = client.GetStreamingResponseAsync(
+                [new ChatMessage(ChatRole.User, "continue")]).GetAsyncEnumerator();
+            AgentCredentialAccessException refusal;
+            if (faultDispatch)
+            {
+                var aggregate = await Assert.ThrowsAsync<AggregateException>(async () => await updates.MoveNextAsync());
+                Assert.Equal(2, aggregate.InnerExceptions.Count);
+                refusal = Assert.IsType<AgentCredentialAccessException>(aggregate.InnerExceptions[0]);
+                Assert.Same(loggerFactory.Failure, aggregate.InnerExceptions[1]);
+            }
+            else
+            {
+                refusal = await Assert.ThrowsAsync<AgentCredentialAccessException>(async () => await updates.MoveNextAsync());
+            }
+
+            Assert.Equal(action, refusal.RequiredAction);
+            Assert.NotNull(refusal.RequestIdentifier);
+            Assert.Equal(baselineSubscriptions, session.SubscriberCount);
+            Assert.Equal(0, session.SendAsyncCallCount);
+            Assert.Null(typeof(CopilotSdkChatClient)
+                .GetField("currentRouter", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(client));
+        }
+    }
+
+    [Fact]
+    public async Task CopilotSdkChatClient_InitialStreamingSendCancellation_DisposesTurnAndPreservesQueuedInput()
+    {
+        var broker = new AgentAccessTestBroker();
+        var queues = new AgentInputQueueManager();
+        var session = new FakeCopilotSession();
+        var result = await AgentFactory.CreateChatClientAsync(
+            Definition("openai", "${SECRET:ModelKey}"),
+            new AgentServices
+            {
+                AccessBroker = broker,
+                CopilotClientFactory = new RecordingFactory(new FakeCopilotClient(session), broker.Context),
+            },
+            queueManager: queues);
+        await using var client = Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
+        client.SetSubAgentDependencies(
+            Mock.Of<IRunningAgentChatFactory>(),
+            Mock.Of<ISubAgentTable>());
+        await EstablishSessionAsync(client);
+        var baselineSubscriptions = session.SubscriberCount;
+        using var cancellation = new CancellationTokenSource();
+        session.OnSubscribe = _ => cancellation.Cancel();
+
+        await using var updates = client.GetStreamingResponseAsync(
+            [new ChatMessage(ChatRole.User, "continue")],
+            cancellationToken: cancellation.Token).GetAsyncEnumerator();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await updates.MoveNextAsync());
+
+        Assert.True(cancellation.IsCancellationRequested);
         Assert.Equal(baselineSubscriptions, session.SubscriberCount);
         Assert.Equal(0, session.SendAsyncCallCount);
         Assert.Null(typeof(CopilotSdkChatClient)
             .GetField("currentRouter", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(client));
-        var pending = new AgentInputItem { Messages = [new ChatMessage(ChatRole.User, "preserve")] };
+        var pending = new AgentInputItem { Messages = [new ChatMessage(ChatRole.User, "preserve after cancellation")] };
         queues.Enqueue(queues.ImmediateQueue, [pending]);
         Assert.Same(pending, Assert.Single(queues.ImmediateQueue.Items));
         Assert.Single(broker.StoredRequests);
