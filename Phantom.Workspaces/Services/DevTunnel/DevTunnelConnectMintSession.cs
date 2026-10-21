@@ -120,7 +120,7 @@ internal sealed class DevTunnelConnectMintSession(
         {
             return new DevTunnelConnectMintFailed { ErrorCode = AccessErrorCode.IdentityMismatch };
         }
-        var used = await session.UseGenerationAsync(metadata.Generation,
+        var used = await session.UseGenerationAsync(metadata.Generation, context, permit,
             (identity, token) => management.MintAsync(request.Tunnel, DevTunnelIdentityScheme.Entra, new string(identity.Span), token),
             cancellationToken).ConfigureAwait(false);
         if (used is not EntraGenerationUseSucceeded<DevTunnelConnectManagementOutcome> success)
