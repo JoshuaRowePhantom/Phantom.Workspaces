@@ -332,10 +332,35 @@ internal sealed class EntraCredentialSession : IEntraCredentialSession
             }
 
             var result = await operation(material.Token, cancellation.Token).ConfigureAwait(false);
-            cancellation.Token.ThrowIfCancellationRequested();
-            return await parentExecutionPermit.AuthorizesPrivateUseAsync(parentContext, cancellation.Token).ConfigureAwait(false)
-                ? new EntraGenerationUseSucceeded<TResult> { Result = result }
-                : new EntraGenerationUseDenied<TResult>();
+            var transferred = false;
+            try
+            {
+                // End the identity borrow before post-checks or result cleanup can await.
+                material.Dispose();
+                cancellation.Token.ThrowIfCancellationRequested();
+                if (!await parentExecutionPermit.AuthorizesPrivateUseAsync(parentContext, cancellation.Token).ConfigureAwait(false))
+                {
+                    return new EntraGenerationUseDenied<TResult>();
+                }
+
+                var success = new EntraGenerationUseSucceeded<TResult> { Result = result };
+                transferred = true;
+                return success;
+            }
+            finally
+            {
+                if (!transferred)
+                {
+                    if (result is IAsyncDisposable asynchronous)
+                    {
+                        await asynchronous.DisposeAsync().ConfigureAwait(false);
+                    }
+                    else if (result is IDisposable disposable)
+                    {
+                        disposable.Dispose();
+                    }
+                }
+            }
         }
         finally
         {

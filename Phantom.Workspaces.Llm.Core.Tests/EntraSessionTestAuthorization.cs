@@ -7,7 +7,8 @@ internal static class EntraSessionTestAuthorization
 {
     internal static (ICredentialExecutionContext Context, ProviderInteractionPermit Permit) PrivateConnect(
         EntraCredentialAccessRequest configuration,
-        CredentialAccountIdentifier? account = null)
+        CredentialAccountIdentifier? account = null,
+        Func<bool>? isActive = null)
     {
         var request = PolicyRequest(configuration, account) with
         {
@@ -41,7 +42,7 @@ internal static class EntraSessionTestAuthorization
                 Policy = context.Policy,
                 Authorization = authorization,
                 Request = request,
-            }).BindExecution(() => true);
+            }).BindExecution(isActive ?? (() => true));
         return (context, permit);
     }
 

@@ -330,6 +330,151 @@ public sealed class EntraCredentialSessionTests
         Assert.Equal(1, acquirer.Calls);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EntraCredentialSession_PrivateUse_DisposesUnclaimedResultWhenProofEnds(bool asynchronous)
+    {
+        var request = Request();
+        var acquirer = new Acquirer();
+        await using var session = new EntraCredentialSession(request, new ForbiddenCredential(), acquirer);
+        var generation = await AcquireAsync(session, request);
+        var active = true;
+        var capability = EntraSessionTestAuthorization.PrivateConnect(request, acquirer.Account, () => active);
+        ReadOnlyMemory<char> observed = default;
+        void AssertIdentityCleared() => Assert.All(observed.ToArray(), character => Assert.Equal('\0', character));
+        object result = asynchronous
+            ? new TrackedAsynchronousResult { BeforeDisposal = AssertIdentityCleared }
+            : new TrackedSynchronousResult { BeforeDisposal = AssertIdentityCleared };
+        var outcome = await session.UseGenerationAsync(
+            generation, capability.Context, capability.Permit, (material, _) =>
+            {
+                observed = material;
+                active = false;
+                return ValueTask.FromResult(result);
+            }, CancellationToken.None);
+        Assert.IsType<EntraGenerationUseDenied<object>>(outcome);
+        if (result is TrackedAsynchronousResult asynchronousResult)
+        {
+            Assert.Equal(1, asynchronousResult.AsynchronousDisposals);
+            Assert.Equal(0, asynchronousResult.SynchronousDisposals);
+        }
+        else
+        {
+            Assert.Equal(1, Assert.IsType<TrackedSynchronousResult>(result).Disposals);
+        }
+
+        Assert.All(observed.ToArray(), character => Assert.Equal('\0', character));
+        Assert.True(await session.IsCurrentGenerationAsync(generation, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task EntraCredentialSession_PrivateUse_SuccessTransfersResultWithoutDisposingIt()
+    {
+        var request = Request();
+        var acquirer = new Acquirer();
+        await using var session = new EntraCredentialSession(request, new ForbiddenCredential(), acquirer);
+        var generation = await AcquireAsync(session, request);
+        var capability = EntraSessionTestAuthorization.PrivateConnect(request, acquirer.Account);
+        var result = new TrackedAsynchronousResult();
+        var outcome = Assert.IsType<EntraGenerationUseSucceeded<TrackedAsynchronousResult>>(await session.UseGenerationAsync(
+            generation, capability.Context, capability.Permit,
+            (_, _) => ValueTask.FromResult(result), CancellationToken.None));
+        Assert.Same(result, outcome.Result);
+        Assert.Equal(0, result.AsynchronousDisposals);
+        Assert.Equal(0, result.SynchronousDisposals);
+        await outcome.Result.DisposeAsync();
+        Assert.Equal(1, result.AsynchronousDisposals);
+    }
+
+    [Fact]
+    public async Task EntraCredentialSession_PrivateUse_CancellationAfterCallbackDisposesUnclaimedResult()
+    {
+        var request = Request();
+        var acquirer = new Acquirer();
+        await using var session = new EntraCredentialSession(request, new ForbiddenCredential(), acquirer);
+        var generation = await AcquireAsync(session, request);
+        var capability = EntraSessionTestAuthorization.PrivateConnect(request, acquirer.Account);
+        using var cancellation = new CancellationTokenSource();
+        var result = new TrackedAsynchronousResult();
+        ReadOnlyMemory<char> observed = default;
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await session.UseGenerationAsync(
+            generation, capability.Context, capability.Permit, (material, _) =>
+            {
+                observed = material;
+                cancellation.Cancel();
+                return ValueTask.FromResult(result);
+            }, cancellation.Token));
+        Assert.Equal(1, result.AsynchronousDisposals);
+        Assert.Equal(0, result.SynchronousDisposals);
+        Assert.All(observed.ToArray(), character => Assert.Equal('\0', character));
+    }
+
+    [Fact]
+    public async Task EntraCredentialSession_PrivateUse_ResultCleanupFailurePropagatesAndReleasesIdentity()
+    {
+        var request = Request();
+        var acquirer = new Acquirer();
+        await using var session = new EntraCredentialSession(request, new ForbiddenCredential(), acquirer);
+        var generation = await AcquireAsync(session, request);
+        var active = true;
+        var capability = EntraSessionTestAuthorization.PrivateConnect(request, acquirer.Account, () => active);
+        var result = new TrackedAsynchronousResult { ThrowOnDisposal = true };
+        ReadOnlyMemory<char> observed = default;
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(async () => await session.UseGenerationAsync(
+            generation, capability.Context, capability.Permit, (material, _) =>
+            {
+                observed = material;
+                active = false;
+                return ValueTask.FromResult(result);
+            }, CancellationToken.None));
+        Assert.Equal("Callback result cleanup failed.", failure.Message);
+        Assert.Equal(1, result.AsynchronousDisposals);
+        Assert.Equal(0, result.SynchronousDisposals);
+        Assert.All(observed.ToArray(), character => Assert.Equal('\0', character));
+        var next = EntraSessionTestAuthorization.PrivateConnect(request, acquirer.Account);
+        Assert.IsType<EntraGenerationUseSucceeded<int>>(await session.UseGenerationAsync(
+            generation, next.Context, next.Permit,
+            (material, _) => ValueTask.FromResult(material.Length), CancellationToken.None));
+    }
+
+    private sealed class TrackedAsynchronousResult : IAsyncDisposable, IDisposable
+    {
+        internal int AsynchronousDisposals { get; private set; }
+        internal int SynchronousDisposals { get; private set; }
+        internal bool ThrowOnDisposal { get; init; }
+        internal Action? BeforeDisposal { get; init; }
+
+        public ValueTask DisposeAsync()
+        {
+            this.AsynchronousDisposals++;
+            this.BeforeDisposal?.Invoke();
+            if (this.ThrowOnDisposal)
+            {
+                throw new InvalidOperationException("Callback result cleanup failed.");
+            }
+
+            return ValueTask.CompletedTask;
+        }
+
+        public void Dispose()
+        {
+            this.SynchronousDisposals++;
+            this.BeforeDisposal?.Invoke();
+        }
+    }
+
+    private sealed class TrackedSynchronousResult : IDisposable
+    {
+        internal int Disposals { get; private set; }
+        internal Action? BeforeDisposal { get; init; }
+        public void Dispose()
+        {
+            this.Disposals++;
+            this.BeforeDisposal?.Invoke();
+        }
+    }
+
     internal static EntraCredentialAccessRequest Request()
     {
         var requestor = CredentialIdentityFactory.CreateRequestorIdentifier(AccessRequestorKind.Application, "test");

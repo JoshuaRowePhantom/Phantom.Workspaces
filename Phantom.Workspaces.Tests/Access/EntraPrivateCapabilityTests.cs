@@ -224,19 +224,21 @@ public sealed class EntraPrivateCapabilityTests
         var session = fixture.Entra.GetSession(fixture.Request);
         var generation = (await session.InspectGenerationAsync(TestContext.Current.CancellationToken))!.Generation;
         var callbackCalls = 0;
+        var unclaimed = new CallbackResult();
         connect.Use = async (context, authorization, _, active, cancellationToken) =>
         {
             ReadOnlyMemory<char> observed = default;
-            Assert.IsType<EntraGenerationUseDenied<int>>(await session.UseGenerationAsync(
+            Assert.IsType<EntraGenerationUseDenied<CallbackResult>>(await session.UseGenerationAsync(
                 generation, context, active, async (material, token) =>
                 {
                     callbackCalls++;
                     observed = material;
                     Assert.NotNull(authorization.MemoryIdentifier);
                     await context.Policy.ForgetAsync(authorization.MemoryIdentifier, token);
-                    return material.Length;
+                    return unclaimed;
                 }, cancellationToken));
             Assert.Equal(1, callbackCalls);
+            Assert.Equal(1, unclaimed.Disposals);
             Assert.All(observed.ToArray(), character => Assert.Equal('\0', character));
             Assert.True(active.IsActivePrivateExecution(context));
             Assert.False(await active.AuthorizesPrivateUseAsync(context, cancellationToken));
@@ -253,6 +255,7 @@ public sealed class EntraPrivateCapabilityTests
         Assert.True(await session.IsCurrentGenerationAsync(generation, TestContext.Current.CancellationToken));
         Assert.Equal(1, fixture.Acquirer.Calls);
         Assert.Equal(1, callbackCalls);
+        Assert.Equal(1, unclaimed.Disposals);
         Assert.IsType<SensitiveValueUseSucceeded<int>>(await exported.AccessToken.UseAsync(
             (value, _) => ValueTask.FromResult(value.Length), TestContext.Current.CancellationToken));
     }
@@ -422,6 +425,16 @@ public sealed class EntraPrivateCapabilityTests
             public ValueTask<ConnectResult> MaterializeAsync(CancellationToken cancellationToken) =>
                 ValueTask.FromResult(new ConnectResult { Value = value });
             public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class CallbackResult : IAsyncDisposable
+    {
+        internal int Disposals { get; private set; }
+        public ValueTask DisposeAsync()
+        {
+            this.Disposals++;
+            return ValueTask.CompletedTask;
         }
     }
 
