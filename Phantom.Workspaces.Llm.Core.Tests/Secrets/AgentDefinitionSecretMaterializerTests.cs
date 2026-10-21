@@ -69,6 +69,38 @@ public sealed class AgentDefinitionSecretMaterializerTests
     }
 
     [Fact]
+    public async Task MaterializeAsync_OAuthClientSecret_DoesNotAdmitManifestCredentialWork()
+    {
+        var definition = AgentDefinition.FromJson("""
+        {
+          "kind": "prompt",
+          "name": "test",
+          "tools": [{
+            "name": "oauth-tool",
+            "kind": "mcp",
+            "connection": {
+              "kind": "oauth",
+              "endpoint": "https://resource.test/mcp",
+              "clientId": "client",
+              "clientSecret": "${SECRET:ProviderSecret}"
+            }
+          }]
+        }
+        """)!;
+        await using var broker = new ManifestAccessTestBroker { Deny = true };
+        await using var result = await new AgentDefinitionSecretMaterializer().MaterializeAsync(
+            definition,
+            broker,
+            new CredentialUseLineage(),
+            CancellationToken.None);
+
+        Assert.Empty(broker.Requests);
+        Assert.False(result.Resolver.TryResolve("${SECRET:ProviderSecret}", out _));
+        var tool = Assert.IsAssignableFrom<McpTool>(Assert.Single(Assert.IsType<PromptAgent>(definition).Tools!));
+        Assert.Equal("${SECRET:ProviderSecret}", Assert.IsType<OAuthConnection>(tool.Connection).ClientSecret);
+    }
+
+    [Fact]
     public async Task MaterializeAsync_Denial_DoesNotRewriteOrAcquireLaterOccurrences()
     {
         var definition = AgentDefinition.FromJson("""{"kind":"prompt","name":"test","instructions":"${SECRET:One} ${SECRET:Two}"}""")!;

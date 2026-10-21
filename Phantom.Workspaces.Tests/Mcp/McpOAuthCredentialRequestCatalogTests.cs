@@ -1,5 +1,6 @@
 using AgentSchema;
 using ModelContextProtocol.Client;
+using Moq;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Auth;
 using Phantom.Workspaces.Llm.Interfaces.Access;
@@ -13,6 +14,49 @@ namespace Phantom.Workspaces.Tests.Mcp;
 
 public sealed class McpOAuthCredentialRequestCatalogTests
 {
+    [Fact]
+    public async Task McpOAuthCatalog_AfterManifestMaterialization_PreservesConfidentialNestedSecretReference()
+    {
+        var definition = AgentDefinition.FromJson("""
+        {
+          "kind": "prompt",
+          "name": "test",
+          "tools": [{
+            "name": "oauth-tool",
+            "kind": "mcp",
+            "connection": {
+              "kind": "oauth",
+              "endpoint": "https://resource.test/mcp",
+              "clientId": "private-client",
+              "clientSecret": "${SECRET:private-client-secret}",
+              "scopes": ["read"]
+            }
+          }]
+        }
+        """)!;
+        var broker = new Mock<IAccessBroker>(MockBehavior.Strict);
+        var context = StoredSecretAccessExecutorTests.Request();
+        await using var materialized = await new AgentDefinitionSecretMaterializer().MaterializeAsync(
+            definition,
+            broker.Object,
+            context.Use.Lineage,
+            TestContext.Current.CancellationToken);
+        var tool = Assert.IsAssignableFrom<McpTool>(Assert.Single(Assert.IsType<PromptAgent>(materialized.Definition).Tools!));
+        var catalog = new McpOAuthCredentialRequestCatalog([Configuration(true)]);
+
+        var request = catalog.CreateRequest(
+            tool,
+            context.Requestor,
+            context.Use,
+            context.PresentationScope);
+
+        Assert.NotNull(request);
+        Assert.Equal("private-client-secret",
+            Assert.IsType<ConfidentialOAuthClient>(request.ClientAuthentication).ClientSecret.Name);
+        Assert.False(materialized.Resolver.TryResolve("${SECRET:private-client-secret}", out _));
+        broker.VerifyNoOtherCalls();
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

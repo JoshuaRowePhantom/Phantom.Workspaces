@@ -5,10 +5,11 @@ using AgentSchema;
 namespace Phantom.Workspaces.Llm.Secrets;
 
 /// <summary>
-/// Walks every string leaf of an <see cref="AgentDefinition"/> to discover <c>${SECRET:Name}</c>
+/// Walks manifest-owned string leaves of an <see cref="AgentDefinition"/> to discover <c>${SECRET:Name}</c>
 /// placeholder uses, and rewrites those placeholders to opaque per-materialization reference tokens
 /// (<c>${SECRET:&lt;handle&gt;}</c>). This type only ever touches placeholder <em>text</em>; it never
-/// substitutes a secret value.
+/// substitutes a secret value. MCP OAuth client-secret references remain provider-owned metadata
+/// for the independently authorized nested credential request.
 /// </summary>
 public sealed partial class SecretUsageScanner
 {
@@ -18,7 +19,7 @@ public sealed partial class SecretUsageScanner
     private static partial Regex SecretPlaceholderRegex();
 
     /// <summary>
-    /// Returns every <c>${SECRET:Name}</c> use in <paramref name="definition"/>, in document order.
+    /// Returns every manifest-owned <c>${SECRET:Name}</c> use in <paramref name="definition"/>, in document order.
     /// A single string leaf containing multiple placeholders yields one <see cref="SecretUsage"/> per
     /// occurrence (all sharing the same <see cref="SecretUsage.JsonPath"/>).
     /// </summary>
@@ -64,7 +65,10 @@ public sealed partial class SecretUsageScanner
             case JsonObject obj:
                 foreach (var property in obj)
                 {
-                    ScanNode(property.Value, $"{path}.{property.Key}", results);
+                    if (!IsProviderOwnedOAuthClientSecret(obj, property.Key))
+                    {
+                        ScanNode(property.Value, $"{path}.{property.Key}", results);
+                    }
                 }
 
                 break;
@@ -97,6 +101,10 @@ public sealed partial class SecretUsageScanner
             case JsonObject obj:
                 foreach (var key in obj.Select(property => property.Key).ToArray())
                 {
+                    if (IsProviderOwnedOAuthClientSecret(obj, key))
+                    {
+                        continue;
+                    }
                     var childPath = $"{path}.{key}";
                     if (obj[key] is JsonValue value && value.TryGetValue<string>(out var text))
                     {
@@ -127,6 +135,23 @@ public sealed partial class SecretUsageScanner
                 break;
         }
     }
+
+    private static bool IsProviderOwnedOAuthClientSecret(JsonObject connection, string propertyName)
+        => propertyName == "clientSecret"
+            && connection["kind"] is JsonValue connectionKind
+            && connectionKind.TryGetValue<string>(out var kind)
+            && kind == "oauth"
+            && connection.Parent is JsonObject tool
+            && ReferenceEquals(tool["connection"], connection)
+            && tool["kind"] is JsonValue toolKind
+            && toolKind.TryGetValue<string>(out var toolKindName)
+            && toolKindName == "mcp"
+            && tool.Parent is JsonObject tools
+            && tools.Parent is JsonObject agent
+            && ReferenceEquals(agent["tools"], tools)
+            && agent["kind"] is JsonValue agentKind
+            && agentKind.TryGetValue<string>(out var agentKindName)
+            && agentKindName == "prompt";
 
     private static string Rewrite(
         string text,

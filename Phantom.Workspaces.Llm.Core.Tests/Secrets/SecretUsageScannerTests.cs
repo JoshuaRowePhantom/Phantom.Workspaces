@@ -152,6 +152,110 @@ public sealed class SecretUsageScannerTests
     }
 
     [Fact]
+    public void Scan_OAuthClientSecret_RemainsProviderOwnedWhileOtherUsesAreScanned()
+    {
+        var definition = Load("""
+        {
+          "kind": "prompt",
+          "name": "test-agent",
+          "instructions": "${SECRET:Shared}",
+          "tools": [
+            {
+              "name": "oauth-tool",
+              "kind": "mcp",
+              "connection": {
+                "kind": "oauth",
+                "endpoint": "https://resource.test/mcp",
+                "clientId": "client",
+                "clientSecret": "${SECRET:Shared}"
+              }
+            },
+            {
+              "name": "key-tool",
+              "kind": "mcp",
+              "connection": {
+                "kind": "key",
+                "endpoint": "https://resource.test/mcp",
+                "apiKey": "${SECRET:Shared}"
+              }
+            }
+          ]
+        }
+        """);
+        var scanner = new SecretUsageScanner();
+        var usages = scanner.Scan(definition);
+        Assert.Equal(2, usages.Count);
+        Assert.All(usages, usage => Assert.Equal("Shared", usage.SecretName));
+        Assert.Contains(usages, usage => usage.JsonPath == "definition.instructions");
+        Assert.Contains(usages, usage => usage.JsonPath == "definition.tools.key-tool.connection.apiKey");
+
+        scanner.RewritePlaceholders(definition, usages.ToDictionary(usage => usage, _ => "opaque-handle"));
+
+        var tools = Assert.IsType<PromptAgent>(definition).Tools!;
+        Assert.Equal("${SECRET:Shared}",
+            Assert.IsType<OAuthConnection>(Assert.IsAssignableFrom<McpTool>(tools[0]).Connection).ClientSecret);
+        Assert.Equal("${SECRET:opaque-handle}",
+            Assert.IsType<ApiKeyConnection>(Assert.IsAssignableFrom<McpTool>(tools[1]).Connection).ApiKey);
+        Assert.Equal("${SECRET:opaque-handle}", Assert.IsType<PromptAgent>(definition).Instructions);
+    }
+
+    [Fact]
+    public void Scan_ArbitraryOAuthShapedModelOptions_AreNotExcluded()
+    {
+        var definition = Load("""
+        {
+          "kind": "prompt",
+          "name": "test-agent",
+          "model": {
+            "id": "m",
+            "provider": "p",
+            "apiType": "OpenAI",
+            "options": {
+              "additionalProperties": {
+                "kind": "mcp",
+                "connection": { "kind": "oauth", "clientSecret": "${SECRET:ModelSecret}" }
+              }
+            }
+          }
+        }
+        """);
+
+        var usage = Assert.Single(new SecretUsageScanner().Scan(definition));
+
+        Assert.Equal("ModelSecret", usage.SecretName);
+        Assert.Equal("definition.model.options.additionalProperties.connection.clientSecret", usage.JsonPath);
+    }
+
+    [Fact]
+    public void RewritePlaceholders_OAuthClientSecret_CannotBeRewrittenThroughCallerSuppliedMap()
+    {
+        var definition = Load("""
+        {
+          "kind": "prompt",
+          "name": "test-agent",
+          "tools": [{
+            "name": "oauth-tool",
+            "kind": "mcp",
+            "connection": {
+              "kind": "oauth",
+              "endpoint": "https://resource.test/mcp",
+              "clientId": "client",
+              "clientSecret": "${SECRET:ProviderSecret}"
+            }
+          }]
+        }
+        """);
+
+        new SecretUsageScanner().RewritePlaceholders(definition, new Dictionary<SecretUsage, string>
+        {
+            [new SecretUsage("ProviderSecret", "definition.tools.oauth-tool.connection.clientSecret")] = "opaque-handle",
+        });
+
+        var tool = Assert.IsAssignableFrom<McpTool>(Assert.Single(Assert.IsType<PromptAgent>(definition).Tools!));
+        Assert.Equal("${SECRET:ProviderSecret}", Assert.IsType<OAuthConnection>(tool.Connection).ClientSecret);
+    }
+
+    [Fact]
     public void RewritePlaceholders_SubstitutesHandleTokenNotPlaintext()
     {
         var scanner = new SecretUsageScanner();
