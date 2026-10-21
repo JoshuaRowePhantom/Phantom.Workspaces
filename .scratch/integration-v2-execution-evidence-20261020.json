@@ -1,6 +1,18 @@
 {
   "codeCheckpoint": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
   "productionCheckpoint": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
+  "currentMergedSdkRefresh": {
+    "executedAtMetadataCheckpoint": "23758f456381397dcf50f48e656f6145e11cb91d",
+    "source": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
+    "project": "Phantom.Workspaces.Llm.Core.Tests\\Phantom.Workspaces.Llm.Core.Tests.csproj",
+    "selectors": "CopilotSdkChatClient_AccountUpsert_PreservesRequiredActionAndRequestIdentifier,CopilotSdkChatClient_StreamingCredentialRefusal_DisposesTurnAndPreservesQueuedInput,CopilotSdkChatClient_InitialStreamingSendCancellation_DisposesTurnAndPreservesQueuedInput",
+    "passed": 7,
+    "failed": 0,
+    "skipped": 0,
+    "log": ".scratch\\integration-v2-sdk-account-stream-current-refresh-tests.log",
+    "status": "Fresh CURRENT merged execution satisfies direct parent affected-refresh request. Existing independent4bce/af29/351 source receipts retained, SDK gates CLOSED. No duplicate code/intake/review wait.",
+    "boundary": "Earlier7PASS and actual scanner3PASS plus full801/160/11 initial+10 remain separate preserved evidence. Only named-anonymous parity gate OPEN; no features advancement/publication."
+  },
   "hostCoherentReviewProvenance": {
     "receipt": ".scratch\\access-host-coherent-review-receipt-20261020.json",
     "sha256": "4226CB29595310D86EF92D37E2B9C978E7567B698890C434C6836CBB30F69A52",
@@ -125,6 +137,7 @@
     "skipped": 0,
     "review": "Legacy/usage, provider/recovery, shutdown, actual-root Audience and latest stored missing-source delta independently reviewed read-only. SDK7d3 exact4bce/af29/351/a1f existing CLEAR receipts now reconciled; identical inherited patches and actual merged regions verified. No source edits after sourceb007 full matrices.",
     "sdkAffectedSelectorPassed": 7,
+    "sdkCurrentMergedRefreshLog": ".scratch\\integration-v2-sdk-account-stream-current-refresh-tests.log",
     "boundary": "Prior completed sourceb007 matrices/SDK affected selectors preserved, but NEW named-anonymous semantic/coverage gate OPEN. WEB-only anonymous and Private named cases do not establish anonymous name discovery. No new runtime reproduction, whole-arc acceptance, features advancement or publication."
   },
   "gitHubOwnershipPairPassed": 75,
@@ -168,6 +181,11 @@
   "pairedLegacyBoundary": "Only coherent c9 endpoint accepted, never SDK-only81504 prefix. Actual missing095 usage prerequisite plus parent-authorized paired App/Core/modal/OAuth marker retirement; native contracts/caches preserved. Read-only new21-file review clear; source unchanged after116/133x10 and fresh final committed116/133.",
   "dumpCount": 0,
   "logs": [
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-sdk-account-stream-current-refresh-tests.log",
+      "bytes": 5980,
+      "sha256": "FEFA1D47EA7145B1D20889693C942EF2E84E883C063BA4249996AE173B6F518F"
+    },
     {
       "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\access-host-coherent-review-receipt-20261020.json",
       "bytes": 3103,

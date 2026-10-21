@@ -15,7 +15,21 @@
     "rootDistinction": "Frozen rootc6a43bfd lacks352 according to root's separate verified report. This integration DOES contain exact352 fixture via its own8b562 baseline history; never inferred from root e099=>279f alias or whole-root intake.",
     "boundary": "No duplicate import, source edit or new stability execution. Existing source-specific execution evidence retained; named-anonymous gate remains OPEN."
   },
-  "status": "ACCEPTANCE REOPENED: actual sourceb007 confirms named-anonymous repository AND persistence emit Name-only requests rejected by canonical anonymous Connect endpoint guard before any row. Prior anonymous consumer regression is explicit WEB only, not named parity. New assessment records source-supported IdentityMismatch path, NOT new runtime reproduction. SDK account/stream/scanner gates remain CLEAR, prior801/160/11 evidence retained.85 artifacts including exact existing root-review provenance; await fresh parent-scoped named-anonymous correction/explicit behavior decision. No features/publication or speculative root/Management identity changes.",
+  "status": "ACCEPTANCE REOPENED ONLY FOR NAMED-ANONYMOUS PARITY: sourceb007 repository/persistence Name-only anonymous requests are rejected by canonical endpoint guard; prior anonymous coverage is explicit WEB only. SDK account/stream/scanner gates CLOSED; parent-requested CURRENT seven-case account/stream union freshly7/7 PASS at23758f45 on unchangedb007. Prior scanner3/3 and full801/160/11 initial+10 retained.86 artifacts including existing root-review provenance. Await fresh parent-scoped named-anonymous correction/explicit behavior decision; no duplicate SDK packet/review/intake, features advancement or publication.",
+  "currentMergedSdkRefresh20261021": {
+    "requestedBy": "Direct parent2026-10-21T06:45:24.300-07:00 existingSdkGateClosure reconciliation",
+    "executedAtMetadataCheckpoint": "23758f456381397dcf50f48e656f6145e11cb91d",
+    "productionCheckpoint": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
+    "testProject": "Phantom.Workspaces.Llm.Core.Tests\\Phantom.Workspaces.Llm.Core.Tests.csproj",
+    "selectors": "CopilotSdkChatClient_AccountUpsert_PreservesRequiredActionAndRequestIdentifier,CopilotSdkChatClient_StreamingCredentialRefusal_DisposesTurnAndPreservesQueuedInput,CopilotSdkChatClient_InitialStreamingSendCancellation_DisposesTurnAndPreservesQueuedInput",
+    "passed": 7,
+    "failed": 0,
+    "skipped": 0,
+    "log": ".scratch\\integration-v2-sdk-account-stream-current-refresh-tests.log",
+    "sha256": "FEFA1D47EA7145B1D20889693C942EF2E84E883C063BA4249996AE173B6F518F",
+    "status": "SDK metadata gates CLOSED using existing independent4bce/af29/351 clearances plus fresh exact merged execution; no additional SDK source packet/review is awaited.",
+    "preserved": "Earlier seven-case evidence, scanner exact3/3 actual counterexample, full sourceb007801/160/11 initial+10, all historical failures and85 prior artifacts. No source changes or new source-review claim. Separate named-anonymous gate remains OPEN."
+  },
   "hostCoherentReviewProvenance20261021": {
     "receipt": ".scratch\\access-host-coherent-review-receipt-20261020.json",
     "sha256": "4226CB29595310D86EF92D37E2B9C978E7567B698890C434C6836CBB30F69A52",
@@ -62,7 +76,7 @@
     "log": ".scratch\\integration-v2-scanner-actual-root-counterexample-tests.log",
     "boundary": "Specific08e-alone counterexample does not reproduce with actual accepted08e+a1 companion. Current SDK handoff independently source-clears exacta1f root-anchor finding; actual inheritedc8d patch-id matches. No global scanner review inferred, and separate account/stream closures have their own receipts."
   },
-  "pendingSdkAgentAccountRequiredOutcomes20261021": {
+  "resolvedSdkAgentAccountRequiredOutcomes20261021": {
     "owner": "3891b377-81d3-407b-b1f2-9baa3c3a36db",
     "reviewer": "7d3e5373-3f52-47e7-8724-e3ed91e4826f",
     "finding": "Independent Agent-purpose account Upsert loses typed AuthorizationRequired/ReacquisitionRequired row/kind by throwing parameterless AgentCredentialAccessException.",
@@ -569,6 +583,6 @@
   ],
   "remainingAcceptanceBoundary": "NEW named-anonymous semantic/coverage gate OPEN; do not infer closure from prior WEB-only anonymous case or private named consumers. SDK account/stream/scanner closures remain CLEAR. Prior sourceb007801/160/11 initial+10 preserved; no features/publication or whole-arc acceptance.",
   "executionEvidenceManifest": ".scratch\\integration-v2-execution-evidence-20261020.json",
-  "cleanState": "Clean production/tests at sourceb007 unchanged; accepted SDK/root/shared/provider/caller/retirement corrections intact. Named-anonymous gate OPEN without speculative code or duplicate writer.85 evidence hashes/pins retained, including original-byte existing root-review provenance; prior801/160/11 plus SDK7/scanner3 valid only within actual covered cases. No new review, features advancement or publication.",
+  "cleanState": "Clean production/tests at sourceb007 unchanged; accepted SDK/root/shared/provider/caller/retirement corrections intact. CURRENT parent-requested SDK union freshly7PASS, all SDK gates CLOSED; scanner3PASS/full801/160/11 initial+10 retained. Named-anonymous gate OPEN without speculative code or duplicate writer.86 evidence hashes/pins retained, including original-byte root-review provenance. No new review, features advancement or publication.",
   "safety": "No live checkout, auth, browser/UI/provider actions, features advancement, push/release/closure or rewritten history. Normal submodule init preserves Dock8c8d11 and MXC29702c3."
 }
