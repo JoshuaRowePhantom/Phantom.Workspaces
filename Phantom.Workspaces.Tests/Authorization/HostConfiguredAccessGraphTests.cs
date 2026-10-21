@@ -113,20 +113,13 @@ public sealed class HostConfiguredAccessGraphTests
         store.VerifyNoOtherCalls();
     }
 
-    [Fact]
-    public async Task ConfiguredOAuthRoutesUseOneHostRegistryAndCurrentPresentation()
+    [Theory]
+    [InlineData("https://transport.invalid/connect")]
+    [InlineData(null)]
+    public async Task ConfiguredOAuthRoutesUseOneHostRegistryAndCurrentPresentation(string? endpoint)
     {
         await using var host = CreateHost();
-        var authentication = new RemoteAuthentication(
-            RemoteAuthentication.OAuthScheme,
-            Authority: "https://identity.invalid/",
-            ClientId: "configured-host-client",
-            AuthorizationEndpoint: "https://identity.invalid/authorize",
-            TokenEndpoint: "https://identity.invalid/token",
-            Scopes: ["tunnel", "profile"],
-            AccountEndpoint: "https://identity.invalid/account",
-            AccountIdentifierClaim: OAuthAccountIdentifierClaim.Subject,
-            Audience: "configured-tunnel-audience");
+        var authentication = OAuthAuthentication(endpoint);
         var (requestor, use) = CreateUse();
         var bootstrap = Assert.IsType<OAuthDevTunnelIdentityRoute>(
             host.CreateDevTunnelIdentityRoute(authentication, requestor, use));
@@ -145,6 +138,67 @@ public sealed class HostConfiguredAccessGraphTests
         Assert.Same(use, runtime.Credential.Use);
         Assert.Equal(AccessPresentationScope.Runtime, runtime.Credential.PresentationScope);
         Assert.Empty(host.AuthorizationRegistry.GetSnapshot());
+    }
+
+    [Theory]
+    [InlineData("https://transport.invalid/connect", CredentialUseKind.Repository)]
+    [InlineData(null, CredentialUseKind.Repository)]
+    [InlineData("https://transport.invalid/connect", CredentialUseKind.Application)]
+    [InlineData(null, CredentialUseKind.Application)]
+    public async Task ConfiguredOAuthSourceRouteUsesAudienceIndependentlyOfEndpoint(string? endpoint, CredentialUseKind useKind)
+    {
+        var store = new Mock<IPlatformSecretStore>(MockBehavior.Strict);
+        await using var host = AccessHostServices.Create(new AccessHostOptions
+        {
+            PlatformSecretStore = store.Object,
+            Dispatch = action => action(),
+            ReleaseMemoryFilePath = Path.Combine(Environment.CurrentDirectory, ".nonexistent-host-oauth-audience",
+                Guid.NewGuid().ToString("N"), "release-memory.json"),
+        });
+        var authentication = OAuthAuthentication(endpoint);
+        var source = new DevTunnelNameRepositorySource("configured-oauth-tunnel", Configuration.DevTunnelAccessMode.Private, authentication);
+        var bootstrap = Assert.IsType<OAuthDevTunnelIdentityRoute>(host.CreateDevTunnelIdentityRoute(source, useKind));
+        var configuration = Assert.Single(host.OAuthProviders.SnapshotConfigurations());
+        Assert.Equal(authentication.Audience, configuration.Provider.Audience);
+        Assert.NotEqual(endpoint, configuration.Provider.Audience);
+        Assert.Equal(useKind, bootstrap.Credential.Use.Kind);
+        Assert.Equal(AccessPresentationScope.Bootstrap, bootstrap.Credential.PresentationScope);
+
+        host.EnterRuntime();
+        var runtime = Assert.IsType<OAuthDevTunnelIdentityRoute>(host.CreateDevTunnelIdentityRoute(source, useKind));
+        Assert.Equal(bootstrap.Credential.Credential.LogicalIdentifier, runtime.Credential.Credential.LogicalIdentifier);
+        Assert.Same(configuration, Assert.Single(host.OAuthProviders.SnapshotConfigurations()));
+        Assert.Equal(AccessPresentationScope.Runtime, runtime.Credential.PresentationScope);
+        Assert.Empty(host.AuthorizationRegistry.GetSnapshot());
+        store.VerifyNoOtherCalls();
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData("relative-audience")]
+    [InlineData("/relative-audience")]
+    public async Task InvalidConfiguredOAuthAudienceFailsInActualRootBeforeRegistration(string? audience)
+    {
+        var store = new Mock<IPlatformSecretStore>(MockBehavior.Strict);
+        await using var host = AccessHostServices.Create(new AccessHostOptions
+        {
+            PlatformSecretStore = store.Object,
+            Dispatch = action => action(),
+            ReleaseMemoryFilePath = Path.Combine(Environment.CurrentDirectory, ".nonexistent-host-oauth-audience",
+                Guid.NewGuid().ToString("N"), "release-memory.json"),
+        });
+        var source = new DevTunnelNameRepositorySource("configured-oauth-tunnel", Configuration.DevTunnelAccessMode.Private,
+            OAuthAuthentication("https://transport.invalid/connect") with { Audience = audience });
+
+        var failure = Assert.Throws<DevTunnelCredentialAccessException>(() =>
+            host.CreateDevTunnelIdentityRoute(source, CredentialUseKind.Repository));
+
+        Assert.Equal(AccessErrorCode.UnsupportedRequest, failure.ErrorCode);
+        Assert.Empty(host.OAuthProviders.SnapshotConfigurations());
+        Assert.Empty(host.AuthorizationRegistry.GetSnapshot());
+        store.VerifyNoOtherCalls();
     }
 
     [Fact]
@@ -212,6 +266,18 @@ public sealed class HostConfiguredAccessGraphTests
         Assert.Equal(0, scopeReads);
         Assert.Empty(host.AuthorizationRegistry.GetSnapshot());
     }
+
+    private static RemoteAuthentication OAuthAuthentication(string? endpoint) => new(
+        RemoteAuthentication.OAuthScheme,
+        Endpoint: endpoint,
+        Authority: "https://identity.invalid/",
+        ClientId: "configured-host-client",
+        AuthorizationEndpoint: "https://identity.invalid/authorize",
+        TokenEndpoint: "https://identity.invalid/token",
+        Scopes: ["tunnel", "profile"],
+        AccountEndpoint: "https://identity.invalid/account",
+        AccountIdentifierClaim: OAuthAccountIdentifierClaim.Subject,
+        Audience: "https://tunnels.api.visualstudio.com/");
 
     private sealed class CachedPlatformStore : IPlatformSecretStore, IDisposable
     {

@@ -22,11 +22,13 @@ public sealed class DevTunnelIdentityRouteFactoryTests
         fixture.Store.VerifyNoOtherCalls();
     }
 
-    [Fact]
-    public void Create_OAuthRegistersActualExplicitConfigurationInSharedRegistry_WithoutAnyAcquisition()
+    [Theory]
+    [InlineData("https://transport.example/connect")]
+    [InlineData(null)]
+    public void Create_OAuthRegistersActualExplicitConfigurationInSharedRegistry_WithoutAnyAcquisition(string? endpoint)
     {
         var fixture = new Fixture();
-        var authentication = OAuth() with { Scopes = ["profile", "openid", "profile"] };
+        var authentication = OAuth() with { Endpoint = endpoint, Scopes = ["profile", "openid", "profile"] };
         var route = Assert.IsType<OAuthDevTunnelIdentityRoute>(fixture.Create(authentication));
         var registered = fixture.Registry.FindConfiguration(route.Credential.Credential.LogicalIdentifier);
 
@@ -136,7 +138,7 @@ public sealed class DevTunnelIdentityRouteFactoryTests
         TokenEndpoint: "https://provider.example/token",
         AccountEndpoint: "https://provider.example/principal",
         AccountIdentifierClaim: OAuthAccountIdentifierClaim.Subject,
-        Audience: "configured-resource");
+        Audience: "https://resource.example/");
 
     private sealed class Fixture
     {
