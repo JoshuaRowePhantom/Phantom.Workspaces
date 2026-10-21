@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using System.Reflection;
 using GitHub.Copilot;
+using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Llm.Copilot;
 using Phantom.Workspaces.Llm.Core.Transport.Chat;
 using Phantom.Workspaces.Llm.Interfaces.Access;
@@ -226,6 +227,91 @@ public sealed class WorkerCopilotProviderAccessTests
         Assert.Equal(0, factory.Client.Session.Uses);
         Assert.Single(broker.Requests);
         Assert.Equal(Material, factory.Client.Provider!.ApiKey);
+        var failure = await channel.Outbound.Reader.ReadAsync(TestToken());
+        Assert.Equal(CopilotSessionTransportFrames.SessionErrorType,
+            CopilotSessionTransportFrames.FrameType(failure));
+        Assert.DoesNotContain(Endpoint, failure.GetRawText(), StringComparison.Ordinal);
+        Assert.DoesNotContain(Material, failure.GetRawText(), StringComparison.Ordinal);
+        await channel.Inbound.Writer.WriteAsync(OperationFrame("abort"), TestToken());
+        await factory.Client.Session.AbortCalled.Task.WaitAsync(TestToken());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ModelChange_QueuedBehindGuardedSend_DoesNotBlockAbortOrToolResult(bool completeWithTool)
+    {
+        await using var broker = new StoredSecretAccessTestBroker(Material);
+        var factory = new RecordingFactory(broker);
+        factory.Client.Session.BlockSend = !completeWithTool;
+        await using var channel = new WorkerChannel();
+        await using var host = await OpenAsync(factory, broker, channel);
+        var tool = completeWithTool ? AIFunctionFactory.Create(() => "source-result", "source_tool") : null;
+        await channel.Inbound.Writer.WriteAsync(SessionFrame(false, tool), TestToken());
+        _ = await channel.Outbound.Reader.ReadAsync(TestToken());
+        if (completeWithTool)
+        {
+            factory.Client.Session.OnSending = async token =>
+            {
+                var remoteTool = Assert.IsAssignableFrom<AIFunction>(Assert.Single(factory.Client.Config!.Tools!));
+                _ = await remoteTool.InvokeAsync(new AIFunctionArguments(), token);
+            };
+        }
+        await channel.Inbound.Writer.WriteAsync(OperationFrame("send-and-wait"), TestToken());
+        await factory.Client.Session.SendEntered.Task.WaitAsync(TestToken());
+        JsonElement? invocation = completeWithTool
+            ? await channel.Outbound.Reader.ReadAsync(TestToken())
+            : null;
+        if (invocation is { } toolInvocation)
+            Assert.Equal(CopilotSessionTransportFrames.ToolInvokeType, CopilotSessionTransportFrames.FrameType(toolInvocation));
+
+        await channel.Inbound.Writer.WriteAsync(OperationFrame("set-model"), TestToken());
+        if (invocation is { } pendingTool)
+        {
+            await channel.Inbound.Writer.WriteAsync(CopilotSessionTransportFrames.BuildFrame(new JsonObject
+            {
+                [CopilotSessionTransportFrames.TypeProperty] = CopilotSessionTransportFrames.ToolResultType,
+                [CopilotSessionTransportFrames.ToolCallIdProperty] = CopilotSessionTransportFrames.GetString(
+                    pendingTool, CopilotSessionTransportFrames.ToolCallIdProperty),
+                [CopilotSessionTransportFrames.ResultJsonProperty] = JsonSerializer.Serialize("source-result"),
+            }), TestToken());
+        }
+        else
+        {
+            await channel.Inbound.Writer.WriteAsync(OperationFrame("abort"), TestToken());
+            await factory.Client.Session.AbortCalled.Task.WaitAsync(TestToken());
+        }
+
+        await factory.Client.Session.ModelChanged.Task.WaitAsync(TestToken());
+        var completed = await channel.Outbound.Reader.ReadAsync(TestToken());
+        Assert.Equal(CopilotSessionTransportFrames.SendResultType,
+            CopilotSessionTransportFrames.FrameType(completed));
+        Assert.Equal(completeWithTool ? 2 : 3, factory.Client.Session.Uses);
+        Assert.Single(broker.Requests);
+        Assert.DoesNotContain(Endpoint, completed.GetRawText(), StringComparison.Ordinal);
+        Assert.DoesNotContain(Material, completed.GetRawText(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ModelChange_SdkFailure_IsSanitizedAndDoesNotStopFramePump()
+    {
+        await using var broker = new StoredSecretAccessTestBroker(Material);
+        var factory = new RecordingFactory(broker);
+        factory.Client.Session.FailSetModel = true;
+        await using var channel = new WorkerChannel();
+        await using var host = await OpenAsync(factory, broker, channel);
+        await channel.Inbound.Writer.WriteAsync(SessionFrame(false), TestToken());
+        _ = await channel.Outbound.Reader.ReadAsync(TestToken());
+        await channel.Inbound.Writer.WriteAsync(OperationFrame("set-model"), TestToken());
+
+        var failure = await channel.Outbound.Reader.ReadAsync(TestToken());
+        Assert.Equal(CopilotSessionTransportFrames.SessionErrorType,
+            CopilotSessionTransportFrames.FrameType(failure));
+        Assert.DoesNotContain(Endpoint, failure.GetRawText(), StringComparison.Ordinal);
+        Assert.DoesNotContain(Material, failure.GetRawText(), StringComparison.Ordinal);
+        Assert.Single(broker.Requests);
+        await channel.Inbound.Writer.WriteAsync(OperationFrame("abort"), TestToken());
+        await factory.Client.Session.AbortCalled.Task.WaitAsync(TestToken());
     }
 
     [Theory]
@@ -404,7 +490,7 @@ public sealed class WorkerCopilotProviderAccessTests
             cancellationToken);
     }
 
-    private static JsonElement SessionFrame(bool resume) =>
+    private static JsonElement SessionFrame(bool resume, AIFunction? tool = null) =>
         CopilotSessionTransportFrames.BuildFrame(new JsonObject
         {
             [CopilotSessionTransportFrames.TypeProperty] = resume
@@ -412,7 +498,7 @@ public sealed class WorkerCopilotProviderAccessTests
                 : CopilotSessionTransportFrames.CreateSessionType,
             [CopilotSessionTransportFrames.SessionIdProperty] = "worker-session",
             [CopilotSessionTransportFrames.ConfigProperty] = CopilotSessionTransportFrames.SerializeConfig(
-                new SessionConfig { Model = "worker-model" }),
+                new SessionConfig { Model = "worker-model", Tools = tool is null ? null : [tool] }),
         });
 
     private static JsonElement OperationFrame(string operation) =>
@@ -482,6 +568,7 @@ public sealed class WorkerCopilotProviderAccessTests
         public RecordingSession Session { get; } = new();
         public TaskCompletionSource CreateEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public ProviderConfig? Provider { get; private set; }
+        public SessionConfig? Config { get; private set; }
         public int Starts { get; private set; }
         public int Creates { get; private set; }
         public int Resumes { get; private set; }
@@ -502,6 +589,7 @@ public sealed class WorkerCopilotProviderAccessTests
         {
             this.Creates++;
             this.Provider = config.Provider;
+            this.Config = config;
             this.CreateEntered.TrySetResult();
             if (this.BlockCreate)
                 await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
@@ -533,8 +621,11 @@ public sealed class WorkerCopilotProviderAccessTests
         public int Uses { get; private set; }
         public bool Disposed { get; private set; }
         public bool BlockSend { get; set; }
+        public bool FailSetModel { get; set; }
+        public Func<CancellationToken, Task>? OnSending { get; set; }
         public TaskCompletionSource SendEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource AbortCalled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ModelChanged { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public IDisposable Subscribe(Action<SessionEvent> handler)
         {
             this.handler = handler;
@@ -548,6 +639,8 @@ public sealed class WorkerCopilotProviderAccessTests
         {
             this.Uses++;
             this.SendEntered.TrySetResult();
+            if (this.OnSending is not null)
+                await this.OnSending(cancellationToken);
             if (this.BlockSend)
                 await this.AbortCalled.Task.WaitAsync(cancellationToken);
             return null;
@@ -566,6 +659,9 @@ public sealed class WorkerCopilotProviderAccessTests
         public Task SetModelAsync(string modelId, CancellationToken cancellationToken)
         {
             this.Uses++;
+            if (this.FailSetModel)
+                throw new InvalidOperationException($"{Endpoint} {Material}");
+            this.ModelChanged.TrySetResult();
             return Task.CompletedTask;
         }
         public ValueTask DisposeAsync()

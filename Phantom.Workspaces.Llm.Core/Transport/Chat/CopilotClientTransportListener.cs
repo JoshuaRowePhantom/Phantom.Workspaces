@@ -459,7 +459,8 @@ public sealed class CopilotClientTransportListener : ITransportListener
                     var modelId = CopilotSessionTransportFrames.GetString(frame, CopilotSessionTransportFrames.ModelIdProperty);
                     if (this.session is { } modelSession && !string.IsNullOrWhiteSpace(modelId))
                     {
-                        await modelSession.SetModelAsync(modelId, token).ConfigureAwait(false);
+                        this.StartOperation(
+                            operationToken => modelSession.SetModelAsync(modelId, operationToken));
                     }
 
                     break;
