@@ -50,11 +50,19 @@ public sealed class DevTunnelAuthenticationHandler : DelegatingHandler
             await this.broker.AcquireAsync(this.CurrentRequest(), cancellationToken).ConfigureAwait(false));
         using var retry = await CloneRequestAsync(request, cancellationToken).ConfigureAwait(false);
         var replayResponse = await this.SendWithCredentialAsync(retry, renewed, cancellationToken).ConfigureAwait(false);
-        if (replayResponse.StatusCode == HttpStatusCode.Unauthorized)
+        try
         {
-            await renewed.InvalidateRejectedGenerationAsync(cancellationToken).ConfigureAwait(false);
+            if (replayResponse.StatusCode == HttpStatusCode.Unauthorized)
+            {
+                await renewed.InvalidateRejectedGenerationAsync(cancellationToken).ConfigureAwait(false);
+            }
+            return replayResponse;
         }
-        return replayResponse;
+        catch
+        {
+            replayResponse.Dispose();
+            throw;
+        }
     }
 
     private DevTunnelConnectCredentialAccessRequest CurrentRequest() =>
@@ -95,7 +103,15 @@ public sealed class DevTunnelAuthenticationHandler : DelegatingHandler
     internal static void SanitizeResponseRequest(HttpResponseMessage response, HttpRequestMessage request)
     {
         // A transport may return a caller-owned request or an authenticated copy.
-        response.RequestMessage = CloneRequestMetadata(response.RequestMessage ?? request);
+        try
+        {
+            response.RequestMessage = CloneRequestMetadata(response.RequestMessage ?? request);
+        }
+        catch
+        {
+            response.Dispose();
+            throw;
+        }
     }
 
     internal static async Task<HttpRequestMessage> CloneRequestAsync(

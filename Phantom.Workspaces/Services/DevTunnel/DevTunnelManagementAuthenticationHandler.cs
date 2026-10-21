@@ -35,11 +35,19 @@ internal sealed class DevTunnelManagementAuthenticationHandler(
             await broker.AcquireAsync(CurrentRequest(), cancellationToken).ConfigureAwait(false));
         using var retry = await DevTunnelAuthenticationHandler.CloneRequestAsync(request, cancellationToken).ConfigureAwait(false);
         var replay = await this.SendWithIdentityAsync(retry, renewed, cancellationToken).ConfigureAwait(false);
-        if (replay.StatusCode == HttpStatusCode.Unauthorized)
+        try
         {
-            await renewed.InvalidateRejectedGenerationAsync(cancellationToken).ConfigureAwait(false);
+            if (replay.StatusCode == HttpStatusCode.Unauthorized)
+            {
+                await renewed.InvalidateRejectedGenerationAsync(cancellationToken).ConfigureAwait(false);
+            }
+            return replay;
         }
-        return replay;
+        catch
+        {
+            replay.Dispose();
+            throw;
+        }
     }
 
     internal static void ValidateDestination(Uri? destination)

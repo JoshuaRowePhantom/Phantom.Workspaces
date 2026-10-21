@@ -18,9 +18,11 @@ namespace Phantom.Workspaces.Tests.Access;
 public sealed class DevTunnelConnectMintSessionTests
 {
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task ExportedManagementIdentity_401InvalidatesExactGeneration_AndReplaysOnlyOnce(bool rejectAgain)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task ExportedManagementIdentity_401InvalidatesExactGeneration_AndReplaysOnlyOnce(
+        bool rejectAgain, bool cancelAfterReplay)
     {
         await using var fixture = new Fixture();
         var identityRequest = DevTunnelIdentityCredentialAccessRequest.Create(fixture.Request.IdentityRoute,
@@ -31,6 +33,8 @@ public sealed class DevTunnelConnectMintSessionTests
         var initial = fixture.Broker.AcquireAsync(identityRequest, TestContext.Current.CancellationToken);
         await fixture.ApproveUntilCompletedAsync(initial);
         await using var first = Assert.IsType<AccessSucceeded<DevTunnelIdentityCredentialAccessResult>>(await initial).Result;
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var replayContent = new TrackedContent();
         var sends = 0;
         using var client = new HttpClient(new DevTunnelManagementAuthenticationHandler(
             fixture.Broker, identityRequest, new ManagementHandler(async (message, token) =>
@@ -38,15 +42,31 @@ public sealed class DevTunnelConnectMintSessionTests
                 Assert.Equal("github", message.Headers.Authorization!.Scheme);
                 Assert.Equal("management identity only", message.Headers.Authorization.Parameter);
                 Assert.Equal("buffered request", await message.Content!.ReadAsStringAsync(token));
-                return new(++sends == 1 || rejectAgain ? HttpStatusCode.Unauthorized : HttpStatusCode.OK);
+                var response = new HttpResponseMessage(++sends == 1 || rejectAgain ? HttpStatusCode.Unauthorized : HttpStatusCode.OK);
+                if (sends == 2)
+                {
+                    response.Content = replayContent;
+                    if (cancelAfterReplay)
+                    {
+                        cancellation.Cancel();
+                    }
+                }
+                return response;
             })));
         var sending = client.PostAsync("https://global.rel.tunnels.api.visualstudio.com/tunnels",
-            new StringContent("buffered request"), TestContext.Current.CancellationToken);
+            new StringContent("buffered request"), cancellation.Token);
         var renewal = await fixture.WaitForActionAsync(TestContext.Current.CancellationToken);
         Assert.False(sending.IsCompleted);
         Assert.Equal(1, sends);
         Assert.Empty(await fixture.GitHub.InspectCachedGenerationsAsync(TestContext.Current.CancellationToken));
         await fixture.ApplyRememberedAsync(renewal);
+        if (cancelAfterReplay)
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => fixture.ApproveUntilCompletedAsync(sending));
+            Assert.Equal(2, sends);
+            Assert.True(replayContent.Disposed);
+            return;
+        }
         await fixture.ApproveUntilCompletedAsync(sending);
         using var response = await sending;
         Assert.Equal(rejectAgain ? HttpStatusCode.Unauthorized : HttpStatusCode.OK, response.StatusCode);
@@ -62,6 +82,17 @@ public sealed class DevTunnelConnectMintSessionTests
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
             callback(request, cancellationToken);
+    }
+
+    private sealed class TrackedContent() : StringContent("response")
+    {
+        public bool Disposed { get; private set; }
+
+        protected override void Dispose(bool disposing)
+        {
+            this.Disposed |= disposing;
+            base.Dispose(disposing);
+        }
     }
 
     [Fact]

@@ -137,6 +137,45 @@ public sealed class DevTunnelAuthenticationHandlerTests
     }
 
     [Fact]
+    public async Task DevTunnelAuthenticationHandler_CancelledReplayInvalidationDisposesUnpublishedResponse()
+    {
+        await using var fixture = new DevTunnelConnectCredentialAccessExecutorTests.Fixture();
+        await using var initial = await fixture.AcquireAsync();
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var content = new TrackedContent();
+        var sends = 0;
+        using var client = Client(fixture, _ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.Unauthorized);
+            if (++sends == 2)
+            {
+                response.Content = content;
+                cancellation.Cancel();
+            }
+            return response;
+        });
+        var sending = client.GetAsync(fixture.Session.Endpoint, cancellation.Token);
+        await fixture.ApplyAsync(fixture.Registry.GetSnapshot().Last(snapshot =>
+            snapshot.State is UserAuthorizationState.Pending or UserAuthorizationState.RenewalNeeded));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            sending.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+        Assert.Equal(2, sends);
+        Assert.True(content.Disposed);
+    }
+
+    private sealed class TrackedContent() : StringContent("response")
+    {
+        public bool Disposed { get; private set; }
+
+        protected override void Dispose(bool disposing)
+        {
+            this.Disposed |= disposing;
+            base.Dispose(disposing);
+        }
+    }
+
+    [Fact]
     public async Task DevTunnelAuthenticationHandler_NonAuthFailure_DoesNotRenew()
     {
         await using var fixture = new DevTunnelConnectCredentialAccessExecutorTests.Fixture();
