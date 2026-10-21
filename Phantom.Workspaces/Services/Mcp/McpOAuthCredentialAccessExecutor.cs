@@ -38,6 +38,8 @@ internal sealed class McpOAuthCredentialAccessExecutor :
     private readonly McpOAuthCredentialRequestCatalog catalog;
     private readonly HashSet<FixedSession> sessions = [];
     private readonly HashSet<OAuthCallbackBinding> callbackBindings = [];
+    private readonly HashSet<Task> activeWork = [];
+    private readonly TaskCompletionSource disposal = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly ISystemBrowserLauncher browserLauncher;
     private readonly CancellationTokenSource lifetime = new();
     private bool disposed;
@@ -117,6 +119,27 @@ internal sealed class McpOAuthCredentialAccessExecutor :
     }
 
     public async ValueTask<CredentialExecutionOutcome<McpCredentialUseResult>> ExecuteAsync(
+        McpOAuthCredentialUseRequest request,
+        CredentialInspection inspection,
+        ReleaseAuthorization authorization,
+        ProviderInteractionPermit? interactionPermit,
+        ICredentialExecutionContext context,
+        CancellationToken cancellationToken)
+    {
+        var work = this.BeginWork();
+        if (work is null)
+        {
+            return new CredentialExecutionFailed<McpCredentialUseResult> { ErrorCode = AccessErrorCode.Disposed, CanRetry = false };
+        }
+        try
+        {
+            return await this.ExecuteCoreAsync(request, inspection, authorization, interactionPermit, context, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally { this.CompleteWork(work); }
+    }
+
+    private async ValueTask<CredentialExecutionOutcome<McpCredentialUseResult>> ExecuteCoreAsync(
         McpOAuthCredentialUseRequest request,
         CredentialInspection inspection,
         ReleaseAuthorization authorization,
@@ -233,28 +256,77 @@ internal sealed class McpOAuthCredentialAccessExecutor :
 
     public async ValueTask DisposeAsync()
     {
-        FixedSession[] active;
-        OAuthCallbackBinding[] callbacks;
+        FixedSession[]? active = null;
+        Task[] pending = [];
+        OAuthCallbackBinding[] callbacks = [];
         lock (this.gate)
         {
-            if (this.disposed)
+            if (!this.disposed)
             {
-                return;
+                this.disposed = true;
+                active = this.sessions.ToArray();
+                pending = this.activeWork.ToArray();
+                callbacks = this.callbackBindings.ToArray();
             }
-            this.disposed = true;
-            active = this.sessions.ToArray();
-            callbacks = this.callbackBindings.ToArray();
         }
-        await this.lifetime.CancelAsync().ConfigureAwait(false);
-        foreach (var callback in callbacks) { await callback.DisposeAsync().ConfigureAwait(false); }
-        foreach (var session in active)
+        if (active is null)
         {
-            await session.DisposeAsync().ConfigureAwait(false);
+            await this.disposal.Task.ConfigureAwait(false);
+            return;
         }
-        foreach (var provider in this.providers.Values)
+        try
         {
-            await provider.Commits.DisposeAsync().ConfigureAwait(false);
+            await this.lifetime.CancelAsync().ConfigureAwait(false);
+            foreach (var callback in callbacks) { await callback.DisposeAsync().ConfigureAwait(false); }
+            await Task.WhenAll(pending).ConfigureAwait(false);
+            foreach (var session in active)
+            {
+                await session.DisposeAsync().ConfigureAwait(false);
+            }
+            foreach (var provider in this.providers.Values)
+            {
+                await provider.Commits.DisposeAsync().ConfigureAwait(false);
+            }
+            this.lifetime.Dispose();
+            this.disposal.TrySetResult();
         }
+        catch (Exception exception)
+        {
+            this.disposal.TrySetException(exception);
+            throw;
+        }
+    }
+
+    private TaskCompletionSource? BeginWork()
+    {
+        lock (this.gate)
+        {
+            if (this.disposed) { return null; }
+            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            this.activeWork.Add(completion.Task);
+            return completion;
+        }
+    }
+
+    private void CompleteWork(TaskCompletionSource completion)
+    {
+        lock (this.gate) { this.activeWork.Remove(completion.Task); }
+        completion.TrySetResult();
+    }
+
+    private async ValueTask<ProviderAcquisitionOutcome> ExecuteAcquisitionAsync(
+        Acquisition operation,
+        ProviderAcquisitionCommitContext commitContext,
+        CancellationToken cancellationToken)
+    {
+        var work = this.BeginWork();
+        if (work is null) { return new ProviderAcquisitionShuttingDown(); }
+        try
+        {
+            using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, this.lifetime.Token);
+            return await this.AcquireAsync(operation, commitContext, cancellation.Token).ConfigureAwait(false);
+        }
+        finally { this.CompleteWork(work); }
     }
 
     private Provider? FindProvider(McpOAuthCredentialUseRequest request)
@@ -517,7 +589,7 @@ internal sealed class McpOAuthCredentialAccessExecutor :
         public Guid AcquisitionGeneration => this.Context.AcquisitionGeneration;
         public ValueTask<ProviderAcquisitionOutcome> ExecuteAsync(
             ProviderAcquisitionCommitContext commitContext,
-            CancellationToken cancellationToken) => owner.AcquireAsync(this, commitContext, cancellationToken);
+            CancellationToken cancellationToken) => owner.ExecuteAcquisitionAsync(this, commitContext, cancellationToken);
     }
 
     private sealed class AcquisitionTokenCache(

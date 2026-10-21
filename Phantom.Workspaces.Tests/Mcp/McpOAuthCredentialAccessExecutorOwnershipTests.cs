@@ -169,6 +169,68 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
     }
 
     [Fact]
+    public async Task McpOAuthExecutor_Disposal_JoinsAdmittedAcquisitionCleanupBeforeReturning()
+    {
+        using var cleanup = new AcquisitionCleanupBarrier();
+        var handlers = 0;
+        await using var fixture = new Fixture(createHttpHandler: server =>
+            Interlocked.Increment(ref handlers) == 1 ? new AcquisitionCleanupHandler(server, cleanup) : new Handler(server));
+        fixture.Browser.Block = true;
+        var acquisition = fixture.Broker.AcquireAsync(fixture.Request(), TestContext.Current.CancellationToken);
+        await fixture.AllowAsync();
+        await fixture.Browser.Opened.Task.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+        var shutdown = fixture.Executor.DisposeAsync().AsTask();
+        Task repeatedShutdown;
+        try
+        {
+            await cleanup.Entered.Task.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+            Assert.False(shutdown.IsCompleted);
+            repeatedShutdown = fixture.Executor.DisposeAsync().AsTask();
+            Assert.False(repeatedShutdown.IsCompleted);
+        }
+        finally { cleanup.Release.Set(); }
+        await shutdown.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+        await repeatedShutdown.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+        Assert.IsType<AccessFailed<McpCredentialUseResult>>(
+            await acquisition.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken));
+        fixture.Browser.Continue.TrySetResult();
+        await Assert.ThrowsAsync<HttpRequestException>(() => fixture.Browser.Callback!);
+        Assert.Equal(0, fixture.Store.Writes);
+        Assert.Equal(1, cleanup.Disposals);
+    }
+
+    private sealed class AcquisitionCleanupBarrier : IDisposable
+    {
+        internal TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal ManualResetEventSlim Release { get; } = new();
+        internal int Disposals { get; set; }
+        public void Dispose() => this.Release.Dispose();
+    }
+
+    private sealed class AcquisitionCleanupHandler(Server server, AcquisitionCleanupBarrier cleanup) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var response = await server.SendAsync(request, cancellationToken);
+            response.RequestMessage ??= request;
+            return response;
+        }
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                cleanup.Disposals++;
+                cleanup.Entered.TrySetResult();
+                if (!cleanup.Release.Wait(TimeSpan.FromSeconds(20)))
+                {
+                    throw new TimeoutException("Controlled acquisition cleanup was not released.");
+                }
+            }
+            base.Dispose(disposing);
+        }
+    }
+
+    [Fact]
     public async Task McpOAuthExecutor_StreamingResponse_ReturnsHeadersWithoutHoldingUseUntilBodyCompletes()
     {
         var tracker = new SessionTracker { StreamResponse = true };
