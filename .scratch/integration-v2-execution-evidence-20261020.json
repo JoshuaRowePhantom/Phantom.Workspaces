@@ -1,5 +1,6 @@
 {
-  "codeCheckpoint": "079f20811faa410455c15c5035d51783355de1cd",
+  "codeCheckpoint": "cbce2a686879be78873d45f232bac3dc735e3ca0",
+  "historicalRootCoreCodeCheckpoint": "079f20811faa410455c15c5035d51783355de1cd",
   "baseline": "e8ed98d70fe885ce37b12410e82f63317a923db5",
   "appRootFinalPassed": 200,
   "appRootStabilityRuns": 10,
@@ -9,9 +10,22 @@
   "coreStabilityPassedPerRun": 171,
   "largerAppTargetInitialPassed": 312,
   "largerAppTargetStability": "Failed run5/10; exact causal fixture correction079f2081 subsequently targeted16 and root200x10 plus exact-final-source200 pass. Not claimed312x10.",
-  "knownRemainingFailures": "14 provider-owned GitHub private fixture scenarios and one root-owned stale401 replay fixture; these were explicitly excluded from bounded root200, not represented as resolved.",
+  "knownRemainingFailures": "One root-owned stale401 replay fixture remains pending. Former14 fabricated-account GitHub fixture failures are now resolved by exact immutable owner fixture prerequisites;75 relevant tests passed plus75x10. Canonical GitHub/final-await production followups remain pending and are not given clearance by this result-ownership validation.",
+  "gitHubOwnershipPairPassed": 75,
+  "gitHubOwnershipPairStabilityRuns": 10,
+  "gitHubOwnershipPairStabilityPassedPerRun": 75,
   "dumpCount": 0,
   "logs": [
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-github-result-ownership-tests.log",
+      "bytes": 6275,
+      "sha256": "9AE77EB5A7DFC7758CD1A4265A7ED4268D6B7462461B16B55D55212F7D8AA384"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-github-result-ownership-stability.log",
+      "bytes": 2800,
+      "sha256": "B18D786C4C8536A6CA619A1B98078DD5F418D3FEBDB8938AC7E2EE860CBF7F9C"
+    },
     {
       "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-build-initial.log",
       "bytes": 12610,
