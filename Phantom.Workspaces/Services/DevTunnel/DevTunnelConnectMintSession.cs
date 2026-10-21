@@ -80,14 +80,12 @@ internal sealed class DevTunnelConnectMintSession(
         {
             return new DevTunnelConnectMintFailed { ErrorCode = AccessErrorCode.IdentityMismatch };
         }
-        using var mintedMaterial = new MintedMaterialOwner();
         var used = await gitHub.UsePrivateAsync(new GitHubPrivateCredentialRequest
         {
             Source = source.Kind,
             AccountIdentifier = request.Credential.AccountIdentifier,
         }, context, permit,
-            (identity, token) => mintedMaterial.CaptureAsync(
-                management.MintAsync(request.Tunnel, DevTunnelIdentityScheme.GitHub, identity, token)),
+            (identity, token) => management.MintAsync(request.Tunnel, DevTunnelIdentityScheme.GitHub, identity, token),
             cancellationToken).ConfigureAwait(false);
         if (used is not GitHubPrivateCredentialUseSucceeded<DevTunnelConnectManagementOutcome> success)
         {
@@ -98,7 +96,6 @@ internal sealed class DevTunnelConnectMintSession(
                     ? failed.ErrorCode : AccessErrorCode.ProviderFailure,
             };
         }
-        mintedMaterial.Release(success.Result);
         using var ownedResult = success.Result as IDisposable;
         if (success.Result is DevTunnelConnectManagementUnauthorized)
         {
@@ -273,28 +270,6 @@ internal sealed class DevTunnelConnectMintSession(
 
     // Provider executors are borrowed from the broker registry, which owns their lifetimes.
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-
-    private sealed class MintedMaterialOwner : IDisposable
-    {
-        private DevTunnelConnectManagementOutcome? outcome;
-
-        public async ValueTask<DevTunnelConnectManagementOutcome> CaptureAsync(
-            ValueTask<DevTunnelConnectManagementOutcome> pending)
-        {
-            this.outcome = await pending.ConfigureAwait(false);
-            return this.outcome;
-        }
-
-        public void Release(DevTunnelConnectManagementOutcome published)
-        {
-            if (ReferenceEquals(this.outcome, published))
-            {
-                this.outcome = null;
-            }
-        }
-
-        public void Dispose() => (this.outcome as IDisposable)?.Dispose();
-    }
 
     private sealed class EntraAcquisition(
         EntraCredentialAccessRequest request,

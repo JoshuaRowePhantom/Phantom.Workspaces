@@ -454,7 +454,6 @@ public sealed class GitHubPrivateCredentialSessionTests
                 LogicalIdentifier = new() { Digest = new string('c', 64) },
                 Provider = CredentialProviderKind.DevTunnel,
                 Kind = CredentialKind.ConnectToken,
-                AccountIdentifier = CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.DevTunnel, "connect-account"),
             },
             Sources =
             [
@@ -542,7 +541,8 @@ public sealed class GitHubPrivateCredentialSessionTests
             ICredentialExecutionContext context,
             CancellationToken cancellationToken)
         {
-            Assert.Equal(ReleaseAuthorizationValidation.Valid, await context.Policy.ValidateAsync(authorization.Identifier, context.PolicyRequest!, cancellationToken));
+            Assert.Equal(request.Credential.AccountIdentifier is null ? ReleaseAuthorizationValidation.IdentityMismatch : ReleaseAuthorizationValidation.Valid,
+                await context.Policy.ValidateAsync(authorization.Identifier, context.PolicyRequest!, cancellationToken));
             events.Add("release validated");
             Assert.NotNull(interactionPermit);
             var operation = new Operation(this, provider, events, context, inspection.AcquisitionKeys[inspection.SelectedSource!]);
@@ -561,7 +561,18 @@ public sealed class GitHubPrivateCredentialSessionTests
             }
             Assert.IsType<ProviderAcquisitionSucceeded>(acquired);
             Assert.Equal("connect-material", this.derivedMaterial);
-            return new CredentialExecutionReady<ParentResult> { Materializer = new Materializer() };
+            return new CredentialExecutionReady<ParentResult>
+            {
+                ResolvedIdentity = new()
+                {
+                    LogicalIdentifier = request.Credential.LogicalIdentifier,
+                    SourceIdentifier = context.PolicyRequest!.SourceIdentifier,
+                    AccountIdentifier = this.UsedAccount!,
+                    RequestIdentifier = context.RequestIdentifier,
+                    RequestGeneration = context.Revision,
+                },
+                Materializer = new Materializer(),
+            };
         }
 
         private sealed class Operation(
