@@ -1,10 +1,11 @@
 using System.Security.Cryptography;
 using System.Text;
 using Phantom.Workspaces.Llm.Interfaces.Access;
+using Phantom.Workspaces.Llm.Interfaces.Access.Execution;
 
 namespace Phantom.Workspaces.Services.Access;
 
-public sealed class ReleaseAuthorizationPolicy : IReleaseAuthorizationPolicy, IAsyncDisposable
+public sealed class ReleaseAuthorizationPolicy : IReleaseAuthorizationPolicy, IProviderAcquisitionAuthorizationPolicy, IAsyncDisposable
 {
     private readonly ReleaseMemoryStore store;
     private readonly SemaphoreSlim gate = new(1, 1);
@@ -87,10 +88,23 @@ public sealed class ReleaseAuthorizationPolicy : IReleaseAuthorizationPolicy, IA
         }
     }
 
-    public async ValueTask<ReleaseAuthorizationValidation> ValidateAsync(
+    public ValueTask<ReleaseAuthorizationValidation> ValidateAsync(
         ReleaseAuthorizationIdentifier identifier,
         ReleasePolicyRequest request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        this.ValidateCoreAsync(identifier, request, null, cancellationToken);
+
+    ValueTask<ReleaseAuthorizationValidation> IProviderAcquisitionAuthorizationPolicy.ValidateAcquisitionAuthorizationAsync(
+        ReleaseAuthorization authorization,
+        ReleasePolicyRequest request,
+        CancellationToken cancellationToken) =>
+        this.ValidateCoreAsync(authorization.Identifier, request, authorization, cancellationToken);
+
+    private async ValueTask<ReleaseAuthorizationValidation> ValidateCoreAsync(
+        ReleaseAuthorizationIdentifier identifier,
+        ReleasePolicyRequest request,
+        ReleaseAuthorization? acquisitionAuthorization,
+        CancellationToken cancellationToken)
     {
         await this.gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -105,7 +119,18 @@ public sealed class ReleaseAuthorizationPolicy : IReleaseAuthorizationPolicy, IA
                 return ReleaseAuthorizationValidation.AuthorizationRequired;
             }
 
-            if (entry.Provisional || entry.Request.RequestIdentifier != request.RequestIdentifier ||
+            if (acquisitionAuthorization is not null &&
+                (entry.Request != request ||
+                    acquisitionAuthorization.RequestIdentifier != request.RequestIdentifier ||
+                    acquisitionAuthorization.RequestGeneration != request.RequestGeneration ||
+                    acquisitionAuthorization.Scope != entry.Record.Scope ||
+                    acquisitionAuthorization.MemoryIdentifier !=
+                        (entry.Record.Scope == ReleaseMemoryScopeKind.AllowOnce ? null : entry.Record.Identifier)))
+            {
+                return ReleaseAuthorizationValidation.IdentityMismatch;
+            }
+
+            if ((entry.Provisional && acquisitionAuthorization is null) || entry.Request.RequestIdentifier != request.RequestIdentifier ||
                 entry.Request.RequestGeneration != request.RequestGeneration ||
                 entry.Request.RequestorIdentifier != request.RequestorIdentifier ||
                 entry.Request.Use.Fingerprint != request.Use.Fingerprint ||
@@ -116,7 +141,7 @@ public sealed class ReleaseAuthorizationPolicy : IReleaseAuthorizationPolicy, IA
                 return ReleaseAuthorizationValidation.IdentityMismatch;
             }
 
-            if (entry.Record.Scope != ReleaseMemoryScopeKind.AllowOnce &&
+            if (!entry.Provisional && entry.Record.Scope != ReleaseMemoryScopeKind.AllowOnce &&
                 !(await this.LoadAsync(cancellationToken).ConfigureAwait(false)).ContainsKey(entry.Record.Identifier))
             {
                 return ReleaseAuthorizationValidation.AuthorizationRequired;

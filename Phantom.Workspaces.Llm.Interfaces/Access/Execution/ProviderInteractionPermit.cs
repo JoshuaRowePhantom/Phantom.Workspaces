@@ -13,6 +13,21 @@ internal sealed record ProviderAcquisitionKey
     public required ProviderProtocolKind Protocol { get; init; }
 }
 
+internal sealed record ProviderExecutionAuthorizationBinding
+{
+    public required IReleaseAuthorizationPolicy Policy { get; init; }
+    public required ReleaseAuthorization Authorization { get; init; }
+    public required ReleasePolicyRequest Request { get; init; }
+}
+
+internal interface IProviderAcquisitionAuthorizationPolicy
+{
+    ValueTask<ReleaseAuthorizationValidation> ValidateAcquisitionAuthorizationAsync(
+        ReleaseAuthorization authorization,
+        ReleasePolicyRequest request,
+        CancellationToken cancellationToken);
+}
+
 [JsonConverter(typeof(SerializationGuard))]
 internal sealed class ProviderInteractionPermit
 {
@@ -22,6 +37,7 @@ internal sealed class ProviderInteractionPermit
     private readonly Guid generation;
     private readonly ProviderAcquisitionKey key;
     private readonly Func<bool> isCurrent;
+    private readonly ProviderExecutionAuthorizationBinding? authorizationBinding;
     private int consumed;
     private bool executionBound;
 
@@ -31,7 +47,8 @@ internal sealed class ProviderInteractionPermit
         CredentialExecutorKind executor,
         Guid generation,
         ProviderAcquisitionKey key,
-        Func<bool> isCurrent)
+        Func<bool> isCurrent,
+        ProviderExecutionAuthorizationBinding? authorizationBinding = null)
     {
         this.requestIdentifier = requestIdentifier;
         this.revision = revision;
@@ -39,6 +56,7 @@ internal sealed class ProviderInteractionPermit
         this.generation = generation;
         this.key = key;
         this.isCurrent = isCurrent;
+        this.authorizationBinding = authorizationBinding;
     }
 
     internal bool Authorizes(
@@ -68,10 +86,72 @@ internal sealed class ProviderInteractionPermit
         ProviderAcquisitionKey key) =>
         this.executionBound && this.executor == executor && this.key == key && this.isCurrent();
 
+    internal bool AuthorizesActiveExecution(
+        UserAuthorizationRequestIdentifier requestIdentifier,
+        long revision,
+        CredentialExecutorKind executor,
+        Guid generation,
+        ProviderAcquisitionKey key) =>
+        Volatile.Read(ref this.consumed) == 1 &&
+        this.Authorizes(requestIdentifier, revision, executor, generation, key) &&
+        this.AuthorizesProvider(executor, key);
+
+    internal bool IsActivePrivateExecution(ICredentialExecutionContext? context)
+    {
+        var request = context?.PolicyRequest;
+        var binding = this.authorizationBinding;
+        if (context is null || request is null || binding is null ||
+            !ReferenceEquals(binding.Policy, context.Policy) || binding.Request != request ||
+            binding.Authorization.RequestIdentifier != request.RequestIdentifier ||
+            binding.Authorization.RequestGeneration != request.RequestGeneration ||
+            request.Credential.Provider != CredentialProviderKind.DevTunnel ||
+            request.Credential.Kind != CredentialKind.ConnectToken ||
+            request.RequestIdentifier != context.RequestIdentifier ||
+            request.RequestGeneration != context.Revision ||
+            request.RequestorIdentifier != context.Requestor.Identifier ||
+            request.Use.Fingerprint != context.Use.Fingerprint ||
+            request.Use.Kind != context.Use.Kind ||
+            request.Use.Lineage != context.Use.Lineage ||
+            request.Use.SafeDisplayName != context.Use.SafeDisplayName ||
+            !request.Use.MemoryScopes.SequenceEqual(context.Use.MemoryScopes))
+        {
+            return false;
+        }
+
+        var expectedKey = new ProviderAcquisitionKey
+        {
+            Configuration = request.Credential.LogicalIdentifier,
+            Source = request.SourceIdentifier,
+            Account = request.Credential.AccountIdentifier,
+            Protocol = ProviderProtocolKind.TunnelConnect,
+        };
+        return this.AuthorizesActiveExecution(
+            context.RequestIdentifier, context.Revision, CredentialExecutorKind.DevTunnelConnect,
+            context.AcquisitionGeneration, expectedKey);
+    }
+
+    internal async ValueTask<bool> AuthorizesPrivateUseAsync(
+        ICredentialExecutionContext? context,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var binding = this.authorizationBinding;
+        if (!this.IsActivePrivateExecution(context) ||
+            binding is null || binding.Policy is not IProviderAcquisitionAuthorizationPolicy policy)
+        {
+            return false;
+        }
+
+        var validation = await policy.ValidateAcquisitionAuthorizationAsync(
+            binding.Authorization, binding.Request, cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        return validation == ReleaseAuthorizationValidation.Valid && this.IsActivePrivateExecution(context);
+    }
+
     internal ProviderInteractionPermit BindExecution(Func<bool> isActive)
     {
         var permit = new ProviderInteractionPermit(
-            this.requestIdentifier, this.revision, this.executor, this.generation, this.key, isActive);
+            this.requestIdentifier, this.revision, this.executor, this.generation, this.key, isActive, this.authorizationBinding);
         permit.consumed = 1;
         permit.executionBound = true;
         return permit;

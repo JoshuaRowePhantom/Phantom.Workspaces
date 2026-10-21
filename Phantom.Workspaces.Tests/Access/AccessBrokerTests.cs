@@ -409,9 +409,11 @@ public sealed class AccessBrokerTests : IDisposable
         ProviderInteractionPermit? savedPermit = null;
         ProviderAcquisitionKey? savedKey = null;
         var commits = 0;
+        var parentCommitted = false;
         var materialGeneration = new CredentialMaterialGenerationIdentifier { Value = Guid.NewGuid() };
         var executor = new Executor
         {
+            Kind = CredentialExecutorKind.DevTunnelConnect,
             IsUsable = () => !perform,
             Execute = async (_, inspection, _, permit, context, cancellationToken) =>
             {
@@ -420,7 +422,7 @@ public sealed class AccessBrokerTests : IDisposable
                 savedKey = inspection.AcquisitionKeys[inspection.SelectedSource!];
                 if (permit is not null)
                 {
-                    Assert.False(permit.AuthorizesProvider(CredentialExecutorKind.OAuth, savedKey));
+                    Assert.False(await permit.AuthorizesPrivateUseAsync(context, cancellationToken));
                 }
                 var childKey = savedKey with
                 {
@@ -440,16 +442,28 @@ public sealed class AccessBrokerTests : IDisposable
                     });
                 }, CredentialExecutorKind.Entra);
                 var parentPermit = permit ?? new ProviderInteractionPermit(
-                    context.RequestIdentifier, context.Revision, CredentialExecutorKind.OAuth,
+                    context.RequestIdentifier, context.Revision, CredentialExecutorKind.DevTunnelConnect,
                     context.AcquisitionGeneration, savedKey, () => true);
                 var acquired = await context.ExecutePrivateProviderDependencyAsync(child, parentPermit, cancellationToken);
+                Assert.IsType<ProviderAcquisitionDenied>(acquired);
                 if (perform)
                 {
-                    Assert.Equal(materialGeneration, Assert.IsType<ProviderAcquisitionSucceeded>(acquired).CommittedGeneration);
-                }
-                else
-                {
-                    Assert.IsType<ProviderAcquisitionDenied>(acquired);
+                    var parentOperation = new Operation(context, savedKey, async commit =>
+                    {
+                        savedPermit = commit.InteractionPermit;
+                        Assert.True(await savedPermit.AuthorizesPrivateUseAsync(context, cancellationToken));
+                        var privateOutcome = await context.ExecutePrivateProviderDependencyAsync(
+                            child, savedPermit, cancellationToken);
+                        Assert.Equal(materialGeneration,
+                            Assert.IsType<ProviderAcquisitionSucceeded>(privateOutcome).CommittedGeneration);
+                        return await commit.CommitAsync(new() { Value = Guid.NewGuid() }, _ =>
+                        {
+                            parentCommitted = true;
+                            return ValueTask.CompletedTask;
+                        });
+                    }, CredentialExecutorKind.DevTunnelConnect);
+                    Assert.IsType<ProviderAcquisitionSucceeded>(
+                        await context.ExecuteProviderAcquisitionAsync(parentOperation, permit!, cancellationToken));
                 }
 
                 return new CredentialExecutionReady<Result> { Materializer = new Materializer(() => new Result()) };
@@ -457,10 +471,22 @@ public sealed class AccessBrokerTests : IDisposable
         };
         var (broker, registry) = this.Create(executor);
         await using var owned = broker;
-        var task = broker.AcquireAsync(Request(), TestContext.Current.CancellationToken);
+        var original = Request();
+        var request = original with
+        {
+            Credential = original.Credential with
+            {
+                Provider = CredentialProviderKind.DevTunnel,
+                Kind = CredentialKind.ConnectToken,
+                AccountIdentifier = CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.Entra, "account-a"),
+            },
+            Sources = original.Sources.Select(source => source with { Provider = CredentialProviderKind.DevTunnel }).ToArray(),
+        };
+        var task = broker.AcquireAsync(request, TestContext.Current.CancellationToken);
         await ApplyAsync(registry, Assert.Single(registry.GetSnapshot()));
         await using var result = Assert.IsType<AccessSucceeded<Result>>(await task).Result;
         Assert.Equal(perform ? 1 : 0, commits);
+        Assert.Equal(perform, parentCommitted);
         Assert.Equal(UserAuthorizationState.Completed, Assert.Single(registry.GetSnapshot()).State);
         Assert.NotNull(savedContext);
         var late = new Operation(savedContext, savedKey!, _ => throw new InvalidOperationException());
@@ -694,13 +720,293 @@ public sealed class AccessBrokerTests : IDisposable
         }, TestContext.Current.CancellationToken);
     }
 
-    private (AccessBroker Broker, UserAuthorizationRegistry Registry) Create(Executor executor)
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AccessBroker_PrivateCapability_RequiresCommittedActiveExecutionAndExactPolicyBinding(bool provisional)
+    {
+        var account = CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.Entra, "principal-a");
+        var request = ConnectRequest(provisional ? null : account);
+        var executions = 0;
+        ICredentialExecutionContext? completedContext = null;
+        ProviderInteractionPermit? completedProof = null;
+        var executor = new Executor
+        {
+            Kind = CredentialExecutorKind.DevTunnelConnect,
+            Execute = async (_, inspection, authorization, admission, context, cancellationToken) =>
+            {
+                var key = inspection.AcquisitionKeys[inspection.SelectedSource!];
+                var childKey = key with { Configuration = new() { Digest = new string('e', 64) }, Protocol = ProviderProtocolKind.Sdk };
+                Operation Child() => new(context, childKey, async commit =>
+                {
+                    executions++;
+                    return await commit.CommitAsync(new() { Value = Guid.NewGuid() }, _ => ValueTask.CompletedTask);
+                }, CredentialExecutorKind.Entra);
+                Assert.NotNull(admission);
+                Assert.False(await admission.AuthorizesPrivateUseAsync(context, cancellationToken));
+                Assert.IsType<ProviderAcquisitionDenied>(
+                    await context.ExecutePrivateProviderDependencyAsync(Child(), admission, cancellationToken));
+                Assert.Equal(0, executions);
+                var parent = new Operation(context, key, async commit =>
+                {
+                    var active = commit.InteractionPermit;
+                    completedContext = context;
+                    completedProof = active;
+                    var binding = new ProviderExecutionAuthorizationBinding
+                    {
+                        Policy = context.Policy,
+                        Authorization = authorization,
+                        Request = context.PolicyRequest!,
+                    };
+                    ProviderInteractionPermit Bound(
+                        CredentialExecutorKind kind,
+                        ProviderAcquisitionKey candidate,
+                        ProviderExecutionAuthorizationBinding? evidence = null,
+                        bool current = true,
+                        UserAuthorizationRequestIdentifier? identifier = null,
+                        long? revision = null,
+                        Guid? generation = null) => new ProviderInteractionPermit(
+                            identifier ?? context.RequestIdentifier, revision ?? context.Revision, kind,
+                            generation ?? context.AcquisitionGeneration, candidate, () => true, evidence ?? binding)
+                            .BindExecution(() => current);
+                    var unbound = new ProviderInteractionPermit(
+                        context.RequestIdentifier, context.Revision, CredentialExecutorKind.DevTunnelConnect,
+                        context.AcquisitionGeneration, key, () => true).BindExecution(() => true);
+                    foreach (var denied in new ProviderInteractionPermit[]
+                    {
+                        admission,
+                        unbound,
+                        Bound(CredentialExecutorKind.Entra, key),
+                        Bound(CredentialExecutorKind.DevTunnelConnect, key with { Protocol = ProviderProtocolKind.Sdk }),
+                        Bound(CredentialExecutorKind.DevTunnelConnect, key with { Configuration = new() { Digest = new string('f', 64) } }),
+                        Bound(CredentialExecutorKind.DevTunnelConnect, key with { Source = new() { Digest = new string('f', 64) } }),
+                        Bound(CredentialExecutorKind.DevTunnelConnect, key with { Account = provisional ? account : null }),
+                        Bound(CredentialExecutorKind.DevTunnelConnect, key, current: false),
+                        Bound(CredentialExecutorKind.DevTunnelConnect, key, identifier: new() { Value = Guid.NewGuid() }),
+                        Bound(CredentialExecutorKind.DevTunnelConnect, key, revision: context.Revision + 1),
+                        Bound(CredentialExecutorKind.DevTunnelConnect, key, generation: Guid.NewGuid()),
+                        Bound(CredentialExecutorKind.DevTunnelConnect, key, binding with
+                        {
+                            Policy = new Mock<IReleaseAuthorizationPolicy>().Object,
+                        }),
+                        Bound(CredentialExecutorKind.DevTunnelConnect, key, binding with
+                        {
+                            Authorization = authorization with { Identifier = new() { Value = Guid.NewGuid() } },
+                        }),
+                        Bound(CredentialExecutorKind.DevTunnelConnect, key, binding with
+                        {
+                            Authorization = authorization with { Scope = ReleaseMemoryScopeKind.AllUses },
+                        }),
+                        Bound(CredentialExecutorKind.DevTunnelConnect, key, binding with
+                        {
+                            Request = binding.Request with { SourceIdentifier = new() { Digest = new string('f', 64) } },
+                        }),
+                    })
+                    {
+                        Assert.False(await denied.AuthorizesPrivateUseAsync(context, cancellationToken));
+                        Assert.IsType<ProviderAcquisitionDenied>(
+                            await context.ExecutePrivateProviderDependencyAsync(Child(), denied, cancellationToken));
+                    }
+
+                    Assert.Equal(0, executions);
+                    Assert.Equal(provisional ? ReleaseAuthorizationValidation.IdentityMismatch : ReleaseAuthorizationValidation.Valid,
+                        await context.Policy.ValidateAsync(authorization.Identifier, context.PolicyRequest!, cancellationToken));
+                    Assert.True(await active.AuthorizesPrivateUseAsync(context, cancellationToken));
+                    if (!provisional)
+                    {
+                        var unpinned = new Operation(context, childKey with { Account = null }, _ =>
+                        {
+                            executions++;
+                            throw new InvalidOperationException("A known parent account cannot become an unpinned child.");
+                        }, CredentialExecutorKind.Entra);
+                        Assert.IsType<ProviderAcquisitionDenied>(
+                            await context.ExecutePrivateProviderDependencyAsync(unpinned, active, cancellationToken));
+                        Assert.Equal(0, executions);
+                    }
+                    Assert.IsType<ProviderAcquisitionSucceeded>(
+                        await context.ExecutePrivateProviderDependencyAsync(Child(), active, cancellationToken));
+                    Assert.Equal(1, executions);
+                    return await commit.CommitAsync(new() { Value = Guid.NewGuid() }, _ => ValueTask.CompletedTask);
+                }, CredentialExecutorKind.DevTunnelConnect);
+                Assert.IsType<ProviderAcquisitionSucceeded>(
+                    await context.ExecuteProviderAcquisitionAsync(parent, admission, cancellationToken));
+                return new CredentialExecutionReady<Result>
+                {
+                    ResolvedIdentity = new()
+                    {
+                        LogicalIdentifier = request.Credential.LogicalIdentifier,
+                        SourceIdentifier = context.PolicyRequest!.SourceIdentifier,
+                        AccountIdentifier = account,
+                        RequestIdentifier = context.RequestIdentifier,
+                        RequestGeneration = context.Revision,
+                    },
+                    Materializer = new Materializer(() => new Result()),
+                };
+            },
+        };
+        var (broker, registry) = this.Create(executor);
+        await using var owned = broker;
+        var pending = broker.AcquireAsync(request, TestContext.Current.CancellationToken);
+        await ApplyAsync(registry, Assert.Single(registry.GetSnapshot()));
+        await using var result = Assert.IsType<AccessSucceeded<Result>>(await pending).Result;
+        Assert.NotNull(completedContext);
+        Assert.NotNull(completedProof);
+        Assert.False(await completedProof.AuthorizesPrivateUseAsync(completedContext, TestContext.Current.CancellationToken));
+        Assert.Equal(1, executions);
+        Assert.Single(registry.GetSnapshot());
+    }
+
+    [Fact]
+    public async Task AccessBroker_PrivateCapability_RevokedPolicyDeniesBeforePrivateChildExecution()
+    {
+        var account = CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.Entra, "principal-a");
+        var request = ConnectRequest(account);
+        var executions = 0;
+        var executor = new Executor
+        {
+            Kind = CredentialExecutorKind.DevTunnelConnect,
+            Execute = async (_, inspection, authorization, admission, context, cancellationToken) =>
+            {
+                var key = inspection.AcquisitionKeys[inspection.SelectedSource!];
+                var operation = new Operation(context, key, async commit =>
+                {
+                    var active = commit.InteractionPermit;
+                    Assert.True(await active.AuthorizesPrivateUseAsync(context, cancellationToken));
+                    Assert.NotNull(authorization.MemoryIdentifier);
+                    await context.Policy.ForgetAsync(authorization.MemoryIdentifier, cancellationToken);
+                    Assert.False(await active.AuthorizesPrivateUseAsync(context, cancellationToken));
+                    var child = new Operation(context, key with { Protocol = ProviderProtocolKind.Sdk }, _ =>
+                    {
+                        executions++;
+                        throw new InvalidOperationException("Revoked policy must deny before child execution.");
+                    }, CredentialExecutorKind.Entra);
+                    Assert.IsType<ProviderAcquisitionDenied>(
+                        await context.ExecutePrivateProviderDependencyAsync(child, active, cancellationToken));
+                    return await commit.CommitAsync(new() { Value = Guid.NewGuid() }, _ => ValueTask.CompletedTask);
+                }, CredentialExecutorKind.DevTunnelConnect);
+                Assert.NotNull(admission);
+                var outcome = await context.ExecuteProviderAcquisitionAsync(operation, admission, cancellationToken);
+                if (outcome is not ProviderAcquisitionSucceeded)
+                {
+                    return new CredentialExecutionFailed<Result>
+                    {
+                        ErrorCode = AccessErrorCode.ProviderFailure,
+                        CanRetry = false,
+                    };
+                }
+                return new CredentialExecutionReady<Result> { Materializer = new Materializer(() => new Result()) };
+            },
+        };
+        var (broker, registry) = this.Create(executor);
+        await using var owned = broker;
+        var pending = broker.AcquireAsync(request, TestContext.Current.CancellationToken);
+        var row = Assert.Single(registry.GetSnapshot());
+        await registry.ActAsync(new ApplyUserAuthorizationAction
+        {
+            RequestIdentifier = row.Identifier,
+            ExpectedRevision = row.Revision,
+            Source = row.SelectedSource,
+            Memory = row.MemoryOptions.Single(option => option.Scope == ReleaseMemoryScopeKind.AllUses).Identifier,
+        }, TestContext.Current.CancellationToken);
+        Assert.IsType<AccessAuthorizationRequired<Result>>(await pending);
+        Assert.Equal(0, executions);
+    }
+
+    [Fact]
+    public async Task AccessBroker_PrivateCapability_ApprovedFollowerKeepsParentProofAndChildAlive()
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var coordinator = new ParticipantTrackingCoordinator();
+        var childExecutions = 0;
+        ICredentialExecutionContext? leaderContext = null;
+        ProviderInteractionPermit? groupProof = null;
+        var executor = new Executor
+        {
+            Kind = CredentialExecutorKind.DevTunnelConnect,
+            Execute = async (_, inspection, _, admission, context, cancellationToken) =>
+            {
+                Assert.NotNull(admission);
+                var key = inspection.AcquisitionKeys[inspection.SelectedSource!];
+                var operation = new GroupOperation(context, key, async (commit, groupCancellation) =>
+                {
+                    leaderContext = context;
+                    groupProof = commit.InteractionPermit;
+                    started.TrySetResult();
+                    await finish.Task.WaitAsync(groupCancellation);
+                    Assert.True(await groupProof.AuthorizesPrivateUseAsync(context, groupCancellation));
+                    var child = new Operation(context, key with
+                    {
+                        Configuration = new() { Digest = new string('e', 64) },
+                        Protocol = ProviderProtocolKind.Sdk,
+                    }, async childCommit =>
+                    {
+                        childExecutions++;
+                        return await childCommit.CommitAsync(new() { Value = Guid.NewGuid() }, _ => ValueTask.CompletedTask);
+                    }, CredentialExecutorKind.Entra);
+                    Assert.IsType<ProviderAcquisitionSucceeded>(
+                        await context.ExecutePrivateProviderDependencyAsync(child, groupProof, groupCancellation));
+                    return await commit.CommitAsync(new() { Value = Guid.NewGuid() }, _ => ValueTask.CompletedTask);
+                });
+                var outcome = await context.ExecuteProviderAcquisitionAsync(operation, admission, cancellationToken);
+                if (outcome is not ProviderAcquisitionSucceeded)
+                {
+                    return new CredentialExecutionFailed<Result>
+                    {
+                        ErrorCode = AccessErrorCode.ProviderFailure,
+                        CanRetry = false,
+                    };
+                }
+                return new CredentialExecutionReady<Result> { Materializer = new Materializer(() => new Result()) };
+            },
+        };
+        var (broker, registry) = this.Create(executor, coordinator);
+        await using var owned = broker;
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var request = ConnectRequest(CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.Entra, "principal-a"));
+        var first = broker.AcquireAsync(request, cancellation.Token);
+        var second = broker.AcquireAsync(request, TestContext.Current.CancellationToken);
+        await ApplyAsync(registry, registry.GetSnapshot()[0]);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await ApplyAsync(registry, registry.GetSnapshot()[1]);
+        await coordinator.FollowerJoined.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        cancellation.Cancel();
+        Assert.IsType<AccessCancelled<Result>>(
+            await first.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+        Assert.NotNull(groupProof);
+        Assert.NotNull(leaderContext);
+        Assert.True(await groupProof.AuthorizesPrivateUseAsync(leaderContext, TestContext.Current.CancellationToken));
+        finish.TrySetResult();
+        await using var result = Assert.IsType<AccessSucceeded<Result>>(
+            await second.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).Result;
+        Assert.Equal(1, childExecutions);
+        Assert.False(await groupProof.AuthorizesPrivateUseAsync(leaderContext, TestContext.Current.CancellationToken));
+    }
+
+    private static RequestRecord ConnectRequest(CredentialAccountIdentifier? account)
+    {
+        var original = Request();
+        return original with
+        {
+            Credential = original.Credential with
+            {
+                Provider = CredentialProviderKind.DevTunnel,
+                Kind = CredentialKind.ConnectToken,
+                AccountIdentifier = account,
+            },
+            Sources = original.Sources.Select(source => source with { Provider = CredentialProviderKind.DevTunnel }).ToArray(),
+        };
+    }
+
+    private (AccessBroker Broker, UserAuthorizationRegistry Registry) Create(
+        Executor executor,
+        IProviderAcquisitionCoordinator? coordinator = null)
     {
         var policy = new ReleaseAuthorizationPolicy(new ReleaseMemoryStore(Path.Combine(this.directory, $"{Guid.NewGuid():N}.json")));
         var executors = new CredentialAccessExecutorRegistry();
         executors.Add<RequestRecord, Result>(executor);
         var registry = new UserAuthorizationRegistry();
-        return (new AccessBroker(policy, executors, new ProviderAcquisitionCoordinator(), registry), registry);
+        return (new AccessBroker(policy, executors, coordinator ?? new ProviderAcquisitionCoordinator(), registry), registry);
     }
 
     private static Task ApplyAsync(
@@ -853,7 +1159,7 @@ public sealed class AccessBrokerTests : IDisposable
             CancellationToken, ValueTask<CredentialExecutionOutcome<Result>>> Execute { get; init; }
         public Func<bool> IsUsable { get; init; } = () => false;
         public Func<CredentialInspection, CredentialInspection> RefineInspection { get; init; } = inspection => inspection;
-        public CredentialExecutorKind Kind => CredentialExecutorKind.OAuth;
+        public CredentialExecutorKind Kind { get; init; } = CredentialExecutorKind.OAuth;
 
         public ValueTask<CredentialInspection> InspectAsync(
             RequestRecord request,
@@ -874,7 +1180,10 @@ public sealed class AccessBrokerTests : IDisposable
                     {
                         Configuration = request.Credential.LogicalIdentifier,
                         Source = source.Identifier,
-                        Protocol = ProviderProtocolKind.OAuth,
+                        Account = request.Credential.AccountIdentifier,
+                        Protocol = this.Kind == CredentialExecutorKind.DevTunnelConnect
+                            ? ProviderProtocolKind.TunnelConnect
+                            : ProviderProtocolKind.OAuth,
                     },
                 },
             }));
@@ -888,6 +1197,46 @@ public sealed class AccessBrokerTests : IDisposable
             ICredentialExecutionContext context,
             CancellationToken cancellationToken) =>
             this.Execute(request, inspection, authorization, interactionPermit, context, cancellationToken);
+    }
+
+    private sealed class ParticipantTrackingCoordinator : IProviderAcquisitionCoordinator
+    {
+        private readonly ProviderAcquisitionCoordinator coordinator = new();
+        private int participants;
+        internal TaskCompletionSource FollowerJoined { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public ValueTask<ProviderAcquisitionOutcome> ExecuteOrJoinAsync(
+            IProviderAcquisitionOperation operation,
+            ProviderInteractionPermit permit,
+            CancellationToken cancellationToken)
+        {
+            var pending = this.coordinator.ExecuteOrJoinAsync(operation, permit, cancellationToken);
+            if (operation.ExecutorKind == CredentialExecutorKind.DevTunnelConnect &&
+                Interlocked.Increment(ref this.participants) == 2)
+            {
+                this.FollowerJoined.TrySetResult();
+            }
+
+            return pending;
+        }
+
+        public ValueTask DisposeAsync() => this.coordinator.DisposeAsync();
+    }
+
+    private sealed class GroupOperation(
+        ICredentialExecutionContext context,
+        ProviderAcquisitionKey key,
+        Func<ProviderAcquisitionCommitContext, CancellationToken, ValueTask<ProviderAcquisitionOutcome>> execute)
+        : IProviderAcquisitionOperation
+    {
+        public ProviderAcquisitionKey CompatibilityKey => key;
+        public UserAuthorizationRequestIdentifier RequestIdentifier => context.RequestIdentifier;
+        public long Revision => context.Revision;
+        public CredentialExecutorKind ExecutorKind => CredentialExecutorKind.DevTunnelConnect;
+        public Guid AcquisitionGeneration => context.AcquisitionGeneration;
+        public ValueTask<ProviderAcquisitionOutcome> ExecuteAsync(
+            ProviderAcquisitionCommitContext commitContext,
+            CancellationToken cancellationToken) => execute(commitContext, cancellationToken);
     }
 
     private sealed class Operation(

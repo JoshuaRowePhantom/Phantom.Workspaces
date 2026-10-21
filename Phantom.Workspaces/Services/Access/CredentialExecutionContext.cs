@@ -77,17 +77,20 @@ internal sealed class CredentialExecutionContext : ICredentialExecutionContext
         return outcome;
     }
 
-    public ValueTask<ProviderAcquisitionOutcome> ExecutePrivateProviderDependencyAsync(
+    public async ValueTask<ProviderAcquisitionOutcome> ExecutePrivateProviderDependencyAsync(
         IProviderAcquisitionOperation operation,
         ProviderInteractionPermit parentGenerationPermit,
         CancellationToken cancellationToken)
     {
-        if (!this.canPerform || this.PolicyRequest is null ||
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!this.canPerform || this.PolicyRequest is null || parentGenerationPermit is null ||
             operation.RequestIdentifier != this.RequestIdentifier ||
             operation.Revision != this.Revision || operation.AcquisitionGeneration != this.AcquisitionGeneration ||
-            !parentGenerationPermit.BelongsToGeneration(this.RequestIdentifier, this.Revision, this.AcquisitionGeneration))
+            !await parentGenerationPermit.AuthorizesPrivateUseAsync(this, cancellationToken).ConfigureAwait(false) ||
+            (this.PolicyRequest.Credential.AccountIdentifier is { } account &&
+                operation.CompatibilityKey.Account != account))
         {
-            return ValueTask.FromResult<ProviderAcquisitionOutcome>(new ProviderAcquisitionDenied());
+            return new ProviderAcquisitionDenied();
         }
 
         var permit = new ProviderInteractionPermit(
@@ -96,8 +99,11 @@ internal sealed class CredentialExecutionContext : ICredentialExecutionContext
             operation.ExecutorKind,
             this.AcquisitionGeneration,
             operation.CompatibilityKey,
-            () => parentGenerationPermit.BelongsToGeneration(this.RequestIdentifier, this.Revision, this.AcquisitionGeneration));
-        return this.ExecuteProviderAcquisitionAsync(operation, permit, cancellationToken);
+            () => parentGenerationPermit.IsActivePrivateExecution(this));
+        var outcome = await this.ExecuteProviderAcquisitionAsync(operation, permit, cancellationToken).ConfigureAwait(false);
+        return await parentGenerationPermit.AuthorizesPrivateUseAsync(this, cancellationToken).ConfigureAwait(false)
+            ? outcome
+            : new ProviderAcquisitionDenied();
     }
 
     public ICredentialLeaseContext CreateLeaseContext(ICredentialGenerationValidator generationValidator)

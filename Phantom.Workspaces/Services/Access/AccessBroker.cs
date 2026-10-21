@@ -240,7 +240,13 @@ internal sealed class AccessBroker : IAccessBroker
 
                             permit = new ProviderInteractionPermit(
                                 identifier, revision, executor.Kind, acquisitionGeneration, key,
-                                () => this.IsCurrentExecution(identifier, decision.Revision, acquisitionGeneration));
+                                () => this.IsCurrentExecution(identifier, decision.Revision, acquisitionGeneration),
+                                new ProviderExecutionAuthorizationBinding
+                                {
+                                    Policy = this.Policy,
+                                    Authorization = authorization,
+                                    Request = policyRequest,
+                                });
                         }
 
                         outcome = await this.ExecuteCredentialAsync(
