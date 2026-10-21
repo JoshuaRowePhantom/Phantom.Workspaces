@@ -109,6 +109,16 @@
   "httpExactGenerationVerification20261021": {
     "canonicalProductionFix": "1e9923ef6b018e629b19e7c3539aec9c714ac74e",
     "approvedImmutableSource": "05d80103b5285ca79e07d0f1b6ac0db08cabee4a",
+    "candidateSourceReviewReceipt20261021": {
+      "reviewer": "9138ee92-e671-4e53-b882-67573927d963",
+      "source": "05d80103b5285ca79e07d0f1b6ac0db08cabee4a",
+      "sourceParent": "60663d8be0cc1c34d06cc62222e75debbb781064",
+      "receivedAt": "2026-10-21T02:25:19.162-07:00",
+      "result": "DIRECT source CLEAR: explicitly parent-authorized read-only exact three-file candidate intake review complete; no significant issues found. Both handlers dispose rejected response before exact invalidation, only Invalidated permits new broker-authorized acquire/retry, stale/missing failures are sanitized typed InvalidGeneration, await-using retains original lease ownership, replay remains bounded once.",
+      "realBrokerTestScope": "Exact candidate relay regression pauses actual A request, invalidates A/publishes B, then releases401: one send, two mints, no B delete/replay, response content disposed and B fixed lease usable. Reviewer did not rerun owner179 tests or perform any builds/tests/edits.",
+      "alreadyIntegratedEquivalence": "No new cherry-pick needed: local1e9923ef already contains the immutable candidate. Actual git diff --quiet of BOTH complete current handler files against reviewed05d returns0. Newer owned real-broker Management+Connect rejection/lease-disposal regressions and existing82 initial plus10x82 execution evidence remain separate, unchanged.",
+      "boundary": "Clearance applies only to immutable05d candidate, not former4d branch/ownership, unrelated GitHub/root shutdown work, live/runtime acceptance or whole arc. This direct source receipt is separate from earlier fresh local two-handler net/regression review."
+    },
     "ownedRegressionCheckpoint": "ceb8000fcb0bab5c7fafdde802ee0ae09c881230",
     "verification": "Parent requested independent confirmation of an old4d runtime report. Read current canonical two-handler source and verified both files exactly equal existing owned1e9923ef; issue already fixed here. No withdrawn moving HEAD/unreviewed candidate or duplicate equivalent production fix consumed.",
     "behavior": "Both first401 paths dispose old response, then require exact CredentialGenerationInvalidationOutcome.Invalidated before any renewed broker acquisition/replay. Current enum alternatives NoLongerCurrent/Missing (unavailable exact generation) take typed InvalidGeneration; cancellation propagates. No invented Unavailable enum or token/provider fallback. Independently publishedB is never substituted by staleA's401. Existing legitimate newly broker-authorized Perform, single replay, repeated401 handling, destination/header sanitization and borrowed/owned HTTP lifetimes preserved.",
@@ -318,7 +328,8 @@
     "Fresh independent read-only actual paired-net review through a171c3dd: no significant issues in provider/caller ownership, exact-count real production caller regressions, async-first/fault/transfer handling, three internal observation modifiers or exact2d92 stale-handle test-only leaf. No builds/tests/edits; no canonical/final-await or whole-arc clearance.",
     "Fresh independent read-only generic-only integration compatibility review of selected bd1/3a/9d/04 intake through0434a855, preserved explicit Audience fixture and untouched newer MCP lifecycle/catalog/admin: no significant issues. Existing source-clear algorithms not reopened; no reviewer edits/builds/tests.",
     "Requested c4d bounded SOURCE reviewfa2b26f0 against9784130d now CLEAR at01:32:53: no significant introduced defects in disconnected UI retirement or actual shared-host navigation replacement tests. Native contracts/store/picker/providers/caches retained. No builds/tests/live interaction; no new root978 or whole-arc clearance.",
-    "Fresh parent-requested two-handler HTTP review: no significant issues in actual1e9923ef Management/Connect exact-invalidation net or three owned real-broker regression files committedceb8000f. Actual rejected-A disposal/no-B-substitution and current source checked; no reviewer builds/tests, no broader shared/GitHub/root shutdown clearance."
+    "Fresh parent-requested two-handler HTTP review: no significant issues in actual1e9923ef Management/Connect exact-invalidation net or three owned real-broker regression files committedceb8000f. Actual rejected-A disposal/no-B-substitution and current source checked; no reviewer builds/tests, no broader shared/GitHub/root shutdown clearance.",
+    "DIRECT9138 source receipt2026-10-21T02:25:19-07:00 independently clears exact05d80103 vs60663d8b three-file candidate after explicit parent authorization. No significant issues in both exact-invalidation handlers and actual real-broker relay stale401 regression; static only, owner179 not rerun. Both current full handler blobs verified exactly equal reviewed05d. No duplicate equivalent intake or former-owner ownership restored; separate from integrator82x10 and local fresh net review."
   ],
   "genericOAuthShutdownReview20261021": {
     "reviewer": "9138ee92-e671-4e53-b882-67573927d963",
