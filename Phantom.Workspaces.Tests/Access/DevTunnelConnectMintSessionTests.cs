@@ -17,6 +17,25 @@ namespace Phantom.Workspaces.Tests.Access;
 
 public sealed class DevTunnelConnectMintSessionTests
 {
+    [Fact]
+    public async Task ConnectMint_PerformWaitsForActualAuthorizationRowPublication()
+    {
+        await using var fixture = new Fixture();
+        var perform = fixture.PerformAsync();
+        Assert.False(perform.IsCompleted);
+        Assert.Empty(fixture.Registry.GetSnapshot());
+        Assert.Equal(0, fixture.Source.Acquisitions);
+        Assert.Equal(0, fixture.ManagementCalls);
+
+        var pending = fixture.Broker.AcquireAsync(fixture.Request, TestContext.Current.CancellationToken);
+        await perform.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await using var result = Assert.IsType<AccessSucceeded<DevTunnelConnectCredentialAccessResult>>(
+            await pending.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).Result;
+        Assert.NotNull(result.ConnectToken);
+        Assert.Equal(1, fixture.Source.Acquisitions);
+        Assert.Equal(1, fixture.ManagementCalls);
+    }
+
     [Theory]
     [InlineData(true, false)]
     [InlineData(false, false)]
@@ -444,11 +463,12 @@ public sealed class DevTunnelConnectMintSessionTests
             await operation.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         }
 
-        public Task PerformAsync()
+        public async Task PerformAsync()
         {
+            await this.WaitForActionAsync(TestContext.Current.CancellationToken);
             var row = Assert.Single(this.Registry.GetSnapshot().Where(value =>
                 value.State is UserAuthorizationState.Pending or UserAuthorizationState.RenewalNeeded));
-            return this.Registry.ActAsync(new ApplyUserAuthorizationAction
+            await this.Registry.ActAsync(new ApplyUserAuthorizationAction
             {
                 RequestIdentifier = row.Identifier,
                 ExpectedRevision = row.Revision,
