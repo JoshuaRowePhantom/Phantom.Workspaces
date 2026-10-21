@@ -340,12 +340,38 @@ internal sealed class GitHubCredentialAccessExecutor : ICredentialAccessExecutor
         {
             return new GitHubPrivateCredentialUseDenied<TResult>();
         }
-        return new GitHubPrivateCredentialUseSucceeded<TResult>
+        var result = await operation(new string(snapshot.Material), snapshot.Account, cancellationToken).ConfigureAwait(false);
+        var transferred = false;
+        try
         {
-            Result = await operation(new string(snapshot.Material), snapshot.Account, cancellationToken).ConfigureAwait(false),
-            Generation = snapshot.Generation,
-            AccountIdentifier = snapshot.Account,
-        };
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!IsApprovedConnectGeneration(context, parentGenerationPermit))
+            {
+                return new GitHubPrivateCredentialUseDenied<TResult>();
+            }
+            var succeeded = new GitHubPrivateCredentialUseSucceeded<TResult>
+            {
+                Result = result,
+                Generation = snapshot.Generation,
+                AccountIdentifier = snapshot.Account,
+            };
+            transferred = true;
+            return succeeded;
+        }
+        finally
+        {
+            if (!transferred)
+            {
+                if (result is IAsyncDisposable asynchronous)
+                {
+                    await asynchronous.DisposeAsync().ConfigureAwait(false);
+                }
+                else if (result is IDisposable synchronous)
+                {
+                    synchronous.Dispose();
+                }
+            }
+        }
     }
 
     private static bool IsPrivateSource(GitHubPrivateCredentialSource source) =>

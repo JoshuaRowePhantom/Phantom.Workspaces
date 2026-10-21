@@ -8,6 +8,48 @@ namespace Phantom.Workspaces.Tests.Access;
 
 public sealed class GitHubPrivateCredentialSessionTests
 {
+    [Fact]
+    public async Task PrivateMaterialUse_CancelledCallbackResultIsDisposedBeforeReturning()
+    {
+        var events = new List<string>();
+        var provider = new GitHubCredentialAccessExecutor(new Source(events));
+        var parent = new ParentExecutor(provider, events);
+        var (broker, registry) = Create(provider, parent);
+        await using var owned = broker;
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var result = new DerivedResult();
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        parent.BodyOverride = async (context, commit, groupCancellation) =>
+        {
+            try
+            {
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+                    await provider.UsePrivateAsync(
+                        parent.IdentityRequest, context, commit.InteractionPermit,
+                        async (_, callbackCancellation) =>
+                        {
+                            var groupCancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                            using var registration = callbackCancellation.Register(() => groupCancelled.TrySetResult());
+                            cancellation.Cancel();
+                            await groupCancelled.Task.WaitAsync(TestContext.Current.CancellationToken);
+                            return result;
+                        }, groupCancellation));
+                Assert.Equal(1, result.AsyncDisposals);
+                Assert.Equal(0, result.SyncDisposals);
+                completed.SetResult();
+            }
+            catch (Exception error)
+            {
+                completed.SetException(error);
+            }
+            return new ProviderAcquisitionCancelled();
+        };
+        var task = broker.AcquireAsync(Request(), cancellation.Token);
+        await AllowAsync(registry);
+        await task;
+        await completed.Task.WaitAsync(TestContext.Current.CancellationToken);
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(1)]
@@ -513,6 +555,10 @@ public sealed class GitHubPrivateCredentialSessionTests
             {
                 return new CredentialExecutionFailed<ParentResult> { ErrorCode = failed.ErrorCode, CanRetry = true };
             }
+            if (acquired is ProviderAcquisitionCancelled)
+            {
+                throw new OperationCanceledException(cancellationToken);
+            }
             Assert.IsType<ProviderAcquisitionSucceeded>(acquired);
             Assert.Equal("connect-material", this.derivedMaterial);
             return new CredentialExecutionReady<ParentResult> { Materializer = new Materializer() };
@@ -615,6 +661,18 @@ public sealed class GitHubPrivateCredentialSessionTests
             public ValueTask<ParentResult> MaterializeAsync(CancellationToken cancellationToken) => ValueTask.FromResult(new ParentResult());
             public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         }
+    }
+
+    private sealed class DerivedResult : IAsyncDisposable, IDisposable
+    {
+        public int AsyncDisposals { get; private set; }
+        public int SyncDisposals { get; private set; }
+        public ValueTask DisposeAsync()
+        {
+            this.AsyncDisposals++;
+            return ValueTask.CompletedTask;
+        }
+        public void Dispose() => this.SyncDisposals++;
     }
 
     private sealed class Source(List<string> events) : IGitHubCredentialAccessSource
