@@ -180,6 +180,14 @@ public sealed class UserAuthorizationRegistry : IUserAuthorizationRegistry
     internal bool Complete(
         UserAuthorizationRequestIdentifier identifier,
         long expectedRevision,
+        UserAuthorizationState state) => this.Complete(identifier, (long?)expectedRevision, state);
+
+    internal bool Cancel(UserAuthorizationRequestIdentifier identifier) =>
+        this.Complete(identifier, null, UserAuthorizationState.Cancelled);
+
+    private bool Complete(
+        UserAuthorizationRequestIdentifier identifier,
+        long? expectedRevision,
         UserAuthorizationState state)
     {
         if (state is not (UserAuthorizationState.Completed or UserAuthorizationState.Failed or
@@ -192,7 +200,7 @@ public sealed class UserAuthorizationRegistry : IUserAuthorizationRegistry
         lock (this.gate)
         {
             if (this.disposed || !this.rows.TryGetValue(identifier, out var row) ||
-                row.Snapshot.Revision != expectedRevision ||
+                (expectedRevision is { } revision && row.Snapshot.Revision != revision) ||
                 row.Snapshot.State is UserAuthorizationState.Completed or UserAuthorizationState.Denied or UserAuthorizationState.Cancelled)
             {
                 return false;
@@ -200,7 +208,7 @@ public sealed class UserAuthorizationRegistry : IUserAuthorizationRegistry
 
             updated = row.Snapshot with
             {
-                Revision = expectedRevision + 1,
+                Revision = row.Snapshot.Revision + 1,
                 State = state,
                 CanAct = state is UserAuthorizationState.Failed or UserAuthorizationState.RenewalNeeded,
                 PrimaryAction = state switch

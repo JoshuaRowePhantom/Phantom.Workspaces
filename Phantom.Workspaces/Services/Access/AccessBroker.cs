@@ -188,6 +188,7 @@ internal sealed class AccessBroker : IAccessBroker
         where TResult : ICredentialAccessResult
     {
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, this.lifetime.Token);
+        using var rowCancellation = cancellation.Token.Register(() => this.registry.Cancel(identifier));
         long revision = 1;
         try
         {
@@ -479,6 +480,7 @@ internal sealed class AccessBroker : IAccessBroker
         where TResult : IAccessResult
     {
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, this.lifetime.Token);
+        using var rowCancellation = cancellation.Token.Register(() => this.registry.Cancel(identifier));
         long revision = 1;
         try
         {

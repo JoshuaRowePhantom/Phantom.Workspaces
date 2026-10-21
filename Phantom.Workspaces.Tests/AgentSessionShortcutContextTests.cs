@@ -313,8 +313,7 @@ public sealed class AgentSessionShortcutContextTests
             credentialPicker: new NullCredentialPicker(),
             allowedSecretsStore: new AllowedSecretsStore(new AllowedSecretsStoreConfiguration()),
             platformSecretStore: new NullPlatformSecretStore(),
-            mcpOAuthCredentials: mcpOAuthCredentials,
-            accessBroker: Mock.Of<IAccessBroker>());
+            mcpOAuthCredentials: mcpOAuthCredentials);
 
     [AvaloniaFact(Timeout = 15_000)]
     public async Task ApplicationServices_McpCatalog_ExposesExactTypedInstanceWithoutLegacySlot()

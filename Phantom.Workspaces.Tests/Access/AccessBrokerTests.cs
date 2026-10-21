@@ -304,6 +304,35 @@ public sealed class AccessBrokerTests : IDisposable
         var cancelled = broker.AcquireAsync(Request("cancelled"), cancellation.Token);
         cancellation.Cancel();
         Assert.IsType<AccessCancelled<Result>>(await cancelled);
+        Assert.DoesNotContain(registry.GetSnapshot(), snapshot => snapshot.CanAct);
+    }
+
+    [Fact]
+    public async Task AccessBroker_CompletionCallerCancellationClosesRowBeforeReturning()
+    {
+        var executor = new CompletionExecutor();
+        var executors = new CredentialAccessExecutorRegistry();
+        executors.AddCompletion<CompletionRequest, CompletionResult>(executor);
+        var registry = new UserAuthorizationRegistry();
+        await using var broker = new AccessBroker(
+            Mock.Of<IReleaseAuthorizationPolicy>(), executors, new ProviderAcquisitionCoordinator(), registry);
+        var credentialRequest = Request();
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var pending = broker.AcquireAsync(new CompletionRequest
+        {
+            Requestor = credentialRequest.Requestor,
+            Use = credentialRequest.Use with { MemoryScopes = [] },
+            PresentationScope = AccessPresentationScope.Bootstrap,
+        }, cancellation.Token);
+        Assert.True(Assert.Single(registry.GetSnapshot()).CanAct);
+
+        await cancellation.CancelAsync();
+
+        Assert.IsType<AccessCancelled<CompletionResult>>(await pending);
+        var cancelled = Assert.Single(registry.GetSnapshot());
+        Assert.Equal(UserAuthorizationState.Cancelled, cancelled.State);
+        Assert.False(cancelled.CanAct);
+        Assert.Equal(0, executor.Executions);
     }
 
     [Fact]

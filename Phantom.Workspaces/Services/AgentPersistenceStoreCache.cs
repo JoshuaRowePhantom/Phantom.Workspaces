@@ -12,6 +12,7 @@ public sealed class AgentPersistenceStoreCache : IAgentPersistenceStoreCache, IA
     private readonly ConditionalWeakTable<RepositorySource, Task<IAgentPersistenceStore>> cache = new();
     private readonly IAccessBroker? accessBroker;
     private readonly Func<AccessPresentationScope>? presentationScope;
+    private readonly Func<RepositorySource, DevTunnelIdentityRoute?>? identityRouteFactory;
     private readonly object gate = new();
     private readonly HashSet<Task<IAgentPersistenceStore>> stores = [];
     private readonly CancellationTokenSource lifetime = new();
@@ -20,10 +21,12 @@ public sealed class AgentPersistenceStoreCache : IAgentPersistenceStoreCache, IA
 
     public AgentPersistenceStoreCache(
         IAccessBroker? accessBroker = null,
-        Func<AccessPresentationScope>? presentationScope = null)
+        Func<AccessPresentationScope>? presentationScope = null,
+        Func<RepositorySource, DevTunnelIdentityRoute?>? identityRouteFactory = null)
     {
         this.accessBroker = accessBroker;
         this.presentationScope = presentationScope;
+        this.identityRouteFactory = identityRouteFactory;
     }
 
     public Task<IAgentPersistenceStore> GetOrCreateAsync(RepositorySource repositorySource)
@@ -34,8 +37,7 @@ public sealed class AgentPersistenceStoreCache : IAgentPersistenceStoreCache, IA
             return this.cache.GetValue(repositorySource, src =>
             {
                 var task = src is WebRepositorySource or DevTunnelNameRepositorySource
-                    ? new AgentPersistenceStoreSourceFactory(src, this.accessBroker,
-                        presentationScope: this.presentationScope).CreateAsync(this.lifetime.Token)
+                    ? new AgentPersistenceStoreSourceFactory(src, this.accessBroker, this.identityRouteFactory?.Invoke(src), this.presentationScope).CreateAsync(this.lifetime.Token)
                     : CreateAgentPersistenceStoreAsync(src);
                 this.stores.Add(task);
                 return task;

@@ -30,7 +30,9 @@ public static class AgentServicesComposition
         IMcpOAuthCredentialRequestCatalog? mcpOAuthCredentials = null,
         IRemoteCopilotProviderCatalog? remoteCopilotProviderCatalog = null,
         Func<AccessPresentationScope>? accessPresentationScopeProvider = null)
-        => new()
+    {
+        ArgumentNullException.ThrowIfNull(accessBroker);
+        return new()
         {
             AccessBroker = accessBroker ?? throw new ArgumentNullException(nameof(accessBroker)),
             McpOAuthCredentials = mcpOAuthCredentials,
@@ -40,6 +42,7 @@ public static class AgentServicesComposition
             TrustProfilePolicyCompiler = new MxcTrustProfilePolicyCompiler(),
             RemoteCopilotProviderCatalog = remoteCopilotProviderCatalog,
         };
+    }
 
     /// <summary>
     /// Composes the complete session-launch bundle: the process-wide host services
@@ -141,6 +144,7 @@ public static class AgentServicesComposition
             accessPresentationScopeProvider: applicationServices.AccessPresentationScopeProvider) with
         {
             AccessBroker = applicationServices.AccessBroker,
+            RemoteCopilotProviderCatalog = applicationServices.RemoteCopilotProviderCatalog,
             AgentPersistenceStoreOverride = agentPersistenceStore,
             ToolsetFactory = toolsetFactory,
             ToolResourceFactory = toolResourceFactory,

@@ -213,7 +213,7 @@ public sealed class ReconnectingDevTunnelLifetimeTests
 
         await owner.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => starting);
-        Assert.Throws<ObjectDisposedException>(() => fixture.Start(TestContext.Current.CancellationToken));
+        Assert.Throws<ObjectDisposedException>(() => { _ = fixture.Start(TestContext.Current.CancellationToken); });
         Assert.Equal(0, fixture.Disposals());
     }
 

@@ -25,6 +25,8 @@ public sealed class DevTunnelCredentialAccessExceptionTests
             DevTunnelCredentialAccessException.RequireAsync(new AccessFailed<Result>
             {
                 ErrorCode = AccessErrorCode.ProviderFailure,
+                SafeMessage = "Credential access failed.",
+                CanRetry = false,
             }, cancellation.Token).AsTask());
         Assert.Equal(cancellation.Token, exception.CancellationToken);
     }
@@ -79,6 +81,8 @@ public sealed class DevTunnelCredentialAccessExceptionTests
             DevTunnelCredentialAccessException.RequireAsync(new AccessFailed<Result>
             {
                 ErrorCode = AccessErrorCode.IdentityMismatch,
+                SafeMessage = "Credential identity did not match.",
+                CanRetry = false,
             }, TestContext.Current.CancellationToken).AsTask());
         Assert.Equal(AccessErrorCode.IdentityMismatch, exception.ErrorCode);
     }

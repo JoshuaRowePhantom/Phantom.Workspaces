@@ -7,6 +7,45 @@ namespace Phantom.Workspaces.Tests.Access;
 public sealed class UserAuthorizationRegistryTests
 {
     [Fact]
+    public async Task UserAuthorizationRegistry_CallerCancellationClosesLatestRevisionExactlyOnce()
+    {
+        await using var registry = new UserAuthorizationRegistry();
+        var snapshot = Snapshot();
+        registry.Add(snapshot);
+        Assert.True(registry.UpdateSources(snapshot.Identifier, snapshot.Revision,
+            [snapshot.SourceOptions[0] with { Usability = CredentialSourceUsability.Usable }]));
+        var beforeCancellation = Assert.Single(registry.GetSnapshot());
+        var changes = 0;
+        registry.Changed += (_, _) => changes++;
+
+        Assert.True(registry.Cancel(snapshot.Identifier));
+        var cancelled = Assert.Single(registry.GetSnapshot());
+        Assert.Equal(beforeCancellation.Revision + 1, cancelled.Revision);
+        Assert.Equal(UserAuthorizationState.Cancelled, cancelled.State);
+        Assert.False(cancelled.CanAct);
+        Assert.False(registry.Cancel(snapshot.Identifier));
+        Assert.Same(cancelled, Assert.Single(registry.GetSnapshot()));
+        Assert.Equal(1, changes);
+        Assert.Equal(UserAuthorizationState.Cancelled,
+            (await registry.WaitForCompletionAsync(snapshot.Identifier, TestContext.Current.CancellationToken)).State);
+    }
+
+    [Theory]
+    [InlineData(UserAuthorizationState.Completed)]
+    [InlineData(UserAuthorizationState.Denied)]
+    public async Task UserAuthorizationRegistry_CallerCancellationPreservesTerminalDecision(UserAuthorizationState state)
+    {
+        await using var registry = new UserAuthorizationRegistry();
+        var snapshot = Snapshot();
+        registry.Add(snapshot);
+        Assert.True(registry.Complete(snapshot.Identifier, snapshot.Revision, state));
+        var completed = Assert.Single(registry.GetSnapshot());
+
+        Assert.False(registry.Cancel(snapshot.Identifier));
+        Assert.Same(completed, Assert.Single(registry.GetSnapshot()));
+    }
+
+    [Fact]
     public async Task UserAuthorizationRegistry_ActAsync_StaleRevision_HasNoSideEffects()
     {
         await using var registry = new UserAuthorizationRegistry();

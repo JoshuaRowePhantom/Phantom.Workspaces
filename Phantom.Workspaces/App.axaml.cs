@@ -10,6 +10,7 @@ using Avalonia.VisualTree;
 using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Access;
@@ -299,8 +300,10 @@ public partial class App : Application
             // in place; this adds the missing logging half).
             Services.Logging.GlobalExceptionLogging.Register(loggerFactory);
 
+            var accessPresentationScope = this.accessHost.GetPresentationScope;
             var agentPersistenceStoreCache = new AgentPersistenceStoreCache(
-                this.accessHost.Broker, () => this.accessHost.PresentationScope);
+                this.accessHost.Broker, accessPresentationScope,
+                source => this.accessHost.CreateDevTunnelIdentityRoute(source, CredentialUseKind.Application));
             this.persistenceStoreCache = agentPersistenceStoreCache;
             var agentPersistenceStore = await agentPersistenceStoreCache.GetOrCreateAsync(repositorySource);
             if (this.isExiting) { return; }
@@ -323,10 +326,11 @@ public partial class App : Application
 
             var agentChatFactory = new AgentChatFactory(
                 agentPersistenceStore,
-                Services.AgentServicesComposition.ComposeHostServices(this.accessHost.Broker, loggerFactory) with
-                {
-                    AccessBroker = this.accessHost.Broker,
-                },
+                Services.AgentServicesComposition.ComposeHostServices(
+                    this.accessHost.Broker, loggerFactory,
+                    mcpOAuthCredentials: this.accessHost.McpOAuthCredentials,
+                    remoteCopilotProviderCatalog: this.accessHost.RemoteCopilotProviders,
+                    accessPresentationScopeProvider: accessPresentationScope),
                 foregroundScheduler);
             this.agentChatFactory = agentChatFactory;
             var transportFactoryRegistryProvider = new Services.TransportFactoryRegistryProvider();
@@ -338,14 +342,20 @@ public partial class App : Application
                 agentPersistenceStoreCache,
                 loggerFactory,
                 accessBroker: this.accessHost.Broker,
-                accessPresentationScope: () => this.accessHost.PresentationScope,
+                accessPresentationScope: accessPresentationScope,
                 logDirectoryProvider: logDirectoryProvider,
                 configurationPersistence: persistenceService,
                 secretProvider: secretProvider,
                 credentialPicker: credentialPicker,
                 allowedSecretsStore: allowedSecretsStore,
                 platformSecretStore: platformStore,
-                transportFactoryRegistryProvider: transportFactoryRegistryProvider);
+                mcpOAuthCredentials: this.accessHost.McpOAuthCredentials,
+                transportFactoryRegistryProvider: transportFactoryRegistryProvider)
+            {
+                DevTunnelHostServiceFactory = this.accessHost.CreateDevTunnelHostService,
+                DevTunnelIdentityRouteFactory = this.accessHost.CreateDevTunnelIdentityRoute,
+                RemoteCopilotProviderCatalog = this.accessHost.RemoteCopilotProviders,
+            };
             var viewModel = new MainWindowViewModel(repositorySource, configuration, applicationServices: applicationServices);
             this.runtimeViewModel = viewModel;
 

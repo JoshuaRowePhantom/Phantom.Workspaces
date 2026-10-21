@@ -92,6 +92,7 @@ public sealed class ApplicationServices
     public Func<AccessPresentationScope> AccessPresentationScope { get; }
     internal Func<RemoteAuthentication?, IAccessBroker, Func<AccessPresentationScope>,
         DevTunnel.IDevTunnelHostService>? DevTunnelHostServiceFactory { get; init; }
+    internal Func<RepositorySource, CredentialUseKind, DevTunnelIdentityRoute?>? DevTunnelIdentityRouteFactory { get; init; }
 
     internal IRemoteCopilotProviderCatalog? RemoteCopilotProviderCatalog { get; init; }
 

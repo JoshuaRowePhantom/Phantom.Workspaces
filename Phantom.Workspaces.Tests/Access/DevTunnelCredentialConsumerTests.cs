@@ -85,14 +85,6 @@ public sealed class DevTunnelCredentialConsumerTests : IDisposable
         var transport = new Transport();
         var factory = new AuthenticatedHttpClientFactory(() => transport);
         var source = new DevTunnelNameRepositorySource("consumer-test", Configuration.DevTunnelAccessMode.Private);
-        var secondRow = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        registry.Changed += (_, _) =>
-        {
-            if (registry.GetSnapshot().Count >= 2)
-            {
-                secondRow.TrySetResult();
-            }
-        };
         Task operation;
         if (persistence)
         {
@@ -104,16 +96,48 @@ public sealed class DevTunnelCredentialConsumerTests : IDisposable
         }
         Assert.Equal(0, transport.Sends);
         Assert.Equal(0, session.Mints);
-        await AllowAsync(registry);
-        await secondRow.Task.WaitAsync(TestContext.Current.CancellationToken);
-        await AllowAsync(registry);
-        await operation;
+        await AllowNextAsync(registry, operation);
+        await AllowNextAsync(registry, operation);
+        await AllowNextAsync(registry, operation);
+        await operation.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         Assert.Equal(1, session.Mints);
-        Assert.Equal(1, transport.Sends);
+        Assert.Equal(2, transport.Sends);
         Assert.Equal("tunnel connect-consumer-material", transport.LastTunnelAuthorization);
         Assert.Null(transport.LastAuthorization);
-        Assert.Equal(2, registry.GetSnapshot().Count);
+        Assert.Equal(3, registry.GetSnapshot().Count);
         Assert.True(transport.Disposed);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PendingPrivateCallerCancellationOrShutdownNeverSends(bool shutdown)
+    {
+        var session = new MintSession();
+        var (broker, registry) = this.Create(session);
+        await using var owned = broker;
+        var transport = new Transport();
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var layer = (WebClientDataAccessLayer)EntityRepository.CreateWebDataAccessLayer(
+            new WebRepositorySource(Relay.AbsoluteUri, UseGitHubAuthToken: true),
+            broker, null, () => AccessPresentationScope.Runtime, new AuthenticatedHttpClientFactory(() => transport));
+        var pending = layer.GetAsync(new GetRequest { Entities = [] }, cancellation.Token);
+        await WaitForPendingAsync(registry, pending);
+
+        if (shutdown)
+        {
+            await broker.DisposeAsync();
+        }
+        else
+        {
+            await cancellation.CancelAsync();
+        }
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            pending.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+        Assert.Equal(0, transport.Sends);
+        Assert.Equal(0, session.Mints);
+        Assert.DoesNotContain(registry.GetSnapshot(), row => row.State == UserAuthorizationState.Pending);
     }
 
     [Fact]
@@ -136,49 +160,6 @@ public sealed class DevTunnelCredentialConsumerTests : IDisposable
         await Assert.ThrowsAsync<DevTunnelCredentialAccessException>(() => task);
         Assert.Equal(0, transport.Sends);
         Assert.Equal(0, session.Mints);
-    }
-
-    [Theory]
-    [InlineData(false, false)]
-    [InlineData(false, true)]
-    [InlineData(true, false)]
-    [InlineData(true, true)]
-    public async Task PrivateConsumer_MissingLiveScopeFailsBeforeTransportOrAuthorization(bool persistence, bool named)
-    {
-        var session = new MintSession();
-        var (broker, registry) = this.Create(session);
-        await using var owned = broker;
-        var transports = 0;
-        var factory = new AuthenticatedHttpClientFactory(() =>
-        {
-            transports++;
-            return new Transport();
-        });
-        RepositorySource source = named
-            ? new DevTunnelNameRepositorySource("consumer-test", Configuration.DevTunnelAccessMode.Private)
-            : new WebRepositorySource(Relay.AbsoluteUri, UseGitHubAuthToken: true);
-        DevTunnelCredentialAccessException exception;
-        if (persistence)
-        {
-            exception = await Assert.ThrowsAsync<DevTunnelCredentialAccessException>(() =>
-                new AgentPersistenceStoreSourceFactory(source, broker, null, null, factory)
-                    .CreateAsync(TestContext.Current.CancellationToken));
-        }
-        else if (source is DevTunnelNameRepositorySource tunnel)
-        {
-            exception = await Assert.ThrowsAsync<DevTunnelCredentialAccessException>(() =>
-                EntityRepository.CreateDevTunnelNameDataAccessLayerAsync(
-                    tunnel, broker, null, null, TestContext.Current.CancellationToken, factory));
-        }
-        else
-        {
-            exception = Assert.Throws<DevTunnelCredentialAccessException>(() =>
-                EntityRepository.CreateWebDataAccessLayer((WebRepositorySource)source, broker, null, null, factory));
-        }
-        Assert.Equal(AccessErrorCode.UnsupportedRequest, exception.ErrorCode);
-        Assert.Equal(0, transports);
-        Assert.Equal(0, session.Mints);
-        Assert.Empty(registry.GetSnapshot());
     }
 
     [Fact]
@@ -210,8 +191,7 @@ public sealed class DevTunnelCredentialConsumerTests : IDisposable
 
     private async Task UseNamedPersistenceAsync(DevTunnelNameRepositorySource source, IAccessBroker broker, IAuthenticatedHttpClientFactory factory)
     {
-        var store = await new AgentPersistenceStoreSourceFactory(source, broker, null, () => AccessPresentationScope.Runtime, factory)
-            .CreateAsync(TestContext.Current.CancellationToken);
+        var store = await new AgentPersistenceStoreSourceFactory(source, broker, null, () => AccessPresentationScope.Runtime, factory).CreateAsync(TestContext.Current.CancellationToken);
         await using var storeDisposal = (IAsyncDisposable)store;
         await store.ReadSubAgentChildIdsAsync("session", TestContext.Current.CancellationToken);
     }
@@ -233,9 +213,48 @@ public sealed class DevTunnelCredentialConsumerTests : IDisposable
         {
             RequestIdentifier = row.Identifier,
             ExpectedRevision = row.Revision,
-            Memory = row.SelectedMemory,
+            Memory = row.MemoryOptions.Single(option => option.Scope == ReleaseMemoryScopeKind.AllowOnce).Identifier,
             Source = row.SourceOptions.Single(source => source.Kind == CredentialSourceKind.GitHubCli).Identifier,
         }, TestContext.Current.CancellationToken);
+    }
+
+    private static async Task AllowNextAsync(UserAuthorizationRegistry registry, Task operation)
+    {
+        await WaitForPendingAsync(registry, operation);
+        await AllowAsync(registry);
+    }
+
+    private static async Task<UserAuthorizationSnapshot> WaitForPendingAsync(
+        UserAuthorizationRegistry registry,
+        Task operation)
+    {
+        var ready = new TaskCompletionSource<UserAuthorizationSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Find()
+        {
+            var row = registry.GetSnapshot().LastOrDefault(snapshot => snapshot.State == UserAuthorizationState.Pending);
+            if (row is not null)
+            {
+                ready.TrySetResult(row);
+            }
+        }
+        EventHandler<UserAuthorizationChangedEventArgs> changed = (_, _) => Find();
+        registry.Changed += changed;
+        try
+        {
+            Find();
+            var completed = await Task.WhenAny(ready.Task, operation)
+                .WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            if (completed == operation)
+            {
+                await operation;
+                Assert.Fail("The consumer completed before the expected authorization request.");
+            }
+            return await ready.Task;
+        }
+        finally
+        {
+            registry.Changed -= changed;
+        }
     }
 
     private sealed class MintSession : IDevTunnelConnectMintSession
@@ -251,7 +270,7 @@ public sealed class DevTunnelCredentialConsumerTests : IDisposable
                 Sources = route.Sources,
             });
 
-        public async ValueTask<DevTunnelConnectMintOutcome> MintAsync(
+        public ValueTask<DevTunnelConnectMintOutcome> MintAsync(
             DevTunnelConnectCredentialAccessRequest request,
             CredentialSourceChoiceDescriptor identitySource,
             ICredentialExecutionContext context,
@@ -260,23 +279,20 @@ public sealed class DevTunnelCredentialConsumerTests : IDisposable
             CancellationToken cancellationToken)
         {
             Assert.Equal(CredentialSourceKind.GitHubCli, identitySource.Kind);
-            Assert.Equal(new ProviderAcquisitionKey
-            {
-                Configuration = request.Credential.LogicalIdentifier,
-                Source = context.PolicyRequest!.SourceIdentifier,
-                Account = context.PolicyRequest.Credential.AccountIdentifier,
-                Protocol = ProviderProtocolKind.TunnelConnect,
-            }, parentAcquisitionKey);
-            Assert.True(await parentGenerationPermit.AuthorizesPrivateUseAsync(context, cancellationToken));
+            Assert.Equal(request.Credential.LogicalIdentifier, parentAcquisitionKey.Configuration);
+            Assert.Equal(context.PolicyRequest!.SourceIdentifier, parentAcquisitionKey.Source);
+            Assert.Equal(context.PolicyRequest.Credential.AccountIdentifier, parentAcquisitionKey.Account);
+            Assert.Equal(ProviderProtocolKind.TunnelConnect, parentAcquisitionKey.Protocol);
+            Assert.True(parentGenerationPermit.AuthorizesProvider(CredentialExecutorKind.DevTunnelConnect, parentAcquisitionKey));
             this.Mints++;
             this.account = CredentialIdentityFactory.CreateAccountIdentifier(CredentialProviderKind.GitHub, "verified-consumer-principal");
-            return new DevTunnelConnectMintSucceeded
+            return ValueTask.FromResult<DevTunnelConnectMintOutcome>(new DevTunnelConnectMintSucceeded
             {
                 Material = "connect-consumer-material".ToCharArray(),
                 Account = this.account,
                 ExpiresOn = DateTimeOffset.UtcNow.AddMinutes(5),
                 Endpoint = request.Tunnel.Endpoint ?? Relay,
-            };
+            });
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
@@ -296,7 +312,8 @@ public sealed class DevTunnelCredentialConsumerTests : IDisposable
             this.LastRequest = request;
             this.LastAuthorization = request.Headers.Authorization?.ToString();
             this.LastTunnelAuthorization = request.Headers.TryGetValues("X-Tunnel-Authorization", out var values) ? values.Single() : null;
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            var restore = request.RequestUri!.AbsolutePath == "/agent/persistence/restore";
+            return Task.FromResult(new HttpResponseMessage(restore ? HttpStatusCode.NotFound : HttpStatusCode.OK)
             {
                 RequestMessage = request,
                 Content = new StringContent(request.RequestUri!.AbsolutePath == "/data/get" ? """{"batches":[]}""" : """{"childSessionIds":[]}"""),

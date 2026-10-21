@@ -55,7 +55,7 @@ public sealed class McpToolContextProviderTests
         await fixture.AllowAsync();
         await fixture.Browser.Opened.Task.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
         var second = CreateTransportAsync(fixture, "second");
-        var pending = fixture.Registry.GetSnapshot().Single(row => row.State == UserAuthorizationState.Pending);
+        var pending = await fixture.WaitForPendingAsync(second);
         fixture.Browser.Continue.TrySetResult();
         var firstTransport = await first.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
         await using var firstOwner = (IAsyncDisposable)firstTransport;
@@ -99,7 +99,7 @@ public sealed class McpToolContextProviderTests
         Assert.Equal(1, fixture.Server.TokenRequests);
         Assert.Equal(1, fixture.Store.Writes);
         var cachedTask = CreateTransportAsync(fixture, "discovered-cached");
-        var pending = fixture.Registry.GetSnapshot().Single(row => row.State == UserAuthorizationState.Pending);
+        var pending = await fixture.WaitForPendingAsync(cachedTask);
         Assert.Equal(UserAuthorizationPrimaryActionKind.Allow, pending.PrimaryAction);
         await fixture.AllowAsync(pending);
         var cachedTransport = await cachedTask.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
@@ -155,7 +155,7 @@ public sealed class McpToolContextProviderTests
         using var firstCancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var first = McpTransportFactory.CreateMcpTransportAsync(
             Tool(fixture), services, NullLoggerFactory.Instance, firstCancellation.Token);
-        var bootstrap = fixture.Registry.GetSnapshot().Single(row => row.State == UserAuthorizationState.Pending);
+        var bootstrap = await fixture.WaitForPendingAsync(first);
         Assert.True(bootstrap.IsBootstrapBlocking);
         firstCancellation.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first);
@@ -164,8 +164,8 @@ public sealed class McpToolContextProviderTests
         using var secondCancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var second = McpTransportFactory.CreateMcpTransportAsync(
             Tool(fixture), services, NullLoggerFactory.Instance, secondCancellation.Token);
-        var runtime = fixture.Registry.GetSnapshot().Single(row =>
-            row.State == UserAuthorizationState.Pending && row.Identifier != bootstrap.Identifier);
+        var runtime = await fixture.WaitForPendingAsync(second,
+            new HashSet<UserAuthorizationRequestIdentifier> { bootstrap.Identifier });
         Assert.False(runtime.IsBootstrapBlocking);
         Assert.NotEqual(bootstrap.Identifier, runtime.Identifier);
         Assert.Equal(0, fixture.Browser.OpenCount);

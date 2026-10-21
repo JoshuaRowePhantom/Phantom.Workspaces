@@ -23,6 +23,7 @@ using Dock.Model.Mvvm.Controls;
 using Dock.Serializer.SystemTextJson;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Configuration;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Web.Client;
 using Phantom.Workspaces.Llm;
@@ -147,7 +148,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             cancellationToken: this.lifetime.Token,
             userComputerProfileOverride: configuration?.UserComputerProfileOverride,
             accessBroker: services.AccessBroker,
-            accessPresentationScope: services.AccessPresentationScope);
+            accessPresentationScope: services.AccessPresentationScope,
+            devTunnelIdentityRoute: services.DevTunnelIdentityRouteFactory?.Invoke(repositorySource, CredentialUseKind.Repository));
         this.profileStore = profileStore ?? ProfileStore.ForCurrentUser();
 
         this.TopLevelViews = new ObservableCollection<ViewDefinitionViewModel>();
@@ -237,20 +239,31 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             PlatformSecretStore = new Llm.Secrets.NullPlatformSecretStore(),
             Dispatch = action => Dispatcher.UIThread.Post(action),
         });
+        var ownedHost = accessHost;
+        var presentationScope = ownedHost.GetPresentationScope;
         var agentChatFactory = new AgentChatFactory(
             agentPersistenceStore,
-            new AgentServices { LoggerFactory = loggerFactory, AccessBroker = accessHost.Broker },
+            AgentServicesComposition.ComposeHostServices(
+                ownedHost.Broker, loggerFactory, ownedHost.McpOAuthCredentials,
+                ownedHost.RemoteCopilotProviders, presentationScope),
             TaskScheduler.Current);
         var registryProvider = new TransportFactoryRegistryProvider();
-        var ownedHost = accessHost;
-        var agentPersistenceStoreCache = new AgentPersistenceStoreCache(ownedHost.Broker, () => ownedHost.PresentationScope);
+        var agentPersistenceStoreCache = new AgentPersistenceStoreCache(
+            ownedHost.Broker, presentationScope,
+            source => ownedHost.CreateDevTunnelIdentityRoute(source, CredentialUseKind.Application));
         return new ApplicationServices(
             new RunningAgentChatTable(agentChatFactory, AgentSessionRuntimeContextFactory.FromProvider(registryProvider)),
             agentPersistenceStoreCache,
             loggerFactory,
             accessBroker: accessHost.Broker,
-            accessPresentationScope: () => ownedHost.PresentationScope,
-            transportFactoryRegistryProvider: registryProvider);
+            accessPresentationScope: presentationScope,
+            mcpOAuthCredentials: ownedHost.McpOAuthCredentials,
+            transportFactoryRegistryProvider: registryProvider)
+        {
+            DevTunnelHostServiceFactory = ownedHost.CreateDevTunnelHostService,
+            DevTunnelIdentityRouteFactory = ownedHost.CreateDevTunnelIdentityRoute,
+            RemoteCopilotProviderCatalog = ownedHost.RemoteCopilotProviders,
+        };
     }
 
     public RepositorySource RepositorySource { get; }

@@ -5,11 +5,13 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Text.Json;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.MongoDB;
 using Phantom.Workspaces.Data.Offline;
 using Phantom.Workspaces.Data.Web.Client;
-using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Services.DevTunnel;
 
 namespace Phantom.Workspaces;
@@ -119,10 +121,10 @@ public sealed class EntityRepository : IAsyncDisposable
                     coreDataAccessLayer,
                     options.UserComputerProfileOverride,
                     cancellationToken).ConfigureAwait(false);
-            return new EntityRepository(
+            var repository = new EntityRepository(
                 repositorySource, coreDataAccessLayer, workspaceEntitySession,
-                options.AccessBroker, options.DevTunnelIdentityRoute, options.AccessPresentationScope,
-                underlyingDataAccessLayer);
+                options.AccessBroker, options.DevTunnelIdentityRoute, options.AccessPresentationScope, underlyingDataAccessLayer);
+            return repository;
         }
         catch (Exception initializationFailure)
         {
@@ -175,14 +177,40 @@ public sealed class EntityRepository : IAsyncDisposable
         }
 
         var broker = RequireAccessBroker(accessBroker);
-        var scope = RequirePresentationScope(presentationScope);
+        presentationScope = RequirePresentationScope(presentationScope);
         var endpoint = new Uri(repositorySource.Endpoint, UriKind.Absolute);
         var request = CreateConnectRequest(
             new DevTunnelAccessDescriptor { Access = DevTunnelAccessKind.Private, Endpoint = endpoint },
-            repositorySource.Authentication, identityRoute, CredentialUseKind.Repository, "repository", scope);
+            repositorySource.Authentication, identityRoute, CredentialUseKind.Repository, "repository", presentationScope);
         var httpClient = (httpClientFactory ?? new AuthenticatedHttpClientFactory())
-            .CreateClient(endpoint, broker, request, scope);
+            .CreateClient(endpoint, broker, request, presentationScope);
         return new WebClientDataAccessLayer(repositorySource.Endpoint, httpClient, ownsHttpClient: true);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref this.disposalStarted, 1) != 0)
+        {
+            await this.disposal.Task.ConfigureAwait(false);
+            return;
+        }
+
+        try
+        {
+            await DisposeLayerAsync(this.underlyingDataAccessLayer).ConfigureAwait(false);
+            this.disposal.TrySetResult();
+        }
+        catch (Exception exception)
+        {
+            this.disposal.TrySetException(exception);
+            throw;
+        }
+    }
+
+    private static async ValueTask DisposeLayerAsync(IDataAccessLayer layer)
+    {
+        if (layer is IAsyncDisposable asynchronous) { await asynchronous.DisposeAsync().ConfigureAwait(false); }
+        else if (layer is IDisposable synchronous) { synchronous.Dispose(); }
     }
 
     internal static async Task<IDataAccessLayer> CreateDevTunnelNameDataAccessLayerAsync(
@@ -194,7 +222,7 @@ public sealed class EntityRepository : IAsyncDisposable
         IAuthenticatedHttpClientFactory? httpClientFactory = null)
     {
         var broker = RequireAccessBroker(accessBroker);
-        var scope = RequirePresentationScope(presentationScope);
+        presentationScope = RequirePresentationScope(presentationScope);
         var anonymous = IsAnonymous(repositorySource);
         var request = CreateConnectRequest(
             new DevTunnelAccessDescriptor
@@ -202,11 +230,11 @@ public sealed class EntityRepository : IAsyncDisposable
                 Access = anonymous ? DevTunnelAccessKind.Anonymous : DevTunnelAccessKind.Private,
                 Name = repositorySource.TunnelName,
             },
-            repositorySource.Authentication, identityRoute, CredentialUseKind.Repository, "repository", scope);
+            repositorySource.Authentication, identityRoute, CredentialUseKind.Repository, "repository", presentationScope);
         var identity = DevTunnelIdentityCredentialAccessRequest.Create(
             request.IdentityRoute, request.Requestor, request.Use, request.PresentationScope);
         var resolver = new DevTunnelServiceFactory(
-            broker, identity, scope).CreateEndpointResolver(request);
+            broker, identity, presentationScope).CreateEndpointResolver(request);
         var authenticatedHttpClientFactory = httpClientFactory ?? new AuthenticatedHttpClientFactory();
 
         var reconnectingDataAccessLayer = new Services.DevTunnel.ReconnectingWebDataAccessLayer(
@@ -216,7 +244,7 @@ public sealed class EntityRepository : IAsyncDisposable
                 cancellationToken),
             buildDataAccessLayer: resolution =>
             {
-                var httpClient = authenticatedHttpClientFactory.CreateClient(resolution.BaseUri, broker, request, scope);
+                var httpClient = authenticatedHttpClientFactory.CreateClient(resolution.BaseUri, broker, request, presentationScope);
                 return new WebClientDataAccessLayer(resolution.BaseUri.ToString(), httpClient, ownsHttpClient: true);
             },
             delayScheduler: Services.DevTunnel.RealDelayScheduler.Instance);
@@ -258,13 +286,65 @@ public sealed class EntityRepository : IAsyncDisposable
         DevTunnelIdentityRoute? configuredRoute,
         CredentialUseKind useKind,
         string purpose,
-        Func<AccessPresentationScope> presentationScope)
+        Func<AccessPresentationScope>? presentationScope)
     {
         if (tunnel.Endpoint is { } endpoint &&
             (endpoint.UserInfo.Length != 0 || endpoint.Query.Length != 0 || endpoint.Fragment.Length != 0))
         {
             throw new InvalidOperationException("Relay endpoints cannot contain credential-bearing URL components.");
         }
+        var (requestor, use) = CreateConnectUse(tunnel, useKind, purpose);
+        presentationScope = RequirePresentationScope(presentationScope);
+        var scope = presentationScope();
+        DevTunnelIdentityRoute route;
+        if (tunnel.Access == DevTunnelAccessKind.Anonymous)
+        {
+            route = new AnonymousDevTunnelIdentityRoute();
+        }
+        else if (configuredRoute is not null)
+        {
+            if (configuredRoute is AnonymousDevTunnelIdentityRoute ||
+                authentication is not null && !string.Equals(authentication.Scheme, configuredRoute.Scheme.ToString(), StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("The configured identity route does not match relay authentication.");
+            }
+            route = configuredRoute switch
+            {
+                GitHubDevTunnelIdentityRoute github => github with
+                {
+                    Credential = github.Credential with { Requestor = requestor, Use = use, PresentationScope = scope },
+                },
+                EntraDevTunnelIdentityRoute entra => entra with
+                {
+                    Credential = entra.Credential with { Requestor = requestor, Use = use, PresentationScope = scope },
+                },
+                OAuthDevTunnelIdentityRoute oauth => oauth with
+                {
+                    Credential = oauth.Credential with { Requestor = requestor, Use = use, PresentationScope = scope },
+                },
+                _ => throw new InvalidOperationException("The configured identity route is not supported."),
+            };
+        }
+        else if (authentication is null || string.Equals(authentication.Scheme, RemoteAuthentication.GithubScheme, StringComparison.OrdinalIgnoreCase))
+        {
+            route = new GitHubDevTunnelIdentityRoute
+            {
+                Credential = GitHubCredentialAccessRequest.Create(
+                    GitHubCredentialPurpose.DevTunnelIdentity, requestor, use.Lineage, purpose, scope),
+            };
+        }
+        else
+        {
+            throw new InvalidOperationException("A configured typed identity route is required for this relay authentication scheme.");
+        }
+        return DevTunnelConnectCredentialAccessRequest.Create(tunnel, route, requestor, use, scope);
+    }
+
+    internal static (AccessRequestor Requestor, CredentialUseDescriptor Use) CreateConnectUse(
+        DevTunnelAccessDescriptor tunnel,
+        CredentialUseKind useKind,
+        string purpose)
+    {
         var requestor = new AccessRequestor
         {
             Kind = AccessRequestorKind.Application,
@@ -284,60 +364,7 @@ public sealed class EntityRepository : IAsyncDisposable
             SafeDisplayName = useKind == CredentialUseKind.Repository ? "Access repository relay" : "Access persistence relay",
             MemoryScopes = [ReleaseMemoryScopeKind.AllowOnce, ReleaseMemoryScopeKind.ExactUse, ReleaseMemoryScopeKind.AllUses],
         };
-        var scope = RequirePresentationScope(presentationScope)();
-        DevTunnelIdentityRoute route;
-        if (tunnel.Access == DevTunnelAccessKind.Anonymous)
-        {
-            route = new AnonymousDevTunnelIdentityRoute();
-        }
-        else if (configuredRoute is not null)
-        {
-            if (configuredRoute is AnonymousDevTunnelIdentityRoute ||
-                authentication is not null && !string.Equals(authentication.Scheme, configuredRoute.Scheme.ToString(), StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidOperationException("The configured identity route does not match relay authentication.");
-            }
-            route = configuredRoute;
-        }
-        else if (authentication is null || string.Equals(authentication.Scheme, RemoteAuthentication.GithubScheme, StringComparison.OrdinalIgnoreCase))
-        {
-            route = new GitHubDevTunnelIdentityRoute
-            {
-                Credential = GitHubCredentialAccessRequest.Create(
-                    GitHubCredentialPurpose.DevTunnelIdentity, requestor, lineage, purpose, scope),
-            };
-        }
-        else
-        {
-            throw new InvalidOperationException("A configured typed identity route is required for this relay authentication scheme.");
-        }
-        return DevTunnelConnectCredentialAccessRequest.Create(tunnel, route, requestor, use, scope);
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        if (Interlocked.Exchange(ref this.disposalStarted, 1) != 0)
-        {
-            await this.disposal.Task.ConfigureAwait(false);
-            return;
-        }
-
-        try
-        {
-            await DisposeLayerAsync(this.underlyingDataAccessLayer).ConfigureAwait(false);
-            this.disposal.TrySetResult();
-        }
-        catch (Exception exception)
-        {
-            this.disposal.TrySetException(exception);
-            throw;
-        }
-    }
-
-    private static async ValueTask DisposeLayerAsync(IDataAccessLayer layer)
-    {
-        if (layer is IAsyncDisposable asynchronous) { await asynchronous.DisposeAsync().ConfigureAwait(false); }
-        else if (layer is IDisposable synchronous) { synchronous.Dispose(); }
+        return (requestor, use);
     }
 
     private static async Task<IDataAccessLayer> CreateMongoDbDataAccessLayerAsync(

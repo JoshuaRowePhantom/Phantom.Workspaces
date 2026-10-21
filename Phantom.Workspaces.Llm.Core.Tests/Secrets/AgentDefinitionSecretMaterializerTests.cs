@@ -56,6 +56,8 @@ public sealed class AgentDefinitionSecretMaterializerTests
         await result.DisposeAsync();
         Assert.False(result.Resolver.TryResolve(token, out _));
         Assert.IsType<SensitiveValueUseFailed<int>>(await lease.UseAsync((_, _) => ValueTask.FromResult(1), CancellationToken.None));
+        Assert.Null(typeof(AgentFactory).GetMethod("ResolveRequiredSecretOrEnvAsync",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic));
     }
 
     [Fact]

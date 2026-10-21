@@ -12,6 +12,7 @@ using Phantom.Workspaces.Llm.Interfaces.Authorization;
 using Phantom.Workspaces.Services.Access;
 using Phantom.Workspaces.Services.Authorization;
 using Phantom.Workspaces.Services.DevTunnel;
+using Phantom.Workspaces.Services.Mcp;
 
 namespace Phantom.Workspaces.Tests.Access;
 
@@ -423,7 +424,7 @@ public sealed class DevTunnelConnectMintSessionTests
                     ready.TrySetResult(row);
                 }
             }
-            EventHandler changed = (_, _) => Find();
+            EventHandler<UserAuthorizationChangedEventArgs> changed = (_, _) => Find();
             this.Registry.Changed += changed;
             try
             {
@@ -466,8 +467,8 @@ public sealed class DevTunnelConnectMintSessionTests
         public async Task PerformAsync()
         {
             await this.WaitForActionAsync(TestContext.Current.CancellationToken);
-            var row = Assert.Single(this.Registry.GetSnapshot().Where(value =>
-                value.State is UserAuthorizationState.Pending or UserAuthorizationState.RenewalNeeded));
+            var row = Assert.Single(this.Registry.GetSnapshot(), value =>
+                value.State is UserAuthorizationState.Pending or UserAuthorizationState.RenewalNeeded);
             await this.Registry.ActAsync(new ApplyUserAuthorizationAction
             {
                 RequestIdentifier = row.Identifier,
@@ -495,6 +496,8 @@ public sealed class DevTunnelConnectMintSessionTests
 
     private sealed class InterceptingSession(Fixture fixture) : IDevTunnelConnectMintSession
     {
+        public ValueTask DisposeAsync() => fixture.Session.DisposeAsync();
+
         public ValueTask<CredentialInspection> InspectIdentityAsync(
             DevTunnelIdentityRoute route, CancellationToken cancellationToken) =>
             fixture.Session.InspectIdentityAsync(route, cancellationToken);

@@ -20,6 +20,13 @@ namespace Phantom.Workspaces.Tests;
 // path needs, so no path can silently drop one (the root cause of #1401 and #1402).
 public sealed class AgentServicesCompositionTests
 {
+    [Fact]
+    public void ComposeHostServicesRejectsMissingOwningBroker()
+    {
+        Assert.Throws<ArgumentNullException>(() => AgentServicesComposition.ComposeHostServices(
+            null!, NullLoggerFactory.Instance));
+    }
+
     private static ApplicationServices CreateApplicationServices(
         IMcpOAuthCredentialRequestCatalog mcpOAuthCredentials,
         Func<AccessPresentationScope>? accessPresentationScopeProvider = null,

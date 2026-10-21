@@ -17,14 +17,15 @@ public sealed record UnknownRepositorySource : RepositorySource;
 /// <summary>A remote Phantom.Workspaces web data-access endpoint.</summary>
 /// <param name="Endpoint">The absolute endpoint URL.</param>
 /// <param name="UseGitHubAuthToken">
-/// When true (dev tunnel access), the <c>X-Tunnel-Authorization</c> token is resolved automatically
-/// from the GitHub auth token (the <c>GITHUB_TOKEN</c> environment variable, else <c>gh auth token</c>),
-/// so no token source needs to be configured.
+/// When true, private dev-tunnel access acquires a Connect credential through the host access broker.
+/// GitHub is the default identity provider unless <paramref name="Authentication"/> selects another
+/// provider; identity credentials are never forwarded to the relay.
 /// </param>
 /// <param name="Authentication">
 /// Optional pluggable authentication configuration (issue #1455). Because <see cref="EntityRepository"/>
 /// and the chat-persistence store both dispatch on this source, this single field configures data and
-/// persistence auth uniformly. Null preserves the legacy behaviour selected by <paramref name="UseGitHubAuthToken"/>.
+/// persistence auth uniformly. Null selects GitHub identity for private tunnel access when
+/// <paramref name="UseGitHubAuthToken"/> is set.
 /// </param>
 public sealed record WebRepositorySource(
     string Endpoint,
@@ -40,7 +41,7 @@ public sealed record WebRepositorySource(
 /// <param name="AccessMode">The tunnel access mode (Anonymous: no token; Private/Token: connect token fetched automatically from Management API).</param>
 /// <param name="Authentication">
 /// Optional pluggable authentication configuration (issue #1455), threaded uniformly to the data and
-/// persistence layers. Null preserves the legacy behaviour derived from <paramref name="AccessMode"/>.
+/// persistence layers. Null selects GitHub identity for private access; anonymous access remains explicit.
 /// </param>
 public sealed record DevTunnelNameRepositorySource(
     string TunnelName,

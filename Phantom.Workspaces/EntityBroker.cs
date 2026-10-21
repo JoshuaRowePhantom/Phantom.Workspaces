@@ -93,7 +93,8 @@ public sealed class EntityBroker
         CancellationToken cancellationToken = default,
         string? userComputerProfileOverride = null,
         IAccessBroker? accessBroker = null,
-        Func<AccessPresentationScope>? accessPresentationScope = null)
+        Func<AccessPresentationScope>? accessPresentationScope = null,
+        DevTunnelIdentityRoute? devTunnelIdentityRoute = null)
     {
         using var startup = RepositoryStartupDiagnostics.Start("broker-initialization");
         var repository = await EntityRepository.CreateAsync(
@@ -103,6 +104,7 @@ public sealed class EntityBroker
                 UserComputerProfileOverride = userComputerProfileOverride,
                 AccessBroker = accessBroker,
                 AccessPresentationScope = accessPresentationScope,
+                DevTunnelIdentityRoute = devTunnelIdentityRoute,
             },
             cancellationToken);
 
