@@ -182,7 +182,9 @@ internal sealed class DevTunnelConnectCredentialAccessExecutor :
             {
                 Configuration = request.Credential.LogicalIdentifier,
                 Source = source.Identifier,
-                Account = account,
+                Account = request.Credential.AccountIdentifier ??
+                    (generations.TryGetValue(source.Identifier, out var selectedGeneration)
+                        ? selectedGeneration.AccountIdentifier : null) ?? account,
                 Protocol = ProviderProtocolKind.TunnelConnect,
             }),
         };

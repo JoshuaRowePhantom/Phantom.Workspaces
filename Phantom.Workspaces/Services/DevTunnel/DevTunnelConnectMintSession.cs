@@ -32,13 +32,15 @@ internal sealed class DevTunnelConnectMintSession(
         if (parentAcquisitionKey is null || parentGenerationPermit is null ||
             context.PolicyRequest is not { Credential: { Provider: CredentialProviderKind.DevTunnel, Kind: CredentialKind.ConnectToken } } policy ||
             policy.RequestIdentifier != context.RequestIdentifier ||
+            policy.RequestGeneration != context.Revision ||
             policy.RequestorIdentifier != context.Requestor.Identifier ||
             policy.RequestorIdentifier != request.Requestor.Identifier ||
-            policy.Use != context.Use || policy.Use != request.Use ||
+            !SameUse(policy.Use, context.Use) || !SameUse(policy.Use, request.Use) ||
             parentAcquisitionKey.Protocol != ProviderProtocolKind.TunnelConnect ||
             parentAcquisitionKey.Configuration != policy.Credential.LogicalIdentifier ||
             parentAcquisitionKey.Configuration != DevTunnelConnectCredentialAccessRequest.CreateLogicalIdentifier(request.Tunnel, request.IdentityRoute) ||
             parentAcquisitionKey.Source != policy.SourceIdentifier ||
+            parentAcquisitionKey.Account != policy.Credential.AccountIdentifier ||
             parentAcquisitionKey.Source != DevTunnelConnectCredentialAccessRequest.CreateSource(identitySource).Identifier ||
             !parentGenerationPermit.Authorizes(context.RequestIdentifier, context.Revision,
                 CredentialExecutorKind.DevTunnelConnect, context.AcquisitionGeneration, parentAcquisitionKey) ||
@@ -58,6 +60,10 @@ internal sealed class DevTunnelConnectMintSession(
             _ => new DevTunnelConnectMintFailed { ErrorCode = AccessErrorCode.ProviderFailure },
         };
     }
+
+    private static bool SameUse(CredentialUseDescriptor left, CredentialUseDescriptor right) =>
+        (left with { MemoryScopes = right.MemoryScopes }) == right &&
+        left.MemoryScopes.SequenceEqual(right.MemoryScopes);
 
     private async ValueTask<DevTunnelConnectMintOutcome> MintGitHubAsync(
         DevTunnelConnectCredentialAccessRequest request,

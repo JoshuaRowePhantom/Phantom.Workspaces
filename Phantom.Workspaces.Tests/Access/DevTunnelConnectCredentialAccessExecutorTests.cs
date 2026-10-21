@@ -206,7 +206,7 @@ public sealed class DevTunnelConnectCredentialAccessExecutorTests
     }
 
     [Fact]
-    public async Task ConnectExecutor_ForwardsUnpinnedExactKeyAlongsideSafelySelectedSourceAccount()
+    public async Task ConnectExecutor_BindsExactKeyToSafelySelectedSourceAccountBeforeAcquisition()
     {
         var clock = new TestClock();
         await using var fixture = new Fixture(multipleIdentitySources: true, timeProvider: clock);
@@ -219,7 +219,7 @@ public sealed class DevTunnelConnectCredentialAccessExecutorTests
             CredentialProviderKind.GitHub, "different principal");
         fixture.Session.MintProofObserved = (context, key) =>
         {
-            Assert.Null(key.Account);
+            Assert.Equal(account, key.Account);
             Assert.Equal(account, context.PolicyRequest!.Credential.AccountIdentifier);
         };
         var pending = fixture.Broker.AcquireAsync(fixture.Request, TestContext.Current.CancellationToken);
