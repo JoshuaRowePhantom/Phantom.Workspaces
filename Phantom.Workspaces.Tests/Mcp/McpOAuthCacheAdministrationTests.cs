@@ -168,6 +168,7 @@ public sealed class McpOAuthCacheAdministrationTests
         var deleting = fixture.Executor.DeleteAsync(row.Identifier, CancellationToken.None).AsTask();
         await fixture.Store.ReadEntered.Task.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
         var shutdown = fixture.Executor.DisposeAsync().AsTask();
+        await fixture.Store.ReadCancelled.Task.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
         Assert.False(shutdown.IsCompleted);
         fixture.Store.ContinueRead.TrySetResult();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => deleting);
@@ -278,6 +279,7 @@ public sealed class McpOAuthCacheAdministrationTests
         internal bool BlockRead { get; set; }
         internal Exception? ReadFailure { get; set; }
         internal TaskCompletionSource ReadEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource ReadCancelled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource ContinueRead { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public async Task<SecureString?> ReadAsync(string name, CancellationToken cancellationToken)
@@ -285,6 +287,7 @@ public sealed class McpOAuthCacheAdministrationTests
             this.Reads++;
             if (this.BlockRead)
             {
+                using var registration = cancellationToken.Register(() => this.ReadCancelled.TrySetResult());
                 this.ReadEntered.TrySetResult();
                 await this.ContinueRead.Task;
             }
