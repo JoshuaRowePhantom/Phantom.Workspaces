@@ -12,6 +12,7 @@
     "ownerEvidence": ".scratch\\integration-v2-named-anonymous-evidence-20261021\\sha256-manifest-final.json",
     "ownerEvidenceManifestSha256": "83D55B0D5DA2449F60B0BD39E55E2A86C992C891BB0E472E495A83960DD4A584",
     "ownerEvidenceFiles": 43,
+    "ownerArtifactAudit": "Source handoff's claimed stability228x10.log is not present in delivered43-file bundle/clean source; original archived unchanged and limitation explicit. Independently parsed actual eleven raw owner228-case TRX: each228passed,54 named cases,0failed/skipped. Canonical867 full helper stdout, final detail and all eleven raw current TRX preserved. No invented/reconstructed original stdout; no source/acceptance gate reopened.",
     "ownerEvidenceRelocation": "Original absolute source-manifest paths map by identical relative suffix from parent.scratch\\access-named-anonymous-correction-evidence-20261021 to integration.scratch\\integration-v2-named-anonymous-evidence-20261021. All copied byte lengths/hashes independently verified; raw original manifest retained.",
     "originalTopLevelArtifacts": 87,
     "currentTopLevelArtifacts": 106,
