@@ -1,5 +1,7 @@
 {
-  "codeCheckpoint": "af3c4a47ed231101bb4bee4edcceac517dd43794",
+  "codeCheckpoint": "0434a8550f4a8977d9451c38be585adfbb0bfb71",
+  "historicalMcpMatchingCodeCheckpoint": "af3c4a47ed231101bb4bee4edcceac517dd43794",
+  "readyProviderCodeCheckpoint": "1e9923ef6b018e629b19e7c3539aec9c714ac74e",
   "historicalGitHubRealCallerCodeCheckpoint": "a171c3dd540c433bb6fa7341edf10f439d513d24",
   "historicalGitHubOwnershipPairCodeCheckpoint": "cbce2a686879be78873d45f232bac3dc735e3ca0",
   "historicalRootCoreCodeCheckpoint": "079f20811faa410455c15c5035d51783355de1cd",
@@ -12,7 +14,7 @@
   "coreStabilityPassedPerRun": 171,
   "largerAppTargetInitialPassed": 312,
   "largerAppTargetStability": "Failed run5/10; exact causal fixture correction079f2081 subsequently targeted16 and root200x10 plus exact-final-source200 pass. Not claimed312x10.",
-  "knownRemainingFailures": "One root-owned stale401 replay fixture remains pending. Former14 fabricated-account GitHub fixture failures are now resolved by exact immutable owner fixture prerequisites;75 relevant tests passed plus75x10. Canonical GitHub/final-await production followups remain pending and are not given clearance by this result-ownership validation.",
+  "knownRemainingFailures": "NEW root broker identity nested shutdown outcome failure in App239 stability run5: expected AccessShuttingDown, actual AccessFailed. Isolated read-only diagnosis completed; root5a25 owns immutable correction. Full239 initial and runs1-4 pass;239x10 NOT claimed. Former stale401 scenario is now fixed by actual05d production guard and passed in complete Management/Connect selection. Canonical GitHub/final-await High remains35ff-owned; prior14 fabricated-account fixtures already resolved.",
   "gitHubOwnershipPairPassed": 75,
   "gitHubOwnershipPairStabilityRuns": 10,
   "gitHubOwnershipPairStabilityPassedPerRun": 75,
@@ -22,8 +24,57 @@
   "mcpCanonicalMatchingPassed": 99,
   "mcpCanonicalMatchingStabilityRuns": 10,
   "mcpCanonicalMatchingStabilityPassedPerRun": 99,
+  "readyProviderAppInitialPassed": 239,
+  "readyProviderAppStabilityPassedRuns": 4,
+  "readyProviderAppStabilityFailureRun": 5,
+  "readyProviderCorePassed": 43,
+  "readyProviderCoreStabilityRuns": 10,
+  "readyProviderCoreStabilityPassedPerRun": 43,
+  "genericShutdownPassed": 105,
+  "genericShutdownStabilityRuns": 10,
+  "genericShutdownStabilityPassedPerRun": 105,
   "dumpCount": 0,
   "logs": [
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-generic-shutdown-tests.log",
+      "bytes": 6278,
+      "sha256": "C5ED445547B74FBB81F7613FC4F657370DF37089A9C0CE0677AA4062A7567F02"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-generic-shutdown-stability.log",
+      "bytes": 3046,
+      "sha256": "618EE3E9110D1951B4A6B08A0710556AFF8541144E6EAA51C07BF77AE39D2155"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-ready-provider-app-tests.log",
+      "bytes": 6278,
+      "sha256": "D362C9898B3986BE0D6FC69CD436661F605CC012983E7DAFEB6D8028E210C0E3"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-ready-provider-app-stability.log",
+      "bytes": 4338,
+      "sha256": "96204EE871AB09AA442AB55E6DEAFD46C57DA55F51E55CDF631E15557EA6D478"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-ready-provider-app-stability-failure.log",
+      "bytes": 2166,
+      "sha256": "FD65E9DECC721F73B56822F66A3DD6721B2F78B53D5C0A7D59C642EA426905F1"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-ready-provider-app-stability-failure.trx.log",
+      "bytes": 396686,
+      "sha256": "39074ABFF1D165ED061209F5D91D76640476225F071FE83515D019DEA3A15E91"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-ready-provider-core-tests.log",
+      "bytes": 5984,
+      "sha256": "DEFDB0E97A168FF7D3C8B0207103D9456F1B6628D410F53BCD4CA81E7F512EE5"
+    },
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-ready-provider-core-stability.log",
+      "bytes": 2706,
+      "sha256": "EA22EB6DA6010AD4852123F62E8679CCE1D5379BBA9318088967652899AD65B3"
+    },
     {
       "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-mcp-canonical-matching-tests.log",
       "bytes": 6276,
