@@ -1,5 +1,8 @@
+using System.Text.Json.Serialization;
+
 namespace Phantom.Workspaces.Llm.Interfaces.Access;
 
+[JsonConverter(typeof(JsonStringEnumConverter<OAuthAccountIdentifierClaim>))]
 public enum OAuthAccountIdentifierClaim { Subject, Identifier }
 
 public sealed record OAuthProviderDescriptor

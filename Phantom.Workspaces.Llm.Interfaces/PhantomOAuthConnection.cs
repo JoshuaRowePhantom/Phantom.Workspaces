@@ -1,12 +1,13 @@
 using System;
 using System.Collections.Generic;
 using AgentSchema;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 
 namespace Phantom.Workspaces.Llm;
 
 /// <summary>
-/// Phantom-owned subclass of <see cref="OAuthConnection"/> that carries the host-pinned Entra
-/// <c>authority</c> field (issue #1420). <see cref="OAuthConnection"/> (Microsoft-owned AgentSchema)
+/// Phantom-owned subclass of <see cref="OAuthConnection"/> that carries provider authority and
+/// explicit trusted account endpoint/claim configuration. <see cref="OAuthConnection"/> (Microsoft-owned AgentSchema)
 /// silently drops unknown properties like <c>authority</c> on load — exactly as it drops the Phantom
 /// <c>type</c> field on <see cref="McpTool"/> (issue #1416). Phantom therefore resolves the field
 /// itself and upgrades each <see cref="OAuthConnection"/> whose <see cref="Connection.AuthenticationMode"/>
@@ -15,15 +16,19 @@ namespace Phantom.Workspaces.Llm;
 /// <remarks>
 /// The <c>authenticationMode</c> discriminator itself already round-trips natively (AgentSchema's
 /// <see cref="Connection"/> base declares <see cref="Connection.AuthenticationMode"/>), so it is
-/// inherited here rather than redeclared. Only <see cref="Authority"/> is new.
+/// inherited here rather than redeclared.
 /// </remarks>
 public sealed class PhantomOAuthConnection : OAuthConnection
 {
     /// <summary>
-    /// The Microsoft Entra tenant authority (e.g. <c>https://login.microsoftonline.com/&lt;tenant&gt;/v2.0</c>)
-    /// used to acquire tokens in <c>entra-pinned</c> mode. Null when not configured.
+    /// The explicitly configured provider authority/issuer, also used by host-pinned Entra.
+    /// Null when not configured.
     /// </summary>
     public string? Authority { get; set; }
+    /// <summary>Configured HTTPS account evidence endpoint, never a fabricated userinfo URL.</summary>
+    public string? AccountEndpoint { get; set; }
+    /// <summary>The explicitly configured stable claim returned by the account evidence endpoint.</summary>
+    public OAuthAccountIdentifierClaim? AccountIdentifierClaim { get; set; }
 
     /// <summary>
     /// Builds a <see cref="PhantomOAuthConnection"/> from a plain <see cref="OAuthConnection"/>,
@@ -44,6 +49,8 @@ public sealed class PhantomOAuthConnection : OAuthConnection
             AuthenticationMode = source.AuthenticationMode,
             UsageDescription = source.UsageDescription,
             Authority = authority,
+            AccountEndpoint = (source as PhantomOAuthConnection)?.AccountEndpoint,
+            AccountIdentifierClaim = (source as PhantomOAuthConnection)?.AccountIdentifierClaim,
         };
     }
 
@@ -58,6 +65,14 @@ public sealed class PhantomOAuthConnection : OAuthConnection
         if (!string.IsNullOrEmpty(this.Authority))
         {
             result["authority"] = this.Authority;
+        }
+        if (!string.IsNullOrEmpty(this.AccountEndpoint))
+        {
+            result["accountEndpoint"] = this.AccountEndpoint;
+        }
+        if (this.AccountIdentifierClaim is { } claim)
+        {
+            result["accountIdentifierClaim"] = claim.ToString();
         }
 
         return result;

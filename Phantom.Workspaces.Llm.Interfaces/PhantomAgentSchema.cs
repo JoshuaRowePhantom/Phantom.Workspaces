@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using AgentSchema;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 
 namespace Phantom.Workspaces.Llm;
 
@@ -50,12 +51,10 @@ public static class PhantomAgentSchema
             // 'executor' binding field.
             McpTool tool and not PhantomMcpTool => PhantomMcpTool.From(tool, ReadTransport(data), ReadExecutor(data)),
 
-            // #1420: for host-pinned Entra, attach the dropped 'authority' field. Only entra-pinned
-            // connections are upgraded — every other OAuth connection stays a plain OAuthConnection and
-            // continues to use the SDK's resource-bound provider.
             OAuthConnection oauth and not PhantomOAuthConnection
-                when string.Equals(oauth.AuthenticationMode, EntraPinnedAuthenticationMode, StringComparison.OrdinalIgnoreCase)
-                => PhantomOAuthConnection.From(oauth, ReadAuthority(data)),
+                when string.Equals(oauth.AuthenticationMode, EntraPinnedAuthenticationMode, StringComparison.OrdinalIgnoreCase) ||
+                    data.ContainsKey("accountEndpoint") || data.ContainsKey("accountIdentifierClaim")
+                => ReadOAuthConnection(oauth, data),
 
             _ => result,
         },
@@ -63,6 +62,31 @@ public static class PhantomAgentSchema
 
     /// <summary>The <c>authenticationMode</c> discriminator that selects host-pinned Entra auth (#1420).</summary>
     public const string EntraPinnedAuthenticationMode = "entra-pinned";
+
+    private static PhantomOAuthConnection ReadOAuthConnection(
+        OAuthConnection source,
+        Dictionary<string, object?> data)
+    {
+        var connection = PhantomOAuthConnection.From(source, ReadAuthority(data));
+        connection.AccountEndpoint = data.TryGetValue("accountEndpoint", out var endpoint) && endpoint is string text
+            ? text : null;
+        if (data.TryGetValue("accountIdentifierClaim", out var value) && value is not null)
+        {
+            var claimText = value switch
+            {
+                string configuredClaim => configuredClaim,
+                long number => number.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                int number => number.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                _ => null,
+            };
+            if (!Enum.TryParse<OAuthAccountIdentifierClaim>(claimText, ignoreCase: true, out var claim) || !Enum.IsDefined(claim))
+            {
+                throw new FormatException("OAuth account identifier claim is unsupported.");
+            }
+            connection.AccountIdentifierClaim = claim;
+        }
+        return connection;
+    }
 
     private static string? ReadAuthority(Dictionary<string, object?> data)
         => data.TryGetValue("authority", out var value) && value is string text && !string.IsNullOrWhiteSpace(text)

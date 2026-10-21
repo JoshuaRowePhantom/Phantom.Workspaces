@@ -140,6 +140,8 @@ public sealed record RemoteAuthentication(
             TokenUrl = this.TokenEndpoint!,
             Scopes = this.Scopes?.ToList(),
             Authority = this.Authority,
+            AccountEndpoint = this.AccountEndpoint,
+            AccountIdentifierClaim = this.AccountIdentifierClaim,
         };
     }
 
@@ -159,7 +161,11 @@ public sealed record RemoteAuthentication(
             ClientId: connection.ClientId,
             ClientSecret: connection.ClientSecret,
             TokenEndpoint: connection.TokenUrl,
-            Scopes: connection.Scopes?.ToList());
+            Scopes: connection.Scopes?.ToList())
+        {
+            AccountEndpoint = connection.AccountEndpoint,
+            AccountIdentifierClaim = connection.AccountIdentifierClaim,
+        };
     }
 
     private static string InferScheme(PhantomOAuthConnection connection)

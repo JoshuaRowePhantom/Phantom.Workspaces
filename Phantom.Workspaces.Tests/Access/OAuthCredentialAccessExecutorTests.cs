@@ -156,6 +156,31 @@ public sealed class OAuthCredentialAccessExecutorTests
     }
 
     [Fact]
+    public async Task CallerConfiguration_ActualJsonFieldsRegisterAndAcquireThroughTheRealBroker()
+    {
+        await using var fixture = new Fixture();
+        var configuration = JsonSerializer.Deserialize<RemoteAuthentication>(
+            """
+            {"scheme":"oauth","endpoint":"https://resource.test/","authority":"https://authority.test/",
+             "authorizationEndpoint":"https://authority.test/authorize","tokenEndpoint":"https://authority.test/token",
+             "accountEndpoint":"https://authority.test/account","accountIdentifierClaim":"Subject",
+             "clientId":"private-client","scopes":["read"]}
+            """, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        var context = fixture.Request("actual-config");
+        var request = new RemoteOAuthCredentialRequestFactory(fixture.Providers).CreateRequest(
+            configuration, fixture.Configuration.ClientAuthentication, new Uri(configuration.Endpoint!),
+            context.Requestor, context.Use, context.PresentationScope);
+        Assert.Empty(fixture.Events);
+        Assert.Equal(0, fixture.Store.Reads);
+        Assert.Null(request.Credential.AccountIdentifier);
+        var acquisition = fixture.Broker.AcquireAsync(request, TestContext.Current.CancellationToken);
+        await fixture.AllowAsync();
+        await using var result = Assert.IsType<AccessSucceeded<OAuthCredentialAccessResult>>(await acquisition).Result;
+        Assert.NotNull((await fixture.Executor.InspectGenerationAsync(request, TestContext.Current.CancellationToken))!.AccountIdentifier);
+        Assert.Equal(1, fixture.Store.Writes);
+    }
+
+    [Fact]
     public async Task Deny_DoesNotTouchProviderBrowserSecretOrCache()
     {
         await using var fixture = new Fixture(confidential: true);
