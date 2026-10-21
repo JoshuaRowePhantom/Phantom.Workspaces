@@ -211,8 +211,7 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
         var second = fixture.Broker.AcquireAsync(fixture.Request("second"), TestContext.Current.CancellationToken);
         Assert.False(second.IsCompleted);
         Assert.Equal(reads, fixture.Store.Reads);
-        Assert.Equal(UserAuthorizationPrimaryActionKind.Allow,
-            fixture.Registry.GetSnapshot().Single(row => row.State == UserAuthorizationState.Pending).PrimaryAction);
+        Assert.Equal(UserAuthorizationPrimaryActionKind.Allow, (await fixture.WaitForPendingAsync(second)).PrimaryAction);
         await fixture.AllowAsync();
         await using var cached = Assert.IsType<AccessSucceeded<McpCredentialUseResult>>(
             await second.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken)).Result;
@@ -358,7 +357,7 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
     {
         await using var fixture = new Fixture();
         var acquisition = fixture.Broker.AcquireAsync(fixture.Request(), TestContext.Current.CancellationToken);
-        var row = Assert.Single(fixture.Registry.GetSnapshot());
+        var row = await fixture.WaitForPendingAsync(acquisition);
         await fixture.Registry.ActAsync(new DenyUserAuthorizationAction
         {
             RequestIdentifier = row.Identifier,
@@ -463,10 +462,10 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
             };
         }
 
-        internal Task AllowAsync(UserAuthorizationSnapshot? row = null)
+        internal async Task AllowAsync(UserAuthorizationSnapshot? row = null)
         {
-            row ??= this.Registry.GetSnapshot().Last(snapshot => snapshot.State == UserAuthorizationState.Pending);
-            return this.Registry.ActAsync(new ApplyUserAuthorizationAction
+            row ??= await this.WaitForPendingAsync();
+            await this.Registry.ActAsync(new ApplyUserAuthorizationAction
             {
                 RequestIdentifier = row.Identifier,
                 ExpectedRevision = row.Revision,
@@ -476,7 +475,7 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
         }
 
         internal async Task<UserAuthorizationSnapshot> WaitForPendingAsync(
-            Task acquisition,
+            Task? acquisition = null,
             IReadOnlySet<UserAuthorizationRequestIdentifier>? excluded = null)
         {
             var pending = new TaskCompletionSource<UserAuthorizationSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -493,6 +492,8 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
             {
                 var row = this.Registry.GetSnapshot().FirstOrDefault(Matches);
                 if (row is not null) { return row; }
+                if (acquisition is null)
+                    return await pending.Task.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
                 var completed = await Task.WhenAny(pending.Task, acquisition)
                     .WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
                 Assert.Same(pending.Task, completed);
@@ -723,8 +724,12 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
             this.events = events;
             this.policy = new ReleaseAuthorizationPolicy(new ReleaseMemoryStore(filePath));
         }
-        public ValueTask<ReleasePolicyEvaluation> EvaluateAsync(ReleasePolicyRequest request, CancellationToken cancellationToken) =>
-            this.policy.EvaluateAsync(request, cancellationToken);
+        public async ValueTask<ReleasePolicyEvaluation> EvaluateAsync(ReleasePolicyRequest request, CancellationToken cancellationToken)
+        {
+            // Exercise asynchronous publication even when the isolated store is empty.
+            await Task.Yield();
+            return await this.policy.EvaluateAsync(request, cancellationToken);
+        }
         public async ValueTask<ReleaseAuthorization> CommitAsync(ReleasePolicyDecision decision, CancellationToken cancellationToken)
         {
             var result = await this.policy.CommitAsync(decision, cancellationToken);

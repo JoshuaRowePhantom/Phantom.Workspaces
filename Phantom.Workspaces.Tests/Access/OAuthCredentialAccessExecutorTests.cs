@@ -137,7 +137,7 @@ public sealed class OAuthCredentialAccessExecutorTests
     {
         await using var fixture = new Fixture();
         var acquisition = fixture.Broker.AcquireAsync(fixture.Request(), TestContext.Current.CancellationToken);
-        Assert.Equal(UserAuthorizationPrimaryActionKind.Perform, Assert.Single(fixture.Registry.GetSnapshot()).PrimaryAction);
+        Assert.Equal(UserAuthorizationPrimaryActionKind.Perform, (await fixture.WaitForPendingAsync(acquisition)).PrimaryAction);
         Assert.Empty(fixture.Events);
         await fixture.AllowAsync();
         await using var result = Assert.IsType<AccessSucceeded<OAuthCredentialAccessResult>>(await acquisition).Result;
@@ -160,7 +160,7 @@ public sealed class OAuthCredentialAccessExecutorTests
     {
         await using var fixture = new Fixture(confidential: true);
         var acquisition = fixture.Broker.AcquireAsync(fixture.Request(), TestContext.Current.CancellationToken);
-        var row = Assert.Single(fixture.Registry.GetSnapshot());
+        var row = await fixture.WaitForPendingAsync(acquisition);
         await fixture.Registry.ActAsync(new DenyUserAuthorizationAction
         {
             RequestIdentifier = row.Identifier,
@@ -216,7 +216,7 @@ public sealed class OAuthCredentialAccessExecutorTests
         Assert.Equal(calls, fixture.Events.Count);
         Assert.NotNull(inspection.CachedGenerations.Single().Value.AccountIdentifier);
         var secondTask = fixture.Broker.AcquireAsync(fixture.Request("second"), TestContext.Current.CancellationToken);
-        Assert.Equal(UserAuthorizationPrimaryActionKind.Allow, fixture.Registry.GetSnapshot().Last().PrimaryAction);
+        Assert.Equal(UserAuthorizationPrimaryActionKind.Allow, (await fixture.WaitForPendingAsync(secondTask)).PrimaryAction);
         await fixture.AllowAsync();
         await using var second = Assert.IsType<AccessSucceeded<OAuthCredentialAccessResult>>(await secondTask).Result;
         Assert.Equal(1, fixture.Browser.Opens);
@@ -261,11 +261,13 @@ public sealed class OAuthCredentialAccessExecutorTests
         Assert.IsType<SensitiveValueUseReacquisitionRequired<int>>(
             await old.AccessToken.UseAsync((_, _) => ValueTask.FromResult(1), TestContext.Current.CancellationToken));
         Assert.Equal(1, fixture.Browser.Opens);
+        var previousRows = fixture.Registry.GetSnapshot().Select(row => row.Identifier).ToHashSet();
         var renewal = fixture.Broker.AcquireAsync(fixture.Request("renew"), TestContext.Current.CancellationToken);
-        var row = fixture.Registry.GetSnapshot().Last(snapshot => snapshot.State == UserAuthorizationState.Pending);
+        var row = await fixture.WaitForPendingAsync(renewal, previousRows);
         Assert.Equal(UserAuthorizationPrimaryActionKind.Perform, row.PrimaryAction);
         await fixture.AllowAsync(row);
-        await using var current = Assert.IsType<AccessSucceeded<OAuthCredentialAccessResult>>(await renewal).Result;
+        await using var current = Assert.IsType<AccessSucceeded<OAuthCredentialAccessResult>>(
+            await renewal.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken)).Result;
         var after = await fixture.Executor.InspectGenerationAsync(fixture.Request(), TestContext.Current.CancellationToken);
         Assert.NotEqual(before!.Generation, after!.Generation);
         Assert.Equal(before.AccountIdentifier, after.AccountIdentifier);
@@ -566,10 +568,10 @@ public sealed class OAuthCredentialAccessExecutorTests
                 AccessPresentationScope.Runtime);
         }
 
-        internal Task AllowAsync(UserAuthorizationSnapshot? row = null)
+        internal async Task AllowAsync(UserAuthorizationSnapshot? row = null)
         {
-            row ??= this.Registry.GetSnapshot().Last(snapshot => snapshot.State == UserAuthorizationState.Pending);
-            return this.Registry.ActAsync(new ApplyUserAuthorizationAction
+            row ??= await this.WaitForPendingAsync();
+            await this.Registry.ActAsync(new ApplyUserAuthorizationAction
             {
                 RequestIdentifier = row.Identifier,
                 ExpectedRevision = row.Revision,
@@ -578,18 +580,23 @@ public sealed class OAuthCredentialAccessExecutorTests
             }, TestContext.Current.CancellationToken);
         }
 
-        internal async Task<UserAuthorizationSnapshot> WaitForPendingAsync(Task acquisition)
+        internal async Task<UserAuthorizationSnapshot> WaitForPendingAsync(
+            Task? acquisition = null,
+            IReadOnlySet<UserAuthorizationRequestIdentifier>? excludedRows = null)
         {
             var pending = new TaskCompletionSource<UserAuthorizationSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
             void Refresh(object? sender, UserAuthorizationChangedEventArgs arguments)
             {
-                var row = this.Registry.GetSnapshot().FirstOrDefault(snapshot => snapshot.State == UserAuthorizationState.Pending);
+                var row = this.Registry.GetSnapshot().FirstOrDefault(snapshot => snapshot.State == UserAuthorizationState.Pending &&
+                    excludedRows?.Contains(snapshot.Identifier) != true);
                 if (row is not null) { pending.TrySetResult(row); }
             }
             this.Registry.Changed += Refresh;
             try
             {
                 Refresh(null, null!);
+                if (acquisition is null)
+                    return await pending.Task.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
                 var completed = await Task.WhenAny(pending.Task, acquisition)
                     .WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
                 Assert.Same(pending.Task, completed);
@@ -1067,26 +1074,41 @@ public sealed class OAuthCredentialAccessExecutorTests
         public ValueTask<ProviderAcquisitionOutcome> ExecuteAsync(ProviderAcquisitionCommitContext commitContext, CancellationToken cancellationToken) =>
             execute(commitContext, cancellationToken);
     }
-    private sealed class RecordingPolicy(List<string> events) : IReleaseAuthorizationPolicy, IAsyncDisposable
+    private sealed class RecordingPolicy : IReleaseAuthorizationPolicy, IAsyncDisposable
     {
-        private readonly ReleaseAuthorizationPolicy policy = new(new ReleaseMemoryStore());
-        public ValueTask<ReleasePolicyEvaluation> EvaluateAsync(ReleasePolicyRequest request, CancellationToken cancellationToken) =>
-            this.policy.EvaluateAsync(request, cancellationToken);
+        private readonly List<string> events;
+        private readonly string directory = Path.Combine(Environment.CurrentDirectory, ".oauth-policy-fixtures", Guid.NewGuid().ToString("N"));
+        private readonly ReleaseAuthorizationPolicy Policy;
+        internal RecordingPolicy(List<string> events)
+        {
+            this.events = events;
+            this.Policy = new(new ReleaseMemoryStore(Path.Combine(this.directory, "release-memory.json")));
+        }
+        public async ValueTask<ReleasePolicyEvaluation> EvaluateAsync(ReleasePolicyRequest request, CancellationToken cancellationToken)
+        {
+            // Exercise asynchronous publication even when the isolated store is empty.
+            await Task.Yield();
+            return await this.Policy.EvaluateAsync(request, cancellationToken);
+        }
         public async ValueTask<ReleaseAuthorization> CommitAsync(ReleasePolicyDecision decision, CancellationToken cancellationToken)
         {
-            var result = await this.policy.CommitAsync(decision, cancellationToken);
+            var result = await this.Policy.CommitAsync(decision, cancellationToken);
             events.Add("release");
             return result;
         }
         public ValueTask<ReleaseAuthorizationValidation> ValidateAsync(ReleaseAuthorizationIdentifier identifier, ReleasePolicyRequest request, CancellationToken cancellationToken) =>
-            this.policy.ValidateAsync(identifier, request, cancellationToken);
+            this.Policy.ValidateAsync(identifier, request, cancellationToken);
         public async ValueTask FinalizeCredentialIdentityAsync(ReleaseAuthorizationIdentifier identifier, ResolvedCredentialIdentity identity, CancellationToken cancellationToken)
         {
-            await this.policy.FinalizeCredentialIdentityAsync(identifier, identity, cancellationToken);
+            await this.Policy.FinalizeCredentialIdentityAsync(identifier, identity, cancellationToken);
             events.Add("finalize");
         }
-        public ValueTask<IReadOnlyList<ReleaseMemoryDescriptor>> ListAsync(CancellationToken cancellationToken) => this.policy.ListAsync(cancellationToken);
-        public ValueTask ForgetAsync(ReleaseMemoryIdentifier identifier, CancellationToken cancellationToken) => this.policy.ForgetAsync(identifier, cancellationToken);
-        public ValueTask DisposeAsync() => this.policy.DisposeAsync();
+        public ValueTask<IReadOnlyList<ReleaseMemoryDescriptor>> ListAsync(CancellationToken cancellationToken) => this.Policy.ListAsync(cancellationToken);
+        public ValueTask ForgetAsync(ReleaseMemoryIdentifier identifier, CancellationToken cancellationToken) => this.Policy.ForgetAsync(identifier, cancellationToken);
+        public async ValueTask DisposeAsync()
+        {
+            await this.Policy.DisposeAsync();
+            if (Directory.Exists(this.directory)) { Directory.Delete(this.directory, recursive: true); }
+        }
     }
 }
