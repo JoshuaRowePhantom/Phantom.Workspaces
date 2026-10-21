@@ -333,13 +333,14 @@ internal sealed class OAuthCredentialAccessExecutor :
         async ValueTask<bool> IsCurrentApprovedAsync() =>
             await parentPermit.AuthorizesPrivateUseAsync(parentContext, cancellation.Token).ConfigureAwait(false) &&
             await provider.IsCurrentGenerationAsync(generation, cancellation.Token).ConfigureAwait(false) &&
-            await parentPermit.AuthorizesPrivateUseAsync(parentContext, cancellation.Token).ConfigureAwait(false);
+            await parentPermit.AuthorizesPrivateUseAsync(parentContext, cancellation.Token).ConfigureAwait(false) &&
+            provider.IsUsable(metadata);
         if (tokens is null || !await IsCurrentApprovedAsync().ConfigureAwait(false))
         {
             return new OAuthGenerationUseUnavailable<TResult>();
         }
 
-            var result = await operation(tokens.AccessToken, cancellation.Token).ConfigureAwait(false);
+        var result = await operation(tokens.AccessToken, cancellation.Token).ConfigureAwait(false);
         var published = false;
         try
         {

@@ -536,6 +536,26 @@ public sealed class OAuthCredentialAccessExecutorTests
         Assert.Equal(1, fixture.Derived.ValidationRaceResult!.Disposals);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PrivateUse_ExpiresDuringFinalPolicyAwait_PreventsCallbackOrPublication(bool afterCallback)
+    {
+        await using var fixture = new Fixture(derived: true);
+        var derived = fixture.Derived!;
+        derived.ExpiryRaceAfterCallback = afterCallback;
+        var parent = fixture.Broker.AcquireAsync(derived.Request(fixture.Request()), TestContext.Current.CancellationToken);
+        await fixture.AllowAsync();
+        await derived.ExpiryPolicyEntered.Task.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(afterCallback, derived.ExpiryCallbackInvoked);
+        fixture.Clock.Advance(TimeSpan.FromHours(2));
+        derived.ExpiryPolicyReleased.TrySetResult();
+
+        Assert.IsType<AccessFailed<DerivedResult>>(await parent);
+        Assert.IsType<OAuthGenerationUseUnavailable<DerivedExecutor.TrackedSynchronousResult>>(derived.ExpiryOutcome);
+        Assert.Equal(afterCallback ? 1 : 0, derived.ExpiryResult!.Disposals);
+    }
+
     [Fact]
     public async Task ProviderFailure_IsSanitizedAndActualFailedWriteCannotPublishReceipt()
     {
@@ -593,12 +613,13 @@ public sealed class OAuthCredentialAccessExecutorTests
             executors.Add<OAuthCredentialAccessRequest, OAuthCredentialAccessResult>(this.Executor);
             executors.Add<StoredSecretAccessRequest, StoredSecretAccessResult>(cycle
                 ? new CycleExecutor(this.Request()) : new StoredSecretAccessExecutor(this.Secret));
+            var policy = new RecordingPolicy(this.Events);
             if (derived)
             {
-                this.Derived = new DerivedExecutor(this.Executor, this.Clock);
+                this.Derived = new DerivedExecutor(this.Executor, this.Clock, policy);
                 executors.Add<DerivedRequest, DerivedResult>(this.Derived);
             }
-            this.Broker = new AccessBroker(new RecordingPolicy(this.Events), executors, this.Acquisitions, this.Registry);
+            this.Broker = new AccessBroker(policy, executors, this.Acquisitions, this.Registry);
         }
 
         internal OAuthCredentialAccessRequest Request(string purpose = "first")
@@ -864,7 +885,7 @@ public sealed class OAuthCredentialAccessExecutorTests
         internal required int Value { get; init; }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
-    private sealed class DerivedExecutor(IOAuthPrivateCredentialProvider identity, Clock clock) : ICredentialAccessExecutor<DerivedRequest, DerivedResult>
+    private sealed class DerivedExecutor(IOAuthPrivateCredentialProvider identity, Clock clock, RecordingPolicy policy) : ICredentialAccessExecutor<DerivedRequest, DerivedResult>
     {
         internal Func<CancellationToken, ValueTask<OAuthGenerationUseOutcome<int>>>? LateUse { get; private set; }
         internal bool ProbeCallbackCancellation { get; set; }
@@ -881,6 +902,12 @@ public sealed class OAuthCredentialAccessExecutorTests
         internal bool RaceCallbackInvoked { get; private set; }
         internal int RaceDisposalsOnReturn { get; private set; }
         internal TrackedSynchronousResult? ValidationRaceResult { get; private set; }
+        internal bool? ExpiryRaceAfterCallback { get; set; }
+        internal TaskCompletionSource ExpiryPolicyEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource ExpiryPolicyReleased { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal bool ExpiryCallbackInvoked { get; private set; }
+        internal TrackedSynchronousResult? ExpiryResult { get; private set; }
+        internal OAuthGenerationUseOutcome<TrackedSynchronousResult>? ExpiryOutcome { get; private set; }
         public CredentialExecutorKind Kind => CredentialExecutorKind.DevTunnelConnect;
         internal DerivedRequest Request(OAuthCredentialAccessRequest oauth) => new()
         {
@@ -934,6 +961,31 @@ public sealed class OAuthCredentialAccessExecutorTests
                 if (dependency is not ProviderAcquisitionSucceeded receipt) { return dependency; }
                 var metadata = await identity.InspectGenerationAsync(request.Identity, token);
                 account = metadata!.AccountIdentifier;
+                if (this.ExpiryRaceAfterCallback is { } expiryAfterCallback)
+                {
+                    var validations = 0;
+                    policy.AfterAcquisitionValidation = async () =>
+                    {
+                        if (++validations == (expiryAfterCallback ? 6 : 4))
+                        {
+                            this.ExpiryPolicyEntered.TrySetResult();
+                            await this.ExpiryPolicyReleased.Task.WaitAsync(token);
+                        }
+                    };
+                    var pending = this.ExpiryResult = new TrackedSynchronousResult();
+                    try
+                    {
+                        this.ExpiryOutcome = await identity.UseGenerationAsync(
+                            request.Identity, receipt.CommittedGeneration, account!, context, commit.InteractionPermit,
+                            (_, _) =>
+                            {
+                                this.ExpiryCallbackInvoked = true;
+                                return ValueTask.FromResult(pending);
+                            }, token);
+                    }
+                    finally { policy.AfterAcquisitionValidation = null; }
+                    return new ProviderAcquisitionFailed { ErrorCode = AccessErrorCode.ProviderFailure };
+                }
                 if (this.ProbeExecutionProofs)
                 {
                     var parentKey = Key(request);
@@ -1138,6 +1190,7 @@ public sealed class OAuthCredentialAccessExecutorTests
         private readonly List<string> events;
         private readonly string directory = Path.Combine(Environment.CurrentDirectory, ".oauth-policy-fixtures", Guid.NewGuid().ToString("N"));
         private readonly ReleaseAuthorizationPolicy Policy;
+        internal Func<ValueTask>? AfterAcquisitionValidation { get; set; }
         internal RecordingPolicy(List<string> events)
         {
             this.events = events;
@@ -1157,11 +1210,16 @@ public sealed class OAuthCredentialAccessExecutorTests
         }
         public ValueTask<ReleaseAuthorizationValidation> ValidateAsync(ReleaseAuthorizationIdentifier identifier, ReleasePolicyRequest request, CancellationToken cancellationToken) =>
             this.Policy.ValidateAsync(identifier, request, cancellationToken);
-        public ValueTask<ReleaseAuthorizationValidation> ValidateAcquisitionAuthorizationAsync(
+        public async ValueTask<ReleaseAuthorizationValidation> ValidateAcquisitionAuthorizationAsync(
             ReleaseAuthorization authorization,
             ReleasePolicyRequest request,
-            CancellationToken cancellationToken) =>
-            ((IProviderAcquisitionAuthorizationPolicy)this.Policy).ValidateAcquisitionAuthorizationAsync(authorization, request, cancellationToken);
+            CancellationToken cancellationToken)
+        {
+            var result = await ((IProviderAcquisitionAuthorizationPolicy)this.Policy)
+                .ValidateAcquisitionAuthorizationAsync(authorization, request, cancellationToken);
+            if (this.AfterAcquisitionValidation is { } after) { await after(); }
+            return result;
+        }
         public async ValueTask FinalizeCredentialIdentityAsync(ReleaseAuthorizationIdentifier identifier, ResolvedCredentialIdentity identity, CancellationToken cancellationToken)
         {
             await this.Policy.FinalizeCredentialIdentityAsync(identifier, identity, cancellationToken);
