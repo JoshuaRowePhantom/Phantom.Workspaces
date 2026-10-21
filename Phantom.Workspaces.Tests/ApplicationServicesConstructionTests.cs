@@ -1,86 +1,58 @@
-using Phantom.Workspaces.Llm.Secrets;
-using Phantom.Workspaces.Services;
-using Phantom.Workspaces.Services.Secrets;
+using System.Reflection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
+using Phantom.Workspaces.Llm.Interfaces.Access;
+using Phantom.Workspaces.Services;
 
 namespace Phantom.Workspaces.Tests;
 
 public sealed class ApplicationServicesConstructionTests
 {
     [Fact]
-    public void ApplicationServices_DefaultConstruction_ProvidesSecretServices()
+    public void ApplicationServices_ConstructionBorrowsExactRequiredBroker()
     {
-        var services = new ApplicationServices(
-            null!,
-            new AgentPersistenceStoreCache(),
-            NullLoggerFactory.Instance,
-            accessBroker: Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>());
+        var broker = Mock.Of<IAccessBroker>();
+        var cache = Mock.Of<IAgentPersistenceStoreCache>();
+        var services = new ApplicationServices(null!, cache, NullLoggerFactory.Instance, broker);
 
-        Assert.NotNull(services.SecretProvider);
-        Assert.NotNull(services.CredentialPicker);
-        Assert.IsAssignableFrom<ISecretProvider>(services.SecretProvider);
-        Assert.IsAssignableFrom<ICredentialPicker>(services.CredentialPicker);
-        Assert.IsAssignableFrom<IAllowedSecretsStore>(services.AllowedSecretsStore);
-        Assert.IsAssignableFrom<IPlatformSecretStore>(services.PlatformSecretStore);
+        Assert.Same(broker, services.AccessBroker);
+        Assert.Same(cache, services.AgentPersistenceStoreCache);
+        var parameter = Assert.Single(typeof(ApplicationServices).GetConstructors()).GetParameters()[3];
+        Assert.Equal("accessBroker", parameter.Name);
+        Assert.Equal(typeof(IAccessBroker), parameter.ParameterType);
+        Assert.False(parameter.HasDefaultValue);
     }
 
     [Fact]
-    public void ApplicationServices_ExplicitSecretServices_AreExposed()
+    public void ApplicationServices_ConstructionRejectsMissingBroker()
     {
-        var secretProvider = new FakeSecretProvider();
-        var credentialPicker = new NullCredentialPicker();
-        var allowedSecretsStore = new FakeAllowedSecretsStore();
-        var platformSecretStore = new NullPlatformSecretStore();
+        Assert.Throws<ArgumentNullException>(() => new ApplicationServices(
+            null!, Mock.Of<IAgentPersistenceStoreCache>(), NullLoggerFactory.Instance, null!));
+    }
 
-        var services = new ApplicationServices(
-            null!,
-            new AgentPersistenceStoreCache(),
-            NullLoggerFactory.Instance,
-            accessBroker: Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>(),
-            secretProvider: secretProvider,
-            credentialPicker: credentialPicker,
-            allowedSecretsStore: allowedSecretsStore,
-            platformSecretStore: platformSecretStore);
-
-        Assert.Same(secretProvider, services.SecretProvider);
-        Assert.Same(credentialPicker, services.CredentialPicker);
-        Assert.Same(allowedSecretsStore, services.AllowedSecretsStore);
-        Assert.Same(platformSecretStore, services.PlatformSecretStore);
+    [Fact]
+    public void ApplicationServices_DoesNotExposeOrConstructLegacySecretGraph()
+    {
+        var type = typeof(ApplicationServices);
+        var legacyProperties = new[] { "SecretProvider", "CredentialPicker", "AllowedSecretsStore", "PlatformSecretStore" };
+        Assert.All(legacyProperties, property => Assert.Null(type.GetProperty(property)));
+        Assert.Null(type.GetMethod("CreateDefaultSecretServices", BindingFlags.Static | BindingFlags.NonPublic));
+        var parameters = Assert.Single(type.GetConstructors()).GetParameters().Select(parameter => parameter.Name).ToArray();
+        Assert.DoesNotContain("secretProvider", parameters);
+        Assert.DoesNotContain("credentialPicker", parameters);
+        Assert.DoesNotContain("allowedSecretsStore", parameters);
+        Assert.DoesNotContain("platformSecretStore", parameters);
     }
 
     [Fact]
     public void ApplicationServices_StartupUpdateCapability_PropagatesUnavailableReason()
     {
         var services = new ApplicationServices(
-            null!, new AgentPersistenceStoreCache(), NullLoggerFactory.Instance,
-            accessBroker: Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>());
+            null!, Mock.Of<IAgentPersistenceStoreCache>(), NullLoggerFactory.Instance, Mock.Of<IAccessBroker>());
 
         services.SetUpdateCapability(null, "Installed update layout is broken; reinstall.");
 
         Assert.Null(services.UpdateController);
         Assert.Contains("reinstall", services.UpdateUnavailableReason, StringComparison.Ordinal);
-    }
-
-    private sealed class FakeSecretProvider : ISecretProvider
-    {
-        public Task<RequestSecretsResult?> RequestSecretsAsync(
-            IReadOnlyList<SecretRequest> requests,
-            CancellationToken cancellationToken)
-            => Task.FromResult<RequestSecretsResult?>(new RequestSecretsResult([], []));
-    }
-
-    private sealed class FakeAllowedSecretsStore : IAllowedSecretsStore
-    {
-        public Task<MemorizedSecret?> TryGetAsync(string hash, CancellationToken ct)
-            => Task.FromResult<MemorizedSecret?>(null);
-
-        public Task PutAsync(string hash, MemorizedSecret record, CancellationToken ct)
-            => Task.CompletedTask;
-
-        public Task DeleteAsync(string hash, CancellationToken ct)
-            => Task.CompletedTask;
-
-        public Task<IReadOnlyDictionary<string, MemorizedSecret>> LoadAllAsync(CancellationToken ct)
-            => Task.FromResult<IReadOnlyDictionary<string, MemorizedSecret>>(new Dictionary<string, MemorizedSecret>());
     }
 }

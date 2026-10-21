@@ -12,9 +12,7 @@ using Moq;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces.Access;
-using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Services;
-using Phantom.Workspaces.Services.Secrets;
 using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces.Tests;
@@ -310,9 +308,6 @@ public sealed class AgentSessionShortcutContextTests
             new AgentPersistenceStoreCache(),
             Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
             accessBroker: Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>(),
-            credentialPicker: new NullCredentialPicker(),
-            allowedSecretsStore: new AllowedSecretsStore(new AllowedSecretsStoreConfiguration()),
-            platformSecretStore: new NullPlatformSecretStore(),
             mcpOAuthCredentials: mcpOAuthCredentials);
 
     [AvaloniaFact(Timeout = 15_000)]

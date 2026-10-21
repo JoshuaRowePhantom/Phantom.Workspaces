@@ -6,10 +6,8 @@ using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Core.Transport.Chat;
 using Phantom.Workspaces.Llm.Interfaces.Access;
-using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Services;
-using Phantom.Workspaces.Services.Secrets;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Logging;
 
@@ -36,9 +34,6 @@ public sealed class AgentServicesCompositionTests
             new AgentPersistenceStoreCache(),
             NullLoggerFactory.Instance,
             accessBroker: Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>(),
-            credentialPicker: new NullCredentialPicker(),
-            allowedSecretsStore: new AllowedSecretsStore(new AllowedSecretsStoreConfiguration()),
-            platformSecretStore: new NullPlatformSecretStore(),
             mcpOAuthCredentials: mcpOAuthCredentials,
             accessPresentationScope: accessPresentationScopeProvider)
         {

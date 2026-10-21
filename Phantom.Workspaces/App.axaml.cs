@@ -14,7 +14,6 @@ using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Access;
-using Phantom.Workspaces.Services.Secrets;
 using Phantom.Workspaces.Services.Updates;
 using Phantom.Workspaces.Templates;
 using Phantom.Workspaces.ViewModels;
@@ -309,21 +308,6 @@ public partial class App : Application
             if (this.isExiting) { return; }
             var foregroundScheduler = SynchronizationContextTaskScheduler.FromCurrent();
 
-            var allowedSecretsStore = new AllowedSecretsStore(new AllowedSecretsStoreConfiguration());
-            var hwndProvider = new AvaloniaHwndProvider();
-            ICredentialPicker credentialPicker;
-            if (OperatingSystem.IsWindows())
-            {
-                credentialPicker = new WindowsCredentialPicker(hwndProvider);
-            }
-            else
-            {
-                credentialPicker = new NullCredentialPicker();
-            }
-
-            var dialogHost = new AvaloniaSecretUseDialogHost(credentialPicker);
-            var secretProvider = new SecretProvider(allowedSecretsStore, platformStore, dialogHost);
-
             var agentChatFactory = new AgentChatFactory(
                 agentPersistenceStore,
                 Services.AgentServicesComposition.ComposeHostServices(
@@ -345,10 +329,6 @@ public partial class App : Application
                 accessPresentationScope: accessPresentationScope,
                 logDirectoryProvider: logDirectoryProvider,
                 configurationPersistence: persistenceService,
-                secretProvider: secretProvider,
-                credentialPicker: credentialPicker,
-                allowedSecretsStore: allowedSecretsStore,
-                platformSecretStore: platformStore,
                 mcpOAuthCredentials: this.accessHost.McpOAuthCredentials,
                 transportFactoryRegistryProvider: transportFactoryRegistryProvider)
             {

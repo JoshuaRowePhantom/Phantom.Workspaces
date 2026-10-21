@@ -1,8 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Configuration;
-using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Llm.Interfaces.Access;
-using Phantom.Workspaces.Services.Secrets;
 using Phantom.Workspaces.Services.Logging;
 using Phantom.Workspaces.Services.Updates;
 using Phantom.Workspaces.Transport;
@@ -19,16 +17,13 @@ public sealed class ApplicationServices
         IUpdateController? updateController = null,
         ILogDirectoryProvider? logDirectoryProvider = null,
         ConfigurationPersistenceService? configurationPersistence = null,
-        ISecretProvider? secretProvider = null,
-        ICredentialPicker? credentialPicker = null,
-        IAllowedSecretsStore? allowedSecretsStore = null,
-        IPlatformSecretStore? platformSecretStore = null,
         IMcpOAuthCredentialRequestCatalog? mcpOAuthCredentials = null,
         TransportFactoryRegistryProvider? transportFactoryRegistryProvider = null,
         string? updateUnavailableReason = null,
         ITransportFactory? outboundHttpTransportFactory = null,
         Func<AccessPresentationScope>? accessPresentationScope = null)
     {
+        ArgumentNullException.ThrowIfNull(accessBroker);
         this.RunningAgentChats = runningAgentChats;
         this.AgentPersistenceStoreCache = agentPersistenceStoreCache;
         this.UpdateController = updateController;
@@ -36,54 +31,12 @@ public sealed class ApplicationServices
         this.LoggerFactory = loggerFactory;
         this.LogDirectoryProvider = logDirectoryProvider;
         this.ConfigurationPersistence = configurationPersistence;
-        if (secretProvider is null || credentialPicker is null || allowedSecretsStore is null || platformSecretStore is null)
-        {
-            var defaults = CreateDefaultSecretServices();
-            secretProvider ??= defaults.SecretProvider;
-            credentialPicker ??= defaults.CredentialPicker;
-            allowedSecretsStore ??= defaults.AllowedSecretsStore;
-            platformSecretStore ??= defaults.PlatformSecretStore;
-        }
-
-        this.SecretProvider = secretProvider;
-        this.CredentialPicker = credentialPicker;
-        this.AllowedSecretsStore = allowedSecretsStore;
-        this.PlatformSecretStore = platformSecretStore;
         this.McpOAuthCredentials = mcpOAuthCredentials;
         this.TransportFactoryRegistryProvider =
             transportFactoryRegistryProvider ?? new TransportFactoryRegistryProvider();
         this.OutboundHttpTransportFactory = outboundHttpTransportFactory;
-        this.AccessBroker = accessBroker ?? throw new ArgumentNullException(nameof(accessBroker));
+        this.AccessBroker = accessBroker;
         this.AccessPresentationScope = accessPresentationScope ?? (() => Llm.Interfaces.Access.AccessPresentationScope.Runtime);
-    }
-
-    internal static (ISecretProvider SecretProvider, ICredentialPicker CredentialPicker, IAllowedSecretsStore AllowedSecretsStore, IPlatformSecretStore PlatformSecretStore) CreateDefaultSecretServices()
-    {
-        IPlatformSecretStore platformStore;
-        if (OperatingSystem.IsWindows())
-        {
-            platformStore = new WindowsCredentialManagerSecretStore();
-        }
-        else
-        {
-            platformStore = new NullPlatformSecretStore();
-        }
-
-        var allowedSecretsStore = new AllowedSecretsStore(new AllowedSecretsStoreConfiguration());
-        var hwndProvider = new AvaloniaHwndProvider();
-        ICredentialPicker credentialPicker;
-        if (OperatingSystem.IsWindows())
-        {
-            credentialPicker = new WindowsCredentialPicker(hwndProvider);
-        }
-        else
-        {
-            credentialPicker = new NullCredentialPicker();
-        }
-
-        var dialogHost = new AvaloniaSecretUseDialogHost(credentialPicker);
-        var secretProvider = new SecretProvider(allowedSecretsStore, platformStore, dialogHost);
-        return (secretProvider, credentialPicker, allowedSecretsStore, platformStore);
     }
 
     public IRunningAgentChatTable RunningAgentChats { get; }
@@ -125,18 +78,6 @@ public sealed class ApplicationServices
 
     public IConfigurationStore? ConfigurationStore => this.ConfigurationPersistence;
 
-
-    /// <summary>The process-wide provider that materializes manifest secret requests.</summary>
-    public ISecretProvider SecretProvider { get; }
-
-    /// <summary>The process-wide picker for choosing or creating platform credentials.</summary>
-    public ICredentialPicker CredentialPicker { get; }
-
-    /// <summary>The process-wide store for remembered secret-use grants.</summary>
-    public IAllowedSecretsStore AllowedSecretsStore { get; }
-
-    /// <summary>The process-wide platform credential store.</summary>
-    public IPlatformSecretStore PlatformSecretStore { get; }
 
     public IMcpOAuthCredentialRequestCatalog? McpOAuthCredentials { get; }
 

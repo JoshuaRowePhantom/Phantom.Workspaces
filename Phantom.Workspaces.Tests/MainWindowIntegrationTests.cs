@@ -36,7 +36,6 @@ using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Notifications;
 using Phantom.Workspaces.Services.Navigation;
-using Phantom.Workspaces.Services.Secrets;
 using Phantom.Workspaces.Trust;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.ViewModels;
@@ -398,10 +397,7 @@ public sealed class MainWindowIntegrationTests
             CreateTestRunningAgentChatTable(),
             new AgentPersistenceStoreCache(),
             Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
-            accessBroker: accessHost.Broker,
-            credentialPicker: new NullCredentialPicker(),
-            allowedSecretsStore: new AllowedSecretsStore(new AllowedSecretsStoreConfiguration()),
-            platformSecretStore: new NullPlatformSecretStore());
+            accessBroker: accessHost.Broker);
 
         await using var viewModel = CreateTestMainWindowViewModel(applicationServices: services);
         await viewModel.InitializeAsync();
