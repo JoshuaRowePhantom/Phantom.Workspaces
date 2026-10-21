@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json.Serialization;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 
 namespace Phantom.Workspaces;
 
@@ -54,6 +56,9 @@ namespace Phantom.Workspaces;
 /// <param name="Scopes">Optional OAuth scopes.</param>
 /// <param name="Remember">Whether to persist and silently reuse the acquired token. Off by default.</param>
 /// <param name="TokenCacheKey">Optional token-cache key (e.g. <c>devtunnel:&lt;name&gt;</c>).</param>
+/// <param name="AccountEndpoint">Explicit trusted HTTPS OAuth account endpoint; never inferred from another endpoint.</param>
+/// <param name="AccountIdentifierClaim">Authoritative account response claim: Subject reads <c>sub</c>, Identifier reads <c>id</c>.</param>
+/// <param name="Audience">Explicit OAuth resource audience.</param>
 public sealed record RemoteAuthentication(
     string Scheme,
     string? Endpoint = null,
@@ -65,7 +70,11 @@ public sealed record RemoteAuthentication(
     string? TokenEndpoint = null,
     IReadOnlyList<string>? Scopes = null,
     bool Remember = false,
-    string? TokenCacheKey = null)
+    string? TokenCacheKey = null,
+    string? AccountEndpoint = null,
+    [property: JsonConverter(typeof(JsonStringEnumConverter<OAuthAccountIdentifierClaim>))]
+    OAuthAccountIdentifierClaim? AccountIdentifierClaim = null,
+    string? Audience = null)
 {
     /// <summary>The <c>github</c> scheme: GitHub token auth (mirrors the legacy <c>useGitHubAuthToken</c>).</summary>
     public const string GithubScheme = "github";

@@ -1,7 +1,9 @@
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using Phantom.Workspaces;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 using Xunit;
 
 namespace Phantom.Workspaces.Tests;
@@ -12,6 +14,43 @@ namespace Phantom.Workspaces.Tests;
 /// </summary>
 public sealed class RemoteAuthenticationTests
 {
+    [Theory]
+    [InlineData(OAuthAccountIdentifierClaim.Subject)]
+    [InlineData(OAuthAccountIdentifierClaim.Identifier)]
+    public void RemoteAuthentication_JsonRoundTrip_PreservesExplicitOAuthAccountEvidence(
+        OAuthAccountIdentifierClaim claim)
+    {
+        var authentication = new RemoteAuthentication(
+            Scheme: RemoteAuthentication.OAuthScheme,
+            Authority: "https://provider.example/",
+            ClientId: "client-id",
+            AuthorizationEndpoint: "https://provider.example/authorize",
+            TokenEndpoint: "https://provider.example/token",
+            AccountEndpoint: "https://accounts.example/principal",
+            AccountIdentifierClaim: claim,
+            Audience: "configured-resource");
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+
+        var json = JsonSerializer.Serialize(authentication, options);
+        var restored = JsonSerializer.Deserialize<RemoteAuthentication>(json, options);
+
+        Assert.Equal(authentication, restored);
+        Assert.Contains($"\"accountIdentifierClaim\":\"{claim}\"", json);
+    }
+
+    [Fact]
+    public void RemoteAuthentication_LegacyOAuthJson_DoesNotInventAccountEvidence()
+    {
+        var authentication = JsonSerializer.Deserialize<RemoteAuthentication>(
+            """{"scheme":"oauth","clientId":"client-id","tokenEndpoint":"https://provider.example/token"}""",
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        Assert.NotNull(authentication);
+        Assert.Null(authentication.AccountEndpoint);
+        Assert.Null(authentication.AccountIdentifierClaim);
+        Assert.Null(authentication.Audience);
+    }
+
     [Theory]
     [InlineData(RemoteAuthentication.EntraScheme, "oauth", PhantomAgentSchema.EntraPinnedAuthenticationMode)]
     [InlineData(RemoteAuthentication.OAuthScheme, "oauth", "system")]

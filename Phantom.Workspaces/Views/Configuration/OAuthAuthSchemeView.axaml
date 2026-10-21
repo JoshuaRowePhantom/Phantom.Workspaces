@@ -9,12 +9,28 @@
     <StackPanel Spacing="8">
         <TextBlock Text="{Binding Description}" TextWrapping="Wrap" Opacity="0.7" />
         <StackPanel Spacing="4">
+            <TextBlock Text="Trusted authority" />
+            <TextBox PlaceholderText="Explicit HTTPS provider authority" Text="{Binding Authority}" />
+        </StackPanel>
+        <StackPanel Spacing="4">
             <TextBlock Text="Authorization endpoint" />
             <TextBox PlaceholderText="https://example.com/oauth/authorize" Text="{Binding AuthorizationEndpoint}" />
         </StackPanel>
         <StackPanel Spacing="4">
             <TextBlock Text="Token endpoint" />
             <TextBox PlaceholderText="https://example.com/oauth/token" Text="{Binding TokenEndpoint}" />
+        </StackPanel>
+        <StackPanel Spacing="4">
+            <TextBlock Text="Trusted account endpoint" />
+            <TextBox PlaceholderText="Explicit HTTPS account endpoint" Text="{Binding AccountEndpoint}" />
+        </StackPanel>
+        <StackPanel Spacing="4">
+            <TextBlock Text="Account claim (Subject = sub; Identifier = id)" />
+            <ComboBox ItemsSource="{Binding AccountIdentifierClaims}" SelectedItem="{Binding AccountIdentifierClaim}" />
+        </StackPanel>
+        <StackPanel Spacing="4">
+            <TextBlock Text="Resource audience" />
+            <TextBox PlaceholderText="Explicit provider resource audience" Text="{Binding Audience}" />
         </StackPanel>
         <StackPanel Spacing="4">
             <TextBlock Text="Client id" />

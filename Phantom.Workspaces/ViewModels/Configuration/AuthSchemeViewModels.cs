@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Phantom.Workspaces.Configuration;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 
 namespace Phantom.Workspaces.ViewModels.Configuration;
 
@@ -134,6 +135,10 @@ public sealed class EntraAuthSchemeViewModel : AuthSchemeViewModel
 /// </summary>
 public sealed class OAuthAuthSchemeViewModel : AuthSchemeViewModel
 {
+    private string? authority;
+    private string? accountEndpoint;
+    private OAuthAccountIdentifierClaim? accountIdentifierClaim;
+    private string? audience;
     private string? authorizationEndpoint;
     private string? tokenEndpoint;
     private string? clientId;
@@ -149,6 +154,10 @@ public sealed class OAuthAuthSchemeViewModel : AuthSchemeViewModel
     public OAuthAuthSchemeViewModel(RemoteAuthentication authentication)
     {
         ArgumentNullException.ThrowIfNull(authentication);
+        this.authority = authentication.Authority;
+        this.accountEndpoint = authentication.AccountEndpoint;
+        this.accountIdentifierClaim = authentication.AccountIdentifierClaim;
+        this.audience = authentication.Audience;
         this.authorizationEndpoint = authentication.AuthorizationEndpoint;
         this.tokenEndpoint = authentication.TokenEndpoint;
         this.clientId = authentication.ClientId;
@@ -158,6 +167,33 @@ public sealed class OAuthAuthSchemeViewModel : AuthSchemeViewModel
 
     /// <inheritdoc />
     public override string Scheme => RemoteAuthentication.OAuthScheme;
+
+    public IReadOnlyList<OAuthAccountIdentifierClaim> AccountIdentifierClaims { get; } =
+        [OAuthAccountIdentifierClaim.Subject, OAuthAccountIdentifierClaim.Identifier];
+
+    public string? Authority
+    {
+        get => this.authority;
+        set => this.SetValidatedProperty(ref this.authority, value);
+    }
+
+    public string? AccountEndpoint
+    {
+        get => this.accountEndpoint;
+        set => this.SetValidatedProperty(ref this.accountEndpoint, value);
+    }
+
+    public OAuthAccountIdentifierClaim? AccountIdentifierClaim
+    {
+        get => this.accountIdentifierClaim;
+        set => this.SetValidatedProperty(ref this.accountIdentifierClaim, value);
+    }
+
+    public string? Audience
+    {
+        get => this.audience;
+        set => this.SetValidatedProperty(ref this.audience, value);
+    }
 
     /// <summary>OAuth authorization endpoint URL. Required.</summary>
     public string? AuthorizationEndpoint
@@ -196,7 +232,7 @@ public sealed class OAuthAuthSchemeViewModel : AuthSchemeViewModel
 
     /// <inheritdoc />
     public override string Description =>
-        "Standard interactive OAuth. Requires authorization/token endpoints and a client id. Provide the secret as a ${SECRET:...} placeholder, never a raw value.";
+        "Interactive OAuth requires explicit trusted HTTPS authority, authorization, token and account endpoints, an account claim (Subject = sub; Identifier = id), an audience and a client id. No endpoints or account identities are inferred. Provide any secret as a ${SECRET:...} placeholder, never a raw value.";
 
     /// <inheritdoc />
     public override string? ValidationMessage
@@ -208,14 +244,34 @@ public sealed class OAuthAuthSchemeViewModel : AuthSchemeViewModel
                 return "OAuth requires a ClientId.";
             }
 
-            if (!Uri.TryCreate(this.AuthorizationEndpoint, UriKind.Absolute, out _))
+            if (!IsTrustedEndpoint(this.Authority))
             {
-                return "OAuth requires a valid AuthorizationEndpoint URL.";
+                return "OAuth requires a trusted HTTPS Authority URL without credentials or a fragment.";
             }
 
-            if (!Uri.TryCreate(this.TokenEndpoint, UriKind.Absolute, out _))
+            if (!IsTrustedEndpoint(this.AuthorizationEndpoint))
             {
-                return "OAuth requires a valid TokenEndpoint URL.";
+                return "OAuth requires a trusted HTTPS AuthorizationEndpoint URL without credentials or a fragment.";
+            }
+
+            if (!IsTrustedEndpoint(this.TokenEndpoint))
+            {
+                return "OAuth requires a trusted HTTPS TokenEndpoint URL without credentials or a fragment.";
+            }
+
+            if (!IsTrustedEndpoint(this.AccountEndpoint))
+            {
+                return "OAuth requires an explicit trusted HTTPS AccountEndpoint URL without credentials or a fragment.";
+            }
+
+            if (this.AccountIdentifierClaim is not { } claim || !Enum.IsDefined(claim))
+            {
+                return "OAuth requires an explicit account claim: Subject (sub) or Identifier (id).";
+            }
+
+            if (string.IsNullOrWhiteSpace(this.Audience))
+            {
+                return "OAuth requires an explicit Audience.";
             }
 
             return null;
@@ -225,11 +281,21 @@ public sealed class OAuthAuthSchemeViewModel : AuthSchemeViewModel
     /// <inheritdoc />
     public override RemoteAuthentication ToRemoteAuthentication() => new(
         Scheme: RemoteAuthentication.OAuthScheme,
+        Authority: AuthSchemeScopes.NullIfBlank(this.Authority),
         ClientId: AuthSchemeScopes.NullIfBlank(this.ClientId),
         ClientSecret: AuthSchemeScopes.NullIfBlank(this.ClientSecret),
         AuthorizationEndpoint: AuthSchemeScopes.NullIfBlank(this.AuthorizationEndpoint),
         TokenEndpoint: AuthSchemeScopes.NullIfBlank(this.TokenEndpoint),
-        Scopes: AuthSchemeScopes.Parse(this.Scopes));
+        Scopes: AuthSchemeScopes.Parse(this.Scopes),
+        AccountEndpoint: AuthSchemeScopes.NullIfBlank(this.AccountEndpoint),
+        AccountIdentifierClaim: this.AccountIdentifierClaim,
+        Audience: AuthSchemeScopes.NullIfBlank(this.Audience));
+
+    private static bool IsTrustedEndpoint(string? value)
+        => Uri.TryCreate(value, UriKind.Absolute, out var uri)
+            && uri.Scheme == Uri.UriSchemeHttps
+            && string.IsNullOrEmpty(uri.UserInfo)
+            && string.IsNullOrEmpty(uri.Fragment);
 }
 
 /// <summary>Helpers for parsing/joining the free-text scopes field shared by the OAuth-style schemes.</summary>
