@@ -473,6 +473,71 @@ public sealed class EntraCredentialSessionTests
             (material, _) => ValueTask.FromResult(material.Length), CancellationToken.None));
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task EntraCredentialSession_PrivateUse_ExpiryDuringFinalValidationPreventsTransfer(
+        bool afterCallback,
+        bool asynchronousResult)
+    {
+        var request = Request();
+        var clock = new FakeTimeProvider(DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
+        var acquirer = new Acquirer { ExpiresOn = clock.GetUtcNow().AddHours(1) };
+        await using var session = new EntraCredentialSession(request, new ForbiddenCredential(), acquirer, clock);
+        var generation = await AcquireAsync(session, request);
+        var validationEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resumeValidation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var validationCalls = 0;
+        var capability = EntraSessionTestAuthorization.PrivateConnect(
+            request, acquirer.Account, asynchronousValidationCheckpoint: async () =>
+            {
+                if (++validationCalls == (afterCallback ? 5 : 4))
+                {
+                    validationEntered.SetResult();
+                    await resumeValidation.Task;
+                }
+            });
+        ReadOnlyMemory<char> observed = default;
+        void AssertIdentityCleared() => Assert.All(observed.ToArray(), character => Assert.Equal('\0', character));
+        object result = asynchronousResult
+            ? new TrackedAsynchronousResult { BeforeDisposal = AssertIdentityCleared }
+            : new TrackedSynchronousResult { BeforeDisposal = AssertIdentityCleared };
+        var callbacks = 0;
+        var use = session.UseGenerationAsync(
+            generation, capability.Context, capability.Permit, (material, _) =>
+            {
+                callbacks++;
+                observed = material;
+                return ValueTask.FromResult(result);
+            }, CancellationToken.None).AsTask();
+        try
+        {
+            await validationEntered.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            clock.Advance(TimeSpan.FromHours(1));
+        }
+        finally
+        {
+            resumeValidation.TrySetResult();
+        }
+
+        Assert.IsType<EntraGenerationUseUnavailable<object>>(await use);
+        Assert.Equal(afterCallback ? 1 : 0, callbacks);
+        if (result is TrackedAsynchronousResult asynchronous)
+        {
+            Assert.Equal(afterCallback ? 1 : 0, asynchronous.AsynchronousDisposals);
+            Assert.Equal(0, asynchronous.SynchronousDisposals);
+        }
+        else
+        {
+            Assert.Equal(afterCallback ? 1 : 0, Assert.IsType<TrackedSynchronousResult>(result).Disposals);
+        }
+
+        AssertIdentityCleared();
+        Assert.Equal(1, acquirer.Calls);
+    }
+
     private sealed class TrackedAsynchronousResult : IAsyncDisposable, IDisposable
     {
         internal int AsynchronousDisposals { get; private set; }

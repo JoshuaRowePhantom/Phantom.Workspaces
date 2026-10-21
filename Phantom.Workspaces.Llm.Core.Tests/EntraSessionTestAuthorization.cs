@@ -9,7 +9,8 @@ internal static class EntraSessionTestAuthorization
         EntraCredentialAccessRequest configuration,
         CredentialAccountIdentifier? account = null,
         Func<bool>? isActive = null,
-        Func<ReleaseAuthorizationValidation>? acquisitionValidation = null)
+        Func<ReleaseAuthorizationValidation>? acquisitionValidation = null,
+        Func<ValueTask>? asynchronousValidationCheckpoint = null)
     {
         var request = PolicyRequest(configuration, account) with
         {
@@ -20,7 +21,7 @@ internal static class EntraSessionTestAuthorization
                 AccountIdentifier = account ?? DefaultAccount(),
             },
         };
-        var context = Context(configuration, request, ReleaseAuthorizationValidation.Valid, acquisitionValidation);
+        var context = Context(configuration, request, ReleaseAuthorizationValidation.Valid, acquisitionValidation, asynchronousValidationCheckpoint);
         var key = new ProviderAcquisitionKey
         {
             Configuration = request.Credential.LogicalIdentifier,
@@ -82,9 +83,10 @@ internal static class EntraSessionTestAuthorization
         EntraCredentialAccessRequest configuration,
         ReleasePolicyRequest request,
         ReleaseAuthorizationValidation validation,
-        Func<ReleaseAuthorizationValidation>? acquisitionValidation = null)
+        Func<ReleaseAuthorizationValidation>? acquisitionValidation = null,
+        Func<ValueTask>? asynchronousValidationCheckpoint = null)
     {
-        return new ExecutionContext(configuration, request, new Policy(validation, acquisitionValidation));
+        return new ExecutionContext(configuration, request, new Policy(validation, acquisitionValidation, asynchronousValidationCheckpoint));
     }
 
     private static CredentialAccountIdentifier DefaultAccount() =>
@@ -92,7 +94,8 @@ internal static class EntraSessionTestAuthorization
 
     private sealed class Policy(
         ReleaseAuthorizationValidation validation,
-        Func<ReleaseAuthorizationValidation>? acquisitionValidation) :
+        Func<ReleaseAuthorizationValidation>? acquisitionValidation,
+        Func<ValueTask>? asynchronousValidationCheckpoint) :
         IReleaseAuthorizationPolicy, IProviderAcquisitionAuthorizationPolicy
     {
         public ValueTask<ReleaseAuthorizationValidation> ValidateAsync(
@@ -100,10 +103,18 @@ internal static class EntraSessionTestAuthorization
             ReleasePolicyRequest request,
             CancellationToken cancellationToken = default) => ValueTask.FromResult(validation);
 
-        public ValueTask<ReleaseAuthorizationValidation> ValidateAcquisitionAuthorizationAsync(
+        public async ValueTask<ReleaseAuthorizationValidation> ValidateAcquisitionAuthorizationAsync(
             ReleaseAuthorization authorization,
             ReleasePolicyRequest request,
-            CancellationToken cancellationToken) => ValueTask.FromResult(acquisitionValidation?.Invoke() ?? validation);
+            CancellationToken cancellationToken)
+        {
+            if (asynchronousValidationCheckpoint is not null)
+            {
+                await asynchronousValidationCheckpoint().ConfigureAwait(false);
+            }
+
+            return acquisitionValidation?.Invoke() ?? validation;
+        }
 
         public ValueTask<ReleasePolicyEvaluation> EvaluateAsync(
             ReleasePolicyRequest request,

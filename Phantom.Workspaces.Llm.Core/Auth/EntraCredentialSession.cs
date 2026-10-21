@@ -343,6 +343,11 @@ internal sealed class EntraCredentialSession : IEntraCredentialSession
                     return new EntraGenerationUseDenied<TResult>();
                 }
 
+                if (this.timeProvider.GetUtcNow() >= expiresOn)
+                {
+                    return new EntraGenerationUseUnavailable<TResult>();
+                }
+
                 var success = new EntraGenerationUseSucceeded<TResult> { Result = result };
                 transferred = true;
                 return success;
