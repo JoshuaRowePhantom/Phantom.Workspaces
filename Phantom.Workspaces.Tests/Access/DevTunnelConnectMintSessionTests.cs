@@ -208,8 +208,9 @@ public sealed class DevTunnelConnectMintSessionTests
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var rejectedContent = new TrackedContent();
         var sends = 0;
+        var observedBroker = new ObservedHttpAccessBroker(fixture.Broker);
         using var client = new HttpClient(new DevTunnelManagementAuthenticationHandler(
-            fixture.Broker, identityRequest, new ManagementHandler(async (_, token) =>
+            observedBroker, identityRequest, new ManagementHandler(async (_, token) =>
             {
                 sends++;
                 entered.SetResult();
@@ -238,6 +239,12 @@ public sealed class DevTunnelConnectMintSessionTests
         Assert.Equal(1, sends);
         Assert.Equal(2, fixture.Source.Acquisitions);
         Assert.True(rejectedContent.Disposed);
+        var rejected = Assert.IsType<DevTunnelIdentityCredentialAccessResult>(Assert.Single(observedBroker.AcquiredResults));
+        Assert.NotSame(first, rejected);
+        Assert.Equal(AccessErrorCode.Disposed, Assert.IsType<SensitiveValueUseFailed<int>>(
+            await rejected.AccessToken!.UseAsync<int>(
+                (_, _) => throw new InvalidOperationException("The rejected HTTP identity must be disposed."),
+                TestContext.Current.CancellationToken)).ErrorCode);
         Assert.Equal(CredentialGenerationInvalidationOutcome.NoLongerCurrent,
             await first.InvalidateRejectedGenerationAsync(TestContext.Current.CancellationToken));
         Assert.NotEqual(first.AccessToken!.MaterialGeneration, replacement.AccessToken!.MaterialGeneration);

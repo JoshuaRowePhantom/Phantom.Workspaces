@@ -210,8 +210,9 @@ public sealed class DevTunnelAuthenticationHandlerTests
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var content = new TrackedContent();
         var sends = 0;
+        var observedBroker = new ObservedHttpAccessBroker(fixture.Broker);
         using var client = new HttpClient(new DevTunnelAuthenticationHandler(
-            fixture.Broker, fixture.Request, new AsyncRecordingHandler(async (_, token) =>
+            observedBroker, fixture.Request, new AsyncRecordingHandler(async (_, token) =>
             {
                 sends++;
                 entered.TrySetResult();
@@ -237,6 +238,12 @@ public sealed class DevTunnelAuthenticationHandlerTests
         Assert.Equal(1, sends);
         Assert.Equal(2, fixture.Session.Mints);
         Assert.True(content.Disposed);
+        var rejected = Assert.IsType<DevTunnelConnectCredentialAccessResult>(Assert.Single(observedBroker.AcquiredResults));
+        Assert.NotSame(initial, rejected);
+        Assert.Equal(AccessErrorCode.Disposed, Assert.IsType<SensitiveValueUseFailed<int>>(
+            await rejected.ConnectToken!.UseAsync<int>(
+                (_, _) => throw new InvalidOperationException("The rejected HTTP credential must be disposed."),
+                TestContext.Current.CancellationToken)).ErrorCode);
         Assert.Equal(CredentialGenerationInvalidationOutcome.NoLongerCurrent,
             await initial.InvalidateRejectedGenerationAsync(TestContext.Current.CancellationToken));
         Assert.NotEqual(initial.ConnectToken!.MaterialGeneration, replacement.ConnectToken!.MaterialGeneration);
