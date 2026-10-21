@@ -76,6 +76,54 @@ public sealed class StoredSecretAccessExecutorTests
         Assert.Equal(new[] { CredentialSourceKind.Environment }, source.Reads);
     }
 
+    [Theory]
+    [InlineData(CredentialSourceKind.Environment)]
+    [InlineData(CredentialSourceKind.SecretStore)]
+    public async Task StoredSecretExecutor_MissingSourceInspection_InvalidatesOnlyItsCachedGenerationWithoutReadingValues(
+        CredentialSourceKind missing)
+    {
+        var source = new Source();
+        await using var executor = new StoredSecretAccessExecutor(source);
+        var request = Request();
+        var (broker, registry) = Create(executor);
+        await using var ownedBroker = broker;
+        await using var ownedRegistry = registry;
+        var environmentTask = broker.AcquireAsync(request, TestContext.Current.CancellationToken);
+        await AllowAsync(registry, CredentialSourceKind.Environment);
+        await using var environment = Assert.IsType<AccessSucceeded<StoredSecretAccessResult>>(await environmentTask).Result;
+        var storedTask = broker.AcquireAsync(request, TestContext.Current.CancellationToken);
+        await AllowAsync(registry, CredentialSourceKind.SecretStore);
+        await using var stored = Assert.IsType<AccessSucceeded<StoredSecretAccessResult>>(await storedTask).Result;
+        var initial = await executor.InspectCachedGenerationsAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(2, initial.Count);
+        ICredentialCacheAdministration administration = executor;
+        Assert.Equal(2, (await administration.ListAsync(TestContext.Current.CancellationToken)).Count);
+        source.MissingOnInspection.Add(missing);
+
+        var inspection = await executor.InspectAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(CredentialSourceUsability.Missing, inspection.Sources.Single(choice => choice.Kind == missing).Usability);
+        Assert.Equal(CredentialSourceUsability.Usable, inspection.Sources.Single(choice => choice.Kind != missing).Usability);
+        var missingIdentifier = request.Sources.Single(choice => choice.Kind == missing).Identifier;
+        var survivingIdentifier = request.Sources.Single(choice => choice.Kind != missing).Identifier;
+        Assert.Equal(survivingIdentifier, Assert.Single(inspection.CachedGenerations).Key);
+        Assert.Null(await executor.GetGenerationCache(missingIdentifier).InspectGenerationAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(initial[survivingIdentifier],
+            await executor.GetGenerationCache(survivingIdentifier).InspectGenerationAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(initial[survivingIdentifier].Generation,
+            Assert.Single(await administration.ListAsync(TestContext.Current.CancellationToken)).Generation);
+        var callbacks = 0;
+        var rejectedLease = missing == CredentialSourceKind.Environment ? environment.Lease : stored.Lease;
+        var survivingLease = missing == CredentialSourceKind.Environment ? stored.Lease : environment.Lease;
+        Assert.IsType<SensitiveValueUseReacquisitionRequired<int>>(await rejectedLease.UseAsync((_, _) =>
+            ValueTask.FromResult(++callbacks), TestContext.Current.CancellationToken));
+        Assert.Equal(0, callbacks);
+        Assert.IsType<SensitiveValueUseSucceeded<int>>(await survivingLease.UseAsync((_, _) =>
+            ValueTask.FromResult(++callbacks), TestContext.Current.CancellationToken));
+        Assert.Equal(1, callbacks);
+        Assert.Equal(new[] { CredentialSourceKind.Environment, CredentialSourceKind.SecretStore }, source.Reads);
+    }
+
     [Fact]
     public async Task StoredSecretExecutor_IndependentLeases_ExactGenerationDeletionDoesNotDeleteRotation()
     {
@@ -206,6 +254,7 @@ public sealed class StoredSecretAccessExecutorTests
         public int Inspections { get; private set; }
         public List<CredentialSourceKind> Reads { get; } = [];
         public bool MissingOnRead { get; set; }
+        public HashSet<CredentialSourceKind> MissingOnInspection { get; } = [];
         public string Suffix { get; set; } = "";
         public Task? InspectionGate { get; init; }
 
@@ -214,7 +263,7 @@ public sealed class StoredSecretAccessExecutorTests
             this.Inspections++;
             if (this.InspectionGate is { } gate)
                 await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-            return true;
+            return !this.MissingOnInspection.Contains(source);
         }
 
         public ValueTask<char[]?> ReadAsync(string name, CredentialSourceKind source, CancellationToken cancellationToken)

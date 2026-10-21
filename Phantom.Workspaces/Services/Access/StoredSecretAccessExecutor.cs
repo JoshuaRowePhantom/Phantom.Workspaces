@@ -59,6 +59,10 @@ internal sealed class StoredSecretAccessExecutor : ICredentialAccessExecutor<Sto
 
             var exists = await this.source.ExistsAsync(request.Reference.Name, choice.Kind, cancellationToken).ConfigureAwait(false);
             sources.Add(choice with { Usability = exists ? CredentialSourceUsability.Usable : CredentialSourceUsability.Missing });
+            if (!exists)
+            {
+                this.GetCache(choice.Identifier).Clear();
+            }
             var metadata = await this.GetCache(choice.Identifier).InspectGenerationAsync(cancellationToken).ConfigureAwait(false);
             if (metadata is not null)
             {
