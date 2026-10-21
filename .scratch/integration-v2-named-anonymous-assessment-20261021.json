@@ -1,0 +1,60 @@
+{
+  "integrationOwner": "2042d708-200b-4ec9-8ea0-4ac52e4d8646",
+  "assessedCheckpoint": "90f130b37a98d0323c48610236438d1feeea971d",
+  "productionCheckpoint": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
+  "reportOrigin": "Frozen root5a relayed former4d unverified semantic-gap report2026-10-21T05:54:26.520-07:00. Integration assessed actual merged files, not former4d moving tree.",
+  "result": "Genuine source-confirmed caller/executor contract mismatch and missing named-anonymous acceptance coverage. Final arc acceptance reopened; prior SDK source closures remain CLOSED.",
+  "evidenceKind": "Direct current-source control-flow trace and immutable pre-cutover comparison, NOT a new runtime reproduction.",
+  "currentMergedTrace": [
+    {
+      "file": "Phantom.Workspaces\\EntityRepository.cs",
+      "surface": "CreateDevTunnelNameDataAccessLayerAsync around219-241; IsAnonymous and CreateConnectRequest around274-338",
+      "fact": "Anonymous AccessMode OR explicit anonymous authentication creates DevTunnelAccessDescriptor Access=Anonymous, Name=TunnelName, Endpoint=null. CreateConnectRequest forces AnonymousDevTunnelIdentityRoute even if a configured identity route was supplied."
+    },
+    {
+      "file": "Phantom.Workspaces\\Services\\AgentPersistenceStoreSourceFactory.cs",
+      "surface": "CreateDevTunnelAsync around88-108",
+      "fact": "Same name-only anonymous descriptor and shared CreateConnectRequest; persistence has the same mismatch as repository."
+    },
+    {
+      "file": "Phantom.Workspaces\\Services\\Access\\AccessHostServices.cs",
+      "surface": "CreateDevTunnelIdentityRoute(RepositorySource,CredentialUseKind) around41-61",
+      "fact": "Root creates a configured named route only when !EntityRepository.IsAnonymous(named); anonymous named sources receive no independent Management route."
+    },
+    {
+      "file": "Phantom.Workspaces\\Services\\DevTunnel\\DevTunnelServiceFactory.cs",
+      "surface": "CreateEndpointResolver",
+      "fact": "Endpoint resolver receives broker, Connect request and live scope only. The factory's identityRequest is not used to resolve named anonymous endpoints."
+    },
+    {
+      "file": "Phantom.Workspaces\\Services\\DevTunnel\\DevTunnelConnectCredentialAccessExecutor.cs",
+      "surface": "InspectAsync around121-144; IsCanonical around307-315",
+      "fact": "Canonical anonymous requests require null account AND a non-null safe relay Endpoint. The current named consumer therefore returns an inspection with no sources; this is not a name-discovery implementation."
+    },
+    {
+      "file": "Phantom.Workspaces\\Services\\Access\\AccessBroker.cs",
+      "surface": "AcquireCredentialAsync around121-135",
+      "fact": "An empty-source inspection returns typed AccessFailed IdentityMismatch before StartCredentialRow. DevTunnelEndpointResolver.RequireAsync surfaces DevTunnelCredentialAccessException IdentityMismatch. This error path is source-supported, not newly executed."
+    }
+  ],
+  "requirementEvidence": {
+    "currentSourceContract": "RepositorySource.cs documents DevTunnelNameRepositorySource relay/port discovery at connect time, AccessMode Anonymous as no token. That record has no configured Endpoint property.",
+    "preCutover": "git show 89f93264^:Phantom.Workspaces/Services/DevTunnel/DevTunnelEndpointResolver.cs: name/auto lookup occurs first through lookupClient; Anonymous then returns null relay token. Lookup and relay authorization were distinct.",
+    "design": "docs\\design\\dev-tunnel-host-service.md around240-252 describes authenticated Management name/port lookup followed by relay endpoint construction; old raw provider names are superseded, not authorized to restore.",
+    "architecture": "JoshuaRowePhantom/Phantom.Workspaces#1505 and #1513 require broker-only typed access, independently authorized exported identity material, identity only to Management, Connect only to relay, no compatibility provider/fallback. #1558/#1559 define derived Connect acquisition/relay boundaries; they do not authorize treating Anonymous as an authenticated Management identity."
+  },
+  "coverageGap": {
+    "existingAnonymousConsumerCase": "DevTunnelCredentialConsumerTests.PlainAndExplicitAnonymousWeb_DoNotNeedBrokerOrResolveIdentity covers WebRepositorySource explicit endpoints only.",
+    "existingNamedConsumerCases": "NamedConsumer_ResolvesThroughConnectThenUsesOnlySafeEndpointMetadata uses Private only.",
+    "executorAnonymousCase": "ConnectExecutor_AnonymousUsesNoMintIdentityOrInventedAccount supplies explicit Endpoint, so it does not cover name-only consumer requests.",
+    "priorAcceptanceBoundary": "Prior App801/Core160/Transport11 sourceb007 initial+10 remains valid for its actual selectors/cases, but does not establish named-anonymous parity."
+  },
+  "requiredResolution": {
+    "preserveParity": "Resolve Name through a REAL separately typed/broker-authorized non-anonymous Management identity request, validate returned safe endpoint, then use tokenless anonymous relay. Cover both repository and persistence, no Connect mint, no identity export to relay, live scope and exact ownership/cancellation.",
+    "alternative": "If no independently configured Management identity/endpoint can be supported within the approved configuration contract, explicitly reject the unsupported named-anonymous configuration with typed UnsupportedRequest and document the explicit anonymous Web endpoint alternative. Do not claim functional name-discovery parity.",
+    "notAuthorized": "No invented anonymous/default Management account, hidden identity acquisition, identity-bearing relay fallback, restoration of retired providers/interfaces, or weakening of the canonical anonymous endpoint guard.",
+    "ownershipBoundary": "Former4d remains stopped. Original root5a remains frozen; new root/composition work requires fresh explicit parent scope. No new overlapping production writer has been delegated by this assessment, and no policy/configuration choice has been silently made."
+  },
+  "remainingGate": "Fresh parent-approved bounded correction/behavior decision and actual named repository+persistence regressions, then immutable reviewed intake and affected acceptance. No features advancement/publication.",
+  "changesMade": "Assessment/handoff metadata only; production/tests, canonical shared/provider algorithms, submodule pins and accepted SDK closures unchanged."
+}

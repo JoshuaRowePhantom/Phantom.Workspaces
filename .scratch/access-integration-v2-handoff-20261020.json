@@ -3,7 +3,16 @@
   "worktree": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020",
   "branch": "integration/access-arc-ready-v2-20261020",
   "baseline": "e8ed98d70fe885ce37b12410e82f63317a923db5",
-  "status": "REQUIRED TARGETED INTEGRATION COMPLETE at unchanged sourceb007: account4bce, streamingaf29/proof351 and scanner-roota1 are independently CLEAR and already inherited as exact patch equivalents. Current parent authority/SDK handoff supersede queued pending messages. Fresh combined account/stream7/7 PASS; exact nested scanner3/3 PASS; full App801/Core160/Transport11 each initial+10 retained.83 artifacts, no remaining owned correction/review gate or duplicate intake. Features/publication remain prohibited without parent approval; no whole-repository/live-provider acceptance claimed.",
+  "status": "ACCEPTANCE REOPENED: actual sourceb007 confirms named-anonymous repository AND persistence emit Name-only requests rejected by canonical anonymous Connect endpoint guard before any row. Prior anonymous consumer regression is explicit WEB only, not named parity. New assessment records source-supported IdentityMismatch path, NOT new runtime reproduction. SDK account/stream/scanner gates remain CLEAR, prior801/160/11 evidence retained.84 artifacts; await fresh parent-scoped named-anonymous correction/explicit behavior decision. No features/publication or speculative root/Management identity changes.",
+  "namedAnonymousAssessment20261021": {
+    "receipt": ".scratch\\integration-v2-named-anonymous-assessment-20261021.json",
+    "assessedCheckpoint": "90f130b37a98d0323c48610236438d1feeea971d",
+    "status": "Genuine source-confirmed caller/executor contract mismatch; acceptance coverage missing for named anonymous in both consumers.",
+    "sourceBoundary": "Name-only Anonymous is noncanonical; Inspect returns no sources, actual broker maps to IdentityMismatch before row. This is direct current-source evidence, not a newly executed failing test.",
+    "resolutionBoundary": "Real independent typed Management name lookup followed by tokenless relay OR explicit typed unsupported-without-endpoint behavior. No anonymous/default Management account, identity-to-relay fallback, retired provider restoration or weakening of endpoint guard.",
+    "ownership": "Former4d stopped/root5a frozen remain unchanged. New root/configuration work requires fresh explicit parent scope; no overlapping implementation delegated or policy choice silently made.",
+    "priorEvidence": "Sourceb007 full801/160/11 initial+10 and fresh SDK7/scanner3 remain valid bounded evidence; none proves named-anonymous parity."
+  },
   "sdkReviewedEquivalenceClosure20261021": {
     "receipt": ".scratch\\integration-v2-sdk-reviewed-equivalence-closure-20261021.json",
     "source": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
@@ -524,9 +533,11 @@
     "preserveMcp": "Existing independently cleared MCP d42 shared completion plus active-work/whole-acquisition/native cleanup barrier remains intact; no old bd1 MCP file or lifecycle replacement.",
     "acceptanceBoundary": "Source reviewer performed no builds/tests/edits. Integrator105 plus ten105 executions are recorded separately, not attributed to reviewer. No whole-arc acceptance."
   },
-  "openOwnerWork": [],
-  "remainingAcceptanceBoundary": "No remaining required targeted integration correction/source-review gate. Account, stream and scanner have separate actual CLEAR receipts and current equivalent/runtime evidence. Full sourceb007801/160/11 initial+10 retained. Parent approval remains required for any features advancement/publication; whole-repository/live-provider/OS-process acceptance not claimed.",
+  "openOwnerWork": [
+    "Named-anonymous repository+persistence parity: source-confirmed Name-only/explicit-Endpoint contract mismatch. Fresh parent-scoped bounded correction or explicit unsupported behavior decision needed; actual named consumer regressions/review/affected acceptance remain open. No former4d/root5a writer restart or invented Management identity."
+  ],
+  "remainingAcceptanceBoundary": "NEW named-anonymous semantic/coverage gate OPEN; do not infer closure from prior WEB-only anonymous case or private named consumers. SDK account/stream/scanner closures remain CLEAR. Prior sourceb007801/160/11 initial+10 preserved; no features/publication or whole-arc acceptance.",
   "executionEvidenceManifest": ".scratch\\integration-v2-execution-evidence-20261020.json",
-  "cleanState": "Clean sourceb007 unchanged; accepted root/shared/provider/caller/retirement packets intact. SDK account/stream/scanner existing reviewed equivalents reconciled, fresh7PASS plus scanner3PASS and full801/160/11 initial+10 retained.83 hashes/pins retained; no source edits, active Git operation, features advancement or publication. Required targeted integration handoff complete; publication awaits parent approval.",
+  "cleanState": "Clean production/tests at sourceb007 unchanged; accepted SDK/root/shared/provider/caller/retirement corrections intact. NEW named-anonymous assessment reopens acceptance without speculative code or duplicate writer.84 evidence hashes/pins retained; prior801/160/11 plus SDK7/scanner3 valid only within actual covered cases. No features advancement/publication.",
   "safety": "No live checkout, auth, browser/UI/provider actions, features advancement, push/release/closure or rewritten history. Normal submodule init preserves Dock8c8d11 and MXC29702c3."
 }

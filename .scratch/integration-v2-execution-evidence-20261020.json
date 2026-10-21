@@ -1,7 +1,15 @@
 {
   "codeCheckpoint": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
   "productionCheckpoint": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
-  "pendingRequiredCorrections": [],
+  "pendingRequiredCorrections": [
+    {
+      "scope": "Named-anonymous repository and persistence endpoint discovery",
+      "status": "Source-confirmed Name-only Anonymous consumer request is rejected by canonical explicit-Endpoint guard before any row; source-supported IdentityMismatch, not new runtime reproduction.",
+      "receipt": ".scratch\\integration-v2-named-anonymous-assessment-20261021.json",
+      "ownership": "Fresh explicit parent scope/behavior decision required for root/configuration correction. Former4d remains stopped/root5a frozen; no new overlapping writer or invented Management identity.",
+      "acceptance": "Real independently typed Management lookup then tokenless relay OR explicit typed unsupported configuration; actual named tests/review/affected acceptance needed. Prior WEB-only anonymous case insufficient."
+    }
+  ],
   "sdkReviewedEquivalenceClosure": {
     "receipt": ".scratch\\integration-v2-sdk-reviewed-equivalence-closure-20261021.json",
     "status": "Account4bce,streamaf29/proof351,scanner-roota1f independently CLEAR per current parent authority/SDK handoff; exact inherited patch-equivalents/ancestry verified. No duplicate source intake.",
@@ -80,7 +88,7 @@
   "coreStabilityPassedPerRun": 171,
   "largerAppTargetInitialPassed": 312,
   "largerAppTargetStability": "Failed run5/10; exact causal fixture correction079f2081 subsequently targeted16 and root200x10 plus exact-final-source200 pass. Not claimed312x10.",
-  "knownRemainingFailures": "NONE in required targeted sourceb007 acceptance. SDK account/initial-stream/scanner findings separately source-cleared and actual inherited equivalents verified; fresh affected7PASS plus exact scanner3PASS. Full801/160/11 initial+10 and all historical failure/diagnosis artifacts preserved. No duplicate intake, features advancement or publication.",
+  "knownRemainingFailures": "NEW source-confirmed named-anonymous caller/executor mismatch and missing actual named acceptance in both repository/persistence. Source-supported IdentityMismatch before row, NOT newly executed runtime failure. SDK gates stay CLEAR; prior full801/160/11 initial+10 and affected7/scanner3 evidence preserved. No source change, invented identity, features advancement or publication.",
   "finalAcceptance": {
     "codeCheckpoint": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
     "appInitialPassed": 801,
@@ -96,7 +104,7 @@
     "skipped": 0,
     "review": "Legacy/usage, provider/recovery, shutdown, actual-root Audience and latest stored missing-source delta independently reviewed read-only. SDK7d3 exact4bce/af29/351/a1f existing CLEAR receipts now reconciled; identical inherited patches and actual merged regions verified. No source edits after sourceb007 full matrices.",
     "sdkAffectedSelectorPassed": 7,
-    "boundary": "Required targeted integration complete on unchanged sourceb007: full801/160/11 initial+10, explicit fresh account/stream7PASS and scanner3PASS, no remaining owned correction/review gate. No whole-repository/live-provider/OS-process acceptance; publication/features advancement still requires parent approval."
+    "boundary": "Prior completed sourceb007 matrices/SDK affected selectors preserved, but NEW named-anonymous semantic/coverage gate OPEN. WEB-only anonymous and Private named cases do not establish anonymous name discovery. No new runtime reproduction, whole-arc acceptance, features advancement or publication."
   },
   "gitHubOwnershipPairPassed": 75,
   "gitHubOwnershipPairStabilityRuns": 10,
@@ -139,6 +147,11 @@
   "pairedLegacyBoundary": "Only coherent c9 endpoint accepted, never SDK-only81504 prefix. Actual missing095 usage prerequisite plus parent-authorized paired App/Core/modal/OAuth marker retirement; native contracts/caches preserved. Read-only new21-file review clear; source unchanged after116/133x10 and fresh final committed116/133.",
   "dumpCount": 0,
   "logs": [
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-named-anonymous-assessment-20261021.json",
+      "bytes": 6463,
+      "sha256": "2697B40E448959F2AC9E99D0B1BC2A68E59F225E36D8BB76192A7CE937BDF1B4"
+    },
     {
       "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-sdk-reviewed-equivalence-closure-20261021.json",
       "bytes": 5409,
