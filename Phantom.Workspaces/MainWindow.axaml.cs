@@ -23,6 +23,7 @@ public partial class MainWindow : Window
             throw new ArgumentException("The popup must use the process authorization rows.", nameof(popup));
         }
         this.accessHost = host;
+        host.EnterRuntime();
         this.AttachAuthorizationRequests(popup);
     }
 

@@ -94,6 +94,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private readonly Microsoft.Extensions.Logging.ILoggerFactory loggerFactory;
     private readonly bool ownsLoggerFactory;
     private Services.Access.AccessHostServices? ownedAccessHost;
+    private readonly CancellationTokenSource lifetime = new();
+    private readonly TaskCompletionSource disposal = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private Task? initializationTask;
+    private int disposalStarted;
     private readonly Services.Logging.ILogDirectoryProvider? logDirectoryProvider;
     private readonly global::Phantom.Workspaces.Configuration.ConfigurationPersistenceService? configurationPersistence;
 
@@ -139,7 +143,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         };
         this.entityBrokerTask = EntityBroker.CreateInitializedAsync(
             repositorySource,
-            userComputerProfileOverride: configuration?.UserComputerProfileOverride);
+            cancellationToken: this.lifetime.Token,
+            userComputerProfileOverride: configuration?.UserComputerProfileOverride,
+            accessBroker: services.AccessBroker,
+            accessPresentationScope: services.AccessPresentationScope);
         this.profileStore = profileStore ?? ProfileStore.ForCurrentUser();
 
         this.TopLevelViews = new ObservableCollection<ViewDefinitionViewModel>();
@@ -221,7 +228,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private static ApplicationServices CreateDefaultApplicationServices(out Services.Access.AccessHostServices accessHost)
     {
-        var agentPersistenceStoreCache = new AgentPersistenceStoreCache();
         var agentPersistenceStore = AgentPersistenceStoreFactory.CreateInMemory();
         var loggerFactory = Services.Logging.HostFileLoggerFactory.Create(
             Services.Logging.HostLogDirectoryResolver.Resolve(AppContext.BaseDirectory));
@@ -235,11 +241,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             new AgentServices { LoggerFactory = loggerFactory, AccessBroker = accessHost.Broker },
             TaskScheduler.Current);
         var registryProvider = new TransportFactoryRegistryProvider();
+        var ownedHost = accessHost;
+        var agentPersistenceStoreCache = new AgentPersistenceStoreCache(ownedHost.Broker, () => ownedHost.PresentationScope);
         return new ApplicationServices(
             new RunningAgentChatTable(agentChatFactory, AgentSessionRuntimeContextFactory.FromProvider(registryProvider)),
             agentPersistenceStoreCache,
             loggerFactory,
             accessBroker: accessHost.Broker,
+            accessPresentationScope: () => ownedHost.PresentationScope,
             transportFactoryRegistryProvider: registryProvider);
     }
 
@@ -664,9 +673,16 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.entityBroker?.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId
         ?? default;
 
-    public async Task InitializeAsync()
+    public Task InitializeAsync()
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref this.disposalStarted) != 0, this);
+        return this.initializationTask ??= this.InitializeCoreAsync();
+    }
+
+    private async Task InitializeCoreAsync()
     {
         this.entityBroker = await this.entityBrokerTask;
+        this.lifetime.Token.ThrowIfCancellationRequested();
 
         // The broker refreshes subscriptions off the UI thread (UpdateAsync runs on the thread pool);
         // marshal its UI-bound collection/snapshot mutations onto the Avalonia dispatcher.
@@ -684,30 +700,41 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         this.entityBroker.Changed += this.OnEntityBrokerChanged;
         this.interestCatalog = await InterestCatalog.CreateAsync(this.entityBroker);
+        this.lifetime.Token.ThrowIfCancellationRequested();
         this.interestCatalog.Changed += this.OnInterestCatalogChanged;
         this.entityBroker.InterestCatalog = this.interestCatalog;
         this.entityTypeCatalog = await EntityTypeCatalog.CreateAsync(this.entityBroker);
+        this.lifetime.Token.ThrowIfCancellationRequested();
         this.entityTypeCatalog.Changed += this.OnEntityTypeCatalogChanged;
         this.entityTypeViewCatalog = await EntityTypeViewCatalog.CreateAsync(this.entityBroker);
+        this.lifetime.Token.ThrowIfCancellationRequested();
         this.fieldEditorFactory = new FieldEditorFactory(
             this.entityBroker,
             this.entityTypeViewCatalog,
             entityReferenceSearch: new EntityReferenceSearch(this.entityBroker),
             openEntity: entityId => _ = this.OpenEntityByIdAsync(entityId));
         this.mainNavigationView = await this.LoadNavigationSubscriptionAsync();
+        this.lifetime.Token.ThrowIfCancellationRequested();
         this.InitializeTopLevelViews();
         await this.ApplySelectedViewAsync();
+        this.lifetime.Token.ThrowIfCancellationRequested();
         await this.InitializeProfileAsync();
+        this.lifetime.Token.ThrowIfCancellationRequested();
         this.InitializeDockLayout(); // Initialize workspace-level dock
         if (this.configuration?.SkipStartupWorkspace != true)
         {
             await this.OpenStartupWorkspaceAsync();
+            this.lifetime.Token.ThrowIfCancellationRequested();
         }
         this.refreshTimer.Start();
         await this.InitializeWebHostAsync();
+        this.lifetime.Token.ThrowIfCancellationRequested();
         await this.InitializeScheduledToolsAsync();
+        this.lifetime.Token.ThrowIfCancellationRequested();
         await this.InitializeAutoResumeAsync();
+        this.lifetime.Token.ThrowIfCancellationRequested();
         await this.InitializeUsageTrackerAsync();
+        this.lifetime.Token.ThrowIfCancellationRequested();
     }
 
     /// <summary>
@@ -4930,66 +4957,88 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     public override async ValueTask DisposeAsync()
     {
-        this.refreshTimer.Stop();
+        if (Interlocked.Exchange(ref this.disposalStarted, 1) != 0)
+        {
+            await this.disposal.Task;
+            return;
+        }
+
+        var failures = new List<Exception>();
+        void Clean(Action cleanup)
+        {
+            try { cleanup(); }
+            catch (Exception exception) { failures.Add(exception); }
+        }
+        async ValueTask CleanAsync(Func<ValueTask> cleanup)
+        {
+            try { await cleanup(); }
+            catch (Exception exception) { failures.Add(exception); }
+        }
+
+        await CleanAsync(() => new ValueTask(this.lifetime.CancelAsync()));
+        if (this.ownedAccessHost is not null) { await CleanAsync(this.ownedAccessHost.DisposeAsync); }
+        try
+        {
+            await (this.initializationTask ?? this.entityBrokerTask);
+        }
+        catch (OperationCanceledException) when (this.lifetime.IsCancellationRequested) { }
+        catch (Exception exception) { failures.Add(exception); }
+        Clean(this.refreshTimer.Stop);
         this.notificationService.NotificationsChanged -= this.OnNotificationsChanged;
         this.dockFactory.ActiveDockableChanged -= this.OnActiveDockableChanged;
-        this.notificationsViewModel?.Dispose();
-
-        await this.currentPopulation.DisposeAsync();
-
-        if (this.scheduledToolRunner is not null)
+        if (this.entityBroker is not null)
         {
-            await this.scheduledToolRunner.DisposeAsync();
+            this.entityBroker.Changed -= this.OnEntityBrokerChanged;
         }
+        Clean(() => this.notificationsViewModel?.Dispose());
+        await CleanAsync(this.currentPopulation.DisposeAsync);
+        if (this.scheduledToolRunner is not null) { await CleanAsync(this.scheduledToolRunner.DisposeAsync); }
+        Clean(() => this.scheduledToolsPause?.Dispose());
+        Clean(() => this.scheduledToolsRunning?.Dispose());
+        Clean(() => this.runningAgentBrain?.Dispose());
+        Clean(() => this.usageTracker?.Dispose());
+        if (this.usageMetricsService is not null) { await CleanAsync(this.usageMetricsService.DisposeAsync); }
+        if (this.devTunnelHostService is not null) { await CleanAsync(this.devTunnelHostService.DisposeAsync); }
+        if (this.webHost is not null) { await CleanAsync(this.webHost.DisposeAsync); }
+        if (this.transportComposition is not null) { await CleanAsync(this.transportComposition.DisposeAsync); }
 
-        this.scheduledToolsPause?.Dispose();
-        this.scheduledToolsRunning?.Dispose();
-        this.runningAgentBrain?.Dispose();
-        this.usageTracker?.Dispose();
-
-        if (this.usageMetricsService is not null)
-        {
-            await this.usageMetricsService.DisposeAsync();
-        }
-
-        if (this.devTunnelHostService is not null)
-        {
-            await this.devTunnelHostService.DisposeAsync();
-        }
-
-        if (this.webHost is not null)
-        {
-            await this.webHost.DisposeAsync();
-        }
-
-        if (this.transportComposition is not null)
-        {
-            await this.transportComposition.DisposeAsync();
-        }
-
-        foreach (var pane in this.WorkspacePanes)
+        foreach (var pane in this.WorkspacePanes.ToArray())
         {
             foreach (var tab in pane.Tabs.ToArray())
             {
-                await DisposeWorkspaceTabAsync(tab);
+                await CleanAsync(() => new ValueTask(DisposeWorkspaceTabAsync(tab)));
             }
         }
 
-        this.ConnectionStatus?.Dispose();
-        this.interestCatalog?.Dispose();
-        this.entityTypeCatalog?.Dispose();
-
+        Clean(() => this.ConnectionStatus?.Dispose());
+        Clean(() => this.interestCatalog?.Dispose());
+        Clean(() => this.entityTypeCatalog?.Dispose());
         foreach (var lease in this.autoResumeLeases)
         {
-            await lease.DisposeAsync();
+            await CleanAsync(lease.DisposeAsync);
         }
-
-        await base.DisposeAsync();
-        if (this.ownedAccessHost is not null)
+        this.autoResumeLeases.Clear();
+        if (this.entityBroker is not null)
         {
-            await this.ownedAccessHost.DisposeAsync();
+            await CleanAsync(this.entityBroker.EntityRepository.DisposeAsync);
         }
-        if (this.ownsLoggerFactory)
-            this.loggerFactory.Dispose();
+        else if (this.entityBrokerTask.IsCompletedSuccessfully)
+        {
+            await CleanAsync(this.entityBrokerTask.Result.EntityRepository.DisposeAsync);
+        }
+        await CleanAsync(base.DisposeAsync);
+        if (this.ownsLoggerFactory && this.applicationServices.AgentPersistenceStoreCache is IAsyncDisposable ownedCache)
+        {
+            await CleanAsync(ownedCache.DisposeAsync);
+        }
+        Clean(this.lifetime.Dispose);
+        if (this.ownsLoggerFactory) { Clean(this.loggerFactory.Dispose); }
+        if (failures.Count > 0)
+        {
+            var failure = new AggregateException("Workspace shutdown did not complete cleanly.", failures);
+            this.disposal.TrySetException(failure);
+            throw failure;
+        }
+        this.disposal.TrySetResult();
     }
 }

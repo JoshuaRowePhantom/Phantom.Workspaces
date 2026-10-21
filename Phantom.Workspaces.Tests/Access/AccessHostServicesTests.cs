@@ -76,7 +76,9 @@ public sealed class AccessHostServicesTests : IDisposable
 
         var row = Assert.Single(host.AuthorizationRegistry.GetSnapshot());
         var presented = Assert.Single(host.AuthorizationRows.Rows);
-        host.AuthorizationRows.SetPresentationMode(AuthorizationRowsPresentationMode.Runtime);
+        Assert.Equal(AccessPresentationScope.Bootstrap, host.PresentationScope);
+        host.EnterRuntime();
+        Assert.Equal(AccessPresentationScope.Runtime, host.PresentationScope);
         Assert.Same(presented, Assert.Single(host.AuthorizationRows.Rows));
         Assert.Equal(row.Identifier, presented.Identifier);
         Assert.False(pending.IsCompleted);
@@ -105,6 +107,27 @@ public sealed class AccessHostServicesTests : IDisposable
             await host.Broker.AcquireAsync(request, TestContext.Current.CancellationToken));
         Assert.Empty(host.AuthorizationRegistry.GetSnapshot());
         Assert.Empty(host.AuthorizationRows.Rows);
+        Assert.Throws<ObjectDisposedException>(host.EnterRuntime);
+    }
+
+    [Fact]
+    public async Task AgentPersistenceStoreCache_RemoteBootstrap_OwnsOneRealStoreUntilShutdown()
+    {
+        await using var host = this.Create(new NullPlatformSecretStore());
+        var cache = new Services.AgentPersistenceStoreCache(host.Broker, () => host.PresentationScope);
+        var source = new WebRepositorySource("https://repository.invalid/", UseGitHubAuthToken: true);
+        var store = await cache.GetOrCreateAsync(source);
+        Assert.IsType<Data.Web.Client.WebClientAgentPersistenceStore>(store);
+        Assert.Same(store, await cache.GetOrCreateAsync(source));
+        Assert.Empty(host.AuthorizationRegistry.GetSnapshot());
+
+        await cache.DisposeAsync();
+        await cache.DisposeAsync();
+
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => cache.GetOrCreateAsync(source));
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
+            await store.ReadSubAgentChildIdsAsync("session", TestContext.Current.CancellationToken));
+        Assert.Empty(host.AuthorizationRegistry.GetSnapshot());
     }
 
     private AccessHostServices Create(IPlatformSecretStore store) => AccessHostServices.Create(new AccessHostOptions

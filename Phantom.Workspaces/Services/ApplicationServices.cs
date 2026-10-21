@@ -54,7 +54,7 @@ public sealed class ApplicationServices
             transportFactoryRegistryProvider ?? new TransportFactoryRegistryProvider();
         this.OutboundHttpTransportFactory = outboundHttpTransportFactory;
         this.AccessBroker = accessBroker ?? throw new ArgumentNullException(nameof(accessBroker));
-        this.AccessPresentationScope = accessPresentationScope;
+        this.AccessPresentationScope = accessPresentationScope ?? (() => Llm.Interfaces.Access.AccessPresentationScope.Runtime);
     }
 
     internal static (ISecretProvider SecretProvider, ICredentialPicker CredentialPicker, IAllowedSecretsStore AllowedSecretsStore, IPlatformSecretStore PlatformSecretStore) CreateDefaultSecretServices()
@@ -89,7 +89,7 @@ public sealed class ApplicationServices
     public IRunningAgentChatTable RunningAgentChats { get; }
 
     public IAccessBroker AccessBroker { get; }
-    public Func<AccessPresentationScope>? AccessPresentationScope { get; }
+    public Func<AccessPresentationScope> AccessPresentationScope { get; }
     internal Func<RemoteAuthentication?, IAccessBroker, Func<AccessPresentationScope>,
         DevTunnel.IDevTunnelHostService>? DevTunnelHostServiceFactory { get; init; }
 

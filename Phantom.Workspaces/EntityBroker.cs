@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.ViewModels;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 
 namespace Phantom.Workspaces;
 
@@ -90,7 +91,9 @@ public sealed class EntityBroker
     public static async Task<EntityBroker> CreateInitializedAsync(
         RepositorySource repositorySource,
         CancellationToken cancellationToken = default,
-        string? userComputerProfileOverride = null)
+        string? userComputerProfileOverride = null,
+        IAccessBroker? accessBroker = null,
+        Func<AccessPresentationScope>? accessPresentationScope = null)
     {
         using var startup = RepositoryStartupDiagnostics.Start("broker-initialization");
         var repository = await EntityRepository.CreateAsync(
@@ -98,17 +101,31 @@ public sealed class EntityBroker
             {
                 RepositorySource = repositorySource,
                 UserComputerProfileOverride = userComputerProfileOverride,
+                AccessBroker = accessBroker,
+                AccessPresentationScope = accessPresentationScope,
             },
             cancellationToken);
 
-        EntityBroker broker;
-        using (RepositoryStartupDiagnostics.Start("broker-construction"))
-            broker = new EntityBroker(repository);
-        using (RepositoryStartupDiagnostics.Start("broker-initialize"))
-            await broker.InitializeAsync(cancellationToken);
-        using (RepositoryStartupDiagnostics.Start("broker-interest-catalog"))
-            broker.InterestCatalog = await InterestCatalog.CreateAsync(broker, cancellationToken);
-        return broker;
+        try
+        {
+            EntityBroker broker;
+            using (RepositoryStartupDiagnostics.Start("broker-construction"))
+                broker = new EntityBroker(repository);
+            using (RepositoryStartupDiagnostics.Start("broker-initialize"))
+                await broker.InitializeAsync(cancellationToken);
+            using (RepositoryStartupDiagnostics.Start("broker-interest-catalog"))
+                broker.InterestCatalog = await InterestCatalog.CreateAsync(broker, cancellationToken);
+            return broker;
+        }
+        catch (Exception initializationFailure)
+        {
+            try { await repository.DisposeAsync(); }
+            catch (Exception cleanupFailure)
+            {
+                throw new AggregateException("Broker initialization and cleanup failed.", initializationFailure, cleanupFailure);
+            }
+            throw;
+        }
     }
 
     public event EventHandler<EntityBrokerChangedEventArgs>? Changed;

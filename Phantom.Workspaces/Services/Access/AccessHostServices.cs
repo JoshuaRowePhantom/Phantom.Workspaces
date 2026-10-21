@@ -12,6 +12,7 @@ public sealed class AccessHostServices : IAsyncDisposable
 {
     private readonly TaskCompletionSource disposal = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int disposalStarted;
+    private int runtimePresentation;
 
     private AccessHostServices() { }
 
@@ -21,6 +22,15 @@ public sealed class AccessHostServices : IAsyncDisposable
     public required IReleaseMemoryAdministration ReleaseMemoryAdministration { get; init; }
     public required ICredentialCacheAdministration CredentialCacheAdministration { get; init; }
     public required IProviderGrantAdministration ProviderGrantAdministration { get; init; }
+    public AccessPresentationScope PresentationScope => Volatile.Read(ref this.runtimePresentation) == 0
+        ? AccessPresentationScope.Bootstrap : AccessPresentationScope.Runtime;
+
+    public void EnterRuntime()
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref this.disposalStarted) != 0, this);
+        Volatile.Write(ref this.runtimePresentation, 1);
+        this.AuthorizationRows.SetPresentationMode(AuthorizationRowsPresentationMode.Runtime);
+    }
 
     public static AccessHostServices Create(AccessHostOptions options)
     {

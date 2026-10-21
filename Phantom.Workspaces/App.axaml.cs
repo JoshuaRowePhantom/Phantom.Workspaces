@@ -31,6 +31,7 @@ public partial class App : Application
     private MainWindow? runtimeWindow;
     private AuthorizationRequestsPopupViewModel? authorizationPopup;
     private AgentChatFactory? agentChatFactory;
+    private AgentPersistenceStoreCache? persistenceStoreCache;
     private ILoggerFactory? processLoggerFactory;
     private Task? shutdownTask;
     private bool shutdownCompleted;
@@ -260,6 +261,7 @@ public partial class App : Application
             var repositorySource = configuration is not null
                 ? configuration.ToRepositorySource()
                 : await ResolveStartupRepositorySourceAsync(desktop, loadingWindow, persistenceService);
+            if (this.isExiting) { return; }
                 
             if (repositorySource is null)
             {
@@ -290,8 +292,11 @@ public partial class App : Application
             // in place; this adds the missing logging half).
             Services.Logging.GlobalExceptionLogging.Register(loggerFactory);
 
-            var agentPersistenceStoreCache = new AgentPersistenceStoreCache();
+            var agentPersistenceStoreCache = new AgentPersistenceStoreCache(
+                this.accessHost.Broker, () => this.accessHost.PresentationScope);
+            this.persistenceStoreCache = agentPersistenceStoreCache;
             var agentPersistenceStore = await agentPersistenceStoreCache.GetOrCreateAsync(repositorySource);
+            if (this.isExiting) { return; }
             var foregroundScheduler = SynchronizationContextTaskScheduler.FromCurrent();
 
             var allowedSecretsStore = new AllowedSecretsStore(new AllowedSecretsStoreConfiguration());
@@ -333,6 +338,7 @@ public partial class App : Application
                 agentPersistenceStoreCache,
                 loggerFactory,
                 accessBroker: this.accessHost.Broker,
+                accessPresentationScope: () => this.accessHost.PresentationScope,
                 logDirectoryProvider: logDirectoryProvider,
                 configurationPersistence: persistenceService,
                 secretProvider: secretProvider,
@@ -368,6 +374,7 @@ public partial class App : Application
                 shutdown: () => this.RequestShutdown(desktop),
                 postInitialize: () =>
                 {
+                    if (this.isExiting) { return; }
                     loadingViewModel.StatusText = "Opening main window.";
                     var mainWindow = new MainWindow(viewModel);
                     this.runtimeWindow = mainWindow;
@@ -428,8 +435,8 @@ public partial class App : Application
         }
         catch (AggregateException failure)
         {
-            this.processLoggerFactory?.CreateLogger<App>().LogError(
-                "Application cleanup failed in {FailureCount} components.", failure.Flatten().InnerExceptions.Count);
+            Console.Error.WriteLine(
+                "Application cleanup failed in {0} components.", failure.Flatten().InnerExceptions.Count);
         }
         finally
         {
@@ -455,8 +462,10 @@ public partial class App : Application
         if (this.accessHost is not null) { await CleanAsync(this.accessHost.DisposeAsync); }
         if (this.runtimeViewModel is not null) { await CleanAsync(this.runtimeViewModel.DisposeAsync); }
         if (this.agentChatFactory is not null) { await CleanAsync(this.agentChatFactory.DisposeAsync); }
+        if (this.persistenceStoreCache is not null) { await CleanAsync(this.persistenceStoreCache.DisposeAsync); }
         await CleanAsync(() => { this.trayIconController?.Dispose(); return ValueTask.CompletedTask; });
         await CleanAsync(() => { this.updateController?.Dispose(); return ValueTask.CompletedTask; });
+        await CleanAsync(() => { this.processLoggerFactory?.Dispose(); return ValueTask.CompletedTask; });
         if (failures.Count > 0)
         {
             throw new AggregateException("Application shutdown did not complete cleanly.", failures);
