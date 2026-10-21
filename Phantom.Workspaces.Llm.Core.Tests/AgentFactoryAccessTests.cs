@@ -4,10 +4,12 @@ using System.Text.Json.Serialization;
 using AgentSchema;
 using GitHub.Copilot;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Moq;
 using Phantom.Workspaces.Llm.Copilot;
 using Phantom.Workspaces.Llm.Core.Tests.Infrastructure;
 using Phantom.Workspaces.Llm.Core.Manifest;
+using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Transport;
@@ -140,6 +142,71 @@ public sealed class AgentFactoryAccessTests
         Assert.Equal(new[] { GitHubCredentialPurpose.Model, GitHubCredentialPurpose.Agent },
             broker.GitHubRequests.Select(request => request.Purpose).ToArray());
         Assert.Single(broker.Leases);
+    }
+
+    [Theory]
+    [InlineData(CredentialLeaseRequiredActionKind.Authorization, false)]
+    [InlineData(CredentialLeaseRequiredActionKind.Reacquisition, false)]
+    [InlineData(CredentialLeaseRequiredActionKind.Authorization, true)]
+    [InlineData(CredentialLeaseRequiredActionKind.Reacquisition, true)]
+    public async Task CopilotSdkChatClient_StreamingCredentialRefusal_DisposesTurnAndPreservesQueuedInput(
+        CredentialLeaseRequiredActionKind action,
+        bool faultDispatch)
+    {
+        var broker = new AgentAccessTestBroker();
+        var queues = new AgentInputQueueManager();
+        var session = new FakeCopilotSession();
+        using var loggerFactory = new FaultingDispatchLoggerFactory();
+        var result = await AgentFactory.CreateChatClientAsync(
+            Definition("openai", "${SECRET:ModelKey}"),
+            new AgentServices
+            {
+                AccessBroker = broker,
+                CopilotClientFactory = new RecordingFactory(new FakeCopilotClient(session), broker.Context),
+                LoggerFactory = faultDispatch ? loggerFactory : null,
+            },
+            queueManager: queues);
+        await using var client = Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
+        client.SetSubAgentDependencies(
+            Mock.Of<IRunningAgentChatFactory>(),
+            Mock.Of<ISubAgentTable>());
+        await EstablishSessionAsync(client);
+        var baselineSubscriptions = session.SubscriberCount;
+        broker.Context.Authorized = action != CredentialLeaseRequiredActionKind.Authorization;
+        broker.Context.Current = action != CredentialLeaseRequiredActionKind.Reacquisition;
+        if (faultDispatch)
+        {
+            session.OnSubscribe = handler => handler(new SessionErrorEvent
+            {
+                Data = new SessionErrorData { Message = "Dispatch failed.", ErrorType = "fatal" },
+            });
+        }
+
+        await using var updates = client.GetStreamingResponseAsync(
+            [new ChatMessage(ChatRole.User, "continue")]).GetAsyncEnumerator();
+        AgentCredentialAccessException refusal;
+        if (faultDispatch)
+        {
+            var aggregate = await Assert.ThrowsAsync<AggregateException>(async () => await updates.MoveNextAsync());
+            Assert.Equal(2, aggregate.InnerExceptions.Count);
+            refusal = Assert.IsType<AgentCredentialAccessException>(aggregate.InnerExceptions[0]);
+            Assert.Same(loggerFactory.Failure, aggregate.InnerExceptions[1]);
+        }
+        else
+        {
+            refusal = await Assert.ThrowsAsync<AgentCredentialAccessException>(async () => await updates.MoveNextAsync());
+        }
+
+        Assert.Equal(action, refusal.RequiredAction);
+        Assert.NotNull(refusal.RequestIdentifier);
+        Assert.Equal(baselineSubscriptions, session.SubscriberCount);
+        Assert.Equal(0, session.SendAsyncCallCount);
+        Assert.Null(typeof(CopilotSdkChatClient)
+            .GetField("currentRouter", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(client));
+        var pending = new AgentInputItem { Messages = [new ChatMessage(ChatRole.User, "preserve")] };
+        queues.Enqueue(queues.ImmediateQueue, [pending]);
+        Assert.Same(pending, Assert.Single(queues.ImmediateQueue.Items));
+        Assert.Single(broker.StoredRequests);
     }
 
     [Fact]
@@ -539,6 +606,33 @@ public sealed class AgentFactoryAccessTests
         (Task<ICopilotSession>)typeof(CopilotSdkChatClient)
             .GetMethod("EnsureSessionAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
             .Invoke(client, new object?[] { null, CancellationToken.None })!;
+
+    private sealed class FaultingDispatchLoggerFactory : ILoggerFactory
+    {
+        internal Exception Failure { get; } = new InvalidOperationException("Dispatch logger failed.");
+
+        public ILogger CreateLogger(string categoryName) => new FaultingDispatchLogger(this.Failure);
+        public void AddProvider(ILoggerProvider provider) { }
+        public void Dispose() { }
+
+        private sealed class FaultingDispatchLogger(Exception failure) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+            public bool IsEnabled(LogLevel logLevel) => true;
+            public void Log<TState>(
+                LogLevel logLevel,
+                EventId eventId,
+                TState state,
+                Exception? exception,
+                Func<TState, Exception?, string> formatter)
+            {
+                if (logLevel == LogLevel.Error)
+                {
+                    throw failure;
+                }
+            }
+        }
+    }
 
     private sealed class RecordingFactory(
         ICopilotClient client,

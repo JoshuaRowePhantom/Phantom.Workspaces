@@ -12,6 +12,15 @@ internal sealed class FakeCopilotSession : ICopilotSession
     private readonly object lockObject = new();
 
     public string SessionId { get; set; } = "fake-session-id";
+    public Action<Action<SessionEvent>>? OnSubscribe { get; set; }
+    public int SendAsyncCallCount { get; private set; }
+    public int SubscriberCount
+    {
+        get
+        {
+            lock (this.lockObject) return this.subscribers.Count;
+        }
+    }
 
     public IReadOnlyList<ModelInfo> Models { get; set; } = Array.Empty<ModelInfo>();
     public Func<CancellationToken, Task<IReadOnlyList<TaskInfo>>>? ListTasksHandler { get; set; }
@@ -54,6 +63,7 @@ internal sealed class FakeCopilotSession : ICopilotSession
         {
             this.subscribers.Add(handler);
         }
+        this.OnSubscribe?.Invoke(handler);
 
         return new UnsubscribeToken(this, handler);
     }
@@ -73,6 +83,7 @@ internal sealed class FakeCopilotSession : ICopilotSession
 
         lock (this.lockObject)
         {
+            this.SendAsyncCallCount++;
             eventsToFire = this.eventQueue.ToList();
             this.eventQueue.Clear();
             subscribersCopy = this.subscribers.ToList();

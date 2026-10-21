@@ -1383,13 +1383,34 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
             var subscription = new AsyncDelegateDisposable(async () =>
             {
-                eventSubscription.Dispose();
-                eventChannel.Writer.Complete();
-                await dispatchLoop;
+                this.steeringSuspended = true;
                 queueSubscription.Dispose();
-
-                await router.DisposeRemainingLeasesAsync();
-                if (ReferenceEquals(this.currentRouter, router)) this.currentRouter = null;
+                try
+                {
+                    eventSubscription.Dispose();
+                }
+                finally
+                {
+                    eventChannel.Writer.TryComplete();
+                    try
+                    {
+                        await dispatchLoop.ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (turnCancellationToken.IsCancellationRequested)
+                    {
+                    }
+                    finally
+                    {
+                        try
+                        {
+                            await router.DisposeRemainingLeasesAsync().ConfigureAwait(false);
+                        }
+                        finally
+                        {
+                            if (ReferenceEquals(this.currentRouter, router)) this.currentRouter = null;
+                        }
+                    }
+                }
             });
 
             return new StreamingTurnContext(
@@ -1480,25 +1501,33 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         var turn = await beginTurnAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await turn.SendAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (System.IO.IOException) when (!cancellationToken.IsCancellationRequested)
-        {
-            // The resumed session's pipe is broken. Dispose its subscription, invalidate the session
-            // without re-arming the resume id, then retry once with a brand-new session.
-            await turn.Subscription.DisposeAsync();
-            await turn.OnPipeBrokenAsync().ConfigureAwait(false);
-
-            turn = await beginTurnAsync(cancellationToken).ConfigureAwait(false);
             try
             {
                 await turn.SendAsync(cancellationToken).ConfigureAwait(false);
             }
-            catch
+            catch (System.IO.IOException) when (!cancellationToken.IsCancellationRequested)
             {
-                await turn.Subscription.DisposeAsync();
-                throw;
+                // Only a broken pipe retries; credential refusals keep their original required action.
+                await turn.Subscription.DisposeAsync().ConfigureAwait(false);
+                await turn.OnPipeBrokenAsync().ConfigureAwait(false);
+                turn = await beginTurnAsync(cancellationToken).ConfigureAwait(false);
+                await turn.SendAsync(cancellationToken).ConfigureAwait(false);
             }
+        }
+        catch (Exception sendFailure)
+        {
+            try
+            {
+                await turn.Subscription.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception cleanupFailure)
+            {
+                throw new AggregateException(
+                    "Streaming turn startup and cleanup failed.",
+                    sendFailure,
+                    cleanupFailure);
+            }
+            throw;
         }
 
         return turn;
