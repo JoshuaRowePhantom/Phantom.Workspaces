@@ -58,15 +58,25 @@ internal sealed class AccessBroker : IAccessBroker
 
         using var ownedCancellation = cancellation;
         var task = this.DispatchSafeAsync(request, chain, cancellation.Token);
+        AccessOutcome<TResult> outcome;
         try
         {
-            return await task.WaitAsync(cancellation.Token).ConfigureAwait(false);
+            outcome = await task.WaitAsync(cancellation.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {
             ObserveLate(DisposeUnclaimedAsync(task));
             return Volatile.Read(ref this.disposed) != 0 ? new AccessShuttingDown<TResult>() : new AccessCancelled<TResult>();
         }
+
+        // Shutdown is visible before lifetime cancellation reaches every linked request.
+        if (Volatile.Read(ref this.disposed) != 0)
+        {
+            await DisposeUnclaimedAsync(task).ConfigureAwait(false);
+            return new AccessShuttingDown<TResult>();
+        }
+
+        return outcome;
     }
 
     private async Task<AccessOutcome<TResult>> DispatchSafeAsync<TResult>(
