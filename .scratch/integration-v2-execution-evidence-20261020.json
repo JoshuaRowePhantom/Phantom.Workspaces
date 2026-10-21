@@ -5,13 +5,21 @@
     {
       "owner": "3891b377-81d3-407b-b1f2-9baa3c3a36db",
       "finding": "NEW reviewer7d3e Medium, root5a relay: independent Agent-purpose account Upsert drops AuthorizationRequired/ReacquisitionRequired row/kind through parameterless AgentCredentialAccessException.",
-      "status": "Owned corrective SHA/evidence/review forthcoming. Existing801/160/11 is prior targeted evidence, not closure of this scenario. Hold arc acceptance/publication."
+      "status": "Actual4bce correction is already inherited as exact121ab patch-equivalent; current implementation and2 regressions verified, fresh2/2 PASS. Await actual7d3 bounded re-review receipt only; no duplicate intake or implementation."
     },
     {
       "reportedScope": "Separate SDK initial-stream Medium, root5a direct relay.",
       "status": "Exact symptom/current owner delivery details requested from SDK3891. No source investigation, guessed mechanism or duplicate writer. Does not conflate account outcome or scanner finding."
     }
   ],
+  "sdkAccountActualEquivalent": {
+    "source": "4bce452f31f6438c0a3066f95ae203cca4231cb1",
+    "localAncestor": "121abf65d689ebea41c7ccc4f3933408060da247",
+    "identicalStablePatchId": "28e74984b10a12c0b71ef5280974448fbc9c913f",
+    "freshRequiredOutcomeCasesPassed": 2,
+    "scope": "Actual account initialization Authorization/Reacquisition retain exact required action/broker row, zero export/session and client cleanup. Already in prior Core160 class selection; no source changes.",
+    "remainingGate": "Actual7d3 bounded re-review receipt pending. Separate initial-stream report details/status requested; runtime is not substituted for review."
+  },
   "scannerActualMergedCounterexample": {
     "source": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
     "companion": "a1f07389c4abf7f918376709abc27a9404616b1a",
@@ -71,7 +79,7 @@
   "coreStabilityPassedPerRun": 171,
   "largerAppTargetInitialPassed": 312,
   "largerAppTargetStability": "Failed run5/10; exact causal fixture correction079f2081 subsequently targeted16 and root200x10 plus exact-final-source200 pass. Not claimed312x10.",
-  "knownRemainingFailures": "SDK account required-outcome correction remains OPEN under3891; separately reported initial-stream Medium details/current delivery status requested. Exact nested full-Prompt scanner counterexample3/3 freshly PASS on actual mergeda1 companion, not inferred from08e-alone receipt. Prior801/160/11 does not close new SDK gates. Historical failures/diagnoses and accepted closures preserved.",
+  "knownRemainingFailures": "Account sourcegap does NOT reproduce: actual4bce exact inherited121ab plus fresh2 required-row/action cases PASS; actual7d3 review receipt pending. Separately reported initial-stream Medium details/status requested. Scanner exact nested full-Prompt counterexample3/3 freshly PASS witha1. Prior801/160/11/historical failures preserved; no source intake or final arc claim.",
   "finalAcceptance": {
     "codeCheckpoint": "b0078d9284de95d76a228aa9f59b51282dff0ddc",
     "appInitialPassed": 801,
@@ -86,7 +94,7 @@
     "failed": 0,
     "skipped": 0,
     "review": "Legacy/usage, provider/recovery, shutdown, actual-root Audience and latest exact two-file stored missing-source delta independently reviewed read-only; no significant issues. No source edits after final stored review and sourceb007801/160/11 each initial+10 execution.",
-    "boundary": "Completed PRIOR sourceb007 targeted matrices, not closure of SDK account/initial-stream gates. Exact merged scanner counterexample freshly3/3 PASS separately. SDK corrections/intake/validation remain OPEN; no whole-repository/live-provider/OS-process acceptance, features advancement or publication."
+    "boundary": "Sourceb007 matrices remain valid; exact account correction already inherited and fresh2PASS, actual7d3 review receipt pending. Separate stream details/status unresolved; merged scanner3PASS. No duplicate source intake/global arc/live-provider/OS-process acceptance or publication."
   },
   "gitHubOwnershipPairPassed": 75,
   "gitHubOwnershipPairStabilityRuns": 10,
@@ -129,6 +137,11 @@
   "pairedLegacyBoundary": "Only coherent c9 endpoint accepted, never SDK-only81504 prefix. Actual missing095 usage prerequisite plus parent-authorized paired App/Core/modal/OAuth marker retirement; native contracts/caches preserved. Read-only new21-file review clear; source unchanged after116/133x10 and fresh final committed116/133.",
   "dumpCount": 0,
   "logs": [
+    {
+      "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-sdk-account-required-equivalence-tests.log",
+      "bytes": 5982,
+      "sha256": "E5330ACF2D85C95539CD7F31FF696AA3CB2A79E2BE811718B5D9A0C70C33E00F"
+    },
     {
       "path": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020\\.scratch\\integration-v2-scanner-actual-root-counterexample-tests.log",
       "bytes": 5982,
