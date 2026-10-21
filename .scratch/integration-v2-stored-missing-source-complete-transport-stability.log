@@ -1,0 +1,84 @@
+Stability run: 10 consecutive passes required for: RemoteCopilotSdkSessionTests, Scenario3_RemoteCopilotSdkTests, RemoteSplitSession_Byok_AtoB_CompletesRoundTripAndClearsRunningItems, RemoteSplitSession_Byok_BtoA_CompletesReciprocalRoundTripAndClearsRunningItems, RemoteSplitSession_Byok_CtoAtoB_RelaysRoundTripAndClearsRunningItems, RemoteSplitSession_Byok_CallerLease_RemainsUnreadAcrossRemoteProviderBinding, RemoteSplitSession_Byok_CtoAtoB_EmitsCorrelatedSafeHopEvents, RemoteSplitSession_Byok_AtoB_ToolCallExecutesOnExecutorAndGuiCallbackReturnsToSource
+Worktree: C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020
+
+=== Run 1 / 10 ===
+
+=== Test Run Summary ===
+Executed : 11
+Passed   : 11
+Failed   : 0
+  Passed!  - Failed:     0, Passed:    11, Skipped:     0, Total:    11, Duration: 20 s - Phantom.Workspaces.Transport.Tests.dll (net10.0)
+
+=== Run 2 / 10 ===
+
+=== Test Run Summary ===
+Executed : 11
+Passed   : 11
+Failed   : 0
+  Passed!  - Failed:     0, Passed:    11, Skipped:     0, Total:    11, Duration: 20 s - Phantom.Workspaces.Transport.Tests.dll (net10.0)
+
+=== Run 3 / 10 ===
+
+=== Test Run Summary ===
+Executed : 11
+Passed   : 11
+Failed   : 0
+  Passed!  - Failed:     0, Passed:    11, Skipped:     0, Total:    11, Duration: 20 s - Phantom.Workspaces.Transport.Tests.dll (net10.0)
+
+=== Run 4 / 10 ===
+
+=== Test Run Summary ===
+Executed : 11
+Passed   : 11
+Failed   : 0
+  Passed!  - Failed:     0, Passed:    11, Skipped:     0, Total:    11, Duration: 19 s - Phantom.Workspaces.Transport.Tests.dll (net10.0)
+
+=== Run 5 / 10 ===
+
+=== Test Run Summary ===
+Executed : 11
+Passed   : 11
+Failed   : 0
+  Passed!  - Failed:     0, Passed:    11, Skipped:     0, Total:    11, Duration: 20 s - Phantom.Workspaces.Transport.Tests.dll (net10.0)
+
+=== Run 6 / 10 ===
+
+=== Test Run Summary ===
+Executed : 11
+Passed   : 11
+Failed   : 0
+  Passed!  - Failed:     0, Passed:    11, Skipped:     0, Total:    11, Duration: 20 s - Phantom.Workspaces.Transport.Tests.dll (net10.0)
+
+=== Run 7 / 10 ===
+
+=== Test Run Summary ===
+Executed : 11
+Passed   : 11
+Failed   : 0
+  Passed!  - Failed:     0, Passed:    11, Skipped:     0, Total:    11, Duration: 20 s - Phantom.Workspaces.Transport.Tests.dll (net10.0)
+
+=== Run 8 / 10 ===
+
+=== Test Run Summary ===
+Executed : 11
+Passed   : 11
+Failed   : 0
+  Passed!  - Failed:     0, Passed:    11, Skipped:     0, Total:    11, Duration: 20 s - Phantom.Workspaces.Transport.Tests.dll (net10.0)
+
+=== Run 9 / 10 ===
+
+=== Test Run Summary ===
+Executed : 11
+Passed   : 11
+Failed   : 0
+  Passed!  - Failed:     0, Passed:    11, Skipped:     0, Total:    11, Duration: 20 s - Phantom.Workspaces.Transport.Tests.dll (net10.0)
+
+=== Run 10 / 10 ===
+
+=== Test Run Summary ===
+Executed : 11
+Passed   : 11
+Failed   : 0
+  Passed!  - Failed:     0, Passed:    11, Skipped:     0, Total:    11, Duration: 19 s - Phantom.Workspaces.Transport.Tests.dll (net10.0)
+
+All 10 runs passed for: RemoteCopilotSdkSessionTests, Scenario3_RemoteCopilotSdkTests, RemoteSplitSession_Byok_AtoB_CompletesRoundTripAndClearsRunningItems, RemoteSplitSession_Byok_BtoA_CompletesReciprocalRoundTripAndClearsRunningItems, RemoteSplitSession_Byok_CtoAtoB_RelaysRoundTripAndClearsRunningItems, RemoteSplitSession_Byok_CallerLease_RemainsUnreadAcrossRemoteProviderBinding, RemoteSplitSession_Byok_CtoAtoB_EmitsCorrelatedSafeHopEvents, RemoteSplitSession_Byok_AtoB_ToolCallExecutesOnExecutorAndGuiCallbackReturnsToSource

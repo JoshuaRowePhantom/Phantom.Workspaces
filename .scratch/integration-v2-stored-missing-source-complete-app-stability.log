@@ -1,0 +1,84 @@
+Stability run: 10 consecutive passes required for: GitHubActionsUsageProviderTests, GitHubCopilotUsageProviderTests, GitHubUsageProviderAccessTests, LegacyAuthorizationUiRemovalTests, AccessMigrationTests, GitHubPrivateCredentialSessionTests, GitHubCredentialAccessExecutorTests, GitHubSelectedSourcePolicyTests, AccessBrokerTests, ProviderCredentialCacheAdministrationTests, DevTunnelConnectMintSessionTests, DevTunnelAuthenticationHandlerTests, DevTunnelCredentialConsumerTests, DevTunnelConnectCredentialAccessExecutorTests, DevTunnelIdentityCredentialAccessExecutorTests, DevTunnelConnectManagementApiTests, DevTunnelClientAuthorizationTests, OAuthPrincipalConfigurationTests, OAuthCredentialAccessExecutorTests, EntraPrivateCapabilityTests, EntraCredentialAccessExecutorTests, AccessHostServicesTests, HostConfiguredAccessGraphTests, OAuthCallbackBindingFactoryTests, McpOAuthCredentialAccessExecutorOwnershipTests, McpOAuthCacheAdministrationTests, McpOAuthCredentialRequestCatalogTests, McpOAuthProviderDiscoveryTests, McpOAuthAttemptTests, McpOAuthCacheCommitCoordinatorTests, StoredSecretAccessExecutorTests, RunVsCodeTunnelToolTests, VsCodeTunnelDiscoveryToolTests, VsCodeTunnelStatusResolverTests, VsCodeTunnelProcessEvidenceTests, VsCodeTunnelAuthorizationTests, ScheduledToolRegistryTests, VsCodeCliInvokerTests, VsCodeCliLocatorTests, WorkerCopilotProviderBrokerTests, DevTunnelIdentityRouteFactoryTests, StoredSecretExecutionLifetimeTests
+Worktree: C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020
+
+=== Run 1 / 10 ===
+
+=== Test Run Summary ===
+Executed : 801
+Passed   : 801
+Failed   : 0
+  Passed!  - Failed:     0, Passed:   801, Skipped:     0, Total:   801, Duration: 26 s - Phantom.Workspaces.Tests.dll (net10.0)
+
+=== Run 2 / 10 ===
+
+=== Test Run Summary ===
+Executed : 801
+Passed   : 801
+Failed   : 0
+  Passed!  - Failed:     0, Passed:   801, Skipped:     0, Total:   801, Duration: 27 s - Phantom.Workspaces.Tests.dll (net10.0)
+
+=== Run 3 / 10 ===
+
+=== Test Run Summary ===
+Executed : 801
+Passed   : 801
+Failed   : 0
+  Passed!  - Failed:     0, Passed:   801, Skipped:     0, Total:   801, Duration: 27 s - Phantom.Workspaces.Tests.dll (net10.0)
+
+=== Run 4 / 10 ===
+
+=== Test Run Summary ===
+Executed : 801
+Passed   : 801
+Failed   : 0
+  Passed!  - Failed:     0, Passed:   801, Skipped:     0, Total:   801, Duration: 28 s - Phantom.Workspaces.Tests.dll (net10.0)
+
+=== Run 5 / 10 ===
+
+=== Test Run Summary ===
+Executed : 801
+Passed   : 801
+Failed   : 0
+  Passed!  - Failed:     0, Passed:   801, Skipped:     0, Total:   801, Duration: 26 s - Phantom.Workspaces.Tests.dll (net10.0)
+
+=== Run 6 / 10 ===
+
+=== Test Run Summary ===
+Executed : 801
+Passed   : 801
+Failed   : 0
+  Passed!  - Failed:     0, Passed:   801, Skipped:     0, Total:   801, Duration: 26 s - Phantom.Workspaces.Tests.dll (net10.0)
+
+=== Run 7 / 10 ===
+
+=== Test Run Summary ===
+Executed : 801
+Passed   : 801
+Failed   : 0
+  Passed!  - Failed:     0, Passed:   801, Skipped:     0, Total:   801, Duration: 27 s - Phantom.Workspaces.Tests.dll (net10.0)
+
+=== Run 8 / 10 ===
+
+=== Test Run Summary ===
+Executed : 801
+Passed   : 801
+Failed   : 0
+  Passed!  - Failed:     0, Passed:   801, Skipped:     0, Total:   801, Duration: 26 s - Phantom.Workspaces.Tests.dll (net10.0)
+
+=== Run 9 / 10 ===
+
+=== Test Run Summary ===
+Executed : 801
+Passed   : 801
+Failed   : 0
+  Passed!  - Failed:     0, Passed:   801, Skipped:     0, Total:   801, Duration: 27 s - Phantom.Workspaces.Tests.dll (net10.0)
+
+=== Run 10 / 10 ===
+
+=== Test Run Summary ===
+Executed : 801
+Passed   : 801
+Failed   : 0
+  Passed!  - Failed:     0, Passed:   801, Skipped:     0, Total:   801, Duration: 26 s - Phantom.Workspaces.Tests.dll (net10.0)
+
+All 10 runs passed for: GitHubActionsUsageProviderTests, GitHubCopilotUsageProviderTests, GitHubUsageProviderAccessTests, LegacyAuthorizationUiRemovalTests, AccessMigrationTests, GitHubPrivateCredentialSessionTests, GitHubCredentialAccessExecutorTests, GitHubSelectedSourcePolicyTests, AccessBrokerTests, ProviderCredentialCacheAdministrationTests, DevTunnelConnectMintSessionTests, DevTunnelAuthenticationHandlerTests, DevTunnelCredentialConsumerTests, DevTunnelConnectCredentialAccessExecutorTests, DevTunnelIdentityCredentialAccessExecutorTests, DevTunnelConnectManagementApiTests, DevTunnelClientAuthorizationTests, OAuthPrincipalConfigurationTests, OAuthCredentialAccessExecutorTests, EntraPrivateCapabilityTests, EntraCredentialAccessExecutorTests, AccessHostServicesTests, HostConfiguredAccessGraphTests, OAuthCallbackBindingFactoryTests, McpOAuthCredentialAccessExecutorOwnershipTests, McpOAuthCacheAdministrationTests, McpOAuthCredentialRequestCatalogTests, McpOAuthProviderDiscoveryTests, McpOAuthAttemptTests, McpOAuthCacheCommitCoordinatorTests, StoredSecretAccessExecutorTests, RunVsCodeTunnelToolTests, VsCodeTunnelDiscoveryToolTests, VsCodeTunnelStatusResolverTests, VsCodeTunnelProcessEvidenceTests, VsCodeTunnelAuthorizationTests, ScheduledToolRegistryTests, VsCodeCliInvokerTests, VsCodeCliLocatorTests, WorkerCopilotProviderBrokerTests, DevTunnelIdentityRouteFactoryTests, StoredSecretExecutionLifetimeTests

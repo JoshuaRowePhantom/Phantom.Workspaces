@@ -1,0 +1,66 @@
+  Phantom.Workspaces.Data.Core -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Data.Core\bin\Debug\net10.0\Phantom.Workspaces.Data.Core.dll
+  Phantom.Workspaces.Llm.Interfaces -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Llm.Interfaces\bin\Debug\net10.0\Phantom.Workspaces.Llm.Interfaces.dll
+  Phantom.Workspaces.Data.Web.Client -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Data.Web.Client\bin\Debug\net10.0\Phantom.Workspaces.Data.Web.Client.dll
+  Phantom.Workspaces.Llm.Echo -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Llm.Echo\bin\Debug\net10.0\Phantom.Workspaces.Llm.Echo.dll
+  Phantom.Workspaces.Containers -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Containers\bin\Debug\net10.0\Phantom.Workspaces.Containers.dll
+  Phantom.Workspaces.Data.MongoDB -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Data.MongoDB\bin\Debug\net10.0\Phantom.Workspaces.Data.MongoDB.dll
+  Phantom.Workspaces.Transport -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Transport\bin\Debug\net10.0\Phantom.Workspaces.Transport.dll
+  mxc: building the native unit and generating C# P/Invoke bindings (cargo build -p mxc_ffi -p plm --features "dotnetsdk" --target x86_64-pc-windows-msvc )
+     Compiling mxc_ffi v0.8.0 (C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\microsoft\mxc\src\ffi\mxc_ffi)
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.69s
+  Microsoft.Mxc.Sdk -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\microsoft\mxc\sdk\dotnet\Microsoft.Mxc.Sdk\bin\Debug\net8.0\Microsoft.Mxc.Sdk.dll
+  Phantom.Workspaces.Llm.Core -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Llm.Core\bin\Debug\net10.0\Phantom.Workspaces.Llm.Core.dll
+  Phantom.Workspaces.Gui.Shared -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Gui.Shared\bin\Debug\net10.0\Phantom.Workspaces.Gui.Shared.dll
+  Phantom.Workspaces.Logging -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Logging\bin\Debug\net10.0\Phantom.Workspaces.Logging.dll
+  Phantom.Dock.Avalonia.TabSwitching -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Dock.Avalonia.TabSwitching\Phantom.Dock.Avalonia.TabSwitching\bin\Debug\net10.0\Phantom.Dock.Avalonia.TabSwitching.dll
+  Phantom.Workspaces.Agent.Gui -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Agent.Gui\bin\Debug\net10.0\Phantom.Workspaces.Agent.Gui.dll
+  Phantom.Workspaces.Data.Offline -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Data.Offline\bin\Debug\net10.0\Phantom.Workspaces.Data.Offline.dll
+  Phantom.Workspaces.Testing -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Testing\bin\Debug\net10.0\Phantom.Workspaces.Testing.dll
+  Phantom.Workspaces.Test.WindowsProcessProbe -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Test.WindowsProcessProbe\bin\Debug\net10.0\Phantom.Workspaces.Test.WindowsProcessProbe.dll
+  Phantom.Workspaces.Data.Core.Tests -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Data.Core.Tests\bin\Debug\net10.0\Phantom.Workspaces.Data.Core.Tests.dll
+  Phantom.Workspaces.Data.MongoDB.Tests -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Data.MongoDB.Tests\bin\Debug\net10.0\Phantom.Workspaces.Data.MongoDB.Tests.dll
+  Phantom.Workspaces.Data.Web.Server -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Data.Web.Server\bin\Debug\net10.0\Phantom.Workspaces.Data.Web.Server.dll
+  Phantom.Workspaces.Install -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Install\bin\Debug\net10.0\Phantom.Workspaces.Install.dll
+  Phantom.Workspaces.Web.Server -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Web.Server\bin\Debug\net10.0\Phantom.Workspaces.Web.Server.dll
+  Phantom.Workspaces.Copilot.Cli.Wrapper -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Copilot.Cli.Wrapper\bin\Debug\net10.0\phantom-copilot-wrapper.dll
+  Phantom.Workspaces -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces\bin\Debug\net10.0\Phantom.Workspaces.dll
+  Phantom.Workspaces.ProcessAcceptance -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.ProcessAcceptance\bin\Debug\net10.0\Phantom.Workspaces.ProcessAcceptance.dll
+  Phantom.Workspaces.Testing.Gui -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Testing.Gui\bin\Debug\net10.0\Phantom.Workspaces.Testing.Gui.dll
+  Phantom.Workspaces.Tests -> C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Tests\bin\Debug\net10.0\Phantom.Workspaces.Tests.dll
+Test run for C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Tests\bin\Debug\net10.0\Phantom.Workspaces.Tests.dll (.NETCoreApp,Version=v10.0)
+A total of 1 test files matched the specified pattern.
+[xUnit.net 00:00:05.53]     Phantom.Workspaces.Tests.Access.StoredSecretAccessExecutorTests.StoredSecretExecutor_MissingSourceInspection_InvalidatesOnlyItsCachedGenerationWithoutReadingValues(missing: SecretStore) [FAIL]
+[xUnit.net 00:00:05.57]     Phantom.Workspaces.Tests.Access.StoredSecretAccessExecutorTests.StoredSecretExecutor_MissingSourceInspection_InvalidatesOnlyItsCachedGenerationWithoutReadingValues(missing: Environment) [FAIL]
+Data collector 'Blame' message: All tests finished running, Sequence file will not be generated.
+  Failed Phantom.Workspaces.Tests.Access.StoredSecretAccessExecutorTests.StoredSecretExecutor_MissingSourceInspection_InvalidatesOnlyItsCachedGenerationWithoutReadingValues(missing: SecretStore) [119 ms]
+  Error Message:
+   Assert.Single() Failure: The collection contained 2 items
+Collection: [[CredentialSourceIdentifier { Digest = 3a00b7d9b57086a3261757b2f77598c68fd3c32a6802910a2295df36df9988cd }] = CredentialGenerationInspection { Generation = CredentialMaterialGenerationIdentifier { Value = 02a7ddb0-0865-4c26-868b-fe52aca26b64 }, ExpiresOn = , AccountIdentifier =  }, [CredentialSourceIdentifier { Digest = 2d142591a3c0e587b17bdce58bb7dab6f8b3edef02793346c7ea75dc9ff18c35 }] = CredentialGenerationInspection { Generation = CredentialMaterialGenerationIdentifier { Value = 0ea66809-1e0d-4ef4-b70f-cd922ca65ab7 }, ExpiresOn = , AccountIdentifier =  }]
+  Stack Trace:
+     at Phantom.Workspaces.Tests.Access.StoredSecretAccessExecutorTests.StoredSecretExecutor_MissingSourceInspection_InvalidatesOnlyItsCachedGenerationWithoutReadingValues(CredentialSourceKind missing) in C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Tests\Access\StoredSecretAccessExecutorTests.cs:line 109
+   at Phantom.Workspaces.Tests.Access.StoredSecretAccessExecutorTests.StoredSecretExecutor_MissingSourceInspection_InvalidatesOnlyItsCachedGenerationWithoutReadingValues(CredentialSourceKind missing) in C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Tests\Access\StoredSecretAccessExecutorTests.cs:line 124
+   at Phantom.Workspaces.Tests.Access.StoredSecretAccessExecutorTests.StoredSecretExecutor_MissingSourceInspection_InvalidatesOnlyItsCachedGenerationWithoutReadingValues(CredentialSourceKind missing) in C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Tests\Access\StoredSecretAccessExecutorTests.cs:line 124
+   at Phantom.Workspaces.Tests.Access.StoredSecretAccessExecutorTests.StoredSecretExecutor_MissingSourceInspection_InvalidatesOnlyItsCachedGenerationWithoutReadingValues(CredentialSourceKind missing) in C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Tests\Access\StoredSecretAccessExecutorTests.cs:line 124
+   at Phantom.Workspaces.Tests.Access.StoredSecretAccessExecutorTests.StoredSecretExecutor_MissingSourceInspection_InvalidatesOnlyItsCachedGenerationWithoutReadingValues(CredentialSourceKind missing) in C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Tests\Access\StoredSecretAccessExecutorTests.cs:line 124
+   at Phantom.Workspaces.Tests.Access.StoredSecretAccessExecutorTests.StoredSecretExecutor_MissingSourceInspection_InvalidatesOnlyItsCachedGenerationWithoutReadingValues(CredentialSourceKind missing) in C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Tests\Access\StoredSecretAccessExecutorTests.cs:line 124
+--- End of stack trace from previous location ---
+  Failed Phantom.Workspaces.Tests.Access.StoredSecretAccessExecutorTests.StoredSecretExecutor_MissingSourceInspection_InvalidatesOnlyItsCachedGenerationWithoutReadingValues(missing: Environment) [1 ms]
+  Error Message:
+   Assert.Single() Failure: The collection contained 2 items
+Collection: [[CredentialSourceIdentifier { Digest = 3a00b7d9b57086a3261757b2f77598c68fd3c32a6802910a2295df36df9988cd }] = CredentialGenerationInspection { Generation = CredentialMaterialGenerationIdentifier { Value = 3572287f-3f45-4b0f-9d37-3b556ce79209 }, ExpiresOn = , AccountIdentifier =  }, [CredentialSourceIdentifier { Digest = 2d142591a3c0e587b17bdce58bb7dab6f8b3edef02793346c7ea75dc9ff18c35 }] = CredentialGenerationInspection { Generation = CredentialMaterialGenerationIdentifier { Value = ae73bf7a-74ee-48cc-a63e-cce1ad4577ac }, ExpiresOn = , AccountIdentifier =  }]
+  Stack Trace:
+     at Phantom.Workspaces.Tests.Access.StoredSecretAccessExecutorTests.StoredSecretExecutor_MissingSourceInspection_InvalidatesOnlyItsCachedGenerationWithoutReadingValues(CredentialSourceKind missing) in C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Tests\Access\StoredSecretAccessExecutorTests.cs:line 109
+   at Phantom.Workspaces.Tests.Access.StoredSecretAccessExecutorTests.StoredSecretExecutor_MissingSourceInspection_InvalidatesOnlyItsCachedGenerationWithoutReadingValues(CredentialSourceKind missing) in C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Tests\Access\StoredSecretAccessExecutorTests.cs:line 124
+   at Phantom.Workspaces.Tests.Access.StoredSecretAccessExecutorTests.StoredSecretExecutor_MissingSourceInspection_InvalidatesOnlyItsCachedGenerationWithoutReadingValues(CredentialSourceKind missing) in C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Tests\Access\StoredSecretAccessExecutorTests.cs:line 124
+   at Phantom.Workspaces.Tests.Access.StoredSecretAccessExecutorTests.StoredSecretExecutor_MissingSourceInspection_InvalidatesOnlyItsCachedGenerationWithoutReadingValues(CredentialSourceKind missing) in C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Tests\Access\StoredSecretAccessExecutorTests.cs:line 124
+   at Phantom.Workspaces.Tests.Access.StoredSecretAccessExecutorTests.StoredSecretExecutor_MissingSourceInspection_InvalidatesOnlyItsCachedGenerationWithoutReadingValues(CredentialSourceKind missing) in C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Tests\Access\StoredSecretAccessExecutorTests.cs:line 124
+   at Phantom.Workspaces.Tests.Access.StoredSecretAccessExecutorTests.StoredSecretExecutor_MissingSourceInspection_InvalidatesOnlyItsCachedGenerationWithoutReadingValues(CredentialSourceKind missing) in C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Tests\Access\StoredSecretAccessExecutorTests.cs:line 124
+--- End of stack trace from previous location ---
+Results File: C:\dev\Phantom.Workspaces-Skills\worktrees\access-arc-integrated-v2-20261020\Phantom.Workspaces.Tests\TestResults\jrowe_DAEMON_2026-10-21_04_52_09_net10.0.trx
+
+Failed!  - Failed:     2, Passed:     0, Skipped:     0, Total:     2, Duration: 157 ms - Phantom.Workspaces.Tests.dll (net10.0)
+
+=== Test Run Summary ===
+Executed : 2
+Passed   : 0
+Failed   : 2

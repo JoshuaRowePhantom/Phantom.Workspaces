@@ -1,0 +1,24 @@
+{
+  "issue": 1505,
+  "base": "8c93d38269ff37a258ab8885d89474dc75788370",
+  "worktree": "C:\\dev\\Phantom.Workspaces-Skills\\worktrees\\access-arc-integrated-v2-20261020",
+  "reproduction": ".scratch\\integration-v2-stored-missing-source-reproduction.log",
+  "failingCases": [
+    "StoredSecretExecutor_MissingSourceInspection_InvalidatesOnlyItsCachedGenerationWithoutReadingValues(missing: Environment)",
+    "StoredSecretExecutor_MissingSourceInspection_InvalidatesOnlyItsCachedGenerationWithoutReadingValues(missing: SecretStore)"
+  ],
+  "observed": "Both new same-executor actual-broker cases failed Assert.Single at test line109: CachedGenerations still contained two entries after one source was marked missing. Later lease/admin assertions were not reached in this reproduction.",
+  "diagnosis": {
+    "agent": "Dedicated isolated general-purpose diagnostic agent, stored-missing-source-diagnosis",
+    "inputs": "Only ISSUE, WORKTREE and FAILING_TESTS plus read-only/no-run/no-publication overrides; no implementation context.",
+    "classification": "related",
+    "sourceSupportedCause": "StoredSecretAccessExecutor.InspectAsync marks the absent source Missing but reads and returns its unchanged cached generation instead of invalidating it.",
+    "boundary": "Agent inspected existing logs/source/git evidence, no edits/builds/tests/GitHub/live actions. No dumps found."
+  },
+  "immutableComparison": {
+    "earlierCorrection": "74141c06db95feb0297892236e13e1a252476c18",
+    "acceptedFacetSource": "cba9588f4406eb76952217d315d04805821b1b8d",
+    "currentGap": "Exact cba-to-current production diff lacked only the four-line missing-source Clear hunk in InspectAsync, independently of stronger current late-read cancellation/disposal/revalidation guards.",
+    "scope": "Restore that exact four-line hunk only, preserving current actual administration and all late-read guards; no whole-provider/history replacement. Existing GitHub missing-environment regression remains untouched."
+  }
+}
