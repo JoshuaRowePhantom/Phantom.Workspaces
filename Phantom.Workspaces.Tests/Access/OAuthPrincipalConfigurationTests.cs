@@ -109,6 +109,62 @@ public sealed class OAuthPrincipalConfigurationTests
     }
 
     [Theory]
+    [InlineData("${SECRET:configured-A}", "different-B")]
+    [InlineData("${SECRET:configured-A}", "configured-a")]
+    [InlineData("${ENV:configured-A}", "configured-A")]
+    [InlineData("${ENV}", "configured-A")]
+    [InlineData("${configured-A}", "configured-A")]
+    [InlineData("configured-A", "configured-A")]
+    [InlineData("${SECRET:}", "")]
+    [InlineData("${SECRET:configured-{A}}", "configured-{A}")]
+    public void ActualConfigurationFactory_RejectsUnboundOrUnsupportedSecretWithoutRegistration(
+        string configuredSecret, string suppliedName)
+    {
+        var store = new Mock<IPlatformSecretStore>(MockBehavior.Strict);
+        var registry = new OAuthProviderRegistry(store.Object,
+            createHttpHandler: () => throw new InvalidOperationException("Invalid metadata must not create provider HTTP."));
+        var configuration = Configuration() with { ClientSecret = configuredSecret };
+        var context = Context();
+        var client = new ConfidentialOAuthClient
+        {
+            Client = new() { Value = configuration.ClientId! },
+            ClientSecret = new() { Name = suppliedName },
+        };
+
+        var failure = Assert.Throws<OAuthCredentialConfigurationException>(() =>
+            new RemoteOAuthCredentialRequestFactory(registry).CreateRequest(
+                configuration, client, new Uri(configuration.Endpoint!),
+                context.Requestor, context.Use, AccessPresentationScope.Runtime));
+
+        Assert.Equal(AccessErrorCode.UnsupportedRequest, failure.ErrorCode);
+        Assert.Empty(registry.SnapshotConfigurations());
+        store.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public void ActualConfigurationFactory_RegistersExactConfiguredStoredSecretWithoutMaterialOrProviderCalls()
+    {
+        var store = new Mock<IPlatformSecretStore>(MockBehavior.Strict);
+        var registry = new OAuthProviderRegistry(store.Object,
+            createHttpHandler: () => throw new InvalidOperationException("Metadata must not create provider HTTP."));
+        var configuration = Configuration() with { ClientSecret = "${SECRET:configured-A}" };
+        var context = Context();
+        var client = new ConfidentialOAuthClient
+        {
+            Client = new() { Value = configuration.ClientId! },
+            ClientSecret = new() { Name = "configured-A" },
+        };
+
+        var request = new RemoteOAuthCredentialRequestFactory(registry).CreateRequest(
+            configuration, client, new Uri(configuration.Endpoint!),
+            context.Requestor, context.Use, AccessPresentationScope.Runtime);
+
+        Assert.Same(client, request.ClientAuthentication);
+        Assert.Same(client, Assert.Single(registry.SnapshotConfigurations()).ClientAuthentication);
+        store.VerifyNoOtherCalls();
+    }
+
+    [Theory]
     [InlineData("authority")]
     [InlineData("account")]
     [InlineData("claim")]

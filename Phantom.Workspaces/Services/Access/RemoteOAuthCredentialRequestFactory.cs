@@ -20,10 +20,7 @@ internal sealed class RemoteOAuthCredentialRequestFactory(OAuthProviderRegistry 
         };
         if (!string.Equals(authentication.Scheme?.Trim(), RemoteAuthentication.OAuthScheme, StringComparison.OrdinalIgnoreCase) ||
             string.IsNullOrWhiteSpace(clientIdentifier) || clientIdentifier != authentication.ClientId ||
-            (!string.IsNullOrWhiteSpace(authentication.ClientSecret) != (clientAuthentication is ConfidentialOAuthClient)) ||
-            (!string.IsNullOrWhiteSpace(authentication.ClientSecret) &&
-                !(authentication.ClientSecret.StartsWith("${", StringComparison.Ordinal) &&
-                  authentication.ClientSecret.EndsWith("}", StringComparison.Ordinal) && authentication.ClientSecret.Length > 3)) ||
+            !MatchesConfiguredClientSecret(authentication.ClientSecret, clientAuthentication) ||
             !TryHttps(authentication.Authority, out var authority) ||
             !TryHttps(authentication.AuthorizationEndpoint, out var authorizationEndpoint) ||
             !TryHttps(authentication.TokenEndpoint, out var tokenEndpoint) ||
@@ -51,6 +48,18 @@ internal sealed class RemoteOAuthCredentialRequestFactory(OAuthProviderRegistry 
     private static bool TryHttps(string? value, out Uri? uri) =>
         Uri.TryCreate(value, UriKind.Absolute, out uri) && uri.Scheme == Uri.UriSchemeHttps &&
         string.IsNullOrEmpty(uri.UserInfo) && string.IsNullOrEmpty(uri.Fragment);
+
+    private static bool MatchesConfiguredClientSecret(string? configuredSecret, OAuthClientAuthentication clientAuthentication)
+    {
+        if (clientAuthentication is not ConfidentialOAuthClient confidential)
+        {
+            return string.IsNullOrWhiteSpace(configuredSecret);
+        }
+
+        var name = confidential.ClientSecret?.Name;
+        return !string.IsNullOrWhiteSpace(name) && name.IndexOfAny(['{', '}']) < 0 &&
+            string.Equals(configuredSecret, "${SECRET:" + name + "}", StringComparison.Ordinal);
+    }
 }
 
 internal sealed class OAuthCredentialConfigurationException()
