@@ -182,7 +182,7 @@ internal sealed class McpOAuthCredentialAccessExecutor :
 
             var account = await ResolveAccountAsync(provider.Configuration, tokens.AccessToken, linked.Token).ConfigureAwait(false);
             provider.SetAccount(generation, account);
-            var session = new FixedSession(provider.Configuration, tokens.AccessToken, this.RemoveSession);
+            var session = new FixedSession(provider.Configuration, tokens.AccessToken, generation, this.RemoveSession);
             unpublishedSession = session;
             lock (this.gate)
             {
@@ -535,11 +535,17 @@ internal sealed class McpOAuthCredentialAccessExecutor :
         private readonly HttpClient client;
         private readonly Uri endpoint;
         private readonly char[] token;
+        private readonly ICredentialGenerationCache generationCache;
+        private readonly CredentialMaterialGenerationIdentifier generation;
         private readonly Action<FixedSession> onDisposed;
         private readonly AsyncLocal<UseScope?> currentScope = new();
         private int disposed;
 
-        internal FixedSession(McpOAuthProviderConfiguration configuration, string token, Action<FixedSession> onDisposed)
+        internal FixedSession(
+            McpOAuthProviderConfiguration configuration,
+            string token,
+            CredentialMaterialGenerationIdentifier generation,
+            Action<FixedSession> onDisposed)
         {
             if (configuration.Endpoint.Scheme != Uri.UriSchemeHttps)
             {
@@ -548,6 +554,8 @@ internal sealed class McpOAuthCredentialAccessExecutor :
             this.endpoint = configuration.Endpoint;
             this.client = new HttpClient(configuration.CreateHttpHandler());
             this.token = token.ToCharArray();
+            this.generationCache = configuration.Cache;
+            this.generation = generation;
             this.onDisposed = onDisposed;
         }
         public async ValueTask<TResult> UseAsync<TResult>(
@@ -582,12 +590,36 @@ internal sealed class McpOAuthCredentialAccessExecutor :
             try
             {
                 var response = await this.client.SendAsync(outgoing, HttpCompletionOption.ResponseHeadersRead, cancellation.Token).ConfigureAwait(false);
-                response.RequestMessage = CopyRequest(request);
-                return response;
+                try
+                {
+                    response.RequestMessage = CopyRequest(request);
+                    if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+                    {
+                        await this.RejectGenerationAsync(cancellation.Token).ConfigureAwait(false);
+                    }
+                    return response;
+                }
+                catch
+                {
+                    response.Dispose();
+                    throw;
+                }
             }
             finally
             {
                 outgoing.Headers.Authorization = null;
+            }
+        }
+
+        private async ValueTask RejectGenerationAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                await this.generationCache.InvalidateGenerationAsync(this.generation, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is IOException or Win32Exception or UnauthorizedAccessException or JsonException)
+            {
+                throw new InvalidOperationException("MCP credential renewal could not be prepared.");
             }
         }
 

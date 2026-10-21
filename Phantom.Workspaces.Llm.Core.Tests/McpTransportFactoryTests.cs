@@ -9,6 +9,7 @@ using ModelContextProtocol.Client;
 using Moq;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces.Access;
+using Phantom.Workspaces.Llm.Interfaces.Access.Execution;
 using Phantom.Workspaces.Llm.Mcp;
 using Phantom.Workspaces.Llm.Secrets;
 
@@ -224,6 +225,45 @@ public sealed class McpTransportFactoryTests
     }
 
     [Theory]
+    [InlineData(HttpStatusCode.Unauthorized, true)]
+    [InlineData(HttpStatusCode.Forbidden, true)]
+    [InlineData(HttpStatusCode.OK, false)]
+    [InlineData(HttpStatusCode.ServiceUnavailable, false)]
+    public async Task McpTransportFactory_EntraHttpDenial_InvokesTheBoundGenerationRejection(
+        HttpStatusCode status,
+        bool rejects)
+    {
+        var rejected = 0;
+        var broker = new Broker
+        {
+            GenerationRejection = _ =>
+            {
+                rejected++;
+                return ValueTask.FromResult(CredentialGenerationInvalidationOutcome.Invalidated);
+            },
+        };
+        var transport = await CreateAsync(PinnedEntraTool(), new AgentServices { AccessBroker = broker });
+        await using var owner = (IAsyncDisposable)transport;
+        var network = new DenialHandler(status);
+        using var client = new HttpClient(McpBrokerClientTransport.CreateEntraUseHandler(
+            broker.EntraResult!, new Uri(Endpoint), network));
+        using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint)
+        {
+            Content = new StringContent("caller-body"),
+        };
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", "caller-header");
+        using var response = await client.SendAsync(request, CancellationToken.None);
+        Assert.Equal(status, response.StatusCode);
+        Assert.Equal(rejects ? 1 : 0, rejected);
+        Assert.NotNull(request.Headers.Authorization);
+        Assert.Equal("Basic", request.Headers.Authorization.Scheme);
+        Assert.Equal("caller-header", request.Headers.Authorization.Parameter);
+        Assert.NotSame(request, network.Outgoing);
+        Assert.Null(network.Outgoing!.Headers.Authorization);
+        Assert.Null(response.RequestMessage!.Headers.Authorization);
+    }
+
+    [Theory]
     [InlineData("http://resource.test/mcp")]
     [InlineData("stdio://server/process")]
     public async Task McpTransportFactory_InsecureCredentialEndpoint_DoesNotAcquire(string endpoint)
@@ -352,6 +392,34 @@ public sealed class McpTransportFactoryTests
         Connection = new OAuthConnection { Endpoint = Endpoint, ClientId = "public-client", Scopes = ["read"] },
     };
 
+    private static McpTool PinnedEntraTool() => new()
+    {
+        Connection = new PhantomOAuthConnection
+        {
+            Endpoint = Endpoint,
+            AuthenticationMode = PhantomAgentSchema.EntraPinnedAuthenticationMode,
+            Authority = "https://login.microsoftonline.com/tenant/v2.0",
+            ClientId = "public-client",
+            Scopes = ["scope/.default"],
+        },
+    };
+
+    private sealed class DenialHandler(HttpStatusCode status) : HttpMessageHandler
+    {
+        internal HttpRequestMessage? Outgoing { get; private set; }
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            this.Outgoing = request;
+            Assert.Equal("Bearer", request.Headers.Authorization?.Scheme);
+            Assert.Equal("test-access", request.Headers.Authorization?.Parameter);
+            return Task.FromResult(new HttpResponseMessage(status)
+            {
+                RequestMessage = request,
+                Content = new StringContent("response"),
+            });
+        }
+    }
+
     private static StoredSecretAccessRequest SecretRequest()
     {
         var requestor = new AccessRequestor
@@ -438,6 +506,7 @@ public sealed class McpTransportFactoryTests
     {
         internal int Calls { get; private set; }
         internal bool Deny { get; init; }
+        internal Func<CancellationToken, ValueTask<CredentialGenerationInvalidationOutcome>>? GenerationRejection { get; init; }
         internal object? LastRequest { get; private set; }
         internal AccessPresentationScope LastScope { get; private set; }
         internal McpOAuthCredentialUseRequest? McpRequest { get; private set; }
@@ -471,6 +540,7 @@ public sealed class McpTransportFactoryTests
                 {
                     AccessToken = new SensitiveValueLease("test-access".AsMemory(), Binding(entra), new LeaseContext()),
                     ExpiresOn = DateTimeOffset.UtcNow.AddHours(1),
+                    GenerationRejection = this.GenerationRejection,
                 };
                 return Task.FromResult((AccessOutcome<TResult>)(object)new AccessSucceeded<EntraCredentialAccessResult> { Result = this.EntraResult });
             }

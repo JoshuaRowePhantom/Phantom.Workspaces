@@ -5,12 +5,18 @@ using Phantom.Workspaces.Llm.Mcp;
 
 namespace Phantom.Workspaces.Llm.Auth;
 
+/// <summary>Configuration consumed by the Entra browser credential factory.</summary>
+public sealed record EntraPinnedTokenRequest(
+    string Authority,
+    string? ClientId,
+    Uri? RedirectUri,
+    string CallerName);
+
 /// <summary>
 /// Builds the default host-pinned Entra <see cref="TokenCredential"/> — an
 /// <see cref="InteractiveBrowserCredential"/> — for the <c>entra-pinned</c> OAuth mode (issue
-/// #1420, integration points D and E). The GUI/desktop host wires this factory into
-/// <see cref="InteractiveOAuthOptions.EntraCredentialProvider"/>; headless/unit contexts inject a fake
-/// credential instead, so the transport factory never takes a hard MSAL dependency.
+/// #1420, integration points D and E). Caller transports use broker-owned fixed leases rather than
+/// raw SDK credential injection; provider sessions also share its authority parser.
 /// </summary>
 /// <remarks>
 /// Tokens are persisted through MSAL's OS-backed cache (<see cref="TokenCachePersistenceOptions"/>)

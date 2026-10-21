@@ -208,6 +208,82 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
         Assert.Null(response.RequestMessage!.Headers.Authorization);
     }
 
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized)]
+    [InlineData(HttpStatusCode.Forbidden)]
+    public async Task McpOAuthExecutor_RejectedHttpGeneration_RequiresNewPerformWithoutRefreshing(HttpStatusCode status)
+    {
+        var tracker = new SessionTracker { ResponseStatus = status };
+        await using var fixture = new Fixture(createHttpHandler: tracker.Create);
+        var acquisition = fixture.Broker.AcquireAsync(fixture.Request(), TestContext.Current.CancellationToken);
+        await fixture.AllowAsync();
+        await using var result = Assert.IsType<AccessSucceeded<McpCredentialUseResult>>(
+            await acquisition.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken)).Result;
+        using var request = new HttpRequestMessage(HttpMethod.Get, fixture.Configuration.Endpoint);
+        using var response = Assert.IsType<CredentialUseSucceeded<HttpResponseMessage>>(await result.Use.UseAsync(
+            cancellation => result.Session.SendAsync(request, cancellation), TestContext.Current.CancellationToken)).Result;
+        Assert.Equal(status, response.StatusCode);
+        Assert.Null(request.Headers.Authorization);
+        Assert.Null(response.RequestMessage!.Headers.Authorization);
+        Assert.Null(await fixture.Executor.GetGenerationCache(fixture.Configuration.Identifier)
+            .InspectGenerationAsync(TestContext.Current.CancellationToken));
+        Assert.IsType<CredentialUseReacquisitionRequired<int>>(await result.Use.UseAsync(
+            _ => ValueTask.FromResult(1), TestContext.Current.CancellationToken));
+        Assert.Contains(fixture.Registry.GetSnapshot(), row => row.PrimaryAction ==
+            Phantom.Workspaces.Llm.Interfaces.Authorization.UserAuthorizationPrimaryActionKind.Perform);
+        Assert.Equal(1, fixture.Browser.OpenCount);
+        Assert.Equal(1, fixture.Server.TokenRequests);
+    }
+
+    [Fact]
+    public async Task McpOAuthExecutor_LateRejectedResponse_CannotInvalidateRotatedCacheGeneration()
+    {
+        var tracker = new SessionTracker { ResponseStatus = HttpStatusCode.Unauthorized, WaitForResponse = true };
+        await using var fixture = new Fixture(createHttpHandler: tracker.Create);
+        var acquisition = fixture.Broker.AcquireAsync(fixture.Request(), TestContext.Current.CancellationToken);
+        await fixture.AllowAsync();
+        await using var result = Assert.IsType<AccessSucceeded<McpCredentialUseResult>>(
+            await acquisition.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken)).Result;
+        using var request = new HttpRequestMessage(HttpMethod.Get, fixture.Configuration.Endpoint);
+        var sending = result.Use.UseAsync(
+            cancellation => result.Session.SendAsync(request, cancellation), TestContext.Current.CancellationToken).AsTask();
+        await tracker.Sending.Task.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+        await fixture.Configuration.Cache.StoreTokensAsync(new ModelContextProtocol.Authentication.TokenContainer
+        {
+            TokenType = "Bearer",
+            AccessToken = "rotated-generation",
+            ExpiresIn = 3600,
+            ObtainedAt = DateTimeOffset.UtcNow,
+        }, TestContext.Current.CancellationToken);
+        var cache = fixture.Executor.GetGenerationCache(fixture.Configuration.Identifier);
+        var rotated = (await cache.InspectGenerationAsync(TestContext.Current.CancellationToken))!;
+        tracker.AllowResponse.TrySetResult();
+        using var response = Assert.IsType<CredentialUseSucceeded<HttpResponseMessage>>(
+            await sending.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken)).Result;
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Equal(rotated.Generation, (await cache.InspectGenerationAsync(TestContext.Current.CancellationToken))!.Generation);
+        Assert.Equal("rotated-generation", (await fixture.Configuration.Cache.GetGenerationTokensAsync(
+            rotated.Generation, TestContext.Current.CancellationToken))!.AccessToken);
+        Assert.Equal(1, fixture.Browser.OpenCount);
+    }
+
+    [Fact]
+    public async Task McpOAuthExecutor_TransientHttpFailure_DoesNotInvalidateCredentialGeneration()
+    {
+        var tracker = new SessionTracker { ResponseStatus = HttpStatusCode.ServiceUnavailable };
+        await using var fixture = new Fixture(createHttpHandler: tracker.Create);
+        var acquisition = fixture.Broker.AcquireAsync(fixture.Request(), TestContext.Current.CancellationToken);
+        await fixture.AllowAsync();
+        await using var result = Assert.IsType<AccessSucceeded<McpCredentialUseResult>>(
+            await acquisition.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken)).Result;
+        using var request = new HttpRequestMessage(HttpMethod.Get, fixture.Configuration.Endpoint);
+        using var response = Assert.IsType<CredentialUseSucceeded<HttpResponseMessage>>(await result.Use.UseAsync(
+            cancellation => result.Session.SendAsync(request, cancellation), TestContext.Current.CancellationToken)).Result;
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.IsType<CredentialUseSucceeded<int>>(await result.Use.UseAsync(
+            _ => ValueTask.FromResult(1), TestContext.Current.CancellationToken));
+    }
+
     private static char[]? FindOwnedBuffer(Phantom.Workspaces.Services.Mcp.McpOAuthCredentialAccessExecutor executor)
     {
         var sessions = (System.Collections.IEnumerable)executor.GetType()
@@ -246,6 +322,8 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
         internal bool Fail { get; init; }
         internal bool Block { get; init; }
         internal bool StreamResponse { get; init; }
+        internal HttpStatusCode ResponseStatus { get; init; } = HttpStatusCode.OK;
+        internal bool WaitForResponse { get; init; }
         internal HttpRequestMessage? Outgoing { get; set; }
         internal string? Body { get; set; }
         internal char[]? OwnedBuffer { get; set; }
@@ -254,6 +332,7 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
         internal TaskCompletionSource Created { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource Sending { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource AllowResponseBody { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource AllowResponse { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         internal HttpMessageHandler Create(Server server)
         {
@@ -276,7 +355,8 @@ public sealed partial class McpOAuthCredentialAccessExecutorTests
             tracker.Sending.TrySetResult();
             if (tracker.Fail) { throw new HttpRequestException("Controlled request failure."); }
             if (tracker.Block) { await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken); }
-            return new HttpResponseMessage(HttpStatusCode.OK)
+            if (tracker.WaitForResponse) { await tracker.AllowResponse.Task.WaitAsync(cancellationToken); }
+            return new HttpResponseMessage(tracker.ResponseStatus)
             {
                 RequestMessage = request,
                 Content = tracker.StreamResponse ? new DelayedResponseContent(tracker.AllowResponseBody) : new StringContent("response-body"),

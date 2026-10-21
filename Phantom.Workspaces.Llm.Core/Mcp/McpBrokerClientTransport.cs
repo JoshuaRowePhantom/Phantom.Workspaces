@@ -4,6 +4,7 @@ using AgentSchema;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Client;
 using Phantom.Workspaces.Llm.Interfaces.Access;
+using Phantom.Workspaces.Llm.Interfaces.Access.Execution;
 using Phantom.Workspaces.Llm.Secrets;
 using McpProtocolTransport = ModelContextProtocol.Protocol.ITransport;
 
@@ -63,10 +64,7 @@ internal sealed class McpBrokerClientTransport : IClientTransport, IAsyncDisposa
             var outcome = await broker.AcquireAsync(request, cancellationToken).ConfigureAwait(false);
             var result = RequireResult(outcome, cancellationToken);
             credential = result;
-            handler = new SensitiveUseHandler(result.AccessToken, endpoint)
-            {
-                InnerHandler = new SocketsHttpHandler { AllowAutoRedirect = false },
-            };
+            handler = CreateEntraUseHandler(result, endpoint, new SocketsHttpHandler { AllowAutoRedirect = false });
         }
         else
         {
@@ -101,7 +99,7 @@ internal sealed class McpBrokerClientTransport : IClientTransport, IAsyncDisposa
             {
                 throw new InvalidOperationException("MCP credential handle is unavailable in this materialization.");
             }
-            var borrowedHandler = new SensitiveUseHandler(lease, endpoint)
+            var borrowedHandler = new SensitiveUseHandler(lease, endpoint, null)
             {
                 InnerHandler = new SocketsHttpHandler { AllowAutoRedirect = false },
             };
@@ -153,12 +151,20 @@ internal sealed class McpBrokerClientTransport : IClientTransport, IAsyncDisposa
             }],
         };
         var result = RequireResult(await broker.AcquireAsync(request, cancellationToken).ConfigureAwait(false), cancellationToken);
-        var handler = new SensitiveUseHandler(result.Lease, endpoint)
+        var handler = new SensitiveUseHandler(result.Lease, endpoint, null)
         {
             InnerHandler = new SocketsHttpHandler { AllowAutoRedirect = false },
         };
         return await CreateOwnedTransportAsync(endpoint, transportMode, handler, result, loggerFactory).ConfigureAwait(false);
     }
+
+    internal static HttpMessageHandler CreateEntraUseHandler(
+        EntraCredentialAccessResult result,
+        Uri endpoint,
+        HttpMessageHandler innerHandler) => new SensitiveUseHandler(result.AccessToken, endpoint, result.RejectGenerationAsync)
+        {
+            InnerHandler = innerHandler,
+        };
 
     private static async Task<IClientTransport> CreateOwnedTransportAsync(
         Uri endpoint,
@@ -314,7 +320,10 @@ internal sealed class McpBrokerClientTransport : IClientTransport, IAsyncDisposa
         }
     }
 
-    private sealed class SensitiveUseHandler(SensitiveValueLease lease, Uri endpoint) : DelegatingHandler
+    private sealed class SensitiveUseHandler(
+        SensitiveValueLease lease,
+        Uri endpoint,
+        Func<CancellationToken, ValueTask<CredentialGenerationInvalidationOutcome>>? rejectGeneration) : DelegatingHandler
     {
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -332,8 +341,21 @@ internal sealed class McpBrokerClientTransport : IClientTransport, IAsyncDisposa
                 try
                 {
                     var response = await base.SendAsync(outgoing, cancellation).ConfigureAwait(false);
-                    response.RequestMessage = CopyRequest(request);
-                    return response;
+                    try
+                    {
+                        response.RequestMessage = CopyRequest(request);
+                        if (rejectGeneration is not null &&
+                            (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden))
+                        {
+                            await rejectGeneration(cancellation).ConfigureAwait(false);
+                        }
+                        return response;
+                    }
+                    catch
+                    {
+                        response.Dispose();
+                        throw;
+                    }
                 }
                 finally
                 {
