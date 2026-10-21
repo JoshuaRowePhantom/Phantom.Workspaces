@@ -16,13 +16,7 @@ internal sealed class DevTunnelManagementAuthenticationHandler(
         HttpRequestMessage request,
         CancellationToken cancellationToken)
     {
-        if (request.RequestUri is not { IsAbsoluteUri: true } uri ||
-            uri.Scheme != Uri.UriSchemeHttps || !uri.IsDefaultPort ||
-            !(uri.Host.Equals("global.rel.tunnels.api.visualstudio.com", StringComparison.OrdinalIgnoreCase) ||
-                uri.Host.EndsWith(".rel.tunnels.api.visualstudio.com", StringComparison.OrdinalIgnoreCase)))
-        {
-            throw new DevTunnelCredentialAccessException(AccessErrorCode.IdentityMismatch);
-        }
+        ValidateDestination(request.RequestUri);
         if (request.Content is not null)
         {
             await request.Content.LoadIntoBufferAsync(cancellationToken).ConfigureAwait(false);
@@ -46,6 +40,18 @@ internal sealed class DevTunnelManagementAuthenticationHandler(
             await renewed.InvalidateRejectedGenerationAsync(cancellationToken).ConfigureAwait(false);
         }
         return replay;
+    }
+
+    internal static void ValidateDestination(Uri? destination)
+    {
+        if (destination is not { IsAbsoluteUri: true } uri ||
+            uri.Scheme != Uri.UriSchemeHttps || !uri.IsDefaultPort ||
+            uri.UserInfo.Length != 0 || uri.Fragment.Length != 0 ||
+            !(uri.Host.Equals("global.rel.tunnels.api.visualstudio.com", StringComparison.OrdinalIgnoreCase) ||
+                uri.Host.EndsWith(".rel.tunnels.api.visualstudio.com", StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new DevTunnelCredentialAccessException(AccessErrorCode.IdentityMismatch);
+        }
     }
 
     private DevTunnelIdentityCredentialAccessRequest CurrentRequest() =>

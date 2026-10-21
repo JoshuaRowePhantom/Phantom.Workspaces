@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
+using System.Text.Json;
 using Microsoft.DevTunnels.Contracts;
 using Microsoft.DevTunnels.Management;
 using Moq;
@@ -12,6 +13,165 @@ namespace Phantom.Workspaces.Tests.Access;
 
 public sealed class DevTunnelConnectManagementApiTests
 {
+    [Theory]
+    [InlineData(DevTunnelIdentityScheme.GitHub, "github", false)]
+    [InlineData(DevTunnelIdentityScheme.Entra, "aad", false)]
+    [InlineData(DevTunnelIdentityScheme.OAuth, "Bearer", false)]
+    [InlineData(DevTunnelIdentityScheme.GitHub, "github", true)]
+    [InlineData(DevTunnelIdentityScheme.Entra, "aad", true)]
+    [InlineData(DevTunnelIdentityScheme.OAuth, "Bearer", true)]
+    public async Task ManagementApi_ActualSdkTransportMintsWithPrivateIdentityAndOwnsPipeline(
+        DevTunnelIdentityScheme scheme, string expectedScheme, bool redirectFirst)
+    {
+        var expiration = DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds();
+        var token = Jwt(expiration);
+        var listed = Tunnel(null);
+        listed.TunnelId = "tsttstst";
+        var minted = Tunnel(token);
+        minted.TunnelId = listed.TunnelId;
+        var descriptor = Descriptor() with { Endpoint = new Uri("https://tsttstst-8080.euw.devtunnels.ms/") };
+        var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var sends = 0;
+        var transport = new SdkTransport(request =>
+        {
+            Assert.Equal(expectedScheme, request.Headers.Authorization!.Scheme);
+            Assert.Equal("private identity", request.Headers.Authorization.Parameter);
+            Assert.False(request.Headers.Contains("X-Tunnel-Authorization"));
+            sends++;
+            if (sends == 1 && redirectFirst)
+            {
+                return new HttpResponseMessage(HttpStatusCode.Redirect)
+                {
+                    RequestMessage = request,
+                    Headers =
+                    {
+                        Location = new UriBuilder(request.RequestUri!)
+                        {
+                            Host = "euw.rel.tunnels.api.visualstudio.com",
+                        }.Uri,
+                    },
+                };
+            }
+            string body;
+            if (sends == (redirectFirst ? 2 : 1))
+            {
+                Assert.DoesNotContain("tokenScopes", request.RequestUri!.Query);
+                body = JsonSerializer.Serialize(new { value = new[] { new { value = new[] { listed } } } }, json);
+            }
+            else
+            {
+                Assert.Equal(redirectFirst ? 3 : 2, sends);
+                Assert.Contains("tokenScopes=connect", request.RequestUri!.Query);
+                body = JsonSerializer.Serialize(minted, json);
+            }
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                RequestMessage = request,
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            };
+        });
+        var api = new DevTunnelConnectManagementApi(createTransport: () => transport);
+
+        using var result = Assert.IsType<DevTunnelConnectManagementSucceeded>(await api.MintAsync(
+            descriptor, scheme, "private identity", TestContext.Current.CancellationToken));
+
+        Assert.Equal(redirectFirst ? 3 : 2, sends);
+        Assert.Equal(token, new string(result.Material));
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(expiration), result.ExpiresOn);
+        Assert.Equal(descriptor.Endpoint, result.Endpoint);
+        Assert.Equal(1, transport.Disposals);
+        Assert.All(transport.Requests, request =>
+        {
+            Assert.Null(request.Headers.Authorization);
+            Assert.False(request.Headers.Contains("X-Tunnel-Authorization"));
+        });
+        Assert.All(transport.Responses, response =>
+        {
+            Assert.NotNull(response.RequestMessage);
+            Assert.Null(response.RequestMessage.Headers.Authorization);
+            Assert.False(response.RequestMessage.Headers.Contains("X-Tunnel-Authorization"));
+        });
+    }
+
+    [Theory]
+    [InlineData(DevTunnelIdentityScheme.GitHub, "github")]
+    [InlineData(DevTunnelIdentityScheme.Entra, "aad")]
+    [InlineData(DevTunnelIdentityScheme.OAuth, "Bearer")]
+    public async Task ManagementApi_ActualSdkRedirectNeverSendsPrivateIdentityToRelay(
+        DevTunnelIdentityScheme scheme, string expectedScheme)
+    {
+        var transport = new SdkTransport(request =>
+        {
+            Assert.EndsWith(".rel.tunnels.api.visualstudio.com", request.RequestUri!.Host);
+            Assert.Equal(expectedScheme, request.Headers.Authorization!.Scheme);
+            return new HttpResponseMessage(HttpStatusCode.Redirect)
+            {
+                RequestMessage = request,
+                Headers = { Location = Descriptor().Endpoint },
+            };
+        });
+        var api = new DevTunnelConnectManagementApi(createTransport: () => transport);
+
+        var failure = Assert.IsType<DevTunnelConnectManagementFailed>(await api.MintAsync(
+            Descriptor(), scheme, "private identity", TestContext.Current.CancellationToken));
+
+        Assert.Equal(AccessErrorCode.IdentityMismatch, failure.ErrorCode);
+        Assert.Single(transport.Requests);
+        Assert.Equal(1, transport.Disposals);
+        Assert.Null(transport.Requests[0].Headers.Authorization);
+        Assert.Null(transport.Responses[0].RequestMessage!.Headers.Authorization);
+    }
+
+    [Theory]
+    [InlineData("https://other.example/")]
+    [InlineData("http://global.rel.tunnels.api.visualstudio.com/")]
+    [InlineData("https://global.rel.tunnels.api.visualstudio.com:8443/")]
+    [InlineData("https://user@global.rel.tunnels.api.visualstudio.com/")]
+    [InlineData("https://global.rel.tunnels.api.visualstudio.com/#fragment")]
+    public async Task ManagementApi_ActualSdkRedirectRejectsUnsafeDestination(string destination)
+    {
+        var transport = new SdkTransport(request => new HttpResponseMessage(HttpStatusCode.Redirect)
+        {
+            RequestMessage = request,
+            Headers = { Location = new Uri(destination) },
+        });
+        var api = new DevTunnelConnectManagementApi(createTransport: () => transport);
+
+        var failure = Assert.IsType<DevTunnelConnectManagementFailed>(await api.MintAsync(
+            Descriptor(), DevTunnelIdentityScheme.GitHub, "private identity", TestContext.Current.CancellationToken));
+
+        Assert.Equal(AccessErrorCode.IdentityMismatch, failure.ErrorCode);
+        Assert.Single(transport.Requests);
+        Assert.Equal(1, transport.Disposals);
+    }
+
+    private sealed class SdkTransport(Func<HttpRequestMessage, HttpResponseMessage> respond) :
+        DelegatingHandler(new HttpClientHandler { AllowAutoRedirect = false })
+    {
+        internal List<HttpRequestMessage> Requests { get; } = [];
+
+        internal List<HttpResponseMessage> Responses { get; } = [];
+
+        internal int Disposals { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            this.Requests.Add(request);
+            var response = respond(request);
+            this.Responses.Add(response);
+            return Task.FromResult(response);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                this.Disposals++;
+            }
+            base.Dispose(disposing);
+        }
+    }
+
     [Theory]
     [InlineData(DevTunnelIdentityScheme.GitHub, "github")]
     [InlineData(DevTunnelIdentityScheme.Entra, "aad")]

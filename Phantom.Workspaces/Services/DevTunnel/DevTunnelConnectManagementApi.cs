@@ -11,14 +11,15 @@ namespace Phantom.Workspaces.Services.DevTunnel;
 
 internal sealed class DevTunnelConnectManagementApi
 {
-    private readonly Func<AuthenticationHeaderValue, ITunnelManagementClient> createClient;
+    private readonly Func<AuthenticationHeaderValue, ITunnelManagementClient>? createClient;
+    private readonly Func<HttpMessageHandler> createTransport;
 
-    internal DevTunnelConnectManagementApi(Func<AuthenticationHeaderValue, ITunnelManagementClient>? createClient = null)
+    internal DevTunnelConnectManagementApi(
+        Func<AuthenticationHeaderValue, ITunnelManagementClient>? createClient = null,
+        Func<HttpMessageHandler>? createTransport = null)
     {
-        this.createClient = createClient ?? (header => new TunnelManagementClient(
-            new ProductInfoHeaderValue("Phantom.Workspaces", "1.0"),
-            () => Task.FromResult<AuthenticationHeaderValue?>(header),
-            ManagementApiVersions.Version20230927Preview));
+        this.createClient = createClient;
+        this.createTransport = createTransport ?? (() => new HttpClientHandler { AllowAutoRedirect = false });
     }
 
     internal async ValueTask<DevTunnelConnectManagementOutcome> MintAsync(
@@ -27,15 +28,32 @@ internal sealed class DevTunnelConnectManagementApi
         string identity,
         CancellationToken cancellationToken)
     {
-        var client = this.createClient(new AuthenticationHeaderValue(
+        var header = new AuthenticationHeaderValue(
             scheme switch
             {
                 DevTunnelIdentityScheme.GitHub => TunnelAuthenticationSchemes.GitHub,
                 DevTunnelIdentityScheme.Entra => TunnelAuthenticationSchemes.Aad,
                 _ => "Bearer",
-            }, identity));
+            }, identity);
+        ITunnelManagementClient? client = null;
+        HttpMessageHandler? ownedHandler = null;
         try
         {
+            if (this.createClient is { } factory)
+            {
+                client = factory(header);
+            }
+            else
+            {
+                // The SDK follows redirects above this handler, preserving headers.
+                ownedHandler = new DevTunnelPrivateManagementAuthenticationHandler(header, this.createTransport());
+                client = new TunnelManagementClient(
+                    new ProductInfoHeaderValue("Phantom.Workspaces", "1.0"),
+                    userTokenCallback: null,
+                    tunnelServiceUri: null,
+                    httpHandler: ownedHandler,
+                    apiVersion: ManagementApiVersions.Version20230927Preview);
+            }
             var candidates = await client.ListTunnelsAsync(null, null, new TunnelRequestOptions
             {
                 IncludePorts = true,
@@ -54,7 +72,6 @@ internal sealed class DevTunnelConnectManagementApi
             {
                 return new DevTunnelConnectManagementFailed { ErrorCode = AccessErrorCode.IdentityMismatch };
             }
-
             var selected = matches[0];
             var minted = await client.GetTunnelAsync(selected, new TunnelRequestOptions
             {
@@ -74,6 +91,10 @@ internal sealed class DevTunnelConnectManagementApi
                 Endpoint = endpoint,
                 ExpiresOn = expiresOn,
             };
+        }
+        catch (DevTunnelCredentialAccessException)
+        {
+            return new DevTunnelConnectManagementFailed { ErrorCode = AccessErrorCode.IdentityMismatch };
         }
         catch (HttpRequestException exception) when (exception.StatusCode == HttpStatusCode.Unauthorized)
         {
@@ -98,13 +119,20 @@ internal sealed class DevTunnelConnectManagementApi
         }
         finally
         {
-            if (client is IAsyncDisposable asynchronous)
+            try
             {
-                await asynchronous.DisposeAsync().ConfigureAwait(false);
+                if (client is IAsyncDisposable asynchronous)
+                {
+                    await asynchronous.DisposeAsync().ConfigureAwait(false);
+                }
+                else
+                {
+                    (client as IDisposable)?.Dispose();
+                }
             }
-            else
+            finally
             {
-                (client as IDisposable)?.Dispose();
+                ownedHandler?.Dispose();
             }
         }
     }
