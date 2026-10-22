@@ -9,38 +9,22 @@ namespace Phantom.Workspaces.Transport.Tests.Scenarios;
 
 /// <summary>
 /// BYOK coverage for Scenarios 3 and 4: the executor resolves its chat client via
-/// <see cref="AgentFactory.CreateChatClient(AgentSchema.AgentDefinition)"/> against a BYOK endpoint
+/// <see cref="AgentFactory.CreateChatClientAsync"/> with a broker-backed credential reference against a BYOK endpoint
 /// served by <see cref="ScriptedByokChatServer"/> (loopback, no ambient network), and the resulting
 /// turn is carried over the transport. The chat client is never hand-constructed — it is produced by
 /// the factory from an <c>AgentDefinition</c>, exactly as production does.
 /// </summary>
 public sealed class ByokTransportScenarioTests
 {
-    private static string ByokDefinitionJson(string baseUrl) => $$"""
-    {
-      "kind": "prompt",
-      "name": "byok-scenario",
-      "model": {
-        "id": "gpt-test",
-        "provider": "github-models",
-        "connection": {
-          "kind": "key",
-          "endpoint": "{{baseUrl}}",
-          "apiKey": "test-key"
-        }
-      }
-    }
-    """;
-
-    private static IChatClient CreateByokExecutor(ScriptedByokChatServer server, string assistantText)
+    private static async Task<IChatClient> CreateByokExecutorAsync(
+        ScriptedByokChatServer server, ByokScenarioCredentials credentials, string assistantText, CancellationToken ct)
     {
         var conversation = server.AddConversation("main", request => request.AnyMessageContains("user", "byok-marker"));
         var stream = conversation.Client.EnqueueStreamingResponse();
         stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, assistantText));
         stream.Complete();
 
-        var definition = AgentDefinitionLoader.LoadAgentFromJson(ByokDefinitionJson(server.BaseUrl));
-        return AgentFactory.CreateChatClient(definition).ChatClient;
+        return await credentials.CreateExecutorAsync(server.BaseUrl, ct);
     }
 
     [Fact]
@@ -48,7 +32,9 @@ public sealed class ByokTransportScenarioTests
     {
         var ct = TransportScenarioSupport.TestToken();
         await using var server = new ScriptedByokChatServer();
-        var executor = CreateByokExecutor(server, "byok-local-pong");
+        await using var credentials = new ByokScenarioCredentials();
+        var executor = await CreateByokExecutorAsync(server, credentials, "byok-local-pong", ct);
+        await using var executorLifetime = Assert.IsAssignableFrom<IAsyncDisposable>(executor);
 
         var registry = new TransportRegistry();
         registry.Register(new ChatClientTransportListener(executor));
@@ -58,6 +44,10 @@ public sealed class ByokTransportScenarioTests
         var text = await TransportScenarioSupport.RunTurnAsync(client, "byok-marker please", ct);
 
         Assert.Contains("byok-local-pong", text, StringComparison.Ordinal);
+        Assert.Single(credentials.Requests);
+        Assert.Single(server.RecordedRequests);
+        Assert.True(credentials.Validations > 1);
+        Assert.True(credentials.GenerationChecks > 1);
         Assert.Empty(server.Failures);
     }
 
@@ -66,7 +56,9 @@ public sealed class ByokTransportScenarioTests
     {
         var ct = TransportScenarioSupport.TestToken();
         await using var server = new ScriptedByokChatServer();
-        var executor = CreateByokExecutor(server, "byok-remote-pong");
+        await using var credentials = new ByokScenarioCredentials();
+        var executor = await CreateByokExecutorAsync(server, credentials, "byok-remote-pong", ct);
+        await using var executorLifetime = Assert.IsAssignableFrom<IAsyncDisposable>(executor);
 
         await using var harness = await HubRelayHarness.CreateAsync(executor, ct);
         var machineB = await harness.ConnectMachineBAsync(ct);
@@ -75,6 +67,10 @@ public sealed class ByokTransportScenarioTests
         var text = await TransportScenarioSupport.RunTurnAsync(client, "byok-marker please", ct);
 
         Assert.Contains("byok-remote-pong", text, StringComparison.Ordinal);
+        Assert.Single(credentials.Requests);
+        Assert.Single(server.RecordedRequests);
+        Assert.True(credentials.Validations > 1);
+        Assert.True(credentials.GenerationChecks > 1);
         Assert.Empty(server.Failures);
     }
 }

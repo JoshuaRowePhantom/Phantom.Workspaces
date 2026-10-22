@@ -16,22 +16,6 @@ namespace Phantom.Workspaces.Transport.Tests.Scenarios;
 /// </summary>
 public sealed class Scenario5_HubRelayTests
 {
-    private static string ByokDefinitionJson(string baseUrl) => $$"""
-    {
-      "kind": "prompt",
-      "name": "scenario5-byok",
-      "model": {
-        "id": "gpt-test",
-        "provider": "github-models",
-        "connection": {
-          "kind": "key",
-          "endpoint": "{{baseUrl}}",
-          "apiKey": "test-key"
-        }
-      }
-    }
-    """;
-
     [Fact]
     public async Task Scenario5_ThreeMachineRelay_ByokTurn_StreamsAcrossHub()
     {
@@ -43,8 +27,9 @@ public sealed class Scenario5_HubRelayTests
         stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "pong"));
         stream.Complete();
 
-        var definition = AgentDefinitionLoader.LoadAgentFromJson(ByokDefinitionJson(server.BaseUrl));
-        var executor = AgentFactory.CreateChatClient(definition).ChatClient;
+        await using var credentials = new ByokScenarioCredentials();
+        var executor = await credentials.CreateExecutorAsync(server.BaseUrl, ct);
+        await using var executorLifetime = Assert.IsAssignableFrom<IAsyncDisposable>(executor);
 
         await using var harness = await HubRelayHarness.CreateAsync(executor, ct);
         var machineB = await harness.ConnectMachineBAsync(ct);
@@ -53,6 +38,10 @@ public sealed class Scenario5_HubRelayTests
         var text = await TransportScenarioSupport.RunTurnAsync(client, "relay-marker please", ct);
 
         Assert.Contains("relay-pong", text, StringComparison.Ordinal);
+        Assert.Single(credentials.Requests);
+        Assert.Single(server.RecordedRequests);
+        Assert.True(credentials.Validations > 1);
+        Assert.True(credentials.GenerationChecks > 1);
         Assert.Empty(server.Failures);
     }
 
