@@ -1008,7 +1008,7 @@ public sealed class MainWindowAxamlTests
             StringComparison.Ordinal);
     }
 
-    [Fact]
+    [AvaloniaFact(Timeout = 15_000)]
     public void AgentChatEditor_NavigationTree_UsesEntityCardTreeViewStyle()
     {
         // Issue #1029: the agent chat editor navigation tree must consume the shared
