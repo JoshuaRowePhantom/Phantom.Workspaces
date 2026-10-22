@@ -160,6 +160,7 @@ function Test-CompletedCache {
             'prepared/phantom-copilot-wrapper.exe'
             'prepared/phantom-copilot-wrapper.dll'
             'prepared/plm.exe'
+            'prepared/runtime.node'
         )
         $artifacts = @($manifest.Artifacts)
         if ($artifacts.Count -ne $expectedArtifacts.Count -or
@@ -859,6 +860,10 @@ try
             [IO.Directory]::Move($stagingDirectory, $cacheDirectory)
         }
         $stagingDirectory = $null
+        if (-not (Test-CompletedCache $cacheDirectory $CacheRoot $sourceFingerprint))
+        {
+            throw "The newly prepared Copilot wrapper prerequisite failed completed-cache validation."
+        }
         Write-Host "Prepared Copilot wrapper prerequisite $cacheKey."
     }
     else
