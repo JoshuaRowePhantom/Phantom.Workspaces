@@ -72,7 +72,8 @@ public sealed class CredentialAccessExecutorRegistryTests
         var repeatedFailure = await Assert.ThrowsAsync<AggregateException>(() => broker.DisposeAsync().AsTask());
 
         Assert.True(concurrentWaited);
-        Assert.Same(executorFailure, Assert.Single(failure.InnerExceptions));
+        var registryFailure = Assert.IsType<AggregateException>(Assert.Single(failure.InnerExceptions));
+        Assert.Same(executorFailure, Assert.Single(registryFailure.InnerExceptions));
         Assert.Same(failure, concurrentFailure);
         Assert.Same(failure, repeatedFailure);
         Assert.Equal(1, first.Disposals);
