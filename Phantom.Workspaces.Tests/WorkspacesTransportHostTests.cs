@@ -539,14 +539,31 @@ public sealed class WorkspacesTransportHostTests
             var factory = new ReverseHttpClientTransportFactory(
                 http, "https://private-hub.example/", profile.ToString(),
                 store, null, logger: logs.CreateLogger<ReverseHttpClientTransportFactory>());
+            var rejected = new TaskCompletionSource<ReachabilityPublicationStatus>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            factory.PublicationStatusChanged += (_, status) =>
+            {
+                if (status.ReasonCode == "endpoint.userinfo"
+                    && status.Persisted == "false"
+                    && status.Cleanup == "removed-or-absent")
+                    rejected.TrySetResult(status);
+            };
             await using (var host = new WorkspacesTransportHost(new TransportRegistry(), [factory], logs))
             {
                 await host.StartAsync(Ct());
                 await http.Channels.Single().DeliverInbound(Json($$"""{"type":"reverse-registration-info","hub-profile-entity-id":"{{hub}}"}"""));
                 Assert.Equal($"failed-validation:reverse-http:{hub}", await store.Operations.ReadAsync(Ct()));
                 Assert.Equal($"remove:reverse-http:{hub}", await store.Operations.ReadAsync(Ct()));
+                var failure = await rejected.Task.WaitAsync(Ct());
+                Assert.True(failure.RegistrationActive);
+                Assert.NotNull(factory.LastReachabilityPublicationError);
                 await factory.RetryReachabilityPublicationAsync(Ct());
                 Assert.Equal($"upsert:reverse-http:{hub}", await store.Operations.ReadAsync(Ct()));
+                Assert.Null(factory.LastReachabilityPublicationError);
+                Assert.Equal("true", factory.LastReachabilityPublicationStatus?.Persisted);
+                Assert.Equal("published", factory.LastReachabilityPublicationStatus?.Outcome);
+                Assert.True(factory.LastReachabilityPublicationStatus?.RegistrationActive == true);
+                Assert.True(factory.IsRegistered);
             }
             var content = string.Concat(Directory.GetFiles(directory, "*.log").Select(path =>
             {
