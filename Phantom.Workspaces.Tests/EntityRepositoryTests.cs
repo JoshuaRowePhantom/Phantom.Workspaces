@@ -1,5 +1,6 @@
 using Avalonia.Headless.XUnit;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text.Json;
 using Phantom.Workspaces.Data;
 
@@ -72,6 +73,76 @@ public sealed class EntityRepositoryTests
                 cancellationSource.Token));
 
         Assert.Empty(validationPasses);
+    }
+
+    [AvaloniaFact]
+    public async Task CreateAsync_RepeatedFreshInMemoryInstances_PreservesIndependentValidatedSeeds()
+    {
+        var activities = new ConcurrentQueue<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == RepositoryStartupDiagnostics.SourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+            ActivityStopped = activities.Enqueue,
+        };
+        ActivitySource.AddActivityListener(listener);
+        var repositories = new List<EntityRepository>();
+        try
+        {
+            for (var index = 0; index < 3; index++)
+            {
+                var passes = new ConcurrentQueue<SchemaValidationPass>();
+                repositories.Add(await EntityRepository.CreateAsync(
+                    new EntityRepositoryInitializationOptions
+                    {
+                        RepositorySource = new UnknownRepositorySource(),
+                        ValidationPassStarted = passes.Enqueue,
+                    },
+                    TestContext.Current.CancellationToken));
+                var seed = Assert.Single(passes, pass => pass.Kind == SchemaValidationPassKind.TrustedEmbeddedSeed);
+                Assert.True(seed.ChangeCount > 100);
+            }
+
+            var seedUpdates = activities.Where(activity => activity.OperationName == "schema-update")
+                .Select(activity => activity.SpanId).ToHashSet();
+            var validations = activities.Where(activity => activity.OperationName == "schema-validation"
+                && seedUpdates.Contains(activity.ParentSpanId)).ToArray();
+            Assert.Equal(3, validations.Length);
+            foreach (var validation in validations)
+            {
+                var builds = Assert.IsType<int>(validation.GetTagItem("schema.composition.build_count"));
+                var hits = Assert.IsType<int>(validation.GetTagItem("schema.composition.cache_hit_count"));
+                var evaluations = Assert.IsType<int>(validation.GetTagItem("schema.evaluation.count"));
+                var stages = activities.Where(activity => activity.ParentSpanId == validation.SpanId).ToArray();
+                var buildTime = stages.Where(activity => activity.OperationName == "schema-composition-build")
+                    .Sum(activity => activity.Duration.TotalMilliseconds);
+                var evaluationTime = stages.Where(activity => activity.OperationName == "schema-evaluation")
+                    .Sum(activity => activity.Duration.TotalMilliseconds);
+                TestContext.Current.TestOutputHelper!.WriteLine(
+                    $"Fresh seed: builds={builds}; hits={hits}; evaluations={evaluations}; build-ms={buildTime:F3}; evaluation-ms={evaluationTime:F3}; validation-ms={validation.Duration.TotalMilliseconds:F3}");
+                Assert.Equal(evaluations, builds + hits);
+                Assert.True(evaluations > 100);
+            }
+            Assert.All(validations, validation =>
+            {
+                var builds = Assert.IsType<int>(validation.GetTagItem("schema.composition.build_count"));
+                var evaluations = Assert.IsType<int>(validation.GetTagItem("schema.evaluation.count"));
+                Assert.True(builds < evaluations, $"builds={builds}; evaluations={evaluations}");
+            });
+
+            var id = new EntityId(Guid.NewGuid());
+            await UpsertEntityAsync(repositories[0], id,
+                $$"""{"entity-id":"{{id}}","entity-types":["entity","task"],"names":[["tests","independent-startup"]]}""",
+                null);
+            Assert.Contains(id, (await repositories[0].ExportEntitySnapshotsAsync()).Keys);
+            Assert.DoesNotContain(id, (await repositories[1].ExportEntitySnapshotsAsync()).Keys);
+            Assert.DoesNotContain(id, (await repositories[2].ExportEntitySnapshotsAsync()).Keys);
+        }
+        finally
+        {
+            foreach (var repository in repositories)
+                await repository.DisposeAsync();
+        }
     }
 
     [AvaloniaFact]

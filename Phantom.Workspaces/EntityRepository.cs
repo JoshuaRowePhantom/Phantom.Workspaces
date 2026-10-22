@@ -197,6 +197,7 @@ public sealed class EntityRepository : IAsyncDisposable
 
         try
         {
+            using var cleanup = RepositoryStartupDiagnostics.Start("repository-disposal");
             await DisposeLayerAsync(this.underlyingDataAccessLayer).ConfigureAwait(false);
             this.disposal.TrySetResult();
         }

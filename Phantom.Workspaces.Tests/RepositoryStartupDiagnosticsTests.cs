@@ -43,4 +43,44 @@ public sealed class RepositoryStartupDiagnosticsTests
         }
         Assert.Same(previous, Activity.Current);
     }
+
+    [Fact]
+    public async Task SchemaValidation_EmitsCountsAndNestedStageTimingsWithoutEntityPayloads()
+    {
+        var activities = new List<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == RepositoryStartupDiagnostics.SourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+            ActivityStopped = activities.Add,
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        var errors = await new SchemaPopulator(
+            new SchemaValidatingDataAccessLayer(new InMemoryDataAccessLayer())).Populate();
+
+        Assert.Empty(errors);
+        var validation = Assert.Single(activities, activity => activity.OperationName == "schema-validation");
+        Assert.Equal(Assert.Single(activities, activity => activity.OperationName == "schema-update").SpanId,
+            validation.ParentSpanId);
+        var allowedTags = new[]
+        {
+            "schema.composition.build_count", "schema.composition.cache_hit_count", "schema.evaluation.count",
+        };
+        Assert.Equal(allowedTags.Order(), validation.TagObjects.Select(tag => tag.Key).Order());
+        Assert.All(validation.TagObjects, tag => Assert.True(Assert.IsType<int>(tag.Value) > 0));
+        var stages = activities.Where(activity =>
+            activity.OperationName is "schema-composition-build" or "schema-evaluation").ToArray();
+        Assert.NotEmpty(stages);
+        Assert.All(stages, activity =>
+        {
+            Assert.Equal(validation.SpanId, activity.ParentSpanId);
+            Assert.True(activity.Duration >= TimeSpan.Zero);
+            Assert.Empty(activity.TagObjects);
+            Assert.Empty(activity.Events);
+            Assert.Empty(activity.Baggage);
+        });
+        Assert.All(activities.Where(activity => activity != validation),
+            activity => Assert.Empty(activity.TagObjects));
+    }
 }

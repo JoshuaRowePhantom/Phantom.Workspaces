@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Json.Schema;
 using Phantom.Workspaces.Data.Serialization;
@@ -11,6 +12,8 @@ namespace Phantom.Workspaces.Data;
 /// This data access layer expects UpdateRequests to have had merge processing already performed.
 /// Schemas are loaded from the request payload and the underlying IDataAccessLayer, then cached
 /// across calls. The cache is invalidated whenever a json-schema entity is successfully written.
+/// Composed schemas are reused by exact text only within one validation request; evaluation
+/// results are never cached.
 /// </remarks>
 public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLayer, IEntitySchemaComposer
 {
@@ -49,6 +52,7 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         UpdateRequest request,
         CancellationToken cancellationToken = default)
     {
+        using var validation = new SchemaValidationContext();
         cancellationToken.ThrowIfCancellationRequested();
         _validationPassStarted?.Invoke(
             new SchemaValidationPass(
@@ -66,6 +70,7 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
 
         foreach (var change in request.Changes)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var entityId = change.EntityId ?? this.GetEntityId(change.Data);
 
             var discriminatorErrors = this.ValidateEntityTypeDiscriminators(
@@ -84,7 +89,7 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
                 continue;
             }
 
-            var validationErrors = await this.ValidateChangeAsync(change, schemaAccessor, schemaRegistry, cancellationToken).ConfigureAwait(false);
+            var validationErrors = await this.ValidateChangeAsync(change, schemaAccessor, schemaRegistry, cancellationToken, validation).ConfigureAwait(false);
             if (validationErrors.Count == 0)
             {
                 continue;
@@ -101,6 +106,7 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
                 });
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         if (validationResults.Count > 0)
         {
             return new UpdateResult
@@ -128,6 +134,8 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         JsonElement entityData,
         CancellationToken cancellationToken = default)
     {
+        using var validation = new SchemaValidationContext();
+        cancellationToken.ThrowIfCancellationRequested();
         var schemaAccessor = _schemaAccessor;
         var schemaRegistry = await this.BuildSchemaRegistryAsync(schemaAccessor, cancellationToken).ConfigureAwait(false);
         await this.EnsureEntityTypeNamesCachedAsync(cancellationToken).ConfigureAwait(false);
@@ -144,7 +152,7 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
             return discriminatorErrors.Select(static error => error.Message).ToArray();
         }
 
-        var errors = await this.ValidateChangeAsync(change, schemaAccessor, schemaRegistry, cancellationToken).ConfigureAwait(false);
+        var errors = await this.ValidateChangeAsync(change, schemaAccessor, schemaRegistry, cancellationToken, validation).ConfigureAwait(false);
         return errors.Select(static error => error.Message).ToArray();
     }
 
@@ -152,8 +160,10 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         EntityChange change,
         ISchemaAccessor schemaAccessor,
         SchemaRegistry schemaRegistry,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        SchemaValidationContext validation)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (change.Data is not { } data || data.ValueKind != JsonValueKind.Object)
         {
             return Array.Empty<UpdateError>();
@@ -203,16 +213,31 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
             schema => !this.IsBaseEntitySchema(schema));
 
         JsonSchema composedSchema;
+        cancellationToken.ThrowIfCancellationRequested();
         try
         {
-            composedSchema = JsonSchema.FromText(
-                this.BuildComposedSchemaText(resolvedSchemas, shouldCloseUnevaluatedProperties),
-                new BuildOptions
-                {
-                    SchemaRegistry = schemaRegistry,
-                    Dialect = WorkspacesSchemaDialect.AllowingUnknownKeywords,
-                });
+            var schemaText = this.BuildComposedSchemaText(resolvedSchemas, shouldCloseUnevaluatedProperties);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (validation.Schemas.TryGetValue(schemaText, out var cached))
+            {
+                composedSchema = cached;
+                validation.CacheHitCount++;
+            }
+            else
+            {
+                using var build = RepositoryStartupDiagnostics.Start("schema-composition-build");
+                composedSchema = JsonSchema.FromText(
+                    schemaText,
+                    new BuildOptions
+                    {
+                        SchemaRegistry = schemaRegistry,
+                        Dialect = WorkspacesSchemaDialect.AllowingUnknownKeywords,
+                    });
+                validation.Schemas.Add(schemaText, composedSchema);
+                validation.BuildCount++;
+            }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception exception)
         {
             errors.Add(
@@ -224,14 +249,20 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
             return errors;
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         EvaluationResults evaluation;
-        evaluation = composedSchema.Evaluate(
-            data,
-            new EvaluationOptions
-            {
-                OutputFormat = OutputFormat.Hierarchical,
-                PreserveDroppedAnnotations = true,
-            });
+        using (RepositoryStartupDiagnostics.Start("schema-evaluation"))
+        {
+            validation.EvaluationCount++;
+            evaluation = composedSchema.Evaluate(
+                data,
+                new EvaluationOptions
+                {
+                    OutputFormat = OutputFormat.Hierarchical,
+                    PreserveDroppedAnnotations = true,
+                });
+        }
+        cancellationToken.ThrowIfCancellationRequested();
         if (!evaluation.IsValid)
         {
             evaluation.ToList();
@@ -250,6 +281,23 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         }
 
         return errors;
+    }
+
+    protected sealed class SchemaValidationContext : IDisposable
+    {
+        private readonly Activity? activity = RepositoryStartupDiagnostics.Start("schema-validation");
+        internal Dictionary<string, JsonSchema> Schemas { get; } = new(StringComparer.Ordinal);
+        internal int BuildCount { get; set; }
+        internal int CacheHitCount { get; set; }
+        internal int EvaluationCount { get; set; }
+
+        public void Dispose()
+        {
+            this.activity?.SetTag("schema.composition.build_count", this.BuildCount);
+            this.activity?.SetTag("schema.composition.cache_hit_count", this.CacheHitCount);
+            this.activity?.SetTag("schema.evaluation.count", this.EvaluationCount);
+            this.activity?.Dispose();
+        }
     }
 
     protected virtual ISchemaAccessor CreateSchemaAccessor(

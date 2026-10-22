@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
@@ -1184,6 +1185,173 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
         await RequireUpdateSucceedsAsync(dataAccessLayer, CreateUpdateRequest(CreateUpdateMetadata("write 3"), new[] { CreateTaskEntityChange(taskEntityId3) }));
 
         Assert.Equal(1, counter.JsonSchemaQueryCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UpdateAsync_RepeatedCompositionInOneRequest_BuildsOnceAndEvaluatesEveryEntity(bool invalidSecondEntity)
+    {
+        var inner = new InMemoryDataAccessLayer();
+        var dal = new SchemaValidatingDataAccessLayer(inner);
+        Assert.Empty(await new SchemaPopulator(dal).Populate());
+        await RequireUpdateSucceedsAsync(dal, CreateUpdateRequest(
+            CreateUpdateMetadata("Add test schema"),
+            [CreateSchemaEntityChange(TestSchemaEntityId, TestSchemaName)]));
+        var activities = new List<Activity>();
+        using var listener = ListenToValidation(activities);
+        var firstId = new EntityId(Guid.NewGuid());
+        var secondId = new EntityId(Guid.NewGuid());
+
+        var result = await dal.UpdateAsync(CreateUpdateRequest(
+            CreateUpdateMetadata("Validate shared composition"),
+            [
+                CreateValidatedEntityChange(firstId, "valid", TestSchemaName),
+                CreateValidatedEntityChange(secondId, invalidSecondEntity ? 42 : "also valid", TestSchemaName),
+            ]));
+
+        Assert.Single(activities, activity => activity.OperationName == "schema-composition-build");
+        Assert.Equal(2, activities.Count(activity => activity.OperationName == "schema-evaluation"));
+        var validation = Assert.Single(activities, activity => activity.OperationName == "schema-validation");
+        Assert.Equal(1, validation.GetTagItem("schema.composition.build_count"));
+        Assert.Equal(1, validation.GetTagItem("schema.composition.cache_hit_count"));
+        Assert.Equal(2, validation.GetTagItem("schema.evaluation.count"));
+        if (invalidSecondEntity)
+        {
+            var failure = Assert.Single(result.EntityResults);
+            Assert.Equal(secondId, failure.RequestedEntityId);
+            Assert.Equal(UpdateState.Failed, failure.UpdateState);
+            Assert.Contains(failure.Errors, error => error.Message.Contains("does not conform to schema", StringComparison.Ordinal));
+            var stored = await inner.GetAsync(new GetRequest
+            {
+                Entities = [new GetEntityRequest { EntityId = firstId }, new GetEntityRequest { EntityId = secondId }],
+            });
+            Assert.All(stored.Batches, batch => Assert.Empty(batch.Entities));
+        }
+        else
+        {
+            Assert.Equal(2, result.EntityResults.Count);
+            Assert.DoesNotContain(result.EntityResults, entity => entity.UpdateState == UpdateState.Failed);
+        }
+    }
+
+    [Fact]
+    public async Task UpdateAsync_DifferentCompositionsInOneRequest_BuildsEachSeparately()
+    {
+        var inner = new InMemoryDataAccessLayer();
+        var dal = new SchemaValidatingDataAccessLayer(inner);
+        Assert.Empty(await new SchemaPopulator(dal).Populate());
+        await RequireUpdateSucceedsAsync(dal, CreateUpdateRequest(
+            CreateUpdateMetadata("Add test schema"),
+            [CreateSchemaEntityChange(TestSchemaEntityId, TestSchemaName)]));
+        var activities = new List<Activity>();
+        using var listener = ListenToValidation(activities);
+
+        await RequireUpdateSucceedsAsync(dal, CreateUpdateRequest(
+            CreateUpdateMetadata("Different compositions"),
+            [
+                CreateTaskEntityChange(new EntityId(Guid.NewGuid())),
+                CreateValidatedEntityChange(new EntityId(Guid.NewGuid()), "valid", TestSchemaName),
+            ]));
+
+        Assert.Equal(2, activities.Count(activity => activity.OperationName == "schema-composition-build"));
+        Assert.Equal(2, activities.Count(activity => activity.OperationName == "schema-evaluation"));
+    }
+
+    [Fact]
+    public async Task UpdateAsync_CancelledBetweenEntities_DoesNotValidateOrPublishRemainingChanges()
+    {
+        var inner = new InMemoryDataAccessLayer();
+        var dal = new SchemaValidatingDataAccessLayer(inner);
+        Assert.Empty(await new SchemaPopulator(dal).Populate());
+        using var cancellation = new CancellationTokenSource();
+        var activities = new List<Activity>();
+        using var listener = ListenToValidation(activities, activity =>
+        {
+            if (activity.OperationName == "schema-evaluation")
+                cancellation.Cancel();
+        });
+        var firstId = new EntityId(Guid.NewGuid());
+        var secondId = new EntityId(Guid.NewGuid());
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => dal.UpdateAsync(CreateUpdateRequest(
+            CreateUpdateMetadata("Cancel between entities"),
+            [CreateTaskEntityChange(firstId), CreateTaskEntityChange(secondId)]), cancellation.Token));
+
+        Assert.Single(activities, activity => activity.OperationName == "schema-evaluation");
+        Assert.Single(activities, activity => activity.OperationName == "schema-composition-build");
+        var stored = await inner.GetAsync(new GetRequest
+        {
+            Entities = [new GetEntityRequest { EntityId = firstId }, new GetEntityRequest { EntityId = secondId }],
+        });
+        Assert.All(stored.Batches, batch => Assert.Empty(batch.Entities));
+    }
+
+    [Fact]
+    public async Task UpdateAsync_RequestSchemaOverride_DoesNotReusePreviousComposition()
+    {
+        var inner = new InMemoryDataAccessLayer();
+        var dal = new SchemaValidatingDataAccessLayer(inner);
+        Assert.Empty(await new SchemaPopulator(dal).Populate());
+        var schemaResult = await RequireUpdateSucceedsAsync(dal, CreateUpdateRequest(
+            CreateUpdateMetadata("String schema"),
+            [CreateSchemaEntityChange(TestSchemaEntityId, TestSchemaName)]));
+        await RequireUpdateSucceedsAsync(dal, CreateUpdateRequest(
+            CreateUpdateMetadata("Warm string composition"),
+            [CreateValidatedEntityChange(new EntityId(Guid.NewGuid()), "valid", TestSchemaName)]));
+        var overrideChange = CreateSchemaEntityChange(TestSchemaEntityId,
+            Assert.Single(schemaResult.EntityResults).ConcurrencyTag, TestSchemaName, "integer");
+
+        var invalid = await dal.UpdateAsync(CreateUpdateRequest(
+            CreateUpdateMetadata("Request-local integer override"),
+            [overrideChange, CreateValidatedEntityChange(new EntityId(Guid.NewGuid()), "invalid now", TestSchemaName)]));
+        Assert.Contains(invalid.EntityResults, entity => entity.UpdateState == UpdateState.Failed);
+        await RequireUpdateSucceedsAsync(dal, CreateUpdateRequest(
+            CreateUpdateMetadata("Failed override did not escape request"),
+            [CreateValidatedEntityChange(new EntityId(Guid.NewGuid()), "still valid", TestSchemaName)]));
+        await RequireUpdateSucceedsAsync(dal, CreateUpdateRequest(
+            CreateUpdateMetadata("Publish integer override"),
+            [overrideChange, CreateValidatedEntityChange(new EntityId(Guid.NewGuid()), 42, TestSchemaName)]));
+        var stale = await dal.UpdateAsync(CreateUpdateRequest(
+            CreateUpdateMetadata("Do not reuse stale string composition"),
+            [CreateValidatedEntityChange(new EntityId(Guid.NewGuid()), "invalid", TestSchemaName)]));
+        Assert.Equal(UpdateState.Failed, Assert.Single(stale.EntityResults).UpdateState);
+        await RequireUpdateSucceedsAsync(dal, CreateUpdateRequest(
+            CreateUpdateMetadata("Current integer composition"),
+            [CreateValidatedEntityChange(new EntityId(Guid.NewGuid()), 43, TestSchemaName)]));
+    }
+
+    private static IDisposable ListenToValidation(List<Activity> activities, Action<Activity>? stopped = null)
+        => new ValidationTrace(activities, stopped);
+
+    private sealed class ValidationTrace : IDisposable
+    {
+        private readonly Activity parent = new Activity("test-schema-validation").Start();
+        private readonly ActivityListener listener;
+
+        public ValidationTrace(List<Activity> activities, Action<Activity>? stopped)
+        {
+            this.listener = new ActivityListener
+            {
+                ShouldListenTo = source => source.Name == RepositoryStartupDiagnostics.SourceName,
+                Sample = (ref ActivityCreationOptions<ActivityContext> options) =>
+                    options.Parent.TraceId == this.parent.TraceId ? ActivitySamplingResult.AllData : ActivitySamplingResult.None,
+                ActivityStopped = activity =>
+                {
+                    if (activity.TraceId != this.parent.TraceId)
+                        return;
+                    activities.Add(activity);
+                    stopped?.Invoke(activity);
+                },
+            };
+            ActivitySource.AddActivityListener(this.listener);
+        }
+
+        public void Dispose()
+        {
+            this.listener.Dispose();
+            this.parent.Dispose();
+        }
     }
 
     [Fact]
