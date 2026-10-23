@@ -1,0 +1,8 @@
+{
+  "TestName": "Phantom.Workspaces.Install.Tests.CopilotWrapperNestedPublishTests.CopilotWrapperPrerequisite_CleanThenTest_RecreatesValidatedCache",
+  "CleanSeconds": 120,
+  "PrepareSeconds": 1500,
+  "PublishSeconds": 600,
+  "LifecycleSeconds": 2400,
+  "WatchdogSeconds": 2520
+}

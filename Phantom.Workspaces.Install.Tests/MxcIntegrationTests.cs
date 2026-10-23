@@ -547,8 +547,11 @@ public sealed class MxcRuntimePayloadTests
         Assert.False(Directory.Exists(directory.Path));
     }
 
-    [Fact]
-    public async Task InvokePowerShellAsync_StalledValidator_TimesOutAndCleansProcessTreeAndArtifacts()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InvokePowerShellAsync_StalledValidator_TimesOutAndCleansProcessTreeAndArtifacts(
+        bool lifecycleCancellation)
     {
         if (!OperatingSystem.IsWindows())
             return;
@@ -558,6 +561,7 @@ public sealed class MxcRuntimePayloadTests
         using var release = new EventWaitHandle(false, EventResetMode.ManualReset, releaseName);
         using var childReady = new EventWaitHandle(false, EventResetMode.ManualReset, childReadyName);
         var time = new ManualTimeoutTimeProvider();
+        using var lifecycle = new CancellationTokenSource();
         var observer = new RecordingProcessObserver();
         var validatorReady = new TaskCompletionSource<string>(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -614,6 +618,7 @@ public sealed class MxcRuntimePayloadTests
                 new MxcRepositoryTestSupport.InvocationOptions
                 {
                     Timeout = TimeSpan.FromDays(1),
+                    CancellationToken = lifecycle.Token,
                     TimeProvider = time,
                     Observer = observer,
                     StandardOutputObserver = line =>
@@ -650,9 +655,14 @@ public sealed class MxcRuntimePayloadTests
                 System.Globalization.CultureInfo.InvariantCulture);
             Assert.True(File.Exists(Path.Combine(payload.Path, "validator.tmp")));
             Assert.True(File.Exists(Path.Combine(artifacts.Path, "validator.tmp")));
-            time.Expire();
+            if (lifecycleCancellation)
+                lifecycle.Cancel();
+            else
+                time.Expire();
 
-            var exception = await Assert.ThrowsAsync<TimeoutException>(() => operation);
+            var exception = lifecycleCancellation
+                ? await Assert.ThrowsAsync<OperationCanceledException>(() => operation)
+                : (Exception)await Assert.ThrowsAsync<TimeoutException>(() => operation);
             Assert.Contains("validator-stderr-before-stall", exception.Message, StringComparison.Ordinal);
             Assert.Contains("VALIDATOR_READY:", exception.Message, StringComparison.Ordinal);
             Assert.False(MxcRepositoryTestSupport.IsProcessRunning(validatorProcessId));
@@ -1426,6 +1436,8 @@ internal static class MxcRepositoryTestSupport
         params string[] arguments)
     {
         var startInfo = CreateStartInfo(fileName, arguments);
+        if (options.StandardOutputObserver is not null)
+            Console.WriteLine($"Contained command: {startInfo.FileName} {string.Join(" ", arguments)}; limit {options.Timeout}");
         if (!string.IsNullOrEmpty(startInfo.Arguments))
         {
             throw new InvalidOperationException(

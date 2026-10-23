@@ -30,13 +30,11 @@ $testTargetPath = if ($TestProject) { (Resolve-Path $TestProject).Path } else { 
 
 Set-Content -Path $TestResultsPath -Value '' -Encoding utf8
 
-# Remove stale crash dumps from previous runs
-Get-ChildItem -Path $repoRoot -Filter '*.dmp' -Recurse -ErrorAction SilentlyContinue |
-    Remove-Item -Force
+# Dumps belong to the diagnosis/archive workflow, not test-run cleanup.
+. (Join-Path $PSScriptRoot 'test-execution-plan.ps1')
 
 $dotnetArgs = @(
     'test',
-    $testTargetPath,
     '--no-restore',
     '--nologo',
     # Serialize the whole solution test run onto a single MSBuild node (issue #1101). `dotnet test`
@@ -61,12 +59,6 @@ if ($NoBuild)
 {
     $dotnetArgs += '--no-build'
 }
-
-$dotnetArgs += @(
-    '--blame-hang',
-    '--blame-hang-timeout',
-    $PerTestHangTimeout
-)
 
 $filterClauses = @()
 if ($TestNames -and $TestNames.Count -gt 0)
@@ -119,10 +111,8 @@ WARNING: Integration tests require network access, a valid GitHub token with tun
     Start-Sleep -Seconds 5
 }
 
-if ($filterClauses.Count -gt 0)
-{
-    $dotnetArgs += @('--filter', ($filterClauses -join '&'))
-}
+$executionPlan = @(Get-TestExecutionPlan -Target $testTargetPath -Filter ($filterClauses -join '&') `
+    -TestNames $TestNames -Mode $Mode -PerTestHangTimeout $PerTestHangTimeout -RepositoryRoot $repoRoot)
 
 # Restore once, up front, so the subsequent `dotnet test --no-restore` build works from a
 # deterministic project.assets.json. Skipping this (relying on whatever restore happened to run
@@ -143,8 +133,16 @@ if (-not $NoBuild)
 
 $runStart = Get-Date
 # Preserve progress in the uploaded log even if CI terminates a long-running test host.
-& dotnet @dotnetArgs 2>&1 | Tee-Object -FilePath $TestResultsPath | Out-Null
-$dotnetExitCode = $LASTEXITCODE
+$dotnetExitCode = 0
+foreach ($partition in $executionPlan)
+{
+    "=== Test partition: $($partition.Name); watchdog: $($partition.HangTimeout) ===" |
+        Add-Content -Path $TestResultsPath -Encoding utf8
+    $partitionArgs = @($dotnetArgs) + @($partition.Target, '--blame-hang', '--blame-hang-timeout', $partition.HangTimeout)
+    if ($partition.Filter) { $partitionArgs += @('--filter', $partition.Filter) }
+    & dotnet @partitionArgs 2>&1 | Tee-Object -FilePath $TestResultsPath -Append | Out-Null
+    if ($LASTEXITCODE -ne 0) { $dotnetExitCode = $LASTEXITCODE }
+}
 $rawOutput = Get-Content -Path $TestResultsPath
 
 # Write full dotnet output to log before TRX parsing
@@ -156,9 +154,11 @@ $cleanOutput = $rawOutput | ForEach-Object {
 
 $cleanOutput | Set-Content -Path $TestResultsPath -Encoding utf8
 
-# Find TRX files produced by this run (search recursively in all project TestResults subdirectories)
-$trxFiles = Get-ChildItem -Path $repoRoot -Filter '*.trx' -Recurse -ErrorAction SilentlyContinue |
-    Where-Object { $_.LastWriteTime -ge $runStart }
+# Only originals reported by these invocations are results; diagnostic attachment/archive
+# copies may have new timestamps but must never inflate acceptance counts.
+$trxFiles = @($rawOutput | ForEach-Object {
+    if ($_ -match '^\s*Results File:\s*(.+\.trx)\s*$') { $Matches[1].Trim() }
+} | Select-Object -Unique | ForEach-Object { Get-Item -LiteralPath $_ })
 
 $failures = @()
 $totalExecuted = 0
@@ -254,7 +254,8 @@ if ($totalExecuted -eq 0)
 
 # Check if dotnet exit code is non-zero and unexplained
 # If we detected benign aborts and dotnet exited with code 1, that's expected - don't fail
-if ($dotnetExitCode -ne 0 -and $failures.Count -eq 0 -and -not ($dotnetExitCode -eq 1 -and $benignAbortsDetected))
+if ($dotnetExitCode -ne 0 -and $failures.Count -eq 0 -and
+    -not ($executionPlan.Count -eq 1 -and $dotnetExitCode -eq 1 -and $benignAbortsDetected))
 {
     $failures += "FAIL: dotnet test exited with code $dotnetExitCode (unexpected)"
 }

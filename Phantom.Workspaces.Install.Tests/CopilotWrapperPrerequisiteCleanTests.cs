@@ -269,10 +269,25 @@ public sealed partial class CopilotWrapperNestedPublishTests
     [Trait("Category", "SlowLayout")]
     public async Task CopilotWrapperPrerequisite_CleanThenTest_RecreatesValidatedCache()
     {
+        using var contract = System.Text.Json.JsonDocument.Parse(
+            MxcRepositoryTestSupport.Read("scripts", "cold-publish-test-contract.json"));
+        var budgets = contract.RootElement;
+        using var lifecycle = new CancellationTokenSource(
+            TimeSpan.FromSeconds(budgets.GetProperty("LifecycleSeconds").GetInt32()));
+        MxcRepositoryTestSupport.InvocationOptions Stage(string name, string budget)
+        {
+            Console.WriteLine($"Cold publish stage: {name}; limit {budgets.GetProperty(budget).GetInt32()}s");
+            return new MxcRepositoryTestSupport.InvocationOptions
+            {
+                Timeout = TimeSpan.FromSeconds(budgets.GetProperty(budget).GetInt32()),
+                CancellationToken = lifecycle.Token,
+                StandardOutputObserver = line => Console.WriteLine($"[{name}] {line}")
+            };
+        }
         using var fixture = new CacheCleanFixture();
         fixture.AddEntries();
-        Assert.Equal(0, (await fixture.CleanProjectAsync()).ExitCode);
-        var result = await fixture.PrepareAsync();
+        Assert.Equal(0, (await fixture.CleanProjectAsync(Stage("initial clean", "CleanSeconds"))).ExitCode);
+        var result = await fixture.PrepareAsync(Stage("cold production preparation", "PrepareSeconds"));
         Assert.True(result.ExitCode == 0, result.StandardOutput + result.StandardError);
         var cacheDirectory = File.ReadAllText(fixture.PointerFile).Trim();
         Assert.Equal(fixture.CacheRoot, Path.GetDirectoryName(cacheDirectory),
@@ -298,13 +313,14 @@ public sealed partial class CopilotWrapperNestedPublishTests
             await using var payload = new MxcRepositoryTestSupport.TestDirectory();
             await using var artifacts = new MxcRepositoryTestSupport.TestDirectory();
             var publish = await MxcRepositoryTestSupport.InvokeAsync(
-                "dotnet", MxcRepositoryTestSupport.CreateCopilotWrapperPublishArguments(
+                "dotnet", Stage("validated wrapper publish", "PublishSeconds"),
+                MxcRepositoryTestSupport.CreateCopilotWrapperPublishArguments(
                     payload.Path, artifacts.Path, prerequisite));
             Assert.True(publish.ExitCode == 0,
                 "Custom prerequisite publish failed:" + Environment.NewLine +
                 publish.StandardOutput + Environment.NewLine + publish.StandardError);
         }
-        Assert.Equal(0, (await fixture.CleanProjectAsync()).ExitCode);
+        Assert.Equal(0, (await fixture.CleanProjectAsync(Stage("final clean", "CleanSeconds"))).ExitCode);
         fixture.AssertRemoved();
     }
 }
@@ -380,6 +396,12 @@ internal sealed class CacheCleanFixture : IDisposable
             "dotnet", Arguments(Path.Combine("Phantom.Workspaces.Install.Tests",
                 "Phantom.Workspaces.Install.Tests.csproj")));
 
+    internal Task<MxcRepositoryTestSupport.ProcessResult> CleanProjectAsync(
+        MxcRepositoryTestSupport.InvocationOptions options) =>
+        MxcRepositoryTestSupport.InvokeAsync(
+            "dotnet", options, Arguments(Path.Combine("Phantom.Workspaces.Install.Tests",
+                "Phantom.Workspaces.Install.Tests.csproj")));
+
     internal Task<MxcRepositoryTestSupport.ProcessResult> CleanSolutionAsync() =>
         MxcRepositoryTestSupport.InvokeAsync(
             "dotnet", Arguments("Phantom.Workspaces.slnx"));
@@ -392,13 +414,10 @@ internal sealed class CacheCleanFixture : IDisposable
             $"-p:BaseIntermediateOutputPath=obj\\{name}\\",
             $"-p:OutDir={outDir}{Path.DirectorySeparatorChar}");
 
-    internal Task<MxcRepositoryTestSupport.ProcessResult> PrepareAsync() =>
+    internal Task<MxcRepositoryTestSupport.ProcessResult> PrepareAsync(
+        MxcRepositoryTestSupport.InvocationOptions options) =>
         MxcRepositoryTestSupport.InvokeAsync("dotnet",
-            new MxcRepositoryTestSupport.InvocationOptions
-            {
-                Timeout = TimeSpan.FromMinutes(25),
-                StandardOutputObserver = line => Console.WriteLine(line)
-            },
+            options,
             [
                 "msbuild",
                 Path.Combine("Phantom.Workspaces.Install.Tests",
