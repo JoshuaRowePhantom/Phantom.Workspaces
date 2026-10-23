@@ -281,7 +281,12 @@ public sealed partial class CopilotWrapperNestedPublishTests
             {
                 Timeout = TimeSpan.FromSeconds(budgets.GetProperty(budget).GetInt32()),
                 CancellationToken = lifecycle.Token,
-                StandardOutputObserver = line => Console.WriteLine($"[{name}] {line}")
+                StandardOutputObserver = line => Console.WriteLine($"[{name}] {line}"),
+                BeforeTimeoutCleanupAsync = (members, cancellation) =>
+                    NativeTimeoutEvidence.CaptureAsync(members, name,
+                        Path.Combine(MxcRepositoryTestSupport.Root.FullName, "dumps", "1656",
+                            $"timeout-{DateTime.UtcNow:yyyyMMddTHHmmss}-{Guid.NewGuid():N}"),
+                        cancellation)
             };
         }
         using var fixture = new CacheCleanFixture();

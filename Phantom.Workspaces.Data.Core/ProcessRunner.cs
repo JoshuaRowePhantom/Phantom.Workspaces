@@ -78,6 +78,8 @@ internal sealed record ProcessRunnerWindowsTestOptions
     public Action<string>? StandardOutputObserver { get; init; }
     public Func<Task>? BeforeFailureCleanupWaitAsync { get; init; }
     public Func<Task, CancellationToken, Task>? OutputDrainDecorator { get; init; }
+    public Func<IReadOnlyList<int>, CancellationToken, Task<string>>? BeforeTimeoutCleanupAsync { get; init; }
+    public Func<int, Process>? TimeoutEvidenceProcessOpener { get; init; }
 }
 
 /// <summary>Controls whether a child process tree is killed when the parent process exits.</summary>
@@ -442,6 +444,56 @@ public static class ProcessRunner
                 cancelled = true;
             }
 
+            var timeoutEvidence = string.Empty;
+            if ((timedOut || cancelled) &&
+                parameters.WindowsTestOptions?.BeforeTimeoutCleanupAsync is { } captureEvidence)
+            {
+                using var evidenceCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                var evidenceProcesses = new List<Process>();
+                var skippedMembers = new List<string>();
+                try
+                {
+                    foreach (var memberId in Win32.GetJobProcessIds(job)
+                                 .OrderBy(memberId => memberId == processInformation.dwProcessId ? 0 : 1))
+                    {
+                        Process? member = null;
+                        try
+                        {
+                            member = parameters.WindowsTestOptions?.TimeoutEvidenceProcessOpener is { } openMember
+                                ? openMember(memberId)
+                                : Process.GetProcessById(memberId);
+                            if (!Win32.IsProcessMember(job, member.SafeHandle))
+                                throw new InvalidOperationException("Process is no longer an owned job member.");
+                            evidenceProcesses.Add(member);
+                            member = null;
+                        }
+                        catch (Exception departedMember) when (
+                            departedMember is ArgumentException or InvalidOperationException or Win32Exception)
+                        {
+                            skippedMembers.Add($"Skipped timeout evidence member {memberId}: {departedMember.Message}");
+                        }
+                        finally
+                        {
+                            member?.Dispose();
+                        }
+                    }
+                    // Hold process handles through capture so an exited member's PID cannot be reused.
+                    timeoutEvidence = await captureEvidence(
+                        evidenceProcesses.Select(member => member.Id).ToArray(), evidenceCancellation.Token)
+                        .WaitAsync(TimeSpan.FromSeconds(40)).ConfigureAwait(false);
+                }
+                catch (Exception evidenceFailure)
+                {
+                    // Evidence collection must neither prevent cleanup nor hide the original failure.
+                    timeoutEvidence = $"Pre-termination evidence capture failed: {evidenceFailure}";
+                }
+                finally
+                {
+                    timeoutEvidence += "\n" + string.Join("\n", skippedMembers);
+                    foreach (var member in evidenceProcesses)
+                        member.Dispose();
+                }
+            }
             var activeJobProcessesBeforeCleanup = Win32.GetActiveJobProcessCount(job);
             await TerminateJobAndWaitForEmptyAsync(job).ConfigureAwait(false);
             var activeJobProcessesAfterCleanup = Win32.GetActiveJobProcessCount(job);
@@ -470,6 +522,7 @@ public static class ProcessRunner
             {
                 throw new OperationCanceledException(
                     $"Process '{parameters.Command}' was cancelled."
+                    + $"\n{timeoutEvidence}"
                     + $"\nPartial standard output:\n{standardOutput}"
                     + $"\nPartial standard error:\n{standardError}",
                     innerException: null,
@@ -479,6 +532,7 @@ public static class ProcessRunner
             {
                 throw new TimeoutException(
                     $"Process did not complete within the allotted {parameters.Timeout}."
+                    + $"\n{timeoutEvidence}"
                     + $"\nPartial standard output:\n{standardOutput}"
                     + $"\nPartial standard error:\n{standardError}");
             }
@@ -727,6 +781,7 @@ public static class ProcessRunner
         public enum JOBOBJECTINFOCLASS
         {
             JobObjectBasicAccountingInformation = 1,
+            JobObjectBasicProcessIdList = 3,
             JobObjectExtendedLimitInformation = 9,
         }
 
@@ -1033,6 +1088,29 @@ public static class ProcessRunner
             if (!result)
                 throw new InvalidOperationException("The direct process is not a member of its containment job.");
             return true;
+        }
+
+        public static IReadOnlyList<int> GetJobProcessIds(JobObjectSafeHandle job)
+        {
+            const int capacity = 8192;
+            var size = 8 + capacity * IntPtr.Size;
+            var pointer = Marshal.AllocHGlobal(size);
+            try
+            {
+                if (!QueryInformationJobObject(job, JOBOBJECTINFOCLASS.JobObjectBasicProcessIdList,
+                        pointer, (uint)size, out _))
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not enumerate owned job members for timeout evidence.");
+                var count = Marshal.ReadInt32(pointer, 4);
+                if (count < 0 || count > capacity)
+                    throw new InvalidOperationException("Invalid owned job process count.");
+                return Enumerable.Range(0, count)
+                    .Select(index => checked((int)Marshal.ReadIntPtr(pointer, 8 + index * IntPtr.Size)))
+                    .ToArray();
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(pointer);
+            }
         }
 
         public static uint GetActiveJobProcessCount(JobObjectSafeHandle job)

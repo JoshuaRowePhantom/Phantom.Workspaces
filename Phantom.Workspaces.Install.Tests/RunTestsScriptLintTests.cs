@@ -32,6 +32,84 @@ public sealed class RunTestsScriptLintTests
     }
 
     [Theory]
+    [InlineData(0, "Only explicit owned job process IDs")]
+    [InlineData(int.MaxValue, "Owned command exited before native evidence capture")]
+    public async Task NativeEvidence_ReportsInvalidOrExitedTargetsWithoutDumpingOthers(
+        int processId, string message)
+    {
+        await using var fixture = new MxcRepositoryTestSupport.TestDirectory();
+        var error = await Assert.ThrowsAsync<IOException>(() =>
+            NativeTimeoutEvidence.CaptureAsync([processId], "synthetic missing target",
+                fixture.Path, CancellationToken.None));
+        Assert.Contains(message, error.Message);
+        Assert.Empty(Directory.GetFiles(fixture.Path, "*.dmp"));
+        if (processId != 0)
+            Assert.True(File.Exists(Path.Combine(fixture.Path, "processes.json")));
+    }
+
+    [Theory]
+    [InlineData("Completed", 3, 3, 0, 0, false, false, 0)]
+    [InlineData("Failed", 3, 2, 1, 1, false, false, 1)]
+    [InlineData("Failed", 3, 3, 0, 1, false, false, 1)]
+    [InlineData("Aborted", 3, 3, 0, 1, false, false, 1)]
+    [InlineData("Aborted", 0, 0, 0, 1, false, false, 1)]
+    [InlineData("Aborted", 0, 0, 0, 1, true, false, 1)]
+    [InlineData("Completed", 3, 3, 0, 0, false, true, 1)]
+    public async Task StockRunner_AccountsOnlyEmittedOriginalsAndFailsClosed(
+        string outcome, int executed, int passed, int failed, int nativeExit,
+        bool benignEmptyMatch, bool buildError, int expectedExit)
+    {
+        await using var fixture = new MxcRepositoryTestSupport.TestDirectory();
+        string Trx(string result, int count, int successes, int failures) =>
+            $"""
+            <TestRun><Results><UnitTestResult testName="synthetic" outcome="{(failures == 0 ? "Passed" : "Failed")}" /></Results>
+            <ResultSummary outcome="{result}"><Counters total="{count}" executed="{count}" passed="{successes}" failed="{failures}" /></ResultSummary></TestRun>
+            """;
+        var ordinary = Path.Combine(fixture.Path, "ordinary.trx");
+        var cold = Path.Combine(fixture.Path, "cold.trx");
+        var archive = Path.Combine(fixture.Path, "archival-copy.trx");
+        var dump = Path.Combine(fixture.Path, "diagnostic-sentinel.dmp");
+        File.WriteAllText(ordinary, Trx(outcome, executed, passed, failed));
+        File.WriteAllText(cold, Trx("Completed", 1, 1, 0));
+        File.WriteAllText(archive, Trx("Completed", 999, 999, 0));
+        File.SetLastWriteTimeUtc(archive, DateTime.UtcNow.AddDays(1));
+        File.WriteAllText(dump, "synthetic preservation sentinel, not a native dump");
+        var log = Path.Combine(fixture.Path, "synthetic-runner.log");
+        var script = Path.Combine(FindRepositoryRoot().FullName, "scripts", "run-tests.ps1");
+        var target = Path.Combine(FindRepositoryRoot().FullName,
+            "Phantom.Workspaces.Install.Tests", "Phantom.Workspaces.Install.Tests.csproj");
+        var harness = Path.Combine(fixture.Path, "synthetic-dotnet-harness.ps1");
+        File.WriteAllText(harness, $$"""
+            # Synthetic native output for behavioral tests; not an acceptance run.
+            function global:dotnet {
+                if (($args -join ' ') -like '*FullyQualifiedName!=*') {
+                    'Results File: {{ordinary}}'
+                    'Results File: {{ordinary}}'
+                    {{(benignEmptyMatch ? "'Could not find files for the given pattern'" : "")}}
+                    {{(buildError ? "'synthetic.cs: error CS0000: synthetic build error'" : "")}}
+                    $global:LASTEXITCODE = {{nativeExit}}
+                } else {
+                    'Results File: {{cold}}'
+                    $global:LASTEXITCODE = 0
+                }
+            }
+            & '{{script}}' -NoBuild -Mode full -TestProject '{{target}}' -TestResultsPath '{{log}}'
+            exit $LASTEXITCODE
+            """);
+        var result = await MxcRepositoryTestSupport.InvokeAsync(
+            "pwsh", "-NoProfile", "-NonInteractive", "-File", harness);
+        Assert.True(expectedExit == result.ExitCode,
+            $"Expected synthetic runner exit {expectedExit}; actual {result.ExitCode}.\n{result.StandardOutput}\n{result.StandardError}");
+        var output = File.ReadAllText(log);
+        Assert.Contains($"Executed : {executed + 1}", output);
+        Assert.Contains($"Passed   : {passed + 1}", output);
+        Assert.Contains($"Failed   : {failed}", output);
+        Assert.True(File.Exists(dump));
+        if (benignEmptyMatch)
+            Assert.Contains("dotnet test exited with code 1", result.StandardOutput);
+    }
+
+    [Theory]
     [InlineData("LifecycleSeconds", 2340)]
     [InlineData("WatchdogSeconds", 2400)]
     public async Task ExecutionPlan_RejectsIncoherentBudgets(string property, int seconds)

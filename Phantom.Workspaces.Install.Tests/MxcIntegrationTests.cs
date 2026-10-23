@@ -548,10 +548,14 @@ public sealed class MxcRuntimePayloadTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
+    [InlineData(false, false, false, false)]
+    [InlineData(true, false, false, false)]
+    [InlineData(false, true, false, false)]
+    [InlineData(false, false, true, false)]
+    [InlineData(false, false, false, true)]
     public async Task InvokePowerShellAsync_StalledValidator_TimesOutAndCleansProcessTreeAndArtifacts(
-        bool lifecycleCancellation)
+        bool lifecycleCancellation, bool evidenceFailure, bool departedMember,
+        bool departedCaptureTarget)
     {
         if (!OperatingSystem.IsWindows())
             return;
@@ -568,13 +572,35 @@ public sealed class MxcRuntimePayloadTests
         string payloadPath;
         string artifactsPath;
         int validatorProcessId;
-        int childProcessId;
+        int childProcessId = 0;
 
         try
         {
             using var fixture = new MxcRepositoryTestSupport.TestDirectory();
             using var payload = new MxcRepositoryTestSupport.TestDirectory();
             using var artifacts = new MxcRepositoryTestSupport.TestDirectory();
+            var evidenceDirectory = Path.Combine(fixture.Path, "native-evidence");
+            if (evidenceFailure)
+                File.WriteAllText(evidenceDirectory, "deliberately blocks evidence directory creation");
+            var capturedBeforeCleanup = false;
+            string? captureScript = null;
+            if (departedCaptureTarget)
+            {
+                captureScript = Path.Combine(fixture.Path, "departed-capture-target.ps1");
+                var collector = Path.Combine(MxcRepositoryTestSupport.Root.FullName,
+                    "scripts", "capture-owned-timeout-evidence.ps1");
+                File.WriteAllText(captureScript, $$"""
+                    param($OwnedProcessIds, $Stage, $OutputDirectory, $NativeCompilerName)
+                    $ErrorActionPreference = 'Stop'
+                    $global:syntheticDepartedCaptureTarget = [int] $OwnedProcessIds.Split(',')[0]
+                    function global:Get-Process {
+                        param([int] $Id)
+                        if ($Id -eq $global:syntheticDepartedCaptureTarget) { throw 'Synthetic target departed after snapshot.' }
+                        Microsoft.PowerShell.Management\Get-Process -Id $Id
+                    }
+                    & '{{collector}}' @PSBoundParameters
+                    """);
+            }
             payloadPath = payload.Path;
             artifactsPath = artifacts.Path;
             var scriptPath = Path.Combine(fixture.Path, "Assert-StalledMxcPayload.ps1");
@@ -621,6 +647,23 @@ public sealed class MxcRuntimePayloadTests
                     CancellationToken = lifecycle.Token,
                     TimeProvider = time,
                     Observer = observer,
+                    TimeoutEvidenceProcessOpener = member =>
+                        departedMember && member == childProcessId
+                            ? throw new ArgumentException("Synthetic departed job member.")
+                            : System.Diagnostics.Process.GetProcessById(member),
+                    BeforeTimeoutCleanupAsync = async (members, cancellation) =>
+                    {
+                        Assert.True(members.Count >= (departedMember ? 1 : 2));
+                        Assert.All(members, member =>
+                            Assert.True(MxcRepositoryTestSupport.IsProcessRunning(member)));
+                        capturedBeforeCleanup = true;
+                        return await NativeTimeoutEvidence.CaptureAsync(
+                            members, "stalled validator", evidenceDirectory, cancellation,
+                            departedCaptureTarget ? "*" : lifecycleCancellation
+                                ? "Phantom.Workspaces.Test.WindowsProcessProbe.exe"
+                                : "crossgen2.exe",
+                            captureScript);
+                    },
                     StandardOutputObserver = line =>
                     {
                         if (line.StartsWith("VALIDATOR_READY:", StringComparison.Ordinal))
@@ -665,6 +708,48 @@ public sealed class MxcRuntimePayloadTests
                 : (Exception)await Assert.ThrowsAsync<TimeoutException>(() => operation);
             Assert.Contains("validator-stderr-before-stall", exception.Message, StringComparison.Ordinal);
             Assert.Contains("VALIDATOR_READY:", exception.Message, StringComparison.Ordinal);
+            Assert.True(capturedBeforeCleanup);
+            if (evidenceFailure || departedCaptureTarget)
+            {
+                Assert.Contains("Pre-termination evidence capture failed", exception.Message);
+            }
+            if (!evidenceFailure)
+            {
+                if (!departedCaptureTarget)
+                    Assert.Contains("Pre-termination native evidence preserved", exception.Message);
+                var dumps = Directory.GetFiles(evidenceDirectory, "*.dmp");
+                var dump = departedCaptureTarget
+                    ? Assert.Single(dumps, path => Path.GetFileName(path).Contains(
+                        "Phantom.Workspaces.Test.WindowsProcessProbe.exe", StringComparison.Ordinal))
+                    : Assert.Single(dumps);
+                Assert.Contains(lifecycleCancellation || departedCaptureTarget
+                    ? "Phantom.Workspaces.Test.WindowsProcessProbe.exe"
+                    : "pwsh.exe", Path.GetFileName(dump));
+                Assert.Equal("MDMP", System.Text.Encoding.ASCII.GetString(
+                    File.ReadAllBytes(dump), 0, 4));
+                Assert.True(File.Exists(dump + ".sha256.json"));
+                using var snapshot = System.Text.Json.JsonDocument.Parse(
+                    File.ReadAllText(Path.Combine(evidenceDirectory, "processes.json")));
+                Assert.Equal("stalled validator", snapshot.RootElement.GetProperty("Stage").GetString());
+                var capturedIds = snapshot.RootElement.GetProperty("OwnedProcessIds")
+                    .EnumerateArray().Select(member => member.GetInt32()).ToArray();
+                Assert.Contains(validatorProcessId, capturedIds);
+                if (departedMember)
+                {
+                    Assert.DoesNotContain(childProcessId, capturedIds);
+                    Assert.Contains($"Skipped timeout evidence member {childProcessId}", exception.Message);
+                    Assert.Contains("Synthetic departed job member", exception.Message);
+                }
+                else
+                {
+                    Assert.Contains(childProcessId, capturedIds);
+                }
+                if (departedCaptureTarget)
+                {
+                    Assert.Contains("Synthetic target departed after snapshot",
+                        File.ReadAllText(Path.Combine(evidenceDirectory, "capture-errors.json")));
+                }
+            }
             Assert.False(MxcRepositoryTestSupport.IsProcessRunning(validatorProcessId));
             Assert.False(MxcRepositoryTestSupport.IsProcessRunning(childProcessId));
             Assert.Contains(
@@ -1460,6 +1545,8 @@ internal static class MxcRepositoryTestSupport
                 TimeProvider = options.TimeProvider,
                 Observer = options.Observer,
                 StandardOutputObserver = options.StandardOutputObserver,
+                BeforeTimeoutCleanupAsync = options.BeforeTimeoutCleanupAsync,
+                TimeoutEvidenceProcessOpener = options.TimeoutEvidenceProcessOpener,
             },
         }, options.CancellationToken);
         return new ProcessResult(
@@ -1788,6 +1875,8 @@ internal static class MxcRepositoryTestSupport
         internal TimeProvider TimeProvider { get; init; } = TimeProvider.System;
         internal IProcessRunnerWindowsObserver? Observer { get; init; }
         internal Action<string>? StandardOutputObserver { get; init; }
+        internal Func<IReadOnlyList<int>, CancellationToken, Task<string>>? BeforeTimeoutCleanupAsync { get; init; }
+        internal Func<int, System.Diagnostics.Process>? TimeoutEvidenceProcessOpener { get; init; }
     }
 
     internal sealed record CopilotWrapperPrerequisite(
