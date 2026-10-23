@@ -5,6 +5,20 @@ namespace Phantom.Workspaces.Install.Tests;
 public sealed partial class CopilotWrapperNestedPublishTests
 {
     [Fact]
+    public void WarmPreparationOptions_BoundBothCallsBelowOrdinaryWatchdogWithoutChangingValidators()
+    {
+        using var lifecycle = new CancellationTokenSource();
+        var options = MxcRepositoryTestSupport.CreateWarmPreparationInvocationOptions(lifecycle.Token);
+        Assert.Equal(TimeSpan.FromSeconds(90), options.Timeout);
+        Assert.Equal(lifecycle.Token, options.CancellationToken);
+        Assert.NotNull(options.StandardOutputObserver);
+        Assert.True(options.Timeout * 2 < MxcRepositoryTestSupport.WarmPreparationLifecycleTimeout);
+        Assert.True(MxcRepositoryTestSupport.WarmPreparationLifecycleTimeout < TimeSpan.FromSeconds(240));
+        Assert.Equal(TimeSpan.FromSeconds(30),
+            MxcRepositoryTestSupport.CreateValidatorInvocationOptions().Timeout);
+    }
+
+    [Fact]
     public Task CopilotWrapperPrerequisite_NewlyWrittenManifest_IsAcceptedByCompletedCacheValidation() =>
         AssertCompletedCacheValidationAsync("valid", true);
 
@@ -32,6 +46,8 @@ public sealed partial class CopilotWrapperNestedPublishTests
     [Fact]
     public async Task CopilotWrapperPrerequisite_UnchangedFingerprint_ReusesPreparedCacheWithoutPublishingAgain()
     {
+        using var lifecycle = new CancellationTokenSource(
+            MxcRepositoryTestSupport.WarmPreparationLifecycleTimeout);
         var project = Path.Combine(MxcRepositoryTestSupport.Root.FullName,
             "Phantom.Workspaces.Install.Tests");
         var pointer = Path.Combine(project, "obj", "Debug", "net10.0",
@@ -65,13 +81,24 @@ public sealed partial class CopilotWrapperNestedPublishTests
         async Task AssertWarmPreparationAsync()
         {
             var result = await MxcRepositoryTestSupport.InvokePowerShellAsync(
-                "scripts", "prepare-copilot-wrapper-test-prerequisite.ps1",
+                Path.Combine(MxcRepositoryTestSupport.Root.FullName,
+                    "scripts", "prepare-copilot-wrapper-test-prerequisite.ps1"),
+                MxcRepositoryTestSupport.CreateWarmPreparationInvocationOptions(lifecycle.Token),
+                "-Verbose",
                 "-RepositoryRoot", MxcRepositoryTestSupport.Root.FullName,
                 "-ProjectDirectory", project,
                 "-BaseIntermediateOutputPath", Path.Combine(project, "obj"),
                 "-CacheRoot", Path.Combine(project, "obj", "mxcw"),
                 "-PathOutputFile", pointer);
             Assert.True(result.ExitCode == 0, result.StandardOutput + result.StandardError);
+            Assert.True(result.DirectProcessInJob);
+            Assert.Equal(0U, result.ActiveJobProcessesAfterCleanup);
+            Assert.Contains("Prerequisite stage: toolchain rustc", result.StandardOutput);
+            Assert.Contains("Prerequisite stage: source fingerprint", result.StandardOutput);
+            Assert.Contains("Prerequisite stage: root lease", result.StandardOutput);
+            Assert.Contains("Prerequisite stage: cache mutex", result.StandardOutput);
+            Assert.Contains("Prerequisite stage: completed-cache validation", result.StandardOutput);
+            Assert.Contains("Prerequisite artifact: prepared/runtime.node", result.StandardOutput);
             Assert.Contains("Using verified Copilot wrapper prerequisite", result.StandardOutput,
                 StringComparison.Ordinal);
             Assert.DoesNotContain("Preparing immutable", result.StandardOutput,

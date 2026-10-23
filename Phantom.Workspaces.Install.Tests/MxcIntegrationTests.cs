@@ -1360,6 +1360,9 @@ internal static class MxcRepositoryTestSupport
 {
     private static readonly TimeSpan LongRunningProcessTimeout = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan ValidatorProcessTimeout = TimeSpan.FromSeconds(30);
+    // Two complete warm preparations get 90s each, then 30s for assertions/cleanup.
+    // The shared lifecycle still leaves 30s before the ordinary 240s blame watchdog.
+    internal static readonly TimeSpan WarmPreparationLifecycleTimeout = TimeSpan.FromSeconds(210);
 
     internal static DirectoryInfo Root { get; } = FindRepositoryRoot();
     internal static string BuiltMxcOutputDirectory => Path.Combine(
@@ -1799,6 +1802,14 @@ internal static class MxcRepositoryTestSupport
 
     internal static InvocationOptions CreateValidatorInvocationOptions() =>
         new() { Timeout = ValidatorProcessTimeout };
+
+    internal static InvocationOptions CreateWarmPreparationInvocationOptions(CancellationToken cancellationToken) =>
+        new()
+        {
+            Timeout = TimeSpan.FromSeconds(90),
+            CancellationToken = cancellationToken,
+            StandardOutputObserver = line => Console.WriteLine($"[warm preparation] {line}"),
+        };
 
     internal static Task<ProcessResult> InvokePowerShellAsync(
         string scriptPath,

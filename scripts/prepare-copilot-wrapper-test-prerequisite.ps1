@@ -173,6 +173,7 @@ function Test-CompletedCache {
 
         foreach ($artifact in $artifacts)
         {
+            Write-Verbose "Prerequisite artifact: $($artifact.RelativePath)"
             if ($artifact.Sha256 -notmatch '^[0-9a-f]{64}$' -or
                 [IO.Path]::IsPathRooted($artifact.RelativePath) -or
                 $artifact.RelativePath -match '(^|[\\/])\.\.([\\/]|$)')
@@ -209,23 +210,27 @@ function Test-CompletedCache {
     }
 }
 
+Write-Verbose 'Prerequisite stage: toolchain rustc'
 $rustcIdentity = (& rustc -vV 2>&1 | Out-String).Trim()
 if ($LASTEXITCODE -ne 0)
 {
     throw "rustc -vV failed while identifying the MXC prerequisite toolchain."
 }
 
+Write-Verbose 'Prerequisite stage: toolchain cargo'
 $cargoIdentity = (& cargo --version 2>&1 | Out-String).Trim()
 if ($LASTEXITCODE -ne 0)
 {
     throw "cargo --version failed while identifying the MXC prerequisite toolchain."
 }
 
+Write-Verbose 'Prerequisite stage: toolchain dotnet SDK'
 $dotnetSdkIdentity = (& dotnet --version 2>&1 | Out-String).Trim()
 if ($LASTEXITCODE -ne 0)
 {
     throw "dotnet --version failed while identifying the wrapper prerequisite toolchain."
 }
+Write-Verbose 'Prerequisite stage: toolchain MSBuild'
 $msbuildIdentity = (& dotnet msbuild -version -nologo 2>&1 | Out-String).Trim()
 if ($LASTEXITCODE -ne 0)
 {
@@ -245,6 +250,7 @@ if ($copilotSdkPackageNodes.Count -ne 1)
 }
 $copilotSdkPackageVersion = [string] $copilotSdkPackageNodes[0].Version
 
+Write-Verbose 'Prerequisite stage: SDK package provenance'
 $globalPackagesOutput = (& dotnet nuget locals global-packages --list 2>&1 | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or
     $globalPackagesOutput -notmatch '(?m)^global-packages:\s*(?<path>.+?)\s*$')
@@ -297,6 +303,7 @@ else
     $env:COPILOT_CLI_DOWNLOAD_BASE_URL.TrimEnd('/')
 }
 
+Write-Verbose 'Prerequisite stage: source enumeration'
 $trackedFiles = @(
     & git -C $RepositoryRoot ls-files --recurse-submodules
 )
@@ -319,6 +326,7 @@ $sourceFiles = @(
     [IO.Path]::GetRelativePath($RepositoryRoot, $PSCommandPath)
 ) | Sort-Object -Unique
 
+Write-Verbose "Prerequisite stage: source fingerprint ($($sourceFiles.Count) files)"
 $hasher = [Security.Cryptography.IncrementalHash]::CreateHash(
     [Security.Cryptography.HashAlgorithmName]::SHA256)
 try
@@ -362,6 +370,7 @@ finally
     $hasher.Dispose()
 }
 
+Write-Verbose 'Prerequisite stage: root lease'
 $rootLease = Open-PrerequisiteRootLease $ProjectDirectory $CacheRoot -Shared
 $rootIdentity = [Convert]::ToHexString(
     [Security.Cryptography.SHA256]::HashData(
@@ -376,6 +385,7 @@ try
 {
     try
     {
+        Write-Verbose 'Prerequisite stage: cache mutex'
         $ownsMutex = $mutex.WaitOne()
     }
     catch [Threading.AbandonedMutexException]
@@ -383,6 +393,7 @@ try
         $ownsMutex = $true
     }
 
+    Write-Verbose 'Prerequisite stage: completed-cache validation'
     $cacheDirectory = $null
     if (Test-Path -LiteralPath $CacheRoot)
     {
