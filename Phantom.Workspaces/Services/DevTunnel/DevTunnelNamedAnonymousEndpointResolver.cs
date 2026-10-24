@@ -63,6 +63,11 @@ internal sealed class DevTunnelNamedAnonymousEndpointResolver(
                     throw new DevTunnelCredentialAccessException(AccessErrorCode.IdentityMismatch);
                 }
             }
+            catch (Exception) when (cancellationToken.IsCancellationRequested)
+            {
+                // The management SDK can wrap cancellation during response deserialization.
+                throw new OperationCanceledException(cancellationToken);
+            }
             catch (DevTunnelCredentialAccessException)
             {
                 throw;

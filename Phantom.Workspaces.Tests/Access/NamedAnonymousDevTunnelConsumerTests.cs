@@ -204,6 +204,58 @@ public sealed class NamedAnonymousDevTunnelConsumerTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NamedAnonymous_CancellationDuringManagementContentReadRemainsCancellation(bool persistence)
+    {
+        await using var fixture = new Fixture();
+        fixture.Management.BlockContentRead = true;
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var operation = fixture.UseConsumerAsync(persistence, Source(false), null, cancellation.Token);
+        await fixture.AllowAsync(await PendingAsync(fixture.Registry, operation));
+        await fixture.AllowAsync(await PendingAsync(fixture.Registry, operation));
+        await fixture.Management.ContentReadEntered.Task.WaitAsync(TestContext.Current.CancellationToken);
+        await cancellation.CancelAsync();
+        var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operation);
+        Assert.True(failure.CancellationToken.IsCancellationRequested);
+        Assert.True(fixture.Management.ContentReadCanceled);
+        Assert.Empty(fixture.Relay.Requests);
+        Assert.Equal(0, fixture.Relay.Disposals);
+        Assert.Equal(1, fixture.Management.Disposals);
+        Assert.Equal(1, fixture.Management.ContentDisposals);
+        Assert.All(fixture.Management.Requests, request => Assert.Null(request.Headers.Authorization));
+        await fixture.AssertLeasesDisposedAsync();
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task NamedAnonymous_CancellationTakesPrecedenceOverLateManagementFailure(
+        bool persistence,
+        bool typed)
+    {
+        await using var fixture = new Fixture();
+        fixture.Management.Block = true;
+        fixture.Management.Fail = !typed;
+        fixture.Management.TypedFailure = typed;
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var operation = fixture.UseConsumerAsync(persistence, Source(false), null, cancellation.Token);
+        await fixture.AllowAsync(await PendingAsync(fixture.Registry, operation));
+        await fixture.AllowAsync(await PendingAsync(fixture.Registry, operation));
+        await fixture.Management.Entered.Task.WaitAsync(TestContext.Current.CancellationToken);
+        await cancellation.CancelAsync();
+        fixture.Management.Release.TrySetResult();
+        var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operation);
+        Assert.True(failure.CancellationToken.IsCancellationRequested);
+        Assert.Empty(fixture.Relay.Requests);
+        Assert.Equal(1, fixture.Management.Disposals);
+        Assert.All(fixture.Management.Requests, request => Assert.Null(request.Headers.Authorization));
+        await fixture.AssertLeasesDisposedAsync();
+    }
+
+    [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]
     [InlineData(false, true)]
@@ -735,10 +787,14 @@ public sealed class NamedAnonymousDevTunnelConsumerTests
         public List<HttpRequestMessage> Requests { get; } = [];
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ContentReadEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool BlockContentRead { get; set; }
+        public bool ContentReadCanceled { get; private set; }
         public bool Block { get; set; }
         public bool Redirect { get; set; }
         public bool Malformed { get; set; }
         public bool Fail { get; set; }
+        public bool TypedFailure { get; set; }
         public string? IdentityScheme { get; private set; }
         public int Disposals { get; private set; }
         public int ContentDisposals { get; private set; }
@@ -767,6 +823,7 @@ public sealed class NamedAnonymousDevTunnelConsumerTests
                 await this.Release.Task;
             }
             if (this.Fail) { throw new HttpRequestException("sensitive test transport failure"); }
+            if (this.TypedFailure) { throw new DevTunnelCredentialAccessException(AccessErrorCode.IdentityMismatch); }
             if (this.Redirect)
             {
                 return new HttpResponseMessage(HttpStatusCode.Redirect)
@@ -775,13 +832,74 @@ public sealed class NamedAnonymousDevTunnelConsumerTests
                     Headers = { Location = new Uri("https://tsttstst-8080.euw.devtunnels.ms/") },
                 };
             }
+            var json = this.Malformed ? "sensitive invalid json" : JsonSerializer.Serialize(
+                new { value = new[] { new { value = this.Tunnels } } },
+                new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            HttpContent content;
+            if (this.BlockContentRead)
+            {
+                content = new CancellationReadContent(json, this.ContentReadEntered,
+                    () => this.ContentReadCanceled = true, () => this.ContentDisposals++);
+                // Cache the controlled read stream before HttpClient buffers the response, so the
+                // cancellation occurs in the SDK's JSON conversion rather than transport buffering.
+                await content.ReadAsStreamAsync(cancellationToken);
+            }
+            else
+            {
+                content = new TrackedContent(json, () => this.ContentDisposals++);
+            }
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 RequestMessage = request,
-                Content = new TrackedContent(this.Malformed ? "sensitive invalid json" : JsonSerializer.Serialize(
-                    new { value = new[] { new { value = this.Tunnels } } },
-                    new JsonSerializerOptions(JsonSerializerDefaults.Web)), () => this.ContentDisposals++),
+                Content = content,
             };
+        }
+
+        private sealed class CancellationReadStream(
+            string content,
+            TaskCompletionSource entered,
+            Action canceled) : MemoryStream(Encoding.UTF8.GetBytes(content))
+        {
+            public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+            {
+                entered.TrySetResult();
+                try
+                {
+                    var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    await stopped.Task.WaitAsync(cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    canceled();
+                    throw;
+                }
+                return await base.ReadAsync(buffer, cancellationToken);
+            }
+        }
+
+        private sealed class CancellationReadContent(
+            string content,
+            TaskCompletionSource entered,
+            Action canceled,
+            Action disposed) : HttpContent
+        {
+            protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
+                stream.WriteAsync(Encoding.UTF8.GetBytes(content)).AsTask();
+
+            protected override bool TryComputeLength(out long length)
+            {
+                length = Encoding.UTF8.GetByteCount(content);
+                return true;
+            }
+
+            protected override Task<Stream> CreateContentReadStreamAsync() =>
+                Task.FromResult<Stream>(new CancellationReadStream(content, entered, canceled));
+
+            protected override void Dispose(bool disposing)
+            {
+                if (disposing) { disposed(); }
+                base.Dispose(disposing);
+            }
         }
 
         protected override void Dispose(bool disposing)
