@@ -889,7 +889,7 @@ public sealed partial class RemoteAgentSessionHostTests
         await secondChannel.Output.ReadAsync();
         await fixture.Host.DispatchCommandAsync(
             Peer(), Open(AgentSessionOpenIntent.Attach), fixture.Runtime, first,
-            Command(fixture.Runtime.Epoch));
+            Command(fixture.Runtime.Epoch) with { ExpectedRevision = fixture.Queues.Object.Snapshot.Revision });
         var firstDelta = AgentSessionProtocolCodec.DeserializeFrame(await fixture.Channel.Output.ReadAsync());
         var secondDelta = AgentSessionProtocolCodec.DeserializeFrame(await secondChannel.Output.ReadAsync());
         Assert.Equal(firstDelta.Sequence, secondDelta.Sequence);
@@ -907,7 +907,7 @@ public sealed partial class RemoteAgentSessionHostTests
         await fixture.Channel.Output.ReadAsync();
         await fixture.Host.DispatchCommandAsync(
             Peer(), Open(AgentSessionOpenIntent.Attach), fixture.Runtime, attachment,
-            Command(fixture.Runtime.Epoch));
+            Command(fixture.Runtime.Epoch) with { ExpectedRevision = fixture.Queues.Object.Snapshot.Revision });
         var delta = AgentSessionProtocolCodec.DeserializeFrame(await fixture.Channel.Output.ReadAsync());
         var completed = AgentSessionProtocolCodec.DeserializeFrame(await fixture.Channel.Output.ReadAsync());
         Assert.IsType<QueueChangedEvent>(
@@ -1431,12 +1431,15 @@ public sealed partial class RemoteAgentSessionHostTests
 
     private static void SetupAppliedQueue(HostFixture fixture, long revision)
     {
+        var currentRevision = revision - 1;
         fixture.Queues.SetupGet(value => value.Snapshot).Returns(() =>
-            new AgentInputQueuesSnapshot { Revision = revision, Queues = [] });
+            new AgentInputQueuesSnapshot { Revision = currentRevision, Queues = [] });
         fixture.Queues.Setup(value => value.CreateQueueAsync(
                 It.IsAny<CreateAgentInputQueueRequest>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((CreateAgentInputQueueRequest request, CancellationToken _) =>
             {
+                Assert.Equal(currentRevision, request.ExpectedRevision);
+                currentRevision = revision;
                 fixture.Queues.Raise(value => value.Changed += null, EventArgs.Empty);
                 return new AgentInputQueueCommandResult
                 {
