@@ -67,6 +67,39 @@ public sealed class AgentInputQueueManagerTests
     }
 
     [Fact]
+    public void TryDequeueNextImmediateOrQueued_AppliedRemoval_AdvancesRevisionAndRaisesStateChanged()
+    {
+        var manager = CreateManager();
+        var item = Item("consumed");
+        manager.Enqueue(manager.ImmediateQueue, [item]);
+        var before = manager.AggregateRevision;
+        var removals = 0;
+        var publications = 0;
+        manager.QueueStateChanged += (_, args) =>
+        {
+            if (args.ChangeKind == AgentInputQueueManager.QueueStateChangeKind.ItemRemoved)
+            {
+                removals++;
+                Assert.Equal(before + 1, manager.AggregateRevision);
+                Assert.Empty(args.Queue.Items);
+            }
+        };
+        manager.QueuePublished += (_, args) =>
+        {
+            publications++;
+            Assert.Same(item, args.Item);
+        };
+
+        Assert.True(manager.TryDequeueNextImmediateOrQueued(out var removed));
+        Assert.False(manager.TryDequeueNextImmediateOrQueued(out _));
+
+        Assert.Same(item, removed);
+        Assert.Equal(before + 1, manager.AggregateRevision);
+        Assert.Equal(1, removals);
+        Assert.Equal(1, publications);
+    }
+
+    [Fact]
     public void Configure_ReleasedHeldQueue_PublishesStateChangeAndAllowsDequeue()
     {
         var manager = CreateManager();

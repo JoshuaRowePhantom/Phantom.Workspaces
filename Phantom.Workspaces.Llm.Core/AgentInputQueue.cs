@@ -35,6 +35,7 @@ public sealed class AgentInputQueue
 
     private ImmutableList<AgentInputItem> items;
     private long revision;
+    internal Action<Action>? ConfigureMutation { get; set; }
 
     public AgentInputQueue(
         Parameters? parameters = null)
@@ -74,6 +75,18 @@ public sealed class AgentInputQueue
         Parameters parameters)
     {
         ArgumentNullException.ThrowIfNull(parameters);
+        if (this.ConfigureMutation is { } mutate)
+        {
+            mutate(() => this.ConfigureCore(parameters));
+        }
+        else
+        {
+            this.ConfigureCore(parameters);
+        }
+    }
+
+    private void ConfigureCore(Parameters parameters)
+    {
         this.Priority = parameters.Priority;
         this.Immediacy = parameters.Immediacy;
         this.CoalescingKey = parameters.CoalescingKey;

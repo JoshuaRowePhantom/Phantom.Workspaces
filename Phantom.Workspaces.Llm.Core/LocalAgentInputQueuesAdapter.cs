@@ -18,7 +18,7 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
     private const string ImmediateQueueDisplayName = "Immediate Queue";
     private const string DefaultQueueDisplayName = "Default Queue";
 
-    private readonly object stateLock = new();
+    private readonly object stateLock;
     private readonly AgentInputQueueManager manager;
     private readonly AgentInputQueue defaultQueue;
     private readonly TaskScheduler foregroundScheduler;
@@ -30,6 +30,8 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
     private int nextUserPriority = 10;
     private bool disposed;
     private bool commandInProgress;
+    private bool notificationScheduled;
+    private long lastNotifiedRevision;
 
     public event EventHandler? Changed;
 
@@ -41,6 +43,7 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
         ArgumentNullException.ThrowIfNull(manager);
         ArgumentNullException.ThrowIfNull(defaultQueue);
         this.manager = manager;
+        this.stateLock = manager.SyncRoot;
         this.defaultQueue = defaultQueue;
         this.foregroundScheduler = foregroundScheduler ?? TaskScheduler.Current;
 
@@ -80,7 +83,9 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
         manager.QueuePublished += this.OnManagerQueuePublished;
         manager.QueueRegistered += this.OnManagerQueueRegistered;
         manager.QueueUnregistered += this.OnManagerQueueUnregistered;
+        manager.MutationCompleted += this.OnManagerMutationCompleted;
         this.snapshot = this.BuildSnapshot();
+        this.lastNotifiedRevision = this.snapshot.Revision;
     }
 
     public AgentInputQueuesSnapshot Snapshot
@@ -111,15 +116,19 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
 
     public void Dispose()
     {
-        if (this.disposed)
+        lock (this.stateLock)
         {
-            return;
+            if (this.disposed)
+            {
+                return;
+            }
+            this.disposed = true;
+            this.manager.QueueStateChanged -= this.OnManagerQueueStateChanged;
+            this.manager.QueuePublished -= this.OnManagerQueuePublished;
+            this.manager.QueueRegistered -= this.OnManagerQueueRegistered;
+            this.manager.QueueUnregistered -= this.OnManagerQueueUnregistered;
+            this.manager.MutationCompleted -= this.OnManagerMutationCompleted;
         }
-        this.disposed = true;
-        this.manager.QueueStateChanged -= this.OnManagerQueueStateChanged;
-        this.manager.QueuePublished -= this.OnManagerQueuePublished;
-        this.manager.QueueRegistered -= this.OnManagerQueueRegistered;
-        this.manager.QueueUnregistered -= this.OnManagerQueueUnregistered;
     }
 
     public Task<AgentInputQueueCommandResult> CreateQueueAsync(
@@ -160,7 +169,7 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
                 this.manager.RegisterInputQueue(underlying);
                 this.EnsureQueueWrappedLocked(underlying, request.Configuration.Name, isDefault: false, isImmediate: false);
 
-                var revision = this.manager.BumpAggregateRevision();
+                var revision = this.manager.AggregateRevision;
                 this.RefreshSnapshotLocked();
                 return new AgentInputQueueCommandResult
                 {
@@ -210,7 +219,7 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
                 this.queuesById.Remove(queue.QueueId);
                 this.queues.Remove(queue);
 
-                var revision = this.manager.BumpAggregateRevision();
+                var revision = this.manager.AggregateRevision;
                 this.RefreshSnapshotLocked();
                 return new AgentInputQueueCommandResult
                 {
@@ -641,6 +650,7 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
         AgentInputQueueCommandResult result;
         lock (this.stateLock)
         {
+            ObjectDisposedException.ThrowIf(this.disposed, this);
             if (this.commandLog.TryGetValue(commandId, out var prior))
             {
                 return string.Equals(prior.Payload, payload, StringComparison.Ordinal)
@@ -672,6 +682,16 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
             {
                 this.commandInProgress = true;
                 result = apply();
+                // Steering/owner callbacks can consume an item synchronously after a
+                // command's own capture (notably Move's target ItemAdded notification).
+                this.RefreshSnapshotLocked();
+                result = result with
+                {
+                    Revision = this.snapshot.Revision,
+                    CurrentSnapshot = result.Status == AgentInputQueueCommandStatus.Applied
+                        ? this.snapshot
+                        : result.CurrentSnapshot,
+                };
             }
             finally
             {
@@ -724,10 +744,6 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
     private void RefreshSnapshotLocked()
     {
         this.snapshot = this.BuildSnapshotLocked();
-        foreach (var q in this.queues)
-        {
-            q.RaiseChanged();
-        }
     }
 
     private AgentInputQueuesSnapshot BuildSnapshot()
@@ -771,38 +787,83 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
 
     private void RaiseChanged()
     {
-        var handler = this.Changed;
-        if (handler is null)
+        lock (this.stateLock)
         {
-            return;
+            if (this.disposed || this.commandInProgress || this.notificationScheduled
+                || this.snapshot.Revision <= this.lastNotifiedRevision)
+            {
+                return;
+            }
+            this.notificationScheduled = true;
         }
         if (TaskScheduler.Current == this.foregroundScheduler)
         {
-            handler.Invoke(this, EventArgs.Empty);
+            this.DrainNotifications();
             return;
         }
 
         _ = Task.Factory.StartNew(
-            () => this.Changed?.Invoke(this, EventArgs.Empty),
+            this.DrainNotifications,
             CancellationToken.None,
             TaskCreationOptions.DenyChildAttach,
             this.foregroundScheduler);
     }
 
+    private void DrainNotifications()
+    {
+        var finished = false;
+        try
+        {
+            while (true)
+            {
+                AgentInputQueuesSnapshot published;
+                LocalAgentInputQueue[] publishedQueues;
+                lock (this.stateLock)
+                {
+                    if (this.disposed || this.snapshot.Revision <= this.lastNotifiedRevision)
+                    {
+                        this.notificationScheduled = false;
+                        finished = true;
+                        return;
+                    }
+                    published = this.snapshot;
+                    publishedQueues = this.queues.ToArray();
+                    this.lastNotifiedRevision = published.Revision;
+                }
+
+                // Snapshot capture and the idempotency log are complete before observers run.
+                // Reentrant mutations are drained afterward, never recursively published.
+                this.Changed?.Invoke(this, new AgentInputQueuesChangedEventArgs(published));
+                foreach (var queue in publishedQueues)
+                {
+                    queue.RaiseChanged();
+                }
+            }
+        }
+        finally
+        {
+            if (!finished)
+            {
+                lock (this.stateLock)
+                {
+                    this.notificationScheduled = false;
+                }
+            }
+        }
+    }
+
+    private void OnManagerMutationCompleted(object? sender, EventArgs e) => this.RaiseChanged();
+
     private void OnManagerQueueStateChanged(object? sender, AgentInputQueueManager.QueueStateChangedEventArgs e)
     {
-        if (this.commandInProgress || this.disposed)
-        {
-            return;
-        }
-
-        // The change may have originated outside our command surface (e.g. the owner's Copilot
-        // dequeue path). Re-snapshot so external consumers observe a fresh aggregate.
         lock (this.stateLock)
         {
+            if (this.commandInProgress || this.disposed)
+            {
+                return;
+            }
             this.RefreshSnapshotLocked();
         }
-        this.RaiseChanged();
     }
 
     private void OnManagerQueuePublished(object? sender, AgentInputQueueManager.QueuePublishedEventArgs e)
@@ -831,8 +892,6 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
             this.EnsureQueueWrappedLocked(e.Queue, name, isDefault: false, isImmediate: false);
             this.RefreshSnapshotLocked();
         }
-
-        this.RaiseChanged();
     }
 
     private void OnManagerQueueUnregistered(object? sender, AgentInputQueueManager.QueueRegistrationChangedEventArgs e)
@@ -854,8 +913,6 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
             this.queues.Remove(queue);
             this.RefreshSnapshotLocked();
         }
-
-        this.RaiseChanged();
     }
 
     private sealed class LocalAgentInputQueue : IAgentInputQueue

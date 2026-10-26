@@ -33,6 +33,10 @@ public sealed class AgentInputQueueManager
     private readonly Dictionary<AgentInputQueue, EventHandler> queueConfigurationHandlers = [];
     private readonly Dictionary<string, string> queueNames = new(StringComparer.Ordinal);
     private long aggregateRevision;
+    private int mutationDepth;
+
+    internal object SyncRoot => this.syncLock;
+    internal event EventHandler? MutationCompleted;
 
     public event EventHandler<QueuePublishedEventArgs>? QueuePublished;
     public event EventHandler<QueueStateChangedEventArgs>? QueueStateChanged;
@@ -51,6 +55,7 @@ public sealed class AgentInputQueueManager
         this.inputQueues = [this.ImmediateQueue];
         this.queueConfigurationHandlers[this.ImmediateQueue] = this.OnQueueConfigurationChanged;
         this.ImmediateQueue.ConfigurationChanged += this.OnQueueConfigurationChanged;
+        this.ImmediateQueue.ConfigureMutation = this.Mutate;
         this.queueNames[this.ImmediateQueue.QueueId] = "Immediate Queue";
     }
 
@@ -66,6 +71,41 @@ public sealed class AgentInputQueueManager
     /// <summary>Bumps the aggregate revision and returns the new value.</summary>
     internal long BumpAggregateRevision() => Interlocked.Increment(ref this.aggregateRevision);
 
+    // One owner gate covers contents, revision accounting and adapter snapshot capture.
+    // Observers of the aggregate run only after the outermost mutation releases it.
+    internal T Mutate<T>(Func<T> mutation)
+    {
+        var completed = false;
+        try
+        {
+            lock (this.syncLock)
+            {
+                this.mutationDepth++;
+                try
+                {
+                    return mutation();
+                }
+                finally
+                {
+                    completed = --this.mutationDepth == 0;
+                }
+            }
+        }
+        finally
+        {
+            if (completed)
+            {
+                this.MutationCompleted?.Invoke(this, EventArgs.Empty);
+            }
+        }
+    }
+
+    internal void Mutate(Action mutation) => this.Mutate(() =>
+    {
+        mutation();
+        return true;
+    });
+
     /// <summary>
     /// #1485: notifies subscribers that a legacy edit/remove path applied a mutation to
     /// <paramref name="queue"/>. Bumps the aggregate revision and raises
@@ -76,8 +116,11 @@ public sealed class AgentInputQueueManager
     public void NotifyLegacyMutationApplied(AgentInputQueue queue, QueueStateChangeKind kind)
     {
         ArgumentNullException.ThrowIfNull(queue);
-        Interlocked.Increment(ref this.aggregateRevision);
-        this.NotifyQueueStateChanged(queue, kind);
+        this.Mutate(() =>
+        {
+            Interlocked.Increment(ref this.aggregateRevision);
+            this.NotifyQueueStateChanged(queue, kind);
+        });
     }
 
     internal void NotifyQueueStateChanged(AgentInputQueue queue, QueueStateChangeKind kind)
@@ -128,22 +171,19 @@ public sealed class AgentInputQueueManager
         ArgumentNullException.ThrowIfNull(queue);
         ArgumentNullException.ThrowIfNull(items);
 
-        this.RegisterInputQueue(queue);
-        var beforeCount = queue.Items.Count;
-        var result = queue.Enqueue(items);
-        if (result.Count > beforeCount)
+        return this.Mutate(() =>
         {
-            Interlocked.Increment(ref this.aggregateRevision);
-            this.QueueStateChanged?.Invoke(
-                this,
-                new QueueStateChangedEventArgs
-                {
-                    Queue = queue,
-                    ChangeKind = QueueStateChangeKind.ItemAdded,
-                });
-        }
+            this.RegisterInputQueue(queue);
+            var beforeCount = queue.Items.Count;
+            var result = queue.Enqueue(items);
+            if (result.Count > beforeCount)
+            {
+                Interlocked.Increment(ref this.aggregateRevision);
+                this.NotifyQueueStateChanged(queue, QueueStateChangeKind.ItemAdded);
+            }
 
-        return result;
+            return result;
+        });
     }
 
     public void RegisterInputQueue(
@@ -151,13 +191,15 @@ public sealed class AgentInputQueueManager
     {
         ArgumentNullException.ThrowIfNull(queue);
 
-        lock (this.syncLock)
+        this.Mutate(() =>
         {
             if (!this.inputQueues.Contains(queue))
             {
                 this.inputQueues.Add(queue);
+                queue.ConfigureMutation = this.Mutate;
                 this.queueConfigurationHandlers[queue] = this.OnQueueConfigurationChanged;
                 queue.ConfigurationChanged += this.OnQueueConfigurationChanged;
+                this.BumpAggregateRevision();
                 this.QueueRegistered?.Invoke(
                     this,
                     new QueueRegistrationChangedEventArgs
@@ -165,7 +207,7 @@ public sealed class AgentInputQueueManager
                         Queue = queue,
                     });
             }
-        }
+        });
     }
 
     public bool UnregisterInputQueue(
@@ -173,7 +215,7 @@ public sealed class AgentInputQueueManager
     {
         ArgumentNullException.ThrowIfNull(queue);
 
-        lock (this.syncLock)
+        return this.Mutate(() =>
         {
             if (ReferenceEquals(queue, this.ImmediateQueue))
             {
@@ -184,10 +226,12 @@ public sealed class AgentInputQueueManager
             if (removed && this.queueConfigurationHandlers.Remove(queue, out var handler))
             {
                 queue.ConfigurationChanged -= handler;
+                queue.ConfigureMutation = null;
             }
 
             if (removed)
             {
+                this.BumpAggregateRevision();
                 this.QueueUnregistered?.Invoke(
                     this,
                     new QueueRegistrationChangedEventArgs
@@ -197,7 +241,7 @@ public sealed class AgentInputQueueManager
             }
 
             return removed;
-        }
+        });
     }
 
     public bool TryDequeueNextImmediate(out AgentInputItem item)
@@ -208,32 +252,32 @@ public sealed class AgentInputQueueManager
 
     private bool TryDequeueNext(bool includeQueued, out AgentInputItem item)
     {
-        AgentInputQueue? selectedQueue;
-        lock (this.syncLock)
+        var result = this.Mutate(() =>
         {
-            selectedQueue = this.inputQueues
+            var selectedQueue = this.inputQueues
                 .Where(queue => queue.Items.Count > 0)
                 .Where(queue => queue.Immediacy == AgentInputQueueImmediacy.Immediate
                     || (includeQueued && queue.Immediacy == AgentInputQueueImmediacy.Queue))
                 .OrderByDescending(queue => queue.Priority)
                 .FirstOrDefault();
-        }
 
-        if (selectedQueue is null || !this.TryDequeueFirst(selectedQueue, out item))
-        {
-            item = default!;
-            return false;
-        }
-
-        this.QueuePublished?.Invoke(
-            this,
-            new QueuePublishedEventArgs
+            if (selectedQueue is null || !this.TryDequeueFirst(selectedQueue, out var dequeued))
             {
-                Queue = selectedQueue,
-                Item = item,
-            });
+                return (Applied: false, Item: (AgentInputItem)null!);
+            }
 
-        return true;
+            this.QueuePublished?.Invoke(
+                this,
+                new QueuePublishedEventArgs
+                {
+                    Queue = selectedQueue,
+                    Item = dequeued,
+                });
+
+            return (Applied: true, Item: dequeued);
+        });
+        item = result.Item;
+        return result.Applied;
     }
 
     private bool TryDequeueFirst(AgentInputQueue queue, out AgentInputItem item)
@@ -270,13 +314,10 @@ public sealed class AgentInputQueueManager
             return;
         }
 
-        Interlocked.Increment(ref this.aggregateRevision);
-        this.QueueStateChanged?.Invoke(
-            this,
-            new QueueStateChangedEventArgs
-            {
-                Queue = queue,
-                ChangeKind = QueueStateChangeKind.ConfigurationChanged,
-            });
+        this.Mutate(() =>
+        {
+            Interlocked.Increment(ref this.aggregateRevision);
+            this.NotifyQueueStateChanged(queue, QueueStateChangeKind.ConfigurationChanged);
+        });
     }
 }

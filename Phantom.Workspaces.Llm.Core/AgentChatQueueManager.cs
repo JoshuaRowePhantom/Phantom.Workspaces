@@ -119,17 +119,22 @@ public sealed class AgentChatQueueManager
     public void SetQueueImmediacy(AgentChatQueue queue, AgentInputQueueImmediacy immediacy)
     {
         ArgumentNullException.ThrowIfNull(queue);
-        queue.Queue.Configure(new AgentInputQueue.Parameters
+        this.inputQueueManager.Mutate(() => queue.Queue.Configure(new AgentInputQueue.Parameters
         {
             Priority = queue.Queue.Priority,
             Immediacy = immediacy,
             CoalescingKey = queue.Queue.CoalescingKey,
-        });
+        }));
     }
 
     public void ClearQueue(AgentChatQueue queue)
     {
         ArgumentNullException.ThrowIfNull(queue);
+        this.inputQueueManager.Mutate(() => this.ClearQueueCore(queue));
+    }
+
+    private void ClearQueueCore(AgentChatQueue queue)
+    {
         while (true)
         {
             var expected = queue.Queue.Items;
@@ -140,6 +145,8 @@ public sealed class AgentChatQueueManager
 
             if (queue.Queue.Clear(ref expected))
             {
+                this.inputQueueManager.NotifyLegacyMutationApplied(
+                    queue.Queue, AgentInputQueueManager.QueueStateChangeKind.ItemRemoved);
                 return;
             }
         }
@@ -152,7 +159,11 @@ public sealed class AgentChatQueueManager
     {
         ArgumentNullException.ThrowIfNull(queue);
         ArgumentNullException.ThrowIfNull(item);
+        return this.inputQueueManager.Mutate(() => this.RemoveQueueItemCore(queue, item));
+    }
 
+    private bool RemoveQueueItemCore(AgentChatQueue queue, AgentInputItem item)
+    {
         while (true)
         {
             var expected = queue.Queue.Items;
@@ -163,6 +174,8 @@ public sealed class AgentChatQueueManager
 
             if (queue.Queue.TryRemove(ref expected, item))
             {
+                this.inputQueueManager.NotifyLegacyMutationApplied(
+                    queue.Queue, AgentInputQueueManager.QueueStateChangeKind.ItemRemoved);
                 return true;
             }
         }
@@ -179,7 +192,11 @@ public sealed class AgentChatQueueManager
         {
             return false;
         }
+        return this.inputQueueManager.Mutate(() => this.UpdateQueueItemCore(queue, item, text));
+    }
 
+    private bool UpdateQueueItemCore(AgentChatQueue queue, AgentInputItem item, string text)
+    {
         while (true)
         {
             var expected = queue.Queue.Items;
@@ -202,7 +219,11 @@ public sealed class AgentChatQueueManager
     {
         ArgumentNullException.ThrowIfNull(queue);
         ArgumentNullException.ThrowIfNull(item);
+        return this.inputQueueManager.Mutate(() => this.RemoveQueueItemContentCore(queue, item, contentIndex));
+    }
 
+    private bool RemoveQueueItemContentCore(AgentChatQueue queue, AgentInputItem item, int contentIndex)
+    {
         while (true)
         {
             var expected = queue.Queue.Items;

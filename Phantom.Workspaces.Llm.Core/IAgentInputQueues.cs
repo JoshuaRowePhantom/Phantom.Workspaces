@@ -58,6 +58,11 @@ public readonly record struct AgentInputQueuesSnapshot
     public required ImmutableArray<AgentInputQueueSnapshot> Queues { get; init; }
 }
 
+internal sealed class AgentInputQueuesChangedEventArgs(AgentInputQueuesSnapshot snapshot) : EventArgs
+{
+    internal AgentInputQueuesSnapshot Snapshot { get; } = snapshot;
+}
+
 public readonly record struct AgentInputQueueSnapshot
 {
     public AgentInputQueueSnapshot() { }

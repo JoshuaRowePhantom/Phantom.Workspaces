@@ -45,6 +45,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     private readonly AttachmentPublisherLifetimeHooks? publisherLifetimeHooks;
     private readonly IAgentChatRunningItemsSnapshotProvider? runningItemsSnapshotProvider;
     private HashSet<string> queueIds;
+    private long queueRevision;
     private Task? termination;
     private string terminalReason = "runtime-stopped";
     private bool fenced;
@@ -83,7 +84,9 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         this.SessionContext = sessionContext;
         this.history = this.Chat.History;
         this.Replay = new AgentSessionReplayBuffer(epoch, this.timeProvider);
-        var initialQueues = this.Chat.InputQueues.Snapshot.Queues;
+        var initialQueueSnapshot = this.Chat.InputQueues.Snapshot;
+        this.queueRevision = initialQueueSnapshot.Revision;
+        var initialQueues = initialQueueSnapshot.Queues;
         this.queueIds = initialQueues.IsDefault
             ? []
             : initialQueues.Select(queue => queue.QueueId).ToHashSet(StringComparer.Ordinal);
@@ -327,6 +330,10 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
                         Guid.NewGuid(),
                         new SessionSnapshotEvent { Snapshot = snapshot },
                         replayResetCursor);
+                    this.queueRevision = snapshot.InputQueues.Revision;
+                    this.queueIds = snapshot.InputQueues.Queues.IsDefault
+                        ? []
+                        : snapshot.InputQueues.Queues.Select(queue => queue.QueueId).ToHashSet(StringComparer.Ordinal);
                     var serialized = AgentSessionProtocolCodec.SerializeFrame(frame);
                     foreach (var state in this.attachments.Values.Where(
                                  value => !value.Disconnected
@@ -1138,18 +1145,28 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
 
     private void OnQueuesChanged(object? sender, EventArgs args)
     {
-        var snapshot = this.Chat.InputQueues.Snapshot;
-        var current = snapshot.Queues.IsDefault
-            ? []
-            : snapshot.Queues.Select(queue => queue.QueueId).ToHashSet(StringComparer.Ordinal);
-        var removed = this.queueIds.Except(current, StringComparer.Ordinal).ToArray();
-        this.queueIds = current;
-        this.PublishFromOwner(new QueueChangedEvent
+        var snapshot = args is AgentInputQueuesChangedEventArgs changed
+            ? changed.Snapshot
+            : this.Chat.InputQueues.Snapshot;
+        lock (this.gate)
         {
-            Revision = snapshot.Revision,
-            Queues = snapshot.Queues,
-            RemovedQueueIds = removed,
-        });
+            // An attach snapshot may already include a foreground notification that
+            // has not drained yet. Fence it at publication, not at the remote client.
+            if (this.fenced || snapshot.Revision <= this.queueRevision)
+                return;
+            var current = snapshot.Queues.IsDefault
+                ? []
+                : snapshot.Queues.Select(queue => queue.QueueId).ToHashSet(StringComparer.Ordinal);
+            var removed = this.queueIds.Except(current, StringComparer.Ordinal).ToArray();
+            this.queueIds = current;
+            this.queueRevision = snapshot.Revision;
+            this.PublishFromOwner(new QueueChangedEvent
+            {
+                Revision = snapshot.Revision,
+                Queues = snapshot.Queues,
+                RemovedQueueIds = removed,
+            });
+        }
     }
 
     private void OnRunningItemsChanged(object? sender, NotifyCollectionChangedEventArgs args)
