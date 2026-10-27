@@ -115,11 +115,16 @@
       font-weight: bold;
     }
 
-    .chat-assistant-message > .chat-header .chat-sender::before {
+    .chat-assistant-message > .chat-header:not([hidden]):not(.chat-header-suppressed) .chat-sender::before {
       content: "◉ ";
     }
 
-    .chat-header-suppressed .chat-sender::before {
+    .chat-header[hidden],
+    .chat-header.chat-header-suppressed {
+      display: none;
+    }
+
+    .chat-message > .chat-header-suppressed .chat-sender::before {
       content: none;
     }
 

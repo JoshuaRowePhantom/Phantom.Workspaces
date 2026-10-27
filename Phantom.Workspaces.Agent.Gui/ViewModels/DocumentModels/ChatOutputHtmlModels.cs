@@ -246,6 +246,13 @@ internal sealed class ChatMessageHtmlModel
     /// </summary>
     public bool ProducesNoVisibleContent => this.hasRendered && this.bindings.Count == 0;
 
+    internal bool IsToolCallOnly => this.HasOnlyVisibleCalls(this.isReasoningVisible());
+    internal bool WasRenderedToolCallOnly => this.HasOnlyVisibleCalls(this.lastReasoningVisible);
+
+    private bool HasOnlyVisibleCalls(bool includeReasoning) => this.source.Contents.Any(content => content is FunctionCallContent)
+        && this.source.Contents.All(content => content is FunctionCallContent
+            || !ChatOutputHtmlRenderer.IsContentVisible(content, includeReasoning));
+
     /// <summary>
     /// Returns true if this message's source contains a <see cref="FunctionCallContent"/> with the
     /// given <paramref name="callId"/>. Used by the transformer to locate the matching call slot when
@@ -1051,9 +1058,9 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         var plan = this.PlanSupplementalResults();
         var previous = this.FindPreviousDomSlot(index);
         var next = this.FindNextDomSlot(index - 1);
-        var joinsCallSegments = slot.HasDomElement && !IsRunToolCallItem(slot.Model.Source) &&
+        var joinsCallSegments = slot.HasDomElement && !slot.Model.IsToolCallOnly &&
             previous is not null && next is not null &&
-            IsRunToolCallItem(previous.Model.Source) && IsRunToolCallItem(next.Model.Source) &&
+            previous.Model.IsToolCallOnly && next.Model.IsToolCallOnly &&
             previous.Model.Source.AssistantRunId == next.Model.Source.AssistantRunId;
         if (joinsCallSegments)
         {
@@ -1129,6 +1136,15 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         }
 
         this.ReconcileRoleHeaders();
+    }
+
+    internal void RefreshContent()
+    {
+        var classificationChanged = this.Target.Any(slot => slot.Model.IsToolCallOnly != slot.Model.WasRenderedToolCallOnly);
+        foreach (var slot in this.Target)
+            slot.Model.Refresh();
+        if (classificationChanged)
+            this.RebuildFrom(0);
     }
 
     private int GetRebuildStart(int index)
@@ -1208,7 +1224,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
                 }
             }
 
-            if (!slot.Model.ProducesNoVisibleContent && !IsRunToolCallItem(source))
+            if (!slot.Model.ProducesNoVisibleContent && !slot.Model.IsToolCallOnly)
             {
                 lastVisibleBoundary = index;
             }
@@ -1310,7 +1326,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
 
         slot.HasDomElement = true;
 
-        var isToolCall = IsRunToolCallItem(sourceItem);
+        var isToolCall = slot.Model.IsToolCallOnly;
         var groupablePredecessor = isToolCall ? this.FindGroupablePredecessor(index) : null;
         if (isToolCall)
         {
@@ -1523,7 +1539,9 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
 
     private StructuralCategory Categorize(AgentChatHistoryItem item)
     {
-        if (IsRunToolCallItem(item))
+        if (item.Contents.Any(content => content is FunctionCallContent)
+            && item.Contents.All(content => content is FunctionCallContent
+                || !ChatOutputHtmlRenderer.IsContentVisible(content, this.isReasoningVisible())))
         {
             return StructuralCategory.ToolCallOnly;
         }
@@ -1578,7 +1596,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         if (callIndex < 0 || callIndex >= resultIndex) return true;
         for (var i = callIndex + 1; i < resultIndex; i++)
         {
-            if (slots[i].HasDomElement && !IsRunToolCallItem(slots[i].Model.Source))
+            if (slots[i].HasDomElement && !slots[i].Model.IsToolCallOnly)
                 return true;
         }
         return false;
@@ -1649,27 +1667,6 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         return true;
     }
 
-    internal static bool IsToolCallOnlyItem(AgentChatHistoryItem item)
-    {
-        if (item.Contents.Count == 0)
-        {
-            return false;
-        }
-
-        foreach (var content in item.Contents)
-        {
-            if (content is not FunctionCallContent)
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    internal static bool IsRunToolCallItem(AgentChatHistoryItem item)
-        => IsToolCallOnlyItem(item);
-
     /// <summary>
     /// Looks up the slot whose source message contains a <see cref="FunctionCallContent"/> with the
     /// given <paramref name="callId"/> via the shared call-id map. Returns <see langword="null"/>
@@ -1711,6 +1708,12 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
                 return null;
             }
             var candidateRunId = candidate.Model.Source.AssistantRunId;
+            if (candidateRunId is null && runId is not null &&
+                IsGroupingTransparent(candidate) && candidate.Model.Source.Role == ChatRole.Assistant &&
+                HasOwningRunContext(this.Target, i, runId))
+            {
+                continue;
+            }
             if (runId is not null && candidateRunId != runId ||
                 runId is null && candidateRunId is not null)
             {
@@ -1722,12 +1725,38 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
             }
 
             return candidate.HasDomElement &&
-                   (candidate.Group is not null || IsRunToolCallItem(candidate.Model.Source))
+                   (candidate.Group is not null || candidate.Model.IsToolCallOnly)
                 ? candidate
                 : null;
         }
 
         return null;
+    }
+
+    internal static bool HasOwningRunContext(IList<RenderSlot> slots, int index, string runId)
+    {
+        foreach (var direction in new[] { -1, 1 })
+        {
+            var found = false;
+            for (var candidateIndex = index + direction; candidateIndex >= 0 && candidateIndex < slots.Count; candidateIndex += direction)
+            {
+                var candidate = slots[candidateIndex];
+                if (candidate.Model.Source.Role == ChatRole.User || candidate.Model.Source.Role == ChatRole.System)
+                    return false;
+                if (candidate.Model.Source.AssistantRunId is { } candidateRun)
+                {
+                    if (candidateRun != runId)
+                        return false;
+                    found = true;
+                    break;
+                }
+                if (!IsGroupingTransparent(candidate))
+                    return false;
+            }
+            if (!found)
+                return false;
+        }
+        return true;
     }
 
     private RenderSlot? FindPreviousDomSlot(int index)
@@ -2017,10 +2046,7 @@ internal sealed class RunningChatItemHtmlModel : IDisposable
             return;
         }
 
-        foreach (var slot in this.messageSlots)
-        {
-            slot.Model.Refresh();
-        }
+        this.transformer?.RefreshContent();
     }
 
     /// <summary>
@@ -2495,7 +2521,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
         // Pass 3: use explicit run boundaries where available; legacy messages retain contiguous grouping.
         for (var i = 0; i < snapshot.Count; i++)
         {
-            if (!slots[i].HasDomElement || !ChatMessageHtmlTransformer.IsRunToolCallItem(snapshot[i]))
+            if (!slots[i].HasDomElement || !slots[i].Model.IsToolCallOnly)
             {
                 continue;
             }
@@ -2508,6 +2534,13 @@ public sealed class ChatOutputHtmlModel : IDisposable
                     break;
                 }
                 var runId = snapshot[i].AssistantRunId;
+                if (snapshot[j].AssistantRunId is null && runId is not null &&
+                    ChatMessageHtmlTransformer.IsGroupingTransparent(slots[j]) &&
+                    snapshot[j].Role == ChatRole.Assistant &&
+                    ChatMessageHtmlTransformer.HasOwningRunContext(slots, j, runId))
+                {
+                    continue;
+                }
                 if (runId is not null && snapshot[j].AssistantRunId != runId ||
                     runId is null && snapshot[j].AssistantRunId is not null)
                 {
@@ -2519,7 +2552,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
                 }
 
                 if (slots[j].HasDomElement &&
-                    (slots[j].Group is not null || ChatMessageHtmlTransformer.IsRunToolCallItem(snapshot[j])))
+                    (slots[j].Group is not null || slots[j].Model.IsToolCallOnly))
                 {
                     groupablePredecessor = slots[j];
                 }
@@ -2809,10 +2842,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
 
         if (!this.historyLoading)
         {
-            foreach (var slot in this.historySlots)
-            {
-                slot.Model.Refresh();
-            }
+            this.historyTransformer?.RefreshContent();
         }
 
         foreach (var model in this.runningModels)

@@ -558,6 +558,14 @@ internal static class ChatOutputHtmlRenderer
     /// element, or returns <see langword="null"/> when the block should not be shown (hidden reasoning
     /// or empty text).
     /// </summary>
+    internal static bool IsContentVisible(AIContent content, bool includeReasoning)
+        => content switch
+        {
+            TextReasoningContent reasoning => includeReasoning && !string.IsNullOrWhiteSpace(reasoning.Text),
+            TextContent text => !string.IsNullOrWhiteSpace(text.Text),
+            _ => true,
+        };
+
     public static string? RenderContent(
         string contentId,
         AIContent content,
@@ -567,6 +575,11 @@ internal static class ChatOutputHtmlRenderer
         IToolVisualizerFactory? toolFactory = null,
         IAgentStatusSink? statusSink = null)
     {
+        if (!IsContentVisible(content, includeReasoning))
+        {
+            return null;
+        }
+
         switch (content)
         {
             case TextReasoningContent reasoning:
