@@ -1,15 +1,146 @@
 using System.Diagnostics;
 using Avalonia.Headless.XUnit;
+using Avalonia.Controls;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.ViewModels;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Phantom.Workspaces.Data.Web.Server;
+using Phantom.Workspaces.Transport;
+using Phantom.Workspaces.Transport.Http;
+using Phantom.Workspaces.Transport.ReverseHttp;
+using Phantom.Workspaces.Web.Server;
 
 namespace Phantom.Workspaces.Tests;
 
 public sealed class MainWindowStartupTests
 {
+    [AvaloniaTheory(Timeout = 15_000)]
+    [InlineData("complete")]
+    [InlineData("cancel")]
+    [InlineData("fail")]
+    public async Task ApplicationStartup_WorkspaceQueryIsGated_VisibleShellOwnsResponsiveCancellableLoading(string outcome)
+    {
+        var token = TestContext.Current.CancellationToken;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var armed = 0;
+        var dal = await WebServerDataAccessLayerFactory.CreateDefaultAsync(token);
+        var builder = WebApplication.CreateBuilder();
+        builder.Logging.ClearProviders();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        builder.Services.AddSingleton<IDataAccessLayer>(dal);
+        var connectionStatus = new ReverseConnectionStatusRegistry();
+        await using var reverse = new ReverseHttpServerTransportFactory(connectionStatus);
+        var transports = new TransportRegistry();
+        transports.Register(reverse);
+        await using var transportServer = new HttpServerTransportFactory(transports);
+        await using var server = builder.Build();
+        server.UseWebSockets();
+        server.Use(async (context, next) =>
+        {
+            if (context.Request.Path == "/data/query" && Interlocked.CompareExchange(ref armed, 0, 1) == 1)
+            {
+                entered.TrySetResult();
+                await release.Task.WaitAsync(context.RequestAborted);
+                if (outcome == "fail")
+                {
+                    context.Response.StatusCode = 500;
+                    return;
+                }
+            }
+            await next(context);
+        });
+        server.MapWebDataAccessEndpoints();
+        transportServer.Map(server);
+        server.MapTransportReverseEndpoints(reverse, connectionStatus);
+        await server.StartAsync(token);
+        var address = server.Services.GetRequiredService<IServer>()
+            .Features.Get<IServerAddressesFeature>()!.Addresses.Single();
+        var viewModel = new MainWindowViewModel(new WebRepositorySource(address),
+            new WorkspacesConfiguration { SkipStartupWorkspace = false });
+        var window = new MainWindow(viewModel);
+        var splash = new Avalonia.Controls.Window();
+        await using var access = Services.Access.AccessHostServices.Create(new Services.Access.AccessHostOptions
+        {
+            PlatformSecretStore = new Phantom.Workspaces.Llm.Secrets.NullPlatformSecretStore(),
+            Dispatch = action => action(),
+            ReleaseMemoryFilePath = System.IO.Path.Combine(Environment.CurrentDirectory, ".nonexistent-startup-access", "memory.json"),
+        });
+        await using var popup = new AuthorizationRequestsPopupViewModel { Rows = access.AuthorizationRows };
+        try
+        {
+            splash.Show();
+            await viewModel.PrepareShellAsync();
+            window.AttachAccessHost(access, popup);
+            window.Show();
+            splash.Close();
+            var rendered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Dispatcher.UIThread.Post(() => rendered.TrySetResult(), DispatcherPriority.Render);
+            Volatile.Write(ref armed, 1);
+            var startup = viewModel.CompleteVisibleStartupAsync();
+            await entered.Task.WaitAsync(token);
+            Assert.True(rendered.Task.IsCompletedSuccessfully);
+            Assert.True(window.IsVisible);
+            Assert.False(splash.IsVisible);
+            Assert.NotNull(viewModel.Layout);
+            Assert.Equal(WorkspaceStartupState.LoadingWorkspaces, viewModel.StartupState);
+            Assert.False(viewModel.IsStartupReady);
+            Assert.False(startup.IsCompleted);
+            var heartbeat = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Dispatcher.UIThread.Post(() => heartbeat.TrySetResult());
+            await heartbeat.Task.WaitAsync(token);
+            var registry = Assert.IsType<Services.Authorization.UserAuthorizationRegistry>(access.AuthorizationRegistry);
+            registry.Add(AuthorizationRequestRowsViewModelTests.Snapshot());
+            window.FindControl<Avalonia.Controls.Button>("AuthorizationKey")!
+                .RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
+            await window.AccessAdministrationReady;
+            Assert.Same(access.AuthorizationRows, window.LastAccessAdministrationWindow!.RequestRows);
+            var request = Assert.Single(access.AuthorizationRows.Rows);
+            await request.CancelCommand.ExecuteAsync(null);
+            Assert.False(request.CanAct);
+            if (outcome == "cancel")
+            {
+                var disposal = viewModel.DisposeAsync().AsTask();
+                await Task.WhenAll(disposal, viewModel.DisposeAsync().AsTask());
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => startup);
+                Assert.Equal(WorkspaceStartupState.Cancelled, viewModel.StartupState);
+            }
+            else
+            {
+                release.TrySetResult();
+                if (outcome == "fail")
+                {
+                    await Assert.ThrowsAnyAsync<Exception>(() => startup);
+                    Assert.Equal(WorkspaceStartupState.Failed, viewModel.StartupState);
+                    Assert.Contains("failed", viewModel.StartupStatus, StringComparison.OrdinalIgnoreCase);
+                }
+                else
+                {
+                    await startup;
+                    Assert.True(viewModel.IsStartupReady);
+                }
+            }
+        }
+        finally
+        {
+            release.TrySetResult();
+            splash.Close();
+            await window.DisposeAccessAdministrationAsync();
+            window.Close();
+            try { await viewModel.DisposeAsync(); }
+            catch (AggregateException) when (outcome == "fail") { }
+            await server.StopAsync(token);
+        }
+    }
+
     [AvaloniaFact(Timeout = 15_000)]
     public async Task ApplicationStartup_WorkspaceMaterializes_VisibleWindowRemainsLoadingUntilCompleted()
     {

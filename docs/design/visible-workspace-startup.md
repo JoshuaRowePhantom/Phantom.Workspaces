@@ -17,3 +17,11 @@ failure and cancellation. The main window displays safe loading/failure status.
 Post-show failure is logged and leaves the shell available for diagnostics and
 controlled shutdown. Disposal cancels and observes phase work before resource
 teardown; cancelled panes cannot receive late population updates.
+
+Default-workspace queries and workspace/tab snapshot fetches receive the window
+lifetime token, so shutdown cancels outstanding remote requests rather than
+waiting for a repository response. Credential-free acceptance tests use the real
+loopback data and transport endpoints, holding the actual workspace query while
+verifying shell rendering, dispatcher responsiveness and the shared authorization
+cancel action. They independently cover successful release, remote failure and
+concurrent disposal before the held request is released.

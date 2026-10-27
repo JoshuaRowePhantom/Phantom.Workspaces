@@ -2459,7 +2459,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         // Fetch just the workspace entity to build the skeleton pane
-        var workspaceEntities = await this.EntityBroker!.GetEntitiesAsync([workspaceRequest]);
+        var workspaceEntities = await this.EntityBroker!.GetEntitiesAsync([workspaceRequest], this.lifetime.Token);
         this.lifetime.Token.ThrowIfCancellationRequested();
         var workspaceEntity = workspaceEntities.FirstOrDefault(e => e.EntityId == workspaceSnapshot.EntityId);
         if (workspaceEntity is null)
@@ -2896,7 +2896,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         GetEntityRequest entityRequest,
         bool focus = true)
     {
-        var entities = await this.EntityBroker!.GetEntitiesAsync([entityRequest]);
+        var entities = await this.EntityBroker!.GetEntitiesAsync([entityRequest], this.lifetime.Token);
         var subscribedEntity = entities.FirstOrDefault();
         if (subscribedEntity is null)
         {
@@ -3777,7 +3777,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private async Task<EntitySnapshot?> LoadSingleEntitySnapshotAsync(
         GetEntityRequest request)
     {
-        var entities = await this.EntityBroker.GetEntitiesAsync([request]);
+        var entities = await this.EntityBroker.GetEntitiesAsync([request], this.lifetime.Token);
         return entities.FirstOrDefault()?.Snapshot;
     }
 
@@ -4188,7 +4188,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             EntityName = new EntityName("views", "main"),
         };
 
-        var mainViewEntities = await this.EntityBroker.GetEntitiesAsync([mainViewRequest]);
+        var mainViewEntities = await this.EntityBroker.GetEntitiesAsync([mainViewRequest], this.lifetime.Token);
         var mainViewEntity = mainViewEntities.FirstOrDefault();
         if (mainViewEntity?.Snapshot.Data is not JsonElement mainViewData)
         {
@@ -4212,7 +4212,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             }
         }
 
-        await this.EntityBroker!.GetEntitiesAsync(requests);
+        await this.EntityBroker!.GetEntitiesAsync(requests, this.lifetime.Token);
         return mainViewEntity;
     }
 
@@ -4290,7 +4290,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                         },
                     },
                 ],
-            });
+            }, this.lifetime.Token);
 
         var workspaceIds = new List<EntityId>();
         foreach (var snapshot in queryResult.Batches.SelectMany(static batch => batch.Entities))
