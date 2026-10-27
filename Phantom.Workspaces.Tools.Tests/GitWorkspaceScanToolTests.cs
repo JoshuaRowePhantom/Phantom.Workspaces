@@ -12,6 +12,185 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
     private readonly TempDirectory temporaryRoot = new("git-workspace-scan-");
     private string temporaryRootPath => this.temporaryRoot.Path;
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExecuteAsync_IndexedRecycledWorkspace_RespectsOwnership(bool foreign)
+    {
+        var root = Path.Combine(this.temporaryRootPath, "$Recycle.Bin", "indexed");
+        InitializeGitRepository(root, "https://example.com/indexed.git");
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
+        var context = await CreateExecutionContextAsync(dataAccessLayer, root, root);
+        var entityId = new EntityId(Guid.NewGuid());
+        var owner = foreign ? new EntityId(Guid.NewGuid()) : context.CurrentComputerUserProfileEntity.EntityId;
+        var seeded = await UpsertEntityAsync(dataAccessLayer, entityId,
+            JsonSerializer.Serialize(new Dictionary<string, object?>
+            {
+                ["entity-id"] = entityId.ToString(),
+                ["entity-types"] = new[] { "entity", "git-worktree", "filesystem-path" },
+                ["names"] = new[] { new[] { "git-worktrees", "user-name" } },
+                ["display-name"] = "User display name",
+                ["path"] = root,
+                ["computer-user-profile-id"] = owner.ToString(),
+                ["exists-on-filesystem"] = true,
+                ["git"] = new { branch = "preserved" },
+            }), null);
+        var probes = 0;
+
+        await new GitWorkspaceScanTool(new FixedLocalDriveRootProvider([]),
+            availabilityReader: path =>
+            {
+                probes++;
+                return GitWorkspacePath.Classify(path);
+            }).ExecuteAsync(context);
+
+        var entity = await GetEntityByIdAsync(dataAccessLayer, entityId);
+        var relationship = await WorkspaceToolEntityUtilities.TryGetEntityByIdAsync(dataAccessLayer,
+            DeterministicEntityId.Create("git-workspace-missing", entityId.ToString()), default);
+        Assert.True(entity!.Data!.Value.GetProperty("exists-on-filesystem").GetBoolean());
+        Assert.Equal("User display name", entity.Data.Value.GetProperty("display-name").GetString());
+        if (foreign)
+        {
+            Assert.Equal(0, probes);
+            Assert.Equal(seeded.ConcurrencyTag, entity.ConcurrencyTag);
+            Assert.Null(relationship?.Data);
+        }
+        else
+        {
+            Assert.NotNull(relationship?.Data);
+        }
+        Assert.True(Directory.Exists(root));
+    }
+
+    [Theory]
+    [InlineData("$Recycle.Bin", "[]")]
+    [InlineData("excluded", "[\"%PW_UNUSED_EXCLUDE%\"]")]
+    public async Task ExecuteAsync_LinkedWorktreeExcluded_DoesNotIndexWorktree(string component, string excludes)
+    {
+        var root = Path.Combine(this.temporaryRootPath, "linked-root");
+        InitializeGitRepository(root, "https://example.com/root.git");
+        var linked = Path.Combine(this.temporaryRootPath, component, "linked");
+        Directory.CreateDirectory(Path.GetDirectoryName(linked)!);
+        AddLinkedWorktree(root, "excluded-linked", linked);
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
+        var context = await CreateExecutionContextAsync(dataAccessLayer, root, root,
+            toolExcludesJson: component == "excluded"
+                ? JsonSerializer.Serialize(new[] { Path.GetDirectoryName(linked)! })
+                : excludes);
+
+        await new GitWorkspaceScanTool(new FixedLocalDriveRootProvider([root])).ExecuteAsync(context);
+
+        Assert.Null(await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", linked)));
+        Assert.True(Directory.Exists(linked));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_LinkedWorktreeOpenFails_DoesNotInferDeletion()
+    {
+        var root = Path.Combine(this.temporaryRootPath, "open-failure-root");
+        InitializeGitRepository(root, "https://example.com/root.git");
+        var linked = Path.Combine(this.temporaryRootPath, "open-failure-linked");
+        AddLinkedWorktree(root, "open-failure", linked);
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
+        var context = await CreateExecutionContextAsync(dataAccessLayer, root, root);
+        var tool = new GitWorkspaceScanTool(new FixedLocalDriveRootProvider([root]));
+        await tool.ExecuteAsync(context);
+        var before = await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", linked));
+        File.Delete(Path.Combine(linked, ".git"));
+
+        await tool.ExecuteAsync(context);
+
+        var after = await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", linked));
+        Assert.True(after!.Data!.Value.GetProperty("exists-on-filesystem").GetBoolean());
+        Assert.True(JsonElement.DeepEquals(before!.Data!.Value.GetProperty("git"), after.Data.Value.GetProperty("git")));
+        Assert.Null((await WorkspaceToolEntityUtilities.TryGetEntityByIdAsync(dataAccessLayer,
+            DeterministicEntityId.Create("git-workspace-missing", after.EntityId.ToString()), default))?.Data);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_IndexedWorktreeExcludedFromDiscovery_DoesNotInferDeletion()
+    {
+        var root = Path.Combine(this.temporaryRootPath, "excluded-indexed");
+        InitializeGitRepository(root, "https://example.com/excluded.git");
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
+        var context = await CreateExecutionContextAsync(dataAccessLayer, root, root);
+        await new GitWorkspaceScanTool(new FixedLocalDriveRootProvider([root])).ExecuteAsync(context);
+        var excludingContext = context with
+        {
+            Tool = context.Tool with
+            {
+                Data = JsonSerializer.SerializeToElement(new { excludes = new[] { root } }),
+            },
+        };
+
+        await new GitWorkspaceScanTool(new FixedLocalDriveRootProvider([])).ExecuteAsync(excludingContext);
+
+        var entity = await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", root));
+        Assert.True(entity!.Data!.Value.GetProperty("exists-on-filesystem").GetBoolean());
+        Assert.Null((await WorkspaceToolEntityUtilities.TryGetEntityByIdAsync(dataAccessLayer,
+            DeterministicEntityId.Create("git-workspace-missing", entity.EntityId.ToString()), default))?.Data);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_PathOfflineOrInaccessible_PreservesIndexedState()
+    {
+        var root = Path.Combine(this.temporaryRootPath, "unknown-indexed");
+        InitializeGitRepository(root, "https://example.com/unknown.git");
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
+        var context = await CreateExecutionContextAsync(dataAccessLayer, root, root);
+        await new GitWorkspaceScanTool(new FixedLocalDriveRootProvider([root])).ExecuteAsync(context);
+        var before = await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", root));
+
+        var result = await new GitWorkspaceScanTool(new FixedLocalDriveRootProvider([root]),
+            availabilityReader: _ => GitWorkspaceAvailability.Unknown).ExecuteAsync(context);
+
+        Assert.Contains("skipped: 1", result.ResultContent);
+        Assert.Equal(before!.ConcurrencyTag,
+            (await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", root)))!.ConcurrencyTag);
+    }
+
+    [Theory]
+    [InlineData("$Recycle.Bin")]
+    [InlineData("$RECYCLE.BIN")]
+    public async Task ExecuteAsync_RecycleBinScanRootWithCustomExcludes_DoesNotIndexWorktrees(string component)
+    {
+        var root = Path.Combine(this.temporaryRootPath, component);
+        var repositoryPath = Path.Combine(root, "repository");
+        InitializeGitRepository(repositoryPath, "https://example.com/recycled.git");
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
+        var context = await CreateExecutionContextAsync(dataAccessLayer, root, root);
+
+        await new GitWorkspaceScanTool(new FixedLocalDriveRootProvider([root])).ExecuteAsync(context);
+
+        Assert.Null(await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", repositoryPath)));
+        Assert.True(Directory.Exists(repositoryPath));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_IndexedWorktreeConfirmedDeleted_SetsExistsOnFilesystemFalseAndHidesEntity()
+    {
+        var root = Path.Combine(this.temporaryRootPath, "scan-reconcile");
+        var repositoryPath = Path.Combine(root, "repository");
+        InitializeGitRepository(repositoryPath, "https://example.com/reconcile.git");
+        var dataAccessLayer = await CreateDataAccessLayerAsync();
+        var context = await CreateExecutionContextAsync(dataAccessLayer, root, root);
+        var tool = new GitWorkspaceScanTool(new FixedLocalDriveRootProvider([root]));
+        await tool.ExecuteAsync(context);
+        Directory.Move(repositoryPath, repositoryPath + "-restored");
+
+        await tool.ExecuteAsync(context);
+
+        var missing = await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", repositoryPath));
+        Assert.False(missing!.Data!.Value.GetProperty("exists-on-filesystem").GetBoolean());
+        Directory.Move(repositoryPath + "-restored", repositoryPath);
+        await tool.ExecuteAsync(context);
+        var restored = await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", repositoryPath));
+        Assert.True(restored!.Data!.Value.GetProperty("exists-on-filesystem").GetBoolean());
+        var relationship = await WorkspaceToolEntityUtilities.TryGetEntityByIdAsync(dataAccessLayer,
+            DeterministicEntityId.Create("git-workspace-missing", restored.EntityId.ToString()), default);
+        Assert.Null(relationship?.Data);
+    }
+
     [Fact]
     public void ExpandAndNormalize_WindowsDriveRoot_RemainsRootedAndDoesNotStripSeparator()
     {

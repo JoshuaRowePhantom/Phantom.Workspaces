@@ -20,17 +20,21 @@ public sealed class GitWorkspaceUpdateTool : IWorkspaceTool
         "This Git workspace does not exist on the filesystem.";
 
     private readonly Func<string, ILogger, GitMetadata?> metadataReader;
-    private readonly Func<string, bool> directoryExists;
+    private readonly Func<string, GitWorkspaceAvailability> availabilityReader;
     private readonly ILogger<GitWorkspaceUpdateTool> logger;
 
     public GitWorkspaceUpdateTool(
         Func<string, ILogger, GitMetadata?>? metadataReader = null,
         ILogger<GitWorkspaceUpdateTool>? logger = null,
-        Func<string, bool>? directoryExists = null)
+        Func<string, bool>? directoryExists = null,
+        Func<string, GitWorkspaceAvailability>? availabilityReader = null)
     {
         this.metadataReader = metadataReader ?? GitRepositoryMetadataReader.TryReadMetadata;
         this.logger = logger ?? NullLogger<GitWorkspaceUpdateTool>.Instance;
-        this.directoryExists = directoryExists ?? Directory.Exists;
+        this.availabilityReader = availabilityReader
+            ?? (directoryExists is null
+                ? GitWorkspacePath.Classify
+                : path => directoryExists(path) ? GitWorkspaceAvailability.Exists : GitWorkspaceAvailability.ConfirmedMissing);
     }
 
     public string ToolType => "git-workspace-update";
@@ -73,9 +77,15 @@ public sealed class GitWorkspaceUpdateTool : IWorkspaceTool
         var foreign = 0;
         var errors = 0;
 
-        foreach (var entity in entities)
+        foreach (var queriedEntity in entities)
         {
             context.CancellationToken.ThrowIfCancellationRequested();
+            var entity = await WorkspaceToolEntityUtilities.TryGetEntityByIdAsync(
+                context.DataAccessLayer, queriedEntity.EntityId, context.CancellationToken);
+            if (entity?.Data is null)
+            {
+                continue;
+            }
 
             var ownerId = WorkspaceEntitySnapshotReader.TryGetStringProperty(
                 entity,
@@ -97,7 +107,21 @@ public sealed class GitWorkspaceUpdateTool : IWorkspaceTool
 
             try
             {
-                var existsOnFilesystem = this.directoryExists(path);
+                var availability = this.availabilityReader(path);
+                if (availability == GitWorkspaceAvailability.ConfirmedMissing)
+                {
+                    availability = this.availabilityReader(path);
+                }
+
+                if (availability == GitWorkspaceAvailability.Unknown)
+                {
+                    this.logger.LogWarning("Preserving Git workspace {EntityId}: path availability is unknown.", entity.EntityId);
+                    skipped++;
+                    continue;
+                }
+
+                var existsOnFilesystem = availability == GitWorkspaceAvailability.Exists;
+                var recycled = GitWorkspacePath.IsRecycled(path);
                 var previousExists = TryGetExistsOnFilesystem(entity.Data);
                 var metadata = existsOnFilesystem
                     ? this.metadataReader(path, this.logger)
@@ -115,11 +139,45 @@ public sealed class GitWorkspaceUpdateTool : IWorkspaceTool
                     currentProfileId);
 
                 PreserveExistingStructuralData(entity.Data, incomingData, preserveGit: metadata is null);
+                var desiredReason = recycled ? "recycled" : existsOnFilesystem ? "visible" : "missing";
+                var previousReason = WorkspaceEntitySnapshotReader.TryGetStringProperty(entity, "git-workspace-hidden-reason");
+                var pending = WorkspaceEntitySnapshotReader.TryGetStringProperty(entity, "git-workspace-visibility-intent");
+                var needsRelationshipReconciliation = pending is not null
+                    || desiredReason == "visible"
+                    || (desiredReason == "missing" && previousExists is not false)
+                    || (desiredReason == "recycled" && previousReason != "recycled");
+                if (needsRelationshipReconciliation)
+                {
+                    incomingData["git-workspace-visibility-intent"] = desiredReason;
+                }
+                if (desiredReason != "visible")
+                {
+                    incomingData["git-workspace-hidden-reason"] = desiredReason;
+                }
+                else
+                {
+                    incomingData.Remove("git-workspace-hidden-reason");
+                }
+
+                var relationship = await WorkspaceToolEntityUtilities.TryGetEntityByIdAsync(
+                    context.DataAccessLayer, GetMissingRelationshipId(entity.EntityId), context.CancellationToken);
+                if (desiredReason == "visible" && relationship?.Data is null && pending is null)
+                {
+                    incomingData.Remove("git-workspace-visibility-intent");
+                    needsRelationshipReconciliation = false;
+                }
+
+                if (this.availabilityReader(path) != availability)
+                {
+                    this.logger.LogWarning("Preserving Git workspace {EntityId}: availability changed before commit.", entity.EntityId);
+                    skipped++;
+                    continue;
+                }
 
                 var entityChanged = !IsEntityUnchanged(entity.Data, incomingData);
                 if (entityChanged)
                 {
-                    await UpdateEntityAsync(
+                    entity = await UpdateEntityAsync(
                         context.DataAccessLayer,
                         entity,
                         incomingData,
@@ -139,19 +197,39 @@ public sealed class GitWorkspaceUpdateTool : IWorkspaceTool
                     unchanged++;
                 }
 
-                if (!existsOnFilesystem && previousExists is not false)
+                if (needsRelationshipReconciliation)
                 {
-                    await UpsertMissingRelationshipAsync(
-                        context.DataAccessLayer,
-                        entity.EntityId,
-                        context.CancellationToken).ConfigureAwait(false);
-                }
-                else if (existsOnFilesystem && previousExists is false)
-                {
-                    await DeleteMissingRelationshipAsync(
-                        context.DataAccessLayer,
-                        entity.EntityId,
-                        context.CancellationToken).ConfigureAwait(false);
+                    var current = await WorkspaceToolEntityUtilities.TryGetEntityByIdAsync(
+                        context.DataAccessLayer, entity.EntityId, context.CancellationToken);
+                    if (current?.ConcurrencyTag != entity.ConcurrencyTag)
+                    {
+                        this.logger.LogWarning("Deferring visibility reconciliation for {EntityId}: workspace changed.", entity.EntityId);
+                        skipped++;
+                        continue;
+                    }
+
+                    var revalidated = this.availabilityReader(path);
+                    if (revalidated != availability)
+                    {
+                        this.logger.LogWarning("Deferring visibility reconciliation for {EntityId}: availability changed.", entity.EntityId);
+                        skipped++;
+                        continue;
+                    }
+
+                    if (desiredReason == "visible")
+                    {
+                        await DeleteMissingRelationshipAsync(
+                            context.DataAccessLayer, entity.EntityId, context.CancellationToken).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await UpsertMissingRelationshipAsync(
+                            context.DataAccessLayer, entity.EntityId, recycled, context.CancellationToken).ConfigureAwait(false);
+                    }
+
+                    incomingData.Remove("git-workspace-visibility-intent");
+                    await UpdateEntityAsync(context.DataAccessLayer, entity, incomingData,
+                        "Complete Git workspace visibility reconciliation.", context.CancellationToken).ConfigureAwait(false);
                 }
 
                 if (existsOnFilesystem && metadata is null)
@@ -217,6 +295,13 @@ public sealed class GitWorkspaceUpdateTool : IWorkspaceTool
 
         CopyProperty(existing, incomingData, "names");
         CopyProperty(existing, incomingData, "display-name");
+        foreach (var property in existing.EnumerateObject())
+        {
+            if (!incomingData.ContainsKey(property.Name))
+            {
+                incomingData[property.Name] = JsonNode.Parse(property.Value.GetRawText());
+            }
+        }
         if (preserveGit)
         {
             CopyProperty(existing, incomingData, "git");
@@ -234,7 +319,7 @@ public sealed class GitWorkspaceUpdateTool : IWorkspaceTool
         }
     }
 
-    private static async Task UpdateEntityAsync(
+    private static async Task<EntitySnapshot> UpdateEntityAsync(
         IDataAccessLayer dataAccessLayer,
         EntitySnapshot entity,
         JsonObject data,
@@ -263,14 +348,25 @@ public sealed class GitWorkspaceUpdateTool : IWorkspaceTool
             },
             cancellationToken).ConfigureAwait(false);
         EnsureUpdateSucceeded(result, entity.EntityId);
+        return result.EntityResults.Single(item => item.RequestedEntityId == entity.EntityId).CurrentEntity!;
     }
 
     private static async Task UpsertMissingRelationshipAsync(
         IDataAccessLayer dataAccessLayer,
         EntityId targetEntityId,
+        bool recycled,
         CancellationToken cancellationToken)
     {
         var relationshipId = GetMissingRelationshipId(targetEntityId);
+        var note = recycled ? "This Git workspace is in the Recycle Bin." : MissingWorkspaceNote;
+        var existing = await WorkspaceToolEntityUtilities.TryGetEntityByIdAsync(
+            dataAccessLayer, relationshipId, cancellationToken);
+        if (existing?.Data is { } existingData
+            && existingData.TryGetProperty("note", out var previousNote)
+            && previousNote.GetString() == note)
+        {
+            return;
+        }
         var data = new JsonObject
         {
             ["entity-types"] = new JsonArray("entity", "not-interesting", "relationship"),
@@ -278,7 +374,7 @@ public sealed class GitWorkspaceUpdateTool : IWorkspaceTool
             {
                 ["target"] = targetEntityId.ToString(),
             },
-            ["note"] = MissingWorkspaceNote,
+            ["note"] = note,
         };
         _ = await WorkspaceToolEntityUtilities.UpsertEntityByDeterministicIdAsync(
             dataAccessLayer,
@@ -357,7 +453,9 @@ public sealed class GitWorkspaceUpdateTool : IWorkspaceTool
             && JsonPropertyEquals(existing, incomingData, "owning-repository")
             && JsonPropertyEquals(existing, incomingData, "git")
             && JsonPropertyEquals(existing, incomingData, "computer-user-profile-id")
-            && JsonPropertyEquals(existing, incomingData, "exists-on-filesystem");
+            && JsonPropertyEquals(existing, incomingData, "exists-on-filesystem")
+            && JsonPropertyEquals(existing, incomingData, "git-workspace-hidden-reason")
+            && JsonPropertyEquals(existing, incomingData, "git-workspace-visibility-intent");
     }
 
     private static bool JsonPropertyEquals(

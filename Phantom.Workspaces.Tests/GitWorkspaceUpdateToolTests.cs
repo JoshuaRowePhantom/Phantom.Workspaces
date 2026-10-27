@@ -269,6 +269,13 @@ public sealed class GitWorkspaceUpdateToolTests
             "This Git workspace does not exist on the filesystem.",
             missingRelationship!.Data!.Value.GetProperty("note").GetString());
 
+        await new GitWorkspaceScanTool(
+            new NoDriveRoots(),
+            availabilityReader: _ => GitWorkspaceAvailability.Exists).ExecuteAsync(context);
+        Assert.True((await GetEntityAsync(dataAccessLayer, entityId))!.Data!.Value
+            .GetProperty("exists-on-filesystem").GetBoolean());
+        Assert.Null((await GetEntityAsync(dataAccessLayer, relationshipId))?.Data);
+
         var restoredTool = new GitWorkspaceUpdateTool(
             metadataReader: (_, _) => new GitMetadata
             {
@@ -298,5 +305,10 @@ public sealed class GitWorkspaceUpdateToolTests
             },
             TestContext.Current.CancellationToken);
         return result.Batches.SelectMany(static batch => batch.Entities).FirstOrDefault();
+    }
+
+    private sealed class NoDriveRoots : ILocalDriveRootProvider
+    {
+        public IReadOnlyCollection<string> GetLocalDriveRoots() => [];
     }
 }

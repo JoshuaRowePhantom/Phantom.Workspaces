@@ -40,6 +40,14 @@
     },
     "git": {
       "$ref": "git.json#/$defs/git"
+    },
+    "git-workspace-hidden-reason": {
+      "enum": ["missing", "recycled"],
+      "description": "Last completed or pending system visibility transition. Retained after manual unhide so subsequent unchanged missing/recycled scans do not override the user's decision."
+    },
+    "git-workspace-visibility-intent": {
+      "enum": ["missing", "recycled", "visible"],
+      "description": "Durable pending system relationship reconciliation; removed only after the relationship write succeeds. Allows recovery from partial state/relationship writes."
     }
   }
 }

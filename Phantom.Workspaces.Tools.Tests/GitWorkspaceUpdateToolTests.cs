@@ -20,6 +20,116 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
     }
 
     [Fact]
+    public async Task ExecuteAsync_ExistsAlreadyTrue_RemovesStrandedSystemHide()
+    {
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var entityId = new EntityId(Guid.NewGuid());
+        await SeedGitWorkspaceAsync(fixture.DataAccessLayer, entityId,
+            Path.Combine(this.temporaryRootPath, "restored"), existsOnFilesystem: true);
+        await SeedMissingRelationshipAsync(fixture.DataAccessLayer, entityId);
+
+        await CreateTool(_ => true).ExecuteAsync(await CreateContextAsync(fixture));
+
+        Assert.Null((await GetEntityByIdAsync(fixture.DataAccessLayer, MissingRelationshipId(entityId)))?.Data);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_PathOfflineOrInaccessible_PreservesPreviousStateAndReportsDiagnostic()
+    {
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var entityId = new EntityId(Guid.NewGuid());
+        await SeedGitWorkspaceAsync(fixture.DataAccessLayer, entityId,
+            Path.Combine(this.temporaryRootPath, "unavailable"), existsOnFilesystem: false,
+            gitJson: """{"branch":"preserved"}""");
+        await SeedMissingRelationshipAsync(fixture.DataAccessLayer, entityId);
+        var before = await GetEntityByIdAsync(fixture.DataAccessLayer, entityId);
+        var relationshipBefore = await GetEntityByIdAsync(fixture.DataAccessLayer, MissingRelationshipId(entityId));
+        var tool = new GitWorkspaceUpdateTool(
+            metadataReader: (_, _) => throw new InvalidOperationException("Unknown paths must not be opened."),
+            availabilityReader: _ => GitWorkspaceAvailability.Unknown);
+
+        var result = await tool.ExecuteAsync(await CreateContextAsync(fixture));
+
+        Assert.Contains("skipped: 1", result.ResultContent);
+        Assert.Equal(before!.ConcurrencyTag, (await GetEntityByIdAsync(fixture.DataAccessLayer, entityId))!.ConcurrencyTag);
+        Assert.Equal(relationshipBefore!.ConcurrencyTag,
+            (await GetEntityByIdAsync(fixture.DataAccessLayer, MissingRelationshipId(entityId)))!.ConcurrencyTag);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_PartialUnhideWriteFails_RetryCompletesReconciliation()
+    {
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var entityId = new EntityId(Guid.NewGuid());
+        await SeedGitWorkspaceAsync(fixture.DataAccessLayer, entityId,
+            Path.Combine(this.temporaryRootPath, "restored-partial"), existsOnFilesystem: false);
+        await SeedMissingRelationshipAsync(fixture.DataAccessLayer, entityId);
+        var failingLayer = new FailingEntityUpdateDataAccessLayer(fixture.DataAccessLayer, MissingRelationshipId(entityId));
+        var context = await CreateContextAsync(fixture);
+
+        var failed = await CreateTool(_ => true).ExecuteAsync(context with { DataAccessLayer = failingLayer });
+        Assert.Contains("errors: 1", failed.ResultContent);
+        await CreateTool(_ => true).ExecuteAsync(context);
+
+        Assert.Null((await GetEntityByIdAsync(fixture.DataAccessLayer, MissingRelationshipId(entityId)))?.Data);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ExistingRecycledWorkspace_HidesWithoutFalsifyingExistence()
+    {
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var entityId = new EntityId(Guid.NewGuid());
+        await SeedGitWorkspaceAsync(fixture.DataAccessLayer, entityId,
+            Path.Combine(this.temporaryRootPath, "$Recycle.Bin", "workspace"), existsOnFilesystem: true);
+        var tool = CreateTool(_ => true);
+        var context = await CreateContextAsync(fixture);
+
+        await tool.ExecuteAsync(context);
+        var relationship = await GetEntityByIdAsync(fixture.DataAccessLayer, MissingRelationshipId(entityId));
+        await tool.ExecuteAsync(context);
+
+        var entity = await GetEntityByIdAsync(fixture.DataAccessLayer, entityId);
+        Assert.True(entity!.Data!.Value.GetProperty("exists-on-filesystem").GetBoolean());
+        Assert.Equal("This Git workspace is in the Recycle Bin.",
+            relationship!.Data!.Value.GetProperty("note").GetString());
+        Assert.Equal(relationship.ConcurrencyTag,
+            (await GetEntityByIdAsync(fixture.DataAccessLayer, MissingRelationshipId(entityId)))!.ConcurrencyTag);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_PartialRelationshipWriteFails_RetryCompletesReconciliation()
+    {
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var entityId = new EntityId(Guid.NewGuid());
+        await SeedGitWorkspaceAsync(fixture.DataAccessLayer, entityId,
+            Path.Combine(this.temporaryRootPath, "missing-partial"), existsOnFilesystem: true);
+        var failingLayer = new FailingEntityUpdateDataAccessLayer(fixture.DataAccessLayer, MissingRelationshipId(entityId));
+        var context = await CreateContextAsync(fixture);
+
+        var failed = await CreateTool(_ => false).ExecuteAsync(context with { DataAccessLayer = failingLayer });
+        Assert.Contains("errors: 1", failed.ResultContent);
+        await CreateTool(_ => false).ExecuteAsync(context);
+
+        Assert.NotNull((await GetEntityByIdAsync(fixture.DataAccessLayer, MissingRelationshipId(entityId)))?.Data);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WorktreeRestoredBeforeMissingCommit_DoesNotPersistStaleHide()
+    {
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var entityId = new EntityId(Guid.NewGuid());
+        await SeedGitWorkspaceAsync(fixture.DataAccessLayer, entityId,
+            Path.Combine(this.temporaryRootPath, "concurrent-restore"), existsOnFilesystem: true);
+        var probes = 0;
+
+        await CreateTool(_ => ++probes > 1).ExecuteAsync(await CreateContextAsync(fixture));
+
+        Assert.True((await GetEntityByIdAsync(fixture.DataAccessLayer, entityId))!.Data!.Value
+            .GetProperty("exists-on-filesystem").GetBoolean());
+        Assert.Null((await GetEntityByIdAsync(fixture.DataAccessLayer, MissingRelationshipId(entityId)))?.Data);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_UpdatesGitFieldsOnExistingGitEntity()
     {
         var repoPath = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "real-repo"));
