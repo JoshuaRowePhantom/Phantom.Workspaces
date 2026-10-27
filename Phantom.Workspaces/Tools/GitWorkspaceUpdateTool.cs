@@ -21,11 +21,11 @@ public sealed class GitWorkspaceUpdateTool : IWorkspaceTool
 
     private readonly Func<string, ILogger, GitMetadata?> metadataReader;
     private readonly Func<string, GitWorkspaceAvailability> availabilityReader;
-    private readonly ILogger<GitWorkspaceUpdateTool> logger;
+    private readonly ILogger logger;
 
     public GitWorkspaceUpdateTool(
         Func<string, ILogger, GitMetadata?>? metadataReader = null,
-        ILogger<GitWorkspaceUpdateTool>? logger = null,
+        ILogger? logger = null,
         Func<string, bool>? directoryExists = null,
         Func<string, GitWorkspaceAvailability>? availabilityReader = null)
     {
@@ -74,6 +74,7 @@ public sealed class GitWorkspaceUpdateTool : IWorkspaceTool
         var changed = 0;
         var unchanged = 0;
         var skipped = 0;
+        var unknown = 0;
         var foreign = 0;
         var errors = 0;
 
@@ -117,6 +118,7 @@ public sealed class GitWorkspaceUpdateTool : IWorkspaceTool
                 {
                     this.logger.LogWarning("Preserving Git workspace {EntityId}: path availability is unknown.", entity.EntityId);
                     skipped++;
+                    unknown++;
                     continue;
                 }
 
@@ -256,18 +258,19 @@ public sealed class GitWorkspaceUpdateTool : IWorkspaceTool
         }
 
         this.logger.LogInformation(
-            "Git workspace update: added {Added}, changed {Changed}, unchanged {Unchanged}; skipped {Skipped}; foreign {Foreign}; errors {Errors}.",
+            "Git workspace update: added {Added}, changed {Changed}, unchanged {Unchanged}; skipped {Skipped}; unknown availability {Unknown}; foreign {Foreign}; errors {Errors}.",
             added,
             changed,
             unchanged,
             skipped,
+            unknown,
             foreign,
             errors);
 
         return new WorkspaceToolExecutionResult
         {
             ResultContent =
-                $"Added: {added}; changed: {changed}; unchanged: {unchanged}; skipped: {skipped}; foreign: {foreign}; errors: {errors}.",
+                $"Added: {added}; changed: {changed}; unchanged: {unchanged}; skipped: {skipped}; unknown availability: {unknown}; foreign: {foreign}; errors: {errors}.",
         };
     }
 

@@ -51,6 +51,7 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
         var result = await tool.ExecuteAsync(await CreateContextAsync(fixture));
 
         Assert.Contains("skipped: 1", result.ResultContent);
+        Assert.Contains("unknown availability: 1", result.ResultContent);
         Assert.Equal(before!.ConcurrencyTag, (await GetEntityByIdAsync(fixture.DataAccessLayer, entityId))!.ConcurrencyTag);
         Assert.Equal(relationshipBefore!.ConcurrencyTag,
             (await GetEntityByIdAsync(fixture.DataAccessLayer, MissingRelationshipId(entityId)))!.ConcurrencyTag);

@@ -128,7 +128,9 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
                 context.CancellationToken);
         }
 
-        var reconciliation = await new GitWorkspaceUpdateTool(availabilityReader: this.availabilityReader).ExecuteAsync(context);
+        var reconciliation = await new GitWorkspaceUpdateTool(
+            logger: this.logger,
+            availabilityReader: this.availabilityReader).ExecuteAsync(context);
 
         var summary = $"Scanned {scanRoots.Length} root(s); found {discoveredWorktreePaths.Count} repositories, " +
             $"indexed {allWorktrees.Count} worktree(s). {reconciliation.ResultContent}";

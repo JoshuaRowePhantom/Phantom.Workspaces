@@ -140,11 +140,16 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         var context = await CreateExecutionContextAsync(dataAccessLayer, root, root);
         await new GitWorkspaceScanTool(new FixedLocalDriveRootProvider([root])).ExecuteAsync(context);
         var before = await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", root));
+        var logger = new TestLogger<GitWorkspaceScanTool>();
 
         var result = await new GitWorkspaceScanTool(new FixedLocalDriveRootProvider([root]),
+            logger: logger,
             availabilityReader: _ => GitWorkspaceAvailability.Unknown).ExecuteAsync(context);
 
         Assert.Contains("skipped: 1", result.ResultContent);
+        Assert.Contains("unknown availability: 1", result.ResultContent);
+        Assert.Contains(logger.Entries, entry => entry.Level == LogLevel.Warning
+            && entry.Message.Contains("availability is unknown", StringComparison.Ordinal));
         Assert.Equal(before!.ConcurrencyTag,
             (await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", root)))!.ConcurrencyTag);
     }
