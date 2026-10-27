@@ -149,6 +149,13 @@ internal static class AgentManifestSessionLauncher
                         stageToken => openAgentSessionShortcutHandler.RunningAgentChatTable.AcquireAsync(
                         new AcquireAgentChatRequest
                         {
+                            ObserveInitializingChat = chat =>
+                            {
+                                if (!deadlineToken.IsCancellationRequested)
+                                    loadingTab.StartupProgress.Observe(chat);
+                            },
+                            ProgressCancellation = loadingTab.StartupCancellation,
+                            CancelStartup = openAgentSessionShortcutHandler.CreateStartupCancellationAction(mainWindowViewModel, loadingTab),
                             AgentSessionId = new AgentSessionId(agentSessionId),
                             AgentSessionEntity = acquisition.Entity,
                             AgentManifest = agentManifest,
@@ -198,6 +205,13 @@ internal static class AgentManifestSessionLauncher
                         stageToken => openAgentSessionShortcutHandler.RunningAgentChatTable.AcquireAsync(
                         new AcquireAgentChatRequest
                         {
+                            ObserveInitializingChat = chat =>
+                            {
+                                if (!deadlineToken.IsCancellationRequested)
+                                    loadingTab.StartupProgress.Observe(chat);
+                            },
+                            ProgressCancellation = loadingTab.StartupCancellation,
+                            CancelStartup = openAgentSessionShortcutHandler.CreateStartupCancellationAction(mainWindowViewModel, loadingTab),
                             AgentSessionId = new AgentSessionId(agentSessionId),
                             AgentSessionEntity = acquisition.Entity,
                             AgentDefinition = agentDefinition,

@@ -34,6 +34,44 @@ namespace Phantom.Workspaces.Llm;
 /// </summary>
 public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRunningItemsSnapshotProvider, IAgentChatSubagentsSnapshotProvider, ISubAgentChatRegistry, IRunningSubAgent, ISubAgentTable
 {
+    public bool TrySealIdleForViewerClose()
+        => this.TryCommitIdleViewerRelease(seal: true, () => { });
+
+    internal bool TryCommitIdleViewerRelease(bool seal, Action commit)
+    {
+        var locked = new List<AgentChat>();
+        try
+        {
+            Capture(this);
+            if (locked.Any(chat => chat.queueManager.HasDequeuedWork || AgentChatActivity.HasPendingWork(chat)))
+                return false;
+            if (seal)
+                foreach (var chat in locked)
+                    chat.queueManager.TrySealIdle(() => false);
+            commit();
+            return true;
+        }
+        finally
+        {
+            for (var index = locked.Count - 1; index >= 0; index--)
+                Monitor.Exit(locked[index].queueManager.SyncRoot);
+        }
+
+        void Capture(AgentChat chat)
+        {
+            if (locked.Contains(chat))
+                return;
+            Monitor.Enter(chat.queueManager.SyncRoot);
+            locked.Add(chat);
+            AgentChat[] children;
+            lock (chat.subAgentsLock)
+                children = chat.subAgentMap.Values.Select(value => value.Chat)
+                    .Concat(chat.subAgentTableMap.Values.Select(value => value.AgentChat).OfType<AgentChat>())
+                    .Distinct().ToArray();
+            foreach (var child in children)
+                Capture(child);
+        }
+    }
     internal static TimeSpan DisposeDrainTimeout { get; } = TimeSpan.FromSeconds(2);
 
     internal const string SecondaryProviderCleanupExceptionDataKey =
@@ -263,6 +301,7 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
         Exception failure;
         try
         {
+            AgentChatAcquisitionProgress.OnConstructed(chat, chat.request.AgentSessionId);
             onConstructed?.Invoke(chat);
             await chat.InitializeAsync();
             creation.TrySetResult(chat);
@@ -611,7 +650,7 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
        var hasToolWork = this.runtimeContextProviderRegistrations.Count > 0;
        this.initialization = hasToolWork
            ? this.RunOnForegroundAsync(
-               () => this.InitializeMcpToolsAsync(this.request.CancellationToken))
+               () => this.InitializeMcpToolsAsync(this.cts.Token))
            : Task.CompletedTask;
 
        // Start only after `initialization` references the real task. The processing loop awaits it
@@ -627,7 +666,7 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
     // StartProcessingLoop's Task.Factory.StartNew(..., foregroundScheduler) pattern so that
     // running-item mutations performed by the action are serialized with the processing loop and
     // never mutate the non-thread-safe running-item collections concurrently (issue #1068).
-    private Task RunOnForegroundAsync(Func<Task> action) =>
+    internal Task RunOnForegroundAsync(Func<Task> action) =>
         Task.Factory.StartNew(
             action,
             this.cts.Token,
@@ -808,6 +847,8 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                 : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
 
     public bool IsLocalDocumentFileSystem => this.copilotSdkClient?.IsLocalDocumentFileSystem == true;
+    public string? DocumentOwnerProfileId
+        => (this.request.AgentServices?.CurrentSessionContext as CurrentSessionContext)?.UserComputerProfile?.EntityId.ToString();
 
     public Usage Usage => this.usage;
 
@@ -1629,15 +1670,19 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
         var factory = this.request.AgentServices?.RunningAgentChatFactory as IRunningAgentChatFactory;
         var subAgent = new SubAgent(sessionId, agentChat, factory);
 
-        lock (this.subAgentsLock)
+        lock (this.queueManager.SyncRoot)
         {
-            if (this.subAgentTableMap.ContainsKey(agentChat.AgentSessionId))
+            this.queueManager.ThrowIfViewerClosed();
+            lock (this.subAgentsLock)
             {
-                throw new InvalidOperationException(
-                    $"A sub-agent with session ID '{agentChat.AgentSessionId}' is already registered.");
-            }
+                if (this.subAgentTableMap.ContainsKey(agentChat.AgentSessionId))
+                {
+                    throw new InvalidOperationException(
+                        $"A sub-agent with session ID '{agentChat.AgentSessionId}' is already registered.");
+                }
 
-            this.subAgentTableMap[agentChat.AgentSessionId] = subAgent;
+                this.subAgentTableMap[agentChat.AgentSessionId] = subAgent;
+            }
         }
 
         _ = Task.Factory.StartNew(
@@ -1815,6 +1860,7 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                 AssistantRunId = message.AdditionalProperties?.TryGetValue(
                     StreamingPersistenceMiddleware.AssistantRunIdProperty, out var runId) == true
                     ? runId?.ToString() : null,
+                DocumentOrigin = AgentDocumentOrigin.Read(message),
             });
         }
     }
@@ -1827,6 +1873,31 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
         }
 
         await this.DisposeCoreAsync(awaitCreation: true);
+    }
+
+    public async Task TerminateAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        try
+        {
+            await this.cts.CancelAsync().ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException) when (Volatile.Read(ref this.disposeStarted) != 0)
+        {
+        }
+        AgentChat[] children;
+        lock (this.subAgentsLock)
+            children = this.subAgentMap.Values.Select(value => value.Chat)
+                .Concat(this.subAgentTableMap.Values.Select(value => value.AgentChat).OfType<AgentChat>())
+                .Where(child => !ReferenceEquals(child, this)).Distinct().ToArray();
+        try
+        {
+            await Task.WhenAll(children.Select(child => child.TerminateAsync(ct))).ConfigureAwait(false);
+        }
+        finally
+        {
+            await this.DisposeAsync().ConfigureAwait(false);
+        }
     }
 
     private async Task DisposeCoreAsync(bool awaitCreation)
@@ -1847,7 +1918,7 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
             activeTurn = this.activeTurnCompletion?.Task;
         }
 
-        if (activeTurn is { IsCompleted: false })
+        if (!this.cts.IsCancellationRequested && activeTurn is { IsCompleted: false })
         {
             try
             {
@@ -1980,6 +2051,8 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
         private AgentChatHistoryItem[] cachedItems = [];
         private int promotedCount;
 
+        private readonly AgentDocumentOrigin documentOrigin;
+
         public PartialResponseConflator(AgentChat owner, AgentChatRunningItem runningItem, string assistantRunId)
         {
             this.owner = owner;
@@ -1987,7 +2060,9 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
             this.assistantRunId = assistantRunId;
             this.foregroundScheduler = owner.foregroundScheduler;
             runningItem.AssistantRunId = this.assistantRunId;
-            (owner.client as StreamingPersistenceMiddleware)?.SetAssistantRunId(this.assistantRunId);
+            this.documentOrigin = new AgentDocumentOrigin(owner.DocumentWorkingDirectory, owner.IsLocalDocumentFileSystem,
+                owner.DocumentOwnerProfileId, Environment.MachineName);
+            (owner.client as StreamingPersistenceMiddleware)?.SetAssistantRunId(this.assistantRunId, this.documentOrigin);
         }
 
         public void Notify(AgentResponseUpdate update)
@@ -2099,7 +2174,7 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                 var previousItems = this.cachedItems;
 
                 // Build the chat history items on a background task (does not touch the foreground).
-                var chatHistoryItems = await Task.Run(() => CoalesceAsync(snapshot, previousItems, interstitialSnapshot, this.owner.timeProvider, this.assistantRunId));
+                var chatHistoryItems = await Task.Run(() => CoalesceAsync(snapshot, previousItems, interstitialSnapshot, this.owner.timeProvider, this.assistantRunId, this.documentOrigin));
 
                 // Store the newly-coalesced result so the next cycle can reuse stable references.
                 this.cachedItems = chatHistoryItems;
@@ -2139,7 +2214,8 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
             AgentChatHistoryItem[] previous,
             (int AfterUpdateCount, AgentChatHistoryItem Item)[] interstitials,
             TimeProvider timeProvider,
-            string assistantRunId)
+            string assistantRunId,
+            AgentDocumentOrigin documentOrigin)
         {
             AgentChatHistoryItem[] newItems;
 
@@ -2187,7 +2263,7 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
             }
 
             newItems = newItems.Select(item => item.AssistantRunId is null && item.Role != ChatRole.User
-                ? item with { AssistantRunId = assistantRunId }
+                ? item with { AssistantRunId = assistantRunId, DocumentOrigin = documentOrigin }
                 : item).ToArray();
             // Re-use the cached reference for each item whose content is structurally unchanged.
             // This lets AgentRunningItems.SyncItems' ReferenceEquals guard suppress unnecessary
@@ -2309,6 +2385,7 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
 
                     if (chatMessagesToSubmit.Count == 0)
                     {
+                        this.queueManager.CompleteDequeuedWork();
                         await queueStateSignal.WaitAsync(cancellationToken);
                     }
                 }
@@ -2495,6 +2572,7 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                     }
                     finally
                     {
+                        this.queueManager.CompleteDequeuedWork();
                         activeTurnCompletion.TrySetResult();
                         lock (this.processingStateLock)
                         {

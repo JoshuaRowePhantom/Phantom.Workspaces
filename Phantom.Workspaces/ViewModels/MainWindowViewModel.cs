@@ -3122,7 +3122,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         catch (Exception)
         {
             if (tab is AgentSessionWorkspaceTabViewModel session)
-                session.Agent?.AgentChat.EnqueueTransientDiagnostic("Unable to close session. Termination or background retention did not complete; the tab remains open.");
+            {
+                const string error = "Unable to close session. Termination or background retention did not complete; the tab remains open.";
+                if (session.Agent is { } agent)
+                    agent.AgentChat.EnqueueTransientDiagnostic(error);
+                else
+                    session.StartupProgress.ReportFailure(error);
+            }
             completion.TrySetResult(false);
         }
         finally
@@ -3140,40 +3146,56 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         {
             var chat = session.Agent?.AgentChat;
             var lease = session.Lease;
+            var startupCancellation = session.StartupCancellation;
             var row = this.applicationServices.RunningAgentChats.RunningSessions.FirstOrDefault(
                 candidate => candidate.SessionId.Value == session.AgentSessionId);
-            if (chat is null || session.State != AgentTabState.Ready || row is { IsConnected: false })
+            if (chat is null && session.State is AgentTabState.Loading or AgentTabState.Failed)
+            {
+                var loadingDecision = await this.AgentSessionCloseDecisionProvider.ChooseAsync(
+                    tab.Title, startupCancellation);
+                if (loadingDecision == AgentSessionCloseDecision.RunInBackground)
+                    throw new InvalidOperationException("Background retention is unavailable until acquisition completes.");
+                if (loadingDecision != AgentSessionCloseDecision.Terminate || !pane.Tabs.Contains(tab)
+                    || session.Agent is not null || session.Lease is not null
+                    || startupCancellation != session.StartupCancellation)
+                    return false;
+                await session.DisposeAsync();
+            }
+            else if (chat is null || session.State != AgentTabState.Ready || row is { IsConnected: false })
                 return false;
-            if (AgentSessionCloseActivity.HasPendingWork(chat))
+            else if (AgentSessionCloseActivity.HasPendingWork(chat)
+                || lease is not null && !await lease.TryPrepareIdleCloseAsync(startupCancellation)
+                || lease is null && chat is AgentChat local && !local.TrySealIdleForViewerClose())
             {
                 var decision = await this.AgentSessionCloseDecisionProvider.ChooseAsync(
                     tab.Title,
-                    session.StartupCancellation);
+                    startupCancellation);
                 if (decision == AgentSessionCloseDecision.Cancel)
                     return false;
                 if (!pane.Tabs.Contains(tab) || !ReferenceEquals(session.Agent?.AgentChat, chat)
                     || !ReferenceEquals(session.Lease, lease)
+                    || startupCancellation != session.StartupCancellation
                     || !ReferenceEquals(row, this.applicationServices.RunningAgentChats.RunningSessions.FirstOrDefault(
                         candidate => candidate.SessionId.Value == session.AgentSessionId)))
                     return false;
                 var sessionId = new Phantom.Workspaces.Llm.Interfaces.AgentSessionId(chat.Information.AgentSessionId);
                 if (decision == AgentSessionCloseDecision.Terminate)
                 {
-                    if (!await this.applicationServices.RunningAgentChats.TerminateAsync(sessionId, session.StartupCancellation))
+                    if (!await this.applicationServices.RunningAgentChats.TerminateExactAsync(sessionId, chat, startupCancellation))
                         throw new InvalidOperationException("The owning session could not be terminated.");
                 }
                 else
                 {
                     if (session.Entity?.Data is not JsonElement)
                         throw new InvalidOperationException("Background retention requires a persisted session.");
-                    await this.applicationServices.RunningAgentChats.RetainForViewerCloseAsync(sessionId, session.StartupCancellation);
+                    await this.applicationServices.RunningAgentChats.RetainExactForViewerCloseAsync(sessionId, chat, startupCancellation);
                     if (row?.ContinueInBackground != true)
                         throw new InvalidOperationException("The owner did not acknowledge background retention.");
                 }
-                if (!pane.Tabs.Contains(tab) || !ReferenceEquals(session.Agent?.AgentChat, chat)
-                    || !ReferenceEquals(session.Lease, lease))
-                    return false;
             }
+            if (chat is not null && (!pane.Tabs.Contains(tab) || !ReferenceEquals(session.Agent?.AgentChat, chat)
+                || !ReferenceEquals(session.Lease, lease) || startupCancellation != session.StartupCancellation))
+                return false;
         }
         var document = pane.GetDocumentForTab(tab.Id);
         if (document?.Owner is not null)

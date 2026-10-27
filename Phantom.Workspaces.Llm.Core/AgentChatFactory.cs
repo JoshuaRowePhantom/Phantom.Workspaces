@@ -273,24 +273,59 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
     }
 
     private RunningAgentChatLease MakeLease(AgentSessionId sessionId, AgentChat agentChat)
-        => new RunningAgentChatLease(sessionId, agentChat, () => ReleaseAsync(sessionId));
+    {
+        var released = false;
+        var leaseGate = new SemaphoreSlim(1, 1);
+        return new RunningAgentChatLease(sessionId, agentChat, async () =>
+        {
+            await leaseGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                if (!released)
+                {
+                    await ReleaseAsync(sessionId, agentChat).ConfigureAwait(false);
+                    released = true;
+                }
+            }
+            finally { leaseGate.Release(); }
+        }, prepareIdleClose: async ct =>
+        {
+            await leaseGate.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                if (released) return true;
+                released = await ReleaseAsync(sessionId, agentChat, idleOnly: true).ConfigureAwait(false);
+                return released;
+            }
+            finally { leaseGate.Release(); }
+        });
+    }
 
     public async Task<bool> TerminateAsync(
         AgentSessionId sessionId,
         CancellationToken ct = default)
+        => await this.TerminateCoreAsync(sessionId, null, ct).ConfigureAwait(false);
+
+    public Task<bool> TerminateExactAsync(AgentSessionId sessionId, IAgentChat expected, CancellationToken ct = default)
+        => this.TerminateCoreAsync(sessionId, expected, ct);
+
+    private async Task<bool> TerminateCoreAsync(AgentSessionId sessionId, IAgentChat? expected, CancellationToken ct)
     {
         AgentChat? toDispose;
         TaskCompletionSource disposalCompletion;
+        bool ownsDisposal;
 
         await _gate.WaitAsync(ct);
         try
         {
-            if (!_entries.TryGetValue(sessionId, out var entry))
+            if (!_entries.TryGetValue(sessionId, out var entry)
+                || expected is not null && !ReferenceEquals(entry.AgentChat, expected))
             {
                 return false;
             }
 
             entry.RefCount = 0;
+            ownsDisposal = entry.DisposalCompletion is null;
             entry.DisposalCompletion ??= new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously);
             disposalCompletion = entry.DisposalCompletion;
@@ -301,24 +336,34 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
             _gate.Release();
         }
 
+        if (!ownsDisposal)
+        {
+            await toDispose.TerminateAsync(ct).ConfigureAwait(false);
+            await disposalCompletion.Task.WaitAsync(ct).ConfigureAwait(false);
+            return true;
+        }
+
         try
         {
             await PostToForegroundAsync(() =>
             {
-                var item = _runningSessions.FirstOrDefault(r => r.SessionId == sessionId);
+                var item = _runningSessions.FirstOrDefault(r => r.SessionId == sessionId
+                    && ReferenceEquals(r.AgentChat, toDispose));
                 if (item is not null)
                 {
                     _runningSessions.Remove(item);
                 }
             });
-            await toDispose.DisposeAsync();
+            await toDispose.TerminateAsync(ct);
         }
         finally
         {
             await _gate.WaitAsync(CancellationToken.None);
             try
             {
-                _entries.Remove(sessionId);
+                if (_entries.TryGetValue(sessionId, out var current)
+                    && ReferenceEquals(current.AgentChat, toDispose))
+                    _entries.Remove(sessionId);
             }
             finally
             {
@@ -354,7 +399,7 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
         }
     }
 
-    private async ValueTask ReleaseAsync(AgentSessionId sessionId)
+    private async ValueTask<bool> ReleaseAsync(AgentSessionId sessionId, AgentChat expected, bool idleOnly = false)
     {
         AgentChat? toDispose = null;
         TaskCompletionSource? disposalCompletion = null;
@@ -362,17 +407,29 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
         await _gate.WaitAsync();
         try
         {
-            if (_entries.TryGetValue(sessionId, out var entry))
+            if (_entries.TryGetValue(sessionId, out var entry)
+                && ReferenceEquals(entry.AgentChat, expected)
+                && entry.DisposalCompletion is null)
             {
-                entry.RefCount--;
-                if (entry.RefCount <= 0)
+                if (idleOnly && !expected.TryCommitIdleViewerRelease(entry.RefCount == 1, CommitRelease))
+                    return false;
+                if (!idleOnly)
+                    CommitRelease();
+
+                void CommitRelease()
                 {
-                    entry.RefCount = 0;
-                    entry.DisposalCompletion ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                    disposalCompletion = entry.DisposalCompletion;
-                    toDispose = entry.AgentChat;
+                    entry.RefCount--;
+                    if (entry.RefCount <= 0)
+                    {
+                        entry.RefCount = 0;
+                        entry.DisposalCompletion ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                        disposalCompletion = entry.DisposalCompletion;
+                        toDispose = entry.AgentChat;
+                    }
                 }
             }
+            else if (idleOnly)
+                return false;
         }
         finally
         {
@@ -385,7 +442,8 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
             {
                 await PostToForegroundAsync(() =>
                 {
-                    var item = _runningSessions.FirstOrDefault(r => r.SessionId == sessionId);
+                    var item = _runningSessions.FirstOrDefault(r => r.SessionId == sessionId
+                        && ReferenceEquals(r.AgentChat, toDispose));
                     if (item is not null)
                         _runningSessions.Remove(item);
                 });
@@ -397,7 +455,9 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
                 await _gate.WaitAsync();
                 try
                 {
-                    _entries.Remove(sessionId);
+                    if (_entries.TryGetValue(sessionId, out var current)
+                        && ReferenceEquals(current.AgentChat, toDispose))
+                        _entries.Remove(sessionId);
                 }
                 finally
                 {
@@ -407,6 +467,7 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
                 disposalCompletion?.TrySetResult();
             }
         }
+        return true;
     }
 
     public async ValueTask DisposeAsync()

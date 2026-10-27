@@ -276,6 +276,20 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
     private static async Task InvokeOnUiThreadAsync(Action action)
         => await Dispatcher.UIThread.InvokeAsync(action);
 
+    internal Action CreateStartupCancellationAction(MainWindowViewModel main, AgentSessionWorkspaceTabViewModel tab)
+    {
+        var cancellation = tab.StartupCancellation;
+        return () => _ = this.invokeOnUiThreadAsync(() =>
+        {
+            if (cancellation.IsCancellationRequested)
+                return;
+            if (tab.State == AgentTabState.Loading)
+                tab.CancelStartup();
+            else if (tab.State == AgentTabState.Ready)
+                _ = main.RequestCloseTabAsync(tab);
+        });
+    }
+
     private async Task PublishLoadingFailureAsync(Action action, ILogger logger)
     {
         using var timer = new CancellationTokenSource(this.stageDeadline, this.timeProvider);
@@ -701,6 +715,13 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         var lease = await this.AwaitStageAsync(stageToken => this.runningAgentChatTable.AcquireAsync(
             new AcquireAgentChatRequest
             {
+                ObserveInitializingChat = chat =>
+                {
+                    if (!ct.IsCancellationRequested)
+                        tab.StartupProgress.Observe(chat);
+                },
+                ProgressCancellation = tab.StartupCancellation,
+                CancelStartup = this.CreateStartupCancellationAction(mainWindowViewModel, tab),
                 AgentSessionId = new AgentSessionId(agentSessionId!),
                 AgentSessionEntity = acquisition.Entity,
                 AgentServices = agentServices,
@@ -1109,13 +1130,15 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             RemoteChildResolver = remoteChildResolver,
         })
         {
-            OpenDocumentLinkHandler = async (origin, reference) =>
+            OpenDocumentLinkHandler = async (origin, reference, recorded) =>
             {
                 var context = origin as IAgentDocumentContext;
                 var url = AgentDocumentLinkResolver.Resolve(
                     reference,
-                    context?.DocumentWorkingDirectory,
-                    context?.IsLocalDocumentFileSystem == true).AbsoluteUri;
+                    recorded?.WorkingDirectory,
+                    origin is AgentChat && recorded is { IsLocalFileSystem: true }
+                        && recorded.MachineName == Environment.MachineName
+                        && (recorded.OwnerProfileId is null || recorded.OwnerProfileId == context?.DocumentOwnerProfileId)).AbsoluteUri;
                 await mainWindowViewModel.OpenTabAsync(
                     new WebViewModel(url, mainWindowViewModel)
                 {

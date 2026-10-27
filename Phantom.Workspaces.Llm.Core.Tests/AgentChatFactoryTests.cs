@@ -13,6 +13,181 @@ namespace Phantom.Workspaces.Llm.Tests;
 
 public sealed class AgentChatFactoryTests
 {
+    [Theory]
+    [InlineData(AgentChatCompletionState.Unknown)]
+    [InlineData(AgentChatCompletionState.Running)]
+    public void Activity_UnmaterializedDescendant_DoesNotRequireAChildEditor(AgentChatCompletionState state)
+    {
+        var child = new SubAgent(new AgentSessionId("unmaterialized"), factory: null);
+        child.SetRestoredCompletionState(state);
+        var queues = new Moq.Mock<IAgentInputQueues>();
+        queues.SetupGet(value => value.Snapshot).Returns(new AgentInputQueuesSnapshot { Revision = 0, Queues = [] });
+        var root = new Moq.Mock<IAgentChat>();
+        root.SetupGet(value => value.HistoryPopulated).Returns(Task.CompletedTask);
+        root.SetupGet(value => value.RunningItems).Returns(new AgentChatRunningItemCollection());
+        root.SetupGet(value => value.Modals).Returns(new ReadOnlyObservableCollection<AgentChatModal>([]));
+        root.SetupGet(value => value.InputQueues).Returns(queues.Object);
+        root.SetupGet(value => value.SubAgents).Returns(new ReadOnlyObservableCollection<IRunningSubAgent>([child]));
+        Assert.Null(child.AgentChat);
+        Assert.True(AgentChatActivity.HasPendingWork(root.Object));
+    }
+
+    [Fact]
+    public async Task IdleRelease_MaterializedDescendantActivity_FencesAndTerminatesTheWholeRuntimeTree()
+    {
+        await using var factory = CreateFactory();
+        await using var parent = await factory.GetOrCreateAsync(new AgentSessionId("parent-tree"), EchoAgentDefinition);
+        await using var child = await factory.GetOrCreateAsync(new AgentSessionId("child-tree"), EchoAgentDefinition,
+            registerAsRunningAgent: false);
+        await ((ISubAgentTable)parent.LocalAgentChat).Add(child.LocalAgentChat);
+        var resource = new Moq.Mock<IAsyncDisposable>();
+        resource.Setup(value => value.DisposeAsync()).Returns(ValueTask.CompletedTask);
+        child.LocalAgentChat.RegisterOwnedResource(resource.Object);
+        var held = child.LocalAgentChat.QueueManager.CreateInputQueue("Held child", AgentInputQueueImmediacy.Held);
+        child.LocalAgentChat.EnqueueUserMessage("child pending work", held);
+        Assert.False(await parent.TryPrepareIdleCloseAsync());
+        Assert.True(await factory.TerminateExactAsync(parent.SessionId, parent.AgentChat));
+        resource.Verify(value => value.DisposeAsync(), Moq.Times.Once);
+    }
+
+    [Fact]
+    public async Task IdleRelease_SubmissionWinsOwnerGate_RequiresConsent()
+    {
+        var id = new AgentSessionId("idle-release-submission");
+        await using var factory = CreateFactory();
+        await using var lease = await factory.GetOrCreateAsync(id, EchoAgentDefinition);
+        var held = lease.LocalAgentChat.QueueManager.CreateInputQueue("Held", AgentInputQueueImmediacy.Held);
+        lease.LocalAgentChat.EnqueueUserMessage("queued before release", held);
+        Assert.False(await lease.TryPrepareIdleCloseAsync());
+        Assert.Single(factory.RunningSessions);
+        Assert.Single(held.Queue.Items);
+    }
+
+    [Fact]
+    public async Task IdleRelease_ReleaseWinsOwnerGate_RejectsLateSubmissionAndDisposesOnce()
+    {
+        var id = new AgentSessionId("idle-release-first");
+        await using var factory = CreateFactory();
+        var lease = await factory.GetOrCreateAsync(id, EchoAgentDefinition);
+        Assert.True(await lease.TryPrepareIdleCloseAsync());
+        Assert.Empty(factory.RunningSessions);
+        Assert.Throws<ObjectDisposedException>(() => lease.LocalAgentChat.EnqueueUserMessage("too late"));
+        await using var child = await factory.GetOrCreateAsync(new AgentSessionId("late-child"), EchoAgentDefinition,
+            registerAsRunningAgent: false);
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => ((ISubAgentTable)lease.LocalAgentChat).Add(child.LocalAgentChat));
+        await lease.DisposeAsync();
+        Assert.Empty(factory.RunningSessions);
+    }
+
+    [Fact]
+    public async Task IdleRelease_OtherViewerRemains_DoesNotSealSharedRuntime()
+    {
+        var id = new AgentSessionId("idle-release-shared");
+        await using var factory = CreateFactory();
+        await using var first = await factory.GetOrCreateAsync(id, EchoAgentDefinition);
+        await using var second = await factory.GetAsync(id);
+        Assert.True(await first.TryPrepareIdleCloseAsync());
+        var held = second.LocalAgentChat.QueueManager.CreateInputQueue("Held", AgentInputQueueImmediacy.Held);
+        second.LocalAgentChat.EnqueueUserMessage("survives", held);
+        Assert.Single(held.Queue.Items);
+        Assert.Single(factory.RunningSessions);
+    }
+
+    [Fact]
+    public async Task ExactRuntime_OldLeaseAndDecision_CannotReleaseOrTerminateReplacement()
+    {
+        var id = new AgentSessionId("replacement");
+        await using var factory = CreateFactory();
+        var old = await factory.GetOrCreateAsync(id, EchoAgentDefinition);
+        Assert.True(await factory.TerminateExactAsync(id, old.AgentChat));
+        await using var replacement = await factory.GetOrCreateAsync(id, EchoAgentDefinition);
+        Assert.False(await factory.TerminateExactAsync(id, old.AgentChat));
+        Assert.False(await old.TryPrepareIdleCloseAsync());
+        await old.DisposeAsync();
+        Assert.Single(factory.RunningSessions);
+        Assert.Same(replacement.AgentChat, factory.RunningSessions.Single().AgentChat);
+    }
+
+    [Fact]
+    public async Task ExactRuntime_ConcurrentTermination_WaitsForTheSameCleanupBeforeReplacement()
+    {
+        var id = new AgentSessionId("concurrent-termination");
+        await using var factory = CreateFactory();
+        await using var lease = await factory.GetOrCreateAsync(id, EchoAgentDefinition);
+        var disposing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resource = new Moq.Mock<IAsyncDisposable>();
+        resource.Setup(value => value.DisposeAsync()).Returns(() =>
+        {
+            disposing.TrySetResult();
+            return new ValueTask(release.Task);
+        });
+        lease.LocalAgentChat.RegisterOwnedResource(resource.Object);
+        var first = factory.TerminateExactAsync(id, lease.AgentChat);
+        await disposing.Task;
+        var second = factory.TerminateExactAsync(id, lease.AgentChat);
+        var replacement = factory.GetOrCreateAsync(id, EchoAgentDefinition);
+        try
+        {
+            Assert.False(first.IsCompleted);
+            Assert.False(second.IsCompleted);
+            Assert.False(replacement.IsCompleted);
+        }
+        finally { release.TrySetResult(); }
+        Assert.True(await first);
+        Assert.True(await second);
+        await using var current = await replacement;
+        Assert.NotSame(lease.AgentChat, current.AgentChat);
+        Assert.Same(current.AgentChat, Assert.Single(factory.RunningSessions).AgentChat);
+        resource.Verify(value => value.DisposeAsync(), Moq.Times.Once);
+    }
+
+    [Fact]
+    public async Task AcquisitionProgress_ConstructionHook_ObservesBeforeLeasePublication()
+    {
+        var id = new AgentSessionId("progress-construction");
+        await using var factory = CreateFactory();
+        IAgentChat? initializing = null;
+        using var progress = new AgentChatAcquisitionProgress(id.Value!, chat =>
+        {
+            initializing = chat;
+            Assert.Empty(factory.RunningSessions);
+            Assert.False(chat.HistoryPopulated.IsCompleted);
+        });
+        await using var lease = await factory.GetOrCreateAsync(id, EchoAgentDefinition);
+        Assert.Same(initializing, lease.AgentChat);
+    }
+
+    [Fact]
+    public async Task AcquisitionProgress_AuthorizationActions_AreBoundToExactChatAndRemovedOnCompletion()
+    {
+        var id = new AgentSessionId("progress-actions");
+        await using var factory = CreateFactory();
+        using var cancellation = new CancellationTokenSource();
+        var resumes = 0;
+        using var progress = new AgentChatAcquisitionProgress(id.Value!, _ => { }, cancellation.Cancel, cancellation.Token);
+        await using var lease = await factory.GetOrCreateAsync(id, EchoAgentDefinition);
+        var wait = await AgentChatAcquisitionProgress.WaitingForAuthorizationAsync("<GitHub>", _ =>
+        {
+            resumes++;
+            return Task.CompletedTask;
+        });
+        var item = Assert.Single(lease.AgentChat.RunningItems);
+        var text = Assert.IsType<TextContent>(Assert.Single(Assert.Single(item.Items).Contents)).Text!;
+        Assert.DoesNotContain("https:", text);
+        var href = System.Text.RegularExpressions.Regex.Match(text, @"phantom-startup:[a-f0-9]+").Value;
+        Assert.True(await AgentStartupActions.TryInvokeAsync(lease.AgentChat, href));
+        Assert.Equal(1, resumes);
+        await using var other = await factory.GetOrCreateAsync(new AgentSessionId("other-actions"), EchoAgentDefinition);
+        Assert.True(await AgentStartupActions.TryInvokeAsync(other.AgentChat, href));
+        Assert.Equal(1, resumes);
+        await wait!.DisposeAsync();
+        Assert.Empty(lease.AgentChat.RunningItems);
+        Assert.True(await AgentStartupActions.TryInvokeAsync(lease.AgentChat, href));
+        Assert.Equal(1, resumes);
+        Assert.False(await AgentStartupActions.TryInvokeAsync(lease.AgentChat, "https://example.com"));
+    }
+
     private const string EchoAgentDefinitionJson =
         """
         {

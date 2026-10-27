@@ -27,6 +27,14 @@ internal sealed class AgentSessionCloseDecisionProvider : IAgentSessionCloseDeci
         if (Application.Current?.ApplicationLifetime is not IClassicDesktopStyleApplicationLifetime { MainWindow: { } owner })
             return AgentSessionCloseDecision.Cancel;
 
+        var (window, decision) = CreateDialog(sessionName);
+        using var registration = cancellationToken.Register(() => Avalonia.Threading.Dispatcher.UIThread.Post(window.Close));
+        _ = window.ShowDialog(owner);
+        return await decision.WaitAsync(cancellationToken);
+    }
+
+    internal static (Window Window, Task<AgentSessionCloseDecision> Decision) CreateDialog(string sessionName)
+    {
         var completion = new TaskCompletionSource<AgentSessionCloseDecision>(TaskCreationOptions.RunContinuationsAsynchronously);
         var terminate = new Button { Content = "Terminate" };
         var background = new Button { Content = "Run in background" };
@@ -65,8 +73,6 @@ internal sealed class AgentSessionCloseDecisionProvider : IAgentSessionCloseDeci
             }
         };
         window.Closed += (_, _) => completion.TrySetResult(AgentSessionCloseDecision.Cancel);
-        using var registration = cancellationToken.Register(() => Avalonia.Threading.Dispatcher.UIThread.Post(window.Close));
-        _ = window.ShowDialog(owner);
-        return await completion.Task.WaitAsync(cancellationToken);
+        return (window, completion.Task);
     }
 }

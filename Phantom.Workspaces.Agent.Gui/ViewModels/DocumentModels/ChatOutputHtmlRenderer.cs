@@ -376,7 +376,8 @@ internal static class ChatOutputHtmlRenderer
         IReadOnlyList<(string ElementId, string Html)> contents,
         DateTimeOffset? timestamp = null,
         string? jumpLinkHtml = null,
-        bool suppressRoleHeader = false)
+        bool suppressRoleHeader = false,
+        string? assistantRunId = null)
     {
         var builder = new StringBuilder();
         var stickyBaseLevel = string.Equals(roleLabel, "user", StringComparison.OrdinalIgnoreCase) ? 0 : 1;
@@ -384,6 +385,8 @@ internal static class ChatOutputHtmlRenderer
         var usageTargetId = FindTargetId(contents, "data-usage-inspect-target");
         builder.Append("<div class=\"chat-message ").Append(RoleClass(roleLabel)).Append("\" id=\"")
             .Append(messageId).Append("\" data-sticky-base-level=\"").Append(stickyBaseLevel).Append("\"");
+        if (assistantRunId is not null)
+            builder.Append(" data-document-run-id=\"").Append(HtmlEscape(assistantRunId)).Append("\"");
         if (!string.IsNullOrEmpty(inspectTargetId))
         {
             builder.Append(" data-message-inspect-target=\"").Append(inspectTargetId).Append("\"");

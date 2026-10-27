@@ -66,4 +66,7 @@ public interface IRunningAgentChatFactory : Interfaces.IRunningAgentChatFactory
 
     Task<bool> TerminateAsync(AgentSessionId sessionId, CancellationToken ct = default)
         => Task.FromResult(false);
+
+    Task<bool> TerminateExactAsync(AgentSessionId sessionId, IAgentChat expected, CancellationToken ct = default)
+        => Task.FromResult(false);
 }

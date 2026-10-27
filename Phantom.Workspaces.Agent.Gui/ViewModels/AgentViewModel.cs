@@ -697,9 +697,9 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     /// </summary>
     public Action<string>? OpenUrlHandler { get; set; }
 
-    private Func<IAgentChat, string, Task>? openDocumentLinkHandler;
+    private Func<IAgentChat, string, AgentDocumentOrigin?, Task>? openDocumentLinkHandler;
 
-    public Func<IAgentChat, string, Task>? OpenDocumentLinkHandler
+    public Func<IAgentChat, string, AgentDocumentOrigin?, Task>? OpenDocumentLinkHandler
     {
         get => this.openDocumentLinkHandler;
         set
@@ -710,12 +710,21 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         }
     }
 
-    public async Task OpenDocumentLinkAsync(string reference)
+    public async Task OpenDocumentLinkAsync(string reference, string? assistantRunId = null, bool fromTranscript = false)
     {
         try
         {
             if (this.OpenDocumentLinkHandler is { } handler)
-                await handler(this.agentChat, reference);
+            {
+                var context = this.agentChat as IAgentDocumentContext;
+                var recorded = fromTranscript
+                    ? this.agentChat.History.Concat(this.agentChat.RunningItems.SelectMany(item => item.Items))
+                        .FirstOrDefault(item => assistantRunId is not null && item.AssistantRunId == assistantRunId
+                            && item.DocumentOrigin is not null)?.DocumentOrigin
+                    : new AgentDocumentOrigin(context?.DocumentWorkingDirectory, context?.IsLocalDocumentFileSystem == true,
+                        context?.DocumentOwnerProfileId, Environment.MachineName);
+                await handler(this.agentChat, reference, recorded);
+            }
             else
                 this.OpenUrlHandler?.Invoke(reference);
         }

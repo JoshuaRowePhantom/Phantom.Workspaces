@@ -119,19 +119,23 @@ public sealed class ChatOutputControlLifecycleWebViewTests
         {
             var chat = await AgentFactory.CreateAgentChatAsync(
                 new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+            var recordedOrigin = new AgentDocumentOrigin(@"C:\original\report", true,
+                MachineName: Environment.MachineName);
             chat.History.Add(new AgentChatHistoryItem
             {
                 Role = ChatRole.Assistant,
+                AssistantRunId = "historical-link-run",
+                DocumentOrigin = recordedOrigin,
                 Contents = [new TextContent("[report](../a%20b%23%25.md#section) [fragment](#section)")],
             });
             using var loggerFactory = new ObservableLoggerFactory();
             await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
-            var received = new TaskCompletionSource<(IAgentChat Origin, string Reference)>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var received = new TaskCompletionSource<(IAgentChat Origin, string Reference, AgentDocumentOrigin? Recorded)>(TaskCreationOptions.RunContinuationsAsynchronously);
             var requests = 0;
-            viewModel.OpenDocumentLinkHandler = (origin, reference) =>
+            viewModel.OpenDocumentLinkHandler = (origin, reference, recorded) =>
             {
                 requests++;
-                received.TrySetResult((origin, reference));
+                received.TrySetResult((origin, reference, recorded));
                 return Task.CompletedTask;
             };
             var control = new AgentChatOutputControl { DataContext = viewModel };
@@ -151,6 +155,7 @@ public sealed class ChatOutputControlLifecycleWebViewTests
                 var result = await received.Task;
                 Assert.Same(chat, result.Origin);
                 Assert.Equal("../a%20b%23%25.md#section", result.Reference);
+                Assert.Equal(recordedOrigin, result.Recorded);
                 Assert.Equal(1, requests);
             }
             finally

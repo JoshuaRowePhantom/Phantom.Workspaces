@@ -10,6 +10,9 @@ namespace Phantom.Workspaces.Services;
 
 public sealed class AcquireAgentChatRequest
 {
+    public Action<IAgentChat>? ObserveInitializingChat { get; init; }
+    public Action? CancelStartup { get; init; }
+    public CancellationToken? ProgressCancellation { get; init; }
     public required AgentSessionId AgentSessionId { get; init; }
     public JsonElement? AgentSessionEntity { get; init; }
     public AgentDefinition? AgentDefinition { get; init; }

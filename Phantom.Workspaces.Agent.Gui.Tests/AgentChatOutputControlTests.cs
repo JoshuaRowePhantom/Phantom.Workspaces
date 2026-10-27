@@ -13,6 +13,7 @@ using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 using Phantom.Workspaces.Gui.Shared.Controls;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Interfaces;
 
 using Phantom.Workspaces.Testing.Gui;
 
@@ -20,6 +21,63 @@ namespace Phantom.Workspaces.Agent.Gui.Tests;
 
 public sealed class AgentChatOutputControlTests
 {
+    [AvaloniaFact]
+    public async Task AgentChatOutput_ConstructingChat_ShowsAuthorizationActionsBeforeLeasePublication()
+    {
+        using var progress = new AgentStartupProgress();
+        var observed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var store = new GatedStartupStore(release.Task);
+        await using var factory = new AgentChatFactory(store, new AgentServices(),
+            TaskScheduler.FromCurrentSynchronizationContext());
+        using var attempt = new AgentChatAcquisitionProgress("pending-html", chat =>
+        {
+            progress.Observe(chat);
+            observed.TrySetResult();
+        });
+        var acquisition = factory.GetOrCreateAsync(new AgentSessionId("pending-html"), CreateAgentDefinition());
+        await observed.Task;
+        try
+        {
+            await using var authorization = await AgentChatAcquisitionProgress.WaitingForAuthorizationAsync(
+                "Example MCP", _ => Task.CompletedTask);
+            var control = new AgentChatOutputControl();
+            var browser = GetBrowser(control);
+            SetAttached(control);
+            control.DataContext = progress;
+            await control.HistoryLoaded;
+            Assert.False(acquisition.IsCompleted);
+            Assert.Empty(factory.RunningSessions);
+            Assert.Contains(browser.PostedMessages, message =>
+                message.Contains("Example MCP", StringComparison.Ordinal)
+                && message.Contains("Open sign-in", StringComparison.Ordinal)
+                && message.Contains("Cancel startup", StringComparison.Ordinal)
+                && message.Contains("phantom-startup:", StringComparison.Ordinal));
+            control.DataContext = null;
+        }
+        finally { release.TrySetResult(); }
+        await using var lease = await acquisition;
+        Assert.Single(factory.RunningSessions);
+    }
+
+    private sealed class GatedStartupStore(Task release) : IAgentPersistenceStore
+    {
+        private readonly InMemoryAgentPersistenceStore inner = new();
+        public ValueTask StoreAsync(StoreRequestAgent request, CancellationToken cancellationToken = default)
+            => this.inner.StoreAsync(request, cancellationToken);
+        public async ValueTask<PersistedAgent?> RestoreAsync(RestoreRequest request, CancellationToken cancellationToken = default)
+        {
+            await release.WaitAsync(cancellationToken);
+            return await this.inner.RestoreAsync(request, cancellationToken);
+        }
+        public ValueTask<ChatMessage[]> ReadMessagesAsync(ReadMessagesRequest request, CancellationToken cancellationToken = default)
+            => this.inner.ReadMessagesAsync(request, cancellationToken);
+        public ValueTask AddSubAgentLinkAsync(string parentSessionId, string childSessionId, CancellationToken cancellationToken = default)
+            => this.inner.AddSubAgentLinkAsync(parentSessionId, childSessionId, cancellationToken);
+        public ValueTask<IReadOnlyList<AgentSessionId>> ReadSubAgentChildIdsAsync(string parentSessionId, CancellationToken cancellationToken = default)
+            => this.inner.ReadSubAgentChildIdsAsync(parentSessionId, cancellationToken);
+    }
+
     [AvaloniaFact]
     public async Task AgentChatOutput_StartupBeforeAcquisition_RendersNamedOrdinaryHtml()
     {
@@ -44,7 +102,7 @@ public sealed class AgentChatOutputControlTests
         var html = ReadShellHtml();
 
         Assert.Contains("closest(\"a[href]\")", html, StringComparison.Ordinal);
-        Assert.Contains("postToHost({ type: \"openUrl\", url: href })", html, StringComparison.Ordinal);
+        Assert.Contains("postToHost({ type: \"openUrl\", url: href, assistantRunId:", html, StringComparison.Ordinal);
         Assert.Contains("e.preventDefault()", html, StringComparison.Ordinal);
     }
 

@@ -8,6 +8,48 @@ namespace Phantom.Workspaces.Tests.Mcp;
 public sealed partial class McpOAuthRedirectHandlerTests
 {
     [Fact]
+    public async Task McpOAuthAttempt_StartupDiagnostics_ExposeOnlyOpaqueAuthorizedActionsAndCleanUp()
+    {
+        using var cancellation = new CancellationTokenSource();
+        using var scope = new Llm.AgentChatAcquisitionProgress("oauth-progress", _ => { },
+            cancellation.Cancel, cancellation.Token);
+        await using var factory = new Llm.AgentChatFactory(new Llm.InMemoryAgentPersistenceStore(),
+            new Llm.AgentServices(), TaskScheduler.Default);
+        await using var lease = await factory.GetOrCreateAsync(new Llm.Interfaces.AgentSessionId("oauth-progress"),
+            Llm.AgentDefinitionLoader.LoadAgentFromJson("""
+                {"kind":"prompt","name":"progress","model":{"id":"echo","provider":"echo","apiType":"Echo"},"tools":[]}
+                """), ct: TestContext.Current.CancellationToken);
+        var launched = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var browser = new FakeSystemBrowserLauncher { OnOpenSideEffect = () => launched.TrySetResult() };
+        var operation = new AttemptOperation();
+        var authorized = true;
+        await using var attempt = await BoundAttemptAsync(browser, AuthUri("private-state"), operation);
+        var execution = attempt.ExecuteAsync(
+            AttemptPermit(operation).BindExecution(() => authorized, TestContext.Current.CancellationToken), cancellation.Token);
+        await launched.Task;
+        var item = Assert.Single(lease.AgentChat.RunningItems);
+        var text = Assert.IsType<Microsoft.Extensions.AI.TextContent>(
+            Assert.Single(Assert.Single(item.Items).Contents)).Text!;
+        Assert.Contains("Waiting for your authorization", text);
+        Assert.DoesNotContain("private-state", text);
+        Assert.DoesNotContain(operation.RedirectUri.ToString(), text);
+        var links = System.Text.RegularExpressions.Regex.Matches(text, @"phantom-startup:[a-f0-9]+");
+        Assert.Equal(2, links.Count);
+        await Llm.AgentStartupActions.TryInvokeAsync(lease.AgentChat, links[0].Value);
+        Assert.Equal(2, browser.OpenCount);
+        authorized = false;
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            Llm.AgentStartupActions.TryInvokeAsync(lease.AgentChat, links[0].Value));
+        Assert.Equal(2, browser.OpenCount);
+        await Llm.AgentStartupActions.TryInvokeAsync(lease.AgentChat, links[1].Value);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => execution);
+        Assert.Empty(lease.AgentChat.RunningItems);
+        Assert.False(attempt.IsListenerBound);
+        await Llm.AgentStartupActions.TryInvokeAsync(lease.AgentChat, links[0].Value);
+        Assert.Equal(2, browser.OpenCount);
+    }
+
+    [Fact]
     public async Task McpOAuthAttempt_Ready_CompletesBeforeBrowserCanLaunch()
     {
         var browser = new FakeSystemBrowserLauncher();

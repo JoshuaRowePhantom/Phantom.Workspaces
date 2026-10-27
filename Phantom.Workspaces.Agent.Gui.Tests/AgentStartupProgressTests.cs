@@ -10,6 +10,41 @@ namespace Phantom.Workspaces.Agent.Gui.Tests;
 public sealed class AgentStartupProgressTests
 {
     [AvaloniaFact]
+    public async Task Observe_ConstructingChat_ForwardsLiveDiagnosticsWithoutOwningRuntime()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+        {
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson("""
+                {"kind":"prompt","name":"startup","model":{"id":"echo","provider":"echo","apiType":"Echo"},"tools":[]}
+                """),
+        });
+        using var progress = new AgentStartupProgress();
+        progress.Observe(chat);
+        var item = chat.CreateRunningItem(new AgentChatHistoryItem
+        {
+            Role = AgentChatHistoryItem.DiagnosticChatRole,
+            Contents = [new TextContent("Waiting for your authorization: GitHub")],
+        });
+        Assert.Contains(item, progress.RunningItems);
+        progress.Report("session", "ready-publication");
+        Assert.Contains(item, progress.RunningItems);
+        chat.CompleteRunningItem(item, false);
+        Assert.DoesNotContain(item, progress.RunningItems);
+        var failed = new AgentChatHistoryItem
+        {
+            Role = AgentChatHistoryItem.DiagnosticChatRole,
+            Contents = [new TextContent("Example MCP tool loading failed")],
+        };
+        chat.CompleteRunningItem(chat.CreateRunningItem(failed));
+        Assert.Contains(failed, progress.History);
+        progress.Dispose();
+        chat.CreateRunningItem(new AgentChatHistoryItem { Role = ChatRole.Assistant });
+        chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.User });
+        Assert.Empty(progress.RunningItems);
+        Assert.Empty(progress.History);
+    }
+
+    [AvaloniaFact]
     public async Task IsChatRunning_StartupDiagnostics_DoNotImpersonateTurns()
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest

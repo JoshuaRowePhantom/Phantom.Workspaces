@@ -443,6 +443,16 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
         }
     }
 
+    private static async Task InvokeStartupActionAsync(IAgentChat chat, string href)
+    {
+        try { await AgentStartupActions.TryInvokeAsync(chat, href); }
+        catch (OperationCanceledException) { }
+        catch (Exception)
+        {
+            chat.EnqueueTransientDiagnostic("The startup action is no longer available. Retry session startup.");
+        }
+    }
+
     private void OnBrowserMessageReceived(object? sender, string message)
     {
         JsonElement root;
@@ -479,9 +489,20 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
                     var url = urlProp.GetString();
                     if (!string.IsNullOrEmpty(url))
                     {
+                        if (url.StartsWith("phantom-startup:", StringComparison.Ordinal))
+                        {
+                            var chat = this.subscribedViewModel?.AgentChat
+                                ?? (this.DataContext as AgentStartupProgress)?.ObservedChat;
+                            if (chat is not null)
+                                _ = InvokeStartupActionAsync(chat, url);
+                            break;
+                        }
                         this.UrlNavigationRequested?.Invoke(this, url);
                         if (this.subscribedViewModel is { } origin)
-                            _ = origin.OpenDocumentLinkAsync(url);
+                            _ = origin.OpenDocumentLinkAsync(url,
+                                root.TryGetProperty("assistantRunId", out var runId) && runId.ValueKind == JsonValueKind.String
+                                    ? runId.GetString() : null,
+                                fromTranscript: true);
                     }
                 }
                 break;

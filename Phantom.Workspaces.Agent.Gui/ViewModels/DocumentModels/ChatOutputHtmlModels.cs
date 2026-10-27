@@ -345,7 +345,8 @@ internal sealed class ChatMessageHtmlModel
             this.bindings.Select(binding => (binding.ElementId, binding.Html)).ToList(),
             this.source.Timestamp,
             jumpLinkHtml,
-            this.SuppressRoleHeader);
+            this.SuppressRoleHeader,
+            this.source.AssistantRunId);
     }
 
     /// <summary>

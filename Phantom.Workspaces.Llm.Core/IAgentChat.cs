@@ -51,6 +51,7 @@ public interface IAgentDocumentContext
 {
     string? DocumentWorkingDirectory { get; }
     bool IsLocalDocumentFileSystem { get; }
+    string? DocumentOwnerProfileId => null;
 }
 
 internal interface IAgentChatRunningItemsSnapshotProvider

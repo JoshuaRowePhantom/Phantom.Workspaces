@@ -426,11 +426,24 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
         {
             await this.SendDetachIfConnectedAsync(ct).ConfigureAwait(false);
         }
+
         catch (Exception error) when (!ct.IsCancellationRequested && IsClosedChannelFailure(error)) { }
         finally
         {
             await this.CloseChannelAsync().ConfigureAwait(false);
         }
+    }
+
+    internal async Task<bool> TryDetachIdleAsync(CancellationToken ct = default, bool keepAttached = false)
+    {
+        var detached = await this.SendResultAsync<bool>(new DetachIfIdleCommand
+        {
+            CommandId = Guid.NewGuid(), CorrelationId = Guid.NewGuid(), RuntimeEpoch = this.RequireEpoch(),
+            KeepAttached = keepAttached,
+        }, ct).ConfigureAwait(false);
+        if (detached && !keepAttached)
+            this.detached = true;
+        return detached;
     }
 
     public async ValueTask DisposeAsync()

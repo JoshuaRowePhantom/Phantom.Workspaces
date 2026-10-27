@@ -1259,7 +1259,8 @@
         var href = anchor.getAttribute("href");
         if (!href || href.startsWith("#")) { return; }
         e.preventDefault();
-        postToHost({ type: "openUrl", url: href });
+        var owner = anchor.closest("[data-document-run-id], [data-assistant-run-id]");
+        postToHost({ type: "openUrl", url: href, assistantRunId: owner ? (owner.getAttribute("data-document-run-id") || owner.getAttribute("data-assistant-run-id")) : null });
       }, true);
 
       // Intercept sub-agent jump-link clicks and post navigateToAgent to host.
