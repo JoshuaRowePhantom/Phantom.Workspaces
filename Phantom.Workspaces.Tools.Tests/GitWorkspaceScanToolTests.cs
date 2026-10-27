@@ -155,20 +155,62 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
     }
 
     [Theory]
-    [InlineData("$Recycle.Bin")]
-    [InlineData("$RECYCLE.BIN")]
-    public async Task ExecuteAsync_RecycleBinScanRootWithCustomExcludes_DoesNotIndexWorktrees(string component)
+    [InlineData("$Recycle.Bin", "default", false)]
+    [InlineData("$Recycle.Bin", "empty", false)]
+    [InlineData("$Recycle.Bin", "custom", false)]
+    [InlineData("$RECYCLE.BIN", "default", false)]
+    [InlineData("$RECYCLE.BIN", "empty", false)]
+    [InlineData("$RECYCLE.BIN", "custom", false)]
+    [InlineData("$Recycle.Bin", "default", true)]
+    [InlineData("$Recycle.Bin", "empty", true)]
+    [InlineData("$Recycle.Bin", "custom", true)]
+    [InlineData("$RECYCLE.BIN", "default", true)]
+    [InlineData("$RECYCLE.BIN", "empty", true)]
+    [InlineData("$RECYCLE.BIN", "custom", true)]
+    public async Task ExecuteAsync_RecycleBinScanRootWithCustomExcludes_DoesNotIndexWorktrees(
+        string component, string excludeMode, bool nestedTraversal)
     {
-        var root = Path.Combine(this.temporaryRootPath, component);
-        var repositoryPath = Path.Combine(root, "repository");
+        var root = Path.Combine(this.temporaryRootPath, "scan");
+        var recycleRoot = Path.Combine(root, component);
+        var repositoryPath = Path.Combine(recycleRoot, "repository");
+        var keptRepository = Path.Combine(root, "kept");
+        var excludedDirectory = Path.Combine(root, "configured-exclude");
+        var fakeTemp = Path.Combine(this.temporaryRootPath, "isolated-temp");
         InitializeGitRepository(repositoryPath, "https://example.com/recycled.git");
+        InitializeGitRepository(keptRepository, "https://example.com/kept.git");
+        InitializeGitRepository(Path.Combine(excludedDirectory, "repository"), "https://example.com/excluded.git");
+        Directory.CreateDirectory(fakeTemp);
         var dataAccessLayer = await CreateDataAccessLayerAsync();
-        var context = await CreateExecutionContextAsync(dataAccessLayer, root, root);
+        var scanRoot = nestedTraversal ? root : recycleRoot;
+        var excludes = excludeMode switch
+        {
+            "default" => null,
+            "empty" => "[]",
+            _ => JsonSerializer.Serialize(new[] { excludedDirectory }),
+        };
+        var context = await CreateExecutionContextAsync(dataAccessLayer, scanRoot, scanRoot, excludes);
 
-        await new GitWorkspaceScanTool(new FixedLocalDriveRootProvider([root])).ExecuteAsync(context);
+        // Keep default %TEMP% outside the scan tree so the recycle rule, not a temp exclusion,
+        // must reject the recycled repository. The positive control proves discovery ran.
+        var originalTemp = Environment.GetEnvironmentVariable("TEMP");
+        Environment.SetEnvironmentVariable("TEMP", fakeTemp);
+        try
+        {
+            var result = await new GitWorkspaceScanTool(new FixedLocalDriveRootProvider([scanRoot, keptRepository]))
+                .ExecuteAsync(context);
 
-        Assert.Null(await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", repositoryPath)));
-        Assert.True(Directory.Exists(repositoryPath));
+            Assert.Contains(nestedTraversal ? "Scanned 2 root(s)" : "Scanned 1 root(s)", result.ResultContent);
+            Assert.NotNull(await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", keptRepository)));
+            Assert.Null(await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", repositoryPath)));
+            var excluded = await GetEntityByNameAsync(dataAccessLayer,
+                new EntityName("git-worktrees", Path.Combine(excludedDirectory, "repository")));
+            Assert.Equal(nestedTraversal && excludeMode != "custom", excluded?.Data is not null);
+            Assert.True(Directory.Exists(Path.Combine(repositoryPath, ".git")));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("TEMP", originalTemp);
+        }
     }
 
     [Fact]

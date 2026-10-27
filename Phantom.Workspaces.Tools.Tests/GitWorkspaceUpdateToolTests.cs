@@ -172,6 +172,165 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
         Assert.NotNull(result.ResultContent);
     }
 
+    [Theory]
+    [InlineData(false, GitWorkspaceAvailability.Exists)]
+    [InlineData(false, GitWorkspaceAvailability.Unknown)]
+    [InlineData(true, GitWorkspaceAvailability.ConfirmedMissing)]
+    [InlineData(true, GitWorkspaceAvailability.Unknown)]
+    public async Task ExecuteAsync_AvailabilityChangesAtPreEntityCommitGuard_PreservesStateThenRetries(
+        bool initiallyExists, GitWorkspaceAvailability changedAvailability)
+    {
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var entityId = new EntityId(Guid.NewGuid());
+        await SeedGitWorkspaceAsync(fixture.DataAccessLayer, entityId,
+            Path.Combine(this.temporaryRootPath, "pre-commit"), existsOnFilesystem: !initiallyExists,
+            gitJson: """{"branch":"preserved"}""");
+        if (initiallyExists)
+        {
+            await SeedMissingRelationshipAsync(fixture.DataAccessLayer, entityId);
+        }
+        var before = await GetEntityByIdAsync(fixture.DataAccessLayer, entityId);
+        var relationshipBefore = await GetEntityByIdAsync(fixture.DataAccessLayer, MissingRelationshipId(entityId));
+        var guardProbe = initiallyExists ? 2 : 3;
+        var probes = 0;
+        var tool = new GitWorkspaceUpdateTool(
+            metadataReader: (_, _) => new GitMetadata { BranchName = "main", HeadCommitHash = "abc123" },
+            availabilityReader: _ => ++probes == guardProbe
+                ? changedAvailability
+                : initiallyExists ? GitWorkspaceAvailability.Exists : GitWorkspaceAvailability.ConfirmedMissing);
+        var context = await CreateContextAsync(fixture);
+
+        var deferred = await tool.ExecuteAsync(context);
+
+        Assert.Equal(guardProbe, probes);
+        Assert.Contains("skipped: 1", deferred.ResultContent);
+        Assert.Contains("errors: 0", deferred.ResultContent);
+        var after = await GetEntityByIdAsync(fixture.DataAccessLayer, entityId);
+        Assert.Equal(before!.ConcurrencyTag, after!.ConcurrencyTag);
+        Assert.True(JsonElement.DeepEquals(before.Data!.Value, after.Data!.Value));
+        Assert.Equal(relationshipBefore?.ConcurrencyTag,
+            (await GetEntityByIdAsync(fixture.DataAccessLayer, MissingRelationshipId(entityId)))?.ConcurrencyTag);
+        Assert.False(after.Data.Value.TryGetProperty("git-workspace-visibility-intent", out _));
+
+        var retryExists = changedAvailability == GitWorkspaceAvailability.Unknown
+            ? initiallyExists : changedAvailability == GitWorkspaceAvailability.Exists;
+        var retried = await CreateTool(_ => retryExists).ExecuteAsync(context);
+
+        Assert.Contains("errors: 0", retried.ResultContent);
+        var completed = await GetEntityByIdAsync(fixture.DataAccessLayer, entityId);
+        Assert.Equal(retryExists, completed!.Data!.Value.GetProperty("exists-on-filesystem").GetBoolean());
+        Assert.False(completed.Data.Value.TryGetProperty("git-workspace-visibility-intent", out _));
+        Assert.Equal(!retryExists,
+            (await GetEntityByIdAsync(fixture.DataAccessLayer, MissingRelationshipId(entityId)))?.Data is not null);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExecuteAsync_WorkspaceChangesAfterStateWrite_DefersVisibilityAndRecoversIntent(bool exists)
+    {
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var entityId = new EntityId(Guid.NewGuid());
+        await SeedGitWorkspaceAsync(fixture.DataAccessLayer, entityId,
+            Path.Combine(this.temporaryRootPath, "post-write-concurrency"), existsOnFilesystem: !exists);
+        if (exists)
+        {
+            await SeedMissingRelationshipAsync(fixture.DataAccessLayer, entityId);
+        }
+        var relationshipBefore = await GetEntityByIdAsync(fixture.DataAccessLayer, MissingRelationshipId(entityId));
+        var intent = exists ? "visible" : "missing";
+        var intercepted = new AfterWorkspaceStateWriteDataAccessLayer(fixture.DataAccessLayer, entityId,
+            async state =>
+            {
+                Assert.Equal(intent, state.Data!.Value.GetProperty("git-workspace-visibility-intent").GetString());
+                var concurrentData = JsonNode.Parse(state.Data.Value.GetRawText())!.AsObject();
+                concurrentData["display-name"] = new JsonObject { ["default"] = "Concurrent user edit" };
+                var concurrent = await UpsertEntityAsync(fixture.DataAccessLayer, entityId,
+                    concurrentData.ToJsonString(), state.ConcurrencyTag);
+                Assert.NotEqual(state.ConcurrencyTag, concurrent.ConcurrencyTag);
+            });
+        var context = await CreateContextAsync(fixture);
+
+        var deferred = await CreateTool(_ => exists).ExecuteAsync(context with { DataAccessLayer = intercepted });
+
+        Assert.Equal(1, intercepted.Interventions);
+        Assert.Contains("skipped: 1", deferred.ResultContent);
+        Assert.Contains("errors: 0", deferred.ResultContent);
+        var pending = await GetEntityByIdAsync(fixture.DataAccessLayer, entityId);
+        Assert.Equal(exists, pending!.Data!.Value.GetProperty("exists-on-filesystem").GetBoolean());
+        Assert.Equal(intent, pending.Data.Value.GetProperty("git-workspace-visibility-intent").GetString());
+        Assert.Equal(relationshipBefore?.ConcurrencyTag,
+            (await GetEntityByIdAsync(fixture.DataAccessLayer, MissingRelationshipId(entityId)))?.ConcurrencyTag);
+
+        var retried = await CreateTool(_ => exists).ExecuteAsync(context);
+
+        Assert.Contains("errors: 0", retried.ResultContent);
+        var completed = await GetEntityByIdAsync(fixture.DataAccessLayer, entityId);
+        Assert.False(completed!.Data!.Value.TryGetProperty("git-workspace-visibility-intent", out _));
+        Assert.Equal("Concurrent user edit", completed.Data.Value.GetProperty("display-name").GetProperty("default").GetString());
+        Assert.Equal(!exists,
+            (await GetEntityByIdAsync(fixture.DataAccessLayer, MissingRelationshipId(entityId)))?.Data is not null);
+    }
+
+    [Theory]
+    [InlineData(false, GitWorkspaceAvailability.Exists)]
+    [InlineData(false, GitWorkspaceAvailability.Unknown)]
+    [InlineData(true, GitWorkspaceAvailability.ConfirmedMissing)]
+    [InlineData(true, GitWorkspaceAvailability.Unknown)]
+    public async Task ExecuteAsync_AvailabilityChangesAfterStateWrite_DefersVisibilityAndRecoversIntent(
+        bool initiallyExists, GitWorkspaceAvailability changedAvailability)
+    {
+        var fixture = await ValidatingEntitySeedFixture.CreateAsync();
+        var entityId = new EntityId(Guid.NewGuid());
+        await SeedGitWorkspaceAsync(fixture.DataAccessLayer, entityId,
+            Path.Combine(this.temporaryRootPath, "post-write-availability"), existsOnFilesystem: !initiallyExists);
+        if (initiallyExists)
+        {
+            await SeedMissingRelationshipAsync(fixture.DataAccessLayer, entityId);
+        }
+        var relationshipBefore = await GetEntityByIdAsync(fixture.DataAccessLayer, MissingRelationshipId(entityId));
+        var availability = initiallyExists ? GitWorkspaceAvailability.Exists : GitWorkspaceAvailability.ConfirmedMissing;
+        var intercepted = new AfterWorkspaceStateWriteDataAccessLayer(fixture.DataAccessLayer, entityId, state =>
+        {
+            Assert.Equal(initiallyExists, state.Data!.Value.GetProperty("exists-on-filesystem").GetBoolean());
+            availability = changedAvailability;
+            return Task.CompletedTask;
+        });
+        var tool = new GitWorkspaceUpdateTool(
+            metadataReader: (_, _) => new GitMetadata { BranchName = "main", HeadCommitHash = "abc123" },
+            availabilityReader: _ => availability);
+        var context = await CreateContextAsync(fixture);
+
+        var deferred = await tool.ExecuteAsync(context with { DataAccessLayer = intercepted });
+
+        Assert.Equal(1, intercepted.Interventions);
+        Assert.Contains("skipped: 1", deferred.ResultContent);
+        Assert.Contains("errors: 0", deferred.ResultContent);
+        var pending = await GetEntityByIdAsync(fixture.DataAccessLayer, entityId);
+        Assert.Equal(initiallyExists ? "visible" : "missing",
+            pending!.Data!.Value.GetProperty("git-workspace-visibility-intent").GetString());
+        Assert.Equal(relationshipBefore?.ConcurrencyTag,
+            (await GetEntityByIdAsync(fixture.DataAccessLayer, MissingRelationshipId(entityId)))?.ConcurrencyTag);
+        if (changedAvailability == GitWorkspaceAvailability.Unknown)
+        {
+            var unknown = await tool.ExecuteAsync(context);
+            Assert.Contains("unknown availability: 1", unknown.ResultContent);
+            Assert.Equal(pending.ConcurrencyTag,
+                (await GetEntityByIdAsync(fixture.DataAccessLayer, entityId))!.ConcurrencyTag);
+            availability = initiallyExists ? GitWorkspaceAvailability.Exists : GitWorkspaceAvailability.ConfirmedMissing;
+        }
+
+        var retried = await tool.ExecuteAsync(context);
+
+        Assert.Contains("errors: 0", retried.ResultContent);
+        var completed = await GetEntityByIdAsync(fixture.DataAccessLayer, entityId);
+        var retryExists = availability == GitWorkspaceAvailability.Exists;
+        Assert.Equal(retryExists, completed!.Data!.Value.GetProperty("exists-on-filesystem").GetBoolean());
+        Assert.False(completed.Data.Value.TryGetProperty("git-workspace-visibility-intent", out _));
+        Assert.Equal(!retryExists,
+            (await GetEntityByIdAsync(fixture.DataAccessLayer, MissingRelationshipId(entityId)))?.Data is not null);
+    }
+
     [Fact]
     public async Task ExecuteAsync_SkipsEntitiesWithNoPath()
     {
@@ -995,6 +1154,46 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
 
     private static string EscapeForJsonString(string value) =>
         value.Replace("\\", "\\\\", StringComparison.Ordinal);
+
+    private sealed class AfterWorkspaceStateWriteDataAccessLayer(
+        IDataAccessLayer inner,
+        EntityId workspaceId,
+        Func<EntitySnapshot, Task> afterStateWrite) : IDataAccessLayer
+    {
+        public int Interventions { get; private set; }
+
+        public async Task<UpdateResult> UpdateAsync(UpdateRequest request, CancellationToken cancellationToken = default)
+        {
+            var result = await inner.UpdateAsync(request, cancellationToken);
+            if (this.Interventions == 0 && request.Changes.Any(change => change.EntityId == workspaceId))
+            {
+                var written = Assert.Single(result.EntityResults, item => item.RequestedEntityId == workspaceId);
+                Assert.Empty(written.Errors);
+                var snapshot = Assert.IsType<EntitySnapshot>(written.CurrentEntity);
+                this.Interventions++;
+                await afterStateWrite(snapshot);
+            }
+            return result;
+        }
+
+        public Task<GetResult> GetAsync(GetRequest request, CancellationToken cancellationToken = default)
+            => inner.GetAsync(request, cancellationToken);
+
+        public Task<QueryResult> QueryAsync(QueryRequest request, CancellationToken cancellationToken = default)
+            => inner.QueryAsync(request, cancellationToken);
+
+        public Task<GetHistoryResult> GetHistoryAsync(GetHistoryRequest request, CancellationToken cancellationToken = default)
+            => inner.GetHistoryAsync(request, cancellationToken);
+
+#pragma warning disable CS0618
+        public Task<ExportResult> ExportAsync(ExportRequest request, CancellationToken cancellationToken = default)
+            => inner.ExportAsync(request, cancellationToken);
+#pragma warning restore CS0618
+
+        public Task<GetChangedEntitiesResult> GetChangedEntitiesAsync(
+            GetChangedEntitiesRequest request, CancellationToken cancellationToken = default)
+            => inner.GetChangedEntitiesAsync(request, cancellationToken);
+    }
 
     private sealed class FailingEntityUpdateDataAccessLayer(
         IDataAccessLayer inner,
