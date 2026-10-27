@@ -17,7 +17,7 @@ public sealed class AccessAdministrationWindow : Window, IAsyncDisposable
     public AccessAdministrationWindow(AccessHostServices host)
     {
         ArgumentNullException.ThrowIfNull(host);
-        this.Title = "Access administration";
+        this.Title = CredentialAccessText.Title;
         this.Width = 720;
         this.Height = 520;
         this.WindowStartupLocation = WindowStartupLocation.CenterOwner;
@@ -31,17 +31,17 @@ public sealed class AccessAdministrationWindow : Window, IAsyncDisposable
             {
                 new TabItem
                 {
-                    Header = "Release memory",
+                    Header = CredentialAccessText.SavedApprovals,
                     Content = new Controls.ReleaseMemoryAdministrationControl { DataContext = this.releaseMemory },
                 },
                 new TabItem
                 {
-                    Header = "Local caches",
+                    Header = CredentialAccessText.CachedCredentials,
                     Content = new Controls.CredentialCacheAdministrationControl { DataContext = this.caches },
                 },
                 new TabItem
                 {
-                    Header = "Provider grants",
+                    Header = CredentialAccessText.ProviderAccess,
                     Content = new Controls.ProviderGrantAdministrationControl { DataContext = this.grants },
                 },
             },

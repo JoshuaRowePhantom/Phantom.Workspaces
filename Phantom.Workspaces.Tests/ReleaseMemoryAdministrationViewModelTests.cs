@@ -150,7 +150,7 @@ public sealed class ReleaseMemoryAdministrationViewModelTests
         }
     }
 
-    [AvaloniaFact]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ControlBindsOnlySafeDescriptorAndForgetCommand()
     {
         var viewModel = new ReleaseMemoryAdministrationViewModel { Administration = new Administration() };
@@ -160,7 +160,10 @@ public sealed class ReleaseMemoryAdministrationViewModelTests
         window.Show();
         Dispatcher.UIThread.RunJobs();
         Assert.Contains(control.GetVisualDescendants().OfType<Button>(), button =>
-            button.Content?.ToString() == "Forget" && button.Command?.CanExecute(button.CommandParameter) == true);
+            button.Content?.ToString() == "Forget approval" && button.Command?.CanExecute(button.CommandParameter) == true);
+        Assert.Contains(control.GetVisualDescendants().OfType<TextBlock>(), block => block.Text == "Saved approvals");
+        Assert.Contains(control.GetVisualDescendants().OfType<TextBlock>(), block =>
+            block.Text == "Forgetting removes only this approval. Cached credentials and provider access stay unchanged.");
         window.Close();
         await viewModel.DisposeAsync();
     }

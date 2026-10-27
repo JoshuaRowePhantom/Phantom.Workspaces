@@ -70,7 +70,10 @@ public sealed class ProviderGrantAdministrationViewModelTests
         window.Show();
         Dispatcher.UIThread.RunJobs();
         Assert.Contains(control.GetVisualDescendants().OfType<Button>(), button =>
-            button.Content?.ToString() == "Revoke" && button.Command?.CanExecute(button.CommandParameter) == true);
+            button.Content?.ToString() == "Revoke access" && button.Command?.CanExecute(button.CommandParameter) == true);
+        Assert.Contains(control.GetVisualDescendants().OfType<TextBlock>(), block => block.Text == "Provider access");
+        Assert.Contains(control.GetVisualDescendants().OfType<TextBlock>(), block =>
+            block.Text == "Revoking contacts the provider and clears affected cached credentials only on success. Saved approvals stay unchanged.");
         window.Close();
         await viewModel.DisposeAsync();
     }

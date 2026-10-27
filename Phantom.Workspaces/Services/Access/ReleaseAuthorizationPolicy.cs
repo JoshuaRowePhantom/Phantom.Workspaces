@@ -207,7 +207,7 @@ public sealed class ReleaseAuthorizationPolicy : IReleaseAuthorizationPolicy, IP
                 SourceIdentifier = record.SourceIdentifier,
                 AccountIdentifier = record.AccountIdentifier,
                 Scope = record.Scope,
-                SafeDisplayName = record.Scope.ToString(),
+                SafeDisplayName = CredentialAccessText.Scope(record.Scope),
             }).ToArray();
         }
         finally

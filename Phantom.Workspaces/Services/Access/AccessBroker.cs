@@ -843,7 +843,7 @@ internal sealed class AccessBroker : IAccessBroker
         {
             Identifier = new() { Value = Guid.NewGuid() },
             Scope = scope,
-            SafeDisplayName = scope.ToString(),
+            SafeDisplayName = CredentialAccessText.Scope(scope),
         }).ToArray();
         var selected = sources.Single(source => source.Identifier == selectedSource);
         return new UserAuthorizationSnapshot

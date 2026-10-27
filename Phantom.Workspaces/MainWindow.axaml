@@ -110,7 +110,7 @@
 
                     <Button Classes="settings-gear top-right"
                             Content="🤫"
-                            ToolTip.Tip="Memorized secrets and credentials"
+                            ToolTip.Tip="Credential access"
                             Click="OnOpenAccessAdministrationClicked" />
 
                     <Panel VerticalAlignment="Stretch"

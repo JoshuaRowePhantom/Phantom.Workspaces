@@ -11,7 +11,7 @@ public sealed class CredentialCacheAdministrationViewModel : AdministrationViewM
     private CredentialAdministrationFailure? lastFailure;
     public required ICredentialCacheAdministration Administration { private get; init; }
     public CredentialAdministrationFailure? LastFailure => this.lastFailure;
-    public override string ActionLabel => "Delete";
+    public override string ActionLabel => Services.Access.CredentialAccessText.DeleteCredential;
     protected override ValueTask<IReadOnlyList<CredentialCacheDescriptor>> ListAsync(CancellationToken cancellationToken) =>
         this.Administration.ListAsync(cancellationToken);
     protected override ValueTask RemoveCoreAsync(CredentialCacheDescriptor descriptor, CancellationToken cancellationToken) =>
