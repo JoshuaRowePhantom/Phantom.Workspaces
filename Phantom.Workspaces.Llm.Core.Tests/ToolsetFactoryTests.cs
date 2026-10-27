@@ -4,7 +4,6 @@ using Microsoft.Extensions.AI;
 using Moq;
 using Phantom.Workspaces.Llm.Echo;
 using Phantom.Workspaces.Llm.Interfaces;
-using System.Text.Json;
 
 namespace Phantom.Workspaces.Llm.Tests;
 
@@ -118,7 +117,9 @@ public sealed class ToolsetFactoryTests
     public async Task CreateFilesystemToolsetFactory_ReturnsFilesystemServiceToolset()
     {
         var factory = ToolsetFactory.CreateFilesystemToolsetFactory();
-        var toolset = await factory.CreateToolsetAsync(CreateCustomTool("filesystem"), new AgentServices());
+        var tool = Assert.IsType<FilesystemTool>(CreateCustomTool("filesystem"));
+        Assert.Null(tool.EditStoreConnection);
+        var toolset = await factory.CreateToolsetAsync(tool, new AgentServices());
 
         Assert.IsType<FilesystemServiceContextProvider>(toolset);
     }
@@ -265,9 +266,8 @@ public sealed class ToolsetFactoryTests
         Assert.Equal("web_request", (await GetToolsAsync(Assert.IsType<FixedToolsContextProvider>(twoToolset!)))[0].Name);
     }
 
-    private static Tool CreateCustomTool(string kind, object? connection = null)
+    private static Tool CreateCustomTool(string kind)
     {
-        var connectionJson = connection is null ? "null" : JsonSerializer.Serialize(connection);
         var definition = AgentDefinitionLoader.LoadAgentFromJson(
             $$"""
             {
@@ -281,15 +281,15 @@ public sealed class ToolsetFactoryTests
               "tools": [
                 {
                   "kind": "{{kind}}",
-                  "description": "test tool",
-                  "connection": {{connectionJson}}
+                  "description": "test tool"
                 }
               ]
             }
             """);
 
         var promptAgent = Assert.IsType<PromptAgent>(definition);
-        return Assert.IsType<CustomTool>(Assert.Single(promptAgent.Tools!));
+        var tool = Assert.Single(promptAgent.Tools!);
+        return kind == "filesystem" ? Assert.IsType<FilesystemTool>(tool) : Assert.IsType<CustomTool>(tool);
     }
 
     private static Mock<IToolsetFactory> CreateMockToolsetFactory(

@@ -126,6 +126,15 @@ public sealed class AgentDefinitionToolSchemaTests
     }
 
     [Fact]
+    public void AgentDefinitionLoader_FilesystemNullConnection_RejectsSuppliedMalformedConfiguration()
+    {
+        var json = Definition("""{"kind":"filesystem","connection":null}""");
+
+        Assert.False(Evaluate(ParseElement(json)).IsValid);
+        Assert.Throws<InvalidOperationException>(() => AgentDefinitionLoader.LoadAgentFromJson(json));
+    }
+
+    [Fact]
     public void ToolsetFactory_FilesystemConfiguration_DoesNotSilentlyConsumeLegacyOptionsOrSdkConnections()
     {
         Assert.Null(ToolsetFactory.GetFilesystemConnectionJson(new AgentSchema.CustomTool { Kind = "filesystem" }));
@@ -137,6 +146,63 @@ public sealed class AgentDefinitionToolSchemaTests
             }));
         Assert.Throws<InvalidOperationException>(() => ToolsetFactory.GetFilesystemConnectionJson(
             new AgentSchema.CustomTool { Kind = "filesystem", Connection = new AgentSchema.AnonymousConnection() }));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void AgentDefinitionLoader_GithubPolicyDefaultModeAndOptionalSelectors_RoundTrips(
+        bool includeAvailable, bool includeExcluded)
+    {
+        var authored = new System.Text.Json.Nodes.JsonObject
+        {
+            ["kind"] = GitHubCliBuiltinToolsTool.KindName,
+            ["name"] = "policy",
+        };
+        if (includeAvailable)
+        {
+            authored["available-tools"] = System.Text.Json.Nodes.JsonNode.Parse("""{"isolated":true}""");
+        }
+        if (includeExcluded)
+        {
+            authored["excluded-tools"] = System.Text.Json.Nodes.JsonNode.Parse("""{"tools":["builtin:write_file","mcp:vendor"]}""");
+        }
+        var original = Assert.IsType<AgentSchema.PromptAgent>(
+            AgentDefinitionLoader.LoadAgentFromJson(Definition(authored.ToJsonString())));
+        var originalPolicy = Assert.IsType<GitHubCliBuiltinToolsTool>(Assert.Single(original.Tools!));
+        Assert.Equal(GitHub.Copilot.CopilotClientMode.CopilotCli, originalPolicy.ClientMode);
+
+        var saved = original.ToJson();
+
+        Assert.True(Evaluate(ParseElement(saved)).IsValid, saved);
+        var savedPolicy = ParseElement(saved).GetProperty("tools").GetProperty("policy");
+        Assert.Equal("copilot-cli", savedPolicy.GetProperty("client-mode").GetString());
+        Assert.Equal(includeAvailable, savedPolicy.TryGetProperty("available-tools", out _));
+        Assert.Equal(includeExcluded, savedPolicy.TryGetProperty("excluded-tools", out _));
+        var reloaded = Assert.IsType<AgentSchema.PromptAgent>(AgentDefinitionLoader.LoadAgentFromJson(saved));
+        var policy = Assert.IsType<GitHubCliBuiltinToolsTool>(Assert.Single(reloaded.Tools!));
+        Assert.Equal(GitHub.Copilot.CopilotClientMode.CopilotCli, policy.ClientMode);
+        if (includeAvailable)
+        {
+            Assert.True(policy.AvailableTools!.Isolated);
+            Assert.Null(policy.AvailableTools.Tools);
+        }
+        else
+        {
+            Assert.Null(policy.AvailableTools);
+        }
+        if (includeExcluded)
+        {
+            Assert.False(policy.ExcludedTools!.Isolated);
+            Assert.Equal(new[] { "builtin:write_file", "mcp:vendor" }, policy.ExcludedTools.Tools);
+        }
+        else
+        {
+            Assert.Null(policy.ExcludedTools);
+        }
+        Assert.True(JsonElement.DeepEquals(ParseElement(saved), ParseElement(reloaded.ToJson())));
     }
 
     [Fact]
