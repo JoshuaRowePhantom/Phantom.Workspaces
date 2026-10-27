@@ -507,6 +507,63 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task AuthorizationHost_AdministrationLoadFailure_RendersSafeStatusAndPreservesSharedRows()
+    {
+        var path = Path.Combine(Environment.CurrentDirectory, ".scratch", $"access-host-{Guid.NewGuid():N}.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, "{\"unsafe-provider-payload\":",
+            TestContext.Current.CancellationToken);
+        await using var access = Services.Access.AccessHostServices.Create(new Services.Access.AccessHostOptions
+        {
+            PlatformSecretStore = new NullPlatformSecretStore(),
+            Dispatch = action => action(),
+            ReleaseMemoryFilePath = path,
+        });
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var window = new MainWindow(viewModel);
+        await using var popup = new AuthorizationRequestsPopupViewModel { Rows = access.AuthorizationRows };
+        window.AttachAccessHost(access, popup);
+        window.Show();
+        try
+        {
+            viewModel.OpenAccessAdministrationCommand.Execute(null);
+            await window.AccessAdministrationReady;
+            var host = Assert.IsType<AccessAdministrationWindow>(window.LastAccessAdministrationWindow);
+            var model = Assert.IsType<ReleaseMemoryAdministrationViewModel>(
+                ((Controls.ReleaseMemoryAdministrationControl)((TabItem)((TabControl)host.Content!).Items[1]!).Content!).DataContext);
+            Assert.Equal("Operation unavailable. Refresh and try again.", model.SafeStatus);
+            host.UpdateLayout();
+            Assert.Contains(host.GetVisualDescendants().OfType<TextBlock>(),
+                control => control.Text == model.SafeStatus && control.IsEffectivelyVisible);
+            Assert.DoesNotContain(host.GetVisualDescendants().OfType<TextBlock>(),
+                control => control.Text?.Contains("unsafe-provider-payload", StringComparison.Ordinal) == true);
+            Assert.True(window.IsVisible);
+            Assert.True(window.IsEnabled);
+            Assert.Same(access.AuthorizationRows, host.RequestRows);
+            var registry = Assert.IsType<Services.Authorization.UserAuthorizationRegistry>(access.AuthorizationRegistry);
+            registry.Add(AuthorizationRequestRowsViewModelTests.Snapshot());
+            var row = Assert.Single(access.AuthorizationRows.Rows);
+            await row.CancelCommand.ExecuteAsync(null);
+            Assert.False(row.CanAct);
+            await File.WriteAllTextAsync(path, "{\"version\":1,\"records\":[]}",
+                TestContext.Current.CancellationToken);
+            await model.RefreshAsync(TestContext.Current.CancellationToken);
+            Assert.Equal("List updated.", model.SafeStatus);
+            await Task.WhenAll(window.DisposeAccessAdministrationAsync().AsTask(),
+                window.DisposeAccessAdministrationAsync().AsTask());
+            Assert.True(host.IsDisposed);
+            Assert.Null(window.LastAccessAdministrationWindow);
+        }
+        finally
+        {
+            await window.DisposeAccessAdministrationAsync();
+            await CloseWindowAsync(window);
+            File.Delete(path);
+        }
+    }
+
     private static Button? GetSaveWorkspaceButton(Window window) =>
         window.GetVisualDescendants()
             .OfType<Button>()
