@@ -32,7 +32,7 @@ namespace Phantom.Workspaces.Llm;
 /// otherwise a dedicated exclusive scheduler that serializes foreground work so the
 /// running-item collections are never mutated concurrently off the UI thread.
 /// </summary>
-public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvider, IAgentChatSubagentsSnapshotProvider, ISubAgentChatRegistry, IRunningSubAgent, ISubAgentTable
+public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRunningItemsSnapshotProvider, IAgentChatSubagentsSnapshotProvider, ISubAgentChatRegistry, IRunningSubAgent, ISubAgentTable
 {
     internal static TimeSpan DisposeDrainTimeout { get; } = TimeSpan.FromSeconds(2);
 
@@ -800,6 +800,14 @@ public sealed class AgentChat : IAgentChat, IAgentChatRunningItemsSnapshotProvid
     public ISlashCommandRegistry SlashCommands => this.outerSlashCommands;
 
     public AgentInformation Information => this.information;
+
+    public string? DocumentWorkingDirectory => this.copilotSdkClient?.WorkingDirectoryOverride
+        ?? (this.chatOptions?.ChatOptions?.AdditionalProperties?.TryGetValue("working-directory", out var directory) == true
+            && directory is string text && !string.IsNullOrWhiteSpace(text)
+                ? text
+                : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+
+    public bool IsLocalDocumentFileSystem => this.copilotSdkClient?.IsLocalDocumentFileSystem == true;
 
     public Usage Usage => this.usage;
 

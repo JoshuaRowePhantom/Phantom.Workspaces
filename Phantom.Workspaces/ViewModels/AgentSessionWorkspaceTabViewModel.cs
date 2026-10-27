@@ -1,6 +1,7 @@
 using System;
 using System.ComponentModel;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -41,6 +42,10 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
     private string? remoteProfileDisplayName;
     private bool hasModalsNeedingInput;
     private bool disposed;
+    private CancellationTokenSource startupCancellation = new();
+
+    public AgentStartupProgress StartupProgress { get; } = new();
+    internal CancellationToken StartupCancellation => this.startupCancellation.Token;
 
     public AgentSessionWorkspaceTabViewModel()
         : this(TimeProvider.System)
@@ -286,6 +291,9 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
         if (this.disposed || this.State != AgentTabState.Failed)
             throw new InvalidOperationException("Only a failed open tab can be retried.");
         this.LoadError = null;
+        this.startupCancellation.Cancel();
+        this.startupCancellation.Dispose();
+        this.startupCancellation = new CancellationTokenSource();
         this.remoteProfileDisplayName = null;
         this.State = AgentTabState.Loading;
     }
@@ -472,6 +480,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
 
     public override async ValueTask DisposeAsync()
     {
+        this.startupCancellation.Cancel();
         this.disposed = true;
         if (this.agent is not null)
         {

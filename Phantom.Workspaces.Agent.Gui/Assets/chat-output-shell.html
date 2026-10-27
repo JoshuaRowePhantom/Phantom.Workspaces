@@ -1259,7 +1259,7 @@
         var href = anchor.getAttribute("href");
         if (!href || href.startsWith("#")) { return; }
         e.preventDefault();
-        postToHost({ type: "openUrl", url: anchor.href });
+        postToHost({ type: "openUrl", url: href });
       }, true);
 
       // Intercept sub-agent jump-link clicks and post navigateToAgent to host.

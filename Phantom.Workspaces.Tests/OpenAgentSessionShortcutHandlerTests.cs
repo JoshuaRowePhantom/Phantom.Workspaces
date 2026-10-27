@@ -91,7 +91,7 @@ public sealed class OpenAgentSessionShortcutHandlerTests
                 if (tabs.Any(tab => tab.State == AgentTabState.Ready)) ready.TrySetResult();
                 return Task.CompletedTask;
             },
-            TimeSpan.FromSeconds(30), clock, TimeSpan.FromSeconds(5));
+            clock, TimeSpan.FromSeconds(5));
         Assert.True(await handler.Handle(viewModel, Shortcut.Open, session!));
         await stalled.ReadStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
         clock.Advance(TimeSpan.FromSeconds(5));
@@ -187,7 +187,7 @@ public sealed class OpenAgentSessionShortcutHandlerTests
     }
 
     [AvaloniaFact(Timeout = 30_000)]
-    public async Task AgentManifestSessionLauncher_RemoteAcquisitionStalls_ReportsStageAndDisposesLateLease()
+    public async Task AgentManifestSessionLauncher_UserWaitExceedsFormerDeadline_RemainsInitializingAndDisposesLateLeaseOnClose()
     {
         await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
@@ -233,12 +233,13 @@ public sealed class OpenAgentSessionShortcutHandlerTests
                 entered.TrySetResult();
                 return completed.Task;
             }, session!, tab, TaskScheduler.Default, CancellationToken.None,
-            TimeSpan.FromSeconds(5), clock);
+            clock);
         await entered.Task;
-        clock.Advance(TimeSpan.FromSeconds(5));
+        clock.Advance(TimeSpan.FromHours(1));
+        Assert.False(initialize.IsCompleted);
+        Assert.Equal(AgentTabState.Loading, tab.State);
+        await tab.DisposeAsync();
         await initialize;
-        Assert.Equal(AgentTabState.Failed, tab.State);
-        Assert.Contains("remote-flight-chat-acquisition", tab.LoadError);
         var lease = new RunningAgentChatLease(
             new AgentSessionId("late-lease"), null!, () =>
             {
@@ -247,12 +248,12 @@ public sealed class OpenAgentSessionShortcutHandlerTests
             });
         completed.TrySetResult((lease, new ObservableLoggerFactory()));
         await disposed.Task.WaitAsync(TestContext.Current.CancellationToken);
-        Assert.Equal(AgentTabState.Failed, tab.State);
+        Assert.Equal(AgentTabState.Loading, tab.State);
         Assert.Null(tab.Lease);
     }
 
     [AvaloniaFact(Timeout = 30_000)]
-    public async Task Handle_InitializationPublicationStalls_ShowsBoundedFailureAndNoLateReady()
+    public async Task Handle_InitializationPublicationExceedsFormerDeadline_RemainsInitializing()
     {
         await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
@@ -304,20 +305,16 @@ public sealed class OpenAgentSessionShortcutHandlerTests
                     .Any(tab => tab.State == AgentTabState.Ready))
                     ready.TrySetResult();
             },
-            TimeSpan.FromSeconds(5), clock);
+            clock);
         Assert.True(await handler.Handle(viewModel, Shortcut.Open, session!));
         await waiting.Task;
-        clock.Advance(TimeSpan.FromSeconds(5));
-        await failed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        clock.Advance(TimeSpan.FromHours(1));
         var tab = Assert.Single(viewModel.WorkspacePanes.SelectMany(pane => pane.Tabs)
             .OfType<AgentSessionWorkspaceTabViewModel>());
-        Assert.Equal(AgentTabState.Failed, tab.State);
-        Assert.Contains("timed out at", tab.LoadError);
+        Assert.Equal(AgentTabState.Loading, tab.State);
+        Assert.False(failed.Task.IsCompleted);
         Assert.Null(tab.Agent);
         release.TrySetResult();
-        Assert.Equal(AgentTabState.Failed, tab.State);
-        Assert.Null(tab.Lease);
-        Assert.True(await handler.Handle(viewModel, Shortcut.Open, session!));
         await ready.Task.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Equal(AgentTabState.Ready, tab.State);
     }

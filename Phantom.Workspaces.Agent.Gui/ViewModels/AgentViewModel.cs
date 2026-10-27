@@ -416,7 +416,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     /// <summary>Test/host seam: the factory that owns the detail dock and its document registry.</summary>
     internal AgentDetailDockFactory DetailDockFactory => this.detailDockFactory;
 
-    public bool IsChatRunning => this.RunningItems.Count > 0;
+    public bool IsChatRunning => this.RunningItems.Any(item => item.AssistantRunId is not null
+        || item.Items.Any(message => message.Role != AgentChatHistoryItem.DiagnosticChatRole));
 
     /// <summary>
     /// #1451: Completes once this agent has finished rehydrating from persistence — both persisted
@@ -695,6 +696,34 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     /// <see cref="System.Diagnostics.Process.Start"/>. Null means no navigation occurs.
     /// </summary>
     public Action<string>? OpenUrlHandler { get; set; }
+
+    private Func<IAgentChat, string, Task>? openDocumentLinkHandler;
+
+    public Func<IAgentChat, string, Task>? OpenDocumentLinkHandler
+    {
+        get => this.openDocumentLinkHandler;
+        set
+        {
+            this.openDocumentLinkHandler = value;
+            foreach (var child in this.subAgentViewModels)
+                child.OpenDocumentLinkHandler = value;
+        }
+    }
+
+    public async Task OpenDocumentLinkAsync(string reference)
+    {
+        try
+        {
+            if (this.OpenDocumentLinkHandler is { } handler)
+                await handler(this.agentChat, reference);
+            else
+                this.OpenUrlHandler?.Invoke(reference);
+        }
+        catch (Exception)
+        {
+            this.agentChat.EnqueueTransientDiagnostic("Unable to open document: the destination or originating filesystem is unavailable or unsupported.");
+        }
+    }
 
     /// <summary>
     /// Called when the user clicks the '→ Open sub-agent' jump link on a tool-result block.
@@ -983,6 +1012,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         // (issue #1046): the parent can resolve its own children, and if the target is above this
         // agent it falls through to ancestor resolution logic in NavigateToSubAgent.
         subAgentViewModel.NavigateToAgentHandler = this.NavigateToAgentHandler;
+        subAgentViewModel.OpenDocumentLinkHandler = this.OpenDocumentLinkHandler;
+        subAgentViewModel.OpenUrlHandler = this.OpenUrlHandler;
         this.subAgentViewModels.Add(subAgentViewModel);
         PropertyChangedEventHandler modalHandler = (_, e) =>
         {
@@ -1223,6 +1254,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             ParentAgentViewModel = this, RemoteChildResolver = this.remoteChildResolver,
         });
         view.NavigateToAgentHandler = this.NavigateToAgentHandler;
+        view.OpenDocumentLinkHandler = this.OpenDocumentLinkHandler;
+        view.OpenUrlHandler = this.OpenUrlHandler;
         this.subAgentViewModels.Add(view);
         this.AppendSubAgentDetailContents(view);
         this.subAgentsContainerDetail.AddSlot(reference.AgentId, view, reference);

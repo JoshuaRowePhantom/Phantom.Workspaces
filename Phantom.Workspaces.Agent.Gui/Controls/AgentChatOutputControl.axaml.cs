@@ -241,13 +241,16 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
     {
         this.DetachOutputModel();
 
-        if (!this.isAttached || this.DataContext is not AgentViewModel agentViewModel)
+        if (!this.isAttached || this.DataContext is not (AgentViewModel or AgentStartupProgress))
         {
             return;
         }
 
-        this.subscribedViewModel = agentViewModel;
-        agentViewModel.PropertyChanged += this.OnViewModelPropertyChanged;
+        if (this.DataContext is AgentViewModel agentViewModel)
+        {
+            this.subscribedViewModel = agentViewModel;
+            agentViewModel.PropertyChanged += this.OnViewModelPropertyChanged;
+        }
 
         // Reload the shell so a reused control starts from an empty page. LoadShell always
         // re-navigates — a plain HtmlShell assignment is deduplicated by the property system when
@@ -305,10 +308,24 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
         // Always post the theme first so CSS variables are set before any DOM operations arrive.
         this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Theme(this.GetThemeClassName()));
 
-        if (!this.isAttached || this.subscribedViewModel is not { } vm)
+        if (!this.isAttached)
         {
             return;
         }
+
+        if (this.DataContext is AgentStartupProgress startup)
+        {
+            this.outputModel = new ChatOutputHtmlModel(
+                generation,
+                () => this.IsCurrentOutputGeneration(generation),
+                startup.History,
+                startup.RunningItems,
+                () => false,
+                this);
+            return;
+        }
+        if (this.subscribedViewModel is not { } vm)
+            return;
 
         // Track the full ready → history-populated → rendered pipeline so callers (and tests) can
         // await the point at which persisted history has actually been rendered (issue #1009).
@@ -320,15 +337,8 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
         // a WebView Ready that arrives before persistence completes captures an empty History and
         // renders nothing until a manual reload (issue #1009). When history is already loaded (the
         // common case) the awaited task is already complete and execution continues synchronously.
-        try
-        {
-            await vm.HistoryPopulated;
-        }
-        catch (Exception)
-        {
-            // A failed or cancelled history load must not crash the UI thread; fall through and
-            // render whatever history is currently available.
-        }
+        // The model subscribes to collection deltas while taking its initial snapshot, so history
+        // can populate after the first frame without losing or duplicating persisted messages.
 
         // The control may have been detached or re-bound to a different view model while awaiting;
         // abandon this stale cycle rather than rendering into a reused browser.
@@ -390,7 +400,15 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
         }
 
         // Complete the tracked pipeline task once the initial history render finishes.
-        _ = CompleteWhenLoadedAsync(completion, candidate.HistoryLoaded);
+        _ = CompleteWhenLoadedAsync(completion, Task.WhenAll(vm.HistoryPopulated, candidate.HistoryLoaded));
+        try
+        {
+            await vm.HistoryPopulated;
+        }
+        catch (Exception)
+        {
+            // The live model retains diagnostics and any partial history when acquisition fails.
+        }
     }
 
     private string BeginOutputGeneration()
@@ -462,7 +480,8 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
                     if (!string.IsNullOrEmpty(url))
                     {
                         this.UrlNavigationRequested?.Invoke(this, url);
-                        this.subscribedViewModel?.OpenUrlHandler?.Invoke(url);
+                        if (this.subscribedViewModel is { } origin)
+                            _ = origin.OpenDocumentLinkAsync(url);
                     }
                 }
                 break;

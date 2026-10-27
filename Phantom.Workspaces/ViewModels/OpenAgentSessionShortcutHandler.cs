@@ -38,7 +38,6 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
     private readonly ITransportFactoryRegistry? transportFactoryRegistry;
     private readonly Func<Action, Task> invokeOnUiThreadAsync;
     private readonly TimeProvider timeProvider;
-    private readonly TimeSpan loadingDeadline;
     private readonly TimeSpan stageDeadline;
     private readonly ConcurrentDictionary<string, ObservableLoggerFactory> sessionLoggers =
         new(StringComparer.Ordinal);
@@ -78,7 +77,6 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         IAgentSessionOwnerDecisionProvider ownerDecisionProvider,
         ITransportFactoryRegistry? transportFactoryRegistry = null,
         Func<Action, Task>? invokeOnUiThreadAsync = null,
-        TimeSpan? loadingDeadline = null,
         TimeProvider? timeProvider = null,
         TimeSpan? stageDeadline = null)
     {
@@ -89,9 +87,6 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             ?? throw new ArgumentNullException(nameof(ownerDecisionProvider));
         this.transportFactoryRegistry = transportFactoryRegistry;
         this.invokeOnUiThreadAsync = invokeOnUiThreadAsync ?? InvokeOnUiThreadAsync;
-        this.loadingDeadline = loadingDeadline ?? TimeSpan.FromSeconds(90);
-        if (this.loadingDeadline <= TimeSpan.Zero)
-            throw new ArgumentOutOfRangeException(nameof(loadingDeadline));
         this.timeProvider = timeProvider ?? TimeProvider.System;
         this.stageDeadline = stageDeadline ?? TimeSpan.FromSeconds(15);
         if (this.stageDeadline <= TimeSpan.Zero)
@@ -175,26 +170,16 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
     {
         (AgentViewModel agent, ObservableLoggerFactory loggerFactory, RunningAgentChatLease? lease)? result = null;
         var published = false;
-        using var timer = new CancellationTokenSource(this.loadingDeadline, this.timeProvider);
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct, timer.Token);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct, tab.StartupCancellation);
+        ct = deadline.Token;
         using var diagnosticScope = SessionAttachDiagnosticScope.Begin();
         var stage = "service-initialization";
         var correlation = SessionAttachDiagnosticScope.CurrentAttempt!;
         var started = this.timeProvider.GetTimestamp();
-        TimeSpan? remainingAtDecision = null;
         void SetWaitingForOwnerDecision(bool waiting)
         {
             if (waiting)
-            {
-                remainingAtDecision = this.loadingDeadline - this.timeProvider.GetElapsedTime(started);
-                timer.CancelAfter(Timeout.InfiniteTimeSpan);
-            }
-            else
-            {
-                timer.CancelAfter(remainingAtDecision
-                    ?? throw new InvalidOperationException("The owner decision was not started."));
-                remainingAtDecision = null;
-            }
+                ReportStage("owner-decision");
         }
         var logger = mainWindowViewModel.ApplicationServices.LoggerFactory
             .CreateLogger<OpenAgentSessionShortcutHandler>();
@@ -204,6 +189,11 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
                 "Session loading; attempt {Attempt}; stage {Stage}; elapsed-ms {ElapsedMs}; outcome started.",
                 correlation, next, this.timeProvider.GetElapsedTime(started).TotalMilliseconds);
             stage = next;
+            _ = this.invokeOnUiThreadAsync(() =>
+            {
+                if (!ct.IsCancellationRequested)
+                    tab.StartupProgress.Report(tab.Title, next);
+            });
         }
         try
         {
@@ -238,20 +228,6 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
                 logger.LogInformation(
                     "Session loading; attempt {Attempt}; stage ready-publication; outcome ready.",
                     correlation);
-        }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested && timer.IsCancellationRequested)
-        {
-            logger.LogWarning(
-                "Session loading; attempt {Attempt}; stage {Stage}; elapsed-ms {ElapsedMs}; reason session-load-timeout.",
-                correlation, stage, this.timeProvider.GetElapsedTime(started).TotalMilliseconds);
-            await this.PublishLoadingFailureAsync(() =>
-            {
-                if (!ct.IsCancellationRequested && tab.State == AgentTabState.Loading)
-                {
-                    tab.SetFailed($"Session loading timed out at {stage}. Check remote reachability and retry opening the session.");
-                    mainWindowViewModel.NotifyAgentTabStateChanged();
-                }
-            }, logger);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -349,7 +325,10 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         Func<T, Task>? disposeLate = null,
         Action<string>? reportStage = null)
     {
-        using var timer = new CancellationTokenSource(this.stageDeadline, this.timeProvider);
+        var boundedOperation = stage is "transport-choice" or "owner-profile-lookup" or "owner-takeover" or "local-profile-preferences";
+        using var timer = new CancellationTokenSource(
+            boundedOperation ? this.stageDeadline : Timeout.InfiniteTimeSpan,
+            this.timeProvider);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timer.Token);
         var task = operation(linked.Token);
         T result;
@@ -1130,14 +1109,22 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             RemoteChildResolver = remoteChildResolver,
         })
         {
-            OpenUrlHandler = url => _ = mainWindowViewModel.OpenTabAsync(
-                new WebViewModel(url, mainWindowViewModel)
+            OpenDocumentLinkHandler = async (origin, reference) =>
+            {
+                var context = origin as IAgentDocumentContext;
+                var url = AgentDocumentLinkResolver.Resolve(
+                    reference,
+                    context?.DocumentWorkingDirectory,
+                    context?.IsLocalDocumentFileSystem == true).AbsoluteUri;
+                await mainWindowViewModel.OpenTabAsync(
+                    new WebViewModel(url, mainWindowViewModel)
                 {
                     Id = $"web-{url}",
                     Title = url,
                 },
                 insertAfterTabId: agentSessionTabId,
-                workspacePaneId: mainWindowViewModel.FindWorkspacePaneIdForTab(agentSessionTabId)),
+                    workspacePaneId: mainWindowViewModel.FindWorkspacePaneIdForTab(agentSessionTabId));
+            },
         };
     }
 

@@ -262,12 +262,10 @@ internal static class AgentManifestSessionLauncher
         AgentSessionWorkspaceTabViewModel loadingTab,
         TaskScheduler foregroundScheduler,
         CancellationToken lifetimeToken,
-        TimeSpan? loadingDeadline = null,
         TimeProvider? timeProvider = null)
     {
         var clock = timeProvider ?? TimeProvider.System;
-        using var timer = new CancellationTokenSource(loadingDeadline ?? TimeSpan.FromSeconds(90), clock);
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(lifetimeToken, timer.Token);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(lifetimeToken, loadingTab.StartupCancellation);
         using var scope = Phantom.Workspaces.Transport.SessionAttachDiagnosticScope.Begin();
         var attempt = Phantom.Workspaces.Transport.SessionAttachDiagnosticScope.CurrentAttempt!;
         var started = clock.GetTimestamp();
@@ -277,6 +275,7 @@ internal static class AgentManifestSessionLauncher
         void ReportStage(string value)
         {
             stage = value;
+            loadingTab.StartupProgress.Report(loadingTab.Title, value);
             logger.LogInformation(
                 "Session loading; attempt {Attempt}; stage {Stage}; elapsed-ms {ElapsedMs}; outcome started.",
                 attempt, stage, clock.GetElapsedTime(started).TotalMilliseconds);
@@ -316,16 +315,8 @@ internal static class AgentManifestSessionLauncher
             loadingTab.SetReady(agent, loggerFactory);
             transferred = true;
         }
-        catch (OperationCanceledException) when (lifetimeToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested)
         {
-        }
-        catch (OperationCanceledException) when (timer.IsCancellationRequested)
-        {
-            logger.LogWarning(
-                "Session loading; attempt {Attempt}; stage {Stage}; elapsed-ms {ElapsedMs}; reason session-load-timeout.",
-                attempt, stage, clock.GetElapsedTime(started).TotalMilliseconds);
-            if (loadingTab.State == AgentTabState.Loading)
-                loadingTab.SetFailed($"Session loading timed out at {stage}. Check remote reachability and retry opening the session.");
         }
         catch (TimeoutException)
         {
