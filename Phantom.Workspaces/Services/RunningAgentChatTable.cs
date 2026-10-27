@@ -666,10 +666,16 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         return this.SetContinueInBackgroundCoreAsync(sessionId, continueInBackground, ct);
     }
 
+    public Task RetainForViewerCloseAsync(
+        AgentSessionId sessionId,
+        CancellationToken ct = default)
+        => this.SetContinueInBackgroundCoreAsync(sessionId, true, ct, requirePersistedEntity: true);
+
     private async Task SetContinueInBackgroundCoreAsync(
         AgentSessionId sessionId,
         bool continueInBackground,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool requirePersistedEntity = false)
     {
         var entry = this.FindEntry(sessionId)
             ?? throw new ArgumentException("The agent session is not running.", nameof(sessionId));
@@ -697,6 +703,14 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         {
             entry = this.FindEntry(sessionId)
                 ?? throw new ArgumentException("The agent session is not running.", nameof(sessionId));
+            if (requirePersistedEntity)
+            {
+                lock (this._entityInfoLock)
+                {
+                    if (!this.localRuntimeEntities.ContainsKey(sessionId))
+                        throw new InvalidOperationException("Background retention requires a persisted session.");
+                }
+            }
             RunningAgentChatLease? newlyPinnedLease = null;
             if (continueInBackground)
             {

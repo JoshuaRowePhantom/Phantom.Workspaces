@@ -442,7 +442,8 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
         global::Dock.Model.Core.IFactory? factory = documentDock.Factory ?? this.environment?.DockFactory;
         factory?.CloseDockable(activeDoc);
 
-        this.environment?.RunMruNavigationAfterActiveClose();
+        if (activeDoc.TabViewModel is not AgentSessionWorkspaceTabViewModel)
+            this.environment?.RunMruNavigationAfterActiveClose();
     }
 
     /// <summary>#1341: cycles the active tab in this pane in visible order (formerly

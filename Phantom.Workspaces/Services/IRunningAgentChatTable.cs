@@ -49,5 +49,9 @@ public interface IRunningAgentChatTable
         AgentSessionId sessionId, bool continueInBackground,
         CancellationToken ct = default)
         => Task.CompletedTask;
-}
 
+    Task RetainForViewerCloseAsync(
+        AgentSessionId sessionId,
+        CancellationToken ct = default)
+        => Task.FromException(new InvalidOperationException("Durable viewer-close retention is unavailable."));
+}

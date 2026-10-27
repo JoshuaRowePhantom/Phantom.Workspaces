@@ -3094,6 +3094,103 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     }
 
     public void CloseTab(WorkspaceTabViewModel tab)
+        => _ = this.RequestCloseTabAsync(tab);
+
+    internal IAgentSessionCloseDecisionProvider AgentSessionCloseDecisionProvider { get; set; }
+        = new AgentSessionCloseDecisionProvider();
+
+    private readonly Dictionary<WorkspaceTabViewModel, Task<bool>> pendingTabCloses = [];
+
+    public Task<bool> RequestCloseTabAsync(WorkspaceTabViewModel tab)
+    {
+        if (this.pendingTabCloses.TryGetValue(tab, out var pending))
+            return pending;
+        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        this.pendingTabCloses.Add(tab, completion.Task);
+        _ = this.CompleteCloseRequestAsync(tab, completion);
+        return completion.Task;
+    }
+
+    private async Task CompleteCloseRequestAsync(
+        WorkspaceTabViewModel tab,
+        TaskCompletionSource<bool> completion)
+    {
+        try
+        {
+            completion.TrySetResult(await this.RequestCloseTabCoreAsync(tab));
+        }
+        catch (Exception)
+        {
+            if (tab is AgentSessionWorkspaceTabViewModel session)
+                session.Agent?.AgentChat.EnqueueTransientDiagnostic("Unable to close session. Termination or background retention did not complete; the tab remains open.");
+            completion.TrySetResult(false);
+        }
+        finally
+        {
+            this.pendingTabCloses.Remove(tab);
+        }
+    }
+
+    private async Task<bool> RequestCloseTabCoreAsync(WorkspaceTabViewModel tab)
+    {
+        var pane = this.WorkspacePanes.FirstOrDefault(candidate => candidate.Tabs.Contains(tab));
+        if (pane is null)
+            return false;
+        if (tab is AgentSessionWorkspaceTabViewModel session)
+        {
+            var chat = session.Agent?.AgentChat;
+            var lease = session.Lease;
+            var row = this.applicationServices.RunningAgentChats.RunningSessions.FirstOrDefault(
+                candidate => candidate.SessionId.Value == session.AgentSessionId);
+            if (chat is null || session.State != AgentTabState.Ready || row is { IsConnected: false })
+                return false;
+            if (AgentSessionCloseActivity.HasPendingWork(chat))
+            {
+                var decision = await this.AgentSessionCloseDecisionProvider.ChooseAsync(
+                    tab.Title,
+                    session.StartupCancellation);
+                if (decision == AgentSessionCloseDecision.Cancel)
+                    return false;
+                if (!pane.Tabs.Contains(tab) || !ReferenceEquals(session.Agent?.AgentChat, chat)
+                    || !ReferenceEquals(session.Lease, lease)
+                    || !ReferenceEquals(row, this.applicationServices.RunningAgentChats.RunningSessions.FirstOrDefault(
+                        candidate => candidate.SessionId.Value == session.AgentSessionId)))
+                    return false;
+                var sessionId = new Phantom.Workspaces.Llm.Interfaces.AgentSessionId(chat.Information.AgentSessionId);
+                if (decision == AgentSessionCloseDecision.Terminate)
+                {
+                    if (!await this.applicationServices.RunningAgentChats.TerminateAsync(sessionId, session.StartupCancellation))
+                        throw new InvalidOperationException("The owning session could not be terminated.");
+                }
+                else
+                {
+                    if (session.Entity?.Data is not JsonElement)
+                        throw new InvalidOperationException("Background retention requires a persisted session.");
+                    await this.applicationServices.RunningAgentChats.RetainForViewerCloseAsync(sessionId, session.StartupCancellation);
+                    if (row?.ContinueInBackground != true)
+                        throw new InvalidOperationException("The owner did not acknowledge background retention.");
+                }
+                if (!pane.Tabs.Contains(tab) || !ReferenceEquals(session.Agent?.AgentChat, chat)
+                    || !ReferenceEquals(session.Lease, lease))
+                    return false;
+            }
+        }
+        var document = pane.GetDocumentForTab(tab.Id);
+        if (document?.Owner is not null)
+        {
+            var wasActive = ReferenceEquals((document.Owner as IDock)?.ActiveDockable, document);
+            this.dockFactory.CommitTabClose(document);
+            if (wasActive)
+                this.RunMruNavigationAfterActiveClose();
+        }
+        else
+        {
+            this.CommitCloseTab(tab);
+        }
+        return !pane.Tabs.Contains(tab);
+    }
+
+    private void CommitCloseTab(WorkspaceTabViewModel tab)
     {
         foreach (var pane in this.WorkspacePanes)
         {
@@ -3233,6 +3330,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             var tab = pane.Tabs.FirstOrDefault(t => string.Equals(t.Id, tabId, StringComparison.Ordinal));
             if (tab is null) continue;
 
+            if (tab is AgentSessionWorkspaceTabViewModel)
+            {
+                _ = this.RequestCloseTabAsync(tab);
+                return false;
+            }
             // Capture whether this tab was active before removing it
             var wasActive = false;
             if (pane.ContentLayout is not null)
@@ -3268,6 +3370,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         return false;
+    }
+
+    internal Task<bool> CloseTabByIdAsync(string tabId)
+    {
+        var tab = this.WorkspacePanes.SelectMany(pane => pane.Tabs)
+            .FirstOrDefault(candidate => string.Equals(candidate.Id, tabId, StringComparison.Ordinal));
+        return tab is null ? Task.FromResult(false) : this.RequestCloseTabAsync(tab);
     }
 
     private void SubscribeToInnerDockChanges(WorkspacePaneViewModel workspacePane)
