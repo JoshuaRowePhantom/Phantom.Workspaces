@@ -126,6 +126,16 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         WorkspaceStartupState.Cancelled => "Workspace loading cancelled.",
         _ => string.Empty,
     };
+
+    private string accessAdministrationStatus = string.Empty;
+    public string AccessAdministrationStatus => this.accessAdministrationStatus;
+
+    internal void ReportAccessAdministrationFailure()
+    {
+        this.accessAdministrationStatus = "Credential access is unavailable. Close the window and try again.";
+        this.RaisePropertyChanged(nameof(this.AccessAdministrationStatus));
+        this.loggerFactory.CreateLogger<MainWindowViewModel>().LogError("Credential access window operation failed.");
+    }
     private int disposalStarted;
     private readonly Services.Logging.ILogDirectoryProvider? logDirectoryProvider;
     private readonly global::Phantom.Workspaces.Configuration.ConfigurationPersistenceService? configurationPersistence;

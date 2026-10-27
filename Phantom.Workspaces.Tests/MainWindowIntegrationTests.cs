@@ -416,25 +416,93 @@ public sealed class MainWindowIntegrationTests
 
             shushButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
 
-            for (var i = 0; i < 20 && window.LastAccessAdministrationWindow is null; i++)
-            {
-                await Dispatcher.UIThread.InvokeAsync(() => { });
-                Dispatcher.UIThread.RunJobs();
-            }
+            await window.AccessAdministrationReady;
 
             var dialog = window.LastAccessAdministrationWindow;
             Assert.NotNull(dialog);
             Assert.IsType<TabControl>(dialog!.Content);
+            Assert.True(dialog.IsVisible);
+            Assert.Same(window, dialog.Owner);
+            Assert.Same(accessHost.AuthorizationRows, dialog.RequestRows);
+            Assert.Equal(CredentialAccessPage.SavedApprovals, dialog.SelectedPage);
+            Assert.Equal(new[] { "Requests", "Saved approvals", "Cached credentials", "Provider access" },
+                ((TabControl)dialog.Content!).Items.Cast<TabItem>().Select(item => item.Header));
+            Assert.True(window.IsEnabled);
+            Assert.True(shushButton.Focus());
+            Assert.True(shushButton.IsFocused);
 
-            dialog.Close();
+            var authorizationKey = window.FindControl<Button>("AuthorizationKey")!;
+            authorizationKey.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            await window.AccessAdministrationReady;
+            Assert.Same(dialog, window.LastAccessAdministrationWindow);
+            Assert.Equal(CredentialAccessPage.Requests, dialog.SelectedPage);
+            dialog.UpdateLayout();
+            var requests = Assert.Single(dialog.GetVisualDescendants().OfType<Controls.AuthorizationRequestRowsControl>());
+            Assert.Same(accessHost.AuthorizationRows, requests.DataContext);
+
+            var registry = Assert.IsType<Services.Authorization.UserAuthorizationRegistry>(accessHost.AuthorizationRegistry);
+            var snapshot = AuthorizationRequestRowsViewModelTests.Snapshot();
+            registry.Add(snapshot);
+            dialog.UpdateLayout();
+            var row = Assert.Single(accessHost.AuthorizationRows.Rows);
+            var selectedSource = row.SelectedSource;
+            var selectedMemory = row.SelectedMemory;
+            row.IsDetailsExpanded = true;
+            var source = requests.GetVisualDescendants().OfType<ComboBox>()
+                .Single(combo => Avalonia.Automation.AutomationProperties.GetName(combo) == "Credential source");
+            Assert.True(source.Focus());
+            Assert.True(registry.UpdateSources(snapshot.Identifier, snapshot.Revision,
+                snapshot.SourceOptions.Select(option => option with
+                {
+                    Usability = Llm.Interfaces.Access.CredentialSourceUsability.AcquisitionRequired,
+                }).ToArray()));
             Dispatcher.UIThread.RunJobs();
-            await dialog.DisposeAsync();
+            Assert.Same(row, Assert.Single(accessHost.AuthorizationRows.Rows));
+            Assert.Equal(selectedSource, row.SelectedSource);
+            Assert.Equal(selectedMemory, row.SelectedMemory);
+            Assert.True(row.IsDetailsExpanded);
+            Assert.True(source.IsFocused);
+            Assert.Equal(snapshot.Revision + 1, row.Revision);
+
+            Assert.True(shushButton.Focus());
+            registry.Add(snapshot with
+            {
+                Identifier = new() { Value = Guid.NewGuid() },
+            });
+            Dispatcher.UIThread.RunJobs();
+            Assert.True(shushButton.IsFocused);
+            Assert.Equal(2, accessHost.AuthorizationRows.ActionableCount);
+
+            var escape = new KeyEventArgs { Key = Key.Escape, RoutedEvent = InputElement.KeyDownEvent };
+            dialog.RaiseEvent(escape);
+            Assert.True(escape.Handled);
+            Assert.True(authorizationKey.IsFocused);
+            await window.DisposeClosedAccessAdministrationAsync();
             await dialog.DisposeAsync();
             Assert.True(dialog.IsDisposed);
+            var disposedModel = Assert.IsType<ReleaseMemoryAdministrationViewModel>(
+                ((Controls.ReleaseMemoryAdministrationControl)((TabItem)((TabControl)dialog.Content!).Items[1]!).Content!).DataContext);
+            Assert.False(disposedModel.RefreshCommand.CanExecute(null));
+            Assert.Null(window.LastAccessAdministrationWindow);
             await dialog.RefreshAsync(TestContext.Current.CancellationToken);
+            shushButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            await window.AccessAdministrationReady;
+            var reopened = Assert.IsType<AccessAdministrationWindow>(window.LastAccessAdministrationWindow);
+            Assert.NotSame(dialog, reopened);
+            Assert.Same(accessHost.AuthorizationRows, reopened.RequestRows);
+            Assert.Same(row, reopened.RequestRows.Rows[0]);
+            Assert.False(reopened.IsDisposed);
+            var reopenedModel = Assert.IsType<ReleaseMemoryAdministrationViewModel>(
+                ((Controls.ReleaseMemoryAdministrationControl)((TabItem)((TabControl)reopened.Content!).Items[1]!).Content!).DataContext);
+            Assert.NotSame(disposedModel, reopenedModel);
+            Assert.True(reopenedModel.RefreshCommand.CanExecute(null));
+            await window.DisposeAccessAdministrationAsync();
+            Assert.True(reopened.IsDisposed);
+            Assert.Equal(2, accessHost.AuthorizationRows.Rows.Count);
         }
         finally
         {
+            await window.DisposeAccessAdministrationAsync();
             await CloseWindowAsync(window);
         }
     }

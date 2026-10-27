@@ -36,6 +36,8 @@
                     <TextBlock Text="{Binding RepositoryStatusText}" />
                     <TextBlock Text="{Binding StartupStatus}" TextWrapping="Wrap"
                                AutomationProperties.Name="Workspace startup status" />
+                    <TextBlock Text="{Binding AccessAdministrationStatus}" TextWrapping="Wrap"
+                               AutomationProperties.LiveSetting="Polite" />
                     <TextBlock Classes="accent"
                                Text="Debug mode enabled"
                                IsVisible="{Binding IsDebuggingEnabled}" />

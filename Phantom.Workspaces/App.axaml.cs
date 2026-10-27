@@ -459,9 +459,9 @@ public partial class App : Application
             catch (Exception exception) { failures.Add(exception); }
         }
 
-        if (this.runtimeWindow?.LastAccessAdministrationWindow is { } administration)
+        if (this.runtimeWindow is { } window)
         {
-            await CleanAsync(administration.DisposeAsync);
+            await CleanAsync(window.DisposeAccessAdministrationAsync);
         }
         if (this.authorizationPopup is not null) { await CleanAsync(this.authorizationPopup.DisposeAsync); }
         if (this.accessHost is not null) { await CleanAsync(this.accessHost.DisposeAsync); }
