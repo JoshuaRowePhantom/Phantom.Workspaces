@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.ViewModels;
@@ -9,6 +10,135 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class MainWindowStartupTests
 {
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ApplicationStartup_WorkspaceMaterializes_VisibleWindowRemainsLoadingUntilCompleted()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource(),
+            new WorkspacesConfiguration { SkipStartupWorkspace = false });
+        await viewModel.PrepareShellAsync();
+        var window = new MainWindow(viewModel);
+        var loadingObserved = false;
+        viewModel.WorkspacePanes.CollectionChanged += (_, _) =>
+        {
+            if (viewModel.WorkspacePanes.Any(p => p.Id.StartsWith("loading-workspace:", StringComparison.Ordinal)))
+            {
+                Assert.True(window.IsVisible);
+                Assert.Equal(WorkspaceStartupState.LoadingWorkspaces, viewModel.StartupState);
+                Assert.False(viewModel.IsStartupReady);
+                loadingObserved = true;
+            }
+        };
+        try
+        {
+            window.Show();
+            await viewModel.CompleteVisibleStartupAsync();
+            Assert.True(loadingObserved);
+            Assert.True(viewModel.IsStartupReady);
+            Assert.All(viewModel.WorkspacePanes, pane => Assert.True(pane.Populated.IsCompletedSuccessfully));
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ApplicationStartup_WorkspaceLoadFails_ReportsFailureAndCompletesTeardown()
+    {
+        var viewModel = new MainWindowViewModel(new UnknownRepositorySource(),
+            new WorkspacesConfiguration { SkipStartupWorkspace = false });
+        await viewModel.PrepareShellAsync();
+        var window = new MainWindow(viewModel);
+        var failure = new InvalidOperationException("Controlled workspace materialization failure");
+        System.Collections.Specialized.NotifyCollectionChangedEventHandler failRestore = (_, _) => throw failure;
+        viewModel.WorkspacePanes.CollectionChanged += failRestore;
+        try
+        {
+            window.Show();
+            Assert.Same(failure, await Assert.ThrowsAsync<InvalidOperationException>(viewModel.CompleteVisibleStartupAsync));
+            Assert.True(window.IsVisible);
+            Assert.Equal(WorkspaceStartupState.Failed, viewModel.StartupState);
+            Assert.Contains("failed", viewModel.StartupStatus, StringComparison.OrdinalIgnoreCase);
+            window.UpdateLayout();
+            Assert.Contains(window.GetVisualDescendants().OfType<Avalonia.Controls.TextBlock>(),
+                block => block.Text == viewModel.StartupStatus);
+            var disposal = await Assert.ThrowsAsync<AggregateException>(() => viewModel.DisposeAsync().AsTask());
+            Assert.Contains(failure, disposal.InnerExceptions);
+        }
+        finally
+        {
+            viewModel.WorkspacePanes.CollectionChanged -= failRestore;
+            window.Close();
+            try { await viewModel.DisposeAsync(); }
+            catch (AggregateException) { }
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ApplicationStartup_MainWindowIsShown_RenderOpportunityPrecedesWorkspaceLoad()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource(),
+            new WorkspacesConfiguration { SkipStartupWorkspace = false });
+        await viewModel.PrepareShellAsync();
+        Assert.NotNull(viewModel.Layout);
+        Assert.Equal(WorkspaceStartupState.ShellPrepared, viewModel.StartupState);
+        var window = new MainWindow(viewModel);
+        var splash = new Avalonia.Controls.Window();
+        try
+        {
+            splash.Show();
+            window.Show();
+            splash.Close();
+            var renderOpportunity = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Dispatcher.UIThread.Post(() =>
+            {
+                Assert.True(window.IsVisible);
+                Assert.False(splash.IsVisible);
+                Assert.False(viewModel.IsStartupReady);
+                renderOpportunity.TrySetResult();
+            }, DispatcherPriority.Render);
+            var startup = viewModel.CompleteVisibleStartupAsync();
+            await renderOpportunity.Task.WaitAsync(TestContext.Current.CancellationToken);
+            await startup;
+            Assert.True(viewModel.IsStartupReady);
+            Assert.Same(startup, viewModel.CompleteVisibleStartupAsync());
+            Assert.Same(viewModel.InitializeAsync(), viewModel.InitializeAsync());
+            Assert.DoesNotContain(viewModel.WorkspacePanes, pane => pane.Id == "loading");
+        }
+        finally
+        {
+            splash.Close();
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindowViewModel_DisposedAfterShellPreparation_CancelsVisibleStartup()
+    {
+        var viewModel = new MainWindowViewModel(new UnknownRepositorySource(),
+            new WorkspacesConfiguration { SkipStartupWorkspace = false });
+        await viewModel.PrepareShellAsync();
+        var startup = viewModel.CompleteVisibleStartupAsync();
+        var disposal = viewModel.DisposeAsync().AsTask();
+        await Task.WhenAll(disposal, viewModel.DisposeAsync().AsTask());
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => startup);
+        Assert.Equal(WorkspaceStartupState.Cancelled, viewModel.StartupState);
+        Assert.False(viewModel.IsStartupReady);
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => viewModel.CompleteVisibleStartupAsync());
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindowViewModel_SkipStartupWorkspaceIsTrue_PreparesShellWithoutClaimingReady()
+    {
+        await using var viewModel = CreateViewModel();
+        await viewModel.PrepareShellAsync();
+        Assert.False(viewModel.IsStartupReady);
+        var panes = viewModel.WorkspacePanes.ToArray();
+        await viewModel.InitializeAsync();
+        Assert.True(viewModel.IsStartupReady);
+        Assert.Equal(panes, viewModel.WorkspacePanes);
+    }
+
     [AvaloniaFact]
     public async Task MainWindowViewModel_RepositoryStartupIsBlocked_DispatcherRemainsResponsive()
     {

@@ -98,6 +98,34 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private readonly TaskCompletionSource disposal = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly object initializationGate = new();
     private Task? initializationTask;
+    private Task? shellPreparationTask;
+    private Task? visibleStartupTask;
+    private WorkspaceStartupState startupState;
+
+    public WorkspaceStartupState StartupState
+    {
+        get => this.startupState;
+        private set
+        {
+            if (this.SetProperty(ref this.startupState, value))
+            {
+                this.RaisePropertyChanged(nameof(this.StartupStatus));
+                this.RaisePropertyChanged(nameof(this.IsStartupReady));
+            }
+        }
+    }
+
+    public bool IsStartupReady => this.StartupState == WorkspaceStartupState.Ready;
+
+    public string StartupStatus => this.StartupState switch
+    {
+        WorkspaceStartupState.PreparingShell => "Preparing workspace window…",
+        WorkspaceStartupState.ShellPrepared => "Window ready. Workspaces have not finished loading.",
+        WorkspaceStartupState.LoadingWorkspaces => "Loading workspaces and services…",
+        WorkspaceStartupState.Failed => "Workspace loading failed. See the application log for details.",
+        WorkspaceStartupState.Cancelled => "Workspace loading cancelled.",
+        _ => string.Empty,
+    };
     private int disposalStarted;
     private readonly Services.Logging.ILogDirectoryProvider? logDirectoryProvider;
     private readonly global::Phantom.Workspaces.Configuration.ConfigurationPersistenceService? configurationPersistence;
@@ -691,11 +719,29 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         lock (this.initializationGate)
         {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref this.disposalStarted) != 0, this);
-            return this.initializationTask ??= this.InitializeCoreAsync();
+            return this.initializationTask ??= this.CompleteVisibleStartupAsync();
         }
     }
 
-    private async Task InitializeCoreAsync()
+    public Task PrepareShellAsync()
+    {
+        lock (this.initializationGate)
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref this.disposalStarted) != 0, this);
+            return this.shellPreparationTask ??= this.PrepareShellCoreAsync();
+        }
+    }
+
+    public Task CompleteVisibleStartupAsync()
+    {
+        lock (this.initializationGate)
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref this.disposalStarted) != 0, this);
+            return this.visibleStartupTask ??= this.CompleteVisibleStartupCoreAsync();
+        }
+    }
+
+    private async Task PrepareShellCoreAsync()
     {
         this.entityBroker = await this.entityBrokerTask;
         this.lifetime.Token.ThrowIfCancellationRequested();
@@ -737,6 +783,38 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         await this.InitializeProfileAsync();
         this.lifetime.Token.ThrowIfCancellationRequested();
         this.InitializeDockLayout(); // Initialize workspace-level dock
+        this.StartupState = WorkspaceStartupState.ShellPrepared;
+    }
+
+    private async Task CompleteVisibleStartupCoreAsync()
+    {
+        try
+        {
+            await this.PrepareShellAsync();
+            // Loaded is below Render: the shown shell gets a layout/render opportunity
+            // even when the repository and workspace loaders initially complete synchronously.
+            await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Loaded);
+            this.lifetime.Token.ThrowIfCancellationRequested();
+            this.StartupState = WorkspaceStartupState.LoadingWorkspaces;
+            await this.LoadStartupWorkspacesAndRuntimeAsync();
+            this.StartupState = WorkspaceStartupState.Ready;
+        }
+        catch (OperationCanceledException) when (this.lifetime.IsCancellationRequested)
+        {
+            this.StartupState = WorkspaceStartupState.Cancelled;
+            throw;
+        }
+        catch (Exception exception)
+        {
+            this.StartupState = WorkspaceStartupState.Failed;
+            this.loggerFactory.CreateLogger<MainWindowViewModel>()
+                .LogError(exception, "Visible workspace startup failed.");
+            throw;
+        }
+    }
+
+    private async Task LoadStartupWorkspacesAndRuntimeAsync()
+    {
         if (this.configuration?.SkipStartupWorkspace != true)
         {
             await this.OpenStartupWorkspaceAsync();
@@ -2322,8 +2400,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     }
 
     internal async Task OpenWorkspaceAsync(
-        GetEntityRequest workspaceRequest)
+        GetEntityRequest workspaceRequest,
+        bool awaitPopulation = false)
     {
+        this.lifetime.Token.ThrowIfCancellationRequested();
         var (loadingWorkspacePane, alreadyOpening) = this.GetOrCreateLoadingWorkspacePane(workspaceRequest);
         this.SelectedWorkspacePane = loadingWorkspacePane;
 
@@ -2335,6 +2415,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         var workspaceSnapshot = await this.LoadSingleEntitySnapshotAsync(workspaceRequest);
+        this.lifetime.Token.ThrowIfCancellationRequested();
         if (workspaceSnapshot?.Data is not JsonElement workspaceData)
         {
             this.DismissLoadingPane(loadingWorkspacePane);
@@ -2369,6 +2450,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         // Fetch just the workspace entity to build the skeleton pane
         var workspaceEntities = await this.EntityBroker!.GetEntitiesAsync([workspaceRequest]);
+        this.lifetime.Token.ThrowIfCancellationRequested();
         var workspaceEntity = workspaceEntities.FirstOrDefault(e => e.EntityId == workspaceSnapshot.EntityId);
         if (workspaceEntity is null)
         {
@@ -2396,6 +2478,21 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         // Phase 2: populate tabs asynchronously (fire and forget)
         var populateTask = workspacePane.PopulateTabsAsync(workspaceEntity, workspaceData);
+        if (awaitPopulation)
+        {
+            try
+            {
+                await populateTask;
+                this.lifetime.Token.ThrowIfCancellationRequested();
+                workspacePane.SignalPopulated();
+            }
+            catch (Exception exception)
+            {
+                workspacePane.SignalPopulated(exception);
+                throw;
+            }
+            return;
+        }
         _ = populateTask.ContinueWith(t =>
         {
             if (t.IsFaulted && t.Exception != null)
@@ -4055,11 +4152,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private async Task OpenStartupWorkspaceAsync()
     {
         var defaultWorkspaceIds = await this.QueryDefaultWorkspaceIdsAsync();
+        this.lifetime.Token.ThrowIfCancellationRequested();
         if (defaultWorkspaceIds.Count > 0)
         {
             foreach (var workspaceId in defaultWorkspaceIds)
             {
-                await this.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+                this.lifetime.Token.ThrowIfCancellationRequested();
+                await this.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId }, awaitPopulation: true);
             }
 
             return;
@@ -4069,7 +4168,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             new GetEntityRequest
             {
                 EntityName = new EntityName("workspaces", "getting-started-workspace"),
-            });
+            }, awaitPopulation: true);
     }
 
     private async Task<SubscribedEntityViewModel?> LoadNavigationSubscriptionAsync()
@@ -4906,7 +5005,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             NotificationService = this.notificationService,
             NavigationHistory = this.navigationHistoryService,
             TabFactory = this,
-            IsPaneLive = pane => this.WorkspacePanes.Contains(pane),
+            IsPaneLive = pane => !this.lifetime.IsCancellationRequested && this.WorkspacePanes.Contains(pane),
             SelectPane = this.SelectAndActivateWorkspacePane,
             RunMruNavigationAfterActiveClose = this.RunMruNavigationAfterActiveClose,
         };
@@ -4986,7 +5085,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         Task startup;
         lock (this.initializationGate)
         {
-            startup = this.initializationTask ?? this.entityBrokerTask;
+            startup = this.initializationTask ?? this.visibleStartupTask ?? this.shellPreparationTask ?? this.entityBrokerTask;
         }
         var failures = new List<Exception>();
         void Clean(Action cleanup)
