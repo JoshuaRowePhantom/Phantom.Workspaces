@@ -44,7 +44,23 @@ See `docs/design/remote-chat-client-session.md` for the full topology narrative 
 
 Provides file-read, file-write, and directory-listing MCP tools backed by the `FilesystemServiceContextProvider`. The filesystem MCP server is spawned as a child process from `Phantom.Workspaces.Llm.Core.exe` (or via `dotnet` on non-Windows).
 
-No explicit tool entry is needed in the agent definition; the filesystem toolset is injected at the `AgentServices` layer. The `FilesystemServiceContextProvider` accepts an optional `editStoreConnectionJson` for persistence integration.
+Select it explicitly with `{"kind":"filesystem","name":"files"}` or a baseline
+`{"kind":"tool","id":"fixed","name":"filesystem"}` manifest resource. Registration
+in the default factory is availability, not automatic attachment.
+
+An optional **top-level** `connection` uses the shared chat-history-provider
+schema and the Phantom `FilesystemTool` loader/save/reload bridge. Absent
+configuration uses in-memory edit history; malformed supplied configuration
+fails. It is not an SDK connection. Programmatic callers use
+`FilesystemTool.EditStoreConnection`. Filesystem `options.connection` and SDK
+connections are rejected instead of silently ignored. Baseline resource options
+are not forwarded: configure persistence through `template.tools`.
+
+Provider JSON requires MongoDB `container` or `external` plus nonempty database
+and collection names; container mode requires container name/data directory and
+optionally integer port 1–65535; external mode requires a connection string.
+See Agent Definition Schema and Agent Manifest Schema documentation for the
+complete eight-direct-kind/seven-fixed-name inventory and host prerequisites.
 
 ---
 
@@ -98,9 +114,18 @@ Worked example — an `oauth` MCP tool:
 
 ---
 
-## `chat-history` (CustomTool with kind `"chat-history"`)
+## `chat-history` (special custom-tool configuration, not callable)
 
 Persists conversation history to an external store. Backed by `AgentPersistenceStoreFactory`.
+
+Exact custom-tool `kind: chat-history` **or** `name: chat-history` selects this
+configuration, including the name alias on another custom kind. Ordinary
+built-in-like display names do not select toolsets. It consumes
+`options.connection` using the same provider constraints as filesystem, but its
+runtime parse-failure behavior is different: absence or parsing failure uses
+in-memory chat history. Authored malformed provider JSON fails schema validation.
+Kind attachment suppression is case-insensitive, separately from ordinal factory
+selection and the exact persistence name/kind alias.
 
 ### Fields
 

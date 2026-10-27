@@ -59,7 +59,17 @@
   "$defs": {
     "toolResource": {
       "type": "object",
-      "description": "A reference to a tool that is resolved at runtime. 'id' selects the resolution strategy and 'name' identifies the specific resource.",
+      "description": "A toolset-selection reference, not a callable-function parameter schema. 'id' selects the resolution strategy and 'name' identifies the resource within it. The seven baseline fixed names are web_search, web_request, web, filesystem, workspace-entity, workspace-gui, current-session. The first four are core-default toolsets; application host composition provides entity tools with data access, workspace-gui with a GUI context provider, and current-session with data access and session context. Direct agent-session additionally requires a running-chat factory and populated parent chat reference; it is not a baseline fixed name. Unknown custom ids/names remain valid and require caller-supplied resolvers/mappings. Schema validity does not promise host resolution. MCP entity resolution is separate from direct kind mcp. For configured filesystem or chat-history persistence use template.tools; fixed resource options are not forwarded.",
+      "examples": [
+        { "kind": "tool", "id": "fixed", "name": "web_search" },
+        { "kind": "tool", "id": "fixed", "name": "web_request" },
+        { "kind": "tool", "id": "fixed", "name": "web" },
+        { "kind": "tool", "id": "fixed", "name": "filesystem" },
+        { "kind": "tool", "id": "fixed", "name": "workspace-entity" },
+        { "kind": "tool", "id": "fixed", "name": "workspace-gui" },
+        { "kind": "tool", "id": "fixed", "name": "current-session" },
+        { "kind": "tool", "id": "mcp-server-entity", "name": "github" }
+      ],
       "additionalProperties": true,
       "required": [
         "kind",
@@ -74,7 +84,7 @@
         "id": {
           "type": "string",
           "minLength": 1,
-          "description": "Tool resource type that selects how the tool is resolved. Common values: 'mcp-server-entity' (resolve an mcp-server entity by entity name, see 'name'), 'fixed' (resolve a built-in toolset by name). An unknown id fails session load with \"Tool resource '<id>:<name>' could not be resolved\"."
+          "description": "Exact resolution strategy identifier. Baseline strategies: 'mcp-server-entity' resolves an MCP-server entity by entity name; 'fixed' resolves the supplied exact (id,name) mapping. Custom strategies remain open. An unresolved resource retains a placeholder and diagnostic while the remaining tools load; it does not fail the whole session."
         },
         "name": {
           "type": "string",
@@ -84,13 +94,37 @@
         "options": {
           "type": "object",
           "additionalProperties": true,
-          "description": "Tool-specific configuration options. The structure depends on the tool type."
+          "description": "Extension options. Baseline fixed and mcp-server-entity resolvers do not consume these: resource options are not forwarded to the resolved tool, including connection. Use template.tools for configured filesystem or chat-history selections. Custom strategies may define their own options."
         },
         "executor": {
           "type": "string",
           "minLength": 1,
           "description": "NEW (#1433, per-component-executor-binding). Optional name of the 'executor' resource this tool binds to. Unset inherits the session's overall executor (the local orchestrator, '.'). Never emit 'executor':'local'."
         }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["id", "name"],
+            "properties": {
+              "id": { "const": "fixed" },
+              "name": { "enum": ["web_search", "web_request", "web", "filesystem", "workspace-entity", "workspace-gui", "current-session"] }
+            }
+          },
+          "then": { "$ref": "#/$defs/fixedBuiltinResource" }
+        }
+      ]
+    },
+    "fixedBuiltinResource": {
+      "type": "object",
+      "description": "Baseline fixed selection contract; validates metadata only, never fabricates configuration forwarding. Fixed filesystem uses its mapped tool configuration (in-memory by default). The registered direct agent-session kind and proposed unregistered shell are not baseline fixed names.",
+      "required": ["kind", "id", "name"],
+      "properties": {
+        "kind": { "const": "tool" },
+        "id": { "const": "fixed" },
+        "name": { "enum": ["web_search", "web_request", "web", "filesystem", "workspace-entity", "workspace-gui", "current-session"] },
+        "options": { "type": "object", "additionalProperties": true },
+        "executor": { "type": "string", "minLength": 1 }
       }
     },
     "modelResource": {
