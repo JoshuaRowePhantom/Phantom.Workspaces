@@ -267,7 +267,7 @@
                      infinite vertical constraint); a * row cannot resolve against infinity and the
                      inner ScrollViewer's ExtentHeight never grows past the viewport for a tall card. -->
                 <Grid RowDefinitions="Auto,Auto"
-                      ColumnDefinitions="20,*"
+                      ColumnDefinitions="40,*"
                       HorizontalAlignment="Stretch">
                     <StackPanel Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2"
                                 Classes="entity-card-tree-item"
@@ -278,14 +278,11 @@
                                         Content="{TemplateBinding Header}"
                                         ContentTemplate="{TemplateBinding HeaderTemplate}" />
                     </StackPanel>
-                    <Border Grid.Column="0" Grid.Row="1"
-                            Classes="entity-card-child-rail"
-                            Background="{Binding ChildRailBrush, FallbackValue=#808080}"
-                            Width="2"
-                            HorizontalAlignment="Center"
-                            VerticalAlignment="Stretch" />
                     <ItemsPresenter Grid.Column="1" Grid.Row="1"
                                     IsVisible="{Binding IsExpanded}" />
+                    <controls:EntityTreeConnectors Grid.Column="0" Grid.Row="1" Grid.ColumnSpan="2"
+                            Classes="entity-card-child-rail"
+                            Brush="{Binding ChildRailBrush, FallbackValue=#808080}" />
                 </Grid>
             </ControlTemplate>
         </Setter>

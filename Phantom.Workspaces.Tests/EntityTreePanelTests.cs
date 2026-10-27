@@ -14,6 +14,131 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityTreePanelTests
 {
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardTreeView_SelectionAndScrolling_PreservesConnectorAlignment()
+    {
+        var root = new TreeNode("Root");
+        foreach (var i in Enumerable.Range(0, 2))
+        {
+            root.Children.Add(new TreeNode($"Child {i}") { Height = 30 + i % 3 * 20 });
+        }
+        var roots = new[] { root }.Concat(Enumerable.Range(1, 200).Select(i => new TreeNode($"Root {i}"))).ToArray();
+        var tree = CreateTree(roots);
+        tree.ItemTemplate = new Avalonia.Controls.Templates.FuncTreeDataTemplate<TreeNode>(
+            (node, _) => new TextBlock { Text = node.Name, Height = node.Height }, node => node.Children);
+        var window = new Window { Content = tree, Width = 400, Height = 300 };
+        try
+        {
+            window.Show();
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            var parent = Assert.IsType<TreeViewItem>(tree.ContainerFromIndex(0));
+            parent.IsExpanded = true;
+            window.UpdateLayout();
+            var connectors = parent.GetVisualDescendants()
+                .OfType<Phantom.Workspaces.Gui.Shared.Controls.EntityTreeConnectors>()
+                .Single(c => c.FindAncestorOfType<TreeViewItem>() == parent);
+            var scroll = tree.GetVisualDescendants().OfType<ScrollViewer>().First();
+            tree.SelectedItem = roots[100];
+            scroll.Offset = new Vector(0, 3500);
+            window.UpdateLayout();
+            Assert.True(tree.GetRealizedContainers().Count() < roots.Length / 2);
+            Assert.False(connectors.IsHitTestVisible);
+            tree.SelectedItem = root.Children[0];
+            scroll.Offset = default;
+            window.UpdateLayout();
+            parent = Assert.IsType<TreeViewItem>(tree.ContainerFromIndex(0));
+            parent.IsExpanded = true;
+            window.UpdateLayout();
+            connectors = parent.GetVisualDescendants()
+                .OfType<Phantom.Workspaces.Gui.Shared.Controls.EntityTreeConnectors>()
+                .Single(c => c.FindAncestorOfType<TreeViewItem>() == parent);
+            var realized = parent.GetRealizedContainers().OfType<TreeViewItem>().ToArray();
+            Assert.Equal(2, realized.Length);
+            Assert.Equal(realized.Length, connectors.Attachments.Count);
+            foreach (var child in realized)
+            {
+                var header = child.GetVisualDescendants().OfType<StackPanel>()
+                    .Single(p => p.Classes.Contains("entity-card-tree-item")
+                        && p.FindAncestorOfType<TreeViewItem>() == child);
+                Assert.Contains(Assert.NotNull(header.TranslatePoint(new Point(0, header.Bounds.Height / 2), connectors)),
+                    connectors.Attachments);
+            }
+            Assert.Equal(connectors.Attachments[^1].Y, connectors.RailEnd);
+            Assert.Same(root.Children[0], tree.SelectedItem);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardTreeView_WrappedChildren_AttachesBranchesToActualHeaderBounds()
+    {
+        var root = new TreeNode("Root");
+        root.Children.Add(new TreeNode("Short") { Height = 34 });
+        root.Children.Add(new TreeNode("Last") { Height = 83 });
+        root.Children[1].Children.Add(new TreeNode("Grandchild") { Height = 120 });
+        var tree = CreateTree(new[] { root });
+        tree.ItemTemplate = new Avalonia.Controls.Templates.FuncTreeDataTemplate<TreeNode>(
+            (node, _) => new TextBlock { Text = node.Name, Height = node.Height }, node => node.Children);
+        var window = new Window { Content = tree, Width = 480, Height = 600 };
+        try
+        {
+            window.Show();
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            var parent = Assert.IsType<TreeViewItem>(tree.ContainerFromIndex(0));
+            parent.IsExpanded = true;
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            var last = Assert.IsType<TreeViewItem>(parent.ContainerFromIndex(1));
+            last.IsExpanded = true;
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            var connectors = parent.GetVisualDescendants()
+                .OfType<Phantom.Workspaces.Gui.Shared.Controls.EntityTreeConnectors>()
+                .Single(c => c.FindAncestorOfType<TreeViewItem>() == parent);
+            Assert.False(connectors.IsHitTestVisible);
+            Assert.True(connectors.ClipToBounds);
+            Assert.Equal(2, connectors.Attachments.Count);
+            foreach (var child in parent.GetRealizedContainers().OfType<TreeViewItem>())
+            {
+                var header = child.GetVisualDescendants().OfType<StackPanel>()
+                    .Single(p => p.Classes.Contains("entity-card-tree-item")
+                        && p.FindAncestorOfType<TreeViewItem>() == child);
+                var attachment = Assert.NotNull(header.TranslatePoint(new Point(0, header.Bounds.Height / 2), connectors));
+                Assert.Contains(attachment, connectors.Attachments);
+                Assert.Equal(40, attachment.X);
+            }
+            Assert.Equal(connectors.Attachments[^1].Y, connectors.RailEnd);
+            Assert.True(connectors.RailEnd < connectors.Bounds.Height);
+            var grandchild = Assert.IsType<TreeViewItem>(last.ContainerFromIndex(0));
+            Assert.Equal(80, Assert.NotNull(grandchild.TranslatePoint(default, parent)).X);
+            window.Width = 320;
+            tree.SelectedItem = root.Children[1];
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            Assert.Equal(2, connectors.Attachments.Count);
+            Assert.Equal(connectors.Attachments[^1].Y, connectors.RailEnd);
+            parent.IsExpanded = false;
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            Assert.Empty(connectors.Attachments);
+            Assert.Equal(0, connectors.RailEnd);
+            parent.IsExpanded = true;
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            Assert.Equal(2, connectors.Attachments.Count);
+            root.Children.Clear();
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            Assert.Empty(connectors.Attachments);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
     [AvaloniaTheory]
     [InlineData(0, false)]
     [InlineData(1, false)]

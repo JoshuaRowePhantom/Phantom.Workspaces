@@ -27,6 +27,34 @@ namespace Phantom.Workspaces.Tests;
 public sealed class EntityCardControlTests
 {
     [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardControl_LongDisplayName_RemainsSelectableAndFullyVisible()
+    {
+        var text = new string('W', 150);
+        var card = new EntityCardControl { DataContext = new EntityCardViewModel(text, "note") };
+        var window = new Window { Content = card, Width = 200, Height = 800 };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            var title = window.GetVisualDescendants().OfType<SafeSelectableTextBlock>()
+                .Single(control => control.Classes.Contains("workspace-entity-title"));
+            Assert.Equal(text, title.Text);
+            Assert.Equal(Avalonia.Media.TextWrapping.Wrap, title.TextWrapping);
+            Assert.True(title.Bounds.Height > 40);
+            title.SelectionStart = 0;
+            title.SelectionEnd = text.Length;
+            Assert.Equal(text, title.SelectedText);
+            var header = window.GetVisualDescendants().OfType<EntityCardHeaderPanel>().Single();
+            Assert.True(title.Bounds.Height <= header.Bounds.Height);
+            Assert.True(title.Bounds.Width <= header.Bounds.Width);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task EntityCardControl_ExternalAndNote_RendersLinksAndNoteMarkdown()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
