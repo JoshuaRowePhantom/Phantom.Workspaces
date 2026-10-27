@@ -5,6 +5,46 @@ namespace Phantom.Workspaces.Llm.Tests;
 public sealed class AgentInputQueuesConcurrencyTests
 {
     [Fact]
+    public void BootstrapDefaultAndImmediateQueues_InitialSnapshotStartsAtRevisionZero()
+    {
+        var manager = new AgentInputQueueManager();
+        var legacy = new AgentChatQueueManager(manager);
+        using var adapter = new LocalAgentInputQueuesAdapter(manager, legacy.DefaultInputQueue.Queue);
+
+        Assert.Equal(0, manager.AggregateRevision);
+        Assert.Equal(0, adapter.Snapshot.Revision);
+        Assert.Equal(2, adapter.Snapshot.Queues.Length);
+        Assert.Contains(adapter.Snapshot.Queues, q => q.IsDefault);
+        Assert.Contains(adapter.Snapshot.Queues, q => q.IsImmediate);
+        var added = adapter.CreateQueue(new CreateAgentInputQueueRequest
+        {
+            CommandId = Guid.NewGuid(),
+            ExpectedRevision = adapter.Snapshot.Revision,
+            Configuration = new AgentInputQueueConfiguration
+            {
+                Name = "first mutation",
+                Priority = 10,
+                Immediacy = AgentInputQueueImmediacy.Queue,
+            },
+        });
+        Assert.Equal(AgentInputQueueCommandStatus.Applied, added.Status);
+        Assert.Equal(1, added.Revision);
+    }
+
+    [Fact]
+    public void BootstrapDefault_AlreadyObservedManager_AdvancesRegistrationRevision()
+    {
+        var manager = new AgentInputQueueManager();
+        manager.QueueRegistered += (_, _) => { };
+
+        var legacy = new AgentChatQueueManager(manager);
+        using var adapter = new LocalAgentInputQueuesAdapter(manager, legacy.DefaultInputQueue.Queue);
+
+        Assert.Equal(1, manager.AggregateRevision);
+        Assert.Equal(1, adapter.Snapshot.Revision);
+    }
+
+    [Fact]
     public async Task Enqueue_OwnerDequeueDuringCapturedNotification_PublishesCurrentSnapshot()
     {
         var ct = CancellationToken.None;

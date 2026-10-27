@@ -582,6 +582,10 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
         {
             if (this.pending.TryGetValue(frame.CorrelationId, out var pendingCommand))
             {
+                if (value is CommandCompletedEvent completed && completed.CommandId != pendingCommand.CommandId)
+                    throw new RemoteAgentProtocolException("A command acknowledgement contained a mismatched command id.");
+                if (value is OperationErrorEvent error && error.Error.CorrelationId != frame.CorrelationId)
+                    throw new RemoteAgentProtocolException("An operation error contained a mismatched correlation id.");
                 if (value is CommandCompletedEvent && pendingCommand.AcceptTerminal)
                 {
                     this.FrameReceived?.Invoke(this, frame);
@@ -590,10 +594,6 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
                     return;
                 }
                 this.pending.TryRemove(frame.CorrelationId, out _);
-                if (value is CommandCompletedEvent completed && completed.CommandId != pendingCommand.CommandId)
-                    throw new RemoteAgentProtocolException("A command acknowledgement contained a mismatched command id.");
-                if (value is OperationErrorEvent error && error.Error.CorrelationId != frame.CorrelationId)
-                    throw new RemoteAgentProtocolException("An operation error contained a mismatched correlation id.");
                 pendingCommand.Completion.TrySetResult(frame);
             }
             else

@@ -776,6 +776,40 @@ public sealed partial class RemoteAgentSessionHostTests
     }
 
     [Fact]
+    public async Task Command_CachedErrorRetry_RebindsCorrelationWithoutReexecuting()
+    {
+        await using var fixture = new HostFixture();
+        var command = Command();
+        var original = new OperationErrorEvent
+        {
+            Error = new RemoteAgentOperationError
+            {
+                Code = "conflict", Operation = command.Type, IsRetryable = true,
+                Message = "The queue changed before this command was applied.",
+                CorrelationId = command.CorrelationId,
+            },
+        };
+        var executions = 0;
+        Task<AgentSessionServerEvent> Execute(CancellationToken _)
+        {
+            executions++;
+            return Task.FromResult<AgentSessionServerEvent>(original);
+        }
+
+        var first = Assert.IsType<OperationErrorEvent>(
+            await fixture.Runtime.ExecuteCommandOnceAsync(command, Execute, default));
+        var retry = command with { CorrelationId = Guid.NewGuid() };
+        var second = Assert.IsType<OperationErrorEvent>(
+            await fixture.Runtime.ExecuteCommandOnceAsync(retry, Execute, default));
+
+        Assert.Equal(1, executions);
+        Assert.Equal(command.CorrelationId, first.Error.CorrelationId);
+        Assert.Equal(retry.CorrelationId, second.Error.CorrelationId);
+        Assert.Equal(original.Error with { CorrelationId = retry.CorrelationId }, second.Error);
+        Assert.Equal(command.CorrelationId, original.Error.CorrelationId);
+    }
+
+    [Fact]
     public async Task Command_DuplicateIdDifferentPayload_ReturnsConflict()
     {
         await using var fixture = new HostFixture();

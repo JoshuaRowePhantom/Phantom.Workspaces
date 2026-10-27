@@ -443,7 +443,10 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
                 this.commands.Add(command.CommandId, new CommandCacheEntry(payload, task));
             }
         }
-        return await task.WaitAsync(ct).ConfigureAwait(false);
+        var result = await task.WaitAsync(ct).ConfigureAwait(false);
+        return result is OperationErrorEvent error
+            ? error with { Error = error.Error with { CorrelationId = command.CorrelationId } }
+            : result;
     }
 
     internal async ValueTask<bool> TryTerminateAsync(CancellationToken ct = default)

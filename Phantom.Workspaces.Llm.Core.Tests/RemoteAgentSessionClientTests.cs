@@ -310,6 +310,57 @@ public sealed partial class RemoteAgentSessionClientTests
     }
 
     [Fact]
+    public async Task MalformedOperationError_PendingRequest_FailsWithProtocolException()
+    {
+        var transport = new TestTransport();
+        await using var client = await ConnectAsync(transport);
+        var disconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        client.UnexpectedlyDisconnected += (_, _) => disconnected.TrySetResult();
+        var operation = client.InterruptAsync(Guid.NewGuid());
+        var command = AgentSessionProtocolCodec.DeserializeCommand(await transport.ServerReadAsync());
+
+        await transport.ServerSendAsync(Frame(2, new OperationErrorEvent
+        {
+            Error = new RemoteAgentOperationError
+            {
+                Code = "conflict", Operation = command.Type, IsRetryable = true,
+                Message = "The queue changed before this command was applied.",
+                CorrelationId = Guid.NewGuid(),
+            },
+        }, command.CorrelationId));
+        await disconnected.Task;
+
+        var error = await Assert.ThrowsAsync<RemoteAgentProtocolException>(() => operation);
+        Assert.Contains("mismatched correlation id", error.Message);
+        Assert.True(transport.ChannelDisposed);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MalformedCommandAcknowledgement_PendingRequest_FailsWithProtocolException(bool terminate)
+    {
+        var transport = new TestTransport();
+        await using var client = await ConnectAsync(transport);
+        var disconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        client.UnexpectedlyDisconnected += (_, _) => disconnected.TrySetResult();
+        var operation = terminate
+            ? client.TerminateAsync(new TerminateAgentSessionRequest { CommandId = Guid.NewGuid(), Reason = "user-requested" })
+            : client.InterruptAsync(Guid.NewGuid());
+        var command = AgentSessionProtocolCodec.DeserializeCommand(await transport.ServerReadAsync());
+
+        await transport.ServerSendAsync(Frame(2, new CommandCompletedEvent
+        {
+            CommandId = Guid.NewGuid(),
+        }, command.CorrelationId));
+        await disconnected.Task;
+
+        var error = await Assert.ThrowsAsync<RemoteAgentProtocolException>(() => operation);
+        Assert.Contains("mismatched command id", error.Message);
+        Assert.True(transport.ChannelDisposed);
+    }
+
+    [Fact]
     public async Task TerminateAsync_Connected_SerializesReasonAndAwaitsTerminal()
     {
         var transport = new TestTransport();

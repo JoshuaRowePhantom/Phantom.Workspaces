@@ -188,6 +188,15 @@ public sealed class AgentInputQueueManager
 
     public void RegisterInputQueue(
         AgentInputQueue queue)
+        => this.RegisterInputQueue(queue, advanceRevision: true);
+
+    // Only silent construction of an untouched manager is bootstrap state. A default
+    // queue added to an already observed/mutated manager is still a real mutation.
+    internal void RegisterInitialInputQueue(AgentInputQueue queue)
+        => this.Mutate(() => this.RegisterInputQueue(queue, advanceRevision:
+            this.aggregateRevision != 0 || this.inputQueues.Count != 1 || this.QueueRegistered is not null));
+
+    private void RegisterInputQueue(AgentInputQueue queue, bool advanceRevision)
     {
         ArgumentNullException.ThrowIfNull(queue);
 
@@ -199,7 +208,10 @@ public sealed class AgentInputQueueManager
                 queue.ConfigureMutation = this.Mutate;
                 this.queueConfigurationHandlers[queue] = this.OnQueueConfigurationChanged;
                 queue.ConfigurationChanged += this.OnQueueConfigurationChanged;
-                this.BumpAggregateRevision();
+                if (advanceRevision)
+                {
+                    this.BumpAggregateRevision();
+                }
                 this.QueueRegistered?.Invoke(
                     this,
                     new QueueRegistrationChangedEventArgs

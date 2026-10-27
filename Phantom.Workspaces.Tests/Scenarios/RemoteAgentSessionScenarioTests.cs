@@ -328,12 +328,15 @@ public sealed class RemoteAgentSessionScenarioTests
             .GetProperty("continue-in-background").GetBoolean());
     }
 
-    [Fact]
-    public async Task Cancellation_SendWaitCancelled_CommandDeduplicatesOnRetry()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Cancellation_SendWaitCancelled_CommandDeduplicatesOnRetry(bool conflict)
     {
         await using var fixture = await ScenarioFixture.CreateAsync(Session("cancel", background: true));
         await using var proxy = await fixture.OpenProxyAsync("cancel", AgentSessionOpenIntent.Start);
-        var request = CreateQueue("only-once", 0);
+        var initialRevision = proxy.Chat.InputQueues.Snapshot.Revision;
+        var request = CreateQueue("only-once", initialRevision + (conflict ? 1 : 0));
         var writeGate = fixture.Listener.LastChannel.ArmNextAsyncWrite();
         using var cancellation = new CancellationTokenSource();
         var first = proxy.Chat.InputQueues.CreateQueueAsync(request, cancellation.Token);
@@ -343,13 +346,23 @@ public sealed class RemoteAgentSessionScenarioTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first);
         writeGate.Release();
         await writeGate.Completed;
-        var retry = await proxy.Chat.InputQueues.CreateQueueAsync(
+        var retry = proxy.Chat.InputQueues.CreateQueueAsync(
             request, TestContext.Current.CancellationToken);
         var runtime = await fixture.RuntimeAsync("cancel", 0);
 
-        Assert.Equal(AgentInputQueueCommandStatus.Applied, retry.Status);
-        Assert.Equal(1, runtime.Chat.InputQueues.Snapshot.Revision);
-        Assert.Single(runtime.Chat.InputQueues.Snapshot.Queues, queue => queue.Name == "only-once");
+        if (conflict)
+        {
+            var error = await Assert.ThrowsAsync<RemoteAgentSessionException>(() => retry);
+            Assert.Equal("conflict", error.Code);
+            Assert.Equal(initialRevision, runtime.Chat.InputQueues.Snapshot.Revision);
+            Assert.DoesNotContain(runtime.Chat.InputQueues.Snapshot.Queues, queue => queue.Name == "only-once");
+        }
+        else
+        {
+            Assert.Equal(AgentInputQueueCommandStatus.Applied, (await retry).Status);
+            Assert.Equal(initialRevision + 1, runtime.Chat.InputQueues.Snapshot.Revision);
+            Assert.Single(runtime.Chat.InputQueues.Snapshot.Queues, queue => queue.Name == "only-once");
+        }
         Assert.Equal(2, fixture.Listener.LastChannel.ReceivedMessages.Count(
             value => value.GetRawText().Contains(request.CommandId.ToString(), StringComparison.OrdinalIgnoreCase)));
     }
