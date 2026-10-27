@@ -39,7 +39,10 @@ public sealed class ReleaseMemoryStore
             throw new JsonException("Unsupported release memory document.");
         }
 
-        return document.Records;
+        return document.Records.Select(record => record with
+        {
+            SafeContext = record.SafeContext is { } context && context.IsValid() ? context : null,
+        }).ToArray();
     }
 
     internal async ValueTask SaveAsync(
@@ -91,4 +94,5 @@ internal sealed record ReleaseMemoryRecord
     public CredentialAccountIdentifier? AccountIdentifier { get; init; }
     public required ReleaseMemoryScopeKind Scope { get; init; }
     public required CredentialUseFingerprint BindingFingerprint { get; init; }
+    public SafeApprovalContext? SafeContext { get; init; }
 }

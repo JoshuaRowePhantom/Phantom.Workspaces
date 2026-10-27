@@ -14,8 +14,12 @@
             <ItemsControl.ItemTemplate>
                 <DataTemplate x:DataType="access:ReleaseMemoryDescriptor">
                     <Grid ColumnDefinitions="*,Auto">
-                        <TextBlock Text="{Binding SafeDisplayName}" />
+                        <StackPanel>
+                            <TextBlock Text="{Binding SafeDisplayName}" TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding SafeContext, TargetNullValue='Details unavailable'}" TextWrapping="Wrap" />
+                        </StackPanel>
                         <Button Grid.Column="1" Content="{x:Static copy:CredentialAccessText.ForgetApproval}"
+                                AutomationProperties.Name="{Binding SafeContext, StringFormat='Forget approval: {0}', TargetNullValue='Forget approval: Details unavailable'}"
                                 Command="{Binding $parent[UserControl].((vm:ReleaseMemoryAdministrationViewModel)DataContext).RemoveCommand}"
                                 CommandParameter="{Binding}" />
                     </Grid>

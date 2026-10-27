@@ -765,6 +765,7 @@ internal sealed class AccessBroker : IAccessBroker
                 AccountIdentifier = SelectedSourceAccount(request.Credential, inspection, source),
             },
             SourceIdentifier = source,
+            SourceKind = inspection.Sources.SingleOrDefault(candidate => candidate.Identifier == source)?.Kind,
             RequestorIdentifier = request.Requestor.Identifier,
             Use = request.Use with { MemoryScopes = Array.AsReadOnly(request.Use.MemoryScopes.ToArray()) },
         };
