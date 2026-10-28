@@ -3338,11 +3338,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                     return false;
                 await session.DisposeAsync();
             }
-            else if (chat is null || session.State != AgentTabState.Ready || row is { IsConnected: false })
+            else if (chat is null || session.State != AgentTabState.Ready
+                || lease?.IsRuntimeTerminal != true && row is { IsConnected: false })
                 return false;
-            else if (AgentSessionCloseActivity.HasPendingWork(chat)
+            else if (lease?.IsRuntimeTerminal != true && (AgentSessionCloseActivity.HasPendingWork(chat)
                 || lease is not null && !await lease.TryPrepareIdleCloseAsync(startupCancellation)
                 || lease is null && chat is AgentChat local && !local.TrySealIdleForViewerClose())
+                && lease?.IsRuntimeTerminal != true)
             {
                 var decision = await this.AgentSessionCloseDecisionProvider.ChooseAsync(
                     tab.Title,
@@ -3351,23 +3353,30 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                     return false;
                 if (!pane.Tabs.Contains(tab) || !ReferenceEquals(session.Agent?.AgentChat, chat)
                     || !ReferenceEquals(session.Lease, lease)
-                    || startupCancellation != session.StartupCancellation
-                    || !ReferenceEquals(row, this.applicationServices.RunningAgentChats.RunningSessions.FirstOrDefault(
-                        candidate => candidate.SessionId.Value == session.AgentSessionId)))
+                    || startupCancellation != session.StartupCancellation)
                     return false;
-                var sessionId = new Phantom.Workspaces.Llm.Interfaces.AgentSessionId(chat.Information.AgentSessionId);
-                if (decision == AgentSessionCloseDecision.Terminate)
+                // A sibling may have terminated this exact runtime while consent was open.
+                // Its terminal evidence remains valid even when a replacement owns the session ID.
+                if (lease?.IsRuntimeTerminal != true)
                 {
-                    if (!await this.applicationServices.RunningAgentChats.TerminateExactAsync(sessionId, chat, startupCancellation))
-                        throw new InvalidOperationException("The owning session could not be terminated.");
-                }
-                else
-                {
-                    if (session.Entity?.Data is not JsonElement)
-                        throw new InvalidOperationException("Background retention requires a persisted session.");
-                    await this.applicationServices.RunningAgentChats.RetainExactForViewerCloseAsync(sessionId, chat, startupCancellation);
-                    if (row?.ContinueInBackground != true)
-                        throw new InvalidOperationException("The owner did not acknowledge background retention.");
+                    if (!ReferenceEquals(row, this.applicationServices.RunningAgentChats.RunningSessions.FirstOrDefault(
+                        candidate => candidate.SessionId.Value == session.AgentSessionId)))
+                        return false;
+                    var sessionId = new Phantom.Workspaces.Llm.Interfaces.AgentSessionId(chat.Information.AgentSessionId);
+                    if (decision == AgentSessionCloseDecision.Terminate)
+                    {
+                        if (!await this.applicationServices.RunningAgentChats.TerminateExactAsync(sessionId, chat, startupCancellation)
+                            && lease?.IsRuntimeTerminal != true)
+                            throw new InvalidOperationException("The owning session could not be terminated.");
+                    }
+                    else
+                    {
+                        if (session.Entity?.Data is not JsonElement)
+                            throw new InvalidOperationException("Background retention requires a persisted session.");
+                        await this.applicationServices.RunningAgentChats.RetainExactForViewerCloseAsync(sessionId, chat, startupCancellation);
+                        if (row?.ContinueInBackground != true)
+                            throw new InvalidOperationException("The owner did not acknowledge background retention.");
+                    }
                 }
             }
             if (chat is not null && (!pane.Tabs.Contains(tab) || !ReferenceEquals(session.Agent?.AgentChat, chat)
@@ -3917,10 +3926,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             if (pane.Tabs.Contains(tabVm))
             {
                 pane.HandleChildTabClosed(tabVm);
-                this.UpdateUnreadAttentionState(tabVm.Entity);
                 break;
             }
         }
+        this.UpdateUnreadAttentionState(tabVm.Entity);
         _ = DisposeWorkspaceTabAsync(tabVm);
     }
 

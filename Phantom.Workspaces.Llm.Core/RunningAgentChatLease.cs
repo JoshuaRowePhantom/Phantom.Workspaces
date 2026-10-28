@@ -14,6 +14,14 @@ public sealed class RunningAgentChatLease : IAsyncDisposable
 
     public IAgentChat AgentChat { get; }
 
+    /// <summary>Positive terminal evidence for this captured runtime, not its session ID's current replacement.</summary>
+    public bool IsRuntimeTerminal => this.AgentChat switch
+    {
+        AgentChat local => local.IsTerminal,
+        Remote.RemoteAgentChat remote => remote.IsTerminal,
+        _ => false,
+    };
+
     /// <summary>
     /// Temporary local-engine compatibility accessor. New UI code consumes <see cref="AgentChat"/>.
     /// </summary>

@@ -213,11 +213,8 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
             },
             afterDispose: () =>
             {
-                var disposedEntry = this.FindEntry(sessionId);
-                if (disposedEntry is not null)
-                {
-                    disposedEntry.DecrementViewerCount();
-                }
+                if (ReferenceEquals(entry, this.FindEntry(sessionId)))
+                    entry?.DecrementViewerCount();
                 return ValueTask.CompletedTask;
             },
             prepareIdleClose: async token =>
