@@ -26,6 +26,10 @@ identity or matching. Version-1 records remain usable and forgettable. Origin is
 explicitly historical ("Originally approved for"), never a restriction on an
 AllUses approval. Rendered contextual action names carry these same safe details.
 Duplicate descriptions are valid: commands always remove the selected identifier.
+Optional context is deserialized independently: unknown enum strings/numbers,
+missing required context fields and malformed shapes produce Details unavailable,
+not an unreadable approval file. The surrounding document and policy identity
+remain strictly validated.
 
 ## One nonmodal host
 
@@ -43,3 +47,8 @@ this lifecycle before the process access graph. Reopening creates fresh models
 while retaining process row identity and presentation state. Escape closes the
 host and returns keyboard focus to the authorization key. Failures are reported
 using fixed safe UI/log text without backend/provider exception content.
+The real owned-host regression keeps thirty process-owned requests at a nonzero
+scroll offset across page changes, provider revisions and close/reopen, checking
+source/scope selection, details and focus alongside row identity. Rendered scope
+choices are also exercised from real broker-generated options, including AllUses;
+provider revocation coverage distinguishes denied/generic failures from success.
