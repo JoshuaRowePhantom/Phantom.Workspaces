@@ -102,8 +102,9 @@ public sealed class EntityUnreadAttentionTests
         NotifyUnread(viewModel, tab.Id);
         Assert.True(entity.HasUnreadAttention);
 
-        viewModel.CloseTab(tab);
+        Assert.True(await viewModel.RequestCloseTabAsync(tab));
 
+        Assert.DoesNotContain(tab, viewModel.WorkspacePanes.SelectMany(pane => pane.Tabs));
         Assert.False(entity.HasUnreadAttention);
     }
 

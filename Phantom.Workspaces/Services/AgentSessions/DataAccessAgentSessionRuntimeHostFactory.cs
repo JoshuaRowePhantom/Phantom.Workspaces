@@ -105,7 +105,14 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
                 this.timeProvider,
                 ownership,
                 chatLease,
-                sessionContext);
+                sessionContext,
+                terminateRuntimeAsync: async () =>
+                {
+                    if (!await this.runningChats.TerminateExactAsync(
+                        chatLease.SessionId, chat, CancellationToken.None).ConfigureAwait(false)
+                        && !chatLease.IsRuntimeTerminal)
+                        throw new InvalidOperationException("The owning runtime could not be terminated.");
+                });
             ownership.Start(state.LeasePeriod);
             return runtime;
         }

@@ -154,6 +154,8 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
     private CancellationTokenSource? activeRunCancellation;
     private TaskCompletionSource? activeTurnCompletion;
     private int disposeStarted;
+    private int disposalCompleted;
+    internal bool IsTerminal => Volatile.Read(ref this.disposalCompleted) != 0;
 
     // Sub-agent registry
     private readonly Dictionary<string, (AgentChat Chat, SubAgentChatClient Client)> subAgentMap =
@@ -1881,6 +1883,7 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
         }
 
         await this.DisposeCoreAsync(awaitCreation: true);
+        Volatile.Write(ref this.disposalCompleted, 1);
     }
 
     public async Task TerminateAsync(CancellationToken ct = default)

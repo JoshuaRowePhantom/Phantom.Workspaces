@@ -42,6 +42,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     private readonly Func<AgentSessionSnapshot> snapshotFactory;
     private readonly AgentSessionOwnershipLease? ownershipLease;
     private readonly IAsyncDisposable? runtimeLifetime;
+    private readonly Func<Task>? terminateRuntimeAsync;
     private readonly AttachmentPublisherLifetimeHooks? publisherLifetimeHooks;
     private readonly IAgentChatRunningItemsSnapshotProvider? runningItemsSnapshotProvider;
     private HashSet<string> queueIds;
@@ -66,7 +67,8 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         AgentSessionOwnershipLease? ownershipLease = null,
         IAsyncDisposable? runtimeLifetime = null,
         CurrentSessionContext? sessionContext = null,
-        AttachmentPublisherLifetimeHooks? publisherLifetimeHooks = null)
+        AttachmentPublisherLifetimeHooks? publisherLifetimeHooks = null,
+        Func<Task>? terminateRuntimeAsync = null)
     {
         this.SessionId = !string.IsNullOrWhiteSpace(sessionId) ? sessionId : throw new ArgumentException("Session id is required.", nameof(sessionId));
         this.OwnershipGeneration = ownershipGeneration >= 0 ? ownershipGeneration : throw new ArgumentOutOfRangeException(nameof(ownershipGeneration));
@@ -79,6 +81,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         this.timeProvider = timeProvider ?? TimeProvider.System;
         this.ownershipLease = ownershipLease;
         this.runtimeLifetime = runtimeLifetime;
+        this.terminateRuntimeAsync = terminateRuntimeAsync;
         this.publisherLifetimeHooks = publisherLifetimeHooks;
         this.runningItemsSnapshotProvider = chat as IAgentChatRunningItemsSnapshotProvider;
         this.SessionContext = sessionContext;
@@ -782,8 +785,14 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         ((INotifyCollectionChanged)this.Chat.Modals).CollectionChanged -= this.OnModalsChanged;
         try
         {
-            if (this.Chat is AgentChat local)
+            if (this.terminateRuntimeAsync is not null)
+                await this.terminateRuntimeAsync().ConfigureAwait(false);
+            else if (this.Chat is AgentChat local)
                 await local.TerminateAsync().ConfigureAwait(false);
+        }
+        catch (Exception error) { failures.Add(error); }
+        try
+        {
             if (this.runtimeLifetime is not null)
                 await this.runtimeLifetime.DisposeAsync().ConfigureAwait(false);
             else
@@ -803,18 +812,20 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             catch (Exception error) { failures.Add(error); }
         }
 
-        Exception? persistenceFailure = null;
+        Exception? terminalFailure = failures.Count == 0 ? null
+            : new AggregateException("Runtime cleanup failed.", failures);
         try
         {
-            await this.persistTerminalAsync(CancellationToken.None).ConfigureAwait(false);
+            if (terminalFailure is null)
+                await this.persistTerminalAsync(CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception error)
         {
-            persistenceFailure = error;
+            terminalFailure = error;
             failures.Add(error);
         }
 
-        if (this.ownershipLease is not null && persistenceFailure is null)
+        if (this.ownershipLease is not null && terminalFailure is null)
         {
             try { await this.ownershipLease.ReleaseAsync().ConfigureAwait(false); }
             catch (Exception error) { failures.Add(error); }
@@ -826,7 +837,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         }
 
         Task[] terminalWrites = [];
-        if (persistenceFailure is null)
+        if (terminalFailure is null)
         {
             lock (this.gate)
             {
@@ -855,10 +866,10 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
 
         Task[] publisherTasks;
         lock (this.gate)
-            publisherTasks = states.Select(state => persistenceFailure is null
+            publisherTasks = states.Select(state => terminalFailure is null
                     ? state.Publisher.CompleteUnderLock()
                     : state.Publisher.AbortUnderLock(
-                        new InvalidOperationException("Terminal persistence failed.")))
+                        new InvalidOperationException("Runtime termination failed.", terminalFailure)))
                 .ToArray();
         foreach (var publisherTask in publisherTasks)
         {
@@ -875,9 +886,9 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             foreach (var state in this.attachments.Values)
                 state.Released.TrySetResult();
             this.attachments.Clear();
-            this.hasTerminated = persistenceFailure is null;
+            this.hasTerminated = terminalFailure is null;
         }
-        if (persistenceFailure is null && this.Terminated is { } terminated)
+        if (terminalFailure is null && this.Terminated is { } terminated)
         {
             foreach (EventHandler handler in terminated.GetInvocationList())
             {

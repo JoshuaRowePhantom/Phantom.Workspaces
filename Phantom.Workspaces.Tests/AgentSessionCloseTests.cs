@@ -15,6 +15,191 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class AgentSessionCloseTests
 {
+    [AvaloniaTheory(Timeout = 30_000)]
+    [InlineData("sibling")]
+    [InlineData("gone")]
+    [InlineData("replacement")]
+    [InlineData("during-dialog")]
+    [InlineData("cancel")]
+    public async Task CloseTab_ExactTerminatedLocalRuntime_ClosesOnlyCapturedViewer(string scenario)
+    {
+        await using var factory = new AgentChatFactory(new InMemoryAgentPersistenceStore(), new AgentServices(),
+            TaskScheduler.FromCurrentSynchronizationContext());
+        var table = new RunningAgentChatTable(factory);
+        var services = new ApplicationServices(table, new AgentPersistenceStoreCache(),
+            Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+            Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>());
+        await using var main = MainWindowIntegrationTests.CreateTestMainWindowViewModel(applicationServices: services);
+        await main.InitializeAsync();
+        var firstWorkspaceId = new Phantom.Workspaces.Data.EntityId(Guid.NewGuid());
+        await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(MainWindowIntegrationTests.GetEntityBroker(main), firstWorkspaceId,
+            $$$"""{"entity-id":"{{{firstWorkspaceId}}}","entity-types":["entity","workspace"],"names":[["tests","first-terminal-pane"]]}""");
+        await main.OpenWorkspaceAsync(new Phantom.Workspaces.Data.GetEntityRequest { EntityId = firstWorkspaceId });
+        var id = new AgentSessionId("terminal-shared");
+        var request = new AcquireAgentChatRequest
+        {
+            AgentSessionId = id,
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson("""
+                {"kind":"prompt","name":"terminal-shared","model":{"id":"echo","provider":"echo","apiType":"Echo"},"tools":[]}
+                """),
+        };
+        var firstLease = await table.AcquireAsync(request);
+        var survivorLease = await table.AcquireAsync(request);
+        Assert.Same(firstLease.AgentChat, survivorLease.AgentChat);
+        var first = await OpenLeaseTabAsync(main, firstLease);
+        var workspaceId = new Phantom.Workspaces.Data.EntityId(Guid.NewGuid());
+        await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(MainWindowIntegrationTests.GetEntityBroker(main), workspaceId,
+            $$$"""{"entity-id":"{{{workspaceId}}}","entity-types":["entity","workspace"],"names":[["tests","terminal-pane"]]}""");
+        await main.OpenWorkspaceAsync(new Phantom.Workspaces.Data.GetEntityRequest { EntityId = workspaceId });
+        var survivor = await OpenLeaseTabAsync(main, survivorLease);
+        Assert.NotEqual(first.WorkspacePaneId, survivor.WorkspacePaneId);
+        var resource = new Moq.Mock<IAsyncDisposable>();
+        resource.Setup(value => value.DisposeAsync()).Returns(ValueTask.CompletedTask);
+        firstLease.LocalAgentChat.RegisterOwnedResource(resource.Object);
+        firstLease.LocalAgentChat.CreateRunningItem(new AgentChatHistoryItem { Role = ChatRole.Assistant });
+        var decisions = new GatedDecisionProvider();
+        main.AgentSessionCloseDecisionProvider = decisions;
+        Task<bool>? closing = null;
+        if (scenario is "during-dialog" or "cancel")
+        {
+            closing = main.RequestCloseTabAsync(survivor);
+            await decisions.Entered.Task.WaitAsync(TestContext.Current.CancellationToken);
+        }
+        if (scenario == "sibling")
+        {
+            decisions.Completion.SetResult(AgentSessionCloseDecision.Terminate);
+            Assert.True(await main.RequestCloseTabAsync(first));
+        }
+        else
+            Assert.True(await table.TerminateExactAsync(id, firstLease.AgentChat));
+        resource.Verify(value => value.DisposeAsync(), Moq.Times.Once);
+        RunningAgentChatLease? replacement = null;
+        if (scenario is "replacement" or "during-dialog")
+        {
+            replacement = await table.AcquireAsync(request);
+            Assert.NotSame(survivorLease.AgentChat, replacement.AgentChat);
+            replacement.LocalAgentChat.CreateRunningItem(new AgentChatHistoryItem { Role = ChatRole.Assistant });
+        }
+        if (scenario != "sibling")
+            decisions.Completion.SetResult(scenario == "cancel" ? AgentSessionCloseDecision.Cancel : AgentSessionCloseDecision.Terminate);
+        Assert.Equal(scenario != "cancel", await (closing ?? main.RequestCloseTabAsync(survivor)));
+        Assert.Equal(scenario == "cancel", main.WorkspacePanes.SelectMany(pane => pane.Tabs).Contains(survivor));
+        if (scenario is "gone" or "replacement")
+            Assert.Equal(0, decisions.Calls);
+        await survivorLease.DisposeAsync();
+        if (replacement is not null)
+        {
+            var row = Assert.Single(table.RunningSessions);
+            Assert.Equal(1, row.ViewerCount);
+            Assert.Same(replacement.AgentChat, Assert.Single(factory.RunningSessions).AgentChat);
+            Assert.Single(replacement.AgentChat.RunningItems);
+            await replacement.DisposeAsync();
+        }
+    }
+
+    [AvaloniaTheory(Timeout = 30_000)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CloseTab_LocalCleanupPendingOrFailed_IsNotProofOfTerminalRuntime(bool fail)
+    {
+        await using var factory = new AgentChatFactory(new InMemoryAgentPersistenceStore(), new AgentServices(),
+            TaskScheduler.FromCurrentSynchronizationContext());
+        var table = new RunningAgentChatTable(factory);
+        var services = new ApplicationServices(table, new AgentPersistenceStoreCache(),
+            Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+            Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>());
+        await using var main = MainWindowIntegrationTests.CreateTestMainWindowViewModel(applicationServices: services);
+        await main.InitializeAsync();
+        var lease = await table.AcquireAsync(new AcquireAgentChatRequest
+        {
+            AgentSessionId = new AgentSessionId("pending-cleanup"),
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson("""
+                {"kind":"prompt","name":"pending-cleanup","model":{"id":"echo","provider":"echo","apiType":"Echo"},"tools":[]}
+                """),
+        });
+        var tab = await OpenLeaseTabAsync(main, lease);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resource = new Moq.Mock<IAsyncDisposable>();
+        resource.Setup(value => value.DisposeAsync()).Returns(() =>
+        {
+            entered.TrySetResult();
+            return new ValueTask(release.Task);
+        });
+        lease.LocalAgentChat.RegisterOwnedResource(resource.Object);
+        var terminating = table.TerminateExactAsync(lease.SessionId, lease.AgentChat);
+        await entered.Task.WaitAsync(TestContext.Current.CancellationToken);
+        var decisions = new GatedDecisionProvider();
+        decisions.Completion.SetResult(AgentSessionCloseDecision.Terminate);
+        main.AgentSessionCloseDecisionProvider = decisions;
+        var closing = main.RequestCloseTabAsync(tab);
+        Assert.Contains(tab, main.WorkspacePanes.SelectMany(pane => pane.Tabs));
+        if (fail)
+        {
+            release.SetException(new IOException("Controlled cleanup failure"));
+            await Assert.ThrowsAsync<AggregateException>(() => terminating);
+            Assert.False(await closing);
+            Assert.False(await main.RequestCloseTabAsync(tab));
+            Assert.Contains(tab, main.WorkspacePanes.SelectMany(pane => pane.Tabs));
+        }
+        else
+        {
+            release.SetResult();
+            Assert.True(await terminating);
+            Assert.True(await closing);
+            Assert.DoesNotContain(tab, main.WorkspacePanes.SelectMany(pane => pane.Tabs));
+        }
+        resource.Verify(value => value.DisposeAsync(), Moq.Times.Once);
+    }
+
+    [AvaloniaTheory(Timeout = 30_000)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CloseTab_FalseTerminationResult_RequiresPositiveCapturedTerminalEvidence(bool terminal)
+    {
+        var table = new Moq.Mock<IRunningAgentChatTable>();
+        table.SetupGet(value => value.RunningSessions).Returns(new ObservableCollection<RunningAgentChatWithEntityInfo>());
+        var services = new ApplicationServices(table.Object, new AgentPersistenceStoreCache(),
+            Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+            Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>());
+        await using var main = MainWindowIntegrationTests.CreateTestMainWindowViewModel(applicationServices: services);
+        await main.InitializeAsync();
+        var (tab, chat) = await OpenAsync(main);
+        var lease = new RunningAgentChatLease(new AgentSessionId(chat.AgentSessionId), chat, () => ValueTask.CompletedTask);
+        tab.SetLease(lease);
+        chat.CreateRunningItem(new AgentChatHistoryItem { Role = ChatRole.Assistant });
+        table.Setup(value => value.TerminateExactAsync(lease.SessionId, chat, Moq.It.IsAny<CancellationToken>()))
+            .Returns(async () =>
+            {
+                if (terminal) await chat.TerminateAsync();
+                return false;
+            });
+        var decisions = new GatedDecisionProvider();
+        decisions.Completion.SetResult(AgentSessionCloseDecision.Terminate);
+        main.AgentSessionCloseDecisionProvider = decisions;
+        Assert.False(lease.IsRuntimeTerminal);
+        Assert.Equal(terminal, await main.RequestCloseTabAsync(tab));
+        Assert.Equal(terminal, lease.IsRuntimeTerminal);
+        Assert.Equal(!terminal, main.WorkspacePanes.SelectMany(pane => pane.Tabs).Contains(tab));
+        table.Verify(value => value.TerminateExactAsync(lease.SessionId, chat, Moq.It.IsAny<CancellationToken>()), Moq.Times.Once);
+        await chat.DisposeAsync();
+    }
+
+    private static async Task<AgentSessionWorkspaceTabViewModel> OpenLeaseTabAsync(
+        MainWindowViewModel main, RunningAgentChatLease lease)
+    {
+        var logger = new ObservableLoggerFactory();
+        var tab = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = Guid.NewGuid().ToString(), Title = "Shared runtime", AgentSessionId = lease.SessionId.Value,
+        };
+        tab.SetLease(lease);
+        tab.SetReady(new AgentViewModel(lease.AgentChat, "shared", "", logger,
+            TaskScheduler.FromCurrentSynchronizationContext()), logger);
+        await main.OpenTabAsync(tab);
+        return tab;
+    }
+
     [AvaloniaFact(Timeout = 30_000)]
     public async Task CloseTab_RetentionStoreWriteFails_RollsBackPinKeepsViewerAndSurfacesError()
     {

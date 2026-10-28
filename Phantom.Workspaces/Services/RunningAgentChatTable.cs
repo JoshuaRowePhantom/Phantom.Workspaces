@@ -213,11 +213,8 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
             },
             afterDispose: () =>
             {
-                var disposedEntry = this.FindEntry(sessionId);
-                if (disposedEntry is not null)
-                {
-                    disposedEntry.DecrementViewerCount();
-                }
+                if (ReferenceEquals(entry, this.FindEntry(sessionId)))
+                    entry?.DecrementViewerCount();
                 return ValueTask.CompletedTask;
             },
             prepareIdleClose: async token =>
@@ -643,7 +640,8 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                         lock (_entityInfoLock)
                         {
                             _entityInfo.Remove(removed.SessionId);
-                            localAcquisitionGates.Remove(removed.SessionId);
+                            // Keep the session gate across epochs: old waiters and replacement
+                            // acquisition must serialize on the same owner.
                             localRuntimeEntities.Remove(removed.SessionId);
                         }
                         break;
@@ -685,9 +683,25 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         await gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            return expected is null
-                ? await this._factory.TerminateAsync(sessionId, ct).ConfigureAwait(false)
-                : await this._factory.TerminateExactAsync(sessionId, expected, ct).ConfigureAwait(false);
+            var terminated = expected is null
+                ? await this._factory.TerminateAsync(sessionId, CancellationToken.None).ConfigureAwait(false)
+                : await this._factory.TerminateExactAsync(sessionId, expected, CancellationToken.None).ConfigureAwait(false);
+            if (!terminated)
+                return false;
+
+            RunningAgentChatLease? retained = null;
+            lock (this._entityInfoLock)
+            {
+                if (this._continueInBackgroundLeases.TryGetValue(sessionId, out var pin)
+                    && (expected is null || ReferenceEquals(pin.AgentChat, expected)))
+                {
+                    this._continueInBackgroundLeases.Remove(sessionId);
+                    retained = pin;
+                }
+            }
+            if (retained is not null)
+                await retained.DisposeAsync().ConfigureAwait(false);
+            return true;
         }
         finally { gate.Release(); }
     }

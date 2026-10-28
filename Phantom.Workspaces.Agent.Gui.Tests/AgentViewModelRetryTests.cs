@@ -103,15 +103,38 @@ public sealed class AgentViewModelRetryTests
                 (Func<ValueTask>)(() => ValueTask.CompletedTask),
                 localChat,
                 null,
+                null,
             ],
             culture: null)!;
         await using var remoteChat = new RemoteAgentChatProxy(localChat);
+        var remoteLease = (RunningAgentChatLease)Activator.CreateInstance(
+            typeof(RunningAgentChatLease),
+            BindingFlags.Instance | BindingFlags.NonPublic,
+            binder: null,
+            args:
+            [
+                new AgentSessionId("remote-lease"),
+                remoteChat,
+                (Func<ValueTask>)(() => ValueTask.CompletedTask),
+                null,
+                null,
+                null,
+            ],
+            culture: null)!;
         await using var vm = this.CreateViewModel(remoteChat, loggerFactory);
 
         Assert.IsAssignableFrom<IAgentChat>(lease.AgentChat);
         Assert.Same(localChat, lease.AgentChat);
+        Assert.Same(localChat, lease.LocalAgentChat);
+        Assert.False(lease.IsRuntimeTerminal);
+        Assert.IsAssignableFrom<IAgentChat>(remoteLease.AgentChat);
+        Assert.Same(remoteChat, remoteLease.AgentChat);
+        Assert.Throws<InvalidOperationException>(() => remoteLease.LocalAgentChat);
+        Assert.False(remoteLease.IsRuntimeTerminal);
+        Assert.Same(remoteLease.AgentChat, vm.AgentChat);
         Assert.NotNull(vm.InputQueue);
         await lease.DisposeAsync();
+        await remoteLease.DisposeAsync();
     }
 
     [Fact]

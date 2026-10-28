@@ -27,6 +27,9 @@ public sealed partial class RemoteAgentSessionHostTests
     [InlineData("failure")]
     [InlineData("replace-terminate")]
     [InlineData("replace-background")]
+    [InlineData("survivor")]
+    [InlineData("survivor-replacement")]
+    [InlineData("terminal-during-dialog")]
     public async Task CloseTab_RealRemoteTableClientOwnerRoundtrip_RequiresExactAcknowledgedLifecycle(string scenario)
     {
         await using var localFactory = new AgentChatFactory(new InMemoryAgentPersistenceStore(), new AgentServices(),
@@ -57,6 +60,8 @@ public sealed partial class RemoteAgentSessionHostTests
                 await releasePersistence.Task;
                 if (scenario == "failure") throw new IOException("Controlled owner persistence failure");
             });
+        var ownerTerminated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        runtime.Terminated += (_, _) => ownerTerminated.TrySetResult();
         await using var registry = new RemoteAgentSessionRuntimeRegistry(TimeProvider.System);
         await registry.GetOrStartAsync(Intent(), _ => Task.FromResult(runtime));
         var authorization = new Mock<IAgentSessionAttachAuthorizer>();
@@ -86,12 +91,72 @@ public sealed partial class RemoteAgentSessionHostTests
         await main.OpenTabAsync(tab);
         var decision = new RemoteCloseDecisionProvider();
         main.AgentSessionCloseDecisionProvider = decision;
+        if (scenario.StartsWith("survivor", StringComparison.Ordinal))
+        {
+            var survivorLease = await table.AcquireAsync(new AcquireAgentChatRequest
+            {
+                AgentSessionId = request.AgentSessionId, AgentSessionEntity = request.AgentSessionEntity,
+                AcquisitionMode = request.AcquisitionMode, ForegroundScheduler = request.ForegroundScheduler,
+                OwningProfileTransport = new CloseLoopbackTransport(host),
+            }, TestContext.Current.CancellationToken);
+            Assert.Same(lease.AgentChat, survivorLease.AgentChat);
+            var survivorLogger = new ObservableLoggerFactory();
+            var survivor = new AgentSessionWorkspaceTabViewModel
+            {
+                Id = Guid.NewGuid().ToString(), Title = "Survivor", AgentSessionId = "session", Entity = entity,
+            };
+            survivor.SetLease(survivorLease);
+            survivor.SetReady(new AgentViewModel(survivorLease.AgentChat, "survivor", "", survivorLogger,
+                TaskScheduler.FromCurrentSynchronizationContext()), survivorLogger);
+            await main.OpenTabAsync(survivor);
+            decision.Result.SetResult(AgentSessionCloseDecision.Terminate);
+            Assert.True(await main.RequestCloseTabAsync(tab));
+            Assert.True(runtime.HasTerminated);
+            Assert.Contains(survivor, main.WorkspacePanes.SelectMany(pane => pane.Tabs));
+            await using var replacementOwner = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+            {
+                AgentSessionId = "session", ConfiguredStore = new InMemoryAgentPersistenceStore(),
+                AgentDefinition = owner.AgentDefinition, ForegroundScheduler = TaskScheduler.FromCurrentSynchronizationContext(),
+            });
+            await using var replacement = new RemoteAgentSessionLease("session", 1,
+                new RuntimeEpoch { Value = Guid.NewGuid() }, replacementOwner, true,
+                () => Snapshot() with { Information = replacementOwner.Information, InputQueues = ((IAgentChat)replacementOwner).InputQueues.Snapshot });
+            RunningAgentChatLease? replacementLease = null;
+            var replacementTransport = new CloseLoopbackTransport(host);
+            if (scenario == "survivor-replacement")
+            {
+                await registry.GetOrStartAsync(Intent(), _ => Task.FromResult(replacement));
+                replacementLease = await table.AcquireAsync(new AcquireAgentChatRequest
+                {
+                    AgentSessionId = request.AgentSessionId, AgentSessionEntity = request.AgentSessionEntity,
+                    AcquisitionMode = request.AcquisitionMode, ForegroundScheduler = request.ForegroundScheduler,
+                    OwningProfileTransport = replacementTransport,
+                },
+                    TestContext.Current.CancellationToken);
+                Assert.NotSame(survivorLease.AgentChat, replacementLease.AgentChat);
+            }
+            Assert.True(await main.RequestCloseTabAsync(survivor));
+            Assert.Equal(1, decision.Calls);
+            await survivorLease.DisposeAsync();
+            Assert.Single(transport.Commands, command => command is TerminateSessionCommand);
+            Assert.All(transport.Commands, command => Assert.Equal(runtime.Epoch, command.RuntimeEpoch));
+            if (replacementLease is not null)
+            {
+                Assert.Empty(replacementTransport.Commands);
+                Assert.False(replacement.HasTerminated);
+                Assert.Equal(1, replacement.ViewerCount);
+                Assert.Single(table.RunningSessions);
+                await replacementLease.DisposeAsync();
+            }
+            return;
+        }
         var closing = main.RequestCloseTabAsync(tab);
         if (scenario == "idle")
         {
             Assert.True(await closing);
             Assert.Equal(0, decision.Calls);
             Assert.IsType<DetachIfIdleCommand>(Assert.Single(transport.Commands));
+            await ownerTerminated.Task.WaitAsync(TestContext.Current.CancellationToken);
             Assert.True(runtime.HasTerminated);
             Assert.Equal(0, runtime.ViewerCount);
             Assert.Equal(0, retentionWrites);
@@ -99,6 +164,26 @@ public sealed partial class RemoteAgentSessionHostTests
         }
         Assert.Equal(1, decision.Calls);
         Assert.Contains(tab, main.WorkspacePanes.SelectMany(pane => pane.Tabs));
+        if (scenario == "terminal-during-dialog")
+        {
+            var proxy = Assert.IsType<RemoteAgentChat>(lease.AgentChat);
+            var terminal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            proxy.RuntimeStateChanged += (_, _) =>
+            {
+                if (proxy.IsTerminal) terminal.TrySetResult();
+            };
+            await runtime.TryTerminateAsync(TestContext.Current.CancellationToken);
+            await terminal.Task.WaitAsync(TestContext.Current.CancellationToken);
+            decision.Result.SetResult(AgentSessionCloseDecision.Terminate);
+            Assert.True(await closing);
+            Assert.All(transport.Commands, command =>
+            {
+                Assert.IsType<DetachCommand>(command);
+                Assert.Equal(runtime.Epoch, command.RuntimeEpoch);
+            });
+            Assert.DoesNotContain(tab, main.WorkspacePanes.SelectMany(pane => pane.Tabs));
+            return;
+        }
         if (scenario.StartsWith("replace-", StringComparison.Ordinal))
         {
             var oldProxy = Assert.IsType<RemoteAgentChat>(lease.AgentChat);

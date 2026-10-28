@@ -142,6 +142,39 @@ public sealed class AgentChatFactoryTests
         resource.Verify(value => value.DisposeAsync(), Moq.Times.Once);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ExactRuntime_FailedCleanup_BlocksAcquisitionAndEveryTerminationWaiter(bool explicitTermination)
+    {
+        var id = new AgentSessionId("failed-exact-cleanup");
+        await using var factory = CreateFactory();
+        await using var lease = await factory.GetOrCreateAsync(id, EchoAgentDefinition);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resource = new Moq.Mock<IAsyncDisposable>();
+        resource.Setup(value => value.DisposeAsync()).Returns(async () =>
+        {
+            started.TrySetResult();
+            await release.Task;
+            throw new InvalidOperationException("owned cleanup failed");
+        });
+        lease.LocalAgentChat.RegisterOwnedResource(resource.Object);
+        Task first = explicitTermination
+            ? factory.TerminateExactAsync(id, lease.AgentChat)
+            : lease.DisposeAsync().AsTask();
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        var second = factory.TerminateExactAsync(id, lease.AgentChat);
+        var acquisition = factory.GetOrCreateAsync(id, EchoAgentDefinition);
+        release.TrySetResult();
+        await Assert.ThrowsAnyAsync<Exception>(() => first);
+        await Assert.ThrowsAnyAsync<Exception>(() => second);
+        await Assert.ThrowsAnyAsync<Exception>(() => acquisition);
+        await Assert.ThrowsAnyAsync<Exception>(() => factory.GetAsync(id));
+        Assert.Empty(factory.RunningSessions);
+        resource.Verify(value => value.DisposeAsync(), Moq.Times.Once);
+    }
+
     [Fact]
     public async Task AcquisitionProgress_ConstructionHook_ObservesBeforeLeasePublication()
     {

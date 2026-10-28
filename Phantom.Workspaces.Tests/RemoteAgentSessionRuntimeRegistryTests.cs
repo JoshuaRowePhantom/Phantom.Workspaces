@@ -608,7 +608,7 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
     }
 
     [Fact]
-    public async Task RuntimeDispose_CleanupFailure_IsReportedAfterTerminalAndChannelCleanup()
+    public async Task RuntimeDispose_CleanupFailure_ClosesChannelsWithoutSuccessfulTerminalOrPersistence()
     {
         TestChannel? channel = null;
         channel = new TestChannel(() =>
@@ -616,15 +616,22 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
             var sawTerminal = false;
             while (channel!.Reader.TryRead(out var frame))
                 sawTerminal |= frame.GetRawText().Contains("session-terminal", StringComparison.Ordinal);
-            Assert.True(sawTerminal);
+            Assert.False(sawTerminal);
         });
         var runtimeTree = new Mock<IAsyncDisposable>();
         runtimeTree.Setup(value => value.DisposeAsync())
             .ThrowsAsync(new InvalidOperationException("runtime cleanup failed"));
+        var persisted = 0;
+        var terminated = 0;
         var lease = new RemoteAgentSessionLease(
             "session", 1, Epoch(), Chat().Object, true, () => null!,
-            persistTerminalAsync: _ => ValueTask.CompletedTask,
+            persistTerminalAsync: _ =>
+            {
+                Interlocked.Increment(ref persisted);
+                return ValueTask.CompletedTask;
+            },
             runtimeLifetime: runtimeTree.Object);
+        lease.Terminated += (_, _) => Interlocked.Increment(ref terminated);
         lease.Attach(new AttachRemoteAgentSessionRequest
         {
             AttachmentToken = "active",
@@ -638,7 +645,12 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
         Assert.True(lease.IsFenced);
         Assert.Contains(failure.InnerExceptions,
             error => error.Message == "runtime cleanup failed");
-        Assert.True(lease.HasTerminated);
+        Assert.False(lease.HasTerminated);
+        Assert.Equal(0, persisted);
+        Assert.Equal(0, terminated);
+        runtimeTree.Verify(value => value.DisposeAsync(), Times.Once);
+        await Assert.ThrowsAsync<AggregateException>(() => lease.DisposeAsync().AsTask());
+        runtimeTree.Verify(value => value.DisposeAsync(), Times.Once);
     }
 
     [Fact]
@@ -825,11 +837,11 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
             () => lease.DisposeAsync().AsTask());
 
         Assert.Equal(
-            ["interrupt", "runtime", "persist", "failing-channel", "remaining-channel"],
+            ["interrupt", "runtime", "failing-channel", "remaining-channel"],
             order);
         Assert.Equal(2, failure.InnerExceptions.Count);
         Assert.True(remaining.IsDisposed);
-        Assert.True(lease.HasTerminated);
+        Assert.False(lease.HasTerminated);
     }
 
     [Fact]
