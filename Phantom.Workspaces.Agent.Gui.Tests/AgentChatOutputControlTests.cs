@@ -25,6 +25,7 @@ public sealed class AgentChatOutputControlTests
     public async Task AgentChatOutput_ConstructingChat_ShowsAuthorizationActionsBeforeLeasePublication()
     {
         using var progress = new AgentStartupProgress();
+        progress.Report("Research assistant", "remote-flight-chat-acquisition");
         var observed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var store = new GatedStartupStore(release.Task);
@@ -39,8 +40,6 @@ public sealed class AgentChatOutputControlTests
         await observed.Task;
         try
         {
-            await using var authorization = await AgentChatAcquisitionProgress.WaitingForAuthorizationAsync(
-                "Example MCP", _ => Task.CompletedTask);
             var control = new AgentChatOutputControl();
             var browser = GetBrowser(control);
             SetAttached(control);
@@ -48,6 +47,11 @@ public sealed class AgentChatOutputControlTests
             await control.HistoryLoaded;
             Assert.False(acquisition.IsCompleted);
             Assert.Empty(factory.RunningSessions);
+            Assert.Contains(browser.PostedMessages, message =>
+                message.Contains("Loading session and history", StringComparison.Ordinal)
+                && message.Contains("Research assistant", StringComparison.Ordinal));
+            await using var authorization = await AgentChatAcquisitionProgress.WaitingForAuthorizationAsync(
+                "Example MCP", _ => Task.CompletedTask);
             Assert.Contains(browser.PostedMessages, message =>
                 message.Contains("Example MCP", StringComparison.Ordinal)
                 && message.Contains("Open sign-in", StringComparison.Ordinal)

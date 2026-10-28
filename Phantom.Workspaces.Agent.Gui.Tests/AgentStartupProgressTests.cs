@@ -10,6 +10,33 @@ namespace Phantom.Workspaces.Agent.Gui.Tests;
 public sealed class AgentStartupProgressTests
 {
     [AvaloniaFact]
+    public async Task Observe_EmptyConstructingChat_RetainsLifecycleUntilRealDiagnosticsAndForwardsLaterStages()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+        {
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson("""
+                {"kind":"prompt","name":"startup","model":{"id":"echo","provider":"echo","apiType":"Echo"},"tools":[]}
+                """),
+        });
+        using var progress = new AgentStartupProgress();
+        progress.Report("Research", "service-initialization");
+        progress.Observe(chat);
+        Assert.Contains("Preparing session", Assert.Single(Assert.Single(progress.RunningItems).Items).Contents.OfType<TextContent>().Single().Text);
+        progress.Report("Research", "remote-flight-chat-acquisition");
+        Assert.Contains("Loading session and history", Assert.Single(Assert.Single(progress.RunningItems).Items).Contents.OfType<TextContent>().Single().Text);
+        var diagnostic = chat.CreateRunningItem(new AgentChatHistoryItem
+        {
+            Role = AgentChatHistoryItem.DiagnosticChatRole,
+            Contents = [new TextContent("Loading tools from Example MCP")],
+        });
+        Assert.Same(diagnostic, Assert.Single(progress.RunningItems));
+        progress.Report("Research", "ready-publication");
+        Assert.Same(diagnostic, Assert.Single(progress.RunningItems));
+        chat.CompleteRunningItem(diagnostic, false);
+        Assert.Contains("Opening chat", Assert.Single(Assert.Single(progress.RunningItems).Items).Contents.OfType<TextContent>().Single().Text);
+    }
+
+    [AvaloniaFact]
     public async Task Observe_ConstructingChat_ForwardsLiveDiagnosticsWithoutOwningRuntime()
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest

@@ -8,6 +8,7 @@ namespace Phantom.Workspaces.Agent.Gui.ViewModels;
 public sealed class AgentStartupProgress : IDisposable
 {
     private IAgentChat? observed;
+    private AgentChatRunningItem? lifecycleItem;
     private readonly HashSet<AgentChatHistoryItem> observedHistory = new(ReferenceEqualityComparer.Instance);
     private bool disposed;
     public IAgentChat? ObservedChat => this.observed;
@@ -57,11 +58,12 @@ public sealed class AgentStartupProgress : IDisposable
 
     private void SynchronizeRunningItems()
     {
-        if (this.observed is not { } chat)
-            return;
-        foreach (var removed in this.RunningItems.Except(chat.RunningItems).ToArray())
+        var current = this.observed?.RunningItems.ToArray() ?? [];
+        if (current.Length == 0 && this.lifecycleItem is { } fallback)
+            current = [fallback];
+        foreach (var removed in this.RunningItems.Except(current).ToArray())
             this.RunningItems.Remove(removed);
-        foreach (var added in chat.RunningItems.Except(this.RunningItems))
+        foreach (var added in current.Except(this.RunningItems))
             this.RunningItems.Add(added);
     }
 
@@ -87,7 +89,7 @@ public sealed class AgentStartupProgress : IDisposable
 
     public void Report(string sessionName, string stage)
     {
-        if (this.disposed || this.observed is not null)
+        if (this.disposed)
             return;
         var description = stage switch
         {
@@ -98,13 +100,13 @@ public sealed class AgentStartupProgress : IDisposable
             "ready-publication" => $"Opening chat: {sessionName}",
             _ => $"Loading {stage}: {sessionName}",
         };
-        this.RunningItems.Clear();
         var item = new AgentChatRunningItem();
         item.Items.Add(new AgentChatHistoryItem
         {
             Role = AgentChatHistoryItem.DiagnosticChatRole,
             Contents = [new TextContent(description)],
         });
-        this.RunningItems.Add(item);
+        this.lifecycleItem = item;
+        this.SynchronizeRunningItems();
     }
 }

@@ -71,7 +71,7 @@ public sealed class AgentChatAcquisitionProgress : IDisposable
             {
                 chat.CompleteRunningItem(item, writeToHistory: false);
                 return Task.CompletedTask;
-            }).ConfigureAwait(false);
+            }, runAfterCancellation: true).ConfigureAwait(false);
         }
     }
 

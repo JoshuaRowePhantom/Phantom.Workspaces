@@ -666,10 +666,10 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
     // StartProcessingLoop's Task.Factory.StartNew(..., foregroundScheduler) pattern so that
     // running-item mutations performed by the action are serialized with the processing loop and
     // never mutate the non-thread-safe running-item collections concurrently (issue #1068).
-    internal Task RunOnForegroundAsync(Func<Task> action) =>
+    internal Task RunOnForegroundAsync(Func<Task> action, bool runAfterCancellation = false) =>
         Task.Factory.StartNew(
             action,
-            this.cts.Token,
+            runAfterCancellation ? CancellationToken.None : this.cts.Token,
             TaskCreationOptions.DenyChildAttach,
             this.foregroundScheduler).Unwrap();
 
