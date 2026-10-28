@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.IO;
 using Azure.Core;
@@ -65,8 +66,10 @@ public sealed class EntraCredentialAccessExecutorTests
             await renewed.AccessToken.UseAsync((token, _) => ValueTask.FromResult(token.Length), TestContext.Current.CancellationToken));
     }
 
-    [Fact]
-    public async Task EntraExecutor_FinalizesAccountBeforeIndependentLeaseMaterialization()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EntraExecutor_FinalizesAccountBeforeIndependentLeaseMaterialization(bool finalizeFollowerFirst)
     {
         await using var fixture = new Fixture();
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -78,18 +81,66 @@ public sealed class EntraCredentialAccessExecutorTests
         };
         var firstPending = fixture.Broker.AcquireAsync(fixture.Request, TestContext.Current.CancellationToken);
         var secondPending = fixture.Broker.AcquireAsync(fixture.Request, TestContext.Current.CancellationToken);
-        await fixture.ApplyAsync(fixture.Registry.GetSnapshot()[0]);
+        var firstRow = fixture.Registry.GetSnapshot()[0];
+        var secondRow = fixture.Registry.GetSnapshot()[1];
+        Assert.NotEqual(firstRow.Identifier, secondRow.Identifier);
+        await fixture.ApplyAsync(firstRow);
         await started.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-        await fixture.ApplyAsync(fixture.Registry.GetSnapshot()[1]);
+        await fixture.ApplyAsync(secondRow);
         await fixture.Coordinator.FollowerJoined.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        Assert.Equal(2, fixture.Policy.Commits);
+        var authorizations = fixture.Policy.Authorizations.ToArray();
+        Assert.Equal(2, authorizations.Length);
+        var checkpoints = authorizations.ToDictionary(
+            authorization => authorization.RequestIdentifier,
+            authorization => new FinalizationCheckpoint(authorization, new()
+            {
+                RequestIdentifier = authorization.RequestIdentifier,
+                RequestGeneration = authorization.RequestGeneration,
+                LogicalIdentifier = fixture.Request.CreateLogicalIdentifier(),
+                SourceIdentifier = fixture.Request.CreateSourceIdentifier(),
+                AccountIdentifier = fixture.Acquirer.Account,
+            }));
+        var firstCheckpoint = checkpoints[firstRow.Identifier];
+        var secondCheckpoint = checkpoints[secondRow.Identifier];
+        Assert.NotEqual(firstCheckpoint.Authorization.Identifier, secondCheckpoint.Authorization.Identifier);
+        fixture.Policy.BeforeFinalization = (identifier, identity, cancellationToken) =>
+            checkpoints[identity.RequestIdentifier].EnterAsync(identifier, identity, cancellationToken);
+        fixture.Policy.AfterFinalization = (identifier, identity) =>
+            checkpoints[identity.RequestIdentifier].Complete(identifier, identity);
+        fixture.ObservedExecutor.BeforeMaterialization = (authorization, identity) =>
+            checkpoints[identity.RequestIdentifier].Materialize(authorization, identity);
         Assert.Equal(0, fixture.Policy.Finalizations);
+        Assert.False(firstPending.IsCompleted);
         Assert.False(secondPending.IsCompleted);
         finish.TrySetResult();
-        var first = Assert.IsType<AccessSucceeded<EntraCredentialAccessResult>>(
-            await firstPending.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).Result;
-        await using var second = Assert.IsType<AccessSucceeded<EntraCredentialAccessResult>>(
-            await secondPending.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).Result;
+        await Task.WhenAll(firstCheckpoint.Entered.Task, secondCheckpoint.Entered.Task)
+            .WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        Assert.Equal(0, fixture.Policy.Finalizations);
+        Assert.Equal(["entered"], firstCheckpoint.Events.ToArray());
+        Assert.Equal(["entered"], secondCheckpoint.Events.ToArray());
+        Assert.False(firstPending.IsCompleted);
+        Assert.False(secondPending.IsCompleted);
+
+        var releasedCheckpoint = finalizeFollowerFirst ? secondCheckpoint : firstCheckpoint;
+        var blockedCheckpoint = finalizeFollowerFirst ? firstCheckpoint : secondCheckpoint;
+        var releasedPending = finalizeFollowerFirst ? secondPending : firstPending;
+        var blockedPending = finalizeFollowerFirst ? firstPending : secondPending;
+        releasedCheckpoint.Continue.TrySetResult();
+        await using var released = Assert.IsType<AccessSucceeded<EntraCredentialAccessResult>>(
+            await releasedPending.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).Result;
+        Assert.Equal(1, fixture.Policy.Finalizations);
+        Assert.Equal(["entered", "finalized", "materializing"], releasedCheckpoint.Events.ToArray());
+        Assert.Equal(["entered"], blockedCheckpoint.Events.ToArray());
+        Assert.False(blockedPending.IsCompleted);
+        blockedCheckpoint.Continue.TrySetResult();
+        await using var blocked = Assert.IsType<AccessSucceeded<EntraCredentialAccessResult>>(
+            await blockedPending.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).Result;
+        var first = finalizeFollowerFirst ? blocked : released;
+        var second = finalizeFollowerFirst ? released : blocked;
         Assert.Equal(2, fixture.Policy.Finalizations);
+        Assert.Equal(["entered", "finalized", "materializing"], firstCheckpoint.Events.ToArray());
+        Assert.Equal(["entered", "finalized", "materializing"], secondCheckpoint.Events.ToArray());
         Assert.Equal(1, fixture.Acquirer.Calls);
         Assert.NotSame(first.AccessToken, second.AccessToken);
         await first.DisposeAsync();
@@ -308,6 +359,7 @@ public sealed class EntraCredentialAccessExecutorTests
         internal UserAuthorizationRegistry Registry { get; } = new();
         internal TrackingCoordinator Coordinator { get; } = new();
         internal EntraCredentialAccessExecutor Executor { get; }
+        internal ObservingExecutor ObservedExecutor { get; }
         internal AccessBroker Broker { get; }
 
         internal Fixture()
@@ -317,8 +369,9 @@ public sealed class EntraCredentialAccessExecutorTests
             this.Policy = new TrackingPolicy(new ReleaseAuthorizationPolicy(new ReleaseMemoryStore(Path.Combine(this.directory, "memory.json"))));
             var executors = new CredentialAccessExecutorRegistry();
             this.Executor = new EntraCredentialAccessExecutor(_ => this.Session, this.Clock);
+            this.ObservedExecutor = new ObservingExecutor(this.Executor);
             executors.Add<EntraCredentialAccessRequest, EntraCredentialAccessResult>(
-                this.Executor);
+                this.ObservedExecutor);
             this.Broker = new AccessBroker(this.Policy, executors, this.Coordinator, this.Registry);
         }
 
@@ -492,6 +545,97 @@ public sealed class EntraCredentialAccessExecutorTests
             await session.ExecuteAsync(request, context, TestContext.Current.CancellationToken)).CommittedGeneration;
     }
 
+    private sealed class FinalizationCheckpoint(
+        ReleaseAuthorization authorization,
+        ResolvedCredentialIdentity expectedIdentity)
+    {
+        internal ReleaseAuthorization Authorization { get; } = authorization;
+        internal ConcurrentQueue<string> Events { get; } = new();
+        internal TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource Continue { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal async ValueTask EnterAsync(
+            ReleaseAuthorizationIdentifier identifier,
+            ResolvedCredentialIdentity identity,
+            CancellationToken cancellationToken)
+        {
+            Assert.Equal(this.Authorization.Identifier, identifier);
+            Assert.Equal(expectedIdentity, identity);
+            this.Events.Enqueue("entered");
+            this.Entered.SetResult();
+            await this.Continue.Task.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
+        }
+
+        internal void Complete(
+            ReleaseAuthorizationIdentifier identifier,
+            ResolvedCredentialIdentity identity)
+        {
+            Assert.Equal(this.Authorization.Identifier, identifier);
+            Assert.Equal(expectedIdentity, identity);
+            Assert.Equal(["entered"], this.Events.ToArray());
+            this.Events.Enqueue("finalized");
+        }
+
+        internal void Materialize(
+            ReleaseAuthorization materializationAuthorization,
+            ResolvedCredentialIdentity identity)
+        {
+            Assert.Equal(this.Authorization, materializationAuthorization);
+            Assert.Equal(expectedIdentity, identity);
+            Assert.Equal(["entered", "finalized"], this.Events.ToArray());
+            this.Events.Enqueue("materializing");
+        }
+    }
+
+    private sealed class ObservingExecutor(EntraCredentialAccessExecutor executor)
+        : ICredentialAccessExecutor<EntraCredentialAccessRequest, EntraCredentialAccessResult>, IAsyncDisposable
+    {
+        internal Action<ReleaseAuthorization, ResolvedCredentialIdentity>? BeforeMaterialization { get; set; }
+        public CredentialExecutorKind Kind => executor.Kind;
+
+        public ValueTask<CredentialInspection> InspectAsync(
+            EntraCredentialAccessRequest request,
+            CancellationToken cancellationToken) => executor.InspectAsync(request, cancellationToken);
+
+        public async ValueTask<CredentialExecutionOutcome<EntraCredentialAccessResult>> ExecuteAsync(
+            EntraCredentialAccessRequest request,
+            CredentialInspection inspection,
+            ReleaseAuthorization authorization,
+            ProviderInteractionPermit? interactionPermit,
+            ICredentialExecutionContext context,
+            CancellationToken cancellationToken)
+        {
+            var outcome = await executor.ExecuteAsync(
+                request, inspection, authorization, interactionPermit, context, cancellationToken);
+            if (outcome is CredentialExecutionReady<EntraCredentialAccessResult> ready &&
+                this.BeforeMaterialization is { } observe)
+            {
+                var identity = Assert.IsType<ResolvedCredentialIdentity>(ready.ResolvedIdentity);
+                return ready with
+                {
+                    Materializer = new ObservingMaterializer(ready.Materializer, () => observe(authorization, identity)),
+                };
+            }
+
+            return outcome;
+        }
+
+        public ValueTask DisposeAsync() => executor.DisposeAsync();
+
+        private sealed class ObservingMaterializer(
+            IAccessResultMaterializer<EntraCredentialAccessResult> materializer,
+            Action observe) : IAccessResultMaterializer<EntraCredentialAccessResult>
+        {
+            public ValueTask<EntraCredentialAccessResult> MaterializeAsync(CancellationToken cancellationToken)
+            {
+                observe();
+                return materializer.MaterializeAsync(cancellationToken);
+            }
+
+            public ValueTask DisposeAsync() => materializer.DisposeAsync();
+        }
+    }
+
     private sealed class TrackingCoordinator : IProviderAcquisitionCoordinator
     {
         private readonly ProviderAcquisitionCoordinator coordinator = new();
@@ -519,15 +663,22 @@ public sealed class EntraCredentialAccessExecutorTests
     private sealed class TrackingPolicy(ReleaseAuthorizationPolicy policy)
         : IReleaseAuthorizationPolicy, IProviderAcquisitionAuthorizationPolicy, IAsyncDisposable
     {
-        internal int Commits { get; private set; }
-        internal int Finalizations { get; private set; }
+        private int commits;
+        private int finalizations;
+
+        internal ConcurrentQueue<ReleaseAuthorization> Authorizations { get; } = new();
+        internal Func<ReleaseAuthorizationIdentifier, ResolvedCredentialIdentity, CancellationToken, ValueTask>? BeforeFinalization { get; set; }
+        internal Action<ReleaseAuthorizationIdentifier, ResolvedCredentialIdentity>? AfterFinalization { get; set; }
+        internal int Commits => Volatile.Read(ref this.commits);
+        internal int Finalizations => Volatile.Read(ref this.finalizations);
 
         public ValueTask<ReleasePolicyEvaluation> EvaluateAsync(ReleasePolicyRequest request, CancellationToken cancellationToken = default) =>
             policy.EvaluateAsync(request, cancellationToken);
         public async ValueTask<ReleaseAuthorization> CommitAsync(ReleasePolicyDecision decision, CancellationToken cancellationToken = default)
         {
             var result = await policy.CommitAsync(decision, cancellationToken);
-            this.Commits++;
+            this.Authorizations.Enqueue(result);
+            Interlocked.Increment(ref this.commits);
             return result;
         }
 
@@ -541,8 +692,14 @@ public sealed class EntraCredentialAccessExecutorTests
         public async ValueTask FinalizeCredentialIdentityAsync(
             ReleaseAuthorizationIdentifier identifier, ResolvedCredentialIdentity identity, CancellationToken cancellationToken = default)
         {
+            if (this.BeforeFinalization is { } beforeFinalization)
+            {
+                await beforeFinalization(identifier, identity, cancellationToken);
+            }
+
             await policy.FinalizeCredentialIdentityAsync(identifier, identity, cancellationToken);
-            this.Finalizations++;
+            Interlocked.Increment(ref this.finalizations);
+            this.AfterFinalization?.Invoke(identifier, identity);
         }
 
         public ValueTask<IReadOnlyList<ReleaseMemoryDescriptor>> ListAsync(CancellationToken cancellationToken = default) => policy.ListAsync(cancellationToken);
