@@ -16,3 +16,8 @@ coordinate space. The rail terminates at the logical last child's header when
 realized, otherwise continues to the clipped extent rather than treating a
 visible intermediate child as the terminus. It never forces realization.
 Layout tracking is detached with the visual and drawing is noninteractive.
+The child ItemsPresenter binds its owner's ItemsPanel, so immediate children use
+the virtualizing panel rather than an implicit StackPanel. The explicit
+small-population style still selects StackPanel throughout the tree. Geometry
+coverage includes wrapping-induced header height changes on resize and scrolling
+the initially unrealized logical last immediate child into and out of view.
