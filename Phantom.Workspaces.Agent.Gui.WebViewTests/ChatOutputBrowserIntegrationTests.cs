@@ -761,6 +761,42 @@ public sealed class ChatOutputBrowserIntegrationTests
         });
 
     [Fact]
+    public Task ChatHeader_VisibleAssistant_SuppressAndRestore_ReconcilesComputedMarkerAndLabel()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history-container", "append",
+                    ChatOutputHtmlRenderer.RenderMessage("marker", "assistant",
+                        [("marker-c0", "<div id=\"marker-c0\">Visible prose</div>")])));
+                const string visible = "(function(){var h=document.getElementById('marker-header');"
+                    + "var s=h.querySelector('.chat-sender');"
+                    + "return !h.hidden&&getComputedStyle(h).display!=='none'&&h.getBoundingClientRect().height>0"
+                    + "&&s.textContent==='assistant'&&getComputedStyle(s,'::before').content.includes('\\u25c9');})()";
+                Assert.Contains("true", await EvalAsync(web, visible), StringComparison.Ordinal);
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "marker-header", "replace",
+                    ChatOutputHtmlRenderer.RenderHeader("marker", "assistant", suppressed: true)));
+                Assert.Contains("true", await EvalAsync(web,
+                    "(function(){var h=document.getElementById('marker-header');"
+                    + "var s=h.querySelector('.chat-sender');var c=getComputedStyle(s,'::before').content;"
+                    + "return h.hidden&&s.textContent===''&&getComputedStyle(h).display==='none'"
+                    + "&&h.getBoundingClientRect().height===0&&(c==='none'||c==='normal'||c==='\"\"');})()"),
+                    StringComparison.Ordinal);
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "marker-header", "replace",
+                    ChatOutputHtmlRenderer.RenderHeader("marker", "assistant")));
+                Assert.Contains("true", await EvalAsync(web, visible), StringComparison.Ordinal);
+                Assert.Contains("true", await EvalAsync(web,
+                    "document.querySelectorAll('#marker-header').length===1"
+                    + "&&document.getElementById('marker-c0').textContent==='Visible prose'"), StringComparison.Ordinal);
+            }
+            finally { window.Close(); }
+        });
+
+    [Fact]
     public Task ChatOutput_SuppressedAssistantHeaderWithInspectTargets_RemainsHiddenAndActionsUsable()
         => this.fixture.InvokeAsync(async () =>
         {
