@@ -487,12 +487,19 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     }
 
     internal async ValueTask ReleaseAsync(string token, long generation)
-        => await this.ReleaseCoreAsync(token, generation).ConfigureAwait(false);
+    {
+        await this.ReleaseCoreAsync(token, generation).ConfigureAwait(false);
+    }
 
     internal async ValueTask AbortOpenAsync(string token, long generation)
-        => await this.ReleaseCoreAsync(token, generation).ConfigureAwait(false);
+    {
+        await this.ReleaseCoreAsync(token, generation).ConfigureAwait(false);
+    }
 
-    private async ValueTask ReleaseCoreAsync(string token, long generation)
+    internal ValueTask<bool> TryReleaseIdleAsync(string token, long generation, AgentSessionCommand command)
+        => this.ReleaseCoreAsync(token, generation, command);
+
+    private async ValueTask<bool> ReleaseCoreAsync(string token, long generation, AgentSessionCommand? idleCommand = null)
     {
         Task? terminationTask = null;
         Task? publisherTask = null;
@@ -504,17 +511,45 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             lock (this.gate)
             {
                 if (!this.attachments.TryGetValue(token, out var state) || state.Generation != generation)
-                    return;
-                this.attachments.Remove(token);
-                state.GraceTimer?.Dispose();
-                receiveCancellation = state.ReceiveCancellation;
-                publisherTask = state.Publisher.AbortUnderLock(
-                    new ObjectDisposedException(nameof(RemoteAgentAttachmentLease)));
-                state.Released.TrySetResult();
-                changed = true;
-                if (!this.fenced && this.attachments.Count == 0 && !this.continueInBackground
-                    && this.owningParentCount == 0)
-                    terminationTask = this.BeginTerminationUnderLock("runtime-stopped");
+                    return false;
+                if (idleCommand is not null)
+                {
+                    if (this.fenced || idleCommand.RuntimeEpoch != this.Epoch
+                        || this.Chat is not AgentChat local
+                        || !local.TryCommitIdleViewerRelease(
+                            idleCommand is not DetachIfIdleCommand { KeepAttached: true }
+                                && this.attachments.Count == 1 && !this.continueInBackground && this.owningParentCount == 0,
+                            CommitRelease))
+                        return false;
+                }
+                else
+                    CommitRelease();
+
+                void CommitRelease()
+                {
+                    if (idleCommand is not null)
+                    {
+                        var frame = this.Replay.Append(idleCommand.CorrelationId, new CommandCompletedEvent
+                        {
+                            CommandId = idleCommand.CommandId,
+                            Result = JsonSerializer.SerializeToElement(true),
+                        });
+                        state.Publisher.QueueUnderLock(AgentSessionProtocolCodec.SerializeFrame(frame), waitForWrite: false);
+                        if (idleCommand is DetachIfIdleCommand { KeepAttached: true })
+                            return;
+                    }
+                    this.attachments.Remove(token);
+                    state.GraceTimer?.Dispose();
+                    receiveCancellation = state.ReceiveCancellation;
+                    publisherTask = idleCommand is not null
+                        ? state.Publisher.CompleteUnderLock()
+                        : state.Publisher.AbortUnderLock(new ObjectDisposedException(nameof(RemoteAgentAttachmentLease)));
+                    state.Released.TrySetResult();
+                    changed = true;
+                    if (!this.fenced && this.attachments.Count == 0 && !this.continueInBackground
+                        && this.owningParentCount == 0)
+                        terminationTask = this.BeginTerminationUnderLock("runtime-stopped");
+                }
             }
         }
         finally
@@ -528,6 +563,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             await terminationTask.ConfigureAwait(false);
         else if (changed)
             await this.PublishRetentionChangedAsync().ConfigureAwait(false);
+        return true;
     }
 
     internal IMessageChannel? GetConnectedChannel(string token, long generation)
@@ -746,6 +782,8 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         ((INotifyCollectionChanged)this.Chat.Modals).CollectionChanged -= this.OnModalsChanged;
         try
         {
+            if (this.Chat is AgentChat local)
+                await local.TerminateAsync().ConfigureAwait(false);
             if (this.runtimeLifetime is not null)
                 await this.runtimeLifetime.DisposeAsync().ConfigureAwait(false);
             else
@@ -1546,6 +1584,9 @@ internal sealed class RemoteAgentAttachmentLease : IAsyncDisposable
 
     internal ValueTask ReleaseExplicitlyAsync()
         => this.owner.ReleaseAsync(this.token, this.generation);
+
+    internal ValueTask<bool> TryReleaseIdleAsync(AgentSessionCommand command)
+        => this.owner.TryReleaseIdleAsync(this.token, this.generation, command);
 
     public async ValueTask DisposeAsync()
     {

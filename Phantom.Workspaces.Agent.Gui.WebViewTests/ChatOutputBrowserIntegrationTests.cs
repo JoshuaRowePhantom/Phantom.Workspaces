@@ -40,6 +40,63 @@ public sealed class ChatOutputBrowserIntegrationTests
     public ChatOutputBrowserIntegrationTests(WebViewAppFixture fixture) => this.fixture = fixture;
 
     [Fact]
+    public Task ToolRun_InvisibleTextAndPlaceholder_LivePromotionAndReloadHaveNoCircleSeparators()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            var history = new ObservableCollection<AgentChatHistoryItem>();
+            var running = new ObservableCollection<AgentChatRunningItem>();
+            using var model = CreateModel(web, history, running);
+            try
+            {
+                await model.HistoryLoaded;
+                var run = new AgentChatRunningItem { AssistantRunId = "screenshot-run" };
+                running.Add(run);
+                run.Items.Add(new AgentChatHistoryItem { Role = ChatRole.Assistant, AssistantRunId = run.AssistantRunId, Contents = [new TextContent(""), new FunctionCallContent("c1", "read_agent")] });
+                run.Items.Add(new AgentChatHistoryItem { Role = ChatRole.Assistant, Contents = [] });
+                run.Items.Add(new AgentChatHistoryItem { Role = ChatRole.Assistant, AssistantRunId = run.AssistantRunId, Contents = [new TextContent(" "), new FunctionCallContent("c2", "powershell")] });
+                run.Items.Add(new AgentChatHistoryItem { Role = ChatRole.Assistant, AssistantRunId = run.AssistantRunId, Contents = [new TextContent(""), new FunctionCallContent("c3", "view")] });
+                run.Items.Add(new AgentChatHistoryItem { Role = ChatRole.Tool, AssistantRunId = run.AssistantRunId, Contents = [new FunctionResultContent("c1", "first"), new FunctionResultContent("c2", "second"), new FunctionResultContent("c3", "third")] });
+
+                async Task AssertTranscriptAsync()
+                {
+                    web.EndBatch();
+                    var result = await EvalAsync(web, """
+                        (function(){
+                        var ids=Array.from(document.querySelectorAll('[id]')).map(e=>e.id);
+                        var headers=Array.from(document.querySelectorAll('.chat-header'));
+                        return document.querySelectorAll('.chat-tool-group').length===1
+                          && document.querySelectorAll('.chat-tool-call').length===3
+                          && document.querySelectorAll('.chat-tool-result').length===3
+                          && new Set(ids).size===ids.length
+                          && headers.every(h=>getComputedStyle(h).display==='none'
+                            || h.querySelector('.chat-sender').textContent.trim().length>0);
+                        })()
+                        """);
+                    Assert.Contains("true", result, StringComparison.Ordinal);
+                }
+                await AssertTranscriptAsync();
+                foreach (var item in run.Items)
+                    history.Add(item);
+                running.Remove(run);
+                await AssertTranscriptAsync();
+                model.Dispose();
+
+                var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                web.Ready += (_, _) => ready.TrySetResult();
+                web.LoadShell(ShellHtml);
+                await ready.Task;
+                using var reload = CreateModel(web, history);
+                await reload.HistoryLoaded;
+                await AssertTranscriptAsync();
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
     public Task Append_AddsMessageElementWithContent()
         => this.fixture.InvokeAsync(async () =>
         {
@@ -704,6 +761,42 @@ public sealed class ChatOutputBrowserIntegrationTests
         });
 
     [Fact]
+    public Task ChatHeader_VisibleAssistant_SuppressAndRestore_ReconcilesComputedMarkerAndLabel()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history-container", "append",
+                    ChatOutputHtmlRenderer.RenderMessage("marker", "assistant",
+                        [("marker-c0", "<div id=\"marker-c0\">Visible prose</div>")])));
+                const string visible = "(function(){var h=document.getElementById('marker-header');"
+                    + "var s=h.querySelector('.chat-sender');"
+                    + "return !h.hidden&&getComputedStyle(h).display!=='none'&&h.getBoundingClientRect().height>0"
+                    + "&&s.textContent==='assistant'&&getComputedStyle(s,'::before').content.includes('\\u25c9');})()";
+                Assert.Contains("true", await EvalAsync(web, visible), StringComparison.Ordinal);
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "marker-header", "replace",
+                    ChatOutputHtmlRenderer.RenderHeader("marker", "assistant", suppressed: true)));
+                Assert.Contains("true", await EvalAsync(web,
+                    "(function(){var h=document.getElementById('marker-header');"
+                    + "var s=h.querySelector('.chat-sender');var c=getComputedStyle(s,'::before').content;"
+                    + "return h.hidden&&s.textContent===''&&getComputedStyle(h).display==='none'"
+                    + "&&h.getBoundingClientRect().height===0&&(c==='none'||c==='normal'||c==='\"\"');})()"),
+                    StringComparison.Ordinal);
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "marker-header", "replace",
+                    ChatOutputHtmlRenderer.RenderHeader("marker", "assistant")));
+                Assert.Contains("true", await EvalAsync(web, visible), StringComparison.Ordinal);
+                Assert.Contains("true", await EvalAsync(web,
+                    "document.querySelectorAll('#marker-header').length===1"
+                    + "&&document.getElementById('marker-c0').textContent==='Visible prose'"), StringComparison.Ordinal);
+            }
+            finally { window.Close(); }
+        });
+
+    [Fact]
     public Task ChatOutput_SuppressedAssistantHeaderWithInspectTargets_RemainsHiddenAndActionsUsable()
         => this.fixture.InvokeAsync(async () =>
         {
@@ -735,7 +828,9 @@ public sealed class ChatOutputBrowserIntegrationTests
                     web,
                     "(function(){var m=document.getElementById('suppressed');var h=document.getElementById('suppressed-header');"
                     + "var c=m.querySelector(':scope > .chat-contents');"
-                    + "return h.hidden&&!h.querySelector('.inspect-gutter-btn')"
+                    + "var marker=getComputedStyle(h.querySelector('.chat-sender'),'::before').content;"
+                    + "return h.hidden&&getComputedStyle(h).display==='none'&&h.getBoundingClientRect().height===0"
+                    + "&&(marker==='none'||marker==='normal'||marker==='\"\"')&&!h.querySelector('.inspect-gutter-btn')"
                     + "&&!!c.querySelector(':scope > .inspect-gutter-btn')"
                     + "&&!!c.querySelector(':scope > .usage-gutter-btn')"
                     + "&&!!c.querySelector('[data-copy-target]');})()");

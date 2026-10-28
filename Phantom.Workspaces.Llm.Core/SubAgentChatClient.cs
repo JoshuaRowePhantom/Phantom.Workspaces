@@ -20,6 +20,7 @@ internal sealed class SubAgentChatClient : IChatClient, ISubAgentChat, IHostedAg
     public string AgentId { get; }
     public string DisplayName { get; }
     public string Description { get; }
+    internal AgentDocumentOrigin? DocumentOrigin { get; }
 
     public AgentChatCompletionState CompletionState => completionState;
 
@@ -29,11 +30,13 @@ internal sealed class SubAgentChatClient : IChatClient, ISubAgentChat, IHostedAg
 
     public event EventHandler? CompletionStateChanged;
 
-    public SubAgentChatClient(string agentId, string displayName, string description = "", TimeProvider? timeProvider = null)
+    public SubAgentChatClient(string agentId, string displayName, string description = "", TimeProvider? timeProvider = null,
+        AgentDocumentOrigin? documentOrigin = null)
     {
         AgentId = agentId;
         DisplayName = displayName;
         Description = description;
+        this.DocumentOrigin = documentOrigin;
         this.timeProvider = timeProvider ?? TimeProvider.System;
         lastUpdatedAt = this.timeProvider.GetUtcNow().UtcDateTime;
     }

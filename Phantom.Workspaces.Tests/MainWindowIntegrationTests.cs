@@ -4297,8 +4297,15 @@ public sealed class MainWindowIntegrationTests
         Assert.Contains(workspacePane.Tabs, t => ReferenceEquals(t, agentTab));
 
         // Act: close the floating document
+        var removed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ((System.Collections.Specialized.INotifyCollectionChanged)workspacePane.Tabs).CollectionChanged += (_, _) =>
+        {
+            if (!workspacePane.Tabs.Contains(agentTab)) removed.TrySetResult();
+        };
+        var disposed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var disposalRegistration = agentTab.StartupCancellation.Register(() => disposed.TrySetResult());
         dockFactory.CloseDockable(document!);
-        await Dispatcher.UIThread.InvokeAsync(() => { });
+        await Task.WhenAll(removed.Task, disposed.Task).WaitAsync(TestContext.Current.CancellationToken);
 
         // Tab must have been removed from pane.Tabs and disposed
         Assert.DoesNotContain(workspacePane.Tabs, t => ReferenceEquals(t, agentTab));
@@ -4359,22 +4366,32 @@ public sealed class MainWindowIntegrationTests
 
         // Track how many times the tab is removed from pane.Tabs
         var removeCount = 0;
+        var removed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var disposed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var disposalCount = 0;
+        using var disposalRegistration = agentTab.StartupCancellation.Register(() =>
+        {
+            disposalCount++;
+            disposed.TrySetResult();
+        });
         ((System.Collections.Specialized.INotifyCollectionChanged)workspacePane.Tabs).CollectionChanged += (_, e) =>
         {
             if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Remove
                 && e.OldItems?.Contains(agentTab) == true)
             {
                 removeCount++;
+                removed.TrySetResult();
             }
         };
 
         // Act: close directly from the main dock (no float)
         dockFactory.CloseDockable(document!);
-        await Dispatcher.UIThread.InvokeAsync(() => { });
+        await Task.WhenAll(removed.Task, disposed.Task).WaitAsync(TestContext.Current.CancellationToken);
 
         // Tab must be removed exactly once (guards against double-dispose from both
         // SyncPaneTabsFromDockChange and OnDockableClosed firing on close)
         Assert.Equal(1, removeCount);
+        Assert.Equal(1, disposalCount);
         Assert.DoesNotContain(workspacePane.Tabs, t => ReferenceEquals(t, agentTab));
     }
 

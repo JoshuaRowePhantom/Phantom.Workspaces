@@ -24,6 +24,7 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
     private readonly IAgentPersistenceStore store;
     private AgentSession? currentSession;
     private string? currentAssistantRunId;
+    private AgentDocumentOrigin? documentOrigin;
 
     internal event Action<ChatMessage>? MessagePersisted;
 
@@ -47,7 +48,11 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
         this.currentSession = session;
     }
 
-    internal void SetAssistantRunId(string runId) => this.currentAssistantRunId = runId;
+    internal void SetAssistantRunId(string runId, AgentDocumentOrigin? origin = null)
+    {
+        this.currentAssistantRunId = runId;
+        this.documentOrigin = origin;
+    }
 
     /// <inheritdoc />
     public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
@@ -179,6 +184,8 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
 
         message.AdditionalProperties ??= [];
         message.AdditionalProperties[AssistantRunIdProperty] = assistantRunId;
+        if (this.documentOrigin is { } origin)
+            message.AdditionalProperties[AgentDocumentOrigin.PropertyName] = origin;
         var agent = this.provider.BuildPersistedAgent(session);
         await this.store.StoreAsync(
             new StoreRequestAgent

@@ -567,6 +567,11 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     /// </summary>
     internal string? WorkingDirectoryOverride => this.workingDirectoryOverride;
 
+    internal bool IsLocalDocumentFileSystem => !this.requiresRemoteProvider
+        && (this.executorBindings is null
+            ? string.IsNullOrWhiteSpace(this.modelExecutorName)
+            : IsLocalDescriptor(this.executorBindings.ResolveComponent(this.modelExecutorName)));
+
     /// <summary>
     /// Changes the active model for this client. When a session is already live, the model is
     /// retuned in place via <see cref="ICopilotSession.SetModelAsync"/> so the conversation history

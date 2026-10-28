@@ -19,6 +19,44 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class AgentSessionWorkspaceTabViewModelTests
 {
+    [AvaloniaFact]
+    public async Task StartupDiagnostics_CompletionDoesNotNotifyButGenuineTurnDoes()
+    {
+        using var logger = new ObservableLoggerFactory();
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateSimpleAgentDefinition() });
+        var notifications = new NotificationService(new FakeActiveTabProvider());
+        var agent = new AgentViewModel(chat, "startup", "", logger, TaskScheduler.FromCurrentSynchronizationContext());
+        await using var tab = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = "startup-notifications", Title = "Startup", NotificationService = notifications,
+        };
+        tab.SetReady(agent, logger);
+        var startup = chat.CreateRunningItem(new AgentChatHistoryItem
+        {
+            Role = AgentChatHistoryItem.DiagnosticChatRole,
+            Contents = [new Microsoft.Extensions.AI.TextContent("Loading tools")],
+        });
+        chat.CompleteRunningItem(startup, false);
+        Assert.False(agent.IsChatRunning);
+        Assert.Empty(notifications.Notifications);
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        notifications.NotificationsChanged += (_, _) =>
+        {
+            if (notifications.Notifications.Any(item => item.Heading == "Completed")) completed.TrySetResult();
+        };
+        var turn = chat.CreateRunningItem(new AgentChatHistoryItem
+        {
+            Role = Microsoft.Extensions.AI.ChatRole.Assistant,
+            Contents = [new Microsoft.Extensions.AI.TextContent("Real turn")],
+        });
+        Assert.True(agent.IsChatRunning);
+        chat.CompleteRunningItem(turn);
+        await completed.Task.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.Contains(notifications.Notifications, item => item.TabKey == tab.Id
+            && item.Heading == "Completed" && item.Kind == "chat-idle" && !item.IsRead);
+    }
+
     [Fact]
     public async Task SetReady_RemoteAgent_SetsRemoteMetadata()
     {

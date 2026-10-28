@@ -1713,6 +1713,51 @@ public sealed class ChatOutputHtmlModelTests
         Assert.False(plan.Slots[1].HasDomElement);
     }
 
+    [Theory]
+    [InlineData(false, 1)]
+    [InlineData(true, 2)]
+    public void GenerateHistoryChunk_InvisibleTextAndReasoning_UsesRenderedToolBoundaries(
+        bool includeReasoning,
+        int expectedGroups)
+    {
+        var snapshot = new List<AgentChatHistoryItem>
+        {
+            new() { Role = ChatRole.Assistant, AssistantRunId = "run", Contents = [new TextContent(""), new FunctionCallContent("c1", "read_agent")] },
+            new() { Role = ChatRole.Assistant, AssistantRunId = "run", Contents = [new TextContent(" "), new FunctionCallContent("c2", "powershell")] },
+            new() { Role = ChatRole.Assistant, AssistantRunId = "run", Contents = [new TextReasoningContent("thinking"), new FunctionCallContent("c3", "view")] },
+        };
+        var plan = ChatOutputHtmlModel.BuildHistoryRenderPlan(snapshot, new RecordingSink(), () => includeReasoning);
+        var html = ChatOutputHtmlModel.GenerateHistoryChunk(plan, 0, snapshot.Count);
+
+        Assert.Equal(expectedGroups, System.Text.RegularExpressions.Regex.Matches(html, "chat-tool-group\"").Count);
+        Assert.Same(plan.Slots[0].Group, plan.Slots[1].Group);
+        Assert.Equal(!includeReasoning, ReferenceEquals(plan.Slots[0].Group, plan.Slots[2].Group));
+        Assert.Contains("read_agent", html);
+        Assert.Contains("powershell", html);
+        Assert.Contains("view", html);
+        Assert.Equal(includeReasoning, html.Contains("thinking", StringComparison.Ordinal));
+        Assert.Contains(includeReasoning ? "2 calls" : "3 calls", html);
+    }
+
+    [Theory]
+    [InlineData(null, 1)]
+    [InlineData("foreign", 2)]
+    public void GenerateHistoryChunk_IdentitylessSlot_RequiresMatchingRunContext(
+        string? placeholderRun,
+        int expectedGroups)
+    {
+        var snapshot = new List<AgentChatHistoryItem>
+        {
+            new() { Role = ChatRole.Assistant, AssistantRunId = "run", Contents = [new FunctionCallContent("c1", "read")] },
+            new() { Role = ChatRole.Assistant, AssistantRunId = placeholderRun, Contents = [] },
+            new() { Role = ChatRole.Assistant, AssistantRunId = "run", Contents = [new FunctionCallContent("c2", "view")] },
+        };
+        var plan = BuildPlan(snapshot, new RecordingSink());
+        var html = ChatOutputHtmlModel.GenerateHistoryChunk(plan, 0, snapshot.Count);
+
+        Assert.Equal(expectedGroups, System.Text.RegularExpressions.Regex.Matches(html, "chat-tool-group\"").Count);
+    }
+
     [Fact]
     public void BuildHistoryRenderPlan_NonDisplayedInterveningItem_ProducesNoDomElement()
     {
@@ -1755,6 +1800,48 @@ public sealed class ChatOutputHtmlModelTests
             sink.ContentOperations,
             op => op.Location == ChatOutputUpdateLocation.Append
                 && op.Path == ChatOutputHtmlRenderer.HistoryContainerId);
+    }
+
+    [AvaloniaFact]
+    public async Task LiveTransformer_SameRunInvisibleTextAndIdentitylessSlot_CoalescesCallsAndPairsResults()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            new() { Role = ChatRole.Assistant, AssistantRunId = "run", Contents = [new TextContent(""), new FunctionCallContent("c1", "read_agent")] },
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => false, sink);
+        await model.HistoryLoaded;
+        sink.Clear();
+        history.Add(new AgentChatHistoryItem { Role = ChatRole.Assistant, Contents = [] });
+        history.Add(new AgentChatHistoryItem { Role = ChatRole.Assistant, AssistantRunId = "run", Contents = [new TextContent(" "), new FunctionCallContent("c2", "powershell")] });
+        history.Add(new AgentChatHistoryItem { Role = ChatRole.Assistant, AssistantRunId = "run", Contents = [new TextReasoningContent("invisible-reasoning-payload"), new FunctionCallContent("c3", "view")] });
+        history.Add(new AgentChatHistoryItem { Role = ChatRole.Tool, AssistantRunId = "run", Contents = [new FunctionResultContent("c1", "first"), new FunctionResultContent("c2", "second"), new FunctionResultContent("c3", "third")] });
+
+        Assert.Contains(sink.ContentOperations, operation => operation.Content.Contains("3 calls", StringComparison.Ordinal));
+        Assert.DoesNotContain(sink.ContentOperations, operation => operation.Content.Contains("invisible-reasoning-payload", StringComparison.Ordinal));
+        Assert.Contains(sink.ContentOperations, operation => operation.Content.Contains("first", StringComparison.Ordinal));
+        Assert.Contains(sink.ContentOperations, operation => operation.Content.Contains("second", StringComparison.Ordinal));
+        Assert.Contains(sink.ContentOperations, operation => operation.Content.Contains("third", StringComparison.Ordinal));
+    }
+
+    [AvaloniaFact]
+    public async Task Refresh_ReasoningBecomesVisible_ReestablishesToolBoundary()
+    {
+        var includeReasoning = false;
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            new() { Role = ChatRole.Assistant, Contents = [new FunctionCallContent("c1", "read")] },
+            new() { Role = ChatRole.Assistant, Contents = [new TextReasoningContent("visible reasoning"), new FunctionCallContent("c2", "view")] },
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => includeReasoning, sink);
+        await model.HistoryLoaded;
+        sink.Clear();
+        includeReasoning = true;
+        model.Refresh();
+        Assert.Contains(sink.ContentOperations, operation => operation.Content.Contains("visible reasoning", StringComparison.Ordinal));
+        Assert.DoesNotContain(sink.ContentOperations, operation => operation.Content.Contains("2 calls", StringComparison.Ordinal));
     }
 
     [AvaloniaFact(Timeout = 15_000)]

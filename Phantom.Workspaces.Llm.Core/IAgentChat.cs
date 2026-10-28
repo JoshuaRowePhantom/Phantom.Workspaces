@@ -47,6 +47,13 @@ public interface IAgentChat : IAsyncDisposable, IServiceProvider
     Task InterruptAsync(CancellationToken ct = default);
 }
 
+public interface IAgentDocumentContext
+{
+    string? DocumentWorkingDirectory { get; }
+    bool IsLocalDocumentFileSystem { get; }
+    string? DocumentOwnerProfileId => null;
+}
+
 internal interface IAgentChatRunningItemsSnapshotProvider
 {
     void SubscribeAndCaptureRunningItems(

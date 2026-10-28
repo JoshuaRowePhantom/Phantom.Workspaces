@@ -106,6 +106,23 @@ internal sealed class McpOAuthAttempt : IAsyncDisposable
             }
 
             cancellationToken.ThrowIfCancellationRequested();
+            await using var progress = await Llm.AgentChatAcquisitionProgress.WaitingForAuthorizationAsync(
+                this.authorizationUri.IdnHost,
+                async token =>
+                {
+                    if (!await permit.AuthorizesAcquisitionAsync(token).ConfigureAwait(false)
+                        || !this.binding.IsActive
+                        || !permit.Authorizes(this.requestIdentifier, this.revision, this.executorKind,
+                            this.acquisitionGeneration, this.acquisitionKey))
+                        throw new InvalidOperationException("OAuth interaction is no longer authorized.");
+                    lock (this.gate)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        if (this.closed)
+                            return;
+                        this.browserLauncher.Open(this.authorizationUri);
+                    }
+                }).ConfigureAwait(false);
             try
             {
                 this.browserLauncher.Open(this.authorizationUri);
