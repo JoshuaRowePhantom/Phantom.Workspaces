@@ -1335,6 +1335,67 @@ public sealed class RunningAgentChatTableTests
     }
 
     [Fact]
+    public async Task TerminateExactAsync_RetainedOwner_SerializesReacquisitionAndCannotReleaseReplacementPin()
+    {
+        await using var factory = new AgentChatFactory(
+            new InMemoryAgentPersistenceStore(),
+            new AgentServices { ChatClientOverride = new DeterministicTestChatClient() },
+            TaskScheduler.Default);
+        var table = new RunningAgentChatTable(factory);
+        var id = new AgentSessionId("exact-retained-owner");
+        var request = new AcquireAgentChatRequest
+        {
+            AgentSessionId = id,
+            AgentDefinition = CreateTestAgentDefinition(),
+        };
+        var old = await table.AcquireAsync(request, TestContext.Current.CancellationToken);
+        await table.SetContinueInBackgroundAsync(id, true, TestContext.Current.CancellationToken);
+        var oldRow = Assert.Single(table.RunningSessions);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resource = new Mock<IAsyncDisposable>();
+        resource.Setup(value => value.DisposeAsync()).Returns(async () =>
+        {
+            started.TrySetResult();
+            await release.Task;
+        });
+        old.LocalAgentChat.RegisterOwnedResource(resource.Object);
+        var terminating = table.TerminateExactAsync(id, old.AgentChat, TestContext.Current.CancellationToken);
+        await started.Task.WaitAsync(TestContext.Current.CancellationToken);
+        var replacement = table.AcquireAsync(request, TestContext.Current.CancellationToken);
+        var oldRelease = old.DisposeAsync().AsTask();
+        using var cancellation = new CancellationTokenSource();
+        var canceledAcquisition = table.AcquireAsync(request, cancellation.Token);
+        cancellation.Cancel();
+        try
+        {
+            Assert.False(terminating.IsCompleted);
+            Assert.False(replacement.IsCompleted);
+            Assert.False(oldRelease.IsCompleted);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => canceledAcquisition);
+        }
+        finally { release.TrySetResult(); }
+        Assert.True(await terminating);
+        var current = await replacement;
+        await oldRelease;
+        Assert.NotSame(old.AgentChat, current.AgentChat);
+        var row = Assert.Single(table.RunningSessions);
+        Assert.NotSame(oldRow, row);
+        Assert.Equal(1, row.ViewerCount);
+        Assert.False(row.ContinueInBackground);
+        await table.SetContinueInBackgroundAsync(id, true, TestContext.Current.CancellationToken);
+        Assert.False(await table.TerminateExactAsync(id, old.AgentChat, TestContext.Current.CancellationToken));
+        await old.DisposeAsync();
+        await current.DisposeAsync();
+        Assert.Same(row, Assert.Single(table.RunningSessions));
+        Assert.Equal(0, row.ViewerCount);
+        Assert.True(row.ContinueInBackground);
+        await table.SetContinueInBackgroundAsync(id, false, TestContext.Current.CancellationToken);
+        Assert.Empty(table.RunningSessions);
+        resource.Verify(value => value.DisposeAsync(), Times.Once);
+    }
+
+    [Fact]
     public async Task TerminateAsync_LocalSession_AwaitsOwningRuntimeTeardown()
     {
         var disposalStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

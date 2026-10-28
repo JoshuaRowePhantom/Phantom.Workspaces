@@ -343,36 +343,54 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
             return true;
         }
 
+        await DisposeEntryAsync(sessionId, toDispose, disposalCompletion, terminate: true).ConfigureAwait(false);
+        return true;
+    }
+
+    private async Task DisposeEntryAsync(
+        AgentSessionId sessionId, AgentChat chat, TaskCompletionSource completion, bool terminate)
+    {
+        Exception? failure = null;
         try
         {
             await PostToForegroundAsync(() =>
             {
                 var item = _runningSessions.FirstOrDefault(r => r.SessionId == sessionId
-                    && ReferenceEquals(r.AgentChat, toDispose));
+                    && ReferenceEquals(r.AgentChat, chat));
                 if (item is not null)
-                {
                     _runningSessions.Remove(item);
-                }
             });
-            await toDispose.TerminateAsync(ct);
+            if (terminate)
+                await chat.TerminateAsync(CancellationToken.None).ConfigureAwait(false);
+            else
+                await chat.DisposeAsync().ConfigureAwait(false);
         }
-        finally
+        catch (Exception error)
+        {
+            failure = error;
+        }
+
+        if (failure is null)
         {
             await _gate.WaitAsync(CancellationToken.None);
             try
             {
                 if (_entries.TryGetValue(sessionId, out var current)
-                    && ReferenceEquals(current.AgentChat, toDispose))
+                    && ReferenceEquals(current.AgentChat, chat))
                     _entries.Remove(sessionId);
             }
             finally
             {
                 _gate.Release();
             }
-            disposalCompletion.TrySetResult();
+            completion.TrySetResult();
         }
-
-        return true;
+        else
+        {
+            // A failed teardown is not a reusable chat or permission to start its replacement.
+            completion.TrySetException(failure);
+        }
+        await completion.Task.ConfigureAwait(false);
     }
 
     // Fix #1109: every chat this factory creates MUST reach back to the factory so restore
@@ -438,34 +456,7 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
 
         if (toDispose is not null)
         {
-            try
-            {
-                await PostToForegroundAsync(() =>
-                {
-                    var item = _runningSessions.FirstOrDefault(r => r.SessionId == sessionId
-                        && ReferenceEquals(r.AgentChat, toDispose));
-                    if (item is not null)
-                        _runningSessions.Remove(item);
-                });
-
-                await toDispose.DisposeAsync();
-            }
-            finally
-            {
-                await _gate.WaitAsync();
-                try
-                {
-                    if (_entries.TryGetValue(sessionId, out var current)
-                        && ReferenceEquals(current.AgentChat, toDispose))
-                        _entries.Remove(sessionId);
-                }
-                finally
-                {
-                    _gate.Release();
-                }
-
-                disposalCompletion?.TrySetResult();
-            }
+            await DisposeEntryAsync(sessionId, toDispose, disposalCompletion!, terminate: false).ConfigureAwait(false);
         }
         return true;
     }

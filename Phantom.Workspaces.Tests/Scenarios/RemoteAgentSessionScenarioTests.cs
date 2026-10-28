@@ -1073,13 +1073,24 @@ public sealed class RemoteAgentSessionScenarioTests
         await Task.WhenAll(firstDismissed, secondDismissed);
     }
 
-    [Fact]
-    public async Task Takeover_ActiveOldRuntime_FencesOldProxyBeforeNewRuntimeMutates()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Takeover_ActiveOldRuntime_FencesOldProxyBeforeNewRuntimeMutates(bool background)
     {
         var newOwner = "22222222-2222-2222-2222-222222222222";
-        await using var fixture = await ScenarioFixture.CreateAsync(Session("takeover", background: true));
+        await using var fixture = await ScenarioFixture.CreateAsync(Session("takeover", background: background));
         await using var oldProxy = await fixture.OpenProxyAsync("takeover", AgentSessionOpenIntent.Start);
         var oldRuntime = await fixture.RuntimeAsync("takeover", 0);
+        var resources = await AddOwnedRuntimeTreeAsync(oldRuntime);
+        var oldViewer = await fixture.AcquireOwnerViewerAsync("takeover");
+        var stream = fixture.Model.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "old owner working"));
+        var oldChat = Assert.IsType<AgentChat>(oldRuntime.Chat);
+        var oldRunning = WaitForRunningItemsAsync(oldChat, 1);
+        oldChat.EnqueueUserMessage("active takeover");
+        await stream.WaitForClaimedAsync(TestContext.Current.CancellationToken);
+        await oldRunning;
         var oldTerminal = WaitForTerminalAsync(oldProxy.Chat);
         var oldChannelEof = oldProxy.Transport.LastChannelCompletion;
         await using var takeoverTransport = fixture.CreateTransport();
@@ -1104,6 +1115,24 @@ public sealed class RemoteAgentSessionScenarioTests
             TestContext.Current.CancellationToken));
         await using var newProxy = await fixture.OpenProxyAsync(
             "takeover", AgentSessionOpenIntent.Attach, newOwner, 1);
+        var replacement = await fixture.RuntimeAsync("takeover", 1);
+        Assert.NotSame(oldRuntime.Chat, replacement.Chat);
+        var context = ChatContext(replacement.Chat);
+        Assert.NotSame(ChatContext(oldRuntime.Chat), context);
+        Assert.Equal(newOwner, context.OwningProfileEntityId);
+        Assert.Equal(1, context.OwnershipGeneration);
+        Assert.Equal(replacement.Epoch, context.RuntimeEpoch);
+        Assert.NotEqual(oldRuntime.Epoch, context.RuntimeEpoch);
+        await oldViewer.DisposeAsync();
+        Assert.False(await fixture.RunningChats.TerminateExactAsync(
+            oldViewer.SessionId, oldRuntime.Chat, TestContext.Current.CancellationToken));
+        var row = Assert.Single(fixture.RunningChats.RunningSessions);
+        Assert.Equal(1, row.ViewerCount);
+        Assert.Equal(background, row.ContinueInBackground);
+        Assert.Equal(background ? replacement.Chat : null, fixture.RetainedChat("takeover"));
+        Assert.Equal(1, resources.RootProcess.DisposeCount);
+        Assert.Equal(1, resources.ChildProcess.DisposeCount);
+        Assert.Equal(1, stream.DisposalCount);
         var result = await newProxy.Chat.InputQueues.CreateQueueAsync(
             CreateQueue("new-owner", newProxy.Chat.InputQueues.Snapshot.Revision),
             TestContext.Current.CancellationToken);
@@ -1112,8 +1141,96 @@ public sealed class RemoteAgentSessionScenarioTests
         Assert.Equal(AgentInputQueueCommandStatus.Applied, result.Status);
         Assert.Equal(1, persisted.GetProperty("ownership-generation").GetInt64());
         Assert.Equal(newOwner, persisted.GetProperty("owning-profile-entity-id").GetString());
+        Assert.Equal(background, persisted.GetProperty("continue-in-background").GetBoolean());
         Assert.NotEqual(oldRuntime.Epoch, newProxy.Client.LastAppliedCursor!.Value.Epoch);
         Assert.Equal(1, (await fixture.RuntimeAsync("takeover", 1)).SessionContext!.OwnershipGeneration);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Takeover_CleanupBlocked_FencesOldEpochAndAwaitsExactCleanup(bool background)
+    {
+        const string newOwner = "22222222-2222-2222-2222-222222222222";
+        await using var fixture = await ScenarioFixture.CreateAsync(Session("blocked-takeover", background: background));
+        await using var oldProxy = await fixture.OpenProxyAsync("blocked-takeover", AgentSessionOpenIntent.Start);
+        var oldRuntime = await fixture.RuntimeAsync("blocked-takeover", 0);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resource = new GatedOwnedProcess(started, release.Task);
+        Assert.IsType<AgentChat>(oldRuntime.Chat).RegisterOwnedResource(resource);
+        await using var transport = fixture.CreateTransport();
+        var takeover = RemoteAgentSessionClient.TakeOverAsync(
+            transport,
+            fixture.OpenRequest("blocked-takeover", AgentSessionOpenIntent.Status,
+                ScenarioFixture.DefaultOwner, 0, Guid.NewGuid().ToString("N")),
+            newOwner, TestContext.Current.CancellationToken);
+        await started.Task.WaitAsync(TestContext.Current.CancellationToken);
+        using var canceled = new CancellationTokenSource();
+        var waiter = oldRuntime.TryTerminateAsync(canceled.Token).AsTask();
+        canceled.Cancel();
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiter);
+            Assert.False(takeover.IsCompleted);
+            Assert.True(oldRuntime.IsFenced);
+            Assert.False(oldRuntime.HasTerminated);
+            Assert.False(oldProxy.Chat.IsTerminal);
+            Assert.Null(await fixture.TryRuntimeAsync("blocked-takeover", 1));
+            Assert.Equal(0, (await fixture.ReadSessionAsync("blocked-takeover"))
+                .GetProperty("ownership-generation").GetInt64());
+            await Assert.ThrowsAnyAsync<Exception>(() => oldProxy.Chat.InputQueues.CreateQueueAsync(
+                CreateQueue("fenced-during-cleanup", oldProxy.Chat.InputQueues.Snapshot.Revision),
+                TestContext.Current.CancellationToken));
+        }
+        finally { release.TrySetResult(); }
+        await takeover;
+        var replacement = await fixture.RuntimeAsync("blocked-takeover", 1);
+        Assert.NotSame(oldRuntime.Chat, replacement.Chat);
+        Assert.Equal(newOwner, ChatContext(replacement.Chat).OwningProfileEntityId);
+        Assert.Equal(1, resource.DisposeCount);
+        Assert.Equal(background ? replacement.Chat : null, fixture.RetainedChat("blocked-takeover"));
+    }
+
+    [Fact]
+    public async Task Takeover_CleanupFails_DoesNotPublishSuccessfulTerminalOrStartReplacement()
+    {
+        await using var fixture = await ScenarioFixture.CreateAsync(Session("failed-takeover", background: true));
+        await using var proxy = await fixture.OpenProxyAsync("failed-takeover", AgentSessionOpenIntent.Start);
+        var runtime = await fixture.RuntimeAsync("failed-takeover", 0);
+        var resource = new GatedOwnedProcess(
+            new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+            Task.FromException(new InvalidOperationException("owned cleanup failed")));
+        Assert.IsType<AgentChat>(runtime.Chat).RegisterOwnedResource(resource);
+        var terminated = 0;
+        runtime.Terminated += (_, _) => Interlocked.Increment(ref terminated);
+        await using var transport = fixture.CreateTransport();
+        await Assert.ThrowsAnyAsync<Exception>(() => RemoteAgentSessionClient.TakeOverAsync(
+            transport,
+            fixture.OpenRequest("failed-takeover", AgentSessionOpenIntent.Status,
+                ScenarioFixture.DefaultOwner, 0, Guid.NewGuid().ToString("N")),
+            "22222222-2222-2222-2222-222222222222", TestContext.Current.CancellationToken));
+        Assert.True(runtime.IsFenced);
+        Assert.False(runtime.HasTerminated);
+        Assert.False(proxy.Chat.IsTerminal);
+        Assert.Equal(0, terminated);
+        Assert.Null(await fixture.TryRuntimeAsync("failed-takeover", 1));
+        var persisted = await fixture.ReadSessionAsync("failed-takeover");
+        Assert.Equal(0, persisted.GetProperty("ownership-generation").GetInt64());
+        Assert.Equal(runtime.Epoch.Value, persisted.GetProperty("runtime-epoch").GetGuid());
+        await Assert.ThrowsAnyAsync<Exception>(() => fixture.AcquireOwnerViewerAsync("failed-takeover"));
+        Assert.Equal(1, resource.DisposeCount);
+    }
+
+    private static CurrentSessionContext ChatContext(IAgentChat chat)
+    {
+        var requestField = typeof(AgentChat).GetField(
+            "request", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(requestField);
+        var request = requestField.GetValue(Assert.IsType<AgentChat>(chat));
+        Assert.NotNull(request);
+        var services = Assert.IsType<AgentServices>(request.GetType().GetProperty("AgentServices")!.GetValue(request));
+        return Assert.IsType<CurrentSessionContext>(services.CurrentSessionContext);
     }
 
     [Fact]
@@ -1521,6 +1638,7 @@ public sealed class RemoteAgentSessionScenarioTests
         private int disposeCount;
 
         internal bool IsDisposed => Volatile.Read(ref this.disposeCount) != 0;
+        internal int DisposeCount => Volatile.Read(ref this.disposeCount);
         internal Task Disposed => this.disposed.Task;
 
         public ValueTask DisposeAsync()
@@ -1528,6 +1646,19 @@ public sealed class RemoteAgentSessionScenarioTests
             if (Interlocked.Increment(ref this.disposeCount) == 1)
                 this.disposed.TrySetResult();
             return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class GatedOwnedProcess(TaskCompletionSource started, Task completion) : IAsyncDisposable
+    {
+        private int disposeCount;
+        internal int DisposeCount => Volatile.Read(ref this.disposeCount);
+
+        public async ValueTask DisposeAsync()
+        {
+            Interlocked.Increment(ref this.disposeCount);
+            started.TrySetResult();
+            await completion;
         }
     }
 
@@ -1576,6 +1707,23 @@ public sealed class RemoteAgentSessionScenarioTests
             new(DateTimeOffset.Parse("2026-09-14T00:00:00Z"));
         internal DeterministicTestChatClient Model { get; } = new();
         internal InMemoryAgentPersistenceStore Persistence { get; }
+        internal RunningAgentChatTable RunningChats => this.runningChats;
+        internal IAgentChat? RetainedChat(string sessionId)
+        {
+            var field = typeof(RunningAgentChatTable).GetField(
+                "_continueInBackgroundLeases", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            Assert.NotNull(field);
+            var leases = Assert.IsType<Dictionary<AgentSessionId, RunningAgentChatLease>>(field.GetValue(this.runningChats));
+            return leases.GetValueOrDefault(new AgentSessionId(sessionId))?.AgentChat;
+        }
+
+        internal async Task<RunningAgentChatLease> AcquireOwnerViewerAsync(string sessionId)
+            => await this.runningChats.AcquireAsync(new AcquireAgentChatRequest
+            {
+                AgentSessionId = new AgentSessionId(sessionId),
+                AgentSessionEntity = await this.ReadSessionAsync(sessionId),
+                EntityName = sessionId,
+            }, TestContext.Current.CancellationToken);
         internal ObservableTransportListener Listener { get; }
         internal string? DeniedSessionId { get; set; }
         internal bool EnforceStoredAuthorization { get; private set; }
