@@ -129,23 +129,42 @@
       }
     },
     "tools": {
-      "type": "array",
-      "items": {
-        "anyOf": [
-          {
-            "$ref": "#/$defs/mcpTool"
-          },
-          {
-            "$ref": "#/$defs/githubCliBuiltinToolsTool"
-          },
-          {
-            "$ref": "#/$defs/tool"
-          },
-          {
-            "$ref": "#/$defs/agentDefinitionTool"
+      "description": "Toolset selections, not callable-function parameter schemas. Accepts authored arrays or the SDK Save/ToJson name-keyed object representation. Kind selects exact ordinal runtime factories; names are display metadata except the exact chat-history configuration alias. Arbitrary custom identifiers remain open; schema validity does not guarantee host availability.",
+      "oneOf": [
+        {
+          "type": "array",
+          "items": {
+            "allOf": [
+              { "$ref": "#/$defs/toolSelection" },
+              {
+                "if": { "required": ["kind"], "properties": { "kind": { "const": "agent-definition" } } },
+                "then": { "$ref": "#/$defs/agentDefinitionTool" }
+              }
+            ]
           }
-        ]
-      }
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "allOf": [
+              { "$ref": "#/$defs/toolSelection" },
+              {
+                "if": { "required": ["kind"], "properties": { "kind": { "const": "agent-definition" } } },
+                "then": { "$ref": "#/$defs/mappedAgentDefinitionTool" }
+              }
+            ]
+          },
+          "patternProperties": {
+            "^$": {
+              "not": { "required": ["kind"], "properties": { "kind": { "const": "agent-definition" } } }
+            },
+            "^chat-history$": {
+              "if": { "not": { "required": ["kind"], "properties": { "kind": { "const": "mcp" } } } },
+              "then": { "$ref": "#/$defs/chatHistoryConfiguration" }
+            }
+          }
+        }
+      ]
     },
     "metadata": {
       "type": "object",
@@ -153,6 +172,156 @@
     }
   },
   "$defs": {
+    "toolSelection": {
+      "allOf": [
+        { "$ref": "#/$defs/tool" },
+        {
+          "if": { "required": ["kind"], "properties": { "kind": { "const": "mcp" } } },
+          "then": { "$ref": "#/$defs/mcpTool" }
+        },
+        {
+          "if": { "required": ["kind"], "properties": { "kind": { "const": "github-cli-builtin-tools" } } },
+          "then": { "$ref": "#/$defs/githubCliBuiltinToolsTool" }
+        },
+        {
+          "if": { "required": ["kind"], "properties": { "kind": { "const": "web_search" } } },
+          "then": { "$ref": "#/$defs/webSearchTool" }
+        },
+        {
+          "if": { "required": ["kind"], "properties": { "kind": { "const": "web_request" } } },
+          "then": { "$ref": "#/$defs/webRequestTool" }
+        },
+        {
+          "if": { "required": ["kind"], "properties": { "kind": { "const": "web" } } },
+          "then": { "$ref": "#/$defs/webTool" }
+        },
+        {
+          "if": { "required": ["kind"], "properties": { "kind": { "const": "filesystem" } } },
+          "then": { "$ref": "#/$defs/filesystemTool" }
+        },
+        {
+          "if": { "required": ["kind"], "properties": { "kind": { "const": "workspace-entity" } } },
+          "then": { "$ref": "#/$defs/workspaceEntityTool" }
+        },
+        {
+          "if": { "required": ["kind"], "properties": { "kind": { "const": "workspace-gui" } } },
+          "then": { "$ref": "#/$defs/workspaceGuiTool" }
+        },
+        {
+          "if": { "required": ["kind"], "properties": { "kind": { "const": "current-session" } } },
+          "then": { "$ref": "#/$defs/currentSessionTool" }
+        },
+        {
+          "if": { "required": ["kind"], "properties": { "kind": { "const": "agent-session" } } },
+          "then": { "$ref": "#/$defs/agentSessionTool" }
+        },
+        {
+          "if": { "required": ["kind"], "properties": { "kind": { "const": "chat-history" } } },
+          "then": { "$ref": "#/$defs/chatHistoryTool" }
+        },
+        {
+          "if": {
+            "required": ["name"],
+            "properties": { "name": { "const": "chat-history" } },
+            "not": { "required": ["kind"], "properties": { "kind": { "const": "mcp" } } }
+          },
+          "then": { "$ref": "#/$defs/chatHistoryConfiguration" }
+        }
+      ]
+    },
+    "ignoredToolsetOptions": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "No per-kind configuration switches are consumed by this toolset. Extension keys may be retained but are ignored."
+    },
+    "webSearchTool": {
+      "type": "object",
+      "required": ["kind"],
+      "description": "web_search: core-default web-search capability. No authored per-kind configuration is consumed; requires the host web-search implementation.",
+      "examples": [{ "kind": "web_search" }],
+      "properties": { "kind": { "const": "web_search" }, "options": { "$ref": "#/$defs/ignoredToolsetOptions" } }
+    },
+    "webRequestTool": {
+      "type": "object",
+      "required": ["kind"],
+      "description": "web_request: core-default web-request capability. No authored per-kind configuration is consumed; requires host HTTP access.",
+      "examples": [{ "kind": "web_request" }],
+      "properties": { "kind": { "const": "web_request" }, "options": { "$ref": "#/$defs/ignoredToolsetOptions" } }
+    },
+    "webTool": {
+      "type": "object",
+      "required": ["kind"],
+      "description": "web: core-default combination of web_search and web_request, with no additional authored configuration; requires the host web capabilities.",
+      "examples": [{ "kind": "web" }],
+      "properties": { "kind": { "const": "web" }, "options": { "$ref": "#/$defs/ignoredToolsetOptions" } }
+    },
+    "filesystemTool": {
+      "type": "object",
+      "required": ["kind"],
+      "description": "filesystem: core-default filesystem tools. Absent top-level connection uses in-memory edit history. A supplied connection is shared MongoDB provider JSON carried through the Phantom loader/serializer bridge, not an SDK connection. Malformed supplied configuration fails; no fallback. options.connection is rejected because it never configures the edit store. Requires host filesystem access; persistent storage additionally requires the selected MongoDB/container infrastructure.",
+      "examples": [
+        { "kind": "filesystem" },
+        { "kind": "filesystem", "connection": { "provider": "mongodb", "mongoProvider": "external", "database-name": "workspace", "collection-name": "edits", "connection-string": "mongodb://localhost" } }
+      ],
+      "properties": {
+        "kind": { "const": "filesystem" },
+        "connection": { "$ref": "https://schemas.workspaces.phantom.to/chat-history-provider.json" },
+        "options": {
+          "type": "object",
+          "additionalProperties": true,
+          "not": { "required": ["connection"] },
+          "description": "Other extension options are retained but ignored; configure persistence only with top-level connection."
+        }
+      }
+    },
+    "workspaceEntityTool": {
+      "type": "object",
+      "required": ["kind"],
+      "description": "workspace-entity: application-composed entity tools; requires host data access. No per-kind authored configuration is consumed; unavailable in a core-only host.",
+      "examples": [{ "kind": "workspace-entity" }],
+      "properties": { "kind": { "const": "workspace-entity" }, "options": { "$ref": "#/$defs/ignoredToolsetOptions" } }
+    },
+    "workspaceGuiTool": {
+      "type": "object",
+      "required": ["kind"],
+      "description": "workspace-gui: application-composed workspace navigation tools; requires a host-supplied GUI context provider. No per-kind authored configuration is consumed; unavailable in a core-only host.",
+      "examples": [{ "kind": "workspace-gui" }],
+      "properties": { "kind": { "const": "workspace-gui" }, "options": { "$ref": "#/$defs/ignoredToolsetOptions" } }
+    },
+    "currentSessionTool": {
+      "type": "object",
+      "required": ["kind"],
+      "description": "current-session: application-composed current-session tools; requires host data access and current-session context. No per-kind authored configuration is consumed.",
+      "examples": [{ "kind": "current-session" }],
+      "properties": { "kind": { "const": "current-session" }, "options": { "$ref": "#/$defs/ignoredToolsetOptions" } }
+    },
+    "agentSessionTool": {
+      "type": "object",
+      "required": ["kind"],
+      "description": "agent-session: application-composed child-session tools; requires a running-chat factory, current-session context and populated parent chat reference. No per-kind authored configuration is consumed. Direct kind only: not one of the seven baseline fixed resource names.",
+      "examples": [{ "kind": "agent-session" }],
+      "properties": { "kind": { "const": "agent-session" }, "options": { "$ref": "#/$defs/ignoredToolsetOptions" } }
+    },
+    "chatHistoryConfiguration": {
+      "type": "object",
+      "properties": {
+        "options": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "connection": { "$ref": "https://schemas.workspaces.phantom.to/chat-history-provider.json" }
+          }
+        }
+      }
+    },
+    "chatHistoryTool": {
+      "type": "object",
+      "required": ["kind"],
+      "description": "chat-history: special persistence configuration, not a callable toolset. Exact custom-tool kind OR name chat-history selects options.connection. Absent configuration uses in-memory persistence; runtime parsing failure also falls back to in-memory (authored malformed JSON is rejected by this schema). AgentChat separately suppresses kind attachment case-insensitively; named factories remain ordinal. Requires the selected provider infrastructure when persistent.",
+      "examples": [{ "kind": "chat-history" }],
+      "allOf": [{ "$ref": "#/$defs/chatHistoryConfiguration" }],
+      "properties": { "kind": { "const": "chat-history" } }
+    },
     "tool": {
       "type": "object",
       "additionalProperties": true,
@@ -162,7 +331,7 @@
         },
         "kind": {
           "type": "string",
-          "description": "Tool kind. Recognized provider-specific kinds include mcp, agent-definition, and github-cli-builtin-tools."
+          "description": "Exact ordinal runtime selection identifier; arbitrary custom kinds remain permitted. Ordinary names do not select built-ins."
         },
         "description": {
           "type": "string"
@@ -174,23 +343,25 @@
             "additionalProperties": true
           }
         }
-      },
-      "not": {
-        "properties": {
-          "kind": {
-            "enum": [
-              "github-cli-builtin-tools",
-              "mcp"
-            ]
-          }
-        },
-        "required": [
-          "kind"
-        ]
+      }
+    },
+    "mappedAgentDefinitionTool": {
+      "type": "object",
+      "description": "SDK name-keyed agent-definition serialization; the mapping key supplies the required name.",
+      "required": ["kind", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "agent-definition" },
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string", "minLength": 1 },
+        "options": { "type": "object", "maxProperties": 0, "description": "Empty SDK serialization metadata; dispatcher configuration uses definition or manifest-reference." },
+        "definition": { "$ref": "https://phantom-workspaces/schemas/agent-definition.json" },
+        "manifest-reference": { "$ref": "#/$defs/entityReference" }
       }
     },
     "mcpTool": {
       "type": "object",
+      "description": "Direct MCP server selection. Requires serverName and the typed SDK connection; preserves MCP transport/authentication behavior. Requires the host MCP transport and selected endpoint/provider. This is separate from manifest mcp-server-entity resolution.",
       "additionalProperties": true,
       "required": [
         "kind",
@@ -428,6 +599,10 @@
     "agentDefinitionTool": {
       "type": "object",
       "description": "A named sub-agent that a dispatcher can instantiate.",
+      "examples": [
+        { "kind": "agent-definition", "name": "helper", "description": "Referenced helper", "manifest-reference": ["agent-manifests", "helper"] },
+        { "kind": "agent-definition", "name": "helper", "description": "Inline helper", "definition": { "kind": "prompt", "name": "helper", "model": { "id": "echo", "provider": "echo" } } }
+      ],
       "required": [
         "kind",
         "name",
@@ -504,6 +679,8 @@
     },
     "githubCliBuiltinToolsTool": {
       "type": "object",
+      "description": "Copilot CLI provider-policy selection, not a generic callable toolset. Preserves available/excluded selectors, built-in/custom/MCP prefixes and isolation. Requires a host Copilot runtime; default client-mode is copilot-cli, while empty mode requires an available-tools selector.",
+      "examples": [{ "kind": "github-cli-builtin-tools", "client-mode": "copilot-cli" }],
       "required": [
         "kind"
       ],
@@ -532,6 +709,8 @@
           "$ref": "#/$defs/builtinToolSet"
         },
         "client-mode": {
+          "default": "copilot-cli",
+          "description": "Copilot runtime mode. Empty mode must explicitly select available tools.",
           "enum": [
             "empty",
             "copilot-cli"

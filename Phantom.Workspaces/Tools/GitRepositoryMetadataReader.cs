@@ -48,7 +48,7 @@ public static class GitRepositoryMetadataReader
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var rootFullPath = Path.GetFullPath(root);
 
-        if (IsUnderAnyExclude(rootFullPath, excludes))
+        if (GitWorkspacePath.IsRecycled(rootFullPath) || IsUnderAnyExclude(rootFullPath, excludes))
         {
             logger?.LogDebug("Skipping excluded directory: {Path}", rootFullPath);
             yield break;
@@ -97,7 +97,7 @@ public static class GitRepositoryMetadataReader
                     continue;
                 }
 
-                if (IsUnderAnyExclude(subdirectory, excludes))
+                if (GitWorkspacePath.IsRecycled(subdirectory) || IsUnderAnyExclude(subdirectory, excludes))
                 {
                     logger?.LogDebug("Skipping excluded directory: {Path}", subdirectory);
                     continue;

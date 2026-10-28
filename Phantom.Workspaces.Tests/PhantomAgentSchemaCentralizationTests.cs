@@ -28,11 +28,21 @@ public sealed class PhantomAgentSchemaCentralizationTests
     public void Production_DoesNotCallAgentSchemaFromJsonDirectly_OutsidePhantomAgentSchema()
     {
         var root = FindRepositoryRoot();
+        var violations = FindViolations(new RepositorySourceInventory(root));
 
+        Assert.True(
+            violations.Count == 0,
+            "Production code must load AgentSchema definitions/manifests/tools only through "
+            + "PhantomAgentSchema (#1416). Offending sites:\n" + string.Join("\n", violations));
+    }
+
+    internal static IReadOnlyList<string> FindViolations(RepositorySourceInventory inventory)
+    {
+        var root = inventory.Root;
         var violations = new List<string>();
-        foreach (var file in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories))
+        foreach (var file in inventory.SourceFiles)
         {
-            if (IsExcluded(root, file))
+            if (IsExcluded(root, file) || inventory.IsTestSource(file))
             {
                 continue;
             }
@@ -47,10 +57,7 @@ public sealed class PhantomAgentSchemaCentralizationTests
             }
         }
 
-        Assert.True(
-            violations.Count == 0,
-            "Production code must load AgentSchema definitions/manifests/tools only through "
-            + "PhantomAgentSchema (#1416). Offending sites:\n" + string.Join("\n", violations));
+        return violations;
     }
 
     private static bool IsExcluded(string root, string file)
@@ -72,11 +79,7 @@ public sealed class PhantomAgentSchemaCentralizationTests
             return true;
         }
 
-        var projectSegment = relative.Split('/', 2)[0];
-        return projectSegment.EndsWith(".Tests", StringComparison.Ordinal)
-            || projectSegment.EndsWith(".Test", StringComparison.Ordinal)
-            || projectSegment.EndsWith(".WebViewTests", StringComparison.Ordinal)
-            || projectSegment.EndsWith(".IntegrationTests", StringComparison.Ordinal);
+        return false;
     }
 
     private static string FindRepositoryRoot()

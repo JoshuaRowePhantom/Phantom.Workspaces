@@ -8,6 +8,14 @@ public sealed class SolutionFileTests
     public void SolutionFile_AllProjectReferenceTargets_AreListedInSolution()
     {
         var root = FindRepositoryRoot();
+        var missing = FindMissingProjectReferences(new RepositorySourceInventory(root));
+        Assert.True(missing.Count == 0,
+            "Repository-owned ProjectReference targets must be listed in the solution:\n" + string.Join("\n", missing));
+    }
+
+    internal static IReadOnlyList<string> FindMissingProjectReferences(RepositorySourceInventory inventory)
+    {
+        var root = inventory.Root;
         var solutionPath = Path.Combine(root, "Phantom.Workspaces.slnx");
         var solutionProjectPaths = XDocument.Load(solutionPath)
             .Descendants("Project")
@@ -15,7 +23,8 @@ public sealed class SolutionFileTests
             .Where(path => path.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var projectPath in Directory.EnumerateFiles(root, "*.csproj", SearchOption.AllDirectories))
+        var missing = new List<string>();
+        foreach (var projectPath in inventory.ProjectFiles)
         {
             var projectDirectory = Path.GetDirectoryName(projectPath)!;
             var project = XDocument.Load(projectPath);
@@ -28,9 +37,15 @@ public sealed class SolutionFileTests
                     root,
                     Path.GetFullPath(Path.Combine(projectDirectory, reference!)));
 
-                Assert.Contains(NormalizeRelativePath(referencedPath), solutionProjectPaths);
+                var normalized = NormalizeRelativePath(referencedPath);
+                if (!solutionProjectPaths.Contains(normalized))
+                {
+                    missing.Add(normalized);
+                }
             }
         }
+
+        return missing;
     }
 
     private static string NormalizeRelativePath(string path)

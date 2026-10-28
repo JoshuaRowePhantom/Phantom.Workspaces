@@ -83,7 +83,7 @@ Parameter values are substituted into `model.options.additionalProperties` strin
 | `kind` | `"tool"` or `"model"`. |
 | `id` | Resolution strategy. `"fixed"` for built-in toolsets; `"mcp-server-entity"` to resolve an `mcp-server` entity by name. |
 | `name` | For `"fixed"`: the built-in toolset name. For `"mcp-server-entity"`: the entity name of the MCP server (e.g., `"github"`). |
-| `options` | Optional tool-specific configuration. |
+| `options` | Extension options; baseline fixed/MCP-entity resolvers do not forward them. Configure tools in `template.tools` instead. |
 
 ---
 
@@ -229,7 +229,7 @@ Safety-sensitive Copilot SDK agents can disable the SDK's ambient Copilot CLI to
 
 ## Built-in Tools
 
-Built-in tools are referenced in `manifest.resources[]` with `"id": "fixed"` and the corresponding `name`, or in `template.tools[]` with `"kind": ""` and the toolset name.
+Built-in toolsets are referenced in `manifest.resources[]` with `"kind": "tool"`, `"id": "fixed"` and the corresponding `name`, or selected directly in `template.tools[]` with the exact toolset `kind` (for example `{"kind":"filesystem","name":"files"}`). Ordinary display names do not select factories. Unknown custom kinds, names and resource strategies remain open; schema validity does not guarantee host availability.
 
 <!-- NOTE: Update docs/JsonEntities/documentation/agent-configuration.md when built-in tool names change. -->
 
@@ -237,10 +237,22 @@ Built-in tools are referenced in `manifest.resources[]` with `"id": "fixed"` and
 |---|---|
 | `workspace-entity` | Read and write workspace entities via the data-access-layer. Core toolset for workspace-aware agents. |
 | `workspace-gui` | Open/close panes and tabs, and invoke entity shortcuts in the desktop GUI. Only meaningful in the desktop host. |
-| `filesystem` | Read and write files on the local filesystem via an MCP-backed service. Supports optional `connection` configuration for remote edit stores. |
+| `current-session` | Current-session context; requires application data access and session context. |
+| `filesystem` | Read and write files through the filesystem service. Optional top-level provider `connection` configures edit history through the Phantom loader/save bridge; absence uses in-memory storage. `options.connection` is rejected, and resource options are not forwarded. |
 | `web_search` | Perform web searches and return results. |
 | `web_request` | Fetch arbitrary HTTP URLs and return their content. |
 | `web` | Combined toolset: equivalent to both `web_search` and `web_request`. |
+
+These are the seven baseline fixed names. Direct `kind: agent-session` is also
+registered by the application, requiring a running-chat factory, current-session
+context and parent chat reference; it is not a baseline fixed name. `shell` is
+not registered. `chat-history` is non-callable persistence configuration selected
+by exact custom-tool kind or name and consumes `options.connection`.
+
+See Agent Definition Schema and Agent Manifest Schema documentation for the
+complete typed contracts, shared MongoDB provider constraints, host requirements,
+defaults, failure behavior and extension examples. Unresolved resources retain
+a placeholder and diagnostic while other tools load.
 
 ---
 

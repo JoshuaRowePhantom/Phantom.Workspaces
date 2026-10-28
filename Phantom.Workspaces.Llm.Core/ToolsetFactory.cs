@@ -3,7 +3,6 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm.Interfaces;
-using System.Text.Json;
 
 namespace Phantom.Workspaces.Llm;
 
@@ -226,12 +225,7 @@ public sealed class ToolsetFactory : IToolsetFactory
         AgentSchema.Tool tool,
         AgentServices agentServices)
     {
-        var connection = (tool as AgentSchema.CustomTool)?.Connection;
-        var connectionJson = connection switch
-        {
-            null => null,
-            _ => JsonSerializer.Serialize(connection),
-        };
+        var connectionJson = GetFilesystemConnectionJson(tool);
 
         AIContextProvider toolset = new FilesystemServiceContextProvider(
             editStoreConnectionJson: connectionJson,
@@ -239,6 +233,18 @@ public sealed class ToolsetFactory : IToolsetFactory
             trustContext: agentServices.ExecutionTrustContext as Trust.AgentExecutionTrustContext,
             processExecutor: agentServices.ProcessExecutor as Processes.IProcessExecutor);
         return Task.FromResult<AIContextProvider?>(toolset);
+    }
+
+    internal static string? GetFilesystemConnectionJson(AgentSchema.Tool tool)
+    {
+        if (tool is AgentSchema.CustomTool customTool
+            && (customTool.Connection is not null || customTool.Options?.ContainsKey("connection") == true))
+        {
+            throw new InvalidOperationException(
+                "Filesystem persistence requires FilesystemTool.EditStoreConnection (authored as top-level connection), not an SDK connection or options.connection.");
+        }
+
+        return (tool as FilesystemTool)?.EditStoreConnectionJson;
     }
 
     public static IToolsetFactory Combine(params IToolsetFactory[] factories)

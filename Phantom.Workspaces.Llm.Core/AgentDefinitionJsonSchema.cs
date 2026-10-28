@@ -16,6 +16,7 @@ public static class AgentDefinitionJsonSchema
                            ?? throw new InvalidOperationException($"Embedded schema resource '{ResourceName}' was not found.");
         using var reader = new StreamReader(stream);
         var schemaText = reader.ReadToEnd();
+        SchemaRegistry.Global.Register(ChatHistoryProviderDefinitionJsonSchema.Value);
         return JsonSchema.FromText(schemaText);
     }
 }

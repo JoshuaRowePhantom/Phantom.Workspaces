@@ -55,6 +55,14 @@
     },
     "git": {
       "$ref": "#/$defs/git"
+    },
+    "git-workspace-hidden-reason": {
+      "enum": ["missing", "recycled"],
+      "description": "Last system visibility transition, retained to respect manual unhide."
+    },
+    "git-workspace-visibility-intent": {
+      "enum": ["missing", "recycled", "visible"],
+      "description": "Pending system visibility reconciliation; retained across partial writes until completed."
     }
   }
 }
