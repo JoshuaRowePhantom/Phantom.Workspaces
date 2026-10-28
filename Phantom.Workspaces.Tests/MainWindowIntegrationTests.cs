@@ -508,6 +508,100 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task AuthorizationHost_ScrollableRequests_PreservesScrollAcrossPagesRevisionsAndReopen()
+    {
+        await using var access = Services.Access.AccessHostServices.Create(new Services.Access.AccessHostOptions
+        {
+            PlatformSecretStore = new NullPlatformSecretStore(),
+            Dispatch = action => action(),
+            ReleaseMemoryFilePath = Path.Combine(Environment.CurrentDirectory, ".nonexistent-access-admin", "scroll.json"),
+        });
+        await using var model = CreateTestMainWindowViewModel();
+        await model.InitializeAsync();
+        var owner = new MainWindow(model);
+        await using var popup = new AuthorizationRequestsPopupViewModel { Rows = access.AuthorizationRows };
+        owner.AttachAccessHost(access, popup);
+        owner.Show();
+        var registry = Assert.IsType<Services.Authorization.UserAuthorizationRegistry>(access.AuthorizationRegistry);
+        var snapshots = Enumerable.Range(0, 30).Select(_ => AuthorizationRequestRowsViewModelTests.Snapshot() with
+        {
+            Identifier = new() { Value = Guid.NewGuid() },
+        }).ToArray();
+        foreach (var snapshot in snapshots) { registry.Add(snapshot); }
+        try
+        {
+            var key = owner.FindControl<Button>("AuthorizationKey")!;
+            key.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            await owner.AccessAdministrationReady;
+            var host = Assert.IsType<AccessAdministrationWindow>(owner.LastAccessAdministrationWindow);
+            host.UpdateLayout();
+            var control = Assert.Single(host.GetVisualDescendants().OfType<Controls.AuthorizationRequestRowsControl>());
+            var scroll = control.FindControl<ScrollViewer>("RowsScroller")!;
+            var row = access.AuthorizationRows.Rows[5];
+            row.IsDetailsExpanded = true;
+            var source = control.GetVisualDescendants().OfType<ComboBox>()
+                .Single(combo => ReferenceEquals(combo.DataContext, row)
+                    && Avalonia.Automation.AutomationProperties.GetName(combo) == "Credential source");
+            Assert.True(source.Focus());
+            host.UpdateLayout();
+            scroll.Offset = new Avalonia.Vector(0, 180);
+            host.UpdateLayout();
+            var offset = scroll.Offset;
+            Assert.True(offset.Y > 0);
+            Assert.Equal(offset, access.AuthorizationRows.Presentation.ScrollOffset);
+            var selectedSource = row.SelectedSource;
+            var selectedMemory = row.SelectedMemory;
+            host.SelectPage(CredentialAccessPage.SavedApprovals);
+            host.UpdateLayout();
+            host.SelectPage(CredentialAccessPage.Requests);
+            host.UpdateLayout();
+            Assert.Equal(offset, scroll.Offset);
+            Assert.True(source.Focus());
+            host.UpdateLayout();
+            offset = scroll.Offset;
+            Assert.True(offset.Y > 0);
+            Assert.True(registry.UpdateSources(row.Identifier, row.Revision, snapshots[5].SourceOptions
+                .Select(option => option with { Usability = Llm.Interfaces.Access.CredentialSourceUsability.AcquisitionRequired }).ToArray()));
+            host.UpdateLayout();
+            Assert.True(source.IsFocused);
+            Assert.Equal(offset, scroll.Offset);
+            Assert.Equal(selectedSource, row.SelectedSource);
+            Assert.Equal(selectedMemory, row.SelectedMemory);
+            Assert.True(row.IsDetailsExpanded);
+            Assert.Equal(snapshots[5].Revision + 1, row.Revision);
+            Assert.True(key.Focus());
+            registry.Add(AuthorizationRequestRowsViewModelTests.Snapshot() with { Identifier = new() { Value = Guid.NewGuid() } });
+            host.UpdateLayout();
+            Assert.True(key.IsFocused);
+            Assert.Equal(offset, scroll.Offset);
+            host.Close();
+            await owner.DisposeClosedAccessAdministrationAsync();
+            key.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            await owner.AccessAdministrationReady;
+            var reopened = Assert.IsType<AccessAdministrationWindow>(owner.LastAccessAdministrationWindow);
+            reopened.UpdateLayout();
+            var reopenedControl = Assert.Single(reopened.GetVisualDescendants().OfType<Controls.AuthorizationRequestRowsControl>());
+            Assert.NotSame(host, reopened);
+            Assert.Same(access.AuthorizationRows, reopenedControl.DataContext);
+            Assert.Same(row, reopened.RequestRows.Rows[5]);
+            Assert.Equal(offset, reopenedControl.FindControl<ScrollViewer>("RowsScroller")!.Offset);
+            Assert.True(row.IsDetailsExpanded);
+            Assert.Equal(selectedSource, row.SelectedSource);
+            Assert.Equal(selectedMemory, row.SelectedMemory);
+            Assert.True(key.Focus());
+            Assert.True(registry.UpdateSources(row.Identifier, row.Revision, snapshots[5].SourceOptions));
+            reopened.UpdateLayout();
+            Assert.True(key.IsFocused);
+            Assert.Equal(offset, reopenedControl.FindControl<ScrollViewer>("RowsScroller")!.Offset);
+        }
+        finally
+        {
+            await owner.DisposeAccessAdministrationAsync();
+            await CloseWindowAsync(owner);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task AuthorizationHost_AdministrationLoadFailure_RendersSafeStatusAndPreservesSharedRows()
     {
         var path = Path.Combine(Environment.CurrentDirectory, ".scratch", $"access-host-{Guid.NewGuid():N}.json");
