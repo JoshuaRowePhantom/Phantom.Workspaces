@@ -1,6 +1,7 @@
 using System;
 using System.ComponentModel;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -41,6 +42,17 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
     private string? remoteProfileDisplayName;
     private bool hasModalsNeedingInput;
     private bool disposed;
+    private CancellationTokenSource startupCancellation = new();
+
+    public AgentStartupProgress StartupProgress { get; private set; } = new();
+    internal CancellationToken StartupCancellation => this.startupCancellation.Token;
+    internal void CancelStartup()
+    {
+        this.startupCancellation.Cancel();
+        this.StartupProgress.Dispose();
+        if (this.State == AgentTabState.Loading)
+            this.SetFailed("Session startup cancelled. Retry to start a new attempt.");
+    }
 
     public AgentSessionWorkspaceTabViewModel()
         : this(TimeProvider.System)
@@ -168,6 +180,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
 
         // Publish the ready surface as one coherent state transition. Consumers never observe a
         // Ready tab whose Agent and remote metadata describe different sessions.
+        this.StartupProgress.Dispose();
         this.loggerFactory = factory;
         this.agent = agentViewModel;
         this.isRemote = agentViewModel.AgentChat is RemoteAgentChat or RemoteAgentChatProxy;
@@ -246,6 +259,12 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
     /// </summary>
     internal async Task ResetForRecreationAsync()
     {
+        this.startupCancellation.Cancel();
+        this.StartupProgress.Dispose();
+        this.startupCancellation.Dispose();
+        this.startupCancellation = new CancellationTokenSource();
+        this.StartupProgress = new AgentStartupProgress();
+        this.RaisePropertyChanged(nameof(this.StartupProgress));
         if (this.agent is not null)
         {
             this.agent.PropertyChanged -= this.OnAgentPropertyChanged;
@@ -286,6 +305,12 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
         if (this.disposed || this.State != AgentTabState.Failed)
             throw new InvalidOperationException("Only a failed open tab can be retried.");
         this.LoadError = null;
+        this.startupCancellation.Cancel();
+        this.startupCancellation.Dispose();
+        this.startupCancellation = new CancellationTokenSource();
+        this.StartupProgress.Dispose();
+        this.StartupProgress = new AgentStartupProgress();
+        this.RaisePropertyChanged(nameof(this.StartupProgress));
         this.remoteProfileDisplayName = null;
         this.State = AgentTabState.Loading;
     }
@@ -472,6 +497,8 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
 
     public override async ValueTask DisposeAsync()
     {
+        this.startupCancellation.Cancel();
+        this.StartupProgress.Dispose();
         this.disposed = true;
         if (this.agent is not null)
         {

@@ -13,6 +13,40 @@ namespace Phantom.Workspaces.Tests;
 // prefixes, the ${SECRET:Name} / ${ENV_VAR} semantics, and the OAuth connection fields.
 public sealed class SchemaDocumentationTests
 {
+    [Fact]
+    public void AgentSchemas_BuiltinSelections_DocumentInventoryAndRuntimeBoundaries()
+    {
+        var definition = LoadSchema(LlmCoreAssembly, "Phantom.Workspaces.Llm.Core.JsonSchemas.AgentDefinition.json");
+        var manifest = LoadSchema(LlmCoreAssembly, "Phantom.Workspaces.Llm.Core.JsonSchemas.agent-manifest.json");
+        foreach (var kind in new[] { "web_search", "web_request", "web", "filesystem", "workspace-entity",
+                     "workspace-gui", "current-session", "agent-session", "chat-history" })
+        {
+            var schema = definition.GetProperty("$defs").EnumerateObject()
+                .Select(property => property.Value)
+                .Single(value => value.TryGetProperty("properties", out var properties)
+                    && properties.TryGetProperty("kind", out var discriminator)
+                    && discriminator.TryGetProperty("const", out var constant)
+                    && constant.GetString() == kind);
+            Assert.False(string.IsNullOrWhiteSpace(schema.GetProperty("description").GetString()));
+            Assert.NotEmpty(schema.GetProperty("examples").EnumerateArray());
+        }
+
+        var resource = manifest.GetProperty("$defs").GetProperty("toolResource");
+        var description = resource.GetProperty("description").GetString()!;
+        foreach (var name in FixedToolResources.DefaultNames)
+        {
+            Assert.Contains(name, description, StringComparison.Ordinal);
+        }
+        Assert.Contains("not forwarded", resource.GetProperty("properties").GetProperty("options")
+            .GetProperty("description").GetString(), StringComparison.Ordinal);
+        Assert.Contains("diagnostic", resource.GetProperty("properties").GetProperty("id")
+            .GetProperty("description").GetString(), StringComparison.Ordinal);
+        Assert.Contains("GUI context", definition.GetProperty("$defs").GetProperty("workspaceGuiTool")
+            .GetProperty("description").GetString(), StringComparison.Ordinal);
+        Assert.Contains("in-memory", definition.GetProperty("$defs").GetProperty("filesystemTool")
+            .GetProperty("description").GetString(), StringComparison.Ordinal);
+    }
+
     private static readonly Assembly LlmCoreAssembly = typeof(AgentManifestJsonSchema).Assembly;
     private static readonly Assembly DataCoreAssembly = typeof(IDataAccessLayer).Assembly;
 

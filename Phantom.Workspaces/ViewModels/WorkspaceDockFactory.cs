@@ -170,6 +170,32 @@ public class WorkspaceDockFactory : Factory
         return root;
     }
 
+    private readonly HashSet<IDockable> committedCloses = [];
+
+    internal void CommitTabClose(WorkspaceDocument document)
+    {
+        this.committedCloses.Add(document);
+        try
+        {
+            this.CloseDockable(document);
+        }
+        finally
+        {
+            this.committedCloses.Remove(document);
+        }
+    }
+
+    public override bool OnDockableClosing(IDockable? dockable)
+    {
+        if (dockable is WorkspaceDocument { TabViewModel: AgentSessionWorkspaceTabViewModel tab }
+            && !this.committedCloses.Contains(dockable))
+        {
+            _ = mainWindowViewModel.RequestCloseTabAsync(tab);
+            return false;
+        }
+        return base.OnDockableClosing(dockable);
+    }
+
     public override void OnDockableClosed(IDockable? dockable)
     {
         base.OnDockableClosed(dockable);

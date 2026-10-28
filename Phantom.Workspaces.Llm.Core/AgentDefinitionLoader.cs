@@ -90,13 +90,17 @@ public static class AgentDefinitionLoader
         }
 
         using var jsonDocument = JsonDocument.Parse(content);
-        if (!jsonDocument.RootElement.TryGetProperty("tools", out var toolsElement)
-            || toolsElement.ValueKind != JsonValueKind.Array)
+        if (!jsonDocument.RootElement.TryGetProperty("tools", out var toolsElement))
         {
             return agent;
         }
 
-        var rawTools = toolsElement.EnumerateArray().ToArray();
+        var rawTools = toolsElement.ValueKind switch
+        {
+            JsonValueKind.Array => toolsElement.EnumerateArray().ToArray(),
+            JsonValueKind.Object => toolsElement.EnumerateObject().Select(property => property.Value).ToArray(),
+            _ => [],
+        };
         for (var i = 0; i < rawTools.Length && i < promptAgent.Tools.Count; i++)
         {
             var rawTool = rawTools[i];
@@ -184,8 +188,7 @@ public static class AgentDefinitionLoader
     {
         try
         {
-            return PhantomAgentSchema.AgentDefinitionFromYaml(content)
-                ?? throw new InvalidOperationException("Failed to deserialize agent definition from YAML.");
+            return ParseJsonAgent(PhantomAgentSchema.YamlToJson(content), sourceLabel);
         }
         catch (YamlException ex)
         {

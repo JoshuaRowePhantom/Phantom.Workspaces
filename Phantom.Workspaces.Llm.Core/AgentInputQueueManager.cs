@@ -34,8 +34,37 @@ public sealed class AgentInputQueueManager
     private readonly Dictionary<string, string> queueNames = new(StringComparer.Ordinal);
     private long aggregateRevision;
     private int mutationDepth;
+    private bool sealedForViewerClose;
+    private bool dequeuedWork;
+    internal bool HasDequeuedWork
+    {
+        get { lock (this.syncLock) return this.dequeuedWork; }
+    }
+
+    internal bool TrySealIdle(Func<bool> hasOtherActivity)
+    {
+        lock (this.syncLock)
+        {
+            if (this.dequeuedWork || this.inputQueues.Any(queue => queue.Items.Count != 0)
+                || hasOtherActivity())
+                return false;
+            this.sealedForViewerClose = true;
+            return true;
+        }
+    }
+
+    internal void CompleteDequeuedWork()
+    {
+        lock (this.syncLock)
+            this.dequeuedWork = false;
+    }
 
     internal object SyncRoot => this.syncLock;
+    internal void ThrowIfViewerClosed()
+    {
+        lock (this.syncLock)
+            ObjectDisposedException.ThrowIf(this.sealedForViewerClose, this);
+    }
     internal event EventHandler? MutationCompleted;
 
     public event EventHandler<QueuePublishedEventArgs>? QueuePublished;
@@ -173,6 +202,7 @@ public sealed class AgentInputQueueManager
 
         return this.Mutate(() =>
         {
+            ObjectDisposedException.ThrowIf(this.sealedForViewerClose, this);
             this.RegisterInputQueue(queue);
             var beforeCount = queue.Items.Count;
             var result = queue.Enqueue(items);
@@ -278,6 +308,7 @@ public sealed class AgentInputQueueManager
                 return (Applied: false, Item: (AgentInputItem)null!);
             }
 
+            this.dequeuedWork = true;
             this.QueuePublished?.Invoke(
                 this,
                 new QueuePublishedEventArgs

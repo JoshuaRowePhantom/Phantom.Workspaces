@@ -242,6 +242,16 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
                 await attachment.ReleaseExplicitlyAsync().ConfigureAwait(false);
                 return;
             }
+            if (command is DetachIfIdleCommand)
+            {
+                if (!await attachment.TryReleaseIdleAsync(command).ConfigureAwait(false))
+                    await attachment.PublishAsync(new CommandCompletedEvent
+                    {
+                        CommandId = command.CommandId,
+                        Result = JsonSerializer.SerializeToElement(false),
+                    }, command.CorrelationId, ct).ConfigureAwait(false);
+                return;
+            }
             if (command is OpenSubagentCommand childCommand)
                 await this.AuthorizeSubagentAsync(peer, runtime, childCommand, ct).ConfigureAwait(false);
             var result = await runtime.ExecuteCommandOnceAsync(

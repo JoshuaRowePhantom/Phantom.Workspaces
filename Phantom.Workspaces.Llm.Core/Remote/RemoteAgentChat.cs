@@ -213,6 +213,7 @@ public sealed class RemoteAgentChat : IAgentChat
         {
             await this.client.DetachAsync(ct).ConfigureAwait(false);
         }
+
         catch (Exception exception)
         {
             primaryFailure = exception;
@@ -232,6 +233,9 @@ public sealed class RemoteAgentChat : IAgentChat
         if (primaryFailure is not null)
             ExceptionDispatchInfo.Capture(primaryFailure).Throw();
     }
+
+    public Task<bool> TryDetachIdleAsync(CancellationToken ct = default, bool keepAttached = false)
+        => this.client.TryDetachIdleAsync(ct, keepAttached);
 
     public object? GetService(Type serviceType) => null;
 

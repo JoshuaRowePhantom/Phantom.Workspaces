@@ -213,7 +213,7 @@ public sealed class OpenAgentSessionShortcutHandlerTests
                 if (tabs.Any(tab => tab.State == AgentTabState.Ready)) ready.TrySetResult();
                 return Task.CompletedTask;
             },
-            TimeSpan.FromSeconds(30), clock, TimeSpan.FromSeconds(5));
+            clock, TimeSpan.FromSeconds(5));
         Assert.True(await handler.Handle(viewModel, Shortcut.Open, session!));
         await stalled.ReadStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
         clock.Advance(TimeSpan.FromSeconds(5));
@@ -309,7 +309,7 @@ public sealed class OpenAgentSessionShortcutHandlerTests
     }
 
     [AvaloniaFact(Timeout = 30_000)]
-    public async Task AgentManifestSessionLauncher_RemoteAcquisitionStalls_ReportsStageAndDisposesLateLease()
+    public async Task AgentManifestSessionLauncher_UserWaitExceedsFormerDeadline_PolicyCloseCancelsAndDisposesLateLeaseOnce()
     {
         await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
@@ -344,6 +344,11 @@ public sealed class OpenAgentSessionShortcutHandlerTests
         var completed = new TaskCompletionSource<(RunningAgentChatLease, ObservableLoggerFactory)>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var disposed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var disposalCount = 0;
+        var cancellation = tab.StartupCancellation;
+        await viewModel.OpenTabAsync(tab);
+        var closeDecision = new StartupCloseDecisionProvider();
+        viewModel.AgentSessionCloseDecisionProvider = closeDecision;
         await using var handler = new OpenAgentSessionShortcutHandler(
             new AgentSessionShortcutContext(),
             MainWindowIntegrationTests.CreateLocalTrustedExecutorSelector(),
@@ -355,26 +360,70 @@ public sealed class OpenAgentSessionShortcutHandlerTests
                 entered.TrySetResult();
                 return completed.Task;
             }, session!, tab, TaskScheduler.Default, CancellationToken.None,
-            TimeSpan.FromSeconds(5), clock);
+            clock);
         await entered.Task;
-        clock.Advance(TimeSpan.FromSeconds(5));
+        clock.Advance(TimeSpan.FromHours(1));
+        Assert.False(initialize.IsCompleted);
+        Assert.Equal(AgentTabState.Loading, tab.State);
+        Assert.False(await viewModel.RequestCloseTabAsync(tab));
+        Assert.False(cancellation.IsCancellationRequested);
+        Assert.False(initialize.IsCompleted);
+        Assert.Contains(tab, viewModel.WorkspacePanes.SelectMany(pane => pane.Tabs));
+        closeDecision.Decision = AgentSessionCloseDecision.Terminate;
+        Assert.True(await viewModel.RequestCloseTabAsync(tab));
+        Assert.True(cancellation.IsCancellationRequested);
+        Assert.DoesNotContain(tab, viewModel.WorkspacePanes.SelectMany(pane => pane.Tabs));
         await initialize;
-        Assert.Equal(AgentTabState.Failed, tab.State);
-        Assert.Contains("remote-flight-chat-acquisition", tab.LoadError);
         var lease = new RunningAgentChatLease(
             new AgentSessionId("late-lease"), null!, () =>
             {
+                Interlocked.Increment(ref disposalCount);
                 disposed.TrySetResult();
                 return ValueTask.CompletedTask;
             });
         completed.TrySetResult((lease, new ObservableLoggerFactory()));
         await disposed.Task.WaitAsync(TestContext.Current.CancellationToken);
-        Assert.Equal(AgentTabState.Failed, tab.State);
+        Assert.Equal(AgentTabState.Loading, tab.State);
         Assert.Null(tab.Lease);
+        await tab.DisposeAsync();
+        Assert.Equal(1, disposalCount);
+    }
+
+    private sealed class StartupCloseDecisionProvider : IAgentSessionCloseDecisionProvider
+    {
+        internal AgentSessionCloseDecision Decision { get; set; } = AgentSessionCloseDecision.Cancel;
+        public Task<AgentSessionCloseDecision> ChooseAsync(string sessionName, CancellationToken cancellationToken)
+            => Task.FromResult(this.Decision);
+    }
+
+    [AvaloniaFact]
+    public async Task StartupCancellationAction_QueuedOldAttempt_CannotCancelReplacementAttempt()
+    {
+        await using var main = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await using var tab = new AgentSessionWorkspaceTabViewModel { Id = "stale-startup", Title = "Startup" };
+        Action? posted = null;
+        await using var handler = new OpenAgentSessionShortcutHandler(
+            new AgentSessionShortcutContext(),
+            MainWindowIntegrationTests.CreateLocalTrustedExecutorSelector(),
+            MainWindowIntegrationTests.CreateTestRunningAgentChatTable(),
+            new AgentSessionOwnerDecisionProvider(), null,
+            action => { posted = action; return Task.CompletedTask; });
+        handler.CreateStartupCancellationAction(main, tab)();
+        var oldAction = Assert.IsType<Action>(posted);
+        tab.CancelStartup();
+        tab.ResetFailedLoading();
+        var currentCancellation = tab.StartupCancellation;
+        oldAction();
+        Assert.False(currentCancellation.IsCancellationRequested);
+        Assert.Equal(AgentTabState.Loading, tab.State);
+        handler.CreateStartupCancellationAction(main, tab)();
+        Assert.IsType<Action>(posted)();
+        Assert.True(currentCancellation.IsCancellationRequested);
+        Assert.Equal(AgentTabState.Failed, tab.State);
     }
 
     [AvaloniaFact(Timeout = 30_000)]
-    public async Task Handle_InitializationPublicationStalls_ShowsBoundedFailureAndNoLateReady()
+    public async Task Handle_InitializationPublicationExceedsFormerDeadline_RemainsInitializing()
     {
         await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
@@ -426,20 +475,16 @@ public sealed class OpenAgentSessionShortcutHandlerTests
                     .Any(tab => tab.State == AgentTabState.Ready))
                     ready.TrySetResult();
             },
-            TimeSpan.FromSeconds(5), clock);
+            clock);
         Assert.True(await handler.Handle(viewModel, Shortcut.Open, session!));
         await waiting.Task;
-        clock.Advance(TimeSpan.FromSeconds(5));
-        await failed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        clock.Advance(TimeSpan.FromHours(1));
         var tab = Assert.Single(viewModel.WorkspacePanes.SelectMany(pane => pane.Tabs)
             .OfType<AgentSessionWorkspaceTabViewModel>());
-        Assert.Equal(AgentTabState.Failed, tab.State);
-        Assert.Contains("timed out at", tab.LoadError);
+        Assert.Equal(AgentTabState.Loading, tab.State);
+        Assert.False(failed.Task.IsCompleted);
         Assert.Null(tab.Agent);
         release.TrySetResult();
-        Assert.Equal(AgentTabState.Failed, tab.State);
-        Assert.Null(tab.Lease);
-        Assert.True(await handler.Handle(viewModel, Shortcut.Open, session!));
         await ready.Task.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Equal(AgentTabState.Ready, tab.State);
     }

@@ -188,6 +188,11 @@ internal sealed record SetContinueInBackgroundCommand : AgentSessionCommand
     public required bool ContinueInBackground { get; init; }
 }
 internal sealed record DetachCommand : AgentSessionCommand { public override string Type => "detach"; }
+internal sealed record DetachIfIdleCommand : AgentSessionCommand
+{
+    public override string Type => "detach-if-idle";
+    public bool KeepAttached { get; init; }
+}
 
 internal abstract record AgentSessionServerEvent { public abstract string Type { get; } }
 internal sealed record SessionStatusEvent : AgentSessionServerEvent
@@ -438,6 +443,7 @@ internal static class AgentSessionProtocolCodec
             "set-tool-enabled" => typeof(SetToolEnabledCommand),
             "set-continue-in-background" => typeof(SetContinueInBackgroundCommand),
             "detach" => typeof(DetachCommand),
+            "detach-if-idle" => typeof(DetachIfIdleCommand),
             _ => throw Protocol($"Unknown command discriminator '{type}'."),
         };
         var result = (AgentSessionCommand?)JsonSerializer.Deserialize(element.GetRawText(), target, Options)

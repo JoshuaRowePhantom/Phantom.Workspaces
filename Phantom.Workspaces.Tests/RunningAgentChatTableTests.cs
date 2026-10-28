@@ -1368,8 +1368,10 @@ public sealed class RunningAgentChatTableTests
         }
     }
 
-    [Fact]
-    public async Task SetContinueInBackgroundAsync_LocalOwner_PersistsBeforePublishingPreference()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SetContinueInBackgroundAsync_LocalOwner_PersistsBeforePublishingPreference(bool viewerClose)
     {
         var registry = new FakeLocalRuntimeRegistry();
         var table = new RunningAgentChatTable(
@@ -1385,11 +1387,24 @@ public sealed class RunningAgentChatTableTests
         }, TestContext.Current.CancellationToken);
         var row = Assert.Single(table.RunningSessions);
 
-        await table.SetContinueInBackgroundAsync(sessionId, true, TestContext.Current.CancellationToken);
+        if (viewerClose)
+            await table.RetainForViewerCloseAsync(sessionId, TestContext.Current.CancellationToken);
+        else
+            await table.SetContinueInBackgroundAsync(sessionId, true, TestContext.Current.CancellationToken);
 
         Assert.Equal(1, registry.Writes);
         Assert.True(registry.LastValue);
         Assert.True(row.ContinueInBackground);
+    }
+
+    [Fact]
+    public async Task RetainForViewerCloseAsync_InMemoryOnlySession_DoesNotClaimDurableRetention()
+    {
+        var table = new RunningAgentChatTable(new FakeRunningAgentChatFactory(), new FakeRuntimeContextFactory());
+        var sessionId = new AgentSessionId("in-memory-close");
+        await using var lease = await table.AcquireAsync(new AcquireAgentChatRequest { AgentSessionId = sessionId }, TestContext.Current.CancellationToken);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => table.RetainForViewerCloseAsync(sessionId, TestContext.Current.CancellationToken));
+        Assert.False(Assert.Single(table.RunningSessions).ContinueInBackground);
     }
 
     [Fact]

@@ -8,6 +8,7 @@ public sealed class RunningAgentChatLease : IAsyncDisposable
     private readonly Func<ValueTask>? _afterDispose;
     private readonly AgentChat? _localAgentChat;
     private int _disposed;
+    private readonly Func<CancellationToken, Task<bool>>? prepareIdleClose;
 
     public AgentSessionId SessionId { get; }
 
@@ -24,14 +25,21 @@ public sealed class RunningAgentChatLease : IAsyncDisposable
         IAgentChat agentChat,
         Func<ValueTask> onDispose,
         AgentChat? localAgentChat = null,
-        Func<ValueTask>? afterDispose = null)
+        Func<ValueTask>? afterDispose = null,
+        Func<CancellationToken, Task<bool>>? prepareIdleClose = null)
     {
         SessionId = sessionId;
         AgentChat = agentChat;
         this._localAgentChat = localAgentChat ?? agentChat as AgentChat;
         _onDispose = onDispose;
         _afterDispose = afterDispose;
+        this.prepareIdleClose = prepareIdleClose;
     }
+
+    public Task<bool> TryPrepareIdleCloseAsync(CancellationToken ct = default)
+        => this.prepareIdleClose?.Invoke(ct)
+            ?? Task.FromResult(this.AgentChat is AgentChat local
+                && local.TrySealIdleForViewerClose());
 
     ~RunningAgentChatLease()
     {

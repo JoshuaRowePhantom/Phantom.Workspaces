@@ -24,13 +24,24 @@ public static class PhantomAgentSchema
         => AgentDefinition.FromJson(json, CreateContext());
 
     public static AgentDefinition AgentDefinitionFromYaml(string yaml)
-        => AgentDefinition.FromYaml(yaml, CreateContext());
+        => AgentDefinitionFromJson(YamlToJson(yaml));
 
     public static AgentManifest AgentManifestFromJson(string json)
         => AgentManifest.FromJson(json, CreateContext());
 
     public static AgentManifest AgentManifestFromYaml(string yaml)
-        => AgentManifest.FromYaml(yaml, CreateContext());
+        => AgentManifestFromJson(YamlToJson(yaml));
+
+    internal static string YamlToJson(string yaml)
+    {
+        // AgentSchema's YAML object dictionaries do not preserve nested tool collections.
+        // Normalize through JSON so every entry point uses the same typed load bridge.
+        var value = new YamlDotNet.Serialization.DeserializerBuilder()
+            .WithAttemptingUnquotedStringTypeDeserialization()
+            .Build()
+            .Deserialize<object>(yaml);
+        return new YamlDotNet.Serialization.SerializerBuilder().JsonCompatible().Build().Serialize(value);
+    }
 
     public static McpTool McpToolFromJson(string json)
         => McpTool.FromJson(json, CreateContext());
@@ -43,10 +54,15 @@ public static class PhantomAgentSchema
     /// </summary>
     public static TrackingLoadContext CreateContext() => new()
     {
+        PreProcess = FilesystemTool.PrepareInput,
         // Type-guarded and idempotent: polymorphic loads process the same instance twice, so the
         // second pass (already a Phantom subclass) is a no-op.
         PostProcess = static (result, data) => result switch
         {
+            CustomTool tool and not FilesystemTool
+                when string.Equals(tool.Kind, "filesystem", StringComparison.Ordinal)
+                => FilesystemTool.From(tool, data),
+
             // #1416: attach the dropped 'type' transport field. #1435: also recover the dropped
             // 'executor' binding field.
             McpTool tool and not PhantomMcpTool => PhantomMcpTool.From(tool, ReadTransport(data), ReadExecutor(data)),

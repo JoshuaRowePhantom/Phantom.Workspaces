@@ -67,6 +67,10 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        using var progress = request.ObserveInitializingChat is { } observe
+            ? new AgentChatAcquisitionProgress(request.AgentSessionId.Value!, observe, request.CancelStartup,
+                request.ProgressCancellation ?? ct)
+            : null;
         try
         {
             ValidateAcquisitionRequest(request);
@@ -215,6 +219,18 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                     disposedEntry.DecrementViewerCount();
                 }
                 return ValueTask.CompletedTask;
+            },
+            prepareIdleClose: async token =>
+            {
+                await localGate.WaitAsync(token).ConfigureAwait(false);
+                try
+                {
+                    return await lease.TryPrepareIdleCloseAsync(token).ConfigureAwait(false);
+                }
+                finally
+                {
+                    localGate.Release();
+                }
             });
     }
 
@@ -655,7 +671,25 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
             await remote.TerminateAsync(ct).ConfigureAwait(false);
             return true;
         }
-        return await _factory.TerminateAsync(sessionId, ct).ConfigureAwait(false);
+        return await this.TerminateLocalAsync(sessionId, null, ct).ConfigureAwait(false);
+    }
+
+    private async Task<bool> TerminateLocalAsync(AgentSessionId sessionId, IAgentChat? expected, CancellationToken ct)
+    {
+        SemaphoreSlim gate;
+        lock (this._entityInfoLock)
+        {
+            if (!this.localAcquisitionGates.TryGetValue(sessionId, out gate!))
+                return false;
+        }
+        await gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            return expected is null
+                ? await this._factory.TerminateAsync(sessionId, ct).ConfigureAwait(false)
+                : await this._factory.TerminateExactAsync(sessionId, expected, ct).ConfigureAwait(false);
+        }
+        finally { gate.Release(); }
     }
 
     /// <inheritdoc/>
@@ -666,10 +700,34 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         return this.SetContinueInBackgroundCoreAsync(sessionId, continueInBackground, ct);
     }
 
+    public Task RetainForViewerCloseAsync(
+        AgentSessionId sessionId,
+        CancellationToken ct = default)
+        => this.SetContinueInBackgroundCoreAsync(sessionId, true, ct, requirePersistedEntity: true);
+
+    public Task<bool> TerminateExactAsync(AgentSessionId sessionId, IAgentChat expected, CancellationToken ct = default)
+    {
+        var remote = this.FindRemoteSession(sessionId);
+        if (remote is not null)
+            return ReferenceEquals(remote.Chat, expected) ? TerminateRemoteAsync() : Task.FromResult(false);
+        return this.TerminateLocalAsync(sessionId, expected, ct);
+
+        async Task<bool> TerminateRemoteAsync()
+        {
+            await remote!.TerminateAsync(ct).ConfigureAwait(false);
+            return true;
+        }
+    }
+
+    public Task RetainExactForViewerCloseAsync(AgentSessionId sessionId, IAgentChat expected, CancellationToken ct = default)
+        => this.SetContinueInBackgroundCoreAsync(sessionId, true, ct, requirePersistedEntity: true, expected: expected);
+
     private async Task SetContinueInBackgroundCoreAsync(
         AgentSessionId sessionId,
         bool continueInBackground,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool requirePersistedEntity = false,
+        IAgentChat? expected = null)
     {
         var entry = this.FindEntry(sessionId)
             ?? throw new ArgumentException("The agent session is not running.", nameof(sessionId));
@@ -679,6 +737,8 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         var remote = this.FindRemoteSession(sessionId);
         if (remote is not null)
         {
+            if (expected is not null && !ReferenceEquals(remote.Chat, expected))
+                throw new InvalidOperationException("The owning runtime changed.");
             await remote.SetContinueInBackgroundAsync(continueInBackground, ct).ConfigureAwait(false);
             return;
         }
@@ -695,8 +755,19 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         await localGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
+            if (expected is not null && !this._factory.RunningSessions.Any(
+                item => item.SessionId == sessionId && ReferenceEquals(item.AgentChat, expected)))
+                throw new InvalidOperationException("The owning runtime changed.");
             entry = this.FindEntry(sessionId)
                 ?? throw new ArgumentException("The agent session is not running.", nameof(sessionId));
+            if (requirePersistedEntity)
+            {
+                lock (this._entityInfoLock)
+                {
+                    if (!this.localRuntimeEntities.ContainsKey(sessionId))
+                        throw new InvalidOperationException("Background retention requires a persisted session.");
+                }
+            }
             RunningAgentChatLease? newlyPinnedLease = null;
             if (continueInBackground)
             {
@@ -934,10 +1005,55 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                     throw new ObjectDisposedException(nameof(RemoteRunningSession));
                 }
                 Interlocked.Increment(ref this.viewerCount);
+                var released = false;
+                var leaseGate = new SemaphoreSlim(1, 1);
                 return new RunningAgentChatLease(
                     this.Key.SessionId,
                     this.Chat,
-                    this.ReleaseAsync);
+                    async () =>
+                    {
+                        await leaseGate.WaitAsync().ConfigureAwait(false);
+                        try
+                        {
+                            if (!released)
+                            {
+                                released = true;
+                                await this.ReleaseAsync().ConfigureAwait(false);
+                            }
+                        }
+                        finally { leaseGate.Release(); }
+                    },
+                    prepareIdleClose: async token =>
+                    {
+                        await leaseGate.WaitAsync(token).ConfigureAwait(false);
+                        try
+                        {
+                            if (released) return true;
+                            var remove = false;
+                            await this.lifecycleGate.WaitAsync(token).ConfigureAwait(false);
+                            try
+                            {
+                                if (this.closing != 0 || this.closed != 0 || this.Chat.IsTerminal
+                                    || AgentChatActivity.HasPendingWork(this.Chat))
+                                    return false;
+                                remove = this.viewerCount == 1 && !this.continueInBackground;
+                                if (!await this.Chat.TryDetachIdleAsync(token, keepAttached: !remove).ConfigureAwait(false))
+                                    return false;
+                                Interlocked.Decrement(ref this.viewerCount);
+                                released = true;
+                                if (remove)
+                                {
+                                    Volatile.Write(ref this.closing, 1);
+                                    this.table.UnregisterRemoteFlight(this);
+                                }
+                            }
+                            finally { this.lifecycleGate.Release(); }
+                            if (remove)
+                                await this.table.RemoveRemoteAsync(this).ConfigureAwait(false);
+                            return true;
+                        }
+                        finally { leaseGate.Release(); }
+                    });
             }
             finally
             {

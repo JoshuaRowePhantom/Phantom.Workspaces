@@ -13,6 +13,7 @@ using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 using Phantom.Workspaces.Gui.Shared.Controls;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Interfaces;
 
 using Phantom.Workspaces.Testing.Gui;
 
@@ -20,6 +21,84 @@ namespace Phantom.Workspaces.Agent.Gui.Tests;
 
 public sealed class AgentChatOutputControlTests
 {
+    [AvaloniaFact]
+    public async Task AgentChatOutput_ConstructingChat_ShowsAuthorizationActionsBeforeLeasePublication()
+    {
+        using var progress = new AgentStartupProgress();
+        progress.Report("Research assistant", "remote-flight-chat-acquisition");
+        var observed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var store = new GatedStartupStore(release.Task);
+        await using var factory = new AgentChatFactory(store, new AgentServices(),
+            TaskScheduler.FromCurrentSynchronizationContext());
+        using var attempt = new AgentChatAcquisitionProgress("pending-html", chat =>
+        {
+            progress.Observe(chat);
+            observed.TrySetResult();
+        });
+        var acquisition = factory.GetOrCreateAsync(new AgentSessionId("pending-html"), CreateAgentDefinition());
+        await observed.Task;
+        try
+        {
+            var control = new AgentChatOutputControl();
+            var browser = GetBrowser(control);
+            SetAttached(control);
+            control.DataContext = progress;
+            await control.HistoryLoaded;
+            Assert.False(acquisition.IsCompleted);
+            Assert.Empty(factory.RunningSessions);
+            Assert.Contains(browser.PostedMessages, message =>
+                message.Contains("Loading session and history", StringComparison.Ordinal)
+                && message.Contains("Research assistant", StringComparison.Ordinal));
+            await using var authorization = await AgentChatAcquisitionProgress.WaitingForAuthorizationAsync(
+                "Example MCP", _ => Task.CompletedTask);
+            Assert.Contains(browser.PostedMessages, message =>
+                message.Contains("Example MCP", StringComparison.Ordinal)
+                && message.Contains("Open sign-in", StringComparison.Ordinal)
+                && message.Contains("Cancel startup", StringComparison.Ordinal)
+                && message.Contains("phantom-startup:", StringComparison.Ordinal));
+            control.DataContext = null;
+        }
+        finally { release.TrySetResult(); }
+        await using var lease = await acquisition;
+        Assert.Single(factory.RunningSessions);
+    }
+
+    private sealed class GatedStartupStore(Task release) : IAgentPersistenceStore
+    {
+        private readonly InMemoryAgentPersistenceStore inner = new();
+        public ValueTask StoreAsync(StoreRequestAgent request, CancellationToken cancellationToken = default)
+            => this.inner.StoreAsync(request, cancellationToken);
+        public async ValueTask<PersistedAgent?> RestoreAsync(RestoreRequest request, CancellationToken cancellationToken = default)
+        {
+            await release.WaitAsync(cancellationToken);
+            return await this.inner.RestoreAsync(request, cancellationToken);
+        }
+        public ValueTask<ChatMessage[]> ReadMessagesAsync(ReadMessagesRequest request, CancellationToken cancellationToken = default)
+            => this.inner.ReadMessagesAsync(request, cancellationToken);
+        public ValueTask AddSubAgentLinkAsync(string parentSessionId, string childSessionId, CancellationToken cancellationToken = default)
+            => this.inner.AddSubAgentLinkAsync(parentSessionId, childSessionId, cancellationToken);
+        public ValueTask<IReadOnlyList<AgentSessionId>> ReadSubAgentChildIdsAsync(string parentSessionId, CancellationToken cancellationToken = default)
+            => this.inner.ReadSubAgentChildIdsAsync(parentSessionId, cancellationToken);
+    }
+
+    [AvaloniaFact]
+    public async Task AgentChatOutput_StartupBeforeAcquisition_RendersNamedOrdinaryHtml()
+    {
+        var progress = new AgentStartupProgress();
+        progress.Report("Research assistant", "owner-decision");
+        var control = new AgentChatOutputControl();
+        var browser = GetBrowser(control);
+        SetAttached(control);
+        control.DataContext = progress;
+        await control.HistoryLoaded;
+
+        Assert.Contains(browser.PostedMessages, message => message.Contains("Waiting for your owner selection", StringComparison.Ordinal));
+        Assert.Contains(browser.PostedMessages, message => message.Contains("Research assistant", StringComparison.Ordinal));
+        progress.Report("Research assistant", "remote-flight-chat-acquisition");
+        Assert.Contains(browser.PostedMessages, message => message.Contains("Loading session and history", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void ChatOutputShellHtml_ContainsAnchorClickInterceptor()
     {
@@ -27,7 +106,7 @@ public sealed class AgentChatOutputControlTests
         var html = ReadShellHtml();
 
         Assert.Contains("closest(\"a[href]\")", html, StringComparison.Ordinal);
-        Assert.Contains("postToHost({ type: \"openUrl\", url: anchor.href })", html, StringComparison.Ordinal);
+        Assert.Contains("postToHost({ type: \"openUrl\", url: href, assistantRunId:", html, StringComparison.Ordinal);
         Assert.Contains("e.preventDefault()", html, StringComparison.Ordinal);
     }
 
@@ -638,9 +717,7 @@ public sealed class AgentChatOutputControlTests
     [AvaloniaFact(Timeout = 15_000)]
     public async Task OnBrowserReady_WhenHistoryPopulatedAfterBrowserReady_RendersPersistedMessages()
     {
-        // #1009: the WebView can report Ready before persistence finishes loading history. The
-        // control must wait for AgentViewModel.HistoryPopulated before snapshotting History so the
-        // persisted messages are rendered even though Ready fired first.
+        // Startup diagnostics render immediately while the live model reconciles later history.
         var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
         using var loggerFactory = new ObservableLoggerFactory();
@@ -649,6 +726,11 @@ public sealed class AgentChatOutputControlTests
         // Simulate a session whose history is still loading when the browser becomes ready.
         var historyPopulated = new TaskCompletionSource();
         viewModel.SetHistoryPopulatedForTest(historyPopulated.Task);
+        chat.CreateRunningItem(new AgentChatHistoryItem
+        {
+            Role = AgentChatHistoryItem.DiagnosticChatRole,
+            Contents = [new TextContent("Waiting for your authorization: GitHub")],
+        });
 
         var control = new AgentChatOutputControl();
         var browser = GetBrowser(control);
@@ -657,8 +739,7 @@ public sealed class AgentChatOutputControlTests
         // Fire the ready path before history is available.
         control.DataContext = viewModel;
 
-        // Nothing should be rendered yet: the snapshot is deferred until HistoryPopulated completes.
-        Assert.Equal(0, CountUpdateCommands(browser));
+        Assert.Contains(browser.PostedMessages, message => message.Contains("Waiting for your authorization", StringComparison.Ordinal));
         Assert.False(control.HistoryLoaded.IsCompleted);
 
         // History becomes available, then persistence signals completion.
@@ -671,6 +752,8 @@ public sealed class AgentChatOutputControlTests
 
         // The persisted messages are now rendered.
         Assert.True(CountUpdateCommands(browser) > 0, "Expected persisted history to be rendered after HistoryPopulated completed.");
+        Assert.Single(browser.PostedMessages, message => message.Contains("one", StringComparison.Ordinal)
+            && message.Contains("chat-text", StringComparison.Ordinal));
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -787,10 +870,10 @@ public sealed class AgentChatOutputControlTests
 
         control.DataContext = viewModel;
         var firstGeneration = GetActiveOutputGeneration(control);
+        browser.PostedMessages.Clear();
         browser.FireReady();
         var latestGeneration = GetActiveOutputGeneration(control);
         Assert.NotEqual(firstGeneration, latestGeneration);
-        browser.PostedMessages.Clear();
 
         historyPopulated.SetResult();
         await control.HistoryLoaded;

@@ -11,6 +11,37 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 
 public class StreamingPersistenceMiddlewareTests
 {
+    [Fact]
+    public async Task DocumentOrigin_MessagePersistenceAndJsonReload_PreserveGenerationDirectory()
+    {
+        var store = new SpyAgentPersistenceStore();
+        var (middleware, session) = CreateMiddleware(store, [MakeUpdate("report.md", finishReason: "stop")]);
+        var origin = new AgentDocumentOrigin(@"C:\original\directory", true);
+        middleware.SetAssistantRunId("original-run", origin);
+        await ConsumeAsync(middleware, session);
+        var serialized = JsonSerializer.Serialize(Assert.Single(store.StoredMessages), AIJsonUtilities.DefaultOptions);
+        var reloaded = JsonSerializer.Deserialize<ChatMessage>(serialized, AIJsonUtilities.DefaultOptions)!;
+        Assert.Equal(origin, AgentDocumentOrigin.Read(reloaded));
+        Assert.Null(AgentDocumentOrigin.Read(new ChatMessage(ChatRole.Assistant, "legacy report.md")));
+        var persisted = new InMemoryAgentPersistenceStore();
+        await persisted.StoreAsync(new StoreRequestAgent
+        {
+            Agent = new PersistedAgent
+            {
+                AgentSessionId = "origin-restart",
+                AgentDefinitionJson = BsonDocument.Parse("""
+                    {"kind":"prompt","name":"origin","model":{"id":"echo","provider":"echo","apiType":"Echo"},"tools":[]}
+                    """),
+            },
+            NewMessages = [reloaded],
+        });
+        await using var factory = new AgentChatFactory(persisted, new AgentServices(), TaskScheduler.Default);
+        await using var lease = await factory.GetAsync(new Phantom.Workspaces.Llm.Interfaces.AgentSessionId("origin-restart"));
+        var restoredItem = Assert.Single(lease.AgentChat.History, item => item.Role == ChatRole.Assistant);
+        Assert.Equal(origin, restoredItem.DocumentOrigin);
+        Assert.Equal("original-run", restoredItem.AssistantRunId);
+    }
+
     private const string AgentSessionId = "test-session-id";
 
     [Fact]

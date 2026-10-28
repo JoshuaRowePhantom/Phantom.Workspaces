@@ -22,6 +22,62 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed partial class RemoteAgentSessionHostTests
 {
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task ConditionalDetach_ConcurrentSubmissionOrder_OnlyIdleExactEpochReleases(bool submitFirst, bool keepAttached)
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+        {
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson("""
+                {"kind":"prompt","name":"release","model":{"id":"echo","provider":"echo","apiType":"Echo"},"tools":[]}
+                """),
+        });
+        var held = chat.QueueManager.CreateInputQueue("Held", AgentInputQueueImmediacy.Held);
+        await using var runtime = new RemoteAgentSessionLease("session", 1,
+            new RuntimeEpoch { Value = Guid.NewGuid() }, chat, false, Snapshot);
+        await using var channel = new DuplexChannel();
+        await using var attachment = runtime.Attach(new AttachRemoteAgentSessionRequest
+        {
+            AttachmentToken = "idle-close", Channel = channel,
+        });
+        var command = new DetachIfIdleCommand
+        {
+            CommandId = Guid.NewGuid(), CorrelationId = Guid.NewGuid(), RuntimeEpoch = runtime.Epoch,
+            KeepAttached = keepAttached,
+        };
+        if (submitFirst)
+            chat.EnqueueUserMessage("accepted first", held);
+        Assert.False(await attachment.TryReleaseIdleAsync(command with
+        {
+            RuntimeEpoch = new RuntimeEpoch { Value = Guid.NewGuid() },
+        }));
+        Assert.Equal(1, runtime.ViewerCount);
+        var released = await attachment.TryReleaseIdleAsync(command);
+        Assert.Equal(!submitFirst, released);
+        Assert.Equal(submitFirst || keepAttached ? 1 : 0, runtime.ViewerCount);
+        if (!submitFirst)
+        {
+            var frame = AgentSessionProtocolCodec.DeserializeFrame(await channel.Output.ReadAsync());
+            Assert.Equal("command-completed", frame.Type);
+            if (keepAttached)
+            {
+                chat.EnqueueUserMessage("other viewer remains", held);
+                Assert.Single(held.Queue.Items);
+                Assert.False(runtime.HasTerminated);
+            }
+            else
+            {
+                Assert.Throws<ObjectDisposedException>(() => chat.EnqueueUserMessage("too late", held));
+                Assert.True(runtime.HasTerminated);
+            }
+        }
+        else
+            Assert.Single(held.Queue.Items);
+    }
+
     [Fact]
     public async Task OpenAsync_Start_CreatesOneRuntimeAndSnapshot()
     {

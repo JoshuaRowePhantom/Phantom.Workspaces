@@ -13,6 +13,8 @@ using global::Dock.Model.Core;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Agent.Gui;
+using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Echo;
 using Phantom.Workspaces.Llm.Shell;
@@ -25,6 +27,66 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class WorkspaceGuiContextProviderTests
 {
+    [AvaloniaFact]
+    public async Task TabClose_OwnExecutingSessionTerminateSelected_CompletesWithoutSelfDrain()
+    {
+        var client = new SelfClosingChatClient();
+        await using var factory = new AgentChatFactory(new InMemoryAgentPersistenceStore(),
+            new AgentServices { ChatClientOverride = client }, TaskScheduler.FromCurrentSynchronizationContext());
+        var table = new Services.RunningAgentChatTable(factory);
+        var services = new ApplicationServices(table, new AgentPersistenceStoreCache(),
+            Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+            Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>());
+        await using var main = MainWindowIntegrationTests.CreateTestMainWindowViewModel(applicationServices: services);
+        await main.InitializeAsync();
+        var lease = await table.AcquireAsync(new Services.AcquireAgentChatRequest
+        {
+            AgentSessionId = new Llm.Interfaces.AgentSessionId("self-close"),
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson("""
+                {"kind":"prompt","name":"self-close","model":{"id":"echo","provider":"echo","apiType":"Echo"},"tools":[]}
+                """),
+        });
+        var logger = new ObservableLoggerFactory();
+        var tab = new AgentSessionWorkspaceTabViewModel { Id = "self-close", Title = "Self close", AgentSessionId = "self-close" };
+        tab.SetLease(lease);
+        tab.SetReady(new Agent.Gui.ViewModels.AgentViewModel(lease.AgentChat, "Self close", "", logger, TaskScheduler.Default), logger);
+        await main.OpenTabAsync(tab);
+        main.AgentSessionCloseDecisionProvider = new TerminateCloseDecision();
+        var tool = await GetToolAsync(main, "tab_close");
+        client.Close = async () => await tool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?> { ["tab_id"] = JsonSerializer.SerializeToElement(tab.Id) }), CancellationToken.None);
+        lease.LocalAgentChat.EnqueueUserMessage("close yourself");
+        var result = Assert.IsType<JsonElement>(await client.Closed.Task);
+        Assert.True(result.GetProperty("closed").GetBoolean());
+        Assert.DoesNotContain(tab, main.WorkspacePanes.SelectMany(p => p.Tabs));
+        Assert.Empty(table.RunningSessions);
+    }
+
+    private sealed class TerminateCloseDecision : IAgentSessionCloseDecisionProvider
+    {
+        public Task<AgentSessionCloseDecision> ChooseAsync(string name, CancellationToken ct)
+            => Task.FromResult(AgentSessionCloseDecision.Terminate);
+    }
+
+    private sealed class SelfClosingChatClient : IChatClient
+    {
+        internal Func<Task<object?>>? Close { get; set; }
+        internal TaskCompletionSource<object?> Closed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages, ChatOptions? options = null,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            var result = await this.Close!();
+            this.Closed.TrySetResult(result);
+            yield break;
+        }
+        public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+        public object? GetService(Type type, object? key = null) => null;
+        public void Dispose() { }
+    }
+
     [AvaloniaFact(Timeout = 15_000)]
     public async Task WorkspaceList_ReturnsAllWorkspacePanes_WithCorrectIsSelectedFlag()
     {
@@ -1316,7 +1378,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.True(resultJson.TryGetProperty("error", out _));
     }
 
-    private static async Task<AIFunction> GetToolAsync(MainWindowViewModel viewModel, string toolName)
+    internal static async Task<AIFunction> GetToolAsync(MainWindowViewModel viewModel, string toolName)
     {
         var context = new WorkspaceGuiContext
         {

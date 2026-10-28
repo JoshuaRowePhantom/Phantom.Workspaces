@@ -185,7 +185,8 @@ public sealed class RunningAgentChatWithEntityInfo : INotifyPropertyChanged
                 {
                     this.DecrementViewerCount();
                     return ValueTask.CompletedTask;
-                });
+                },
+                prepareIdleClose: lease.TryPrepareIdleCloseAsync);
             ownershipTransferred = true;
             return result;
         }

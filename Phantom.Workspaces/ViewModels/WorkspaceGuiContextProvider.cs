@@ -294,7 +294,7 @@ public sealed class WorkspaceGuiContextProvider : AIContextProvider
 
             var tabId = idElement.GetString()!;
             var closed = await Dispatcher.UIThread.InvokeAsync(
-                () => this.context.MainWindowViewModel.CloseTabById(tabId));
+                () => this.context.MainWindowViewModel.CloseTabByIdAsync(tabId));
 
             return Serialize(new { closed });
         }

@@ -376,7 +376,8 @@ internal static class ChatOutputHtmlRenderer
         IReadOnlyList<(string ElementId, string Html)> contents,
         DateTimeOffset? timestamp = null,
         string? jumpLinkHtml = null,
-        bool suppressRoleHeader = false)
+        bool suppressRoleHeader = false,
+        string? assistantRunId = null)
     {
         var builder = new StringBuilder();
         var stickyBaseLevel = string.Equals(roleLabel, "user", StringComparison.OrdinalIgnoreCase) ? 0 : 1;
@@ -384,6 +385,8 @@ internal static class ChatOutputHtmlRenderer
         var usageTargetId = FindTargetId(contents, "data-usage-inspect-target");
         builder.Append("<div class=\"chat-message ").Append(RoleClass(roleLabel)).Append("\" id=\"")
             .Append(messageId).Append("\" data-sticky-base-level=\"").Append(stickyBaseLevel).Append("\"");
+        if (assistantRunId is not null)
+            builder.Append(" data-document-run-id=\"").Append(HtmlEscape(assistantRunId)).Append("\"");
         if (!string.IsNullOrEmpty(inspectTargetId))
         {
             builder.Append(" data-message-inspect-target=\"").Append(inspectTargetId).Append("\"");
@@ -558,6 +561,14 @@ internal static class ChatOutputHtmlRenderer
     /// element, or returns <see langword="null"/> when the block should not be shown (hidden reasoning
     /// or empty text).
     /// </summary>
+    internal static bool IsContentVisible(AIContent content, bool includeReasoning)
+        => content switch
+        {
+            TextReasoningContent reasoning => includeReasoning && !string.IsNullOrWhiteSpace(reasoning.Text),
+            TextContent text => !string.IsNullOrWhiteSpace(text.Text),
+            _ => true,
+        };
+
     public static string? RenderContent(
         string contentId,
         AIContent content,
@@ -567,6 +578,11 @@ internal static class ChatOutputHtmlRenderer
         IToolVisualizerFactory? toolFactory = null,
         IAgentStatusSink? statusSink = null)
     {
+        if (!IsContentVisible(content, includeReasoning))
+        {
+            return null;
+        }
+
         switch (content)
         {
             case TextReasoningContent reasoning:

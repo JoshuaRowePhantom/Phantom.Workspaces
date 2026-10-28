@@ -120,14 +120,9 @@
     <DataTemplate DataType="vm:AgentSessionWorkspaceTabViewModel">
         <Panel>
             <!-- Loading state -->
-            <StackPanel IsVisible="{Binding State, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:AgentTabState.Loading}}"
-                        HorizontalAlignment="Center"
-                        VerticalAlignment="Center"
-                        Spacing="12">
-                <TextBlock Text="Loading agent session…"
-                           Classes="muted"
-                           HorizontalAlignment="Center" />
-            </StackPanel>
+            <Panel IsVisible="{Binding State, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:AgentTabState.Loading}}">
+                <agentControls:AgentChatOutputControl DataContext="{Binding StartupProgress}" />
+            </Panel>
 
             <!-- Ready state: wrap in Panel so IsVisible binds to AgentSessionWorkspaceTabViewModel,
                  not to the AgentViewModel set as DataContext on the inner control -->

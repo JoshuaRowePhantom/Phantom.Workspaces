@@ -494,7 +494,6 @@ internal static class Program
             new DeferredTrustedExecutorSelector(),
             chats, new AgentSessionOwnerDecisionProvider(), stalled ?? (ITransportFactoryRegistry?)failedChildTransport ?? registry,
             action => { action(); return Task.CompletedTask; },
-            loadingDeadline: TimeSpan.FromSeconds(90),
             timeProvider: clock,
             stageDeadline: TimeSpan.FromSeconds(45)));
         await using var handlerLifetime = new DiagnosticAsyncLifetime(
