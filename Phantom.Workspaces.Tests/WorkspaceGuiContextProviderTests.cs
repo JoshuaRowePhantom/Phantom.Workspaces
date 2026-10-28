@@ -1378,7 +1378,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.True(resultJson.TryGetProperty("error", out _));
     }
 
-    private static async Task<AIFunction> GetToolAsync(MainWindowViewModel viewModel, string toolName)
+    internal static async Task<AIFunction> GetToolAsync(MainWindowViewModel viewModel, string toolName)
     {
         var context = new WorkspaceGuiContext
         {
