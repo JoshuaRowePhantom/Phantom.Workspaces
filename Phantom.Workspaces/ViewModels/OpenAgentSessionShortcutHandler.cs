@@ -1120,7 +1120,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         // #1122: foregroundScheduler is a required constructor parameter on AgentViewModel so
         // sub-agent restore continuations run on the UI thread. Callers capture the scheduler
         // on the UI thread and thread it through.
-        return new AgentViewModel(new AgentViewModelOptions
+        var viewModel = new AgentViewModel(new AgentViewModelOptions
         {
             AgentChat = agentChat,
             DisplayName = title,
@@ -1133,12 +1133,13 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             OpenDocumentLinkHandler = async (origin, reference, recorded) =>
             {
                 var context = origin as IAgentDocumentContext;
-                var url = AgentDocumentLinkResolver.Resolve(
+                var destination = AgentDocumentLinkResolver.Resolve(
                     reference,
                     recorded?.WorkingDirectory,
                     origin is AgentChat && recorded is { IsLocalFileSystem: true }
                         && recorded.MachineName == Environment.MachineName
-                        && (recorded.OwnerProfileId is null || recorded.OwnerProfileId == context?.DocumentOwnerProfileId)).AbsoluteUri;
+                        && (recorded.OwnerProfileId is null || recorded.OwnerProfileId == context?.DocumentOwnerProfileId));
+                var url = destination.IsFile ? destination.AbsoluteUri : reference;
                 await mainWindowViewModel.OpenTabAsync(
                     new WebViewModel(url, mainWindowViewModel)
                 {
@@ -1149,6 +1150,8 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
                     workspacePaneId: mainWindowViewModel.FindWorkspacePaneIdForTab(agentSessionTabId));
             },
         };
+        viewModel.OpenUrlHandler = reference => _ = viewModel.OpenDocumentLinkAsync(reference);
+        return viewModel;
     }
 
     private async Task<AgentSessionWorkspaceTabViewModel> CreateCloneTabAsync(

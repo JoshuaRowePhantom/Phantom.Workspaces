@@ -840,15 +840,18 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
 
     public AgentInformation Information => this.information;
 
-    public string? DocumentWorkingDirectory => this.copilotSdkClient?.WorkingDirectoryOverride
+    public string? DocumentWorkingDirectory => this.subAgentChatClientSource?.DocumentOrigin?.WorkingDirectory
+        ?? this.copilotSdkClient?.WorkingDirectoryOverride
         ?? (this.chatOptions?.ChatOptions?.AdditionalProperties?.TryGetValue("working-directory", out var directory) == true
             && directory is string text && !string.IsNullOrWhiteSpace(text)
                 ? text
                 : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
 
-    public bool IsLocalDocumentFileSystem => this.copilotSdkClient?.IsLocalDocumentFileSystem == true;
+    public bool IsLocalDocumentFileSystem => this.subAgentChatClientSource?.DocumentOrigin?.IsLocalFileSystem
+        ?? this.copilotSdkClient?.IsLocalDocumentFileSystem == true;
     public string? DocumentOwnerProfileId
-        => (this.request.AgentServices?.CurrentSessionContext as CurrentSessionContext)?.UserComputerProfile?.EntityId.ToString();
+        => this.subAgentChatClientSource?.DocumentOrigin?.OwnerProfileId
+            ?? (this.request.AgentServices?.CurrentSessionContext as CurrentSessionContext)?.UserComputerProfile?.EntityId.ToString();
 
     public Usage Usage => this.usage;
 
@@ -1564,7 +1567,12 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
             }
         }
 
-        var chatClient = new SubAgentChatClient(agentId, subAgentDefinition.Name ?? agentId, subAgentDefinition.Description ?? string.Empty, this.timeProvider);
+        // SDK children execute in the spawning runtime, not a separately resolved chat client.
+        // Capture that runtime's context before the child's autonomous stream can begin.
+        var chatClient = new SubAgentChatClient(agentId, subAgentDefinition.Name ?? agentId,
+            subAgentDefinition.Description ?? string.Empty, this.timeProvider,
+            new AgentDocumentOrigin(this.DocumentWorkingDirectory, this.IsLocalDocumentFileSystem,
+                this.DocumentOwnerProfileId, Environment.MachineName));
         var parentLoggerFactory = this.request.AgentServices?.LoggerFactory;
         var childServices = parentLoggerFactory is null
             ? null
