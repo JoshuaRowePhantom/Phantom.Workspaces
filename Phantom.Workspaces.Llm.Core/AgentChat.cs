@@ -1877,13 +1877,7 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
 
     public async ValueTask DisposeAsync()
     {
-        if (Interlocked.Exchange(ref this.disposeStarted, 1) != 0)
-        {
-            return;
-        }
-
-        await this.DisposeCoreAsync(awaitCreation: true);
-        Volatile.Write(ref this.disposalCompleted, 1);
+        await this.DisposeAsyncCore(markTerminal: true).ConfigureAwait(false);
     }
 
     public async Task TerminateAsync(CancellationToken ct = default)
@@ -1901,14 +1895,48 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
             children = this.subAgentMap.Values.Select(value => value.Chat)
                 .Concat(this.subAgentTableMap.Values.Select(value => value.AgentChat).OfType<AgentChat>())
                 .Where(child => !ReferenceEquals(child, this)).Distinct().ToArray();
+        Exception? descendantFailure = null;
         try
         {
             await Task.WhenAll(children.Select(child => child.TerminateAsync(ct))).ConfigureAwait(false);
         }
-        finally
+        catch (Exception error)
         {
-            await this.DisposeAsync().ConfigureAwait(false);
+            descendantFailure = error;
         }
+
+        Exception? cleanupFailure = null;
+        try
+        {
+            await this.DisposeAsyncCore(markTerminal: descendantFailure is null).ConfigureAwait(false);
+        }
+        catch (Exception error)
+        {
+            cleanupFailure = error;
+        }
+
+        if (descendantFailure is null)
+        {
+            if (cleanupFailure is not null)
+                ExceptionDispatchInfo.Capture(cleanupFailure).Throw();
+            return;
+        }
+
+        if (cleanupFailure is not null)
+            throw new AggregateException(descendantFailure, cleanupFailure);
+        ExceptionDispatchInfo.Capture(descendantFailure).Throw();
+    }
+
+    private async ValueTask DisposeAsyncCore(bool markTerminal)
+    {
+        if (Interlocked.Exchange(ref this.disposeStarted, 1) != 0)
+        {
+            return;
+        }
+
+        await this.DisposeCoreAsync(awaitCreation: true).ConfigureAwait(false);
+        if (markTerminal)
+            Volatile.Write(ref this.disposalCompleted, 1);
     }
 
     private async Task DisposeCoreAsync(bool awaitCreation)

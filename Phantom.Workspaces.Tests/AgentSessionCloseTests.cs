@@ -152,6 +152,64 @@ public sealed class AgentSessionCloseTests
         resource.Verify(value => value.DisposeAsync(), Moq.Times.Once);
     }
 
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task CloseTab_DescendantCleanupFailure_IsNotProofOfTerminalRuntime()
+    {
+        var store = new InMemoryAgentPersistenceStore();
+        await using var factory = new AgentChatFactory(store, new AgentServices(),
+            TaskScheduler.FromCurrentSynchronizationContext());
+        var table = new RunningAgentChatTable(factory);
+        var services = new ApplicationServices(table, new AgentPersistenceStoreCache(),
+            Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+            Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>());
+        await using var main = MainWindowIntegrationTests.CreateTestMainWindowViewModel(applicationServices: services);
+        await main.InitializeAsync();
+        const string parentId = "parent-descendant-failure";
+        const string childId = "child-descendant-failure";
+        var definition = AgentDefinitionLoader.LoadAgentFromJson("""
+            {"kind":"prompt","name":"close-test","model":{"id":"echo","provider":"echo","apiType":"Echo"},"tools":[]}
+            """);
+        var seededChild = await table.AcquireAsync(new AcquireAgentChatRequest
+        {
+            AgentSessionId = new AgentSessionId(childId),
+            AgentDefinition = definition,
+        });
+        await seededChild.DisposeAsync();
+        await store.AddSubAgentLinkAsync(parentId, childId);
+        var lease = await table.AcquireAsync(new AcquireAgentChatRequest
+        {
+            AgentSessionId = new AgentSessionId(parentId),
+            AgentDefinition = definition,
+        });
+        var tab = await OpenLeaseTabAsync(main, lease);
+        var restoredChild = lease.LocalAgentChat.TryGetRegisteredSubAgent(childId);
+        Assert.NotNull(restoredChild);
+        var childLease = await restoredChild!.AcquireLeaseAsync();
+        var childResource = new Moq.Mock<IAsyncDisposable>();
+        childResource.Setup(value => value.DisposeAsync())
+            .Returns(ValueTask.FromException(new IOException("Controlled descendant cleanup failure")));
+        childLease.LocalAgentChat.RegisterOwnedResource(childResource.Object);
+        lease.LocalAgentChat.CreateRunningItem(new AgentChatHistoryItem { Role = ChatRole.Assistant });
+
+        var firstDecision = new GatedDecisionProvider();
+        firstDecision.Completion.SetResult(AgentSessionCloseDecision.Terminate);
+        main.AgentSessionCloseDecisionProvider = firstDecision;
+        Assert.False(await main.RequestCloseTabAsync(tab));
+        Assert.Equal(1, firstDecision.Calls);
+        Assert.False(lease.IsRuntimeTerminal);
+        Assert.Contains(tab, main.WorkspacePanes.SelectMany(pane => pane.Tabs));
+
+        var secondDecision = new GatedDecisionProvider();
+        secondDecision.Completion.SetResult(AgentSessionCloseDecision.Terminate);
+        main.AgentSessionCloseDecisionProvider = secondDecision;
+        Assert.False(await main.RequestCloseTabAsync(tab));
+        Assert.Equal(1, secondDecision.Calls);
+        Assert.False(lease.IsRuntimeTerminal);
+        Assert.Contains(tab, main.WorkspacePanes.SelectMany(pane => pane.Tabs));
+
+        childResource.Verify(value => value.DisposeAsync(), Moq.Times.Once);
+    }
+
     [AvaloniaTheory(Timeout = 30_000)]
     [InlineData(false)]
     [InlineData(true)]
