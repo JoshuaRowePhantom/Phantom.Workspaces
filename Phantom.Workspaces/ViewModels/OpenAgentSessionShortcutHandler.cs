@@ -103,7 +103,8 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
     public override ValueTask<bool> ShouldApplyTo(
         MainWindowViewModel mainWindowViewModel,
         Shortcut shortcut,
-        SubscribedEntityViewModel entityViewModel)
+        SubscribedEntityViewModel entityViewModel,
+        CancellationToken cancellationToken = default)
     {
         return ValueTask.FromResult(shortcut == Shortcut.Open
             && entityViewModel.IsEntityType("agent-session"));
@@ -553,7 +554,8 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         var memoryFactory = this.GetSessionLogger(agentSessionId!);
         var agentServices = await this.agentSessionShortcutContext.CreateAgentServicesAsync(
             mainWindowViewModel,
-            new SessionTeeLoggerFactory(mainWindowViewModel.ApplicationServices.LoggerFactory, memoryFactory));
+            new SessionTeeLoggerFactory(mainWindowViewModel.ApplicationServices.LoggerFactory, memoryFactory),
+            ct);
         var acquisition = await this.OpenPersistedSessionAsync(
             mainWindowViewModel,
             agentSessionEntityData,
@@ -579,25 +581,40 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             },
             ct);
 
-        if (lease.AgentChat is AgentChat localChat)
+        var resumed = false;
+        try
         {
-            localChat.EnqueueUserMessage(resumePrompt);
+            ct.ThrowIfCancellationRequested();
+            if (lease.AgentChat is AgentChat localChat)
+            {
+                localChat.EnqueueUserMessage(resumePrompt);
+            }
+            else
+            {
+                var queues = lease.AgentChat.InputQueues;
+                await queues.EnqueueAsync(
+                    new EnqueueAgentInputRequest
+                    {
+                        TargetQueueId = queues.DefaultQueue.Snapshot.QueueId,
+                        Messages = [new Microsoft.Extensions.AI.ChatMessage(
+                            Microsoft.Extensions.AI.ChatRole.User,
+                            resumePrompt)],
+                        CommandId = Guid.NewGuid(),
+                        ExpectedRevision = queues.Snapshot.Revision,
+                    },
+                    ct);
+            }
+            ct.ThrowIfCancellationRequested();
+            resumed = true;
+            return lease;
         }
-        else
+        finally
         {
-            var queues = lease.AgentChat.InputQueues;
-            await queues.EnqueueAsync(
-                new EnqueueAgentInputRequest
-                {
-                    TargetQueueId = queues.DefaultQueue.Snapshot.QueueId,
-                    Messages = [new Microsoft.Extensions.AI.ChatMessage(
-                        Microsoft.Extensions.AI.ChatRole.User,
-                        resumePrompt)],
-                    CommandId = Guid.NewGuid(),
-                    ExpectedRevision = queues.Snapshot.Revision,
-                });
+            if (!resumed)
+            {
+                await lease.DisposeAsync();
+            }
         }
-        return lease;
     }
 
     public async Task<AgentSessionWorkspaceTabViewModel> CreateAgentSessionTabAsync(
@@ -689,10 +706,11 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
 
         var loggerFactory = this.GetSessionLogger(agentSessionId!);
         reportStage?.Invoke("service-initialization");
-        var agentServices = await this.AwaitStageAsync(_ =>
+        var agentServices = await this.AwaitStageAsync(stageToken =>
             this.agentSessionShortcutContext.CreateAgentServicesAsync(
                 mainWindowViewModel,
-                new SessionTeeLoggerFactory(mainWindowViewModel.ApplicationServices.LoggerFactory, loggerFactory)),
+                new SessionTeeLoggerFactory(mainWindowViewModel.ApplicationServices.LoggerFactory, loggerFactory),
+                stageToken),
             ct, "service-initialization");
 
         // Extract display-name and description from entity data to populate AgentChat properties
@@ -762,7 +780,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             {
                 reportStage?.Invoke("local-profile-preferences");
                 var profileEntities = await this.AwaitStageAsync(
-                    _ => mainWindowViewModel.EntityBroker.GetEntitiesAsync([profileEntityId]),
+                    stageToken => mainWindowViewModel.EntityBroker.GetEntitiesAsync([profileEntityId], stageToken),
                     ct, "local-profile-preferences");
             var profileEntity = profileEntities.FirstOrDefault();
             if (profileEntity?.Data is JsonElement profileData)
@@ -826,7 +844,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
 
         reportStage?.Invoke("owner-profile-lookup");
         var ownerProfiles = await this.AwaitStageAsync(
-            _ => mainWindowViewModel.EntityBroker.GetEntitiesAsync([new EntityId(owner)]),
+            stageToken => mainWindowViewModel.EntityBroker.GetEntitiesAsync([new EntityId(owner)], stageToken),
             ct, "owner-profile-lookup");
         var remoteProfileDisplayName = ownerProfiles.FirstOrDefault()?.DisplayName;
         var registry = this.transportFactoryRegistry

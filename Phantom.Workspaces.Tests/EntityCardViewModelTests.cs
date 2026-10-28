@@ -173,7 +173,8 @@ public sealed class EntityCardViewModelTests : IAsyncDisposable
         public override ValueTask<bool> ShouldApplyTo(
             MainWindowViewModel mainWindowViewModel,
             Shortcut shortcut,
-            SubscribedEntityViewModel entityViewModel)
+            SubscribedEntityViewModel entityViewModel,
+            CancellationToken cancellationToken = default)
             => ValueTask.FromResult(string.Equals(shortcut.Name, this.shortcutName, StringComparison.Ordinal));
 
         public override Task<bool> Handle(
@@ -197,7 +198,8 @@ public sealed class EntityCardViewModelTests : IAsyncDisposable
         public override ValueTask<bool> ShouldApplyTo(
             MainWindowViewModel mainWindowViewModel,
             Shortcut shortcut,
-            SubscribedEntityViewModel entityViewModel)
+            SubscribedEntityViewModel entityViewModel,
+            CancellationToken cancellationToken = default)
             => ValueTask.FromResult(
                 string.Equals(shortcut.Name, this.shortcutName, StringComparison.Ordinal)
                 && entityViewModel.IsEntityType(this.entityType));
@@ -283,7 +285,8 @@ public sealed class EntityCardViewModelTests : IAsyncDisposable
         // its assignment and leave Shortcuts unchanged.
         using var staleCts = new CancellationTokenSource();
         staleCts.Cancel();
-        await card.ResolveShortcutsAsync(staleCts.Token);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => card.ResolveShortcutsAsync(staleCts.Token));
 
         Assert.Same(expected, card.Shortcuts);
     }

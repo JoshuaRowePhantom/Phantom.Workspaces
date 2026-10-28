@@ -7,7 +7,8 @@ public sealed class ToggleJsonEntityShortcutHandler : ShortcutHandler
     public override ValueTask<bool> ShouldApplyTo(
         MainWindowViewModel mainWindowViewModel,
         Shortcut shortcut,
-        SubscribedEntityViewModel entityViewModel)
+        SubscribedEntityViewModel entityViewModel,
+        CancellationToken cancellationToken = default)
     {
         return ValueTask.FromResult(shortcut == Shortcut.Json
             && entityViewModel.CanToggleRawJson);
@@ -22,5 +23,4 @@ public sealed class ToggleJsonEntityShortcutHandler : ShortcutHandler
         return Task.FromResult(true);
     }
 }
-
 

@@ -8,7 +8,8 @@ public sealed class OpenAssociatedWorkspaceShortcutHandler : ShortcutHandler
     public override ValueTask<bool> ShouldApplyTo(
         MainWindowViewModel mainWindowViewModel,
         Shortcut shortcut,
-        SubscribedEntityViewModel entityViewModel)
+        SubscribedEntityViewModel entityViewModel,
+        CancellationToken cancellationToken = default)
     {
         return ValueTask.FromResult(shortcut == Shortcut.OpenWorkspace
             && !entityViewModel.IsEntityType("workspace")
@@ -76,5 +77,4 @@ public sealed class OpenAssociatedWorkspaceShortcutHandler : ShortcutHandler
         return result;
     }
 }
-
 

@@ -1693,6 +1693,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             await this.ReconcileViewPopulationAsync(
                 population, view, changedEntityIds, hasQueryMembershipChanges);
         }
+        catch (OperationCanceledException) when (
+            population.CancellationToken.IsCancellationRequested || this.lifetime.IsCancellationRequested)
+        {
+        }
         finally
         {
             population.ReconcileGate.Release();
@@ -1731,20 +1735,26 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         var candidate = new ViewPopulationViewModel(population.ExpandedEntityIds);
-        await this.PopulateViewAsync(candidate, view,
-            () => this.RebindPopulationAsync(population), population);
+        try
+        {
+            await this.PopulateViewAsync(candidate, view,
+                () => this.RebindPopulationAsync(population), population);
 
-        if (population.CancellationToken.IsCancellationRequested
-            || (!ReferenceEquals(this.currentPopulation, population)
-                && this.GetViewForPopulation(population) is null))
+            if (population.CancellationToken.IsCancellationRequested
+                || this.lifetime.IsCancellationRequested
+                || (!ReferenceEquals(this.currentPopulation, population)
+                    && this.GetViewForPopulation(population) is null))
+            {
+                return;
+            }
+
+            await this.ReconcilePopulationInPlaceAsync(population, candidate);
+            population.AdoptSubscriptions(candidate);
+        }
+        finally
         {
             await candidate.DisposeAsync();
-            return;
         }
-
-        await this.ReconcilePopulationInPlaceAsync(population, candidate);
-        population.AdoptSubscriptions(candidate);
-        await candidate.DisposeAsync();
     }
 
     private void RefreshPopulationEntityData(
@@ -1866,6 +1876,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         Func<Task>? onResultsChanged = null,
         ViewPopulationViewModel? subscriptionOwner = null)
     {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            this.lifetime.Token,
+            next.CancellationToken,
+            (subscriptionOwner ?? next).CancellationToken);
+        var cancellationToken = cancellation.Token;
+        this.lifetime.Token.ThrowIfCancellationRequested();
         var isLeftView = ReferenceEquals(next, this.currentPopulation);
         if (string.Equals(selectedView.Id, EmptyView.Id, StringComparison.Ordinal))
         {
@@ -1873,7 +1889,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
-        if (next.CancellationToken.IsCancellationRequested) return;
+        if (cancellationToken.IsCancellationRequested) return;
 
         if (selectedView.IsEntityBrowser)
         {
@@ -1882,7 +1898,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
-        if (next.CancellationToken.IsCancellationRequested) return;
+        if (cancellationToken.IsCancellationRequested) return;
 
         if (selectedView.ViewEntity is not SubscribedEntityViewModel selectedViewEntity)
         {
@@ -1896,13 +1912,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
-        var associatedNoteEntity = await this.LoadAssociatedViewNoteAsync(next, selectedViewData);
-        if (next.CancellationToken.IsCancellationRequested) return;
+        var associatedNoteEntity = await this.LoadAssociatedViewNoteAsync(next, selectedViewData, cancellationToken);
+        if (cancellationToken.IsCancellationRequested) return;
 
         if (associatedNoteEntity is not null)
         {
-            var viewEntity = await this.CreateViewEntityViewModelAsync(next, associatedNoteEntity, indentLevel: 0, isParentContext: true);
-            if (next.CancellationToken.IsCancellationRequested)
+            var viewEntity = await this.CreateViewEntityViewModelAsync(next, associatedNoteEntity, indentLevel: 0, isParentContext: true, cancellationToken: cancellationToken);
+            if (cancellationToken.IsCancellationRequested)
             {
                 await viewEntity.DisposeAsync();
                 return;
@@ -1911,22 +1927,22 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             next.RootEntities.Add(viewEntity);
         }
 
-        await this.LoadSubViewEntitiesAsync(selectedViewData);
+        await this.LoadSubViewEntitiesAsync(selectedViewData, cancellationToken);
 
-        if (next.CancellationToken.IsCancellationRequested) return;
+        if (cancellationToken.IsCancellationRequested) return;
 
         if (selectedViewData.TryGetProperty("sub-views", out var subViews)
             && subViews.ValueKind == JsonValueKind.Array)
         {
             foreach (var subView in subViews.EnumerateArray())
             {
-                if (next.CancellationToken.IsCancellationRequested) return;
+                if (cancellationToken.IsCancellationRequested) return;
 
                 if (this.EntityBroker.TryGetReferencedEntity(subView, "view-entity-id", out var subViewEntity)
                     && subViewEntity is not null)
                 {
-                    var viewEntity = await this.CreateViewEntityViewModelAsync(next, subViewEntity, indentLevel: 0);
-                    if (next.CancellationToken.IsCancellationRequested)
+                    var viewEntity = await this.CreateViewEntityViewModelAsync(next, subViewEntity, indentLevel: 0, cancellationToken: cancellationToken);
+                    if (cancellationToken.IsCancellationRequested)
                     {
                         await viewEntity.DisposeAsync();
                         return;
@@ -1938,10 +1954,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
                 if (TryReadSubViewGetRequest(subView, this.interestCatalog, out var getRequest))
                 {
-                    var getEntities = await this.LoadGetSubViewEntitiesAsync(next, getRequest);
-                    if (next.CancellationToken.IsCancellationRequested) return;
-                    await this.AddSubViewEntitiesWithHierarchyAsync(next, getEntities);
-                    if (next.CancellationToken.IsCancellationRequested) return;
+                    var getEntities = await this.LoadGetSubViewEntitiesAsync(next, getRequest, cancellationToken);
+                    if (cancellationToken.IsCancellationRequested) return;
+                    await this.AddSubViewEntitiesWithHierarchyAsync(next, getEntities, cancellationToken);
+                    if (cancellationToken.IsCancellationRequested) return;
                     continue;
                 }
 
@@ -1949,21 +1965,22 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 {
                     var queryEntities = await this.LoadQuerySubViewEntitiesAsync(
                         next, queryRequest, onResultsChanged ?? (() => this.RebindPopulationAsync(next)),
-                        subscriptionOwner);
-                    if (next.CancellationToken.IsCancellationRequested) return;
-                    await this.AddSubViewEntitiesWithHierarchyAsync(next, queryEntities);
-                    if (next.CancellationToken.IsCancellationRequested) return;
+                        subscriptionOwner, cancellationToken);
+                    if (cancellationToken.IsCancellationRequested) return;
+                    await this.AddSubViewEntitiesWithHierarchyAsync(next, queryEntities, cancellationToken);
+                    if (cancellationToken.IsCancellationRequested) return;
                 }
             }
         }
 
-        if (next.CancellationToken.IsCancellationRequested) return;
+        if (cancellationToken.IsCancellationRequested) return;
 
         if (isLeftView) this.StickyParentContextText = $"Parent Context: {selectedView.Title}";
     }
 
     private async Task LoadSubViewEntitiesAsync(
-        JsonElement viewData)
+        JsonElement viewData,
+        CancellationToken cancellationToken)
     {
         if (!viewData.TryGetProperty("sub-views", out var subViews)
             || subViews.ValueKind != JsonValueKind.Array)
@@ -1985,14 +2002,16 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
-        await this.EntityBroker!.GetEntitiesAsync(requests);
+        await this.EntityBroker!.GetEntitiesAsync(requests, cancellationToken);
     }
 
     private async Task<IReadOnlyList<SubscribedEntityViewModel>> LoadGetSubViewEntitiesAsync(
         ViewPopulationViewModel population,
-        GetRequest getRequest)
+        GetRequest getRequest,
+        CancellationToken cancellationToken)
     {
-        var subscribedGet = await this.EntityBroker.SubscribeGetAsync(getRequest);
+        var subscribedGet = await this.EntityBroker.SubscribeGetAsync(getRequest, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         population.AddGetSubscription(subscribedGet);
 
         if (subscribedGet.Results.Count == 0)
@@ -2007,7 +2026,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         ViewPopulationViewModel population,
         QueryRequest queryRequest,
         Func<Task> onResultsChanged,
-        ViewPopulationViewModel? subscriptionOwner)
+        ViewPopulationViewModel? subscriptionOwner,
+        CancellationToken cancellationToken)
     {
         // Exclude not-interesting targets at the query level (via a join) unless the user opts to show
         // hidden items.
@@ -2018,7 +2038,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         // The interest-relationship augmentation is performed by TryReadSubViewQueryRequest itself so
         // every view (query, get, or get-entity) always requests every interest relationship type. No
         // additional WithInterestRelationships call is needed here.
-        var subscribedQuery = await this.EntityBroker.SubscribeQueryAsync(effectiveQuery);
+        var subscribedQuery = await this.EntityBroker.SubscribeQueryAsync(effectiveQuery, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         population.AddQuerySubscription(subscribedQuery, onResultsChanged, subscriptionOwner);
 
         if (subscribedQuery.Results.Count == 0)
@@ -2063,7 +2084,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private async Task<SubscribedEntityViewModel?> LoadAssociatedViewNoteAsync(
         ViewPopulationViewModel population,
-        JsonElement selectedViewData)
+        JsonElement selectedViewData,
+        CancellationToken cancellationToken)
     {
         if (!TryReadPrimaryEntityName(selectedViewData, out var selectedViewName))
         {
@@ -2082,7 +2104,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                     },
                 ],
                 Timestamps = [null],
-            });
+            },
+            cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         population.AddGetSubscription(noteSubscription);
         return noteSubscription.Results.FirstOrDefault();
     }
@@ -2210,7 +2234,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         SubscribedEntityViewModel entity,
         int indentLevel,
         bool isExpanded = true,
-        bool isParentContext = false)
+        bool isParentContext = false,
+        CancellationToken cancellationToken = default)
     {
         this.ProjectEntityBadges(entity);
 
@@ -2227,7 +2252,20 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             isExpanded: population.ExpandedEntityIds.TryGetValue(entity.EntityId.ToString(), out var storedExpanded) ? storedExpanded : isExpanded,
             isParentContext: isParentContext,
             fieldEditorFactory: this.fieldEditorFactory);
-        await vm.InitializeAsync();
+        var initialized = false;
+        try
+        {
+            await vm.InitializeAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            initialized = true;
+        }
+        finally
+        {
+            if (!initialized)
+            {
+                await vm.DisposeAsync();
+            }
+        }
 
         // Persist expansion state changes; the tree template shows/hides cached children locally.
         var entityIdStr = entity.EntityId.ToString();
@@ -2288,13 +2326,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     /// </summary>
     private async Task AddSubViewEntitiesWithHierarchyAsync(
         ViewPopulationViewModel population,
-        IReadOnlyList<SubscribedEntityViewModel> rootEntities)
+        IReadOnlyList<SubscribedEntityViewModel> rootEntities,
+        CancellationToken cancellationToken)
     {
-        var hierarchy = await new ViewHierarchyAssembler(this.EntityBroker).AssembleAsync(rootEntities);
+        var hierarchy = await new ViewHierarchyAssembler(this.EntityBroker).AssembleAsync(rootEntities, cancellationToken);
         foreach (var node in hierarchy)
         {
-            if (population.CancellationToken.IsCancellationRequested) return;
-            await this.AddHierarchyNodeAsync(population, node, indentLevel: 0);
+            if (cancellationToken.IsCancellationRequested) return;
+            await this.AddHierarchyNodeAsync(population, node, indentLevel: 0, cancellationToken: cancellationToken);
         }
 
         population.ReapplyFindAfterAssembly();
@@ -2304,14 +2343,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         ViewPopulationViewModel population,
         ViewHierarchyNode node,
         int indentLevel,
-        ViewEntityViewModel? parent = null)
+        ViewEntityViewModel? parent = null,
+        CancellationToken cancellationToken = default)
     {
-        if (population.CancellationToken.IsCancellationRequested) return;
+        if (cancellationToken.IsCancellationRequested) return;
         ViewEntityViewModel? vm = null;
         if (!node.IsAncestorGroup)
         {
-            vm = await this.CreateViewEntityViewModelAsync(population, node.Entity!, indentLevel, isExpanded: node.IsExpanded);
-            if (population.CancellationToken.IsCancellationRequested)
+            vm = await this.CreateViewEntityViewModelAsync(population, node.Entity!, indentLevel, isExpanded: node.IsExpanded, cancellationToken: cancellationToken);
+            if (cancellationToken.IsCancellationRequested)
             {
                 await vm.DisposeAsync();
                 return;
@@ -2337,7 +2377,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         {
             foreach (var child in node.Children)
             {
-                await this.AddHierarchyNodeAsync(population, child, indentLevel + 1, vm ?? parent);
+                await this.AddHierarchyNodeAsync(population, child, indentLevel + 1, vm ?? parent, cancellationToken);
             }
         }
     }
@@ -2950,9 +2990,22 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             Entity = entity,
             DockRegion = dockRegion ?? "full",
         };
-        await this.PopulateViewAsync(
-            tab.Population, definition, () => this.RebindPopulationAsync(tab.Population));
-        return tab;
+        var populated = false;
+        try
+        {
+            await this.PopulateViewAsync(
+                tab.Population, definition, () => this.RebindPopulationAsync(tab.Population));
+            this.lifetime.Token.ThrowIfCancellationRequested();
+            populated = true;
+            return tab;
+        }
+        finally
+        {
+            if (!populated)
+            {
+                await tab.DisposeAsync();
+            }
+        }
     }
 
     internal async Task OpenViewTabAsync(SubscribedEntityViewModel entity, bool focus = true)

@@ -21,9 +21,9 @@ public sealed class CloneEntityShortcutHandlerTests
         await using var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
         var entity = CreateCloneableEntity();
 
-        Assert.False(await handler.ShouldApplyTo(mainWindowViewModel, Shortcut.Open, entity));
-        Assert.False(await handler.ShouldApplyTo(mainWindowViewModel, Shortcut.Delete, entity));
-        Assert.False(await handler.ShouldApplyTo(mainWindowViewModel, Shortcut.Edit, entity));
+        Assert.False(await handler.ShouldApplyTo(mainWindowViewModel, Shortcut.Open, entity, TestContext.Current.CancellationToken));
+        Assert.False(await handler.ShouldApplyTo(mainWindowViewModel, Shortcut.Delete, entity, TestContext.Current.CancellationToken));
+        Assert.False(await handler.ShouldApplyTo(mainWindowViewModel, Shortcut.Edit, entity, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -33,7 +33,7 @@ public sealed class CloneEntityShortcutHandlerTests
         await using var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
         var entity = CreateNonEditableEntity();
 
-        Assert.False(await handler.ShouldApplyTo(mainWindowViewModel, Shortcut.Clone, entity));
+        Assert.False(await handler.ShouldApplyTo(mainWindowViewModel, Shortcut.Clone, entity, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -43,7 +43,7 @@ public sealed class CloneEntityShortcutHandlerTests
         await using var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
         var entity = CreateCloneableEntity();
 
-        Assert.True(await handler.ShouldApplyTo(mainWindowViewModel, Shortcut.Clone, entity));
+        Assert.True(await handler.ShouldApplyTo(mainWindowViewModel, Shortcut.Clone, entity, TestContext.Current.CancellationToken));
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -236,4 +236,3 @@ public sealed class CloneEntityShortcutHandlerTests
         return null;
     }
 }
-

@@ -32,7 +32,8 @@ public sealed class StartShellOnProfileShortcutHandler : ShortcutHandler
     public override ValueTask<bool> ShouldApplyTo(
         MainWindowViewModel mainWindowViewModel,
         Shortcut shortcut,
-        SubscribedEntityViewModel entityViewModel)
+        SubscribedEntityViewModel entityViewModel,
+        CancellationToken cancellationToken = default)
     {
         return ValueTask.FromResult(shortcut == Shortcut.StartShell
             && entityViewModel.IsEntityType("user-computer-profile"));
@@ -171,6 +172,5 @@ public sealed class StartShellOnProfileShortcutHandler : ShortcutHandler
         public ValueTask DisposeAsync() => this.channelStream.DisposeAsync();
     }
 }
-
 
 

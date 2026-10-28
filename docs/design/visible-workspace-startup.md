@@ -31,3 +31,24 @@ cancel action. They independently cover successful release, remote failure and
 concurrent disposal before the held request is released.
 Multiple-default coverage compares the original query order with the resulting
 pane order through both phased startup and the full initialization API.
+
+Restored view population links window lifetime, population lifetime and any
+subscription owner's lifetime. The linked token reaches associated-note and
+get/query subscriptions, referenced subview reads, hierarchy assembly, and card
+shortcut discovery (including filesystem profile/tunnel lookups). Interrupted
+view factories dispose unpublished populations, cards and query observers;
+interrupted reconciliation also disposes its temporary population.
+The broker publishes get/query subscriptions to its shared cache only after the
+initial refresh succeeds, so a superseded population's cancelled read cannot
+poison replacement populations with an unfinished, empty subscription.
+The query satisfier also excludes flights with no remaining callers from new
+deduplication/subsumption, even while the cancelled remote call is still unwinding.
+
+Matching auto-resume sessions forward lifetime cancellation through persistence
+acquisition, session-context composition, owner-profile lookup, transport/chat
+acquisition and remote prompt enqueue. Shared persistence creation remains owned
+and observed by the process cache; cancelling a session's wait does not cancel
+another session's shared store. An acquired chat lease transfers to startup only
+after the resume prompt succeeds; cancellation/failure before transfer releases it.
+Downstream loopback gates run after a real restored-view target fetch or an actual
+matching-session discovery, not merely at the earlier descriptor/discovery calls.

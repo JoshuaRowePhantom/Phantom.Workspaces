@@ -7,7 +7,8 @@ public abstract class ShortcutHandler
     public abstract ValueTask<bool> ShouldApplyTo(
         MainWindowViewModel mainWindowViewModel,
         Shortcut shortcut,
-        SubscribedEntityViewModel entityViewModel);
+        SubscribedEntityViewModel entityViewModel,
+        CancellationToken cancellationToken = default);
 
     public abstract Task<bool> Handle(
         MainWindowViewModel mainWindowViewModel,
@@ -36,4 +37,3 @@ public abstract class ShortcutHandler
         string? dockRegion)
         => Task.FromResult<WorkspaceTabViewModel?>(null);
 }
-

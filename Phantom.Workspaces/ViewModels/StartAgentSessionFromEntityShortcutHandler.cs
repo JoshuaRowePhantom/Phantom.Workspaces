@@ -24,7 +24,8 @@ public sealed class StartAgentSessionFromEntityShortcutHandler : ShortcutHandler
     public override ValueTask<bool> ShouldApplyTo(
         MainWindowViewModel mainWindowViewModel,
         Shortcut shortcut,
-        SubscribedEntityViewModel entityViewModel)
+        SubscribedEntityViewModel entityViewModel,
+        CancellationToken cancellationToken = default)
     {
         if (shortcut != Shortcut.StartAgentSession)
         {
@@ -217,5 +218,4 @@ public sealed class StartAgentSessionFromEntityShortcutHandler : ShortcutHandler
         EntityId appliedToEntityId)
         => DefaultRelationshipResolver.FindDefaultValueAppliedToAsync(dataAccessLayer, appliedToEntityId);
 }
-
 

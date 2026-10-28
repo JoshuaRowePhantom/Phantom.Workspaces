@@ -39,6 +39,19 @@ public sealed class MainWindowStartupTests(ITestOutputHelper output)
     [InlineData("cancel", "reconcile")]
     [InlineData("cancel", "history")]
     [InlineData("cancel", "auto-resume")]
+    [InlineData("cancel", "view-note")]
+    [InlineData("cancel", "view-reference")]
+    [InlineData("cancel", "view-get")]
+    [InlineData("cancel", "view-query")]
+    [InlineData("cancel", "view-hierarchy")]
+    [InlineData("cancel", "view-shortcut-owner")]
+    [InlineData("cancel", "view-shortcut-tunnel")]
+    [InlineData("complete", "view-query")]
+    [InlineData("fail", "view-query")]
+    [InlineData("cancel", "session-profile")]
+    [InlineData("cancel", "session-user")]
+    [InlineData("cancel", "session-computer")]
+    [InlineData("cancel", "session-owner")]
     public async Task ApplicationStartup_WorkspaceQueryIsGated_VisibleShellOwnsResponsiveCancellableLoading(
         string outcome, string stage)
     {
@@ -47,10 +60,20 @@ public sealed class MainWindowStartupTests(ITestOutputHelper output)
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var armed = 0;
         var target = new EntityId(Guid.NewGuid());
+        var subviewTarget = new EntityId(Guid.NewGuid());
+        var remoteOwner = new EntityId(Guid.NewGuid());
         var workspace = new EntityId(Guid.NewGuid());
         var hostId = string.Empty;
         var hostReads = 0;
         var toolQueries = 0;
+        var targetFetched = false;
+        var matchingSessionDiscovered = false;
+        var restoringView = stage.StartsWith("view-", StringComparison.Ordinal);
+        var resumingSession = stage.StartsWith("session-", StringComparison.Ordinal);
+        SubscribedQuery? firstViewQuery = null;
+        SubscribedEntityViewModel? firstViewEntity = null;
+        var entityListenersBeforeRestore = 0;
+        var queryListenersBeforeRestore = 0;
         var dal = await WebServerDataAccessLayerFactory.CreateDefaultAsync(token);
         var builder = WebApplication.CreateBuilder();
         builder.Logging.ClearProviders();
@@ -73,6 +96,19 @@ public sealed class MainWindowStartupTests(ITestOutputHelper output)
                 using var reader = new System.IO.StreamReader(context.Request.Body, leaveOpen: true);
                 var body = await reader.ReadToEndAsync(context.RequestAborted);
                 context.Request.Body.Position = 0;
+                var getRequest = context.Request.Path == "/data/get"
+                    ? JsonSerializer.Deserialize<GetRequest>(body, WebDataAccessJsonSerialization.Options)
+                    : null;
+                var afterTargetFetch = targetFetched;
+                if (getRequest?.Entities.Any(entity => entity.EntityId == target) == true)
+                {
+                    targetFetched = true;
+                }
+                if (resumingSession && context.Request.Path == "/data/query"
+                    && body.Contains("agent-sessions", StringComparison.Ordinal))
+                {
+                    matchingSessionDiscovered = true;
+                }
                 matches = stage switch
                 {
                     "entity-descriptor" or "agent-descriptor" or "declaration" =>
@@ -84,6 +120,29 @@ public sealed class MainWindowStartupTests(ITestOutputHelper output)
                         && body.Contains("tool-execution-result", StringComparison.Ordinal)
                         && Interlocked.Increment(ref toolQueries) == (stage == "reconcile" ? 1 : 2),
                     "auto-resume" => context.Request.Path == "/data/query" && body.Contains("agent-sessions", StringComparison.Ordinal),
+                    "view-note" => afterTargetFetch && getRequest?.Entities.Any(entity =>
+                        entity.EntityName?.Components.SequenceEqual(["tests", "gated-view"]) == true) == true,
+                    "view-reference" or "view-get" => afterTargetFetch
+                        && getRequest?.Entities.Any(entity => entity.EntityId == subviewTarget) == true,
+                    "view-query" => afterTargetFetch && context.Request.Path == "/data/query"
+                        && body.Contains("gated-view-query", StringComparison.Ordinal),
+                    "view-hierarchy" => afterTargetFetch && getRequest?.Entities.Any(entity =>
+                        entity.EntityName?.Components.FirstOrDefault() == "entity-type-views") == true,
+                    "view-shortcut-owner" => afterTargetFetch && getRequest?.Entities.Any(entity =>
+                        entity.EntityName?.Components.SequenceEqual(["tests", "gated-view-path"]) == true) == true,
+                    "view-shortcut-tunnel" => afterTargetFetch && getRequest?.Entities.Any(entity =>
+                        entity.EntityName?.Components.Contains("vscode-tunnel") == true) == true,
+                    "session-profile" => matchingSessionDiscovered && afterTargetFetch
+                        && getRequest?.Entities.Any(entity =>
+                            entity.EntityName?.Components.FirstOrDefault() == "computer-user-profiles") == true,
+                    "session-user" => matchingSessionDiscovered && afterTargetFetch
+                        && getRequest?.Entities.Any(entity =>
+                            entity.EntityName?.Components.SequenceEqual(["users", "username", Environment.UserName]) == true) == true,
+                    "session-computer" => matchingSessionDiscovered && afterTargetFetch
+                        && getRequest?.Entities.Any(entity =>
+                            entity.EntityName?.Components.SequenceEqual(["computers", "hostname", Environment.MachineName]) == true) == true,
+                    "session-owner" => matchingSessionDiscovered && afterTargetFetch
+                        && getRequest?.Entities.Any(entity => entity.EntityId == remoteOwner) == true,
                     _ => false,
                 };
             }
@@ -129,7 +188,30 @@ public sealed class MainWindowStartupTests(ITestOutputHelper output)
             splash.Show();
             await viewModel.PrepareShellAsync();
             hostId = viewModel.EntityBroker!.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId.ToString();
-            if (stage is "entity-descriptor" or "agent-descriptor" or "declaration")
+            if (resumingSession)
+            {
+                var session = JsonNode.Parse($$"""
+                    {"entity-id":"{{target}}","entity-types":["entity","agent-session"],
+                     "names":[["tests","gated-resume-session"]],
+                     "agent-session-id":"gated-resume-session",
+                     "auto-resume":{"trusted-executor":".","resume-prompt":"Continue gated session"} }
+                    """)!;
+                if (stage == "session-owner")
+                {
+                    session["host-profile-entity-id"] = remoteOwner.ToString();
+                    session["ownership-generation"] = 1;
+                }
+                var update = await dal.UpdateAsync(new UpdateRequest
+                {
+                    UpdateMetadata = new() { Comment = new() { Text = "Seed actual matching auto-resume session" } },
+                    Changes = [new() { EntityId = target, EntityChangeMode = EntityChangeMode.Replace,
+                        Data = JsonSerializer.SerializeToElement(session) }],
+                }, token);
+                Assert.DoesNotContain(update.EntityResults, result => result.UpdateState == UpdateState.Failed);
+                var matching = await Services.AutoResumeService.FindMatchingSessionsAsync(dal, ".", token);
+                Assert.Equal(target, Assert.Single(matching).EntityId);
+            }
+            if (stage is "entity-descriptor" or "agent-descriptor" or "declaration" || restoringView)
             {
                 var data = JsonNode.Parse($$"""
                     {"entity-id":"{{workspace}}","entity-types":["entity","workspace"],"names":[["tests","gated-workspace"]],
@@ -165,23 +247,101 @@ public sealed class MainWindowStartupTests(ITestOutputHelper output)
                     data["dock-layout"] = JsonNode.Parse(serializer.Serialize(layout));
                 }
                 var relationship = new EntityId(Guid.NewGuid());
+                var changes = new List<EntityChange>
+                {
+                    new() { EntityId = workspace, EntityChangeMode = EntityChangeMode.Replace,
+                        Data = JsonSerializer.SerializeToElement(data) },
+                    new() { EntityId = relationship, EntityChangeMode = EntityChangeMode.Replace,
+                        Data = JsonSerializer.SerializeToElement(JsonNode.Parse($$"""
+                            {"entity-id":"{{relationship}}","entity-types":["entity","default","relationship"],
+                             "names":[["tests","gated-default"]],
+                             "participants":{"applied-to":"{{hostId}}","value":"{{workspace}}"} }
+                            """)) },
+                };
+                if (restoringView)
+                {
+                    var view = JsonNode.Parse($$"""
+                        {"entity-id":"{{target}}","entity-types":["entity","view"],
+                         "names":[["tests","gated-view"]],"title":{"default":"Gated view"},
+                         "sub-views":[]}
+                        """)!;
+                    var subviews = (JsonArray)view["sub-views"]!;
+                    if (stage == "view-reference")
+                    {
+                        subviews.Add(JsonNode.Parse($$"""{"disposition":"expanded","view-entity-id":"{{subviewTarget}}"}"""));
+                    }
+                    if (stage is "view-get" or "view-hierarchy" or "view-shortcut-owner" or "view-shortcut-tunnel")
+                    {
+                        subviews.Add(JsonNode.Parse($$"""{"disposition":"expanded","get-entity":[{"entity-id":"{{subviewTarget}}"}]}"""));
+                    }
+                    if (stage == "view-query")
+                    {
+                        var firstQuery = new QueryRequest
+                        {
+                            Clauses = [new TopLevelQueryClause
+                            {
+                                ClauseIdentifier = new QueryClauseIdentifier("gated-view-first-query"),
+                                Clause = new EntityTypeQueryClause { EntityTypeNames = new EntityTypeNameSet(["note"]) },
+                            }],
+                        };
+                        subviews.Add(new JsonObject
+                        {
+                            ["disposition"] = "expanded",
+                            ["query"] = JsonSerializer.SerializeToNode(firstQuery, WebDataAccessJsonSerialization.Options),
+                        });
+                        firstViewQuery = await viewModel.EntityBroker.SubscribeQueryAsync(
+                            NotInterestingQuery.ExcludingNotInteresting(
+                                firstQuery with { RelationshipsToReturn = MainWindowViewModel.MergeInterestRelationships(null, viewModel.EntityBroker.InterestCatalog) }),
+                            token);
+                        queryListenersBeforeRestore = CountCollectionListeners(firstViewQuery.Results);
+                        var query = new QueryRequest
+                        {
+                            Clauses = [new TopLevelQueryClause
+                            {
+                                ClauseIdentifier = new QueryClauseIdentifier("gated-view-query"),
+                                Clause = new EntityTypeQueryClause { EntityTypeNames = new EntityTypeNameSet(["note"]) },
+                            }],
+                        };
+                        subviews.Add(new JsonObject
+                        {
+                            ["disposition"] = "expanded",
+                            ["query"] = JsonSerializer.SerializeToNode(query, WebDataAccessJsonSerialization.Options),
+                        });
+                    }
+                    changes.Add(new() { EntityId = target, EntityChangeMode = EntityChangeMode.Replace,
+                        Data = JsonSerializer.SerializeToElement(view) });
+                    if (stage is "view-query" or "view-hierarchy")
+                    {
+                        changes.Add(new() { EntityId = subviewTarget, EntityChangeMode = EntityChangeMode.Replace,
+                            Data = JsonSerializer.SerializeToElement(JsonNode.Parse($$"""
+                                {"entity-id":"{{subviewTarget}}","entity-types":["entity","note"],
+                                 "names":[["tests","gated-view-note"]],
+                                 "display-name":{"default":"Restored note"},
+                                 "content":{"mime-type":"text/markdown","content":{"text":"Restored content"} } }
+                                """)) });
+                    }
+                    if (stage is "view-shortcut-owner" or "view-shortcut-tunnel")
+                    {
+                        changes.Add(new() { EntityId = subviewTarget, EntityChangeMode = EntityChangeMode.Replace,
+                            Data = JsonSerializer.SerializeToElement(JsonNode.Parse($$"""
+                                {"entity-id":"{{subviewTarget}}","entity-types":["entity","filesystem-path"],
+                                 "names":[["tests","gated-view-path"]],"path":"C:\\gated-startup-path"}
+                                """)) });
+                    }
+                }
                 var update = await dal.UpdateAsync(new UpdateRequest
                 {
                     UpdateMetadata = new() { Comment = new() { Text = "Seed deterministic startup cancellation case" } },
-                    Changes =
-                    [
-                        new() { EntityId = workspace, EntityChangeMode = EntityChangeMode.Replace,
-                            Data = JsonSerializer.SerializeToElement(data) },
-                        new() { EntityId = relationship, EntityChangeMode = EntityChangeMode.Replace,
-                            Data = JsonSerializer.SerializeToElement(JsonNode.Parse($$"""
-                                {"entity-id":"{{relationship}}","entity-types":["entity","default","relationship"],
-                                 "names":[["tests","gated-default"]],
-                                 "participants":{"applied-to":"{{hostId}}","value":"{{workspace}}"} }
-                                """)) },
-                    ],
+                    Changes = changes,
                 }, token);
                 Assert.True(update.EntityResults.All(result => result.UpdateState != UpdateState.Failed),
                     string.Join(" | ", update.EntityResults.SelectMany(result => result.Errors).Select(error => error.Message)));
+                if (stage == "view-query")
+                {
+                    await firstViewQuery!.RefreshAsync(token);
+                    firstViewEntity = Assert.Single(await viewModel.EntityBroker.GetEntitiesAsync([subviewTarget], token));
+                    entityListenersBeforeRestore = CountEntityListeners(firstViewEntity);
+                }
             }
             window.AttachAccessHost(access, popup);
             window.Show();
@@ -192,6 +352,13 @@ public sealed class MainWindowStartupTests(ITestOutputHelper output)
             var startup = viewModel.CompleteVisibleStartupAsync();
             output.WriteLine($"Awaiting gated {stage} request.");
             await entered.Task.WaitAsync(token);
+            if (restoringView || resumingSession)
+            {
+                Assert.True(targetFetched);
+                Assert.Equal(resumingSession, matchingSessionDiscovered);
+                Assert.DoesNotContain(viewModel.WorkspacePanes.SelectMany(pane => pane.Tabs),
+                    tab => tab.Entity?.EntityId == target);
+            }
             output.WriteLine($"Entered gated {stage} request.");
             Assert.True(rendered.Task.IsCompletedSuccessfully);
             Assert.True(window.IsVisible);
@@ -200,6 +367,11 @@ public sealed class MainWindowStartupTests(ITestOutputHelper output)
             Assert.Equal(WorkspaceStartupState.LoadingWorkspaces, viewModel.StartupState);
             Assert.False(viewModel.IsStartupReady);
             Assert.False(startup.IsCompleted);
+            if (stage == "view-query")
+            {
+                Assert.True(CountEntityListeners(firstViewEntity!) > entityListenersBeforeRestore);
+                Assert.Equal(queryListenersBeforeRestore + 1, CountCollectionListeners(firstViewQuery!.Results));
+            }
             var heartbeat = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             Dispatcher.UIThread.Post(() => heartbeat.TrySetResult());
             await heartbeat.Task.WaitAsync(token);
@@ -216,7 +388,7 @@ public sealed class MainWindowStartupTests(ITestOutputHelper output)
             {
                 var disposal = viewModel.DisposeAsync().AsTask();
                 output.WriteLine($"Awaiting concurrent disposal during {stage}.");
-                await Task.WhenAll(disposal, viewModel.DisposeAsync().AsTask());
+                await Task.WhenAll(disposal, viewModel.DisposeAsync().AsTask()).WaitAsync(token);
                 output.WriteLine($"Disposed during {stage}.");
                 Assert.False(release.Task.IsCompleted);
                 await Assert.ThrowsAnyAsync<OperationCanceledException>(() => startup);
@@ -225,6 +397,12 @@ public sealed class MainWindowStartupTests(ITestOutputHelper output)
                 release.TrySetResult();
                 await Dispatcher.UIThread.InvokeAsync(() => Assert.Equal(panes, viewModel.WorkspacePanes));
                 Assert.False(viewModel.IsStartupReady);
+                Assert.Empty(viewModel.ApplicationServices.RunningAgentChats.RunningSessions);
+                if (stage == "view-query")
+                {
+                    Assert.Equal(entityListenersBeforeRestore, CountEntityListeners(firstViewEntity!));
+                    Assert.Equal(queryListenersBeforeRestore, CountCollectionListeners(firstViewQuery!.Results));
+                }
             }
             else
             {
@@ -234,11 +412,23 @@ public sealed class MainWindowStartupTests(ITestOutputHelper output)
                     await Assert.ThrowsAnyAsync<Exception>(() => startup);
                     Assert.Equal(WorkspaceStartupState.Failed, viewModel.StartupState);
                     Assert.Contains("failed", viewModel.StartupStatus, StringComparison.OrdinalIgnoreCase);
+                    if (stage == "view-query")
+                    {
+                        Assert.Equal(entityListenersBeforeRestore, CountEntityListeners(firstViewEntity!));
+                        Assert.Equal(queryListenersBeforeRestore, CountCollectionListeners(firstViewQuery!.Results));
+                    }
                 }
                 else
                 {
                     await startup;
                     Assert.True(viewModel.IsStartupReady);
+                    if (restoringView)
+                    {
+                        var tab = Assert.Single(viewModel.WorkspacePanes.SelectMany(pane => pane.Tabs)
+                            .OfType<ViewWorkspaceTabViewModel>(), tab => tab.Entity?.EntityId == target);
+                        Assert.Equal("gated-tab", tab.Id);
+                        Assert.True(tab.Population.QueryObserverCount > 0);
+                    }
                 }
             }
         }
@@ -253,6 +443,17 @@ public sealed class MainWindowStartupTests(ITestOutputHelper output)
             await server.StopAsync(token);
         }
     }
+
+    private static int CountEntityListeners(SubscribedEntityViewModel entity) =>
+        (typeof(ViewModelBase).GetField("PropertyChanged",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(entity) as MulticastDelegate)?.GetInvocationList().Length ?? 0;
+
+    private static int CountCollectionListeners(System.Collections.ObjectModel.ObservableCollection<SubscribedEntityViewModel> collection) =>
+        (typeof(System.Collections.ObjectModel.ObservableCollection<SubscribedEntityViewModel>)
+            .GetField("CollectionChanged",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(collection) as MulticastDelegate)?.GetInvocationList().Length ?? 0;
 
     [AvaloniaFact(Timeout = 15_000)]
     public async Task ApplicationStartup_WorkspaceMaterializes_VisibleWindowRemainsLoadingUntilCompleted()

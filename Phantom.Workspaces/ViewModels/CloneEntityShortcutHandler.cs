@@ -7,7 +7,8 @@ public sealed class CloneEntityShortcutHandler : ShortcutHandler
     public override ValueTask<bool> ShouldApplyTo(
         MainWindowViewModel mainWindowViewModel,
         Shortcut shortcut,
-        SubscribedEntityViewModel entityViewModel)
+        SubscribedEntityViewModel entityViewModel,
+        CancellationToken cancellationToken = default)
     {
         return ValueTask.FromResult(shortcut == Shortcut.Clone
             && entityViewModel.CanEditEntity);
@@ -23,5 +24,4 @@ public sealed class CloneEntityShortcutHandler : ShortcutHandler
         return true;
     }
 }
-
 

@@ -43,14 +43,17 @@ public sealed class AgentSessionShortcutContext
 
     public async Task<AgentServices> CreateAgentServicesAsync(
         MainWindowViewModel mainWindowViewModel,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        CancellationToken cancellationToken = default)
     {
-        var agentPersistenceStore = await this.GetAgentPersistenceStoreAsync(mainWindowViewModel);
+        cancellationToken.ThrowIfCancellationRequested();
+        var agentPersistenceStore = await this.GetAgentPersistenceStoreAsync(mainWindowViewModel, cancellationToken);
         return await AgentServicesComposition.ComposeSessionServicesAsync(
             mainWindowViewModel,
             agentPersistenceStore,
             loggerFactory,
-            this.userComputerProfileOverride);
+            this.userComputerProfileOverride,
+            cancellationToken);
     }
 
     public async Task<SubscribedEntityViewModel?> CreateAgentSessionEntityAsync(
@@ -146,11 +149,14 @@ public sealed class AgentSessionShortcutContext
     }
 
     private Task<IAgentPersistenceStore> GetAgentPersistenceStoreAsync(
-        MainWindowViewModel mainWindowViewModel)
+        MainWindowViewModel mainWindowViewModel,
+        CancellationToken cancellationToken)
     {
         if (this.persistenceStoreCache is not null)
         {
-            return this.persistenceStoreCache.GetOrCreateAsync(mainWindowViewModel.RepositorySource);
+            // The process cache owns shared creation and observes/disposes it at shutdown.
+            return this.persistenceStoreCache.GetOrCreateAsync(mainWindowViewModel.RepositorySource)
+                .WaitAsync(cancellationToken);
         }
 
         if (this.agentPersistenceStoreTask is not null)
@@ -163,7 +169,7 @@ public sealed class AgentSessionShortcutContext
             mainWindowViewModel.RepositorySource,
             repository.AccessBroker,
             repository.DevTunnelIdentityRoute,
-            repository.PresentationScope).CreateAsync(CancellationToken.None);
+            repository.PresentationScope).CreateAsync(cancellationToken);
         return this.agentPersistenceStoreTask;
     }
 }

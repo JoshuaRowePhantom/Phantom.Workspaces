@@ -59,7 +59,8 @@ public sealed class OpenInVsCodeShortcutHandler : ShortcutHandler
     public override async ValueTask<bool> ShouldApplyTo(
         MainWindowViewModel mainWindowViewModel,
         Shortcut shortcut,
-        SubscribedEntityViewModel entityViewModel)
+        SubscribedEntityViewModel entityViewModel,
+        CancellationToken cancellationToken = default)
     {
         if (shortcut != Shortcut.VsCode)
         {
@@ -72,7 +73,7 @@ public sealed class OpenInVsCodeShortcutHandler : ShortcutHandler
             return false;
         }
 
-        var owningProfile = await FindOwningProfileAsync(mainWindowViewModel, entityViewModel);
+        var owningProfile = await FindOwningProfileAsync(mainWindowViewModel, entityViewModel, cancellationToken);
         var localProfileId = mainWindowViewModel.EntityBroker.EntityRepository
             .WorkspaceEntitySession.UserComputerProfileEntityId;
 
@@ -87,7 +88,7 @@ public sealed class OpenInVsCodeShortcutHandler : ShortcutHandler
             return false;
         }
 
-        var tunnelEntity = await TryFindVsCodeTunnelAsync(mainWindowViewModel, owningProfile);
+        var tunnelEntity = await TryFindVsCodeTunnelAsync(mainWindowViewModel, owningProfile, cancellationToken);
         return tunnelEntity is not null;
     }
 
@@ -264,7 +265,8 @@ public sealed class OpenInVsCodeShortcutHandler : ShortcutHandler
 
     private static async Task<SubscribedEntityViewModel?> FindOwningProfileAsync(
         MainWindowViewModel mainWindowViewModel,
-        SubscribedEntityViewModel entityViewModel)
+        SubscribedEntityViewModel entityViewModel,
+        CancellationToken cancellationToken = default)
     {
         if (entityViewModel.IsEntityType("user-computer-profile"))
         {
@@ -284,7 +286,7 @@ public sealed class OpenInVsCodeShortcutHandler : ShortcutHandler
             return null;
         }
 
-        var entities = await mainWindowViewModel.EntityBroker.GetEntitiesAsync(nameRequests);
+        var entities = await mainWindowViewModel.EntityBroker.GetEntitiesAsync(nameRequests, cancellationToken);
         return entities.FirstOrDefault(e => e.IsEntityType("user-computer-profile"));
     }
 
@@ -316,7 +318,8 @@ public sealed class OpenInVsCodeShortcutHandler : ShortcutHandler
 
     private static async Task<SubscribedEntityViewModel?> TryFindVsCodeTunnelAsync(
         MainWindowViewModel mainWindowViewModel,
-        SubscribedEntityViewModel owningProfile)
+        SubscribedEntityViewModel owningProfile,
+        CancellationToken cancellationToken = default)
     {
         if (owningProfile.Data is not JsonElement profileData
             || !profileData.TryGetProperty("names", out var namesElement)
@@ -345,7 +348,7 @@ public sealed class OpenInVsCodeShortcutHandler : ShortcutHandler
         var tunnelName = VsCodeTunnelEntityNaming.BuildTunnelName(new EntityName(nameParts));
         var request = new GetEntityRequest { EntityName = tunnelName };
 
-        var entities = await mainWindowViewModel.EntityBroker.GetEntitiesAsync([request]);
+        var entities = await mainWindowViewModel.EntityBroker.GetEntitiesAsync([request], cancellationToken);
         return entities.FirstOrDefault(e => e.IsEntityType("vscode-tunnel"));
     }
 
