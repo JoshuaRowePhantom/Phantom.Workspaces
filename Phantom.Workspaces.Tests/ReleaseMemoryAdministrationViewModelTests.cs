@@ -13,6 +13,62 @@ namespace Phantom.Workspaces.Tests;
 public sealed class ReleaseMemoryAdministrationViewModelTests
 {
     [AvaloniaTheory(Timeout = 15_000)]
+    [InlineData("""{"provider":"storedSecret","kind":"secret","source":"future-source","origin":"manifest"}""")]
+    [InlineData("""{"provider":"storedSecret","kind":"secret","source":"secretStore"}""")]
+    [InlineData("""{"provider":999,"kind":"secret","source":"secretStore","origin":"manifest"}""")]
+    [InlineData("[]")]
+    [InlineData("null")]
+    public async Task ReleaseMemoryAdministration_MalformedOptionalContext_PreservesPolicyAndExactForget(string metadata)
+    {
+        var directory = Path.Combine(Environment.CurrentDirectory, ".access-ui-tests", Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(directory, "memory.json");
+        var token = TestContext.Current.CancellationToken;
+        var window = new Window();
+        try
+        {
+            var request = Access.ReleaseAuthorizationContractTests.Request();
+            request = request with { Credential = request.Credential with { Provider = CredentialProviderKind.StoredSecret } };
+            await using (var original = new ReleaseAuthorizationPolicy(new ReleaseMemoryStore(path)))
+            {
+                await original.CommitAsync(new() { Request = request, Scope = ReleaseMemoryScopeKind.AllUses }, token);
+            }
+            var json = System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(path, token))!;
+            var identifier = json["records"]![0]!["identifier"]!.ToJsonString();
+            json["records"]![0]!["safeContext"] = System.Text.Json.Nodes.JsonNode.Parse(metadata);
+            await File.WriteAllTextAsync(path, json.ToJsonString(), token);
+            await using var policy = new ReleaseAuthorizationPolicy(new ReleaseMemoryStore(path));
+            await using var model = new ReleaseMemoryAdministrationViewModel
+            {
+                Administration = new ReleaseMemoryAdministration { Policy = policy },
+            };
+            await model.RefreshAsync(token);
+            var descriptor = Assert.Single(model.Items);
+            Assert.Null(descriptor.SafeContext);
+            Assert.Equal(identifier, System.Text.Json.JsonSerializer.SerializeToNode(descriptor.Identifier,
+                new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase })!.ToJsonString());
+            Assert.IsType<ReleasePolicyMatched>(await policy.EvaluateAsync(request, token));
+            var control = new ReleaseMemoryAdministrationControl { DataContext = model };
+            window.Content = control;
+            window.Show();
+            window.UpdateLayout();
+            Assert.Contains(control.GetVisualDescendants().OfType<TextBlock>(), text => text.Text == "Details unavailable");
+            var forget = Assert.Single(control.GetVisualDescendants().OfType<Button>(),
+                button => button.CommandParameter is ReleaseMemoryDescriptor);
+            Assert.Equal("Forget approval: Details unavailable", Avalonia.Automation.AutomationProperties.GetName(forget));
+            await model.RemoveCommand.ExecuteAsync(forget.CommandParameter);
+            Assert.Empty(await policy.ListAsync(token));
+            Assert.IsType<ReleasePolicyRequired>(await policy.EvaluateAsync(request, token));
+            await using var reload = new ReleaseAuthorizationPolicy(new ReleaseMemoryStore(path));
+            Assert.Empty(await reload.ListAsync(token));
+        }
+        finally
+        {
+            window.Close();
+            if (Directory.Exists(directory)) { Directory.Delete(directory, recursive: true); }
+        }
+    }
+
+    [AvaloniaTheory(Timeout = 15_000)]
     [InlineData(false)]
     [InlineData(true)]
     public async Task ReleaseMemoryAdministration_SafeContexts_RendersDetailsAndForgetsExactIdentifier(bool duplicateLabels)
