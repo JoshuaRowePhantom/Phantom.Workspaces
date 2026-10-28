@@ -349,7 +349,8 @@ public sealed class ViewEntityViewModelTests : IAsyncDisposable
         public override async ValueTask<bool> ShouldApplyTo(
             MainWindowViewModel mainWindowViewModel,
             Shortcut shortcut,
-            SubscribedEntityViewModel entityViewModel)
+            SubscribedEntityViewModel entityViewModel,
+            CancellationToken cancellationToken = default)
         {
             await Task.Yield();
             return shortcut == Shortcut.Open;

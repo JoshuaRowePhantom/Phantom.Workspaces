@@ -98,6 +98,44 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private readonly TaskCompletionSource disposal = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly object initializationGate = new();
     private Task? initializationTask;
+    private Task? shellPreparationTask;
+    private Task? visibleStartupTask;
+    private WorkspaceStartupState startupState;
+
+    public WorkspaceStartupState StartupState
+    {
+        get => this.startupState;
+        private set
+        {
+            if (this.SetProperty(ref this.startupState, value))
+            {
+                this.RaisePropertyChanged(nameof(this.StartupStatus));
+                this.RaisePropertyChanged(nameof(this.IsStartupReady));
+            }
+        }
+    }
+
+    public bool IsStartupReady => this.StartupState == WorkspaceStartupState.Ready;
+
+    public string StartupStatus => this.StartupState switch
+    {
+        WorkspaceStartupState.PreparingShell => "Preparing workspace window…",
+        WorkspaceStartupState.ShellPrepared => "Window ready. Workspaces have not finished loading.",
+        WorkspaceStartupState.LoadingWorkspaces => "Loading workspaces and services…",
+        WorkspaceStartupState.Failed => "Workspace loading failed. See the application log for details.",
+        WorkspaceStartupState.Cancelled => "Workspace loading cancelled.",
+        _ => string.Empty,
+    };
+
+    private string accessAdministrationStatus = string.Empty;
+    public string AccessAdministrationStatus => this.accessAdministrationStatus;
+
+    internal void ReportAccessAdministrationFailure()
+    {
+        this.accessAdministrationStatus = "Credential access is unavailable. Close the window and try again.";
+        this.RaisePropertyChanged(nameof(this.AccessAdministrationStatus));
+        this.loggerFactory.CreateLogger<MainWindowViewModel>().LogError("Credential access window operation failed.");
+    }
     private int disposalStarted;
     private readonly Services.Logging.ILogDirectoryProvider? logDirectoryProvider;
     private readonly global::Phantom.Workspaces.Configuration.ConfigurationPersistenceService? configurationPersistence;
@@ -691,11 +729,29 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         lock (this.initializationGate)
         {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref this.disposalStarted) != 0, this);
-            return this.initializationTask ??= this.InitializeCoreAsync();
+            return this.initializationTask ??= this.CompleteVisibleStartupAsync();
         }
     }
 
-    private async Task InitializeCoreAsync()
+    public Task PrepareShellAsync()
+    {
+        lock (this.initializationGate)
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref this.disposalStarted) != 0, this);
+            return this.shellPreparationTask ??= this.PrepareShellCoreAsync();
+        }
+    }
+
+    public Task CompleteVisibleStartupAsync()
+    {
+        lock (this.initializationGate)
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref this.disposalStarted) != 0, this);
+            return this.visibleStartupTask ??= this.CompleteVisibleStartupCoreAsync();
+        }
+    }
+
+    private async Task PrepareShellCoreAsync()
     {
         this.entityBroker = await this.entityBrokerTask;
         this.lifetime.Token.ThrowIfCancellationRequested();
@@ -737,12 +793,43 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         await this.InitializeProfileAsync();
         this.lifetime.Token.ThrowIfCancellationRequested();
         this.InitializeDockLayout(); // Initialize workspace-level dock
+        this.StartupState = WorkspaceStartupState.ShellPrepared;
+    }
+
+    private async Task CompleteVisibleStartupCoreAsync()
+    {
+        try
+        {
+            await this.PrepareShellAsync();
+            // Loaded is below Render: the shown shell gets a layout/render opportunity
+            // even when the repository and workspace loaders initially complete synchronously.
+            await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Loaded);
+            this.lifetime.Token.ThrowIfCancellationRequested();
+            this.StartupState = WorkspaceStartupState.LoadingWorkspaces;
+            await this.LoadStartupWorkspacesAndRuntimeAsync();
+            this.StartupState = WorkspaceStartupState.Ready;
+        }
+        catch (OperationCanceledException) when (this.lifetime.IsCancellationRequested)
+        {
+            this.StartupState = WorkspaceStartupState.Cancelled;
+            throw;
+        }
+        catch (Exception exception)
+        {
+            this.StartupState = WorkspaceStartupState.Failed;
+            this.loggerFactory.CreateLogger<MainWindowViewModel>()
+                .LogError(exception, "Visible workspace startup failed.");
+            throw;
+        }
+    }
+
+    private async Task LoadStartupWorkspacesAndRuntimeAsync()
+    {
         if (this.configuration?.SkipStartupWorkspace != true)
         {
             await this.OpenStartupWorkspaceAsync();
             this.lifetime.Token.ThrowIfCancellationRequested();
         }
-        this.refreshTimer.Start();
         await this.InitializeWebHostAsync();
         this.lifetime.Token.ThrowIfCancellationRequested();
         await this.InitializeScheduledToolsAsync();
@@ -751,6 +838,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.lifetime.Token.ThrowIfCancellationRequested();
         await this.InitializeUsageTrackerAsync();
         this.lifetime.Token.ThrowIfCancellationRequested();
+        this.refreshTimer.Start();
     }
 
     /// <summary>
@@ -769,6 +857,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
         var hostEntityId = this.HostProfileEntityId;
         var hostNameComponents = await this.ResolveHostNameComponentsAsync(hostEntityId);
+        this.lifetime.Token.ThrowIfCancellationRequested();
 
         var registry = new ScheduledTools.ScheduledToolRegistry(
         [
@@ -790,7 +879,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.scheduledToolPauseStateService = new ScheduledTools.ScheduledToolPauseStateService(
             dataAccessLayer,
             this.scheduledToolHost);
-        await this.scheduledToolPauseStateService.RefreshAsync(hostEntityId);
+        await this.scheduledToolPauseStateService.RefreshAsync(hostEntityId, this.lifetime.Token);
+        this.lifetime.Token.ThrowIfCancellationRequested();
         this.ScheduledToolsPause = new ScheduledToolsPauseIndicatorViewModel(
             this.scheduledToolPauseStateService,
             hostEntityId,
@@ -800,7 +890,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         // prior process termination or completion-write failure. See #1155.
         try
         {
-            await this.scheduledToolHost.ReconcileOrphanRunningResultsAsync(hostNameComponents);
+            await this.scheduledToolHost.ReconcileOrphanRunningResultsAsync(hostNameComponents, this.lifetime.Token);
+        }
+        catch (OperationCanceledException) when (this.lifetime.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception exception)
         {
@@ -809,12 +903,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 .LogError(exception, "Failed to reconcile orphan running tool-execution-result entities on startup.");
         }
 
+        this.lifetime.Token.ThrowIfCancellationRequested();
         this.ScheduledToolsRunning = new ScheduledToolsRunningViewModel(
             this.scheduledToolHost,
             dataAccessLayer,
             action => Dispatcher.UIThread.Post(action),
             TaskScheduler.FromCurrentSynchronizationContext());
-        _ = this.ScheduledToolsRunning.RefreshHistoryAsync();
+        await this.ScheduledToolsRunning.RefreshHistoryAsync(this.lifetime.Token);
+        this.lifetime.Token.ThrowIfCancellationRequested();
 
         this.scheduledToolRunner = ScheduledTools.ScheduledToolRunner.Create(
             this.scheduledToolHost,
@@ -834,7 +930,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
         var sessions = await AutoResumeService.FindMatchingSessionsAsync(
-            dataAccessLayer, Llm.Trust.TrustProfile.LocalClientInstance);
+            dataAccessLayer, Llm.Trust.TrustProfile.LocalClientInstance, this.lifetime.Token);
+        this.lifetime.Token.ThrowIfCancellationRequested();
 
         if (sessions.Count == 0)
         {
@@ -845,7 +942,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         foreach (var session in sessions)
         {
-            var entities = await broker.GetEntitiesAsync([session.EntityId]);
+            var entities = await broker.GetEntitiesAsync([session.EntityId], this.lifetime.Token);
+            this.lifetime.Token.ThrowIfCancellationRequested();
             var entity = entities.FirstOrDefault(e => e.EntityId == session.EntityId);
             if (entity is null)
             {
@@ -853,12 +951,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             }
 
             var lease = await this.openAgentSessionShortcutHandler.TryStartAutoResumeAsync(
-                this, entity, session.ResumePrompt, foregroundScheduler);
+                this, entity, session.ResumePrompt, foregroundScheduler, this.lifetime.Token);
 
             if (lease is not null)
             {
                 this.autoResumeLeases.Add(lease);
             }
+            this.lifetime.Token.ThrowIfCancellationRequested();
         }
     }
 
@@ -915,7 +1014,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             providers,
             TimeProvider.System,
             this.loggerFactory.CreateLogger<Services.UsageMetricsService>());
-        await this.usageMetricsService.StartAsync(CancellationToken.None);
+        await this.usageMetricsService.StartAsync(this.lifetime.Token);
     }
 
     private async Task<IReadOnlyList<string>> ResolveHostNameComponentsAsync(EntityId hostEntityId)
@@ -930,7 +1029,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             {
                 Entities = [new GetEntityRequest { EntityId = hostEntityId }],
                 Timestamps = [null],
-            });
+            }, this.lifetime.Token);
+        this.lifetime.Token.ThrowIfCancellationRequested();
         var snapshot = getResult.Batches
             .SelectMany(batch => batch.Entities)
             .FirstOrDefault(entity => entity.EntityId == hostEntityId);
@@ -997,7 +1097,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var runtimeHostServices =
             await Services.AgentServicesComposition.ComposeRuntimeHostServicesAsync(
                 this,
-                this.applicationServices.LoggerFactory);
+                this.applicationServices.LoggerFactory,
+                this.lifetime.Token);
+        this.lifetime.Token.ThrowIfCancellationRequested();
         var composition = new Services.WorkspacesTransportComposition(
             this.entityBroker!.EntityRepository.DataAccessLayer,
             this.entityBroker.EntityRepository.WorkspaceEntitySession,
@@ -1009,7 +1111,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             outboundHttpTransportFactory: this.applicationServices.OutboundHttpTransportFactory);
         this.transportComposition = composition;
         this.trustedExecutorSelector.SetRemoteExecutor(composition.TrustedExecutor);
-        await composition.StartAsync();
+        await composition.StartAsync(this.lifetime.Token);
+        this.lifetime.Token.ThrowIfCancellationRequested();
         this.webHost = new WorkspacesWebHost(
             composition.ConnectionStatusRegistry,
             this.applicationServices.LoggerFactory,
@@ -1024,7 +1127,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         {
             await this.webHost.StartAsync(
                 this.configuration.RemoteHosting,
-                this.entityBroker.EntityRepository.DataAccessLayer);
+                this.entityBroker.EntityRepository.DataAccessLayer,
+                this.lifetime.Token);
+            this.lifetime.Token.ThrowIfCancellationRequested();
             this.ConnectionStatus.SetLocalAccessPoint(this.webHost.ListenUrl);
             this.StartDevTunnelHostIfConfigured(this.webHost.ListenUrl);
         }
@@ -1588,6 +1693,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             await this.ReconcileViewPopulationAsync(
                 population, view, changedEntityIds, hasQueryMembershipChanges);
         }
+        catch (OperationCanceledException) when (
+            population.CancellationToken.IsCancellationRequested || this.lifetime.IsCancellationRequested)
+        {
+        }
         finally
         {
             population.ReconcileGate.Release();
@@ -1626,20 +1735,26 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         var candidate = new ViewPopulationViewModel(population.ExpandedEntityIds);
-        await this.PopulateViewAsync(candidate, view,
-            () => this.RebindPopulationAsync(population), population);
+        try
+        {
+            await this.PopulateViewAsync(candidate, view,
+                () => this.RebindPopulationAsync(population), population);
 
-        if (population.CancellationToken.IsCancellationRequested
-            || (!ReferenceEquals(this.currentPopulation, population)
-                && this.GetViewForPopulation(population) is null))
+            if (population.CancellationToken.IsCancellationRequested
+                || this.lifetime.IsCancellationRequested
+                || (!ReferenceEquals(this.currentPopulation, population)
+                    && this.GetViewForPopulation(population) is null))
+            {
+                return;
+            }
+
+            await this.ReconcilePopulationInPlaceAsync(population, candidate);
+            population.AdoptSubscriptions(candidate);
+        }
+        finally
         {
             await candidate.DisposeAsync();
-            return;
         }
-
-        await this.ReconcilePopulationInPlaceAsync(population, candidate);
-        population.AdoptSubscriptions(candidate);
-        await candidate.DisposeAsync();
     }
 
     private void RefreshPopulationEntityData(
@@ -1761,6 +1876,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         Func<Task>? onResultsChanged = null,
         ViewPopulationViewModel? subscriptionOwner = null)
     {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            this.lifetime.Token,
+            next.CancellationToken,
+            (subscriptionOwner ?? next).CancellationToken);
+        var cancellationToken = cancellation.Token;
+        this.lifetime.Token.ThrowIfCancellationRequested();
         var isLeftView = ReferenceEquals(next, this.currentPopulation);
         if (string.Equals(selectedView.Id, EmptyView.Id, StringComparison.Ordinal))
         {
@@ -1768,7 +1889,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
-        if (next.CancellationToken.IsCancellationRequested) return;
+        if (cancellationToken.IsCancellationRequested) return;
 
         if (selectedView.IsEntityBrowser)
         {
@@ -1777,7 +1898,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
-        if (next.CancellationToken.IsCancellationRequested) return;
+        if (cancellationToken.IsCancellationRequested) return;
 
         if (selectedView.ViewEntity is not SubscribedEntityViewModel selectedViewEntity)
         {
@@ -1791,13 +1912,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
-        var associatedNoteEntity = await this.LoadAssociatedViewNoteAsync(next, selectedViewData);
-        if (next.CancellationToken.IsCancellationRequested) return;
+        var associatedNoteEntity = await this.LoadAssociatedViewNoteAsync(next, selectedViewData, cancellationToken);
+        if (cancellationToken.IsCancellationRequested) return;
 
         if (associatedNoteEntity is not null)
         {
-            var viewEntity = await this.CreateViewEntityViewModelAsync(next, associatedNoteEntity, indentLevel: 0, isParentContext: true);
-            if (next.CancellationToken.IsCancellationRequested)
+            var viewEntity = await this.CreateViewEntityViewModelAsync(next, associatedNoteEntity, indentLevel: 0, isParentContext: true, cancellationToken: cancellationToken);
+            if (cancellationToken.IsCancellationRequested)
             {
                 await viewEntity.DisposeAsync();
                 return;
@@ -1806,22 +1927,22 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             next.RootEntities.Add(viewEntity);
         }
 
-        await this.LoadSubViewEntitiesAsync(selectedViewData);
+        await this.LoadSubViewEntitiesAsync(selectedViewData, cancellationToken);
 
-        if (next.CancellationToken.IsCancellationRequested) return;
+        if (cancellationToken.IsCancellationRequested) return;
 
         if (selectedViewData.TryGetProperty("sub-views", out var subViews)
             && subViews.ValueKind == JsonValueKind.Array)
         {
             foreach (var subView in subViews.EnumerateArray())
             {
-                if (next.CancellationToken.IsCancellationRequested) return;
+                if (cancellationToken.IsCancellationRequested) return;
 
                 if (this.EntityBroker.TryGetReferencedEntity(subView, "view-entity-id", out var subViewEntity)
                     && subViewEntity is not null)
                 {
-                    var viewEntity = await this.CreateViewEntityViewModelAsync(next, subViewEntity, indentLevel: 0);
-                    if (next.CancellationToken.IsCancellationRequested)
+                    var viewEntity = await this.CreateViewEntityViewModelAsync(next, subViewEntity, indentLevel: 0, cancellationToken: cancellationToken);
+                    if (cancellationToken.IsCancellationRequested)
                     {
                         await viewEntity.DisposeAsync();
                         return;
@@ -1833,10 +1954,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
                 if (TryReadSubViewGetRequest(subView, this.interestCatalog, out var getRequest))
                 {
-                    var getEntities = await this.LoadGetSubViewEntitiesAsync(next, getRequest);
-                    if (next.CancellationToken.IsCancellationRequested) return;
-                    await this.AddSubViewEntitiesWithHierarchyAsync(next, getEntities);
-                    if (next.CancellationToken.IsCancellationRequested) return;
+                    var getEntities = await this.LoadGetSubViewEntitiesAsync(next, getRequest, cancellationToken);
+                    if (cancellationToken.IsCancellationRequested) return;
+                    await this.AddSubViewEntitiesWithHierarchyAsync(next, getEntities, cancellationToken);
+                    if (cancellationToken.IsCancellationRequested) return;
                     continue;
                 }
 
@@ -1844,21 +1965,22 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 {
                     var queryEntities = await this.LoadQuerySubViewEntitiesAsync(
                         next, queryRequest, onResultsChanged ?? (() => this.RebindPopulationAsync(next)),
-                        subscriptionOwner);
-                    if (next.CancellationToken.IsCancellationRequested) return;
-                    await this.AddSubViewEntitiesWithHierarchyAsync(next, queryEntities);
-                    if (next.CancellationToken.IsCancellationRequested) return;
+                        subscriptionOwner, cancellationToken);
+                    if (cancellationToken.IsCancellationRequested) return;
+                    await this.AddSubViewEntitiesWithHierarchyAsync(next, queryEntities, cancellationToken);
+                    if (cancellationToken.IsCancellationRequested) return;
                 }
             }
         }
 
-        if (next.CancellationToken.IsCancellationRequested) return;
+        if (cancellationToken.IsCancellationRequested) return;
 
         if (isLeftView) this.StickyParentContextText = $"Parent Context: {selectedView.Title}";
     }
 
     private async Task LoadSubViewEntitiesAsync(
-        JsonElement viewData)
+        JsonElement viewData,
+        CancellationToken cancellationToken)
     {
         if (!viewData.TryGetProperty("sub-views", out var subViews)
             || subViews.ValueKind != JsonValueKind.Array)
@@ -1880,14 +2002,16 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
-        await this.EntityBroker!.GetEntitiesAsync(requests);
+        await this.EntityBroker!.GetEntitiesAsync(requests, cancellationToken);
     }
 
     private async Task<IReadOnlyList<SubscribedEntityViewModel>> LoadGetSubViewEntitiesAsync(
         ViewPopulationViewModel population,
-        GetRequest getRequest)
+        GetRequest getRequest,
+        CancellationToken cancellationToken)
     {
-        var subscribedGet = await this.EntityBroker.SubscribeGetAsync(getRequest);
+        var subscribedGet = await this.EntityBroker.SubscribeGetAsync(getRequest, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         population.AddGetSubscription(subscribedGet);
 
         if (subscribedGet.Results.Count == 0)
@@ -1902,7 +2026,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         ViewPopulationViewModel population,
         QueryRequest queryRequest,
         Func<Task> onResultsChanged,
-        ViewPopulationViewModel? subscriptionOwner)
+        ViewPopulationViewModel? subscriptionOwner,
+        CancellationToken cancellationToken)
     {
         // Exclude not-interesting targets at the query level (via a join) unless the user opts to show
         // hidden items.
@@ -1913,7 +2038,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         // The interest-relationship augmentation is performed by TryReadSubViewQueryRequest itself so
         // every view (query, get, or get-entity) always requests every interest relationship type. No
         // additional WithInterestRelationships call is needed here.
-        var subscribedQuery = await this.EntityBroker.SubscribeQueryAsync(effectiveQuery);
+        var subscribedQuery = await this.EntityBroker.SubscribeQueryAsync(effectiveQuery, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         population.AddQuerySubscription(subscribedQuery, onResultsChanged, subscriptionOwner);
 
         if (subscribedQuery.Results.Count == 0)
@@ -1958,7 +2084,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private async Task<SubscribedEntityViewModel?> LoadAssociatedViewNoteAsync(
         ViewPopulationViewModel population,
-        JsonElement selectedViewData)
+        JsonElement selectedViewData,
+        CancellationToken cancellationToken)
     {
         if (!TryReadPrimaryEntityName(selectedViewData, out var selectedViewName))
         {
@@ -1977,7 +2104,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                     },
                 ],
                 Timestamps = [null],
-            });
+            },
+            cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         population.AddGetSubscription(noteSubscription);
         return noteSubscription.Results.FirstOrDefault();
     }
@@ -2105,7 +2234,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         SubscribedEntityViewModel entity,
         int indentLevel,
         bool isExpanded = true,
-        bool isParentContext = false)
+        bool isParentContext = false,
+        CancellationToken cancellationToken = default)
     {
         this.ProjectEntityBadges(entity);
 
@@ -2122,7 +2252,20 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             isExpanded: population.ExpandedEntityIds.TryGetValue(entity.EntityId.ToString(), out var storedExpanded) ? storedExpanded : isExpanded,
             isParentContext: isParentContext,
             fieldEditorFactory: this.fieldEditorFactory);
-        await vm.InitializeAsync();
+        var initialized = false;
+        try
+        {
+            await vm.InitializeAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            initialized = true;
+        }
+        finally
+        {
+            if (!initialized)
+            {
+                await vm.DisposeAsync();
+            }
+        }
 
         // Persist expansion state changes; the tree template shows/hides cached children locally.
         var entityIdStr = entity.EntityId.ToString();
@@ -2183,13 +2326,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     /// </summary>
     private async Task AddSubViewEntitiesWithHierarchyAsync(
         ViewPopulationViewModel population,
-        IReadOnlyList<SubscribedEntityViewModel> rootEntities)
+        IReadOnlyList<SubscribedEntityViewModel> rootEntities,
+        CancellationToken cancellationToken)
     {
-        var hierarchy = await new ViewHierarchyAssembler(this.EntityBroker).AssembleAsync(rootEntities);
+        var hierarchy = await new ViewHierarchyAssembler(this.EntityBroker).AssembleAsync(rootEntities, cancellationToken);
         foreach (var node in hierarchy)
         {
-            if (population.CancellationToken.IsCancellationRequested) return;
-            await this.AddHierarchyNodeAsync(population, node, indentLevel: 0);
+            if (cancellationToken.IsCancellationRequested) return;
+            await this.AddHierarchyNodeAsync(population, node, indentLevel: 0, cancellationToken: cancellationToken);
         }
 
         population.ReapplyFindAfterAssembly();
@@ -2199,14 +2343,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         ViewPopulationViewModel population,
         ViewHierarchyNode node,
         int indentLevel,
-        ViewEntityViewModel? parent = null)
+        ViewEntityViewModel? parent = null,
+        CancellationToken cancellationToken = default)
     {
-        if (population.CancellationToken.IsCancellationRequested) return;
+        if (cancellationToken.IsCancellationRequested) return;
         ViewEntityViewModel? vm = null;
         if (!node.IsAncestorGroup)
         {
-            vm = await this.CreateViewEntityViewModelAsync(population, node.Entity!, indentLevel, isExpanded: node.IsExpanded);
-            if (population.CancellationToken.IsCancellationRequested)
+            vm = await this.CreateViewEntityViewModelAsync(population, node.Entity!, indentLevel, isExpanded: node.IsExpanded, cancellationToken: cancellationToken);
+            if (cancellationToken.IsCancellationRequested)
             {
                 await vm.DisposeAsync();
                 return;
@@ -2232,7 +2377,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         {
             foreach (var child in node.Children)
             {
-                await this.AddHierarchyNodeAsync(population, child, indentLevel + 1, vm ?? parent);
+                await this.AddHierarchyNodeAsync(population, child, indentLevel + 1, vm ?? parent, cancellationToken);
             }
         }
     }
@@ -2322,8 +2467,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     }
 
     internal async Task OpenWorkspaceAsync(
-        GetEntityRequest workspaceRequest)
+        GetEntityRequest workspaceRequest,
+        bool awaitPopulation = false)
     {
+        this.lifetime.Token.ThrowIfCancellationRequested();
         var (loadingWorkspacePane, alreadyOpening) = this.GetOrCreateLoadingWorkspacePane(workspaceRequest);
         this.SelectedWorkspacePane = loadingWorkspacePane;
 
@@ -2335,6 +2482,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         var workspaceSnapshot = await this.LoadSingleEntitySnapshotAsync(workspaceRequest);
+        this.lifetime.Token.ThrowIfCancellationRequested();
         if (workspaceSnapshot?.Data is not JsonElement workspaceData)
         {
             this.DismissLoadingPane(loadingWorkspacePane);
@@ -2368,7 +2516,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         // Fetch just the workspace entity to build the skeleton pane
-        var workspaceEntities = await this.EntityBroker!.GetEntitiesAsync([workspaceRequest]);
+        var workspaceEntities = await this.EntityBroker!.GetEntitiesAsync([workspaceRequest], this.lifetime.Token);
+        this.lifetime.Token.ThrowIfCancellationRequested();
         var workspaceEntity = workspaceEntities.FirstOrDefault(e => e.EntityId == workspaceSnapshot.EntityId);
         if (workspaceEntity is null)
         {
@@ -2395,7 +2544,22 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.SelectedWorkspacePane = workspacePane;
 
         // Phase 2: populate tabs asynchronously (fire and forget)
-        var populateTask = workspacePane.PopulateTabsAsync(workspaceEntity, workspaceData);
+        var populateTask = workspacePane.PopulateTabsAsync(workspaceEntity, workspaceData, this.lifetime.Token);
+        if (awaitPopulation)
+        {
+            try
+            {
+                await populateTask;
+                this.lifetime.Token.ThrowIfCancellationRequested();
+                workspacePane.SignalPopulated();
+            }
+            catch (Exception exception)
+            {
+                workspacePane.SignalPopulated(exception);
+                throw;
+            }
+            return;
+        }
         _ = populateTask.ContinueWith(t =>
         {
             if (t.IsFaulted && t.Exception != null)
@@ -2789,7 +2953,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         GetEntityRequest entityRequest,
         bool focus = true)
     {
-        var entities = await this.EntityBroker!.GetEntitiesAsync([entityRequest]);
+        var entities = await this.EntityBroker!.GetEntitiesAsync([entityRequest], this.lifetime.Token);
         var subscribedEntity = entities.FirstOrDefault();
         if (subscribedEntity is null)
         {
@@ -2826,9 +2990,22 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             Entity = entity,
             DockRegion = dockRegion ?? "full",
         };
-        await this.PopulateViewAsync(
-            tab.Population, definition, () => this.RebindPopulationAsync(tab.Population));
-        return tab;
+        var populated = false;
+        try
+        {
+            await this.PopulateViewAsync(
+                tab.Population, definition, () => this.RebindPopulationAsync(tab.Population));
+            this.lifetime.Token.ThrowIfCancellationRequested();
+            populated = true;
+            return tab;
+        }
+        finally
+        {
+            if (!populated)
+            {
+                await tab.DisposeAsync();
+            }
+        }
     }
 
     internal async Task OpenViewTabAsync(SubscribedEntityViewModel entity, bool focus = true)
@@ -3801,7 +3978,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private async Task<EntitySnapshot?> LoadSingleEntitySnapshotAsync(
         GetEntityRequest request)
     {
-        var entities = await this.EntityBroker.GetEntitiesAsync([request]);
+        var entities = await this.EntityBroker.GetEntitiesAsync([request], this.lifetime.Token);
         return entities.FirstOrDefault()?.Snapshot;
     }
 
@@ -3890,6 +4067,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         DockTabDescriptor descriptor,
         string tabId)
     {
+        this.lifetime.Token.ThrowIfCancellationRequested();
         switch (descriptor)
         {
             case AgentSessionDockTabDescriptor agentDesc:
@@ -3897,7 +4075,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 {
                     var entityId = new EntityId(agentGuid);
                     var entities = await this.EntityBroker!.GetEntitiesAsync(
-                        [new GetEntityRequest { EntityId = entityId }]);
+                        [new GetEntityRequest { EntityId = entityId }], this.lifetime.Token);
+                    this.lifetime.Token.ThrowIfCancellationRequested();
                     var entity = entities.FirstOrDefault();
                     if (entity is not null && this.openAgentSessionShortcutHandler is not null)
                     {
@@ -3917,7 +4096,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                                     TabId = tabId,
                                     Title = restoredAgentTitle,
                                     DockRegion = null,
-                                });
+                                }, this.lifetime.Token);
                         if (agentTab is not null)
                         {
                             agentTab.IsTitleExplicit = agentDesc.IsTitleExplicit;
@@ -3932,7 +4111,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 {
                     var entityId = new EntityId(entityGuid);
                     var entities = await this.EntityBroker!.GetEntitiesAsync(
-                        [new GetEntityRequest { EntityId = entityId }]);
+                        [new GetEntityRequest { EntityId = entityId }], this.lifetime.Token);
+                    this.lifetime.Token.ThrowIfCancellationRequested();
                     var entity = entities.FirstOrDefault();
                     if (entity is not null)
                     {
@@ -3980,6 +4160,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private async Task<WorkspaceTabViewModel?> TryFetchWorkspaceTabAsync(JsonElement tab)
     {
+        this.lifetime.Token.ThrowIfCancellationRequested();
         if (!tab.TryGetProperty("content", out var content)
             || content.ValueKind != JsonValueKind.Object)
         {
@@ -4004,7 +4185,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 return null;
             }
 
-            var fetched = await this.EntityBroker!.GetEntitiesAsync([request]);
+            var fetched = await this.EntityBroker!.GetEntitiesAsync([request], this.lifetime.Token);
+            this.lifetime.Token.ThrowIfCancellationRequested();
             var targetEntity = fetched.FirstOrDefault();
             if (targetEntity is not null)
             {
@@ -4186,11 +4368,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private async Task OpenStartupWorkspaceAsync()
     {
         var defaultWorkspaceIds = await this.QueryDefaultWorkspaceIdsAsync();
+        this.lifetime.Token.ThrowIfCancellationRequested();
         if (defaultWorkspaceIds.Count > 0)
         {
             foreach (var workspaceId in defaultWorkspaceIds)
             {
-                await this.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+                this.lifetime.Token.ThrowIfCancellationRequested();
+                await this.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId }, awaitPopulation: true);
             }
 
             return;
@@ -4200,7 +4384,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             new GetEntityRequest
             {
                 EntityName = new EntityName("workspaces", "getting-started-workspace"),
-            });
+            }, awaitPopulation: true);
     }
 
     private async Task<SubscribedEntityViewModel?> LoadNavigationSubscriptionAsync()
@@ -4210,7 +4394,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             EntityName = new EntityName("views", "main"),
         };
 
-        var mainViewEntities = await this.EntityBroker.GetEntitiesAsync([mainViewRequest]);
+        var mainViewEntities = await this.EntityBroker.GetEntitiesAsync([mainViewRequest], this.lifetime.Token);
         var mainViewEntity = mainViewEntities.FirstOrDefault();
         if (mainViewEntity?.Snapshot.Data is not JsonElement mainViewData)
         {
@@ -4234,7 +4418,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             }
         }
 
-        await this.EntityBroker!.GetEntitiesAsync(requests);
+        await this.EntityBroker!.GetEntitiesAsync(requests, this.lifetime.Token);
         return mainViewEntity;
     }
 
@@ -4312,7 +4496,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                         },
                     },
                 ],
-            });
+            }, this.lifetime.Token);
 
         var workspaceIds = new List<EntityId>();
         foreach (var snapshot in queryResult.Batches.SelectMany(static batch => batch.Entities))
@@ -5037,7 +5221,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             NotificationService = this.notificationService,
             NavigationHistory = this.navigationHistoryService,
             TabFactory = this,
-            IsPaneLive = pane => this.WorkspacePanes.Contains(pane),
+            IsPaneLive = pane => !this.lifetime.IsCancellationRequested && this.WorkspacePanes.Contains(pane),
             SelectPane = this.SelectAndActivateWorkspacePane,
             RunMruNavigationAfterActiveClose = this.RunMruNavigationAfterActiveClose,
         };
@@ -5117,7 +5301,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         Task startup;
         lock (this.initializationGate)
         {
-            startup = this.initializationTask ?? this.entityBrokerTask;
+            startup = this.initializationTask ?? this.visibleStartupTask ?? this.shellPreparationTask ?? this.entityBrokerTask;
         }
         var failures = new List<Exception>();
         void Clean(Action cleanup)

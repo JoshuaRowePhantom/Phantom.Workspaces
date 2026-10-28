@@ -26,6 +26,128 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class OpenAgentSessionShortcutHandlerTests
 {
+    [AvaloniaTheory(Timeout = 15_000)]
+    [InlineData("complete")]
+    [InlineData("cancel")]
+    [InlineData("fail")]
+    [InlineData("cancel-after-acquire")]
+    public async Task AutoResume_RemotePromptEnqueue_TransfersOrDisposesLeaseWithCancellation(
+        string outcome)
+    {
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var session = await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(
+            viewModel.EntityBroker,
+            new EntityId(Guid.NewGuid()),
+            """
+            {
+              "entity-types": ["entity", "agent-session"],
+              "names": [["tests", "gated-enqueue-session"]],
+              "agent-session-id": "gated-enqueue-session"
+            }
+            """);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource<AgentInputQueueCommandResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cancellation = new CancellationTokenSource();
+        var queue = new Moq.Mock<IAgentInputQueue>();
+        queue.SetupGet(value => value.Snapshot).Returns(new AgentInputQueueSnapshot
+        {
+            QueueId = "default", Name = "Default", IsDefault = true, IsImmediate = false,
+            Immediacy = AgentInputQueueImmediacy.Queue, Priority = 0, Revision = 7, Items = [],
+        });
+        var queues = new Moq.Mock<IAgentInputQueues>();
+        queues.SetupGet(value => value.DefaultQueue).Returns(queue.Object);
+        queues.SetupGet(value => value.Snapshot).Returns(new AgentInputQueuesSnapshot
+        {
+            Revision = 7, Queues = [queue.Object.Snapshot],
+        });
+        queues.Setup(value => value.EnqueueAsync(
+                Moq.It.IsAny<EnqueueAgentInputRequest>(), Moq.It.IsAny<CancellationToken>()))
+            .Returns(async (EnqueueAgentInputRequest request, CancellationToken token) =>
+            {
+                Assert.Equal(cancellation.Token, token);
+                Assert.Equal("default", request.TargetQueueId);
+                Assert.Equal(7, request.ExpectedRevision);
+                Assert.Equal("Continue gated resume", Assert.Single(request.Messages).Text);
+                entered.TrySetResult();
+                return await release.Task.WaitAsync(token);
+            });
+        var chat = new Moq.Mock<IAgentChat>();
+        chat.SetupGet(value => value.InputQueues).Returns(queues.Object);
+        var disposed = 0;
+        var lease = new RunningAgentChatLease(
+            new AgentSessionId("gated-enqueue-session"),
+            chat.Object,
+            () =>
+            {
+                Interlocked.Increment(ref disposed);
+                return ValueTask.CompletedTask;
+            });
+        var table = new Moq.Mock<IRunningAgentChatTable>();
+        table.Setup(value => value.AcquireAsync(
+                Moq.It.IsAny<AcquireAgentChatRequest>(), Moq.It.IsAny<CancellationToken>()))
+            .Returns((AcquireAgentChatRequest request, CancellationToken token) =>
+            {
+                Assert.Equal(cancellation.Token, token);
+                Assert.NotNull(request.AgentServices!.CurrentSessionContext);
+                if (outcome == "cancel-after-acquire")
+                {
+                    cancellation.Cancel();
+                }
+                return Task.FromResult(lease);
+            });
+        await using var handler = new OpenAgentSessionShortcutHandler(
+            new AgentSessionShortcutContext(),
+            MainWindowIntegrationTests.CreateLocalTrustedExecutorSelector(),
+            table.Object);
+        var resume = handler.TryStartAutoResumeAsync(
+            viewModel, session, "Continue gated resume", TaskScheduler.Default, cancellation.Token);
+        try
+        {
+            if (outcome != "cancel-after-acquire")
+            {
+                await entered.Task.WaitAsync(TestContext.Current.CancellationToken);
+                Assert.False(resume.IsCompleted);
+                Assert.Equal(0, disposed);
+            }
+            if (outcome == "cancel")
+            {
+                await cancellation.CancelAsync();
+            }
+            if (outcome.StartsWith("cancel", StringComparison.Ordinal))
+            {
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => resume);
+                Assert.False(release.Task.IsCompleted);
+                Assert.Equal(1, disposed);
+            }
+            else if (outcome == "fail")
+            {
+                var failure = new InvalidOperationException("Gated enqueue failed");
+                release.SetException(failure);
+                Assert.Same(failure, await Assert.ThrowsAsync<InvalidOperationException>(() => resume));
+                Assert.Equal(1, disposed);
+            }
+            else
+            {
+                release.SetResult(new AgentInputQueueCommandResult
+                {
+                    CommandId = Guid.NewGuid(), Status = AgentInputQueueCommandStatus.Applied, Revision = 8,
+                });
+                Assert.Same(lease, await resume);
+                Assert.Equal(0, disposed);
+            }
+            queues.Verify(value => value.EnqueueAsync(
+                Moq.It.IsAny<EnqueueAgentInputRequest>(), cancellation.Token),
+                outcome == "cancel-after-acquire" ? Moq.Times.Never() : Moq.Times.Once());
+        }
+        finally
+        {
+            release.TrySetCanceled();
+            await lease.DisposeAsync();
+        }
+        Assert.Equal(1, disposed);
+    }
+
     [AvaloniaFact(Timeout = 30_000)]
     public async Task Handle_RemoteStatusStalls_RetriesAndAllowsOwnerDecisionBeyondLoadingDeadline()
     {

@@ -104,7 +104,7 @@ public abstract class AdministrationViewModel<TDescriptor> : ViewModelBase where
 public sealed class ReleaseMemoryAdministrationViewModel : AdministrationViewModel<ReleaseMemoryDescriptor>
 {
     public required IReleaseMemoryAdministration Administration { private get; init; }
-    public override string ActionLabel => "Forget";
+    public override string ActionLabel => Services.Access.CredentialAccessText.ForgetApproval;
     protected override ValueTask<IReadOnlyList<ReleaseMemoryDescriptor>> ListAsync(CancellationToken cancellationToken) =>
         this.Administration.ListAsync(cancellationToken);
     protected override ValueTask RemoveCoreAsync(ReleaseMemoryDescriptor descriptor, CancellationToken cancellationToken) =>

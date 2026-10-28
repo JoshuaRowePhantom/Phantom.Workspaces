@@ -19,11 +19,9 @@
                             Background="{Binding Entity.NonAbstractEntityTypeNames, Converter={x:Static converters:EntityTypeColorConverter.Instance}}"
                             VerticalAlignment="Stretch" />
                     <sharedControls:EntityCardHeaderPanel Classes="workspace-entity-header-wrap"
-                                                          ActionsMinWidth="100"
                                                           ItemSpacing="4">
                     <StackPanel Classes="workspace-entity-header-row"
-                                 MinWidth="100"
-                                 Margin="0,0,12,0">
+                                 HorizontalAlignment="Left">
                         <Grid Classes="workspace-entity-title-row"
                               ColumnDefinitions="Auto,*">
                             <ProgressBar Grid.Column="0"
@@ -38,16 +36,13 @@
                                        SearchQuery="{Binding SearchQuery}"
                                        TextWrapping="Wrap" />
                         </Grid>
-                        <sharedControls:SafeSelectableTextBlock Classes="muted"
-                                   Text="{Binding EntityTypeLabels}"
-                                   SearchQuery="{Binding SearchQuery}" />
                     </StackPanel>
                         <ItemsControl IsVisible="{Binding HasBadges}"
                                        IsEnabled="{Binding AreBadgesEnabled}"
                                        ItemsSource="{Binding Badges.Badges}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
-                                    <WrapPanel Orientation="Horizontal" ItemSpacing="4" />
+                                    <sharedControls:EntityCardFlowItemsPanel />
                                 </ItemsPanelTemplate>
                             </ItemsControl.ItemsPanel>
                             <ItemsControl.ItemTemplate>
@@ -63,12 +58,33 @@
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
+                        <ItemsControl IsVisible="{Binding HasShortcuts}"
+                                      IsEnabled="{Binding AreShortcutsEnabled}"
+                                      ItemsSource="{Binding Shortcuts}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <sharedControls:EntityCardFlowItemsPanel />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Button Content="{Binding Shortcut.Label}"
+                                            ContentTemplate="{StaticResource CopyableCardButtonContentTemplate}"
+                                            ToolTip.Tip="{Binding Shortcut.HoverText}"
+                                            IsEnabled="{Binding IsEnabled}"
+                                            Classes="entity-card-action-button"
+                                            Command="{Binding $parent[ItemsControl].DataContext.ActivateShortcutCommand}"
+                                            CommandParameter="{Binding}"
+                                            Tapped="OnInteractiveChildTapped" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
                         <ItemsControl IsVisible="{Binding HasStatusBadges}"
                                       IsEnabled="{Binding AreBadgesEnabled}"
                                       ItemsSource="{Binding StatusBadges.Badges}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
-                                    <WrapPanel Orientation="Horizontal" ItemSpacing="4" />
+                                    <sharedControls:EntityCardFlowItemsPanel />
                                 </ItemsPanelTemplate>
                             </ItemsControl.ItemsPanel>
                             <ItemsControl.ItemTemplate>
@@ -89,27 +105,6 @@
                                 IsVisible="{Binding ShowEditIndicator}"
                                 Command="{Binding ToggleEditModeCommand}"
                                 Tapped="OnInteractiveChildTapped" />
-                        <ItemsControl IsVisible="{Binding HasShortcuts}"
-                                      IsEnabled="{Binding AreShortcutsEnabled}"
-                                      ItemsSource="{Binding Shortcuts}">
-                            <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate>
-                                    <StackPanel Orientation="Horizontal" Spacing="4" />
-                                </ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <Button Content="{Binding Shortcut.Label}"
-                                            ContentTemplate="{StaticResource CopyableCardButtonContentTemplate}"
-                                            ToolTip.Tip="{Binding Shortcut.HoverText}"
-                                            IsEnabled="{Binding IsEnabled}"
-                                            Classes="entity-card-action-button"
-                                            Command="{Binding $parent[ItemsControl].DataContext.ActivateShortcutCommand}"
-                                            CommandParameter="{Binding}"
-                                            Tapped="OnInteractiveChildTapped" />
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
                         <Button Content="{Binding JsonButtonText}"
                                 ContentTemplate="{StaticResource CopyableCardButtonContentTemplate}"
                                 Classes="entity-card-action-button"
@@ -130,6 +125,9 @@
                                  Tapped="OnInteractiveChildTapped" />
                     </sharedControls:EntityCardHeaderPanel>
                 </DockPanel>
+                <sharedControls:SafeSelectableTextBlock Classes="muted"
+                                   Text="{Binding EntityTypeLabels}"
+                                   SearchQuery="{Binding SearchQuery}" />
                 <ItemsControl ItemsSource="{Binding FieldEditors}"
                               Classes="workspace-field-editor-list"
                               IsVisible="{Binding ShowFieldEditors}" />

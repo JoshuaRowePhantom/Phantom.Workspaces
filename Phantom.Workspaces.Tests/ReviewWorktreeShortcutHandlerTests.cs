@@ -22,7 +22,7 @@ public sealed class ReviewWorktreeShortcutHandlerTests
         await using var vm = new MainWindowViewModel(new UnknownRepositorySource());
         var entity = CreateGitWorktreeEntity();
 
-        Assert.True(await handler.ShouldApplyTo(vm, Shortcut.Review, entity));
+        Assert.True(await handler.ShouldApplyTo(vm, Shortcut.Review, entity, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -32,7 +32,7 @@ public sealed class ReviewWorktreeShortcutHandlerTests
         await using var vm = new MainWindowViewModel(new UnknownRepositorySource());
         var entity = CreateGitWorktreeEntity();
 
-        Assert.False(await handler.ShouldApplyTo(vm, Shortcut.Open, entity));
+        Assert.False(await handler.ShouldApplyTo(vm, Shortcut.Open, entity, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -42,7 +42,7 @@ public sealed class ReviewWorktreeShortcutHandlerTests
         await using var vm = new MainWindowViewModel(new UnknownRepositorySource());
         var entity = CreateNoteEntity();
 
-        Assert.False(await handler.ShouldApplyTo(vm, Shortcut.Review, entity));
+        Assert.False(await handler.ShouldApplyTo(vm, Shortcut.Review, entity, TestContext.Current.CancellationToken));
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -280,4 +280,3 @@ public sealed class ReviewWorktreeShortcutHandlerTests
         return Assert.Single(await entityBroker.GetEntitiesAsync([entityId]));
     }
 }
-

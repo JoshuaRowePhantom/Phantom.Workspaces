@@ -11,6 +11,120 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityBrokerTests
 {
+    [AvaloniaTheory(Timeout = 15_000)]
+    [InlineData(false, "complete")]
+    [InlineData(false, "cancel")]
+    [InlineData(false, "fail")]
+    [InlineData(true, "complete")]
+    [InlineData(true, "cancel")]
+    [InlineData(true, "fail")]
+    public async Task Subscribe_InitialRead_PublishesOnlySuccessfulInitializedSubscriptions(
+        bool useQuery,
+        string outcome)
+    {
+        var token = TestContext.Current.CancellationToken;
+        var broker = await CreateBrokerAsync(token);
+        var entityId = new EntityId(Guid.NewGuid());
+        await SeedSnapshotAsync(broker, CreateSnapshot(
+            entityId,
+            new Timestamp(DateTimeOffset.UtcNow, "1"),
+            $$"""
+            {"entity-id":"{{entityId}}","entity-types":["entity","task"],
+             "names":[["tests","gated-subscription"]],"display-name":{"default":"Gated subscription"} }
+            """));
+        var inner = broker.EntityRepository.DataAccessLayer;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reads = 0;
+        async Task GateAsync(CancellationToken cancellationToken)
+        {
+            if (Interlocked.Increment(ref reads) == 1)
+            {
+                entered.SetResult();
+                await release.Task.WaitAsync(cancellationToken);
+            }
+        }
+        var dataAccess = new Moq.Mock<IDataAccessLayer>();
+        dataAccess.Setup(value => value.GetAsync(
+                Moq.It.IsAny<GetRequest>(), Moq.It.IsAny<CancellationToken>()))
+            .Returns(async (GetRequest request, CancellationToken cancellationToken) =>
+            {
+                await GateAsync(cancellationToken);
+                return await inner.GetAsync(request, cancellationToken);
+            });
+        dataAccess.Setup(value => value.QueryAsync(
+                Moq.It.IsAny<QueryRequest>(), Moq.It.IsAny<CancellationToken>()))
+            .Returns(async (QueryRequest request, CancellationToken cancellationToken) =>
+            {
+                await GateAsync(cancellationToken);
+                return await inner.QueryAsync(request, cancellationToken);
+            });
+        broker.EntityRepository.SetDataAccessLayerForTesting(dataAccess.Object);
+        var getRequest = new GetRequest
+        {
+            Entities = [new GetEntityRequest { EntityName = new EntityName("tests", "gated-subscription") }],
+            Timestamps = [null],
+        };
+        var queryRequest = new QueryRequest
+        {
+            Clauses = [new TopLevelQueryClause
+            {
+                ClauseIdentifier = new QueryClauseIdentifier("gated-subscription"),
+                Clause = new EntityTypeQueryClause { EntityTypeNames = new EntityTypeNameSet(["task"]) },
+            }],
+        };
+        async Task<object> SubscribeAsync(CancellationToken cancellationToken) => useQuery
+            ? await broker.SubscribeQueryAsync(queryRequest, cancellationToken)
+            : await broker.SubscribeGetAsync(getRequest, cancellationToken);
+        using var cancellation = new CancellationTokenSource();
+        var first = SubscribeAsync(cancellation.Token);
+        try
+        {
+            await entered.Task.WaitAsync(token);
+            object subscription;
+            if (outcome == "complete")
+            {
+                var concurrent = SubscribeAsync(token);
+                Assert.False(concurrent.IsCompleted);
+                release.SetResult();
+                subscription = await first;
+                Assert.Same(subscription, await concurrent);
+            }
+            else
+            {
+                if (outcome == "cancel")
+                {
+                    await cancellation.CancelAsync();
+                    await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first);
+                    Assert.False(release.Task.IsCompleted);
+                }
+                else
+                {
+                    var failure = new InvalidOperationException("Gated initial read failed");
+                    release.SetException(failure);
+                    Assert.Same(failure, await Assert.ThrowsAsync<InvalidOperationException>(() => first));
+                }
+                subscription = await SubscribeAsync(token);
+            }
+            var results = subscription switch
+            {
+                SubscribedGet get => get.Results,
+                SubscribedQuery query => query.Results,
+                _ => throw new InvalidOperationException("Unexpected subscription type"),
+            };
+            Assert.Equal(entityId, Assert.Single(results).EntityId);
+            Assert.Same(subscription, await SubscribeAsync(token));
+            using var cancelledCacheRead = new CancellationTokenSource();
+            await cancelledCacheRead.CancelAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => SubscribeAsync(cancelledCacheRead.Token));
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+    }
+
     [AvaloniaFact]
     public async Task CreateInitializedAsync_PopulatesRepositoryForInMemorySource()
     {

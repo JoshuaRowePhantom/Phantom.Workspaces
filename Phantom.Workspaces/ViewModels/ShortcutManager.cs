@@ -12,13 +12,15 @@ public sealed class ShortcutManager
 
     public async IAsyncEnumerable<Shortcut> GetShortcutsForAsync(
         MainWindowViewModel mainWindowViewModel,
-        SubscribedEntityViewModel entityViewModel)
+        SubscribedEntityViewModel entityViewModel,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         foreach (var shortcut in this.shortcuts)
         {
             foreach (var handler in this.shortcutHandlers)
             {
-                if (await handler.ShouldApplyTo(mainWindowViewModel, shortcut, entityViewModel))
+                cancellationToken.ThrowIfCancellationRequested();
+                if (await handler.ShouldApplyTo(mainWindowViewModel, shortcut, entityViewModel, cancellationToken))
                 {
                     yield return shortcut;
                     break;
@@ -160,5 +162,4 @@ public sealed class ShortcutManager
         return null;
     }
 }
-
 

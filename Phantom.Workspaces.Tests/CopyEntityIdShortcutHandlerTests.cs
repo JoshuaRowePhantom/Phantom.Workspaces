@@ -16,7 +16,7 @@ public sealed class CopyEntityIdShortcutHandlerTests
         await using var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
         var entity = CreateEntity("11111111-1111-1111-1111-111111111111", "note");
 
-        Assert.True(await handler.ShouldApplyTo(mainWindowViewModel, Shortcut.CopyEntityId, entity));
+        Assert.True(await handler.ShouldApplyTo(mainWindowViewModel, Shortcut.CopyEntityId, entity, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -26,9 +26,9 @@ public sealed class CopyEntityIdShortcutHandlerTests
         await using var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
         var entity = CreateEntity("11111111-1111-1111-1111-111111111111", "note");
 
-        Assert.False(await handler.ShouldApplyTo(mainWindowViewModel, Shortcut.Open, entity));
-        Assert.False(await handler.ShouldApplyTo(mainWindowViewModel, Shortcut.Delete, entity));
-        Assert.False(await handler.ShouldApplyTo(mainWindowViewModel, Shortcut.Review, entity));
+        Assert.False(await handler.ShouldApplyTo(mainWindowViewModel, Shortcut.Open, entity, TestContext.Current.CancellationToken));
+        Assert.False(await handler.ShouldApplyTo(mainWindowViewModel, Shortcut.Delete, entity, TestContext.Current.CancellationToken));
+        Assert.False(await handler.ShouldApplyTo(mainWindowViewModel, Shortcut.Review, entity, TestContext.Current.CancellationToken));
     }
 
     [Theory]
@@ -42,7 +42,7 @@ public sealed class CopyEntityIdShortcutHandlerTests
         await using var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
         var entity = CreateEntity("22222222-2222-2222-2222-222222222222", entityType);
 
-        Assert.True(await handler.ShouldApplyTo(mainWindowViewModel, Shortcut.CopyEntityId, entity));
+        Assert.True(await handler.ShouldApplyTo(mainWindowViewModel, Shortcut.CopyEntityId, entity, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -103,7 +103,7 @@ public sealed class CopyEntityIdShortcutHandlerTests
         var entity = CreateEntity("55555555-5555-5555-5555-555555555555", "note");
 
         var shortcuts = new List<Shortcut>();
-        await foreach (var shortcut in manager.GetShortcutsForAsync(mainWindowViewModel, entity))
+        await foreach (var shortcut in manager.GetShortcutsForAsync(mainWindowViewModel, entity, TestContext.Current.CancellationToken))
         {
             shortcuts.Add(shortcut);
         }

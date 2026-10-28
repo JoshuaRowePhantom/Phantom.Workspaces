@@ -498,7 +498,7 @@ public sealed class EntityCardViewModel : ViewModelBase
 
         var resolved = new List<EntityShortcutViewModel>();
         await foreach (var shortcut in manager
-            .GetShortcutsForAsync(mainWindowViewModel, this.entity)
+            .GetShortcutsForAsync(mainWindowViewModel, this.entity, ct)
             .WithCancellation(ct)
             .ConfigureAwait(false))
         {

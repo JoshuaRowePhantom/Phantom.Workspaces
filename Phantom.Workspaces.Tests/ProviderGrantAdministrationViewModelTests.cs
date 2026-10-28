@@ -14,6 +14,7 @@ public sealed class ProviderGrantAdministrationViewModelTests
     {
         public ProviderGrantIdentifier? Revoked { get; private set; }
         public bool Fail { get; set; }
+        public CredentialAdministrationFailure Failure { get; set; } = CredentialAdministrationFailure.Denied;
         public ProviderGrantDescriptor Descriptor { get; } = new()
         {
             Identifier = new() { Value = Guid.NewGuid() },
@@ -25,7 +26,7 @@ public sealed class ProviderGrantAdministrationViewModelTests
             ValueTask.FromResult<IReadOnlyList<ProviderGrantDescriptor>>(this.Revoked is null ? [this.Descriptor] : []);
         public ValueTask RevokeAsync(ProviderGrantIdentifier identifier, CancellationToken cancellationToken = default)
         {
-            if (this.Fail) { throw new CredentialAdministrationException(CredentialAdministrationFailure.Denied); }
+            if (this.Fail) { throw new CredentialAdministrationException(this.Failure); }
             this.Revoked = identifier;
             return ValueTask.CompletedTask;
         }
@@ -50,6 +51,43 @@ public sealed class ProviderGrantAdministrationViewModelTests
         await viewModel.DisposeAsync();
     }
 
+    [AvaloniaTheory(Timeout = 15_000)]
+    [InlineData(CredentialAdministrationFailure.Denied, "Access revocation was denied. Provider access and cached credentials are unchanged.")]
+    [InlineData(CredentialAdministrationFailure.Failed, "Access revocation did not complete. Refresh and try again.")]
+    public async Task ProviderGrantAdministration_RevocationFails_RendersAccurateStatusAndKeepsActionableRow(
+        CredentialAdministrationFailure failure, string expected)
+    {
+        var administration = new Administration { Fail = true, Failure = failure };
+        await using var model = new ProviderGrantAdministrationViewModel { Administration = administration };
+        await model.RefreshAsync(TestContext.Current.CancellationToken);
+        var control = new ProviderGrantAdministrationControl { DataContext = model };
+        var window = new Window { Content = control };
+        try
+        {
+            window.Show();
+            window.UpdateLayout();
+            var descriptor = Assert.Single(model.Items);
+            await model.RemoveCommand.ExecuteAsync(descriptor);
+            window.UpdateLayout();
+            Assert.Null(administration.Revoked);
+            Assert.Same(descriptor, Assert.Single(model.Items));
+            Assert.Equal(failure, model.LastFailure);
+            Assert.Contains(control.GetVisualDescendants().OfType<TextBlock>(), text => text.Text == expected);
+            var action = Assert.Single(control.GetVisualDescendants().OfType<Button>(),
+                button => button.Content?.ToString() == "Revoke access");
+            Assert.True(action.IsEffectivelyEnabled);
+            Assert.True(action.Command!.CanExecute(action.CommandParameter));
+            administration.Fail = false;
+            await model.RemoveCommand.ExecuteAsync(action.CommandParameter);
+            window.UpdateLayout();
+            Assert.Equal(descriptor.Identifier, administration.Revoked);
+            Assert.Empty(model.Items);
+            Assert.Null(model.LastFailure);
+            Assert.Contains(control.GetVisualDescendants().OfType<TextBlock>(), text => text.Text == "Operation completed.");
+        }
+        finally { window.Close(); }
+    }
+
     [Fact]
     public void DescriptorIsSemanticMetadataOnly()
     {
@@ -70,7 +108,10 @@ public sealed class ProviderGrantAdministrationViewModelTests
         window.Show();
         Dispatcher.UIThread.RunJobs();
         Assert.Contains(control.GetVisualDescendants().OfType<Button>(), button =>
-            button.Content?.ToString() == "Revoke" && button.Command?.CanExecute(button.CommandParameter) == true);
+            button.Content?.ToString() == "Revoke access" && button.Command?.CanExecute(button.CommandParameter) == true);
+        Assert.Contains(control.GetVisualDescendants().OfType<TextBlock>(), block => block.Text == "Provider access");
+        Assert.Contains(control.GetVisualDescendants().OfType<TextBlock>(), block =>
+            block.Text == "Revoking contacts the provider and clears affected cached credentials only on success. Saved approvals stay unchanged.");
         window.Close();
         await viewModel.DisposeAsync();
     }

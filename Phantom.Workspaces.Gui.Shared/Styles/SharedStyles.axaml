@@ -260,6 +260,11 @@
     <Style Selector="TreeView.entity-card-tree TreeViewItem, TreeView.entity-card-tree-view TreeViewItem">
         <Setter Property="HorizontalAlignment" Value="Stretch" />
         <Setter Property="MinWidth" Value="160" />
+        <Setter Property="ItemsPanel">
+            <ItemsPanelTemplate>
+                <VirtualizingStackPanel Orientation="Vertical" HorizontalAlignment="Stretch" />
+            </ItemsPanelTemplate>
+        </Setter>
         <Setter Property="Template">
             <ControlTemplate>
                 <!-- Issue #1347: the items row is Auto (not *) so the header Auto row measures
@@ -267,7 +272,7 @@
                      infinite vertical constraint); a * row cannot resolve against infinity and the
                      inner ScrollViewer's ExtentHeight never grows past the viewport for a tall card. -->
                 <Grid RowDefinitions="Auto,Auto"
-                      ColumnDefinitions="20,*"
+                      ColumnDefinitions="40,*"
                       HorizontalAlignment="Stretch">
                     <StackPanel Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2"
                                 Classes="entity-card-tree-item"
@@ -278,14 +283,11 @@
                                         Content="{TemplateBinding Header}"
                                         ContentTemplate="{TemplateBinding HeaderTemplate}" />
                     </StackPanel>
-                    <Border Grid.Column="0" Grid.Row="1"
-                            Classes="entity-card-child-rail"
-                            Background="{Binding ChildRailBrush, FallbackValue=#808080}"
-                            Width="2"
-                            HorizontalAlignment="Center"
-                            VerticalAlignment="Stretch" />
-                    <ItemsPresenter Grid.Column="1" Grid.Row="1"
+                    <ItemsPresenter Grid.Column="1" Grid.Row="1" ItemsPanel="{TemplateBinding ItemsPanel}"
                                     IsVisible="{Binding IsExpanded}" />
+                    <controls:EntityTreeConnectors Grid.Column="0" Grid.Row="1" Grid.ColumnSpan="2"
+                            Classes="entity-card-child-rail"
+                            Brush="{Binding ChildRailBrush, FallbackValue=#808080}" />
                 </Grid>
             </ControlTemplate>
         </Setter>
@@ -336,7 +338,8 @@
     </Style>
     <!-- Only explicitly opted-in entity Views use ordinary scrolling below 100 total nodes.
          Other consumers retain the virtualizing default; both panels share the width limits. -->
-    <Style Selector="TreeView.entity-card-tree.entity-card-tree-small, TreeView.entity-card-tree-view.entity-card-tree-small">
+    <Style Selector="TreeView.entity-card-tree.entity-card-tree-small, TreeView.entity-card-tree-view.entity-card-tree-small,
+                     TreeView.entity-card-tree.entity-card-tree-small TreeViewItem, TreeView.entity-card-tree-view.entity-card-tree-small TreeViewItem">
         <Setter Property="ItemsPanel">
             <ItemsPanelTemplate>
                 <StackPanel Orientation="Vertical"

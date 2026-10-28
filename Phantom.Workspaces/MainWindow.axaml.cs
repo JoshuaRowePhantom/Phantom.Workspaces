@@ -15,6 +15,9 @@ namespace Phantom.Workspaces;
 public partial class MainWindow : Window
 {
     private AccessHostServices? accessHost;
+    private readonly System.Collections.Generic.List<Task> accessAdministrationDisposals = [];
+    private bool accessAdministrationShuttingDown;
+    internal Task AccessAdministrationReady { get; private set; } = Task.CompletedTask;
 
     public void AttachAccessHost(AccessHostServices host, AuthorizationRequestsPopupViewModel popup)
     {
@@ -36,6 +39,11 @@ public partial class MainWindow : Window
 
     private void OnAuthorizationKeyClicked(object? sender, RoutedEventArgs arguments)
     {
+        if (this.accessHost is not null)
+        {
+            this.BeginOpenAccessAdministration(CredentialAccessPage.Requests);
+            return;
+        }
         (this.AuthorizationRequestsHost.DataContext as AuthorizationRequestsPopupViewModel)?.ToggleOpen();
     }
 
@@ -68,7 +76,12 @@ public partial class MainWindow : Window
         AddDockDataTemplates();
         this.DataContext = viewModel;
         viewModel.OpenAccessAdministrationRequested += this.OnOpenAccessAdministrationRequested;
-        this.Closed += (_, _) => viewModel.OpenAccessAdministrationRequested -= this.OnOpenAccessAdministrationRequested;
+        this.Closed += (_, _) =>
+        {
+            viewModel.OpenAccessAdministrationRequested -= this.OnOpenAccessAdministrationRequested;
+            this.accessAdministrationShuttingDown = true;
+            this.LastAccessAdministrationWindow?.Close();
+        };
         this.AddHandler(InputElement.KeyDownEvent, this.OnPreviewKeyDown, RoutingStrategies.Tunnel);
         this.AddHandler(InputElement.KeyUpEvent, this.OnPreviewKeyUp, RoutingStrategies.Tunnel);
         this.Deactivated += (_, _) =>
@@ -280,38 +293,97 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void OnOpenAccessAdministrationRequested()
+    private void OnOpenAccessAdministrationRequested()
     {
-        await this.OpenAccessAdministrationAsync();
+        this.BeginOpenAccessAdministration(CredentialAccessPage.SavedApprovals);
+    }
+
+    private void BeginOpenAccessAdministration(CredentialAccessPage page)
+    {
+        var opening = this.OpenAccessAdministrationAsync(page);
+        this.AccessAdministrationReady = Task.WhenAll(this.AccessAdministrationReady, opening);
     }
 
     /// <summary>The most recently opened access-administration window.</summary>
     internal AccessAdministrationWindow? LastAccessAdministrationWindow { get; private set; }
 
-    private async Task OpenAccessAdministrationAsync()
+    private async Task OpenAccessAdministrationAsync(CredentialAccessPage page)
     {
-        if (this.DataContext is not MainWindowViewModel viewModel)
+        if (this.DataContext is not MainWindowViewModel || this.accessAdministrationShuttingDown)
         {
             return;
         }
 
-        var host = this.accessHost ?? throw new InvalidOperationException("The process access host has not been attached.");
+        if (this.accessHost is not { } host)
+        {
+            this.ReportAccessAdministrationFailure();
+            return;
+        }
         if (this.LastAccessAdministrationWindow is { } existing)
         {
+            existing.SelectPage(page);
             existing.Activate();
             return;
         }
-        await using var window = new AccessAdministrationWindow(host);
+        var window = new AccessAdministrationWindow(host);
         this.LastAccessAdministrationWindow = window;
+        window.SelectPage(page);
+        window.Closed += (_, _) => this.ReleaseAccessAdministration(window);
+        window.KeyDown += (_, arguments) =>
+        {
+            if (arguments.Key != Key.Escape) { return; }
+            window.Close();
+            this.AuthorizationKey.Focus();
+            arguments.Handled = true;
+        };
         try
         {
+            window.Show(this);
             await window.RefreshAsync();
-            if (!window.IsDisposed) { await window.ShowDialog(this); }
         }
-        finally
+        catch (OperationCanceledException) when (window.IsDisposed || this.accessAdministrationShuttingDown) { }
+        catch (Exception)
         {
-            this.LastAccessAdministrationWindow = null;
+            this.ReportAccessAdministrationFailure();
+            window.Close();
+            this.ReleaseAccessAdministration(window);
         }
+    }
+
+    private void ReleaseAccessAdministration(AccessAdministrationWindow window)
+    {
+        if (!ReferenceEquals(this.LastAccessAdministrationWindow, window)) { return; }
+        this.LastAccessAdministrationWindow = null;
+        this.accessAdministrationDisposals.Add(this.DisposeAdministrationWindowAsync(window));
+    }
+
+    private async Task DisposeAdministrationWindowAsync(AccessAdministrationWindow window)
+    {
+        try { await window.DisposeAsync(); }
+        catch (Exception)
+        {
+            // Report only a fixed safe message, never backend/provider exception content.
+            this.ReportAccessAdministrationFailure();
+        }
+    }
+
+    private void ReportAccessAdministrationFailure()
+    {
+        if (this.DataContext is MainWindowViewModel viewModel)
+        {
+            viewModel.ReportAccessAdministrationFailure();
+        }
+    }
+
+    internal Task DisposeClosedAccessAdministrationAsync() =>
+        Task.WhenAll(this.accessAdministrationDisposals.ToArray());
+
+    internal async ValueTask DisposeAccessAdministrationAsync()
+    {
+        this.accessAdministrationShuttingDown = true;
+        this.LastAccessAdministrationWindow?.Close();
+        await this.AccessAdministrationReady;
+        await this.DisposeClosedAccessAdministrationAsync();
     }
 
     private void OnPreviewKeyUp(object? sender, KeyEventArgs e)
