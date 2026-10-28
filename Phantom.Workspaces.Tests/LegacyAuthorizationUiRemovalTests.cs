@@ -85,14 +85,24 @@ public sealed class LegacyAuthorizationUiRemovalTests
                 var button = window.GetVisualDescendants().OfType<Button>()
                     .Single(control => control.Content is string label && label == "🤫");
                 button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                await window.AccessAdministrationReady;
                 Dispatcher.UIThread.RunJobs();
                 var administration = Assert.IsType<AccessAdministrationWindow>(window.LastAccessAdministrationWindow);
                 var tabs = Assert.IsType<TabControl>(administration.Content);
                 var items = tabs.Items.Cast<TabItem>().ToArray();
-                Assert.Equal(3, items.Length);
-                AssertAdministration(items[0], typeof(ReleaseMemoryAdministrationControl), host.ReleaseMemoryAdministration);
-                AssertAdministration(items[1], typeof(CredentialCacheAdministrationControl), host.CredentialCacheAdministration);
-                AssertAdministration(items[2], typeof(ProviderGrantAdministrationControl), host.ProviderGrantAdministration);
+                Assert.Equal(4, items.Length);
+                Assert.Equal(
+                    new[] { "Requests", "Saved approvals", "Cached credentials", "Provider access" },
+                    items.Select(item => Assert.IsType<string>(item.Header)));
+                var requests = Assert.IsType<AuthorizationRequestRowsControl>(items[0].Content);
+                Assert.Same(host.AuthorizationRows, requests.DataContext);
+                Assert.Same(host.AuthorizationRows, administration.RequestRows);
+                Assert.Equal(CredentialAccessPage.SavedApprovals, administration.SelectedPage);
+                Assert.Same(window, administration.Owner);
+                Assert.True(window.IsEnabled);
+                AssertAdministration(items[1], typeof(ReleaseMemoryAdministrationControl), host.ReleaseMemoryAdministration);
+                AssertAdministration(items[2], typeof(CredentialCacheAdministrationControl), host.CredentialCacheAdministration);
+                AssertAdministration(items[3], typeof(ProviderGrantAdministrationControl), host.ProviderGrantAdministration);
                 administration.Close();
                 Dispatcher.UIThread.RunJobs();
                 await administration.DisposeAsync();

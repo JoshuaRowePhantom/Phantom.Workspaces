@@ -1,5 +1,6 @@
 using Avalonia.Headless.XUnit;
 using System.Linq;
+using System.Xml.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -305,18 +306,44 @@ public sealed class MainWindowAxamlTests
         var dataTemplatesContent = ReadMainAppFile(Path.Combine("Templates", "WorkspaceDataTemplates.axaml"));
         Assert.DoesNotContain("entity-card-tree-type-bar", dataTemplatesContent, StringComparison.Ordinal);
 
-        // #1264 replaced the fixed three-column header Grid / stock WrapPanel
-        // combination with a DockPanel + custom EntityCardHeaderPanel. The type
-        // bar is docked to the left of that header DockPanel (so it stays
-        // constrained to the header, not the whole card), and the custom panel
-        // owns the right-anchored action wrapping.
+        // #1660 replaces reserved/right-anchored actions with one source-order flow,
+        // while the type bar remains confined to the header DockPanel.
         var entityCardContent = ReadMainAppFile(Path.Combine("Controls", "EntityCardControl.axaml"));
         Assert.Contains("Classes=\"entity-card-tree-type-bar\"", entityCardContent, StringComparison.Ordinal);
         Assert.Contains("DockPanel.Dock=\"Left\"", entityCardContent, StringComparison.Ordinal);
         Assert.Contains("<sharedControls:EntityCardHeaderPanel", entityCardContent, StringComparison.Ordinal);
         Assert.Contains("Classes=\"workspace-entity-header-wrap\"", entityCardContent, StringComparison.Ordinal);
-        Assert.Contains("ActionsMinWidth=\"100\"", entityCardContent, StringComparison.Ordinal);
-        Assert.DoesNotContain("HorizontalAlignment=\"Left\"", entityCardContent, StringComparison.Ordinal);
+        var card = XDocument.Parse(entityCardContent);
+        var header = Assert.Single(card.Descendants(),
+            element => element.Name.LocalName == "EntityCardHeaderPanel");
+        var headerDock = Assert.IsType<XElement>(header.Parent);
+        Assert.Equal("DockPanel", headerDock.Name.LocalName);
+        var typeBar = Assert.Single(headerDock.Elements(),
+            element => (string?)element.Attribute("Classes") == "entity-card-tree-type-bar");
+        Assert.Equal("Left", (string?)typeBar.Attribute("DockPanel.Dock"));
+        Assert.Null(header.Attribute("ActionsMinWidth"));
+        Assert.NotEqual("Left", (string?)header.Attribute("HorizontalAlignment"));
+
+        XNamespace axaml = "https://github.com/avaloniaui";
+        var name = Assert.Single(header.Elements().First().Descendants(),
+            element => element.Name.LocalName == "SafeSelectableTextBlock");
+        Assert.Equal("{Binding DisplayName}", (string?)name.Attribute("Text"));
+        Assert.Equal("Wrap", (string?)name.Attribute("TextWrapping"));
+        var groups = header.Elements(axaml + "ItemsControl").ToArray();
+        Assert.Equal(
+            new[] { "{Binding Badges.Badges}", "{Binding Shortcuts}", "{Binding StatusBadges.Badges}" },
+            groups.Select(group => (string?)group.Attribute("ItemsSource")));
+        foreach (var group in groups)
+        {
+            Assert.Single(group.Descendants(),
+                element => element.Name.LocalName == "EntityCardFlowItemsPanel");
+        }
+        var headerStyle = Assert.Single(XDocument.Parse(sharedStylesContent).Descendants(axaml + "Style"),
+            element => (string?)element.Attribute("Selector")
+                == "controls|EntityCardHeaderPanel.workspace-entity-header-wrap");
+        Assert.Contains(headerStyle.Elements(axaml + "Setter"),
+            setter => (string?)setter.Attribute("Property") == "HorizontalAlignment"
+                && (string?)setter.Attribute("Value") == "Stretch");
         // Issues #1343/#1347: the card root no longer clips its own content — clipping the
         // scrollable chain hid tall-card overflow instead of letting the tree/tab ScrollViewer
         // scroll it.
@@ -470,19 +497,38 @@ public sealed class MainWindowAxamlTests
     {
         var sharedStylesContent = ReadSharedStylesFile();
 
-        // Issue #1045: the indent gutter is a fixed 20px column with the 2px rail centred within it.
-        Assert.Contains(
-            "ColumnDefinitions=\"20,*\"",
-            sharedStylesContent,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "Width=\"2\"",
-            sharedStylesContent,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "HorizontalAlignment=\"Center\"",
-            sharedStylesContent,
-            StringComparison.Ordinal);
+        XNamespace axaml = "https://github.com/avaloniaui";
+        var treeStyle = Assert.Single(XDocument.Parse(sharedStylesContent).Descendants(axaml + "Style"),
+            element => (string?)element.Attribute("Selector")
+                == "TreeView.entity-card-tree TreeViewItem, TreeView.entity-card-tree-view TreeViewItem");
+        var template = Assert.Single(treeStyle.Descendants(axaml + "ControlTemplate"));
+        var grid = Assert.Single(template.Elements(axaml + "Grid"));
+        Assert.Equal("40,*", (string?)grid.Attribute("ColumnDefinitions"));
+        var header = Assert.Single(grid.Elements(axaml + "StackPanel"));
+        Assert.Equal("0", (string?)header.Attribute("Grid.Row"));
+        Assert.Equal("2", (string?)header.Attribute("Grid.ColumnSpan"));
+        var children = Assert.Single(grid.Elements(axaml + "ItemsPresenter"));
+        Assert.Equal("1", (string?)children.Attribute("Grid.Row"));
+        Assert.Equal("1", (string?)children.Attribute("Grid.Column"));
+        Assert.Equal("{TemplateBinding ItemsPanel}", (string?)children.Attribute("ItemsPanel"));
+        Assert.Equal("{Binding IsExpanded}", (string?)children.Attribute("IsVisible"));
+        var connectors = Assert.Single(grid.Elements(),
+            element => element.Name.LocalName == "EntityTreeConnectors");
+        Assert.Equal("entity-card-child-rail", (string?)connectors.Attribute("Classes"));
+        Assert.Equal("1", (string?)connectors.Attribute("Grid.Row"));
+        Assert.Equal("0", (string?)connectors.Attribute("Grid.Column"));
+        Assert.Equal("2", (string?)connectors.Attribute("Grid.ColumnSpan"));
+        Assert.Equal("{Binding ChildRailBrush, FallbackValue=#808080}", (string?)connectors.Attribute("Brush"));
+        Assert.DoesNotContain(grid.Elements(axaml + "Border"),
+            element => (string?)element.Attribute("Classes") == "entity-card-child-rail");
+
+        // The shared renderer centers its 2-DIP rail at x=20 in the doubled gutter.
+        var connectorSource = ReadGuiStylesFile(Path.Combine("Controls", "EntityTreeConnectors.cs"));
+        Assert.Contains("var pen = new Pen(brush, 2);", connectorSource, StringComparison.Ordinal);
+        Assert.Contains("new Point(20, 0), new Point(20, this.railEnd)", connectorSource, StringComparison.Ordinal);
+        Assert.Contains("new Point(20, point.Y), point", connectorSource, StringComparison.Ordinal);
+        Assert.Contains("this.IsHitTestVisible = false;", connectorSource, StringComparison.Ordinal);
+        Assert.Contains("this.ClipToBounds = true;", connectorSource, StringComparison.Ordinal);
         Assert.Contains(
             "FallbackValue=▼",
             sharedStylesContent,
@@ -1188,5 +1234,4 @@ public sealed class MainWindowAxamlTests
     }
 
 }
-
 
