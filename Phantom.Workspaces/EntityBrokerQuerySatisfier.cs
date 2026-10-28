@@ -122,9 +122,9 @@ internal sealed class EntityBrokerQuerySatisfier : IAsyncDisposable
         public CancellationTokenSource? ExecutionCts { get; set; }
 
         public bool HasLiveSubsumer =>
-            this.IssuanceTimeSubsumers.Any(static s => !s.Completed)
-            || this.ResultTimeSubsumers.Any(static s => !s.Completed)
-            || this.PendingResultTimeSubsumers.Any(static s => !s.Completed);
+            this.IssuanceTimeSubsumers.Any(static s => !s.Completed && s.LiveAwaiters > 0)
+            || this.ResultTimeSubsumers.Any(static s => !s.Completed && s.LiveAwaiters > 0)
+            || this.PendingResultTimeSubsumers.Any(static s => !s.Completed && s.LiveAwaiters > 0);
     }
 
     private readonly IEntityQueryExecutor executor;
@@ -215,7 +215,8 @@ internal sealed class EntityBrokerQuerySatisfier : IAsyncDisposable
 
         {
             var key = BuildKey(kind, request);
-            if (this.pendingByKey.TryGetValue(key, out var existing) && !existing.Completed)
+            if (this.pendingByKey.TryGetValue(key, out var existing)
+                && !existing.Completed && existing.LiveAwaiters > 0)
             {
                 // Dedup: identical in-flight request shares the same underlying call.
                 task = this.AttachAwaiter(existing, cancellationToken);
@@ -306,7 +307,7 @@ internal sealed class EntityBrokerQuerySatisfier : IAsyncDisposable
 
         foreach (var a in this.allPending)
         {
-            if (ReferenceEquals(a, b) || a.Completed)
+            if (ReferenceEquals(a, b) || a.Completed || a.LiveAwaiters == 0)
             {
                 continue;
             }
@@ -326,7 +327,7 @@ internal sealed class EntityBrokerQuerySatisfier : IAsyncDisposable
         // No provable static subsumer: defer on any in-flight query whose results might cover this get.
         foreach (var a in this.allPending)
         {
-            if (ReferenceEquals(a, b) || a.Completed || a.Kind != QueryKind.Query)
+            if (ReferenceEquals(a, b) || a.Completed || a.LiveAwaiters == 0 || a.Kind != QueryKind.Query)
             {
                 continue;
             }
@@ -344,7 +345,7 @@ internal sealed class EntityBrokerQuerySatisfier : IAsyncDisposable
     {
         foreach (var b in this.allPending)
         {
-            if (ReferenceEquals(a, b) || b.Completed || b.Started || !b.IsSimpleIdGet || b.TargetIds is null)
+            if (ReferenceEquals(a, b) || b.Completed || b.LiveAwaiters == 0 || b.Started || !b.IsSimpleIdGet || b.TargetIds is null)
             {
                 continue;
             }

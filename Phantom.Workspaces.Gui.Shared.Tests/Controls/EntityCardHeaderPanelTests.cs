@@ -1,6 +1,9 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
+using Avalonia.Controls.Templates;
+using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Phantom.Workspaces.Gui.Shared.Controls;
 
 namespace Phantom.Workspaces.Gui.Shared.Tests.Controls;
@@ -9,162 +12,120 @@ namespace Phantom.Workspaces.Gui.Shared.Tests.Controls;
 public sealed class EntityCardHeaderPanelTests
 {
     [AvaloniaFact(Timeout = 15_000)]
-    public void EntityCardHeaderPanel_ArrangesLastActionAtTopRight()
+    public void EntityCardHeaderPanel_Collections_IndividualContainersShareForwardFlow()
     {
-        var (panel, _, _, last) = Arrange(width: 220, actionWidth: 60, actionCount: 2);
-
-        Assert.Equal(220, panel.Bounds.Width);
-        Assert.Equal(220, last.Bounds.Right, precision: 1);
-        Assert.Equal(0, last.Bounds.Y, precision: 1);
-    }
-
-    [AvaloniaFact(Timeout = 15_000)]
-    public void EntityCardHeaderPanel_OverflowActionsWrapBelowRightAnchored()
-    {
-        var (_, header, first, last) = Arrange(width: 180, actionWidth: 70, actionCount: 3);
-
-        Assert.Equal(180, last.Bounds.Right, precision: 1);
-        Assert.True(first.Bounds.Y >= header.Bounds.Bottom - 1);
-        Assert.True(first.Bounds.X >= 0);
-    }
-
-    [AvaloniaFact(Timeout = 15_000)]
-    public void EntityCardHeaderPanel_DisplayNameUsesRemainingWidthBesideFirstRowActions()
-    {
-        var (_, header, _, last) = Arrange(width: 300, actionWidth: 80, actionCount: 1);
-
-        Assert.Equal(0, header.Bounds.X, precision: 1);
-        Assert.Equal(last.Bounds.X - 4, header.Bounds.Right, precision: 1);
-    }
-
-    // Issue #1264 (retry): explicit source-order / branch coverage for the custom panel.
-
-    [AvaloniaFact(Timeout = 15_000)]
-    public void EntityCardHeaderPanel_Wide_FirstRowActionsRightPackedInSourceOrder()
-    {
-        var (panel, header, actions) = ArrangeAll(width: 600, actionWidth: 40, actionCount: 4);
-
-        // With ample width every action fits on the first row.
-        foreach (var action in actions)
+        var header = new EntityCardHeaderPanel();
+        header.Children.Add(new Border { Width = 100, Height = 40 });
+        var tags = Group(30, 40);
+        var shortcuts = Group(50, 60);
+        header.Children.Add(tags);
+        header.Children.Add(shortcuts);
+        var window = new Window { Width = 200, Height = 300, Content = header };
+        try
         {
-            Assert.Equal(0, action.Bounds.Y, precision: 1);
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            var items = new[] { tags, shortcuts }.SelectMany(group =>
+                ((EntityCardFlowItemsPanel)group.ItemsPanelRoot!).Children).ToArray();
+            var points = items.Select(item => item.TranslatePoint(default, header)!.Value).ToArray();
+            Assert.Equal(new Point(104, 0), points[0]);
+            Assert.Equal(new Point(138, 0), points[1]);
+            Assert.Equal(new Point(0, 44), points[2]);
+            Assert.Equal(new Point(54, 44), points[3]);
+            tags.ItemsSource = Array.Empty<double>();
+            Dispatcher.UIThread.RunJobs();
+            var shortcut = ((EntityCardFlowItemsPanel)shortcuts.ItemsPanelRoot!).Children[0];
+            Assert.Equal(new Point(104, 0), shortcut.TranslatePoint(default, header));
         }
-
-        // Visual source order is preserved left-to-right (I1, I2, A1, A2).
-        for (var i = 1; i < actions.Length; i++)
+        finally
         {
-            Assert.True(
-                actions[i].Bounds.X > actions[i - 1].Bounds.X,
-                $"Action {i} (X={actions[i].Bounds.X}) must sit right of action {i - 1} (X={actions[i - 1].Bounds.X}).");
+            window.Close();
         }
+    }
 
-        // The last source-order action is flush against the panel right edge and none of the
-        // actions overlap the display-name column.
-        Assert.Equal(600, actions[^1].Bounds.Right, precision: 1);
-        Assert.True(
-            actions[0].Bounds.X >= header.Bounds.Right - 0.5,
-            $"First action (X={actions[0].Bounds.X}) must not overlap display column (right={header.Bounds.Right}).");
+    private static ItemsControl Group(params double[] widths) => new()
+    {
+        ItemsSource = widths,
+        ItemsPanel = new FuncTemplate<Panel?>(() => new EntityCardFlowItemsPanel()),
+        ItemTemplate = new FuncDataTemplate<double>((width, _) => new Button { Width = width, Height = 24, Padding = default }),
+    };
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardHeaderPanel_Wide_ArrangesNameTagsAndShortcutsInSourceOrder()
+    {
+        var (panel, children) = Arrange(400, (100, 40), (30, 24), (40, 24), (50, 24));
+        Assert.Equal(0, children[0].Bounds.X);
+        Assert.Equal(104, children[1].Bounds.X);
+        Assert.Equal(138, children[2].Bounds.X);
+        Assert.Equal(182, children[3].Bounds.X);
+        Assert.All(children, child => Assert.Equal(0, child.Bounds.Y));
+        Assert.Equal(40, panel.Bounds.Height);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public void EntityCardHeaderPanel_EmptyActions_DisplayNameOccupiesFullWidth()
+    public void EntityCardHeaderPanel_Narrow_WrapsIndividualActionsInSourceOrder()
     {
-        var (panel, header, _) = ArrangeAll(width: 300, actionWidth: 40, actionCount: 0);
-
-        Assert.Equal(0, header.Bounds.X, precision: 1);
-        Assert.Equal(300, header.Bounds.Width, precision: 1);
-        Assert.Equal(header.Bounds.Height, panel.Bounds.Height, precision: 1);
+        var (_, children) = Arrange(180, (100, 40), (40, 24), (60, 32), (70, 24));
+        Assert.Equal(new Rect(104, 0, 40, 24), children[1].Bounds);
+        Assert.Equal(new Rect(0, 44, 60, 32), children[2].Bounds);
+        Assert.Equal(new Rect(64, 44, 70, 24), children[3].Bounds);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public void EntityCardHeaderPanel_SingleAction_FitsOnFirstRow()
+    public void EntityCardHeaderPanel_LongName_WrapsWithoutOverlappingActions()
     {
-        var (panel, header, actions) = ArrangeAll(width: 300, actionWidth: 40, actionCount: 1);
-        var action = actions[0];
-
-        Assert.Equal(0, action.Bounds.Y, precision: 1);
-        Assert.Equal(300, action.Bounds.Right, precision: 1);
-        Assert.Equal(0, header.Bounds.X, precision: 1);
-        Assert.True(
-            header.Bounds.Right <= action.Bounds.X + 0.5,
-            $"Display column (right={header.Bounds.Right}) must occupy the remaining width beside the action (X={action.Bounds.X}).");
-        Assert.Equal(Math.Max(header.Bounds.Height, action.Bounds.Height), panel.Bounds.Height, precision: 1);
+        var panel = new EntityCardHeaderPanel();
+        var title = new TextBlock { Text = new string('W', 120), TextWrapping = Avalonia.Media.TextWrapping.Wrap };
+        var action = new Border { Width = 60, Height = 24 };
+        panel.Children.Add(title);
+        panel.Children.Add(action);
+        Layout(panel, 160);
+        Assert.True(title.Bounds.Height > 40);
+        Assert.True(action.Bounds.Top >= title.Bounds.Bottom + 4);
+        Assert.True(title.Bounds.Right <= 160);
+        Assert.True(action.Bounds.Right <= 160);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public void EntityCardHeaderPanel_Measure_ReservesActionsMinWidth()
+    public void EntityCardHeaderPanel_VisibilityChanges_ReflowsRemainingItems()
     {
-        // The display MinWidth (250) would leave only 50px beside it at width 300, but
-        // ActionsMinWidth=100 reserves room so more than one action still packs onto the first row.
-        var (panel, header, actions) = ArrangeAll(width: 300, actionWidth: 40, actionCount: 3, headerMinWidth: 250);
-
-        var firstRow = actions.Where(action => Math.Abs(action.Bounds.Y) < 1).ToArray();
-        Assert.True(
-            firstRow.Length >= 2,
-            $"ActionsMinWidth floor must reserve room for >=2 actions on the first row; got {firstRow.Length}.");
-        Assert.Equal(300, actions[^1].Bounds.Right, precision: 1);
+        var (panel, children) = Arrange(180, (100, 40), (40, 24), (60, 24));
+        children[1].IsVisible = false;
+        Layout(panel, 180);
+        Assert.Equal(new Rect(104, 0, 60, 24), children[2].Bounds);
+        children[1].IsVisible = true;
+        Layout(panel, 180);
+        Assert.Equal(44, children[2].Bounds.Y);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public void EntityCardHeaderPanel_Narrow_EarlierActionsWrapBelowFullWidth()
+    public void EntityCardHeaderPanel_Empty_HasNoReservedActionWidth()
     {
-        var (panel, header, actions) = ArrangeAll(width: 200, actionWidth: 70, actionCount: 3, headerMinWidth: 100);
-        var last = actions[^1];
-
-        Assert.Equal(200, last.Bounds.Right, precision: 1);
-        Assert.True(
-            actions[0].Bounds.Y > last.Bounds.Y + 1,
-            $"Earlier action (Y={actions[0].Bounds.Y}) must wrap onto a row below the last action (Y={last.Bounds.Y}).");
-
-        // At least one overflow-row child extends leftward under the display-name column.
-        Assert.Contains(
-            actions,
-            action => action.Bounds.Y > last.Bounds.Y + 1 && action.Bounds.X < header.Bounds.Right);
+        var panel = new EntityCardHeaderPanel();
+        Layout(panel, 80);
+        Assert.Equal(0, panel.DesiredSize.Height);
+        var name = new Border { Height = 20 };
+        panel.Children.Add(name);
+        Layout(panel, 80);
+        Assert.True(name.Bounds.Width <= 80);
+        Assert.Equal(20, panel.DesiredSize.Height);
     }
 
-    private static (EntityCardHeaderPanel Panel, Border Header, Border[] Actions) ArrangeAll(
-        double width,
-        double actionWidth,
-        int actionCount,
-        double headerMinWidth = 100,
-        double actionHeight = 24)
+    private static (EntityCardHeaderPanel, Border[]) Arrange(double width, params (double Width, double Height)[] sizes)
     {
-        var panel = new EntityCardHeaderPanel { Width = width, ItemSpacing = 4, ActionsMinWidth = 100 };
-        var header = new Border { MinWidth = headerMinWidth, Height = 40 };
-        panel.Children.Add(header);
-
-        var actions = Enumerable.Range(0, actionCount)
-            .Select(_ => new Border { Width = actionWidth, Height = actionHeight })
-            .ToArray();
-        foreach (var action in actions)
+        var panel = new EntityCardHeaderPanel { ItemSpacing = 4 };
+        var children = sizes.Select(size => new Border { Width = size.Width, Height = size.Height }).ToArray();
+        foreach (var child in children)
         {
-            panel.Children.Add(action);
+            panel.Children.Add(child);
         }
+        Layout(panel, width);
+        return (panel, children);
+    }
 
-        panel.Measure(new Size(width, 500));
+    private static void Layout(EntityCardHeaderPanel panel, double width)
+    {
+        panel.Measure(new Size(width, double.PositiveInfinity));
         panel.Arrange(new Rect(0, 0, width, panel.DesiredSize.Height));
-        return (panel, header, actions);
-    }
-
-    private static (EntityCardHeaderPanel Panel, Border Header, Border First, Border Last) Arrange(
-        double width,
-        double actionWidth,
-        int actionCount)
-    {
-        var panel = new EntityCardHeaderPanel { Width = width, ItemSpacing = 4, ActionsMinWidth = 100 };
-        var header = new Border { MinWidth = 100, Height = 40 };
-        panel.Children.Add(header);
-
-        var actions = Enumerable.Range(0, actionCount)
-            .Select(_ => new Border { Width = actionWidth, Height = 24 })
-            .ToArray();
-        foreach (var action in actions)
-        {
-            panel.Children.Add(action);
-        }
-
-        panel.Measure(new Size(width, 500));
-        panel.Arrange(new Rect(0, 0, width, panel.DesiredSize.Height));
-        return (panel, header, actions[0], actions[^1]);
     }
 }

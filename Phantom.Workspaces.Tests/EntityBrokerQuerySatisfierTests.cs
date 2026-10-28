@@ -6,6 +6,66 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityBrokerQuerySatisfierTests
 {
+    [Theory(Timeout = 15_000)]
+    [InlineData("get-identical")]
+    [InlineData("get-subset")]
+    [InlineData("query-identical")]
+    [InlineData("query-get")]
+    public async Task EntityBrokerQuerySatisfier_CancelledFlightStillUnwinding_DoesNotCaptureReplacement(
+        string shape)
+    {
+        var token = TestContext.Current.CancellationToken;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reads = 0;
+        async Task<TResult> ReadAsync<TResult>(TResult result, CancellationToken cancellationToken)
+        {
+            if (Interlocked.Increment(ref reads) == 1)
+            {
+                entered.SetResult();
+                // Model a remote call still unwinding after its final caller has cancelled.
+                await release.Task;
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+            return result;
+        }
+        var executor = new Moq.Mock<IEntityQueryExecutor>();
+        executor.Setup(value => value.GetAsync(Moq.It.IsAny<GetRequest>(), Moq.It.IsAny<CancellationToken>()))
+            .Returns((GetRequest request, CancellationToken cancellationToken) =>
+                ReadAsync(GetResultFor(request.Entities.Select(entity => entity.EntityId!.Value).ToArray()), cancellationToken));
+        executor.Setup(value => value.QueryAsync(Moq.It.IsAny<QueryRequest>(), Moq.It.IsAny<CancellationToken>()))
+            .Returns((QueryRequest request, CancellationToken cancellationToken) =>
+                ReadAsync(QueryResultFor(Id(1), Id(2)), cancellationToken));
+        await using var satisfier = new EntityBrokerQuerySatisfier(executor.Object);
+        using var cancellation = new CancellationTokenSource();
+        Task first = shape.StartsWith("query", StringComparison.Ordinal)
+            ? satisfier.SatisfyOrIssueOnDemandQueryAsync(Query("all"), cancellation.Token)
+            : satisfier.SatisfyOrIssueOnDemandGetAsync(GetFor(Id(1), Id(2)), cancellation.Token);
+        try
+        {
+            await entered.Task.WaitAsync(token);
+            await cancellation.CancelAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first);
+            if (shape == "query-identical")
+            {
+                var result = await satisfier.SatisfyOrIssueOnDemandQueryAsync(Query("all"), token);
+                Assert.Equal(new[] { Id(1), Id(2) }, result.Batches.SelectMany(batch => batch.Entities).Select(entity => entity.EntityId));
+            }
+            else
+            {
+                var expected = shape == "get-identical" ? new[] { Id(1), Id(2) } : new[] { Id(1) };
+                var result = await satisfier.SatisfyOrIssueOnDemandGetAsync(GetFor(expected), token);
+                Assert.Equal(expected, Ids(result));
+            }
+            Assert.False(release.Task.IsCompleted);
+            Assert.Equal(2, reads);
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+    }
+
     // ---- Issuance-time subsumption ---------------------------------------
 
     [Fact]

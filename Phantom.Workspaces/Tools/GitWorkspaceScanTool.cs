@@ -10,13 +10,16 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
 {
     private readonly ILogger<GitWorkspaceScanTool> logger;
     private readonly ILocalDriveRootProvider localDriveRootProvider;
+    private readonly Func<string, GitWorkspaceAvailability> availabilityReader;
 
     public GitWorkspaceScanTool(
         ILocalDriveRootProvider? localDriveRootProvider = null,
-        ILogger<GitWorkspaceScanTool>? logger = null)
+        ILogger<GitWorkspaceScanTool>? logger = null,
+        Func<string, GitWorkspaceAvailability>? availabilityReader = null)
     {
         this.localDriveRootProvider = localDriveRootProvider ?? new LocalDriveRootProvider();
         this.logger = logger ?? NullLogger<GitWorkspaceScanTool>.Instance;
+        this.availabilityReader = availabilityReader ?? GitWorkspacePath.Classify;
     }
 
     public string ToolType => "git-workspace-scan";
@@ -44,6 +47,7 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
             .Where(static p => !string.IsNullOrEmpty(p))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Where(Directory.Exists)
+            .Where(root => !GitWorkspacePath.IsRecycled(root))
             .Where(root => !GitRepositoryMetadataReader.IsUnderAnyExclude(root, expandedExcludes))
             .ToArray();
 
@@ -76,17 +80,37 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
             GitRepositoryMetadataReader.EnumerateLinkedWorktrees(rootRepoPath, this.logger,
                 linkedWorktreePath =>
                 {
-                    allWorktrees[linkedWorktreePath] = rootRepoPath;
+                    if (!GitWorkspacePath.IsRecycled(linkedWorktreePath)
+                        && !GitRepositoryMetadataReader.IsUnderAnyExclude(linkedWorktreePath, expandedExcludes)
+                        && this.availabilityReader(linkedWorktreePath) == GitWorkspaceAvailability.Exists)
+                    {
+                        allWorktrees[linkedWorktreePath] = rootRepoPath;
+                    }
                 });
         }
 
         foreach (var (discoveredWorktreePath, owningRepositoryPath) in allWorktrees)
         {
             context.CancellationToken.ThrowIfCancellationRequested();
-            var gitMetadata = GitRepositoryMetadataReader.TryReadMetadata(discoveredWorktreePath, this.logger);
             var normalizedPath = NormalizeRepositoryPath(discoveredWorktreePath);
             var deterministicId = DeterministicEntityId.Create("git-workspace", normalizedPath);
+            var existing = await WorkspaceToolEntityUtilities.TryGetEntityByIdAsync(
+                context.DataAccessLayer, deterministicId, context.CancellationToken);
+            // Existing workspaces are refreshed by the shared reconciler, not a discovery write
+            // that could overwrite ownership, missing state, or last-known Git metadata.
+            if (existing?.Data is not null)
+            {
+                continue;
+            }
 
+            if (GitWorkspacePath.IsRecycled(discoveredWorktreePath)
+                || GitRepositoryMetadataReader.IsUnderAnyExclude(discoveredWorktreePath, expandedExcludes)
+                || this.availabilityReader(discoveredWorktreePath) != GitWorkspaceAvailability.Exists)
+            {
+                continue;
+            }
+
+            var gitMetadata = GitRepositoryMetadataReader.TryReadMetadata(discoveredWorktreePath, this.logger);
             var entityData = GitWorkspaceEntityData.Build(
                 discoveredWorktreePath,
                 currentProfileNames,
@@ -104,8 +128,12 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
                 context.CancellationToken);
         }
 
+        var reconciliation = await new GitWorkspaceUpdateTool(
+            logger: this.logger,
+            availabilityReader: this.availabilityReader).ExecuteAsync(context);
+
         var summary = $"Scanned {scanRoots.Length} root(s); found {discoveredWorktreePaths.Count} repositories, " +
-            $"indexed {allWorktrees.Count} worktree(s).";
+            $"indexed {allWorktrees.Count} worktree(s). {reconciliation.ResultContent}";
         this.logger.LogInformation("{Summary}", summary);
         return WorkspaceToolExecutionResult.Success() with { ResultContent = summary };
     }

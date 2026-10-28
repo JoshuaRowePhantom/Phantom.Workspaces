@@ -27,6 +27,114 @@ namespace Phantom.Workspaces.Tests;
 public sealed class EntityCardControlTests
 {
     [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardControl_RealTagsAndShortcuts_FlowIndividuallyAndReflowOnVisibilityChanges()
+    {
+        var entity = new SubscribedEntityViewModel(BuildGitWorktreeSnapshotForTests());
+        var vm = new EntityCardViewModel(entity);
+        var badges = new BadgesModel();
+        badges.SetBadges(Enumerable.Range(1, 6)
+            .Select(index => new BadgeModel($"tag-{index}", $"Tag {index}", $"Tag {index}", false)));
+        vm.SetBadges(new BadgesViewModel(badges));
+        vm.SetShortcuts(Enumerable.Range(1, 9).Select(index => new EntityShortcutViewModel
+        {
+            Shortcut = new Shortcut($"Action {index}", index.ToString()),
+            Entity = entity,
+            ShortcutManager = new ShortcutManager(),
+        }).ToArray(), new RelayCommand(_ => { }));
+        var window = new Window
+        {
+            Content = new EntityCardControl { DataContext = vm },
+            Width = 1400,
+            Height = 800,
+        };
+        try
+        {
+            window.Show();
+            window.UpdateLayout();
+            var header = window.GetVisualDescendants().OfType<EntityCardHeaderPanel>().Single();
+            var groups = header.Children.OfType<ItemsControl>().Take(2).ToArray();
+            var tags = (EntityCardFlowItemsPanel)groups[0].ItemsPanelRoot!;
+            var shortcuts = (EntityCardFlowItemsPanel)groups[1].ItemsPanelRoot!;
+            Assert.Equal(6, tags.Children.Count);
+            Assert.Equal(9, shortcuts.Children.Count);
+            AssertFlow();
+            Assert.All(tags.Children.Concat(shortcuts.Children), control =>
+                Assert.Equal(0, control.TranslatePoint(default, header)!.Value.Y));
+            window.Width = 225;
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            Assert.True(header.Bounds.Width <= 225);
+            AssertFlow();
+            Assert.True(tags.Children.Select(control => control.TranslatePoint(default, header)!.Value.Y)
+                .Distinct().Count() > 1, "Real tags must wrap individually, not as one reserved group.");
+            Assert.True(shortcuts.Children.Select(control => control.TranslatePoint(default, header)!.Value.Y)
+                .Distinct().Count() > 1, "Real shortcuts must wrap individually.");
+            var before = shortcuts.Children[0].TranslatePoint(default, header)!.Value;
+            vm.SetBadges(new BadgesViewModel(new BadgesModel()));
+            window.UpdateLayout();
+            Assert.False(groups[0].IsVisible);
+            AssertFlow();
+            var after = shortcuts.Children[0].TranslatePoint(default, header)!.Value;
+            Assert.True(after.Y < before.Y || (after.Y == before.Y && after.X < before.X));
+            vm.SetBadges(new BadgesViewModel(badges));
+            window.UpdateLayout();
+            Assert.True(groups[0].IsVisible);
+            AssertFlow();
+            Assert.Equal(before, shortcuts.Children[0].TranslatePoint(default, header)!.Value);
+
+            void AssertFlow()
+            {
+                var previous = default(Rect);
+                foreach (var control in header.Children.Where(control => control.IsVisible).SelectMany(control =>
+                    control is ItemsControl { ItemsPanelRoot: EntityCardFlowItemsPanel panel }
+                        ? panel.Children.AsEnumerable()
+                        : new[] { control }))
+                {
+                    var point = control.TranslatePoint(default, header)!.Value;
+                    var bounds = new Rect(point, control.Bounds.Size);
+                    Assert.True(bounds.Right <= header.Bounds.Width + 0.01);
+                    Assert.True(bounds.Top >= previous.Bottom + 3.99
+                        || (bounds.Top == previous.Top && bounds.Left >= previous.Right),
+                        $"Source-order items overlap or flow backwards: {previous} then {bounds}.");
+                    previous = bounds;
+                }
+            }
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardControl_LongDisplayName_RemainsSelectableAndFullyVisible()
+    {
+        var text = new string('W', 150);
+        var card = new EntityCardControl { DataContext = new EntityCardViewModel(text, "note") };
+        var window = new Window { Content = card, Width = 200, Height = 800 };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            var title = window.GetVisualDescendants().OfType<SafeSelectableTextBlock>()
+                .Single(control => control.Classes.Contains("workspace-entity-title"));
+            Assert.Equal(text, title.Text);
+            Assert.Equal(Avalonia.Media.TextWrapping.Wrap, title.TextWrapping);
+            Assert.True(title.Bounds.Height > 40);
+            title.SelectionStart = 0;
+            title.SelectionEnd = text.Length;
+            Assert.Equal(text, title.SelectedText);
+            var header = window.GetVisualDescendants().OfType<EntityCardHeaderPanel>().Single();
+            Assert.True(title.Bounds.Height <= header.Bounds.Height);
+            Assert.True(title.Bounds.Width <= header.Bounds.Width);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task EntityCardControl_ExternalAndNote_RendersLinksAndNoteMarkdown()
     {
         var broker = await EntityBroker.CreateInitializedAsync(

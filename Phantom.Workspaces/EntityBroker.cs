@@ -192,6 +192,7 @@ public sealed class EntityBroker
         GetRequest request,
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var key = JsonSerializer.Serialize(request);
 
         lock (this.gate)
@@ -204,6 +205,9 @@ public sealed class EntityBroker
         }
 
         var subscribedGet = new SubscribedGet(this, request);
+        // A cancelled population must not leave an unfinished subscription in the shared cache.
+        await subscribedGet.RefreshAsync(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         lock (this.gate)
         {
             if (this.subscribedGets.TryGetValue(key, out var existingRef)
@@ -215,7 +219,6 @@ public sealed class EntityBroker
             this.subscribedGets[key] = new WeakReference<SubscribedGet>(subscribedGet);
         }
 
-        await subscribedGet.RefreshAsync(cancellationToken);
         return subscribedGet;
     }
 
@@ -228,6 +231,7 @@ public sealed class EntityBroker
         QueryRequest request,
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var key = JsonSerializer.Serialize(request);
 
         lock (this.gate)
@@ -240,6 +244,8 @@ public sealed class EntityBroker
         }
 
         var subscribedQuery = new SubscribedQuery(this, request);
+        await subscribedQuery.RefreshAsync(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         lock (this.gate)
         {
             if (this.subscribedQueries.TryGetValue(key, out var existingRef)
@@ -251,7 +257,6 @@ public sealed class EntityBroker
             this.subscribedQueries[key] = new WeakReference<SubscribedQuery>(subscribedQuery);
         }
 
-        await subscribedQuery.RefreshAsync(cancellationToken);
         return subscribedQuery;
     }
 

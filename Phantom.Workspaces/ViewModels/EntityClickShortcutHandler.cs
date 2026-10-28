@@ -39,7 +39,8 @@ public sealed class EntityClickShortcutHandler : ShortcutHandler
     public override ValueTask<bool> ShouldApplyTo(
         MainWindowViewModel mainWindowViewModel,
         Shortcut shortcut,
-        SubscribedEntityViewModel entityViewModel)
+        SubscribedEntityViewModel entityViewModel,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(entityViewModel);
 
@@ -67,6 +68,5 @@ public sealed class EntityClickShortcutHandler : ShortcutHandler
             .ConfigureAwait(true);
     }
 }
-
 
 

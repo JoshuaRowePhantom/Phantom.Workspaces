@@ -11,7 +11,7 @@ public sealed class ProviderGrantAdministrationViewModel : AdministrationViewMod
     private CredentialAdministrationFailure? lastFailure;
     public required IProviderGrantAdministration Administration { private get; init; }
     public CredentialAdministrationFailure? LastFailure => this.lastFailure;
-    public override string ActionLabel => "Revoke";
+    public override string ActionLabel => Services.Access.CredentialAccessText.RevokeAccess;
     protected override ValueTask<IReadOnlyList<ProviderGrantDescriptor>> ListAsync(CancellationToken cancellationToken) =>
         this.Administration.ListAsync(cancellationToken);
     protected override ValueTask RemoveCoreAsync(ProviderGrantDescriptor descriptor, CancellationToken cancellationToken) =>
@@ -28,7 +28,7 @@ public sealed class ProviderGrantAdministrationViewModel : AdministrationViewMod
             ? failure.Failure : CredentialAdministrationFailure.Failed;
         this.RaisePropertyChanged(nameof(this.LastFailure));
         return this.lastFailure == CredentialAdministrationFailure.Denied
-            ? "Provider revocation was denied. The grant remains listed."
-            : "Provider revocation unavailable. Refresh and try again.";
+            ? "Access revocation was denied. Provider access and cached credentials are unchanged."
+            : "Access revocation did not complete. Refresh and try again.";
     }
 }

@@ -7,13 +7,39 @@ namespace Phantom.Workspaces.Services.Access;
 
 public sealed class ReleaseMemoryStore
 {
-    private static readonly JsonSerializerOptions SerializerOptions = new()
+    private static readonly JsonSerializerOptions MetadataSerializerOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         WriteIndented = true,
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
+    private static readonly JsonSerializerOptions SerializerOptions = new(MetadataSerializerOptions)
+    {
+        Converters = { new OptionalSafeContextConverter() },
+    };
+
+    private sealed class OptionalSafeContextConverter : JsonConverter<SafeApprovalContext>
+    {
+        public override SafeApprovalContext? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            using var document = JsonDocument.ParseValue(ref reader);
+            try
+            {
+                var context = document.RootElement.Deserialize<SafeApprovalContext>(MetadataSerializerOptions);
+                return context is not null && context.IsValid() ? context : null;
+            }
+            catch (JsonException)
+            {
+                // Optional display metadata cannot invalidate policy identity or prevent Forget.
+                // The administration row explicitly renders "Details unavailable" for rejected context.
+                return null;
+            }
+        }
+
+        public override void Write(Utf8JsonWriter writer, SafeApprovalContext value, JsonSerializerOptions options) =>
+            JsonSerializer.Serialize(writer, value, MetadataSerializerOptions);
+    }
 
     public ReleaseMemoryStore(string? filePath = null)
     {
@@ -39,7 +65,10 @@ public sealed class ReleaseMemoryStore
             throw new JsonException("Unsupported release memory document.");
         }
 
-        return document.Records;
+        return document.Records.Select(record => record with
+        {
+            SafeContext = record.SafeContext is { } context && context.IsValid() ? context : null,
+        }).ToArray();
     }
 
     internal async ValueTask SaveAsync(
@@ -91,4 +120,5 @@ internal sealed record ReleaseMemoryRecord
     public CredentialAccountIdentifier? AccountIdentifier { get; init; }
     public required ReleaseMemoryScopeKind Scope { get; init; }
     public required CredentialUseFingerprint BindingFingerprint { get; init; }
+    public SafeApprovalContext? SafeContext { get; init; }
 }

@@ -494,7 +494,8 @@ public sealed class ShortcutManagerTests
         public override ValueTask<bool> ShouldApplyTo(
             MainWindowViewModel mainWindowViewModel,
             Shortcut shortcut,
-            SubscribedEntityViewModel entityViewModel)
+            SubscribedEntityViewModel entityViewModel,
+            CancellationToken cancellationToken = default)
             => ValueTask.FromResult(this.shouldApply
                 && this.supportedShortcutNames.Contains(shortcut.Name, StringComparer.Ordinal));
 
@@ -556,7 +557,8 @@ public sealed class ShortcutManagerTests
         public override async ValueTask<bool> ShouldApplyTo(
             MainWindowViewModel mainWindowViewModel,
             Shortcut shortcut,
-            SubscribedEntityViewModel entityViewModel)
+            SubscribedEntityViewModel entityViewModel,
+            CancellationToken cancellationToken = default)
         {
             await Task.Yield();
             return shortcut == Shortcut.Open;

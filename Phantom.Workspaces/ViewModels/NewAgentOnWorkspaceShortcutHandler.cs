@@ -25,7 +25,8 @@ public sealed class NewAgentOnWorkspaceShortcutHandler : ShortcutHandler
     public override ValueTask<bool> ShouldApplyTo(
         MainWindowViewModel mainWindowViewModel,
         Shortcut shortcut,
-        SubscribedEntityViewModel entityViewModel)
+        SubscribedEntityViewModel entityViewModel,
+        CancellationToken cancellationToken = default)
     {
         return ValueTask.FromResult(shortcut == Shortcut.NewAgentOnWorkspace
             && entityViewModel.IsEntityType("workspace"));

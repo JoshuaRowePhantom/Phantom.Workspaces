@@ -29,7 +29,8 @@ public sealed class CopyEntityIdShortcutHandler : ShortcutHandler
     public override ValueTask<bool> ShouldApplyTo(
         MainWindowViewModel mainWindowViewModel,
         Shortcut shortcut,
-        SubscribedEntityViewModel entityViewModel)
+        SubscribedEntityViewModel entityViewModel,
+        CancellationToken cancellationToken = default)
         // Every entity has an id — no entity-type gate.
         => ValueTask.FromResult(shortcut == Shortcut.CopyEntityId);
 

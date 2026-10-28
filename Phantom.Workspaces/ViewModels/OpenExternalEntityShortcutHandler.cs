@@ -15,7 +15,8 @@ public sealed class OpenExternalEntityShortcutHandler : ShortcutHandler
     public override ValueTask<bool> ShouldApplyTo(
         MainWindowViewModel mainWindowViewModel,
         Shortcut shortcut,
-        SubscribedEntityViewModel entityViewModel)
+        SubscribedEntityViewModel entityViewModel,
+        CancellationToken cancellationToken = default)
     {
         return ValueTask.FromResult(shortcut == Shortcut.Open
                && entityViewModel.IsEntityType("external"));
@@ -121,6 +122,5 @@ public sealed class OpenExternalEntityShortcutHandler : ShortcutHandler
         return urls;
     }
 }
-
 
 

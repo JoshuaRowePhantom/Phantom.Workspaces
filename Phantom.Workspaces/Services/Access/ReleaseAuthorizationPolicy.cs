@@ -66,6 +66,7 @@ public sealed class ReleaseAuthorizationPolicy : IReleaseAuthorizationPolicy, IP
                 AccountIdentifier = request.Credential.AccountIdentifier,
                 Scope = decision.Scope,
                 BindingFingerprint = binding,
+                SafeContext = CreateSafeContext(request),
             };
             var provisional = request.Credential.AccountIdentifier is null &&
                 request.Credential.Provider is not CredentialProviderKind.StoredSecret &&
@@ -207,7 +208,8 @@ public sealed class ReleaseAuthorizationPolicy : IReleaseAuthorizationPolicy, IP
                 SourceIdentifier = record.SourceIdentifier,
                 AccountIdentifier = record.AccountIdentifier,
                 Scope = record.Scope,
-                SafeDisplayName = record.Scope.ToString(),
+                SafeDisplayName = CredentialAccessText.Scope(record.Scope),
+                SafeContext = record.SafeContext is { } context && context.IsValid() ? context : null,
             }).ToArray();
         }
         finally
@@ -322,6 +324,23 @@ public sealed class ReleaseAuthorizationPolicy : IReleaseAuthorizationPolicy, IP
         {
             Digest = Convert.ToHexStringLower(SHA256.HashData(stream.GetBuffer().AsSpan(0, checked((int)stream.Length)))),
         };
+    }
+
+    private static SafeApprovalContext? CreateSafeContext(ReleasePolicyRequest request)
+    {
+        if (request.SourceKind is not { } source)
+        {
+            return null;
+        }
+
+        var context = new SafeApprovalContext
+        {
+            Provider = request.Credential.Provider,
+            Kind = request.Credential.Kind,
+            Source = source,
+            Origin = request.Use.Kind,
+        };
+        return context.IsValid() ? context : null;
     }
 
     private sealed record AuthorizationEntry

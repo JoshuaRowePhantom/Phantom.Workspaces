@@ -11,6 +11,25 @@ public sealed class GitRepositoryMetadataReaderTests : IDisposable
     private readonly TempDirectory temporaryRoot = new("git-metadata-reader-");
     private string temporaryRootPath => this.temporaryRoot.Path;
 
+    [Theory]
+    [InlineData("$Recycle.Bin", false)]
+    [InlineData("$RECYCLE.BIN", false)]
+    [InlineData("$Recycle.Bin-backup", true)]
+    public void EnumerateGitRepositories_RecycleAncestorCaseAndSeparatorVariants_SkipsOnlyRecycleSubtree(
+        string component,
+        bool expected)
+    {
+        var root = Path.Combine(this.temporaryRootPath, component);
+        var repository = Path.Combine(root, "repository");
+        Directory.CreateDirectory(Path.Combine(repository, ".git"));
+        var discovered = GitRepositoryMetadataReader.EnumerateGitRepositories(
+            this.temporaryRootPath, int.MaxValue, [], default).ToArray();
+        Assert.Equal(expected, discovered.Contains(repository));
+        var explicitRoot = GitRepositoryMetadataReader.EnumerateGitRepositories(
+            root + Path.DirectorySeparatorChar, int.MaxValue, [], default).ToArray();
+        Assert.Equal(expected, explicitRoot.Contains(repository));
+    }
+
     public void Dispose()
     {
         this.temporaryRoot.Dispose();

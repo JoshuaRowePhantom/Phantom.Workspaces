@@ -50,11 +50,11 @@ public sealed class ViewEntityViewModel : ViewModelBase
             canExecute: _ => this.HasTraversedChildren);
     }
 
-    public async Task InitializeAsync()
+    public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
         // The card owns shortcut resolution; awaiting it here gives callers a deterministic point at
         // which the tree node's card shortcuts are populated.
-        await this.entityCardNode.Card.ResolveShortcutsAsync();
+        await this.entityCardNode.Card.ResolveShortcutsAsync(cancellationToken);
         this.RaisePropertyChanged(nameof(this.HasShortcuts));
     }
 

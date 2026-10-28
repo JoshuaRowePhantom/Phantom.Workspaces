@@ -357,7 +357,7 @@ public partial class App : Application
             // front indefinitely.
             var succeeded = await StartupSplashRunner.RunWithSplashDismissAsync(
                 loggerFactory: loggerFactory,
-                initializeAsync: () => viewModel.InitializeAsync(),
+                initializeAsync: () => viewModel.PrepareShellAsync(),
                 setStatus: msg => loadingViewModel.StatusText = msg,
                 onFaultDelay: () => Task.Delay(5000), // Give user time to read the error
                 shutdown: () => this.RequestShutdown(desktop),
@@ -390,7 +390,19 @@ public partial class App : Application
                     loadingWindow.Close();
                 });
 
-            _ = succeeded;
+            if (succeeded && !this.isExiting)
+            {
+                try
+                {
+                    await viewModel.CompleteVisibleStartupAsync();
+                }
+                catch (OperationCanceledException) when (this.isExiting) { }
+                catch (Exception)
+                {
+                    // The view model logs the observed fault and keeps a safe visible failure
+                    // status. The shell remains usable for diagnostics and controlled shutdown.
+                }
+            }
             return;
             }
             catch (Exception startupFailure)
@@ -447,9 +459,9 @@ public partial class App : Application
             catch (Exception exception) { failures.Add(exception); }
         }
 
-        if (this.runtimeWindow?.LastAccessAdministrationWindow is { } administration)
+        if (this.runtimeWindow is { } window)
         {
-            await CleanAsync(administration.DisposeAsync);
+            await CleanAsync(window.DisposeAccessAdministrationAsync);
         }
         if (this.authorizationPopup is not null) { await CleanAsync(this.authorizationPopup.DisposeAsync); }
         if (this.accessHost is not null) { await CleanAsync(this.accessHost.DisposeAsync); }

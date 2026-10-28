@@ -47,8 +47,39 @@ public sealed class ReleaseAuthorizationContractTests
             nameof(ReleaseMemoryDescriptor.Identifier), nameof(ReleaseMemoryDescriptor.LogicalIdentifier),
             nameof(ReleaseMemoryDescriptor.SourceIdentifier), nameof(ReleaseMemoryDescriptor.AccountIdentifier),
             nameof(ReleaseMemoryDescriptor.Scope), nameof(ReleaseMemoryDescriptor.SafeDisplayName),
+            nameof(ReleaseMemoryDescriptor.SafeContext),
         };
         Assert.Equal(allowed.Order(), typeof(ReleaseMemoryDescriptor).GetProperties().Select(property => property.Name).Order());
+    }
+
+    [Fact]
+    public void ReleaseMemoryDescriptor_SafeMetadata_ContainsOnlyAllowlistedProperties()
+    {
+        var properties = typeof(SafeApprovalContext).GetProperties();
+        Assert.Equal(new[] { "Kind", "Origin", "Provider", "Source" },
+            properties.Select(property => property.Name).Order());
+        Assert.All(properties, property => Assert.True(property.PropertyType.IsEnum));
+        var safe = new SafeApprovalContext
+        {
+            Provider = CredentialProviderKind.StoredSecret, Kind = CredentialKind.Secret,
+            Source = CredentialSourceKind.SecretStore, Origin = CredentialUseKind.Mcp,
+        };
+        Assert.Contains("Saved secret", safe.ToString());
+        Assert.Contains("Originally approved for: MCP access", safe.ToString());
+        Assert.Equal("Details unavailable", (safe with { Provider = (CredentialProviderKind)999 }).ToString());
+        Assert.Equal("Details unavailable", (safe with { Kind = (CredentialKind)999 }).ToString());
+        Assert.Equal("Details unavailable", (safe with { Source = (CredentialSourceKind)999 }).ToString());
+        Assert.Equal("Details unavailable", (safe with { Origin = (CredentialUseKind)999 }).ToString());
+        foreach (var provider in Enum.GetValues<CredentialProviderKind>())
+        foreach (var kind in Enum.GetValues<CredentialKind>())
+        foreach (var source in Enum.GetValues<CredentialSourceKind>())
+        foreach (var origin in Enum.GetValues<CredentialUseKind>())
+        {
+            var context = safe with { Provider = provider, Kind = kind, Source = source, Origin = origin };
+            Assert.True(context.IsValid());
+            Assert.DoesNotContain("Details unavailable", context.ToString());
+            Assert.Contains("Originally approved for:", context.ToString());
+        }
     }
 
     internal static ReleasePolicyRequest Request() => new()

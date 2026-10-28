@@ -2,19 +2,24 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:Phantom.Workspaces.ViewModels"
              xmlns:access="using:Phantom.Workspaces.Llm.Interfaces.Access"
+             xmlns:copy="using:Phantom.Workspaces.Services.Access"
              x:Class="Phantom.Workspaces.Controls.ReleaseMemoryAdministrationControl"
              x:DataType="vm:ReleaseMemoryAdministrationViewModel">
     <StackPanel Spacing="8">
-        <TextBlock Text="Remembered release authorizations" FontWeight="Bold" />
-        <TextBlock Text="Forget removes release policy only. Cached credentials and provider grants are unchanged." TextWrapping="Wrap" />
+        <TextBlock Text="{x:Static copy:CredentialAccessText.SavedApprovals}" FontWeight="Bold" />
+        <TextBlock Text="{x:Static copy:CredentialAccessText.ApprovalHelp}" TextWrapping="Wrap" />
         <Button Content="Refresh" Command="{Binding RefreshCommand}" />
         <TextBlock Text="{Binding SafeStatus}" AutomationProperties.LiveSetting="Polite" />
         <ItemsControl ItemsSource="{Binding Items}">
             <ItemsControl.ItemTemplate>
                 <DataTemplate x:DataType="access:ReleaseMemoryDescriptor">
                     <Grid ColumnDefinitions="*,Auto">
-                        <TextBlock Text="{Binding SafeDisplayName}" />
-                        <Button Grid.Column="1" Content="Forget"
+                        <StackPanel>
+                            <TextBlock Text="{Binding SafeDisplayName}" TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding SafeContext, TargetNullValue='Details unavailable'}" TextWrapping="Wrap" />
+                        </StackPanel>
+                        <Button Grid.Column="1" Content="{x:Static copy:CredentialAccessText.ForgetApproval}"
+                                AutomationProperties.Name="{Binding SafeContext, StringFormat='Forget approval: {0}', TargetNullValue='Forget approval: Details unavailable'}"
                                 Command="{Binding $parent[UserControl].((vm:ReleaseMemoryAdministrationViewModel)DataContext).RemoveCommand}"
                                 CommandParameter="{Binding}" />
                     </Grid>

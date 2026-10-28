@@ -24,6 +24,61 @@ namespace Phantom.Workspaces.Tests;
 // than resolving identity via a separate code path.
 public sealed class AgentSessionShortcutContextTests
 {
+    [AvaloniaTheory(Timeout = 15_000)]
+    [InlineData("cancel")]
+    [InlineData("complete")]
+    [InlineData("fail")]
+    public async Task CreateAgentServices_SharedPersistenceCreation_PreservesCacheOwnershipAndObservesOutcome(
+        string outcome)
+    {
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var creation = new TaskCompletionSource<Phantom.Workspaces.Llm.Interfaces.IAgentPersistenceStore>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var cache = new Mock<IAgentPersistenceStoreCache>();
+        cache.Setup(value => value.GetOrCreateAsync(viewModel.RepositorySource)).Returns(creation.Task);
+        var context = new AgentSessionShortcutContext(persistenceStoreCache: cache.Object);
+        using var cancellation = new CancellationTokenSource();
+        var services = context.CreateAgentServicesAsync(
+            viewModel,
+            Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+            cancellation.Token);
+        Assert.False(services.IsCompleted);
+        var store = AgentPersistenceStoreFactory.CreateInMemory();
+        try
+        {
+            if (outcome == "cancel")
+            {
+                await cancellation.CancelAsync();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => services);
+                Assert.False(creation.Task.IsCompleted);
+                creation.SetResult(store);
+                var next = await context.CreateAgentServicesAsync(
+                    viewModel,
+                    Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+                    TestContext.Current.CancellationToken);
+                Assert.Same(store, next.AgentPersistenceStoreOverride);
+            }
+            else if (outcome == "fail")
+            {
+                var failure = new InvalidOperationException("Shared persistence creation failed");
+                creation.SetException(failure);
+                Assert.Same(failure, await Assert.ThrowsAsync<InvalidOperationException>(() => services));
+            }
+            else
+            {
+                creation.SetResult(store);
+                Assert.Same(store, (await services).AgentPersistenceStoreOverride);
+            }
+            cache.Verify(value => value.GetOrCreateAsync(viewModel.RepositorySource),
+                outcome == "cancel" ? Times.Exactly(2) : Times.Once());
+        }
+        finally
+        {
+            creation.TrySetResult(store);
+        }
+    }
+
     [AvaloniaFact(Timeout = 15_000)]
     public async Task AgentSessionShortcutContext_BuildCurrentSessionContext_DelegatesToSharedFactory()
     {

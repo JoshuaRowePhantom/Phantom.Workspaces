@@ -10,6 +10,17 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityListItemViewModelTests
 {
+    [AvaloniaTheory(Timeout = 15_000)]
+    [InlineData(0, 0)]
+    [InlineData(1, 44)]
+    [InlineData(2, 88)]
+    public void EntityListItemViewModel_ParentedLevels_UsesDoubledIndentation(int level, double expected)
+    {
+        var node = new EntityListNodeViewModel("Node", "entity", ["node"], "node");
+        var item = new EntityListItemViewModel(node, 0, level, "node");
+        Assert.Equal(expected, item.IndentMargin.Left);
+    }
+
     [AvaloniaFact]
     public void ToggleExpandCommand_UpdatesItemAndNodeExpansionState()
     {

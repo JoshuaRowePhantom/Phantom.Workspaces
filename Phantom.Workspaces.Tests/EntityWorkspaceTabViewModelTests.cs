@@ -185,7 +185,8 @@ public sealed class EntityWorkspaceTabViewModelTests : IAsyncDisposable
         public override ValueTask<bool> ShouldApplyTo(
             MainWindowViewModel mainWindowViewModel,
             Shortcut shortcut,
-            SubscribedEntityViewModel entityViewModel)
+            SubscribedEntityViewModel entityViewModel,
+            CancellationToken cancellationToken = default)
             => ValueTask.FromResult(string.Equals(shortcut.Name, this.shortcutName, StringComparison.Ordinal));
 
         public override Task<bool> Handle(

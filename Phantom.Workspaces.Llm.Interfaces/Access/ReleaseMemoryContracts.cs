@@ -28,6 +28,7 @@ public sealed record ReleasePolicyRequest
     public required long RequestGeneration { get; init; }
     public required CredentialReference Credential { get; init; }
     public required CredentialSourceIdentifier SourceIdentifier { get; init; }
+    public CredentialSourceKind? SourceKind { get; init; }
     public required AccessRequestorIdentifier RequestorIdentifier { get; init; }
     public required CredentialUseDescriptor Use { get; init; }
 }
@@ -85,6 +86,7 @@ public sealed record ReleaseMemoryDescriptor
     public CredentialAccountIdentifier? AccountIdentifier { get; init; }
     public required ReleaseMemoryScopeKind Scope { get; init; }
     public required string SafeDisplayName { get; init; }
+    public SafeApprovalContext? SafeContext { get; init; }
 }
 
 public sealed class ReleaseIdentityMismatchException : Exception

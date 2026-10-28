@@ -416,26 +416,245 @@ public sealed class MainWindowIntegrationTests
 
             shushButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
 
-            for (var i = 0; i < 20 && window.LastAccessAdministrationWindow is null; i++)
-            {
-                await Dispatcher.UIThread.InvokeAsync(() => { });
-                Dispatcher.UIThread.RunJobs();
-            }
+            await window.AccessAdministrationReady;
 
             var dialog = window.LastAccessAdministrationWindow;
             Assert.NotNull(dialog);
             Assert.IsType<TabControl>(dialog!.Content);
+            Assert.True(dialog.IsVisible);
+            Assert.Same(window, dialog.Owner);
+            Assert.Same(accessHost.AuthorizationRows, dialog.RequestRows);
+            Assert.Equal(CredentialAccessPage.SavedApprovals, dialog.SelectedPage);
+            Assert.Equal(new[] { "Requests", "Saved approvals", "Cached credentials", "Provider access" },
+                ((TabControl)dialog.Content!).Items.Cast<TabItem>().Select(item => item.Header));
+            Assert.True(window.IsEnabled);
+            Assert.True(shushButton.Focus());
+            Assert.True(shushButton.IsFocused);
 
-            dialog.Close();
+            var authorizationKey = window.FindControl<Button>("AuthorizationKey")!;
+            authorizationKey.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            await window.AccessAdministrationReady;
+            Assert.Same(dialog, window.LastAccessAdministrationWindow);
+            Assert.Equal(CredentialAccessPage.Requests, dialog.SelectedPage);
+            dialog.UpdateLayout();
+            var requests = Assert.Single(dialog.GetVisualDescendants().OfType<Controls.AuthorizationRequestRowsControl>());
+            Assert.Same(accessHost.AuthorizationRows, requests.DataContext);
+
+            var registry = Assert.IsType<Services.Authorization.UserAuthorizationRegistry>(accessHost.AuthorizationRegistry);
+            var snapshot = AuthorizationRequestRowsViewModelTests.Snapshot();
+            registry.Add(snapshot);
+            dialog.UpdateLayout();
+            var row = Assert.Single(accessHost.AuthorizationRows.Rows);
+            var selectedSource = row.SelectedSource;
+            var selectedMemory = row.SelectedMemory;
+            row.IsDetailsExpanded = true;
+            var source = requests.GetVisualDescendants().OfType<ComboBox>()
+                .Single(combo => Avalonia.Automation.AutomationProperties.GetName(combo) == "Credential source");
+            Assert.True(source.Focus());
+            Assert.True(registry.UpdateSources(snapshot.Identifier, snapshot.Revision,
+                snapshot.SourceOptions.Select(option => option with
+                {
+                    Usability = Llm.Interfaces.Access.CredentialSourceUsability.AcquisitionRequired,
+                }).ToArray()));
             Dispatcher.UIThread.RunJobs();
-            await dialog.DisposeAsync();
+            Assert.Same(row, Assert.Single(accessHost.AuthorizationRows.Rows));
+            Assert.Equal(selectedSource, row.SelectedSource);
+            Assert.Equal(selectedMemory, row.SelectedMemory);
+            Assert.True(row.IsDetailsExpanded);
+            Assert.True(source.IsFocused);
+            Assert.Equal(snapshot.Revision + 1, row.Revision);
+
+            Assert.True(shushButton.Focus());
+            registry.Add(snapshot with
+            {
+                Identifier = new() { Value = Guid.NewGuid() },
+            });
+            Dispatcher.UIThread.RunJobs();
+            Assert.True(shushButton.IsFocused);
+            Assert.Equal(2, accessHost.AuthorizationRows.ActionableCount);
+
+            var escape = new KeyEventArgs { Key = Key.Escape, RoutedEvent = InputElement.KeyDownEvent };
+            dialog.RaiseEvent(escape);
+            Assert.True(escape.Handled);
+            Assert.True(authorizationKey.IsFocused);
+            await window.DisposeClosedAccessAdministrationAsync();
             await dialog.DisposeAsync();
             Assert.True(dialog.IsDisposed);
+            var disposedModel = Assert.IsType<ReleaseMemoryAdministrationViewModel>(
+                ((Controls.ReleaseMemoryAdministrationControl)((TabItem)((TabControl)dialog.Content!).Items[1]!).Content!).DataContext);
+            Assert.False(disposedModel.RefreshCommand.CanExecute(null));
+            Assert.Null(window.LastAccessAdministrationWindow);
             await dialog.RefreshAsync(TestContext.Current.CancellationToken);
+            shushButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            await window.AccessAdministrationReady;
+            var reopened = Assert.IsType<AccessAdministrationWindow>(window.LastAccessAdministrationWindow);
+            Assert.NotSame(dialog, reopened);
+            Assert.Same(accessHost.AuthorizationRows, reopened.RequestRows);
+            Assert.Same(row, reopened.RequestRows.Rows[0]);
+            Assert.False(reopened.IsDisposed);
+            var reopenedModel = Assert.IsType<ReleaseMemoryAdministrationViewModel>(
+                ((Controls.ReleaseMemoryAdministrationControl)((TabItem)((TabControl)reopened.Content!).Items[1]!).Content!).DataContext);
+            Assert.NotSame(disposedModel, reopenedModel);
+            Assert.True(reopenedModel.RefreshCommand.CanExecute(null));
+            await window.DisposeAccessAdministrationAsync();
+            Assert.True(reopened.IsDisposed);
+            Assert.Equal(2, accessHost.AuthorizationRows.Rows.Count);
         }
         finally
         {
+            await window.DisposeAccessAdministrationAsync();
             await CloseWindowAsync(window);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task AuthorizationHost_ScrollableRequests_PreservesScrollAcrossPagesRevisionsAndReopen()
+    {
+        await using var access = Services.Access.AccessHostServices.Create(new Services.Access.AccessHostOptions
+        {
+            PlatformSecretStore = new NullPlatformSecretStore(),
+            Dispatch = action => action(),
+            ReleaseMemoryFilePath = Path.Combine(Environment.CurrentDirectory, ".nonexistent-access-admin", "scroll.json"),
+        });
+        await using var model = CreateTestMainWindowViewModel();
+        await model.InitializeAsync();
+        var owner = new MainWindow(model);
+        await using var popup = new AuthorizationRequestsPopupViewModel { Rows = access.AuthorizationRows };
+        owner.AttachAccessHost(access, popup);
+        owner.Show();
+        var registry = Assert.IsType<Services.Authorization.UserAuthorizationRegistry>(access.AuthorizationRegistry);
+        var snapshots = Enumerable.Range(0, 30).Select(_ => AuthorizationRequestRowsViewModelTests.Snapshot() with
+        {
+            Identifier = new() { Value = Guid.NewGuid() },
+        }).ToArray();
+        foreach (var snapshot in snapshots) { registry.Add(snapshot); }
+        try
+        {
+            var key = owner.FindControl<Button>("AuthorizationKey")!;
+            key.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            await owner.AccessAdministrationReady;
+            var host = Assert.IsType<AccessAdministrationWindow>(owner.LastAccessAdministrationWindow);
+            host.UpdateLayout();
+            var control = Assert.Single(host.GetVisualDescendants().OfType<Controls.AuthorizationRequestRowsControl>());
+            var scroll = control.FindControl<ScrollViewer>("RowsScroller")!;
+            var row = access.AuthorizationRows.Rows[5];
+            row.IsDetailsExpanded = true;
+            var source = control.GetVisualDescendants().OfType<ComboBox>()
+                .Single(combo => ReferenceEquals(combo.DataContext, row)
+                    && Avalonia.Automation.AutomationProperties.GetName(combo) == "Credential source");
+            Assert.True(source.Focus());
+            host.UpdateLayout();
+            scroll.Offset = new Avalonia.Vector(0, 180);
+            host.UpdateLayout();
+            var offset = scroll.Offset;
+            Assert.True(offset.Y > 0);
+            Assert.Equal(offset, access.AuthorizationRows.Presentation.ScrollOffset);
+            var selectedSource = row.SelectedSource;
+            var selectedMemory = row.SelectedMemory;
+            host.SelectPage(CredentialAccessPage.SavedApprovals);
+            host.UpdateLayout();
+            host.SelectPage(CredentialAccessPage.Requests);
+            host.UpdateLayout();
+            Assert.Equal(offset, scroll.Offset);
+            Assert.True(source.Focus());
+            host.UpdateLayout();
+            offset = scroll.Offset;
+            Assert.True(offset.Y > 0);
+            Assert.True(registry.UpdateSources(row.Identifier, row.Revision, snapshots[5].SourceOptions
+                .Select(option => option with { Usability = Llm.Interfaces.Access.CredentialSourceUsability.AcquisitionRequired }).ToArray()));
+            host.UpdateLayout();
+            Assert.True(source.IsFocused);
+            Assert.Equal(offset, scroll.Offset);
+            Assert.Equal(selectedSource, row.SelectedSource);
+            Assert.Equal(selectedMemory, row.SelectedMemory);
+            Assert.True(row.IsDetailsExpanded);
+            Assert.Equal(snapshots[5].Revision + 1, row.Revision);
+            Assert.True(key.Focus());
+            registry.Add(AuthorizationRequestRowsViewModelTests.Snapshot() with { Identifier = new() { Value = Guid.NewGuid() } });
+            host.UpdateLayout();
+            Assert.True(key.IsFocused);
+            Assert.Equal(offset, scroll.Offset);
+            host.Close();
+            await owner.DisposeClosedAccessAdministrationAsync();
+            key.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            await owner.AccessAdministrationReady;
+            var reopened = Assert.IsType<AccessAdministrationWindow>(owner.LastAccessAdministrationWindow);
+            reopened.UpdateLayout();
+            var reopenedControl = Assert.Single(reopened.GetVisualDescendants().OfType<Controls.AuthorizationRequestRowsControl>());
+            Assert.NotSame(host, reopened);
+            Assert.Same(access.AuthorizationRows, reopenedControl.DataContext);
+            Assert.Same(row, reopened.RequestRows.Rows[5]);
+            Assert.Equal(offset, reopenedControl.FindControl<ScrollViewer>("RowsScroller")!.Offset);
+            Assert.True(row.IsDetailsExpanded);
+            Assert.Equal(selectedSource, row.SelectedSource);
+            Assert.Equal(selectedMemory, row.SelectedMemory);
+            Assert.True(key.Focus());
+            Assert.True(registry.UpdateSources(row.Identifier, row.Revision, snapshots[5].SourceOptions));
+            reopened.UpdateLayout();
+            Assert.True(key.IsFocused);
+            Assert.Equal(offset, reopenedControl.FindControl<ScrollViewer>("RowsScroller")!.Offset);
+        }
+        finally
+        {
+            await owner.DisposeAccessAdministrationAsync();
+            await CloseWindowAsync(owner);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task AuthorizationHost_AdministrationLoadFailure_RendersSafeStatusAndPreservesSharedRows()
+    {
+        var path = Path.Combine(Environment.CurrentDirectory, ".scratch", $"access-host-{Guid.NewGuid():N}.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, "{\"unsafe-provider-payload\":",
+            TestContext.Current.CancellationToken);
+        await using var access = Services.Access.AccessHostServices.Create(new Services.Access.AccessHostOptions
+        {
+            PlatformSecretStore = new NullPlatformSecretStore(),
+            Dispatch = action => action(),
+            ReleaseMemoryFilePath = path,
+        });
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var window = new MainWindow(viewModel);
+        await using var popup = new AuthorizationRequestsPopupViewModel { Rows = access.AuthorizationRows };
+        window.AttachAccessHost(access, popup);
+        window.Show();
+        try
+        {
+            viewModel.OpenAccessAdministrationCommand.Execute(null);
+            await window.AccessAdministrationReady;
+            var host = Assert.IsType<AccessAdministrationWindow>(window.LastAccessAdministrationWindow);
+            var model = Assert.IsType<ReleaseMemoryAdministrationViewModel>(
+                ((Controls.ReleaseMemoryAdministrationControl)((TabItem)((TabControl)host.Content!).Items[1]!).Content!).DataContext);
+            Assert.Equal("Operation unavailable. Refresh and try again.", model.SafeStatus);
+            host.UpdateLayout();
+            Assert.Contains(host.GetVisualDescendants().OfType<TextBlock>(),
+                control => control.Text == model.SafeStatus && control.IsEffectivelyVisible);
+            Assert.DoesNotContain(host.GetVisualDescendants().OfType<TextBlock>(),
+                control => control.Text?.Contains("unsafe-provider-payload", StringComparison.Ordinal) == true);
+            Assert.True(window.IsVisible);
+            Assert.True(window.IsEnabled);
+            Assert.Same(access.AuthorizationRows, host.RequestRows);
+            var registry = Assert.IsType<Services.Authorization.UserAuthorizationRegistry>(access.AuthorizationRegistry);
+            registry.Add(AuthorizationRequestRowsViewModelTests.Snapshot());
+            var row = Assert.Single(access.AuthorizationRows.Rows);
+            await row.CancelCommand.ExecuteAsync(null);
+            Assert.False(row.CanAct);
+            await File.WriteAllTextAsync(path, "{\"version\":1,\"records\":[]}",
+                TestContext.Current.CancellationToken);
+            await model.RefreshAsync(TestContext.Current.CancellationToken);
+            Assert.Equal("List updated.", model.SafeStatus);
+            await Task.WhenAll(window.DisposeAccessAdministrationAsync().AsTask(),
+                window.DisposeAccessAdministrationAsync().AsTask());
+            Assert.True(host.IsDisposed);
+            Assert.Null(window.LastAccessAdministrationWindow);
+        }
+        finally
+        {
+            await window.DisposeAccessAdministrationAsync();
+            await CloseWindowAsync(window);
+            File.Delete(path);
         }
     }
 
@@ -8449,6 +8668,45 @@ public sealed class MainWindowIntegrationTests
         Assert.DoesNotContain(
             viewModel.WorkspacePanes,
             pane => string.Equals(pane.Id, GettingStartedWorkspaceId, StringComparison.Ordinal));
+    }
+
+    [AvaloniaTheory(Timeout = 15_000)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MainWindowViewModel_StartupWorkspaceDefaultsExist_OpensAllDefaultsInOrder(bool phased)
+    {
+        await using var model = CreateTestMainWindowViewModel(
+            configuration: new WorkspacesConfiguration { SkipStartupWorkspace = false });
+        var broker = await GetEntityBrokerBeforeInitAsync(model);
+        var profile = broker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
+        var ids = new[] { new EntityId(Guid.NewGuid()), new EntityId(Guid.NewGuid()), new EntityId(Guid.NewGuid()) };
+        foreach (var id in ids)
+        {
+            await SeedEntityAsync(broker, id, $$"""
+                {"entity-id":"{{id}}","entity-types":["entity","workspace"],"display-name":{"default":"Default {{id}}"},"regions":[]}
+                """);
+            var relationship = new EntityId(Guid.NewGuid());
+            await SeedEntityAsync(broker, relationship, $$"""
+                {"entity-id":"{{relationship}}","entity-types":["entity","default","relationship"],
+                 "participants":{"applied-to":"{{profile}}","value":"{{id}}"} }
+                """);
+        }
+        await model.PrepareShellAsync();
+        var query = typeof(MainWindowViewModel).GetMethod("QueryDefaultWorkspaceIdsAsync",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        var orderedDefaults = await (Task<IReadOnlyList<EntityId>>)query.Invoke(model, null)!;
+        Assert.Equal(3, orderedDefaults.Count);
+        Assert.Equal(ids.OrderBy(id => id.ToString()), orderedDefaults.OrderBy(id => id.ToString()));
+        if (phased)
+        {
+            await model.PrepareShellAsync();
+            Assert.DoesNotContain(model.WorkspacePanes, pane => ids.Any(id => pane.Id == id.ToString()));
+            await model.CompleteVisibleStartupAsync();
+        }
+        else { await model.InitializeAsync(); }
+        Assert.Equal(orderedDefaults.Select(id => id.ToString()), model.WorkspacePanes.Select(pane => pane.Id));
+        Assert.All(model.WorkspacePanes, pane => Assert.True(pane.Populated.IsCompletedSuccessfully));
+        Assert.True(model.IsStartupReady);
     }
 
     [AvaloniaFact(Timeout = 15_000)]

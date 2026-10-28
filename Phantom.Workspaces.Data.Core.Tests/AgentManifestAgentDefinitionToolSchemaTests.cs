@@ -5,6 +5,72 @@ namespace Phantom.Workspaces.Data.Tests;
 
 public sealed class AgentManifestAgentDefinitionToolSchemaTests
 {
+    [Theory]
+    [InlineData("web_search")]
+    [InlineData("web_request")]
+    [InlineData("web")]
+    [InlineData("filesystem")]
+    [InlineData("workspace-entity")]
+    [InlineData("workspace-gui")]
+    [InlineData("current-session")]
+    [InlineData("caller-supplied-fixed-name")]
+    public async Task AgentManifest_FixedBuiltinAndCustomResources_ValidateWithoutForwardedConfiguration(string name)
+    {
+        IEntitySchemaComposer composer = await CreatePopulatedComposerAsync();
+        using var document = JsonDocument.Parse(CanonicalManifest(
+            $$"""{"kind":"tool","id":"fixed","name":"{{name}}","options":{"connection":"not-forwarded"},"extension":true}"""));
+        Assert.Empty(await composer.GetValidationErrorsAsync(document.RootElement));
+    }
+
+    [Theory]
+    [InlineData("""{"kind":"tool","id":"vendor-strategy","name":"filesystem","options":{"vendor":true}}""", true)]
+    [InlineData("""{"kind":"tool","id":"fixed","name":"filesystem","options":false}""", false)]
+    [InlineData("""{"kind":"tool","id":"fixed","name":"web","executor":42}""", false)]
+    [InlineData("""{"kind":"tool","id":"fixed","name":42}""", false)]
+    public async Task AgentManifest_ResourceDiscriminators_ValidateCommonShapeWithoutClosingExtensions(
+        string resource,
+        bool expected)
+    {
+        IEntitySchemaComposer composer = await CreatePopulatedComposerAsync();
+        using var document = JsonDocument.Parse(CanonicalManifest(resource));
+        Assert.Equal(expected, (await composer.GetValidationErrorsAsync(document.RootElement)).Count == 0);
+    }
+
+    [Theory]
+    [InlineData("""{"kind":"filesystem","connection":{"provider":"mongodb"}}""")]
+    [InlineData("""{"kind":"agent-definition","name":"missing-description"}""")]
+    [InlineData("""{"kind":"vendor","name":"chat-history","options":{"connection":{}}}""")]
+    public async Task AgentManifest_KnownBuiltinMalformedConfiguration_FailsEmbeddedValidation(string tool)
+    {
+        IEntitySchemaComposer composer = await CreatePopulatedComposerAsync();
+        using var document = JsonDocument.Parse(CanonicalManifest("", tool));
+        Assert.NotEmpty(await composer.GetValidationErrorsAsync(document.RootElement));
+    }
+
+    [Fact]
+    public async Task AgentManifest_FilesystemProviderReference_ResolvesInEntityWrapper()
+    {
+        IEntitySchemaComposer composer = await CreatePopulatedComposerAsync();
+        using var document = JsonDocument.Parse(CanonicalManifest("", """
+            {"kind":"filesystem","connection":{"provider":"mongodb","mongoProvider":"external",
+            "database-name":"db","collection-name":"edits","connection-string":"mongodb://localhost"}}
+            """));
+        Assert.Empty(await composer.GetValidationErrorsAsync(document.RootElement));
+    }
+
+    private static string CanonicalManifest(string resource, string? tool = null)
+        => $$"""
+        {
+          "entity-id":"7f1c2a3b-4d5e-6f70-8192-a3b4c5d6e7f8",
+          "entity-types":["entity","agent-manifest"],
+          "manifest":{
+            "name":"test","displayName":"Test",
+            "template":{"kind":"prompt","name":"test","model":{"id":"echo","provider":"echo"},"tools":[{{tool}}]},
+            "resources":[{{resource}}]
+          }
+        }
+        """;
+
     private static async Task<SchemaValidatingDataAccessLayer> CreatePopulatedComposerAsync()
     {
         var underlying = new InMemoryDataAccessLayer();

@@ -5,6 +5,33 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 
 public sealed class ToolResourceCompositionTests
 {
+    [Fact]
+    public async Task ToolsetFactory_KnownKindCasing_PreservesOrdinalSelection()
+    {
+        var selected = 0;
+        var factory = ToolsetFactory.CreateNamedToolsetFactory("filesystem", (_, _) =>
+        {
+            selected++;
+            return Task.FromResult<Microsoft.Agents.AI.AIContextProvider?>(null);
+        });
+        await factory.CreateToolsetAsync(new CustomTool { Kind = "Filesystem", Name = "filesystem" }, new AgentServices());
+        Assert.Equal(0, selected);
+        await factory.CreateToolsetAsync(new CustomTool { Kind = "filesystem", Name = "vendor-label" }, new AgentServices());
+        Assert.Equal(1, selected);
+    }
+
+    [Fact]
+    public async Task FixedToolResourceFactory_CustomMappingAndResourceOptions_DoesNotOverrideMappedTool()
+    {
+        var mapped = new CustomTool { Kind = "vendor", Name = "custom-fixed-name" };
+        var factory = new FixedToolResourceFactory(
+            new Dictionary<(string Id, string Name), Tool> { [("fixed", "custom-fixed-name")] = mapped });
+        var resource = ToolResource("fixed", "custom-fixed-name");
+        resource.Options = new Dictionary<string, object> { ["connection"] = new { provider = "not-forwarded" } };
+        Assert.Same(mapped, await factory.ResolveToolResourceAsync(resource));
+        Assert.Null(await factory.ResolveToolResourceAsync(ToolResource("Fixed", "custom-fixed-name")));
+    }
+
     private sealed class MutableToolResourceRepository : IToolResourceRepository
     {
         private readonly ObservableCollection<ToolResource> resources = [];

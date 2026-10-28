@@ -135,7 +135,10 @@ public sealed class CredentialCacheAdministrationViewModelTests
         window.Show();
         Dispatcher.UIThread.RunJobs();
         Assert.Contains(control.GetVisualDescendants().OfType<Button>(), button =>
-            button.Content?.ToString() == "Delete" && button.Command?.CanExecute(button.CommandParameter) == true);
+            button.Content?.ToString() == "Delete cached credential" && button.Command?.CanExecute(button.CommandParameter) == true);
+        Assert.Contains(control.GetVisualDescendants().OfType<TextBlock>(), block => block.Text == "Cached credentials");
+        Assert.Contains(control.GetVisualDescendants().OfType<TextBlock>(), block =>
+            block.Text == "Deleting removes only the cached credential. Saved approvals and provider access stay unchanged.");
         window.Close();
         await viewModel.DisposeAsync();
     }

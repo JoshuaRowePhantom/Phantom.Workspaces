@@ -128,7 +128,8 @@ public sealed class EntityClickShortcutHandlerTests
         public override ValueTask<bool> ShouldApplyTo(
             MainWindowViewModel mainWindowViewModel,
             Shortcut shortcut,
-            SubscribedEntityViewModel entityViewModel)
+            SubscribedEntityViewModel entityViewModel,
+            CancellationToken cancellationToken = default)
             => ValueTask.FromResult(shortcut == Shortcut.Open);
 
         public override Task<bool> Handle(
@@ -143,4 +144,3 @@ public sealed class EntityClickShortcutHandlerTests
         }
     }
 }
-

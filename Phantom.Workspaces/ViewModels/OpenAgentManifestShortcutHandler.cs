@@ -19,7 +19,8 @@ public sealed class OpenAgentManifestShortcutHandler : ShortcutHandler
     public override ValueTask<bool> ShouldApplyTo(
         MainWindowViewModel mainWindowViewModel,
         Shortcut shortcut,
-        SubscribedEntityViewModel entityViewModel)
+        SubscribedEntityViewModel entityViewModel,
+        CancellationToken cancellationToken = default)
     {
         return ValueTask.FromResult(shortcut == Shortcut.Open
             && entityViewModel.IsEntityType("agent-manifest"));
@@ -52,6 +53,5 @@ public sealed class OpenAgentManifestShortcutHandler : ShortcutHandler
         return Task.FromResult(true);
     }
 }
-
 
 
