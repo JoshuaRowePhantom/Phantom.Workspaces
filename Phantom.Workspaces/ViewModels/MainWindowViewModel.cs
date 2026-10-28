@@ -830,7 +830,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             await this.OpenStartupWorkspaceAsync();
             this.lifetime.Token.ThrowIfCancellationRequested();
         }
-        this.refreshTimer.Start();
         await this.InitializeWebHostAsync();
         this.lifetime.Token.ThrowIfCancellationRequested();
         await this.InitializeScheduledToolsAsync();
@@ -839,6 +838,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.lifetime.Token.ThrowIfCancellationRequested();
         await this.InitializeUsageTrackerAsync();
         this.lifetime.Token.ThrowIfCancellationRequested();
+        this.refreshTimer.Start();
     }
 
     /// <summary>
@@ -857,6 +857,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
         var hostEntityId = this.HostProfileEntityId;
         var hostNameComponents = await this.ResolveHostNameComponentsAsync(hostEntityId);
+        this.lifetime.Token.ThrowIfCancellationRequested();
 
         var registry = new ScheduledTools.ScheduledToolRegistry(
         [
@@ -878,7 +879,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.scheduledToolPauseStateService = new ScheduledTools.ScheduledToolPauseStateService(
             dataAccessLayer,
             this.scheduledToolHost);
-        await this.scheduledToolPauseStateService.RefreshAsync(hostEntityId);
+        await this.scheduledToolPauseStateService.RefreshAsync(hostEntityId, this.lifetime.Token);
+        this.lifetime.Token.ThrowIfCancellationRequested();
         this.ScheduledToolsPause = new ScheduledToolsPauseIndicatorViewModel(
             this.scheduledToolPauseStateService,
             hostEntityId,
@@ -888,7 +890,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         // prior process termination or completion-write failure. See #1155.
         try
         {
-            await this.scheduledToolHost.ReconcileOrphanRunningResultsAsync(hostNameComponents);
+            await this.scheduledToolHost.ReconcileOrphanRunningResultsAsync(hostNameComponents, this.lifetime.Token);
+        }
+        catch (OperationCanceledException) when (this.lifetime.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception exception)
         {
@@ -897,12 +903,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 .LogError(exception, "Failed to reconcile orphan running tool-execution-result entities on startup.");
         }
 
+        this.lifetime.Token.ThrowIfCancellationRequested();
         this.ScheduledToolsRunning = new ScheduledToolsRunningViewModel(
             this.scheduledToolHost,
             dataAccessLayer,
             action => Dispatcher.UIThread.Post(action),
             TaskScheduler.FromCurrentSynchronizationContext());
-        _ = this.ScheduledToolsRunning.RefreshHistoryAsync();
+        await this.ScheduledToolsRunning.RefreshHistoryAsync(this.lifetime.Token);
+        this.lifetime.Token.ThrowIfCancellationRequested();
 
         this.scheduledToolRunner = ScheduledTools.ScheduledToolRunner.Create(
             this.scheduledToolHost,
@@ -922,7 +930,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
         var sessions = await AutoResumeService.FindMatchingSessionsAsync(
-            dataAccessLayer, Llm.Trust.TrustProfile.LocalClientInstance);
+            dataAccessLayer, Llm.Trust.TrustProfile.LocalClientInstance, this.lifetime.Token);
+        this.lifetime.Token.ThrowIfCancellationRequested();
 
         if (sessions.Count == 0)
         {
@@ -933,7 +942,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         foreach (var session in sessions)
         {
-            var entities = await broker.GetEntitiesAsync([session.EntityId]);
+            var entities = await broker.GetEntitiesAsync([session.EntityId], this.lifetime.Token);
+            this.lifetime.Token.ThrowIfCancellationRequested();
             var entity = entities.FirstOrDefault(e => e.EntityId == session.EntityId);
             if (entity is null)
             {
@@ -941,12 +951,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             }
 
             var lease = await this.openAgentSessionShortcutHandler.TryStartAutoResumeAsync(
-                this, entity, session.ResumePrompt, foregroundScheduler);
+                this, entity, session.ResumePrompt, foregroundScheduler, this.lifetime.Token);
 
             if (lease is not null)
             {
                 this.autoResumeLeases.Add(lease);
             }
+            this.lifetime.Token.ThrowIfCancellationRequested();
         }
     }
 
@@ -1003,7 +1014,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             providers,
             TimeProvider.System,
             this.loggerFactory.CreateLogger<Services.UsageMetricsService>());
-        await this.usageMetricsService.StartAsync(CancellationToken.None);
+        await this.usageMetricsService.StartAsync(this.lifetime.Token);
     }
 
     private async Task<IReadOnlyList<string>> ResolveHostNameComponentsAsync(EntityId hostEntityId)
@@ -1018,7 +1029,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             {
                 Entities = [new GetEntityRequest { EntityId = hostEntityId }],
                 Timestamps = [null],
-            });
+            }, this.lifetime.Token);
+        this.lifetime.Token.ThrowIfCancellationRequested();
         var snapshot = getResult.Batches
             .SelectMany(batch => batch.Entities)
             .FirstOrDefault(entity => entity.EntityId == hostEntityId);
@@ -1085,7 +1097,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var runtimeHostServices =
             await Services.AgentServicesComposition.ComposeRuntimeHostServicesAsync(
                 this,
-                this.applicationServices.LoggerFactory);
+                this.applicationServices.LoggerFactory,
+                this.lifetime.Token);
+        this.lifetime.Token.ThrowIfCancellationRequested();
         var composition = new Services.WorkspacesTransportComposition(
             this.entityBroker!.EntityRepository.DataAccessLayer,
             this.entityBroker.EntityRepository.WorkspaceEntitySession,
@@ -1097,7 +1111,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             outboundHttpTransportFactory: this.applicationServices.OutboundHttpTransportFactory);
         this.transportComposition = composition;
         this.trustedExecutorSelector.SetRemoteExecutor(composition.TrustedExecutor);
-        await composition.StartAsync();
+        await composition.StartAsync(this.lifetime.Token);
+        this.lifetime.Token.ThrowIfCancellationRequested();
         this.webHost = new WorkspacesWebHost(
             composition.ConnectionStatusRegistry,
             this.applicationServices.LoggerFactory,
@@ -1112,7 +1127,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         {
             await this.webHost.StartAsync(
                 this.configuration.RemoteHosting,
-                this.entityBroker.EntityRepository.DataAccessLayer);
+                this.entityBroker.EntityRepository.DataAccessLayer,
+                this.lifetime.Token);
+            this.lifetime.Token.ThrowIfCancellationRequested();
             this.ConnectionStatus.SetLocalAccessPoint(this.webHost.ListenUrl);
             this.StartDevTunnelHostIfConfigured(this.webHost.ListenUrl);
         }
@@ -2487,7 +2504,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.SelectedWorkspacePane = workspacePane;
 
         // Phase 2: populate tabs asynchronously (fire and forget)
-        var populateTask = workspacePane.PopulateTabsAsync(workspaceEntity, workspaceData);
+        var populateTask = workspacePane.PopulateTabsAsync(workspaceEntity, workspaceData, this.lifetime.Token);
         if (awaitPopulation)
         {
             try
@@ -3866,6 +3883,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         DockTabDescriptor descriptor,
         string tabId)
     {
+        this.lifetime.Token.ThrowIfCancellationRequested();
         switch (descriptor)
         {
             case AgentSessionDockTabDescriptor agentDesc:
@@ -3873,7 +3891,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 {
                     var entityId = new EntityId(agentGuid);
                     var entities = await this.EntityBroker!.GetEntitiesAsync(
-                        [new GetEntityRequest { EntityId = entityId }]);
+                        [new GetEntityRequest { EntityId = entityId }], this.lifetime.Token);
+                    this.lifetime.Token.ThrowIfCancellationRequested();
                     var entity = entities.FirstOrDefault();
                     if (entity is not null && this.openAgentSessionShortcutHandler is not null)
                     {
@@ -3893,7 +3912,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                                     TabId = tabId,
                                     Title = restoredAgentTitle,
                                     DockRegion = null,
-                                });
+                                }, this.lifetime.Token);
                         if (agentTab is not null)
                         {
                             agentTab.IsTitleExplicit = agentDesc.IsTitleExplicit;
@@ -3908,7 +3927,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 {
                     var entityId = new EntityId(entityGuid);
                     var entities = await this.EntityBroker!.GetEntitiesAsync(
-                        [new GetEntityRequest { EntityId = entityId }]);
+                        [new GetEntityRequest { EntityId = entityId }], this.lifetime.Token);
+                    this.lifetime.Token.ThrowIfCancellationRequested();
                     var entity = entities.FirstOrDefault();
                     if (entity is not null)
                     {
@@ -3956,6 +3976,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private async Task<WorkspaceTabViewModel?> TryFetchWorkspaceTabAsync(JsonElement tab)
     {
+        this.lifetime.Token.ThrowIfCancellationRequested();
         if (!tab.TryGetProperty("content", out var content)
             || content.ValueKind != JsonValueKind.Object)
         {
@@ -3980,7 +4001,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 return null;
             }
 
-            var fetched = await this.EntityBroker!.GetEntitiesAsync([request]);
+            var fetched = await this.EntityBroker!.GetEntitiesAsync([request], this.lifetime.Token);
+            this.lifetime.Token.ThrowIfCancellationRequested();
             var targetEntity = fetched.FirstOrDefault();
             if (targetEntity is not null)
             {

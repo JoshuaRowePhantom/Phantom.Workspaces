@@ -25,6 +25,85 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class WorkspacePaneViewModelTests
 {
+    [AvaloniaTheory(Timeout = 15_000)]
+    [InlineData(false, "cancel")]
+    [InlineData(true, "cancel")]
+    [InlineData(false, "failure")]
+    [InlineData(true, "failure")]
+    [InlineData(false, "closed")]
+    [InlineData(true, "closed")]
+    public async Task WorkspacePaneViewModel_RestoreInterrupted_DisposesUnpublishedTabs(
+        bool dockLayout, string outcome)
+    {
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        using var cancellation = new System.Threading.CancellationTokenSource();
+        var first = new DisposeSpyTab("first");
+        var second = new DisposeSpyTab("second");
+        var fallback = new DisposeSpyTab("fallback");
+        var factory = new Moq.Mock<IWorkspaceTabFactory>(Moq.MockBehavior.Strict);
+        factory.Setup(f => f.CreateDefaultWorkspaceTab(Moq.It.IsAny<SubscribedEntityViewModel>())).Returns(fallback);
+        var calls = 0;
+        Task<WorkspaceTabViewModel?> Fetch()
+        {
+            if (++calls == 1) return Task.FromResult<WorkspaceTabViewModel?>(first);
+            if (outcome == "cancel") cancellation.Cancel();
+            return outcome == "failure"
+                ? Task.FromException<WorkspaceTabViewModel?>(new InvalidOperationException("Tab load failed."))
+                : Task.FromResult<WorkspaceTabViewModel?>(second);
+        }
+        factory.Setup(f => f.TryFetchWorkspaceTabAsync(Moq.It.IsAny<JsonElement>())).Returns(Fetch);
+        factory.Setup(f => f.CreateTabViewModelFromDescriptorAsync(
+            Moq.It.IsAny<SubscribedEntityViewModel>(), Moq.It.IsAny<DockTabDescriptor>(), Moq.It.IsAny<string>()))
+            .Returns(Fetch);
+        var pane = new WorkspacePaneViewModel(CreateWorkspaceEntity(), environment: new WorkspacePaneEnvironment
+        {
+            GetEntityBroker = () => viewModel.EntityBroker,
+            DockFactory = new WorkspaceDockFactory(viewModel),
+            NotificationService = new Moq.Mock<Phantom.Workspaces.Services.Notifications.INotificationService>().Object,
+            NavigationHistory = new Phantom.Workspaces.Services.Navigation.NavigationHistoryService(),
+            TabFactory = factory.Object,
+            IsPaneLive = _ => outcome != "closed",
+            SelectPane = _ => true,
+            RunMruNavigationAfterActiveClose = () => { },
+        });
+        using var data = JsonDocument.Parse("""
+            {"tabs":[{"tab-id":"first","kind":"browser","content":{"url":"https://first.example"}},
+                     {"tab-id":"second","kind":"browser","content":{"url":"https://second.example"}}]}
+            """);
+        var layout = new RootDock
+        {
+            Id = "restore-root",
+            VisibleDockables = new ObservableCollection<IDockable>
+            {
+                new WorkspaceContentDock
+                {
+                    Id = "restore-content",
+                    VisibleDockables = new ObservableCollection<IDockable>
+                    {
+                        new WorkspaceDocument { Id = "first", Descriptor = new EntityDockTabDescriptor(Guid.NewGuid().ToString(), "Open") },
+                        new WorkspaceDocument { Id = "second", Descriptor = new EntityDockTabDescriptor(Guid.NewGuid().ToString(), "Open") },
+                    },
+                },
+            },
+        };
+        var savedLayout = DockLayoutCanonicalizer.Serialize(layout);
+        Assert.NotNull(DockLayoutCanonicalizer.Deserialize(savedLayout));
+        Task restoration = dockLayout
+            ? pane.TryRestoreFromDockLayoutAsync(pane.Entity, savedLayout, cancellation.Token)
+            : pane.PopulateTabsAsync(pane.Entity, data.RootElement, cancellation.Token);
+        if (outcome == "cancel")
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => restoration);
+        else if (outcome == "failure")
+            await Assert.ThrowsAsync<InvalidOperationException>(() => restoration);
+        else
+            await restoration;
+        Assert.Empty(pane.Tabs);
+        Assert.Equal(1, first.DisposeCount);
+        Assert.Equal(outcome == "failure" ? 0 : 1, second.DisposeCount);
+        Assert.Equal(outcome == "closed" && !dockLayout ? 1 : 0, fallback.DisposeCount);
+    }
+
     // ── HasNoTabs / HasTabs ───────────────────────────────────────────────────
 
     [Fact]

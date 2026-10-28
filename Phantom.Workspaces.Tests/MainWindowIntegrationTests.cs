@@ -8559,6 +8559,45 @@ public sealed class MainWindowIntegrationTests
             pane => string.Equals(pane.Id, GettingStartedWorkspaceId, StringComparison.Ordinal));
     }
 
+    [AvaloniaTheory(Timeout = 15_000)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MainWindowViewModel_StartupWorkspaceDefaultsExist_OpensAllDefaultsInOrder(bool phased)
+    {
+        await using var model = CreateTestMainWindowViewModel(
+            configuration: new WorkspacesConfiguration { SkipStartupWorkspace = false });
+        var broker = await GetEntityBrokerBeforeInitAsync(model);
+        var profile = broker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
+        var ids = new[] { new EntityId(Guid.NewGuid()), new EntityId(Guid.NewGuid()), new EntityId(Guid.NewGuid()) };
+        foreach (var id in ids)
+        {
+            await SeedEntityAsync(broker, id, $$"""
+                {"entity-id":"{{id}}","entity-types":["entity","workspace"],"display-name":{"default":"Default {{id}}"},"regions":[]}
+                """);
+            var relationship = new EntityId(Guid.NewGuid());
+            await SeedEntityAsync(broker, relationship, $$"""
+                {"entity-id":"{{relationship}}","entity-types":["entity","default","relationship"],
+                 "participants":{"applied-to":"{{profile}}","value":"{{id}}"} }
+                """);
+        }
+        await model.PrepareShellAsync();
+        var query = typeof(MainWindowViewModel).GetMethod("QueryDefaultWorkspaceIdsAsync",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        var orderedDefaults = await (Task<IReadOnlyList<EntityId>>)query.Invoke(model, null)!;
+        Assert.Equal(3, orderedDefaults.Count);
+        Assert.Equal(ids.OrderBy(id => id.ToString()), orderedDefaults.OrderBy(id => id.ToString()));
+        if (phased)
+        {
+            await model.PrepareShellAsync();
+            Assert.DoesNotContain(model.WorkspacePanes, pane => ids.Any(id => pane.Id == id.ToString()));
+            await model.CompleteVisibleStartupAsync();
+        }
+        else { await model.InitializeAsync(); }
+        Assert.Equal(orderedDefaults.Select(id => id.ToString()), model.WorkspacePanes.Select(pane => pane.Id));
+        Assert.All(model.WorkspacePanes, pane => Assert.True(pane.Populated.IsCompletedSuccessfully));
+        Assert.True(model.IsStartupReady);
+    }
+
     [AvaloniaFact(Timeout = 15_000)]
     public async Task InitializeAsync_WithNoDefaultRelationship_OpensGettingStartedWorkspace()
     {

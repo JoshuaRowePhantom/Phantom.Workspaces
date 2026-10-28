@@ -17,21 +17,40 @@ using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.Http;
 using Phantom.Workspaces.Transport.ReverseHttp;
 using Phantom.Workspaces.Web.Server;
+using Microsoft.AspNetCore.Http;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace Phantom.Workspaces.Tests;
 
-public sealed class MainWindowStartupTests
+public sealed class MainWindowStartupTests(ITestOutputHelper output)
 {
     [AvaloniaTheory(Timeout = 15_000)]
-    [InlineData("complete")]
-    [InlineData("cancel")]
-    [InlineData("fail")]
-    public async Task ApplicationStartup_WorkspaceQueryIsGated_VisibleShellOwnsResponsiveCancellableLoading(string outcome)
+    [InlineData("complete", "query")]
+    [InlineData("cancel", "query")]
+    [InlineData("fail", "query")]
+    [InlineData("cancel", "entity-descriptor")]
+    [InlineData("cancel", "agent-descriptor")]
+    [InlineData("cancel", "declaration")]
+    [InlineData("cancel", "runtime-context")]
+    [InlineData("cancel", "remote-host")]
+    [InlineData("cancel", "host-name")]
+    [InlineData("cancel", "pause")]
+    [InlineData("cancel", "reconcile")]
+    [InlineData("cancel", "history")]
+    [InlineData("cancel", "auto-resume")]
+    public async Task ApplicationStartup_WorkspaceQueryIsGated_VisibleShellOwnsResponsiveCancellableLoading(
+        string outcome, string stage)
     {
         var token = TestContext.Current.CancellationToken;
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var armed = 0;
+        var target = new EntityId(Guid.NewGuid());
+        var workspace = new EntityId(Guid.NewGuid());
+        var hostId = string.Empty;
+        var hostReads = 0;
+        var toolQueries = 0;
         var dal = await WebServerDataAccessLayerFactory.CreateDefaultAsync(token);
         var builder = WebApplication.CreateBuilder();
         builder.Logging.ClearProviders();
@@ -46,7 +65,29 @@ public sealed class MainWindowStartupTests
         server.UseWebSockets();
         server.Use(async (context, next) =>
         {
-            if (context.Request.Path == "/data/query" && Interlocked.CompareExchange(ref armed, 0, 1) == 1)
+            var matches = stage == "query" && context.Request.Path == "/data/query";
+            if (Volatile.Read(ref armed) == 1 && stage != "query"
+                && (context.Request.Path == "/data/get" || context.Request.Path == "/data/query"))
+            {
+                context.Request.EnableBuffering();
+                using var reader = new System.IO.StreamReader(context.Request.Body, leaveOpen: true);
+                var body = await reader.ReadToEndAsync(context.RequestAborted);
+                context.Request.Body.Position = 0;
+                matches = stage switch
+                {
+                    "entity-descriptor" or "agent-descriptor" or "declaration" =>
+                        context.Request.Path == "/data/get" && body.Contains(target.ToString(), StringComparison.OrdinalIgnoreCase),
+                    "runtime-context" or "remote-host" or "host-name" or "pause" => context.Request.Path == "/data/get"
+                        && body.Contains(hostId, StringComparison.OrdinalIgnoreCase)
+                        && Interlocked.Increment(ref hostReads) == (stage == "runtime-context" ? 1 : stage == "pause" ? 3 : 2),
+                    "reconcile" or "history" => context.Request.Path == "/data/query"
+                        && body.Contains("tool-execution-result", StringComparison.Ordinal)
+                        && Interlocked.Increment(ref toolQueries) == (stage == "reconcile" ? 1 : 2),
+                    "auto-resume" => context.Request.Path == "/data/query" && body.Contains("agent-sessions", StringComparison.Ordinal),
+                    _ => false,
+                };
+            }
+            if (matches && Interlocked.CompareExchange(ref armed, 0, 1) == 1)
             {
                 entered.TrySetResult();
                 await release.Task.WaitAsync(context.RequestAborted);
@@ -65,7 +106,15 @@ public sealed class MainWindowStartupTests
         var address = server.Services.GetRequiredService<IServer>()
             .Features.Get<IServerAddressesFeature>()!.Addresses.Single();
         var viewModel = new MainWindowViewModel(new WebRepositorySource(address),
-            new WorkspacesConfiguration { SkipStartupWorkspace = false });
+            new WorkspacesConfiguration
+            {
+                SkipStartupWorkspace = false,
+                RemoteHosting = new RemoteHostingSettings
+                {
+                    Enabled = stage == "remote-host",
+                    ListenUrls = ["http://127.0.0.1:0"],
+                },
+            });
         var window = new MainWindow(viewModel);
         var splash = new Avalonia.Controls.Window();
         await using var access = Services.Access.AccessHostServices.Create(new Services.Access.AccessHostOptions
@@ -79,6 +128,61 @@ public sealed class MainWindowStartupTests
         {
             splash.Show();
             await viewModel.PrepareShellAsync();
+            hostId = viewModel.EntityBroker!.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId.ToString();
+            if (stage is "entity-descriptor" or "agent-descriptor" or "declaration")
+            {
+                var data = JsonNode.Parse($$"""
+                    {"entity-id":"{{workspace}}","entity-types":["entity","workspace"],"names":[["tests","gated-workspace"]],
+                     "display-name":{"default":"Gated startup workspace"},
+                     "tabs":[{"tab-id":"gated-tab","title":"Gated target","kind":"entity-view",
+                        "content":{"target-entity-name":"{{target}}"} }]}
+                    """)!;
+                if (stage != "declaration")
+                {
+                    var placeholder = new EntityWorkspaceTabViewModel { Id = "gated-tab", Title = "Gated target" };
+                    var document = new WorkspaceDocument(placeholder)
+                    {
+                        Descriptor = stage == "agent-descriptor"
+                            ? new AgentSessionDockTabDescriptor(target.ToString())
+                            : new EntityDockTabDescriptor(target.ToString(), "Open"),
+                    };
+                    var content = new WorkspaceContentDock
+                    {
+                        Id = "gated-content",
+                        VisibleDockables = new System.Collections.ObjectModel.ObservableCollection<global::Dock.Model.Core.IDockable> { document },
+                        ActiveDockable = document,
+                    };
+                    var layout = new global::Dock.Model.Mvvm.Controls.RootDock
+                    {
+                        Id = "gated-root",
+                        VisibleDockables = new System.Collections.ObjectModel.ObservableCollection<global::Dock.Model.Core.IDockable> { content },
+                        ActiveDockable = content,
+                    };
+                    document.Owner = content;
+                    content.Owner = layout;
+                    var serializer = new global::Dock.Serializer.SystemTextJson.DockSerializer(
+                        typeof(System.Collections.ObjectModel.ObservableCollection<>), new WorkspaceDockTypeInfoResolver());
+                    data["dock-layout"] = JsonNode.Parse(serializer.Serialize(layout));
+                }
+                var relationship = new EntityId(Guid.NewGuid());
+                var update = await dal.UpdateAsync(new UpdateRequest
+                {
+                    UpdateMetadata = new() { Comment = new() { Text = "Seed deterministic startup cancellation case" } },
+                    Changes =
+                    [
+                        new() { EntityId = workspace, EntityChangeMode = EntityChangeMode.Replace,
+                            Data = JsonSerializer.SerializeToElement(data) },
+                        new() { EntityId = relationship, EntityChangeMode = EntityChangeMode.Replace,
+                            Data = JsonSerializer.SerializeToElement(JsonNode.Parse($$"""
+                                {"entity-id":"{{relationship}}","entity-types":["entity","default","relationship"],
+                                 "names":[["tests","gated-default"]],
+                                 "participants":{"applied-to":"{{hostId}}","value":"{{workspace}}"} }
+                                """)) },
+                    ],
+                }, token);
+                Assert.True(update.EntityResults.All(result => result.UpdateState != UpdateState.Failed),
+                    string.Join(" | ", update.EntityResults.SelectMany(result => result.Errors).Select(error => error.Message)));
+            }
             window.AttachAccessHost(access, popup);
             window.Show();
             splash.Close();
@@ -86,7 +190,9 @@ public sealed class MainWindowStartupTests
             Dispatcher.UIThread.Post(() => rendered.TrySetResult(), DispatcherPriority.Render);
             Volatile.Write(ref armed, 1);
             var startup = viewModel.CompleteVisibleStartupAsync();
+            output.WriteLine($"Awaiting gated {stage} request.");
             await entered.Task.WaitAsync(token);
+            output.WriteLine($"Entered gated {stage} request.");
             Assert.True(rendered.Task.IsCompletedSuccessfully);
             Assert.True(window.IsVisible);
             Assert.False(splash.IsVisible);
@@ -109,9 +215,16 @@ public sealed class MainWindowStartupTests
             if (outcome == "cancel")
             {
                 var disposal = viewModel.DisposeAsync().AsTask();
+                output.WriteLine($"Awaiting concurrent disposal during {stage}.");
                 await Task.WhenAll(disposal, viewModel.DisposeAsync().AsTask());
+                output.WriteLine($"Disposed during {stage}.");
+                Assert.False(release.Task.IsCompleted);
                 await Assert.ThrowsAnyAsync<OperationCanceledException>(() => startup);
                 Assert.Equal(WorkspaceStartupState.Cancelled, viewModel.StartupState);
+                var panes = viewModel.WorkspacePanes.ToArray();
+                release.TrySetResult();
+                await Dispatcher.UIThread.InvokeAsync(() => Assert.Equal(panes, viewModel.WorkspacePanes));
+                Assert.False(viewModel.IsStartupReady);
             }
             else
             {

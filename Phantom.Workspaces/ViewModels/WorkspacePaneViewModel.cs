@@ -515,8 +515,10 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
     /// <summary>#1341: loads this pane's tabs (formerly
     /// <c>MainWindowViewModel.PopulateWorkspacePaneTabsAsync</c>). Prefers a saved dock-layout
     /// restore and falls back to the tab-declaration list, then to a default entity tab.</summary>
-    public async Task PopulateTabsAsync(SubscribedEntityViewModel workspaceEntity, JsonElement workspaceData)
+    public async Task PopulateTabsAsync(SubscribedEntityViewModel workspaceEntity, JsonElement workspaceData,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (this.environment is null)
         {
             return;
@@ -526,7 +528,7 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
             && dockLayoutElement.ValueKind == JsonValueKind.Object)
         {
             var dockLayoutJson = dockLayoutElement.GetRawText();
-            if (await this.TryRestoreFromDockLayoutAsync(workspaceEntity, dockLayoutJson))
+            if (await this.TryRestoreFromDockLayoutAsync(workspaceEntity, dockLayoutJson, cancellationToken))
             {
                 return;
             }
@@ -549,11 +551,11 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
         var tabAdded = false;
         if (tabDeclarations.Count > 0)
         {
-            var tabResults = await Task.WhenAll(
-                tabDeclarations.Select(tabDecl => this.environment.TabFactory.TryFetchWorkspaceTabAsync(tabDecl)));
-
-            await Dispatcher.UIThread.InvokeAsync(() =>
+            await this.PublishLoadedTabsAsync(
+                tabDeclarations.Select(tabDecl => this.environment.TabFactory.TryFetchWorkspaceTabAsync(tabDecl)),
+                tabResults =>
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var workspaceClosed = false;
                 foreach (var workspaceTab in tabResults)
                 {
@@ -562,7 +564,6 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
                     if (workspaceClosed || !this.environment.IsPaneLive(this))
                     {
                         workspaceClosed = true;
-                        _ = DisposeTabAsync(workspaceTab);
                         continue;
                     }
 
@@ -578,18 +579,19 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
                         this.environment.DockFactory.SetActiveDockable(focusedDoc);
                     }
                 }
-            });
+                });
         }
 
         if (!tabAdded)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var defaultTab = this.environment.TabFactory.CreateDefaultWorkspaceTab(workspaceEntity);
 
-            await Dispatcher.UIThread.InvokeAsync(() =>
+            await this.PublishLoadedTabsAsync([Task.FromResult<WorkspaceTabViewModel?>(defaultTab)], _ =>
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (!this.environment.IsPaneLive(this))
                 {
-                    _ = DisposeTabAsync(defaultTab);
                     return;
                 }
 
@@ -606,8 +608,10 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
     /// falls through to the legacy default-tab fallback instead of silently rendering an empty pane.</summary>
     public async Task<bool> TryRestoreFromDockLayoutAsync(
         SubscribedEntityViewModel workspaceEntity,
-        string dockLayoutJson)
+        string dockLayoutJson,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (this.environment is null)
         {
             return false;
@@ -636,11 +640,10 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
 
         var tabVmTasks = stubs.Select(stub =>
             this.environment.TabFactory.CreateTabViewModelFromDescriptorAsync(workspaceEntity, stub.Descriptor!, stub.Id));
-        var tabResults = await Task.WhenAll(tabVmTasks);
-
         bool success = false;
-        await Dispatcher.UIThread.InvokeAsync(() =>
+        await this.PublishLoadedTabsAsync(tabVmTasks, tabResults =>
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!this.environment.IsPaneLive(this)) return;
 
             this.environment.DockFactory.ContextLocator ??= new Dictionary<string, Func<object?>>();
@@ -681,7 +684,6 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
                 if (workspaceClosed || !this.environment.IsPaneLive(this))
                 {
                     workspaceClosed = true;
-                    _ = DisposeTabAsync(tabVm);
                     continue;
                 }
 
@@ -700,6 +702,29 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
         });
 
         return success;
+    }
+
+    private async Task PublishLoadedTabsAsync(
+        IEnumerable<Task<WorkspaceTabViewModel?>> pendingTabs,
+        Action<WorkspaceTabViewModel?[]> publish)
+    {
+        var tasks = pendingTabs.ToArray();
+        try
+        {
+            var tabs = await Task.WhenAll(tasks);
+            await Dispatcher.UIThread.InvokeAsync(() => publish(tabs));
+        }
+        finally
+        {
+            // A sibling fetch or cancellation can fail after another tab has acquired resources.
+            foreach (var task in tasks)
+            {
+                if (task.IsCompletedSuccessfully && await task is { } tab && !this.Tabs.Contains(tab))
+                {
+                    await DisposeTabAsync(tab);
+                }
+            }
+        }
     }
 
     // ── #1341: persisted snapshot (per-pane serialization body) ──────────────
