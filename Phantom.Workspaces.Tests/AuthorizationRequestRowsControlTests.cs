@@ -16,6 +16,53 @@ namespace Phantom.Workspaces.Tests;
 public sealed class AuthorizationRequestRowsControlTests
 {
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task AuthorizationRows_ProductionScopeOptions_RenderFriendlyLabelsWithoutChangingIdentifiers()
+    {
+        await using var executor = new Services.Access.StoredSecretAccessExecutor(
+            new Moq.Mock<Services.Access.IStoredSecretAccessSource>().Object);
+        var (broker, registry) = Access.StoredSecretAccessExecutorTests.Create(executor);
+        await using var owned = broker;
+        using var rows = new AuthorizationRequestRowsViewModel { Dispatch = action => action(), Registry = registry };
+        rows.SetPresentationMode(AuthorizationRowsPresentationMode.Runtime);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        rows.Changed += (_, _) => { if (rows.Rows.Count > 0) { entered.TrySetResult(); } };
+        var request = Access.StoredSecretAccessExecutorTests.Request();
+        request = request with { Use = request.Use with { MemoryScopes = Enum.GetValues<ReleaseMemoryScopeKind>() } };
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var pending = broker.AcquireAsync(request, cancellation.Token);
+        var window = new Window();
+        try
+        {
+            await entered.Task.WaitAsync(TestContext.Current.CancellationToken);
+            var snapshot = Assert.Single(registry.GetSnapshot());
+            var control = new AuthorizationRequestRowsControl { DataContext = rows };
+            window.Content = control;
+            window.Show();
+            window.UpdateLayout();
+            var scope = Assert.Single(control.GetVisualDescendants().OfType<ComboBox>(),
+                combo => AutomationProperties.GetName(combo) == "Saved approval scope");
+            Assert.Equal(snapshot.MemoryOptions.Select(option => option.Identifier),
+                scope.Items.Cast<ReleaseMemoryOptionDescriptor>().Select(option => option.Identifier));
+            Assert.Equal(Enum.GetValues<ReleaseMemoryScopeKind>(), snapshot.MemoryOptions.Select(option => option.Scope));
+            foreach (var option in snapshot.MemoryOptions)
+            {
+                scope.SelectedItem = option;
+                window.UpdateLayout();
+                Assert.Contains(scope.GetVisualDescendants().OfType<TextBlock>(),
+                    text => text.Text == Services.Access.CredentialAccessText.Scope(option.Scope));
+                Assert.Equal(option.Identifier, Assert.Single(rows.Rows).SelectedMemory);
+            }
+            Assert.Contains(scope.GetVisualDescendants().OfType<TextBlock>(), text => text.Text == "All uses of this credential");
+        }
+        finally
+        {
+            cancellation.Cancel();
+            await pending;
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public void AuthorizationRows_ScopeAccessibility_UsesFriendlyCredentialTerminology()
     {
         var snapshot = AuthorizationRequestRowsViewModelTests.Snapshot();
