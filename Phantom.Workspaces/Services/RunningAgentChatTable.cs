@@ -124,7 +124,14 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         // when the factory posts the Add mutation on the foreground scheduler.
         lock (_entityInfoLock)
         {
-            _entityInfo.TryAdd(sessionId, (request.EntityName, request.EntityId, request.WorkspaceId));
+            var canonicalName = request.AgentSessionEntity is { } metadata
+                ? ReadCanonicalDisplayName(metadata)
+                : request.EntityDisplayName;
+            var name = !string.IsNullOrWhiteSpace(canonicalName) ? canonicalName
+                : request.EntityName == sessionId.Value ? "" : request.EntityName;
+            if (!_entityInfo.TryGetValue(sessionId, out var previous)
+                || !string.IsNullOrWhiteSpace(name))
+                _entityInfo[sessionId] = (name ?? "", request.EntityId, request.WorkspaceId);
         }
 
         var isRunning = IsRunning(sessionId);
@@ -183,6 +190,13 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         var entry = this.FindEntry(sessionId);
         if (entry is not null)
         {
+            var canonicalName = request.AgentSessionEntity is { } metadata
+                ? ReadCanonicalDisplayName(metadata)
+                : request.EntityDisplayName;
+            if (!string.IsNullOrWhiteSpace(canonicalName))
+                entry.ApplyAuthoritativeDisplayName(canonicalName);
+            else
+                entry.ApplyLaunchName(GetEntityInfo(sessionId).EntityName);
             entry.IncrementViewerCount();
             if (!isRunning && continueInBackground)
             {
@@ -473,6 +487,9 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                         request.EntityId,
                         request.WorkspaceId,
                         AgentChatInterruptState.For(chat));
+                    row.ApplyAuthoritativeDisplayName(request.AgentSessionEntity is { } metadata
+                        ? ReadCanonicalDisplayName(metadata)
+                        : request.EntityDisplayName);
                     row.SetIsRemote(true);
                     row.SetCanSetContinueInBackground(true);
                     row.SetContinueInBackground(chat.ContinueInBackground);
@@ -679,7 +696,16 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         {
             return _entityInfo.TryGetValue(sessionId, out var info) ? info : ("", null, null);
         }
+
     }
+
+    internal static string? ReadCanonicalDisplayName(JsonElement data)
+        => data.TryGetProperty("display-name", out var names)
+            && names.ValueKind == JsonValueKind.Object
+            && names.TryGetProperty("default", out var name)
+            && name.ValueKind == JsonValueKind.String
+                ? name.GetString()
+                : null;
 
     /// <inheritdoc/>
     public async Task<bool> TerminateAsync(

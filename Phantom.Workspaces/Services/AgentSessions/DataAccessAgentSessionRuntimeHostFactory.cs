@@ -78,7 +78,8 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
                 AgentDefinitionResolver = this.definitionResolver,
                 Parameters = ReadStringDictionary(data, "parameter-values"),
                 EntityId = persisted.EntityId.ToString(),
-                EntityName = intent.AgentSessionId,
+                EntityName = RunningAgentChatTable.ReadCanonicalDisplayName(data) ?? "",
+                EntityDisplayName = RunningAgentChatTable.ReadCanonicalDisplayName(data),
                 AcquisitionMode = AgentChatAcquisitionMode.Local,
             }, ct).ConfigureAwait(false);
 

@@ -47,6 +47,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
     private bool isRestartInProgress;
     private string? restartError;
     private bool disposed;
+    private RunningAgentChatWithEntityInfo? sessionDisplay;
     private CancellationTokenSource startupCancellation = new();
 
     public AgentStartupProgress StartupProgress { get; private set; } = new();
@@ -159,6 +160,21 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
         this.ownershipGeneration++;
         this.runtimeEpoch = Guid.NewGuid();
         this.leaseDisposables.Add(value);
+    }
+
+    internal void ObserveSessionDisplay(RunningAgentChatWithEntityInfo display)
+    {
+        if (this.sessionDisplay is not null)
+            this.sessionDisplay.PropertyChanged -= this.OnSessionDisplayChanged;
+        this.sessionDisplay = display;
+        display.PropertyChanged += this.OnSessionDisplayChanged;
+        this.SetTitleFromContent(display.SessionTitle);
+    }
+
+    private void OnSessionDisplayChanged(object? sender, PropertyChangedEventArgs change)
+    {
+        if (change.PropertyName == nameof(RunningAgentChatWithEntityInfo.SessionTitle))
+            this.SetTitleFromContent(this.sessionDisplay!.SessionTitle);
     }
 
     internal void SetRemoteProfileDisplayName(string? value)
@@ -533,6 +549,8 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
 
     public override async ValueTask DisposeAsync()
     {
+        if (this.sessionDisplay is not null)
+            this.sessionDisplay.PropertyChanged -= this.OnSessionDisplayChanged;
         this.startupCancellation.Cancel();
         this.StartupProgress.Dispose();
         this.disposed = true;

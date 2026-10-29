@@ -39,7 +39,15 @@ public sealed class RunningAgentChatWithEntityInfo : INotifyPropertyChanged
     public bool IsSubAgent => _chat?.IsSubAgent ?? _isSubAgent;
 
     /// <summary>The display name of the agent entity that owns this session.</summary>
-    public string EntityName { get; }
+    public string EntityName { get; private set; }
+
+    internal void ApplyLaunchName(string name)
+    {
+        var previous = this.SessionTitle;
+        this.EntityName = name;
+        if (previous != this.SessionTitle)
+            this.PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(this.SessionTitle)));
+    }
 
     /// <summary>
     /// A live, always-nonblank title that identifies this session independently of any viewer
@@ -77,7 +85,7 @@ public sealed class RunningAgentChatWithEntityInfo : INotifyPropertyChanged
             return authoritativeName!;
         }
 
-        if (!string.IsNullOrWhiteSpace(entityName))
+        if (!string.IsNullOrWhiteSpace(entityName) && entityName != sessionId.Value)
         {
             return entityName;
         }

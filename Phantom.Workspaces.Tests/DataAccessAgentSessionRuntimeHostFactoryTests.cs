@@ -323,6 +323,8 @@ public sealed class DataAccessAgentSessionRuntimeHostFactoryTests
 
         Assert.NotNull(running.LastRequest);
         Assert.Equal(AgentChatAcquisitionMode.Local, running.LastRequest.AcquisitionMode);
+        Assert.Equal("Persisted owner session", running.LastRequest.EntityDisplayName);
+        Assert.Equal("Persisted owner session", Assert.Single(running.RunningSessions).SessionTitle);
         Assert.NotNull(running.LastRequest.AgentSessionEntity);
         Assert.Equal("session", running.LastRequest.AgentSessionEntity.Value
             .GetProperty("agent-session-id").GetString());
@@ -465,6 +467,7 @@ public sealed class DataAccessAgentSessionRuntimeHostFactoryTests
         var data = new Dictionary<string, object?>
         {
             ["agent-session-id"] = "session",
+            ["display-name"] = new Dictionary<string, string> { ["default"] = "Persisted owner session" },
             ["host-profile-entity-id"] = Owner,
             ["ownership-generation"] = 3,
             ["continue-in-background"] = true,

@@ -516,6 +516,60 @@ public sealed class RunningAgentChatTableTests
         Assert.Equal("Agent session abcdef12", entry.SessionTitle);
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("persisted-title")]
+    public async Task AcquireAsync_LaterPersistedMetadata_RepairsFirstAcquisition(string initialName)
+    {
+        var table = new RunningAgentChatTable(new FakeRunningAgentChatFactory(), new FakeRuntimeContextFactory());
+        var sessionId = new AgentSessionId("persisted-title");
+        await using var first = await table.AcquireAsync(Request(sessionId, entityName: initialName),
+            TestContext.Current.CancellationToken);
+        var entity = JsonSerializer.SerializeToElement(new Dictionary<string, object?>
+        {
+            ["agent-session-id"] = sessionId.Value,
+            ["display-name"] = new Dictionary<string, string> { ["default"] = "Persisted title" },
+        });
+        await using var second = await table.AcquireAsync(new AcquireAgentChatRequest
+        {
+            AgentSessionId = sessionId,
+            AgentSessionEntity = entity,
+            EntityName = sessionId.Value,
+        }, TestContext.Current.CancellationToken);
+        var row = Assert.Single(table.RunningSessions);
+        Assert.Equal("Persisted title", row.SessionTitle);
+        await using var third = await table.AcquireAsync(Request(sessionId, entityName: ""),
+            TestContext.Current.CancellationToken);
+        Assert.Equal("Persisted title", row.SessionTitle);
+    }
+
+    [Fact]
+    public async Task LastViewerDetachesWithBackgroundRetention_KeepsNamedRuntimeWithoutTitleLease()
+    {
+        var table = new RunningAgentChatTable(new FakeRunningAgentChatFactory(), new FakeRuntimeContextFactory());
+        table.ConfigureLocalRuntimeRegistry(new FakeLocalRuntimeRegistry());
+        var sessionId = new AgentSessionId("retained-title");
+        var entity = JsonSerializer.SerializeToElement(new Dictionary<string, object?>
+        {
+            ["agent-session-id"] = sessionId.Value,
+            ["display-name"] = new Dictionary<string, string> { ["default"] = "Named retained runtime" },
+        });
+        var lease = await table.AcquireAsync(new AcquireAgentChatRequest
+        {
+            AgentSessionId = sessionId,
+            AgentSessionEntity = entity,
+        },
+            TestContext.Current.CancellationToken);
+        await table.RetainForViewerCloseAsync(sessionId, TestContext.Current.CancellationToken);
+        var row = Assert.Single(table.RunningSessions);
+        await lease.DisposeAsync();
+        Assert.Same(row, Assert.Single(table.RunningSessions));
+        Assert.Equal(0, row.ViewerCount);
+        Assert.Equal("Named retained runtime", row.SessionTitle);
+        await table.SetContinueInBackgroundAsync(sessionId, false, TestContext.Current.CancellationToken);
+        Assert.Empty(table.RunningSessions);
+    }
+
     [Fact]
     public async Task AcquireAsync_LastLeaseDisposed_RemovesFromRunningSessions()
     {
