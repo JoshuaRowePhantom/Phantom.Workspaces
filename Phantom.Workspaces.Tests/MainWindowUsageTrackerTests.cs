@@ -1,6 +1,11 @@
 using System.Linq;
 using Avalonia.Controls;
+using Avalonia;
+using Avalonia.Headless;
+using Avalonia.Input;
+using Avalonia.Input.Raw;
 using Avalonia.Headless.XUnit;
+using Avalonia.LogicalTree;
 using Avalonia.VisualTree;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.ViewModels;
@@ -11,6 +16,63 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class MainWindowUsageTrackerTests
 {
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindowUsageTracker_AiCreditsDollarLink_UsesSharedFeaturesUrl()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var opener = new CopilotCurrencyLinkTests.RecordingOpener();
+        viewModel.ApplicationServices.SetUrlOpener(opener);
+        var account = await CopilotCurrencyLinkTests.CreateAccountAsync("https://github.com/copilot", 12);
+        await viewModel.UsageTracker!.Metrics.MutateAsync(() =>
+        {
+            viewModel.UsageTracker.Metrics.Accounts.Add(account);
+            return Task.CompletedTask;
+        });
+        var mainWindow = new MainWindow(viewModel);
+        mainWindow.Show();
+        try
+        {
+            var button = mainWindow.FindControl<Button>("UsageTrackerButton")!;
+            Assert.Same(viewModel.UsageTracker.ToggleOpenCommand, button.Command);
+            Assert.Null(button.CommandParameter);
+            button.Command!.Execute(button.CommandParameter);
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            Assert.True(viewModel.UsageTracker.IsOpen);
+            Assert.Equal(0, opener.Count);
+            var popup = mainWindow.GetLogicalDescendants().OfType<Avalonia.Controls.Primitives.Popup>()
+                .Single(candidate => candidate.Child is Phantom.Workspaces.Controls.UsageTrackerControl);
+            var control = Assert.IsType<Phantom.Workspaces.Controls.UsageTrackerControl>(popup.Child);
+            var dollarLink = control.GetVisualDescendants().OfType<HyperlinkButton>()
+                .Single(link => link.Name == "MetricRowHyperlink" &&
+                    link.DataContext is Phantom.Workspaces.Models.UsageMetric metric &&
+                    metric.Title == "Copilot AI Credits (Additional Usage)");
+            Assert.Equal(new System.Uri("https://github.com/settings/copilot/features"), dollarLink.CommandParameter);
+            Assert.Same(viewModel.UsageTracker.OpenUrlCommand, dollarLink.Command);
+            Assert.Null(dollarLink.NavigateUri);
+            var selectedKey = viewModel.UsageTracker.SelectedUsageMetricKey;
+            var popupRoot = TopLevel.GetTopLevel(dollarLink)!;
+            popupRoot.UpdateLayout();
+            var point = dollarLink.TranslatePoint(new Point(dollarLink.Bounds.Width / 2, dollarLink.Bounds.Height / 2), popupRoot)!.Value;
+            popupRoot.MouseMove(point);
+            popupRoot.MouseDown(point, MouseButton.Left);
+            popupRoot.MouseUp(point, MouseButton.Left);
+            Assert.Equal(1, opener.Count);
+            dollarLink.Focus();
+            popupRoot.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, null);
+            popupRoot.KeyRelease(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, null);
+            Assert.Equal(2, opener.Count);
+            Assert.Equal("https://github.com/settings/copilot/features", opener.Request!.Url);
+            Assert.Equal(Phantom.Workspaces.Services.UrlOpenPreference.Auto, opener.Request.Preference);
+            Assert.Equal(selectedKey, viewModel.UsageTracker.SelectedUsageMetricKey);
+            Assert.True(viewModel.UsageTracker.IsOpen);
+        }
+        finally
+        {
+            mainWindow.Close();
+        }
+    }
+
     private static RepositorySource CreateInMemoryRepositorySource()
     {
         return new UnknownRepositorySource();

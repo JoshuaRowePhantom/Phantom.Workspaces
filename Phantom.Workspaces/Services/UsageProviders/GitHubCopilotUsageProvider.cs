@@ -22,6 +22,7 @@ namespace Phantom.Workspaces.Services.UsageProviders;
 /// </summary>
 public sealed class GitHubCopilotUsageProvider : IUsageProvider
 {
+    private static readonly Uri CopilotFeaturesUrl = new("https://github.com/settings/copilot/features");
     private readonly HttpClient httpClient;
     private readonly GitHubCredentialUsageAdapter credential;
     private readonly ILogger<GitHubCopilotUsageProvider> logger;
@@ -349,7 +350,7 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
                     QuantityPresentationFormatString = costFormat,
                     Unit = string.Empty,
                     LastUpdatedAt = now,
-                    WebUrl = webUrl,
+                    WebUrl = CopilotFeaturesUrl,
                     ResetsAt = periodEnd,
                     BillingPeriodStart = periodStart,
                     // #1160: Mark the net-dollar cost metric as the default budget-relevant
@@ -380,7 +381,7 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
                     QuantityPresentationFormatString = costFormat,
                     Unit = string.Empty,
                     LastUpdatedAt = now,
-                    WebUrl = webUrl,
+                    WebUrl = CopilotFeaturesUrl,
                     ResetsAt = periodEnd,
                     BillingPeriodStart = periodStart,
                 });

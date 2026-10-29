@@ -599,7 +599,8 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var metrics = await provider.GetMetricsAsync(account, TestContext.Current.CancellationToken);
 
-        Assert.All(metrics, m => Assert.Equal(accountUrl, m.WebUrl));
+        Assert.All(metrics.Where(m => !m.Title.EndsWith("(Additional Usage)")), m => Assert.Equal(accountUrl, m.WebUrl));
+        Assert.All(metrics.Where(m => m.Title.EndsWith("(Additional Usage)")), m => Assert.Equal(new Uri("https://github.com/settings/copilot/features"), m.WebUrl));
     }
 
     [Fact]
@@ -620,7 +621,8 @@ public sealed class GitHubCopilotUsageProviderTests
         var metrics = await provider.GetMetricsAsync(account, TestContext.Current.CancellationToken);
 
         Assert.NotEmpty(metrics);
-        Assert.All(metrics, m => Assert.Equal(orgBillingUrl, m.WebUrl));
+        Assert.All(metrics.Where(m => !m.Title.EndsWith("(Additional Usage)")), m => Assert.Equal(orgBillingUrl, m.WebUrl));
+        Assert.All(metrics.Where(m => m.Title.EndsWith("(Additional Usage)")), m => Assert.Equal(new Uri("https://github.com/settings/copilot/features"), m.WebUrl));
     }
 
     [Fact]
@@ -641,7 +643,8 @@ public sealed class GitHubCopilotUsageProviderTests
         var metrics = await provider.GetMetricsAsync(account, TestContext.Current.CancellationToken);
 
         Assert.NotEmpty(metrics);
-        Assert.All(metrics, m => Assert.Equal(accountUrl, m.WebUrl));
+        Assert.All(metrics.Where(m => !m.Title.EndsWith("(Additional Usage)")), m => Assert.Equal(accountUrl, m.WebUrl));
+        Assert.All(metrics.Where(m => m.Title.EndsWith("(Additional Usage)")), m => Assert.Equal(new Uri("https://github.com/settings/copilot/features"), m.WebUrl));
     }
 
     private sealed class RequestCapturingHandler : HttpMessageHandler
