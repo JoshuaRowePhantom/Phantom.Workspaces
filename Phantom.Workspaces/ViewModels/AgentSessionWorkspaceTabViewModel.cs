@@ -38,6 +38,8 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
     private readonly AsyncDisposableCollection leaseDisposables;
     private readonly TimeProvider timeProvider;
     private RunningAgentChatLease? lease;
+    private long ownershipGeneration;
+    private Guid runtimeEpoch;
     private AgentRunningIndicatorTabHeaderItemViewModel? runningIndicator;
     private bool isRemote;
     private string? remoteProfileDisplayName;
@@ -136,9 +138,26 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
     /// </summary>
     public RunningAgentChatLease? Lease => this.lease;
 
+    /// <summary>
+    /// Monotonic generation stamped each time a new runtime lease is installed via
+    /// <see cref="SetLease"/>. A restart request freezes this value before consent and the
+    /// provider rejects the operation if the live generation has advanced (runtime replaced)
+    /// while confirmation was open.
+    /// </summary>
+    public long OwnershipGeneration => this.ownershipGeneration;
+
+    /// <summary>
+    /// Identity of the currently installed runtime entry. Re-stamped with a fresh value whenever
+    /// <see cref="SetLease"/> installs a new lease, so a frozen restart request can prove it is
+    /// still targeting the exact runtime epoch it was authorized against.
+    /// </summary>
+    public Guid RuntimeEpoch => this.runtimeEpoch;
+
     public void SetLease(RunningAgentChatLease value)
     {
         this.lease = value;
+        this.ownershipGeneration++;
+        this.runtimeEpoch = Guid.NewGuid();
         this.leaseDisposables.Add(value);
     }
 

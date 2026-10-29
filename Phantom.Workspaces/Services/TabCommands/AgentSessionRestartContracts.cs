@@ -41,6 +41,15 @@ public sealed record AgentSessionRestartRequest
     public required RunningAgentChatLease? ExpectedLease { get; init; }
 
     public required Guid CommandId { get; init; }
+
+    /// <summary>Owner identity the restart was authorized against (the frozen session owner).</summary>
+    public required string ExpectedOwnerId { get; init; }
+
+    /// <summary>Ownership generation frozen before consent; a newer generation means the runtime was replaced.</summary>
+    public required long OwnershipGeneration { get; init; }
+
+    /// <summary>Runtime epoch/entry identity frozen before consent; a different epoch means a fresh runtime.</summary>
+    public required Guid RuntimeEpoch { get; init; }
 }
 
 public interface IAgentSessionRestartService

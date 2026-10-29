@@ -78,6 +78,8 @@ internal sealed class AgentSessionTabCommandProvider : ITabCommandProvider
         var sessionId = sessionTab.AgentSessionId;
         var expectedLease = sessionTab.Lease;
         var expectedChat = expectedLease?.AgentChat ?? sessionTab.Agent?.AgentChat;
+        var expectedGeneration = sessionTab.OwnershipGeneration;
+        var expectedEpoch = sessionTab.RuntimeEpoch;
         if (string.IsNullOrWhiteSpace(sessionId) || expectedChat is null)
         {
             return TabCommandResult.Rejected("Session runtime is not available for restart.");
@@ -96,7 +98,9 @@ internal sealed class AgentSessionTabCommandProvider : ITabCommandProvider
 
         if (!context.IsStillValid()
             || !ReferenceEquals(sessionTab.Lease, expectedLease)
-            || !ReferenceEquals(sessionTab.Lease?.AgentChat ?? sessionTab.Agent?.AgentChat, expectedChat))
+            || !ReferenceEquals(sessionTab.Lease?.AgentChat ?? sessionTab.Agent?.AgentChat, expectedChat)
+            || sessionTab.OwnershipGeneration != expectedGeneration
+            || sessionTab.RuntimeEpoch != expectedEpoch)
         {
             sessionTab.SetRestartError(
                 "Restart cancelled because the target tab or runtime changed while confirmation was open.");
@@ -114,6 +118,9 @@ internal sealed class AgentSessionTabCommandProvider : ITabCommandProvider
                         ExpectedChat = expectedChat,
                         ExpectedLease = expectedLease,
                         CommandId = Guid.NewGuid(),
+                        ExpectedOwnerId = sessionId,
+                        OwnershipGeneration = expectedGeneration,
+                        RuntimeEpoch = expectedEpoch,
                     },
                     cancellationToken)
                 .ConfigureAwait(false);

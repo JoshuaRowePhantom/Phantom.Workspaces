@@ -75,6 +75,152 @@ public sealed class AgentSessionTabCommandProviderTests
         Assert.Equal(0, restartService.RestartCallCount);
     }
 
+    [Fact]
+    public async Task AgentSessionTabCommands_LocalRemoteAndRestoredSessions_UseLifecycleCapability()
+    {
+        await using var vm = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        vm.AgentSessionRestartService = new RecordingRestartService
+        {
+            Availability = new AgentSessionRestartAvailability { IsAvailable = true },
+        };
+
+        foreach (var sessionId in new[] { "local-session", "remote-session", "restored-session" })
+        {
+            var tab = CreateSessionTab(sessionId, CreateChat(hasPendingWork: false));
+            var context = CreateContext(vm, new WorkspacePaneViewModel(CreateWorkspaceEntity($"pane-{sessionId}")), tab);
+            var descriptor = Assert.Single(tab.TabCommands.GetCommands(context));
+            var availability = descriptor.Availability!(context);
+
+            Assert.True(availability.IsVisible);
+            Assert.True(availability.IsEnabled);
+        }
+    }
+
+    [Fact]
+    public async Task AgentSessionTabCommands_UnsupportedChild_ShowsDisabledExplanation()
+    {
+        await using var vm = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        const string reason = "This sub-agent session can't be restarted independently.";
+        var restartService = new RecordingRestartService
+        {
+            Availability = new AgentSessionRestartAvailability { IsAvailable = false, DisabledReason = reason },
+        };
+        vm.AgentSessionRestartService = restartService;
+
+        var tab = CreateSessionTab("child-session", CreateChat(hasPendingWork: false));
+        var context = CreateContext(vm, new WorkspacePaneViewModel(CreateWorkspaceEntity("pane-child")), tab);
+        var descriptor = Assert.Single(tab.TabCommands.GetCommands(context));
+        var availability = descriptor.Availability!(context);
+
+        Assert.True(availability.IsVisible);
+        Assert.False(availability.IsEnabled);
+        Assert.Equal(reason, availability.DisabledReason);
+
+        var result = await context.Invoker.InvokeAsync(descriptor, context, TestContext.Current.CancellationToken);
+        Assert.Equal(TabCommandResultKind.Rejected, result.Kind);
+        Assert.Equal(0, restartService.RestartCallCount);
+    }
+
+    [Fact]
+    public async Task AgentSessionTabCommands_SupportedIndependentChild_EnablesRestart()
+    {
+        await using var vm = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        vm.AgentSessionRestartService = new RecordingRestartService
+        {
+            Availability = new AgentSessionRestartAvailability { IsAvailable = true },
+        };
+
+        var tab = CreateSessionTab("supported-child", CreateChat(hasPendingWork: false));
+        var context = CreateContext(vm, new WorkspacePaneViewModel(CreateWorkspaceEntity("pane-supported-child")), tab);
+        var descriptor = Assert.Single(tab.TabCommands.GetCommands(context));
+        var availability = descriptor.Availability!(context);
+
+        Assert.True(availability.IsVisible);
+        Assert.True(availability.IsEnabled);
+    }
+
+    [Fact]
+    public async Task AgentSessionTabCommands_SelectionChangesDuringConsent_KeepsFrozenIdentity()
+    {
+        await using var vm = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        var restartService = new RecordingRestartService();
+        var consentGate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        vm.AgentSessionRestartService = restartService;
+        vm.AgentSessionRestartConsentProvider = new DelegateConsentProvider((_, _) => consentGate.Task);
+
+        var tab = CreateSessionTab("frozen-session", CreateChat(hasPendingWork: true));
+        var expectedEpoch = tab.RuntimeEpoch;
+        var expectedGeneration = tab.OwnershipGeneration;
+        var context = CreateContext(vm, new WorkspacePaneViewModel(CreateWorkspaceEntity("pane-frozen")), tab);
+        var command = Assert.Single(tab.TabCommands.GetCommands(context));
+
+        var invokeTask = context.Invoker.InvokeAsync(command, context, TestContext.Current.CancellationToken);
+
+        var otherPane = new WorkspacePaneViewModel(CreateWorkspaceEntity("pane-other-frozen"));
+        vm.WorkspacePanes.Add(otherPane);
+        vm.SelectedWorkspacePane = otherPane;
+        consentGate.TrySetResult(true);
+        var result = await invokeTask;
+
+        Assert.Equal(TabCommandResultKind.Succeeded, result.Kind);
+        Assert.Equal(1, restartService.RestartCallCount);
+        Assert.Equal("frozen-session", restartService.LastRequest!.SessionId);
+        Assert.Equal("frozen-session", restartService.LastRequest.ExpectedOwnerId);
+        Assert.Equal(expectedEpoch, restartService.LastRequest.RuntimeEpoch);
+        Assert.Equal(expectedGeneration, restartService.LastRequest.OwnershipGeneration);
+    }
+
+    [Fact]
+    public async Task AgentSessionTabCommands_ServiceFails_RetainsTabAndReportsScopedError()
+    {
+        await using var vm = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        var restartService = new RecordingRestartService
+        {
+            Result = new AgentSessionRestartResult
+            {
+                Outcome = AgentSessionRestartOutcome.Failed,
+                Message = "Restart failed on runtime.",
+            },
+        };
+        vm.AgentSessionRestartService = restartService;
+
+        var tab = CreateSessionTab("fail-session", CreateChat(hasPendingWork: false));
+        var context = CreateContext(vm, new WorkspacePaneViewModel(CreateWorkspaceEntity("pane-fail")), tab);
+        var command = Assert.Single(tab.TabCommands.GetCommands(context));
+
+        var result = await context.Invoker.InvokeAsync(command, context, TestContext.Current.CancellationToken);
+
+        Assert.Equal(TabCommandResultKind.Rejected, result.Kind);
+        Assert.Equal("Restart failed on runtime.", tab.RestartError);
+        Assert.False(tab.IsRestartInProgress);
+        Assert.True(context.IsStillValid());
+        Assert.Equal(1, restartService.RestartCallCount);
+    }
+
+    [Fact]
+    public async Task AgentSessionTabCommands_DuplicateClicks_InvokesServiceOnce()
+    {
+        await using var vm = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var restartService = new RecordingRestartService { Gate = gate };
+        vm.AgentSessionRestartService = restartService;
+
+        var tab = CreateSessionTab("dup-session", CreateChat(hasPendingWork: false));
+        var context = CreateContext(vm, new WorkspacePaneViewModel(CreateWorkspaceEntity("pane-dup")), tab);
+        var command = Assert.Single(tab.TabCommands.GetCommands(context));
+
+        var first = context.Invoker.InvokeAsync(command, context, TestContext.Current.CancellationToken);
+        var secondResult = await context.Invoker.InvokeAsync(command, context, TestContext.Current.CancellationToken);
+        gate.TrySetResult();
+        var firstResult = await first;
+
+        // While the first restart is in flight the command is disabled, so a duplicate
+        // click is rejected and the lifecycle service is only ever invoked once.
+        Assert.Equal(TabCommandResultKind.Rejected, secondResult.Kind);
+        Assert.Equal(TabCommandResultKind.Succeeded, firstResult.Kind);
+        Assert.Equal(1, restartService.RestartCallCount);
+    }
+
     private static AgentSessionWorkspaceTabViewModel CreateSessionTab(string sessionId, IAgentChat chat)
     {
         var tab = new AgentSessionWorkspaceTabViewModel
@@ -149,25 +295,36 @@ public sealed class AgentSessionTabCommandProviderTests
 
     private sealed class RecordingRestartService : IAgentSessionRestartService
     {
-        public int RestartCallCount { get; private set; }
+        private int restartCallCount;
+
+        public int RestartCallCount => this.restartCallCount;
+
+        public AgentSessionRestartRequest? LastRequest { get; private set; }
+
+        public AgentSessionRestartAvailability Availability { get; set; } = new() { IsAvailable = true };
+
+        public AgentSessionRestartResult Result { get; set; } =
+            new() { Outcome = AgentSessionRestartOutcome.Succeeded };
+
+        public TaskCompletionSource? Gate { get; set; }
 
         public AgentSessionRestartAvailability GetAvailability(
             AgentSessionWorkspaceTabViewModel tab,
             TabCommandContext context)
-            => new()
-            {
-                IsAvailable = true,
-            };
+            => this.Availability;
 
-        public Task<AgentSessionRestartResult> RestartAsync(
+        public async Task<AgentSessionRestartResult> RestartAsync(
             AgentSessionRestartRequest request,
             CancellationToken cancellationToken)
         {
-            this.RestartCallCount++;
-            return Task.FromResult(new AgentSessionRestartResult
+            Interlocked.Increment(ref this.restartCallCount);
+            this.LastRequest = request;
+            if (this.Gate is not null)
             {
-                Outcome = AgentSessionRestartOutcome.Succeeded,
-            });
+                await this.Gate.Task.ConfigureAwait(false);
+            }
+
+            return this.Result;
         }
     }
 
