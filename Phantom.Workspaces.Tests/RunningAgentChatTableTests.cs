@@ -2711,11 +2711,16 @@ public sealed class RunningAgentChatTableTests
     }
 
     [Fact]
-    public async Task AcquireAsync_McpToolWithSecretPlaceholder_MaterializesToOpaqueHandleAndInvokesSecretProvider()
+    public async Task AcquireAsync_McpToolWithSecretPlaceholder_DefersMaterializationToConnectTime()
     {
-        // #1405: opening a session via the foreground RunningAgentChatTable path must materialize the
-        // ${SECRET:...} in an MCP tool connection — rewriting it to an opaque handle and invoking the
-        // SecretProvider — instead of passing the raw placeholder through to the MCP transport.
+        // #1405 + #1672: opening a session via the foreground RunningAgentChatTable path must NOT
+        // acquire a top-level MCP server's connection credential during preflight. The credential is
+        // owned by that server's connection boundary, so preflight leaves the ${SECRET:...} placeholder
+        // intact (surfaced as a deferred reference) and the broker is only consulted when the MCP
+        // transport connects. This keeps a missing/denied optional-server credential from aborting the
+        // whole session: the server degrades to a disabled node while the chat stays usable. The raw
+        // placeholder is still never sent to the transport — the deferred reference is resolved via the
+        // broker at connect (covered by McpTransportFactoryTests).
         var provider = new FakeAccessBroker();
         var services = new AgentServices
         {
@@ -2736,10 +2741,9 @@ public sealed class RunningAgentChatTableTests
             },
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(1, provider.CallCount);
+        Assert.Equal(0, provider.CallCount);
         var json = lease.AgentChat.Information.AgentDefinition.ToJson();
-        Assert.DoesNotContain("${SECRET:GitHubToken}", json, StringComparison.Ordinal);
-        Assert.Contains("${SECRET:", json, StringComparison.Ordinal);
+        Assert.Contains("${SECRET:GitHubToken}", json, StringComparison.Ordinal);
     }
 
     [Fact]
