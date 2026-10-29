@@ -490,6 +490,91 @@ public sealed class RunningAgentBrainControlTests
         Assert.Contains("Command=\"{Binding TerminateCommand}\"", axaml, StringComparison.Ordinal);
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public void RunningAgentBrainControl_NoOpenTab_ShowsPrimaryTitleAndSeparateLocationStatus()
+    {
+        var row = CreateRemoteRow(entityName: "Named Session", isInterruptible: true);
+        var (window, rowGrid) = ShowRowAndGet<Grid>(row, HasClass<Grid>("running-agent-row"));
+
+        try
+        {
+            var textBlocks = rowGrid.GetVisualDescendants().OfType<TextBlock>().ToList();
+
+            var primary = textBlocks.FirstOrDefault(tb => tb.Text == "Named Session");
+            Assert.NotNull(primary);
+            Assert.Equal(FontWeight.SemiBold, primary!.FontWeight);
+
+            // The no-open-tab status is a separate, secondary location line — never the identity.
+            Assert.Contains(textBlocks, tb => tb.Text == "No open tab");
+
+            // Existing applicable actions remain rendered.
+            Assert.Contains(
+                rowGrid.GetVisualDescendants().OfType<Button>(),
+                button => button.Content as string == "Terminate");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void RunningAgentBrainControl_CanonicalRename_UpdatesPopupAndDefaultHeader()
+    {
+        var sessionId = new AgentSessionId(Guid.NewGuid().ToString("n"));
+        var session = new RunningAgentChatWithEntityInfo(
+            sessionId,
+            isSubAgent: false,
+            _ => throw new InvalidOperationException("The control test must not acquire a chat lease."),
+            entityName: "Before Rename",
+            entityId: null)
+        {
+            IsRemote = true,
+            CanSetContinueInBackground = true,
+            ViewerCount = 1,
+        };
+
+        var row = new RunningAgentRowViewModel(
+            session,
+            workspacePaneTitle: null,
+            tabTitle: null,
+            entityName: "Before Rename",
+            hasOpenTab: false,
+            isThinking: false,
+            activateCommand: new RelayCommand(_ => { }),
+            interruptAsync: _ => Task.CompletedTask,
+            terminateAsync: _ => Task.CompletedTask,
+            setContinueInBackgroundAsync: (_, _) => Task.CompletedTask);
+
+        var (window, rowGrid) = ShowRowAndGet<Grid>(row, HasClass<Grid>("running-agent-row"));
+
+        try
+        {
+            Assert.Contains(
+                rowGrid.GetVisualDescendants().OfType<TextBlock>(),
+                tb => tb.Text == "Before Rename");
+
+            // The popup and ordinary session headers both consume the same
+            // RunningAgentChatWithEntityInfo.SessionTitle projection, so a canonical persisted
+            // rename updates the live row without a tab and without reopening the popup.
+            session.ApplyAuthoritativeDisplayName("After Rename");
+            Dispatcher.UIThread.RunJobs();
+            rowGrid.UpdateLayout();
+
+            Assert.Equal("After Rename", row.SessionTitle);
+            Assert.Contains(
+                rowGrid.GetVisualDescendants().OfType<TextBlock>(),
+                tb => tb.Text == "After Rename");
+            Assert.DoesNotContain(
+                rowGrid.GetVisualDescendants().OfType<TextBlock>(),
+                tb => tb.Text == "Before Rename");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
     private static RunningAgentRowViewModel CreateRemoteRow(
         bool continueInBackground = false,
         bool isInterruptible = false,

@@ -490,6 +490,33 @@ public sealed class RunningAgentChatTableTests
     }
 
     [Fact]
+    public async Task RunningAgentChatTable_HeadlessAcquisition_PublishesSessionDisplayMetadata()
+    {
+        var factory = new FakeRunningAgentChatFactory();
+        var table = new RunningAgentChatTable(factory);
+
+        // A headless/owner acquisition can arrive without a GUI display name (issue #1671). The
+        // session identity must still be nonblank and must not surface a raw/empty value.
+        var sessionId = new AgentSessionId("abcdef1234567890");
+        await using var lease = await table.AcquireAsync(
+            Request(sessionId, entityName: string.Empty),
+            TestContext.Current.CancellationToken);
+
+        var entry = Assert.Single(table.RunningSessions);
+        Assert.False(string.IsNullOrWhiteSpace(entry.SessionTitle));
+        Assert.Equal("Agent session abcdef12", entry.SessionTitle);
+
+        // Authoritative display metadata resolves the real title without pinning or replacing the
+        // runtime; a blank acquisition value never becomes the sole title source.
+        table.ApplyAuthoritativeDisplayName(sessionId, "Resolved Headless Title");
+        Assert.Equal("Resolved Headless Title", entry.SessionTitle);
+
+        // A later blank/null authoritative value falls back rather than blanking the title.
+        table.ApplyAuthoritativeDisplayName(sessionId, null);
+        Assert.Equal("Agent session abcdef12", entry.SessionTitle);
+    }
+
+    [Fact]
     public async Task AcquireAsync_LastLeaseDisposed_RemovesFromRunningSessions()
     {
         var factory = new FakeRunningAgentChatFactory();

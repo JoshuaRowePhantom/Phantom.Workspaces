@@ -120,6 +120,30 @@ public sealed class RunningAgentRemoteRowsTests
     }
 
     [Fact]
+    public async Task RunningAgents_TablessRemoteRowTerminate_TargetsStableSessionId()
+    {
+        // Issue #1671: a canonical rename/fallback title change must not change which stable
+        // session is terminated for a tabless remote row.
+        var table = new ControlledTable();
+        var entry = table.Add("remote", isRemote: true, continueInBackground: false, viewerCount: 0);
+        using var brain = Create(table);
+        var row = Assert.Single(brain.Rows);
+        Assert.False(row.HasOpenTab);
+
+        entry.ApplyAuthoritativeDisplayName("Renamed Remote Session");
+        Assert.Equal("Renamed Remote Session", row.SessionTitle);
+
+        var command = Assert.IsType<Phantom.Workspaces.ViewModels.AsyncRelayCommand>(row.TerminateCommand);
+        command.Execute(null);
+        await command.LastExecutionTask!;
+
+        // Termination still targets the original stable session id, and the row disappears only
+        // through authoritative runtime removal.
+        Assert.Equal("remote", Assert.Single(table.Terminated).Value);
+        Assert.Empty(brain.Rows);
+    }
+
+    [Fact]
     public async Task TerminateCommand_WhenTerminationFails_ReenablesRowAndSurfacesError()
     {
         var table = new ControlledTable { TerminationFailure = new InvalidOperationException("rejected") };

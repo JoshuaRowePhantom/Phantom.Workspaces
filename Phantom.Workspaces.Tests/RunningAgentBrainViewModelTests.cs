@@ -1308,4 +1308,151 @@ public sealed class RunningAgentBrainViewModelTests
 
         vm.Dispose();
     }
+
+    // ── Issue #1671: session-backed title authority independent of viewer tabs ──
+
+    [Fact]
+    public void RunningAgents_BackgroundSessionWithZeroTabs_ShowsSessionTitle()
+    {
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-bg", "Background Agent");
+
+        var vm = CreateBrainVm(table, []);
+
+        var row = Assert.Single(vm.Rows);
+        Assert.False(row.HasOpenTab);
+        Assert.Equal("Background Agent", row.SessionTitle);
+
+        vm.Dispose();
+    }
+
+    [Fact]
+    public void RunningAgents_CloseLastViewer_PreservesSessionTitle()
+    {
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-1", "Stable Agent");
+        var tab = CreateReadyTab("tab-1", "Viewer Tab Alias", agentSessionId: "session-1");
+        var currentTabs = new List<AgentTabInfo>
+        {
+            new AgentTabInfo("pane-1", "Workspace Pane", tab),
+        };
+
+        var vm = new RunningAgentBrainViewModel(
+            table: table,
+            getAllAgentTabs: () => currentTabs,
+            navigator: new FakeTabNavigator(),
+            dispatch: action => action());
+
+        var row = Assert.Single(vm.Rows);
+        Assert.True(row.HasOpenTab);
+        Assert.Equal("Stable Agent", row.SessionTitle);
+
+        // Closing the last viewer changes only location state, not the session identity.
+        currentTabs.Clear();
+        vm.Refresh();
+        row = Assert.Single(vm.Rows);
+        Assert.False(row.HasOpenTab);
+        Assert.Equal("Stable Agent", row.SessionTitle);
+
+        // Reopening must not restore a stale tab-title snapshot over the canonical title.
+        currentTabs.Add(new AgentTabInfo("pane-1", "Workspace Pane", tab));
+        vm.Refresh();
+        row = Assert.Single(vm.Rows);
+        Assert.True(row.HasOpenTab);
+        Assert.Equal("Stable Agent", row.SessionTitle);
+
+        vm.Dispose();
+    }
+
+    [Fact]
+    public void RunningAgents_SessionRenamedWithoutTabs_UpdatesTitleLive()
+    {
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-rename", "Original Name");
+
+        var vm = CreateBrainVm(table, []);
+
+        var row = Assert.Single(vm.Rows);
+        Assert.Equal("Original Name", row.SessionTitle);
+
+        // An authoritative persisted-display-name change updates the visible row with no tab and
+        // without reopening the popup.
+        table.RunningSessions.Single().ApplyAuthoritativeDisplayName("Renamed Session");
+        Assert.Equal("Renamed Session", row.SessionTitle);
+
+        vm.Dispose();
+    }
+
+    [Fact]
+    public void RunningAgents_MultipleViewersReordered_PreservesCanonicalTitle()
+    {
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-multi", "Canonical Title");
+        var tabA = CreateReadyTab("tab-A", "Alias A", agentSessionId: "session-multi");
+        var tabB = CreateReadyTab("tab-B", "Alias B", agentSessionId: "session-multi");
+
+        var currentTabs = new List<AgentTabInfo>
+        {
+            new AgentTabInfo("pane-1", "Workspace One", tabA),
+            new AgentTabInfo("pane-2", "Workspace Two", tabB),
+        };
+
+        var vm = new RunningAgentBrainViewModel(
+            table: table,
+            getAllAgentTabs: () => currentTabs,
+            navigator: new FakeTabNavigator(),
+            dispatch: action => action());
+
+        var row = Assert.Single(vm.Rows);
+        Assert.Equal("Canonical Title", row.SessionTitle);
+
+        // Reordering viewers (enumeration order) must not change the primary title.
+        currentTabs.Reverse();
+        vm.Refresh();
+        row = Assert.Single(vm.Rows);
+        Assert.Equal("Canonical Title", row.SessionTitle);
+
+        vm.Dispose();
+    }
+
+    [Fact]
+    public void RunningAgents_MissingOrLoadingEntity_ShowsNonblankSessionIdentity()
+    {
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("abcdef1234567890", entityName: string.Empty);
+
+        var vm = CreateBrainVm(table, []);
+
+        var row = Assert.Single(vm.Rows);
+        Assert.False(string.IsNullOrWhiteSpace(row.SessionTitle));
+        Assert.Equal("Agent session abcdef12", row.SessionTitle);
+
+        // Later-resolved metadata replaces the stable fallback with the real title.
+        table.RunningSessions.Single().ApplyAuthoritativeDisplayName("Resolved Title");
+        Assert.Equal("Resolved Title", row.SessionTitle);
+
+        vm.Dispose();
+    }
+
+    [Fact]
+    public void RunningAgents_LateMetadataForReplacedSession_DoesNotOverwriteCurrentTitle()
+    {
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-late", "Live Title");
+        var session = table.RunningSessions.Single();
+
+        var vm = CreateBrainVm(table, []);
+        Assert.Equal("Live Title", Assert.Single(vm.Rows).SessionTitle);
+
+        // Remove the session: the row is disposed and unsubscribed from the record.
+        table.RemoveSession("session-late");
+        Assert.Empty(vm.Rows);
+
+        // A late authoritative rename for the removed/replaced record must not resurrect or mutate
+        // any current row, and must not throw.
+        session.ApplyAuthoritativeDisplayName("Stale Late Title");
+        Assert.Empty(vm.Rows);
+
+        vm.Dispose();
+    }
 }
