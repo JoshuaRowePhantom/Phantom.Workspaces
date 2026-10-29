@@ -233,6 +233,35 @@ public sealed class AgentSessionProtocolCodecTests
     }
 
     [Fact]
+    public void AgentSessionProtocolCodec_DiagnosticMetadata_IsValidatedAndOptional()
+    {
+        // Valid bounded correlation metadata round-trips through serialize/deserialize unchanged.
+        var attempt = Guid.NewGuid().ToString("N");
+        var wire = AgentSessionProtocolCodec.SerializeOpen(Open() with { DiagnosticAttempt = attempt });
+        Assert.Equal(attempt, wire.GetProperty("diagnostic-attempt").GetString());
+        Assert.Equal(attempt, AgentSessionProtocolCodec.DeserializeOpen(wire).DiagnosticAttempt);
+
+        // Metadata-free old peers stay compatible: the property is omitted on the wire and a payload
+        // that never carries it still deserializes.
+        var withoutMetadata = AgentSessionProtocolCodec.SerializeOpen(Open());
+        Assert.False(withoutMetadata.TryGetProperty("diagnostic-attempt", out _));
+        Assert.Null(AgentSessionProtocolCodec.DeserializeOpen(withoutMetadata).DiagnosticAttempt);
+
+        // Malformed and oversized values follow a safe codec policy on both the write and read paths,
+        // never flowing an unbounded or ill-formed correlation token into routing.
+        var oversized = new string('a', 1024);
+        Assert.Throws<RemoteAgentProtocolException>(() =>
+            AgentSessionProtocolCodec.SerializeOpen(Open() with { DiagnosticAttempt = oversized }));
+        Assert.Throws<RemoteAgentProtocolException>(() =>
+            AgentSessionProtocolCodec.SerializeOpen(Open() with { DiagnosticAttempt = "not-a-guid" }));
+
+        var malformedWire = JsonDocument.Parse(
+            withoutMetadata.GetRawText().TrimEnd('}') + $",\"diagnostic-attempt\":\"{oversized}\"}}").RootElement;
+        Assert.Throws<RemoteAgentProtocolException>(() =>
+            AgentSessionProtocolCodec.DeserializeOpen(malformedWire));
+    }
+
+    [Fact]
     public void AgentSessionOpenRequest_InvalidVersionOrGeneration_RejectsInitialization()
     {
         Assert.Throws<RemoteAgentProtocolException>(() =>
