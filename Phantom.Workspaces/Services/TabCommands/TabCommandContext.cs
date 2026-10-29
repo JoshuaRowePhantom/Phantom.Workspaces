@@ -96,4 +96,33 @@ public sealed class TabCommandContext
             mainWindow.TabCommandInvoker);
         return true;
     }
+
+    /// <summary>
+    /// Resolves a keyboard/on-demand invocation origin (a live tab view-model) to the exact
+    /// registered document that owns it. A known-invalid or unregistered origin rejects and is
+    /// never allowed to fall through to the selected/active tab. Resolution is side-effect-free:
+    /// it reads live registration only and mutates no selection or focus state.
+    /// </summary>
+    public static bool TryCreateForKeyboardOrigin(
+        MainWindowViewModel mainWindow,
+        WorkspaceTabViewModel origin,
+        out TabCommandContext? context)
+    {
+        ArgumentNullException.ThrowIfNull(mainWindow);
+        ArgumentNullException.ThrowIfNull(origin);
+
+        context = null;
+        foreach (var pane in mainWindow.WorkspacePanes)
+        {
+            var document = pane.GetDocumentForTab(origin.Id);
+            if (document is null || !ReferenceEquals(document.TabViewModel, origin))
+            {
+                continue;
+            }
+
+            return TryCreateForExplicitTarget(mainWindow, document, out context);
+        }
+
+        return false;
+    }
 }

@@ -197,6 +197,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         // created, because the pane captures a WorkspacePaneEnvironment bundling these services.
         this.dockFactory = new WorkspaceDockFactory(this);
         this.notificationService = new NotificationService(this);
+        this.TabCommandInvoker = new TabCommandInvoker(
+            new NotificationTabCommandErrorSink(this.notificationService));
 
         this.selectedWorkspacePane = CreatePlaceholderWorkspacePane(DefaultWorkspaceId, "No workspace selected.");
         this.WorkspacePanes.Add(this.selectedWorkspacePane);
@@ -3283,7 +3285,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     internal IAgentSessionRestartConsentProvider AgentSessionRestartConsentProvider { get; set; }
         = new AgentSessionRestartConsentProvider();
 
-    internal TabCommandInvoker TabCommandInvoker { get; } = new();
+    internal TabCommandInvoker TabCommandInvoker { get; }
 
     private readonly Dictionary<WorkspaceTabViewModel, Task<bool>> pendingTabCloses = [];
 

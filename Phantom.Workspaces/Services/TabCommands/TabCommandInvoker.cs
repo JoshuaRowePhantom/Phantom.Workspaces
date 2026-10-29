@@ -71,7 +71,13 @@ public sealed class TabCommandInvoker
 
         try
         {
-            return await command.ExecuteAsync(context, cancellationToken).ConfigureAwait(false);
+            var result = await command.ExecuteAsync(context, cancellationToken).ConfigureAwait(false);
+            if (result.Kind == TabCommandResultKind.Failed && result.Exception is { } failure)
+            {
+                this.errorSink.ReportFailure(context, command, failure);
+            }
+
+            return result;
         }
         catch (OperationCanceledException)
         {
