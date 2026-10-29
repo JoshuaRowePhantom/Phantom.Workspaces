@@ -96,7 +96,14 @@ internal sealed class McpBrokerClientTransport : IClientTransport, IAsyncDisposa
         {
             throw new InvalidOperationException("MCP credential access is unavailable.");
         }
-        if (services.SecretPlaceholderResolver is ISecretPlaceholderResolver resolver)
+        // #1672: a reference the materializer deliberately deferred is acquired at this connection
+        // boundary via the broker (below), not resolved from a pre-registered handle. Only non-
+        // deferred references consult the resolver, preserving the invariant that an unregistered
+        // materialized handle fails closed instead of silently falling back to a stored name.
+        var isDeferredReference = connection.ApiKey is { } apiKeyReference
+            && services.DeferredSecretReferences is { } deferredReferences
+            && deferredReferences.Contains(apiKeyReference);
+        if (!isDeferredReference && services.SecretPlaceholderResolver is ISecretPlaceholderResolver resolver)
         {
             if (!resolver.TryResolve(connection.ApiKey, out var lease))
             {

@@ -58,6 +58,98 @@ public sealed partial class SecretUsageScanner
         CopyState(rewritten, definition);
     }
 
+    /// <summary>
+    /// Partitions the discovered secret uses by their dependency owner (issue #1672): uses that
+    /// belong to a top-level MCP server's <c>connection</c> (its stored-secret credential material)
+    /// are returned as <see cref="SecretUsagePartition.DeferredMcpServer"/> so their acquisition can
+    /// be deferred to that server's own connection boundary; every other use — model credentials,
+    /// system prompt, and non-MCP tool text — is <see cref="SecretUsagePartition.RequiredCore"/> and
+    /// must be materialized fail-closed before the session is created. Provider-owned OAuth
+    /// client-secrets are excluded from scanning entirely and therefore appear in neither partition.
+    /// </summary>
+    public SecretUsagePartition PartitionByOwner(AgentDefinition definition)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+
+        var usages = this.Scan(definition);
+        if (usages.Count == 0)
+        {
+            return new SecretUsagePartition([], []);
+        }
+
+        var root = JsonNode.Parse(definition.ToJson());
+        var requiredCore = new List<SecretUsage>();
+        var deferredMcpServer = new List<SecretUsage>();
+        foreach (var usage in usages)
+        {
+            if (IsMcpServerConnectionOwned(root, usage.JsonPath))
+            {
+                deferredMcpServer.Add(usage);
+            }
+            else
+            {
+                requiredCore.Add(usage);
+            }
+        }
+
+        return new SecretUsagePartition(requiredCore, deferredMcpServer);
+    }
+
+    // A usage is owned by an MCP server when its JSON path lies within the `connection` subtree of a
+    // top-level tool whose kind is "mcp". The AgentSchema serializer emits `tools` as an object keyed
+    // by tool name (e.g. definition.tools.<name>.connection.apiKey); an array form is also handled
+    // defensively. Scoping ownership to the `connection` subtree targets the credential material the
+    // stored-secret/OAuth MCP transports resolve, leaving prompt-shaped or descriptive tool text in
+    // the required-core partition.
+    private static bool IsMcpServerConnectionOwned(JsonNode? root, string jsonPath)
+    {
+        if (root is not JsonObject agent || agent["tools"] is not { } toolsNode)
+        {
+            return false;
+        }
+
+        switch (toolsNode)
+        {
+            case JsonObject toolsObject:
+                foreach (var (name, toolNode) in toolsObject)
+                {
+                    if (PathIsWithinConnection($"{RootPath}.tools.{name}", jsonPath) && IsMcpTool(toolNode))
+                    {
+                        return true;
+                    }
+                }
+
+                break;
+
+            case JsonArray toolsArray:
+                for (var index = 0; index < toolsArray.Count; index++)
+                {
+                    if (PathIsWithinConnection($"{RootPath}.tools[{index}]", jsonPath) && IsMcpTool(toolsArray[index]))
+                    {
+                        return true;
+                    }
+                }
+
+                break;
+        }
+
+        return false;
+    }
+
+    private static bool PathIsWithinConnection(string toolPath, string jsonPath)
+    {
+        var connectionPath = $"{toolPath}.connection";
+        return jsonPath == connectionPath
+            || jsonPath.StartsWith($"{connectionPath}.", StringComparison.Ordinal)
+            || jsonPath.StartsWith($"{connectionPath}[", StringComparison.Ordinal);
+    }
+
+    private static bool IsMcpTool(JsonNode? toolNode)
+        => toolNode is JsonObject tool
+            && tool["kind"] is JsonValue kind
+            && kind.TryGetValue<string>(out var kindName)
+            && kindName == "mcp";
+
     private static void ScanNode(JsonNode? node, string path, List<SecretUsage> results)
     {
         switch (node)

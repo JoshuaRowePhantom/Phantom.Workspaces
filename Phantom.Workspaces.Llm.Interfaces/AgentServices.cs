@@ -86,6 +86,15 @@ public sealed record AgentServices : IServiceProvider
     public object? SecretPlaceholderResolver { get; init; }
 
     /// <summary>
+    /// The set of original <c>${SECRET:Name}</c> reference strings whose acquisition was deliberately
+    /// deferred from preflight materialization to the owning MCP server's connection boundary (issue
+    /// #1672). The stored-secret MCP transport treats a reference listed here as acquire-at-connect
+    /// rather than requiring a pre-registered opaque handle, so an unavailable optional credential
+    /// disables only that server instead of aborting session creation.
+    /// </summary>
+    public System.Collections.Generic.IReadOnlyCollection<string>? DeferredSecretReferences { get; init; }
+
+    /// <summary>
     /// Optional Copilot SDK client factory. Typed as object to avoid a reverse project reference
     /// from Phantom.Workspaces.Llm.Interfaces to Phantom.Workspaces.Llm.Core; consuming code casts
     /// to <c>ICopilotClientFactory</c>.

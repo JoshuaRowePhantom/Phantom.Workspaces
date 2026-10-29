@@ -1,3 +1,4 @@
+using System.Linq;
 using AgentSchema;
 using Phantom.Workspaces.Llm.Interfaces.Access;
 
@@ -21,7 +22,12 @@ public sealed class AgentDefinitionSecretMaterializer
         var handles = new Dictionary<SecretUsage, string>(ReferenceEqualityComparer.Instance);
         try
         {
-            var usages = this.scanner.Scan(definition);
+            // #1672: only required-core uses (model credentials, system prompt, non-MCP tool text)
+            // are materialized fail-closed here. MCP-server connection credentials are deferred to
+            // their own connection boundary so an unavailable optional credential disables only that
+            // server rather than aborting session creation.
+            var partition = this.scanner.PartitionByOwner(definition);
+            var usages = partition.RequiredCore;
             for (var occurrence = 0; occurrence < usages.Count; occurrence++)
             {
                 var usage = usages[occurrence];
@@ -42,8 +48,20 @@ public sealed class AgentDefinitionSecretMaterializer
                 resolver.Register($"${{SECRET:{handle}}}", succeeded.Result);
                 handles.Add(usage, handle);
             }
-            this.scanner.RewritePlaceholders(definition, handles);
-            return new MaterializedAgentDefinition { Definition = definition, Resolver = resolver };
+            if (handles.Count > 0)
+            {
+                this.scanner.RewritePlaceholders(definition, handles);
+            }
+            var deferredReferences = partition.DeferredMcpServer
+                .Select(usage => $"${{SECRET:{usage.SecretName}}}")
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            return new MaterializedAgentDefinition
+            {
+                Definition = definition,
+                Resolver = resolver,
+                DeferredSecretReferences = deferredReferences,
+            };
         }
         catch
         {

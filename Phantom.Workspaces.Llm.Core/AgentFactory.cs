@@ -859,6 +859,7 @@ public static class AgentFactory
         {
             AccessLineage = lineage,
             SecretPlaceholderResolver = materialized.Resolver,
+            DeferredSecretReferences = materialized.DeferredSecretReferences,
         });
     }
 
