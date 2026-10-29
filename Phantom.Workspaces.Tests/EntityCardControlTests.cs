@@ -1417,7 +1417,7 @@ public sealed class EntityCardControlTests
         }
     }
 
-    private static EntitySnapshot BuildGitWorktreeSnapshotForTests()
+    internal static EntitySnapshot BuildGitWorktreeSnapshotForTests()
     {
         var entityId = Guid.NewGuid();
         using var document = JsonDocument.Parse(

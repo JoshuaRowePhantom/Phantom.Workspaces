@@ -13,6 +13,36 @@ namespace Phantom.Workspaces.Tests;
 public sealed class EntityCardViewModelTests : IAsyncDisposable
 {
     [AvaloniaFact]
+    public async Task EntityCardViewModel_ShortcutsMaterialized_PreservesPresentationMetadata()
+    {
+        var entity = CreateEntity("entity");
+        var manager = new ShortcutManager();
+        manager.AddShortcutHandler(new TestShortcutHandler(Shortcut.VsCode.Name));
+        manager.AddShortcutHandler(new TestShortcutHandler(Shortcut.VsCodeWeb.Name));
+        var card = new EntityCardViewModel(entity);
+        card.SetShortcutContext(this.mainWindowViewModel, manager);
+        await card.ResolveShortcutsAsync();
+        AssertMetadata(card.Shortcuts);
+        AssertMetadata(await EntityShortcutViewModel.PopulateShortcutsAsync(this.mainWindowViewModel, entity, manager));
+        entity.UpdateSnapshot(CreateSnapshot("note"));
+        await card.ResolveShortcutsAsync();
+        AssertMetadata(card.Shortcuts);
+
+        void AssertMetadata(System.Collections.Generic.IReadOnlyCollection<EntityShortcutViewModel> shortcuts)
+        {
+            Assert.Equal(2, shortcuts.Count);
+            foreach (var shortcut in shortcuts)
+            {
+                var definition = shortcut.Shortcut.Name == "VsCode" ? Shortcut.VsCode : Shortcut.VsCodeWeb;
+                Assert.Same(definition, shortcut.Shortcut);
+                Assert.Same(definition.Content, shortcut.Shortcut.Content);
+                Assert.Same(entity, shortcut.Entity);
+                Assert.Same(manager, shortcut.ShortcutManager);
+            }
+        }
+    }
+
+    [AvaloniaFact]
     public async Task EntityCardViewModel_ExternalAndNote_SnapshotUpdateRefreshesLinksAndContent()
     {
         var broker = await EntityBroker.CreateInitializedAsync(

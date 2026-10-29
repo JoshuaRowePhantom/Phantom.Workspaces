@@ -22,13 +22,25 @@ public sealed class Shortcut : IEquatable<Shortcut>
     public static Shortcut Edit { get; } = new("Edit", "✏️");
     public static Shortcut Clone { get; } = new("Clone", "⧉");
     public static Shortcut Review { get; } = new("Review", "±");
-    public static Shortcut VsCode { get; } = new("VsCode", "⌨");
-    public static Shortcut VsCodeWeb { get; } = new("VsCodeWeb", "🌐");
+    public static Shortcut VsCode { get; } = new("VsCode", "⌨")
+    {
+        Content = new ShortcutImageContent(ShortcutImageResource.VisualStudioCode),
+    };
+    public static Shortcut VsCodeWeb { get; } = new("VsCodeWeb", "🌐")
+    {
+        Content = new ShortcutCompositeContent(
+        [
+            new ShortcutImageContent(ShortcutImageResource.VisualStudioCode),
+            new ShortcutTextContent("🌐"),
+        ]),
+    };
     public static Shortcut CopyEntityId { get; } = new("CopyEntityId", "📋");
 
     public string Name { get; }
 
     public string Label { get; }
+
+    public ShortcutContent? Content { get; init; }
 
     public string HoverText => this.Name switch
     {

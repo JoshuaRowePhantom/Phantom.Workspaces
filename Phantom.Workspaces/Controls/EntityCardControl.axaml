@@ -68,9 +68,10 @@
                             </ItemsControl.ItemsPanel>
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
-                                    <Button Content="{Binding Shortcut.Label}"
-                                            ContentTemplate="{StaticResource CopyableCardButtonContentTemplate}"
+                                    <Button Content="{Binding Shortcut}"
+                                            ContentTemplate="{StaticResource ShortcutButtonContentTemplate}"
                                             ToolTip.Tip="{Binding Shortcut.HoverText}"
+                                            AutomationProperties.Name="{Binding Shortcut.HoverText}"
                                             IsEnabled="{Binding IsEnabled}"
                                             Classes="entity-card-action-button"
                                             Command="{Binding $parent[ItemsControl].DataContext.ActivateShortcutCommand}"

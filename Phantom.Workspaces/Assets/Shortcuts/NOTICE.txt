@@ -1,0 +1,14 @@
+Visual Studio Code stable icon (vscode.png), unchanged official PNG.
+Source: https://code.visualstudio.com/assets/branding/visual-studio-code-icons.zip
+Archive version: 2021-06-21. Retrieved: 2026-10-29.
+PNG SHA-256: 7ac29e00cd66e549acc2ea6a99a813f92cb23a6d165293be6959845670f0c5a4
+
+Applicable icon/name guidelines: https://code.visualstudio.com/brand
+Used solely to identify "Open in VS Code" actions under the guidelines'
+"Action buttons and links" section, not as Phantom branding or endorsement.
+The unchanged stable mark is displayed with 25% clear space. The adjacent
+globe is a separate indicator, not an official web logo or modification.
+No MIT license or broader trademark rights are asserted for this artwork.
+
+Visual Studio Code, VS Code, and the Visual Studio Code icon are trademarks
+of Microsoft Corporation. All rights reserved.

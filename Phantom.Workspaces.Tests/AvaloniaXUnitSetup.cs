@@ -70,6 +70,11 @@ public static class AvaloniaTestAppBuilder
             Resources.MergedDictionaries.Add(
                 new ResourceInclude(new Uri("avares://Phantom.Workspaces.Tests/"))
                 {
+                    Source = new Uri("avares://Phantom.Workspaces/Templates/ShortcutContentTemplates.axaml")
+                });
+            Resources.MergedDictionaries.Add(
+                new ResourceInclude(new Uri("avares://Phantom.Workspaces.Tests/"))
+                {
                     Source = new Uri("avares://Phantom.Workspaces/Templates/TabHeaderItemTemplates.axaml")
                 });
 
