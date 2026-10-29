@@ -57,6 +57,171 @@ public sealed class MainWindowTabCommandsIntegrationTests
         }
     }
 
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task RestartSession_RepeatedMenuOpen_PreservesDefaultsWithoutDuplicates()
+    {
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        viewModel.AgentSessionRestartService = new RecordingRestartService();
+        viewModel.AgentSessionRestartConsentProvider = new DelegateConsentProvider((_, _) => Task.FromResult(true));
+
+        await viewModel.OpenTabAsync(CreateSessionTab("session-a"));
+        await viewModel.OpenTabAsync(CreateSessionTab("session-b"));
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            var contentTabStrip = await WaitForContentTabStripAsync(window);
+            var tabItem = contentTabStrip
+                .GetVisualDescendants()
+                .OfType<DocumentTabStripItem>()
+                .Single(item => item.DataContext is WorkspaceDocument { Id: "tab-session-a" });
+            var menu = Assert.IsType<ContextMenu>(tabItem.DocumentContextMenu);
+            var factory = new WorkspaceDocumentMenuFactory();
+
+            factory.Apply(menu, tabItem);
+            var defaultHeaders = menu.Items.OfType<MenuItem>()
+                .Where(item => !Equals(item.Header, "Restart agent session…"))
+                .Select(item => item.Header)
+                .ToList();
+            Assert.NotEmpty(defaultHeaders);
+
+            factory.Apply(menu, tabItem);
+            factory.Apply(menu, tabItem);
+
+            Assert.Single(menu.Items.OfType<MenuItem>(), item => Equals(item.Header, "Restart agent session…"));
+            var afterHeaders = menu.Items.OfType<MenuItem>()
+                .Where(item => !Equals(item.Header, "Restart agent session…"))
+                .Select(item => item.Header)
+                .ToList();
+            Assert.Equal(defaultHeaders, afterHeaders);
+        }
+        finally
+        {
+            await MainWindowIntegrationTests.CloseWindowAsync(window);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task DocumentContextMenu_RenderedSplitFloatAndRestore_TargetsExactContent()
+    {
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        viewModel.AgentSessionRestartConsentProvider = new DelegateConsentProvider((_, _) => Task.FromResult(true));
+
+        await viewModel.OpenTabAsync(CreateSessionTab("session-a"));
+        await viewModel.OpenTabAsync(CreateSessionTab("session-b"));
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            var contentTabStrip = await WaitForContentTabStripAsync(window);
+            var renderedItems = contentTabStrip
+                .GetVisualDescendants()
+                .OfType<DocumentTabStripItem>()
+                .Where(item => item.DataContext is WorkspaceDocument)
+                .ToList();
+            Assert.Equal(2, renderedItems.Count);
+            var factory = new WorkspaceDocumentMenuFactory();
+
+            // Each rendered content container targets its own exact document, not the active tab.
+            foreach (var item in renderedItems)
+            {
+                var document = (WorkspaceDocument)item.DataContext!;
+                var expectedSessionId = document.Id["tab-".Length..];
+                var restartService = new RecordingRestartService();
+                viewModel.AgentSessionRestartService = restartService;
+
+                var menu = Assert.IsType<ContextMenu>(item.DocumentContextMenu);
+                factory.Apply(menu, item);
+                var restartItem = Assert.Single(
+                    menu.Items.OfType<MenuItem>(),
+                    menuItem => Equals(menuItem.Header, "Restart agent session…"));
+                Assert.NotNull(restartItem.Command);
+
+                restartItem.Command!.Execute(null);
+                var request = await restartService.LastRequest.Task;
+                Assert.Equal(expectedSessionId, request.SessionId);
+
+                factory.Clear(menu);
+            }
+        }
+        finally
+        {
+            await MainWindowIntegrationTests.CloseWindowAsync(window);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task DocumentContextMenu_KeyboardOpenAndConcurrentMenus_PreserveDefaultsAndTargets()
+    {
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        viewModel.AgentSessionRestartConsentProvider = new DelegateConsentProvider((_, _) => Task.FromResult(true));
+
+        await viewModel.OpenTabAsync(CreateSessionTab("session-a"));
+        await viewModel.OpenTabAsync(CreateSessionTab("session-b"));
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            var contentTabStrip = await WaitForContentTabStripAsync(window);
+            var renderedItems = contentTabStrip
+                .GetVisualDescendants()
+                .OfType<DocumentTabStripItem>()
+                .Where(item => item.DataContext is WorkspaceDocument)
+                .ToList();
+            Assert.Equal(2, renderedItems.Count);
+
+            var itemA = renderedItems.Single(item => item.DataContext is WorkspaceDocument { Id: "tab-session-a" });
+            var itemB = renderedItems.Single(item => item.DataContext is WorkspaceDocument { Id: "tab-session-b" });
+            var factory = new WorkspaceDocumentMenuFactory();
+
+            // The rendered content containers share a single ContextMenu instance that is
+            // retargeted on each open; reopening it for a different tab must drop the old
+            // target, preserve the default items, and never accumulate duplicate restart items.
+            var menu = Assert.IsType<ContextMenu>(itemA.DocumentContextMenu);
+            var defaultHeaders = menu.Items.OfType<MenuItem>().Select(item => item.Header).ToList();
+
+            await AssertRetargetsAsync(factory, menu, itemA, "session-a", defaultHeaders);
+            await AssertRetargetsAsync(factory, menu, itemB, "session-b", defaultHeaders);
+            await AssertRetargetsAsync(factory, menu, itemA, "session-a", defaultHeaders);
+        }
+        finally
+        {
+            await MainWindowIntegrationTests.CloseWindowAsync(window);
+        }
+
+        async Task AssertRetargetsAsync(
+            WorkspaceDocumentMenuFactory factory,
+            ContextMenu menu,
+            DocumentTabStripItem item,
+            string expectedSessionId,
+            IReadOnlyList<object?> defaultHeaders)
+        {
+            factory.Apply(menu, item);
+
+            var restartItem = Assert.Single(
+                menu.Items.OfType<MenuItem>(),
+                menuItem => Equals(menuItem.Header, "Restart agent session…"));
+            var preserved = menu.Items.OfType<MenuItem>()
+                .Where(menuItem => !Equals(menuItem.Header, "Restart agent session…"))
+                .Select(menuItem => menuItem.Header)
+                .ToList();
+            Assert.Equal(defaultHeaders, preserved);
+
+            var restartService = new RecordingRestartService();
+            viewModel.AgentSessionRestartService = restartService;
+            restartItem.Command!.Execute(null);
+            Assert.Equal(expectedSessionId, (await restartService.LastRequest.Task).SessionId);
+
+            factory.Clear(menu);
+        }
+    }
+
     private static async Task<DocumentTabStrip> WaitForContentTabStripAsync(Window window)
     {
         var completion = new TaskCompletionSource<DocumentTabStrip>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -137,8 +302,12 @@ public sealed class MainWindowTabCommandsIntegrationTests
 
     private sealed class RecordingRestartService : IAgentSessionRestartService
     {
+        private readonly object gate = new();
+
         public TaskCompletionSource<AgentSessionRestartRequest> LastRequest { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public List<AgentSessionRestartRequest> AllRequests { get; } = [];
 
         public AgentSessionRestartAvailability GetAvailability(
             AgentSessionWorkspaceTabViewModel tab,
@@ -152,6 +321,11 @@ public sealed class MainWindowTabCommandsIntegrationTests
             AgentSessionRestartRequest request,
             CancellationToken cancellationToken)
         {
+            lock (this.gate)
+            {
+                this.AllRequests.Add(request);
+            }
+
             this.LastRequest.TrySetResult(request);
             return Task.FromResult(new AgentSessionRestartResult
             {

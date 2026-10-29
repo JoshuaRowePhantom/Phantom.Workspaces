@@ -61,8 +61,19 @@ internal sealed class WorkspaceDocumentMenuFactory
             contributedItems.Add(CreateContributionSeparator());
         }
 
+        string? previousGroup = null;
         foreach (var entry in descriptors)
         {
+            // Normalize contribution-group separators after visibility filtering: a single
+            // separator between distinct contribution groups, none leading/trailing/doubled.
+            if (previousGroup is not null
+                && !string.Equals(previousGroup, entry.Descriptor.Group, StringComparison.Ordinal))
+            {
+                contributedItems.Add(CreateContributionSeparator());
+            }
+
+            previousGroup = entry.Descriptor.Group;
+
             var menuItem = new MenuItem
             {
                 Header = entry.Descriptor.Header,
