@@ -1,4 +1,5 @@
 using Phantom.Workspaces.Services.Navigation;
+using Phantom.Workspaces.Services.TabCommands;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -80,4 +81,9 @@ public abstract class WorkspaceTabViewModel : ViewModelBase
     /// Overridden by tab types that run background work (e.g. agent sessions).
     /// </summary>
     public virtual IStatusItem? TabStatus => null;
+
+    /// <summary>
+    /// Optional contributed tab commands for document-tab menu and keyboard invocation surfaces.
+    /// </summary>
+    public virtual ITabCommandProvider TabCommands => EmptyTabCommandProvider.Instance;
 }

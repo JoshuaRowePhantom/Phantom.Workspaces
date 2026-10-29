@@ -31,6 +31,7 @@ using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.DevTunnel;
 using Phantom.Workspaces.Services.Navigation;
 using Phantom.Workspaces.Services.Notifications;
+using Phantom.Workspaces.Services.TabCommands;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.ReverseHttp;
 using Phantom.Workspaces.ViewModels.Configuration;
@@ -3275,6 +3276,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     internal IAgentSessionCloseDecisionProvider AgentSessionCloseDecisionProvider { get; set; }
         = new AgentSessionCloseDecisionProvider();
+
+    internal IAgentSessionRestartService AgentSessionRestartService { get; set; }
+        = UnavailableAgentSessionRestartService.Instance;
+
+    internal IAgentSessionRestartConsentProvider AgentSessionRestartConsentProvider { get; set; }
+        = new AgentSessionRestartConsentProvider();
+
+    internal TabCommandInvoker TabCommandInvoker { get; } = new();
 
     private readonly Dictionary<WorkspaceTabViewModel, Task<bool>> pendingTabCloses = [];
 

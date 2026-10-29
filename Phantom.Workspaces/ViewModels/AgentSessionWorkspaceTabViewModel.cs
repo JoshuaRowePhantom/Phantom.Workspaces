@@ -12,6 +12,7 @@ using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Notifications;
+using Phantom.Workspaces.Services.TabCommands;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -41,6 +42,8 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
     private bool isRemote;
     private string? remoteProfileDisplayName;
     private bool hasModalsNeedingInput;
+    private bool isRestartInProgress;
+    private string? restartError;
     private bool disposed;
     private CancellationTokenSource startupCancellation = new();
 
@@ -112,6 +115,18 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
         private set => this.SetProperty(ref this.hasModalsNeedingInput, value);
     }
 
+    public bool IsRestartInProgress
+    {
+        get => this.isRestartInProgress;
+        private set => this.SetProperty(ref this.isRestartInProgress, value);
+    }
+
+    public string? RestartError
+    {
+        get => this.restartError;
+        private set => this.SetProperty(ref this.restartError, value);
+    }
+
     /// <summary>
     /// The workspace-pane id the tab currently lives in.
     /// Init-stamped from the creating handler's <c>SelectedWorkspacePane?.Id</c>; overwritten
@@ -143,6 +158,8 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
     public event EventHandler<int>? GoToWorkspacePaneAtIndexRequested;
 
     public override IStatusItem TabStatus => this.tabStatus;
+
+    public override ITabCommandProvider TabCommands => AgentSessionTabCommandProvider.Instance;
 
     public void RaiseAltKeyStateChanged(bool isAltHeld)
     {
@@ -526,5 +543,21 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
 
         this.loggerFactory?.Dispose();
         await base.DisposeAsync();
+    }
+
+    internal void SetRestartInProgress(bool value)
+    {
+        if (this.SetProperty(ref this.isRestartInProgress, value))
+        {
+            AgentSessionTabCommandProvider.Instance.NotifyCommandsChanged();
+        }
+    }
+
+    internal void SetRestartError(string? value)
+    {
+        if (this.SetProperty(ref this.restartError, value))
+        {
+            AgentSessionTabCommandProvider.Instance.NotifyCommandsChanged();
+        }
     }
 }
