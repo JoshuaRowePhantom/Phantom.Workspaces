@@ -123,6 +123,8 @@ public sealed record AgentServices : IServiceProvider
     /// </summary>
     public Action<string, string>? McpCredentialStatusReporter { get; init; }
 
+    internal Func<HttpMessageHandler>? McpHttpMessageHandlerFactory { get; init; }
+
     /// <summary>
     /// Optional per-component executor bindings (issue #1438, per-component-executor-binding): the
     /// manifest-resolved map of component executor names to transport connection-descriptors, plus

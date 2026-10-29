@@ -111,7 +111,8 @@ internal sealed class McpBrokerClientTransport : IClientTransport, IAsyncDisposa
             }
             var borrowedHandler = new SensitiveUseHandler(lease, endpoint, null)
             {
-                InnerHandler = new SocketsHttpHandler { AllowAutoRedirect = false },
+                InnerHandler = services.McpHttpMessageHandlerFactory?.Invoke()
+                    ?? new SocketsHttpHandler { AllowAutoRedirect = false },
             };
             return await CreateOwnedTransportAsync(endpoint, transportMode, borrowedHandler, null, loggerFactory).ConfigureAwait(false);
         }
@@ -160,10 +161,18 @@ internal sealed class McpBrokerClientTransport : IClientTransport, IAsyncDisposa
                 SafeDisplayName = "Stored MCP credential",
             }],
         };
+        var serverName = tool.ServerName ?? tool.Name ?? "(mcp server)";
+        services.McpCredentialStatusReporter?.Invoke(serverName, $"Waiting for authorization for MCP server '{serverName}'.");
         var result = RequireResult(await broker.AcquireAsync(request, cancellationToken).ConfigureAwait(false), cancellationToken);
+        if (cancellationToken.IsCancellationRequested)
+        {
+            await result.DisposeAsync().ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
         var handler = new SensitiveUseHandler(result.Lease, endpoint, null)
         {
-            InnerHandler = new SocketsHttpHandler { AllowAutoRedirect = false },
+            InnerHandler = services.McpHttpMessageHandlerFactory?.Invoke()
+                ?? new SocketsHttpHandler { AllowAutoRedirect = false },
         };
         return await CreateOwnedTransportAsync(endpoint, transportMode, handler, result, loggerFactory).ConfigureAwait(false);
     }

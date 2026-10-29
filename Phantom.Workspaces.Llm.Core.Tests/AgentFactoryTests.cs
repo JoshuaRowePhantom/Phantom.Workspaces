@@ -18,6 +18,66 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 public class AgentFactoryTests
 {
     [Fact]
+    public async Task CreateAgentChatAsync_NoBroker_OptionalCredentialDoesNotPreventFirstAnswer()
+    {
+        var environment = new McpCredentialTestEnvironment();
+        var client = McpCredentialTestEnvironment.Client();
+        await using var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+        {
+            AgentDefinition = McpCredentialTestEnvironment.Definition(),
+            AgentServices = environment.Services(client) with { AccessBroker = null },
+            PersistenceStoreFactory = (_, _) => ValueTask.FromResult<IAgentPersistenceStore>(new InMemoryAgentPersistenceStore()),
+        });
+        await McpCredentialTestEnvironment.AssertUsableUnavailableAsync(chat, client, environment, expectedRequests: 0);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("failed")]
+    [InlineData("denied")]
+    [InlineData("cancelled")]
+    [InlineData("reacquisition")]
+    [InlineData("authorization")]
+    public async Task CreateAgentChatAsync_RequiredCoreCredentialIsUnavailable_FailsClosed(string outcome)
+    {
+        var environment = new McpCredentialTestEnvironment
+        {
+            Acquire = (_, _) => Task.FromResult(McpCredentialTestEnvironment.Failure(outcome)),
+        };
+        var exception = await Record.ExceptionAsync(() => AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+        {
+            AgentDefinition = McpCredentialTestEnvironment.Definition(required: true),
+            AgentServices = environment.Services(McpCredentialTestEnvironment.Client()),
+            PersistenceStoreFactory = (_, _) => ValueTask.FromResult<IAgentPersistenceStore>(new InMemoryAgentPersistenceStore()),
+        }));
+        Assert.True(exception is SecretMaterializationRefusedException or SecretMaterializationFailedException);
+        Assert.Equal("Required", Assert.Single(environment.Requests).Reference.Name);
+        Assert.Empty(environment.HttpRequests);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("failed")]
+    [InlineData("denied")]
+    [InlineData("cancelled")]
+    [InlineData("reacquisition")]
+    [InlineData("authorization")]
+    public async Task CreateAgentChatAsync_McpCredentialIsUnavailable_ChatStaysUsableAndServerIsUnavailable(string outcome)
+    {
+        var environment = new McpCredentialTestEnvironment
+        {
+            Acquire = (_, _) => Task.FromResult(McpCredentialTestEnvironment.Failure(outcome)),
+        };
+        var client = McpCredentialTestEnvironment.Client();
+        await using var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+        {
+            AgentDefinition = McpCredentialTestEnvironment.Definition(),
+            AgentServices = environment.Services(client),
+            PersistenceStoreFactory = (_, _) => ValueTask.FromResult<IAgentPersistenceStore>(new InMemoryAgentPersistenceStore()),
+        });
+        await McpCredentialTestEnvironment.AssertUsableUnavailableAsync(chat, client, environment);
+    }
+    [Fact]
     public async Task AgentFactory_CreateAgentChat_SessionDefinitionWithSecret_MaterializesWithoutManifest()
     {
         // #1401: a session launch passes a prebuilt AgentDefinition and NO manifest. The inverted
@@ -126,45 +186,28 @@ public class AgentFactoryTests
     [Fact]
     public async Task CreateChatClientAsync_McpToolSecretPlaceholder_TransportReceivesResolvedSecretNotRawPlaceholder()
     {
-        // #1405: the shared gate materializes an MCP tool's ${SECRET:GitHubToken} into an opaque
-        // handle registered with the resolver, so when McpTransportFactory builds the transport via
-        // ResolveRequiredSecretOrEnvAsync (the exact seam in the reported stack trace) the resolved
-        // secret — never the raw ${SECRET:GitHubToken} placeholder — reaches the transport.
-        const string plaintext = "resolved-github-token";
-        var provider = new Secrets.ManifestAccessTestBroker { Material = plaintext };
-        var definition = AgentDefinition.FromJson("""
-        {
-          "kind": "prompt",
-          "name": "mcp-agent",
-          "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
-          "tools": [
-            {
-              "kind": "mcp",
-              "name": "github-secret-gated",
-              "serverName": "github-secret-gated",
-              "connection": { "kind": "key", "endpoint": "http://127.0.0.1:1/", "apiKey": "${SECRET:GitHubToken}" },
-              "approvalMode": { "kind": "never" }
-            }
-          ]
-        }
-        """) ?? throw new InvalidOperationException("Failed to load definition.");
-
+        var environment = new McpCredentialTestEnvironment();
         var (materializedDefinition, materializedServices) = await AgentFactory.MaterializeSecretsIfNeededAsync(
-            definition,
-            new AgentServices { AccessBroker = provider },
+            McpCredentialTestEnvironment.Definition(),
+            environment.Services(McpCredentialTestEnvironment.Client()),
             manifest: null,
             agentSessionId: null,
             CancellationToken.None);
-
-        Assert.Single(provider.Requests);
-        var rewrittenApiKey = Regex.Match(materializedDefinition!.ToJson(), "\\$\\{SECRET:[^}]+\\}").Value;
-        Assert.NotEqual("${SECRET:GitHubToken}", rewrittenApiKey);
-        Assert.DoesNotContain("${SECRET:GitHubToken}", materializedDefinition.ToJson(), StringComparison.Ordinal);
-
-        var resolver = Assert.IsAssignableFrom<ISecretPlaceholderResolver>(materializedServices!.SecretPlaceholderResolver);
-        Assert.True(resolver.TryResolve(rewrittenApiKey, out var lease));
-        Assert.Equal(plaintext, await AgentAccessTestBroker.UseLeaseAsync(lease!));
-        await resolver.DisposeAsync();
+        Assert.Empty(environment.Requests);
+        var tool = Assert.IsAssignableFrom<McpTool>(Assert.Single(AgentFactory.ExtractTools(materializedDefinition!)!));
+        var transport = await Mcp.McpTransportFactory.CreateMcpTransportAsync(
+            tool, materializedServices, NullLoggerFactory.Instance, CancellationToken.None);
+        await using var owner = (IAsyncDisposable)transport;
+        await using var client = await ModelContextProtocol.Client.McpClient.CreateAsync(
+            transport, cancellationToken: CancellationToken.None);
+        Assert.Single(await McpClientToolListing.ListToolsAsync(client, CancellationToken.None));
+        Assert.Single(environment.Requests);
+        Assert.True(environment.HttpRequests["optional.test"] > 0);
+        await client.DisposeAsync();
+        await owner.DisposeAsync();
+        Assert.IsType<Phantom.Workspaces.Llm.Interfaces.Access.SensitiveValueUseFailed<int>>(
+            await Assert.Single(environment.Results).Lease.UseAsync((_, _) => ValueTask.FromResult(1),
+                CancellationToken.None));
     }
 
     [Fact]

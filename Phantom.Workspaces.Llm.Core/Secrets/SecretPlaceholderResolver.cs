@@ -7,9 +7,19 @@ public sealed class SecretPlaceholderResolver : ISecretPlaceholderResolver
 {
     private readonly Dictionary<string, StoredSecretAccessResult> results = [];
     private readonly object gate = new();
+    private readonly ISecretPlaceholderResolver? parent;
     private bool disposed;
 
     public static ISecretPlaceholderResolver Empty { get; } = new SecretPlaceholderResolver();
+
+    public SecretPlaceholderResolver()
+    {
+    }
+
+    internal SecretPlaceholderResolver(ISecretPlaceholderResolver? parent)
+    {
+        this.parent = parent;
+    }
 
     public void Register(
         string placeholder,
@@ -28,8 +38,15 @@ public sealed class SecretPlaceholderResolver : ISecretPlaceholderResolver
     {
         lock (this.gate)
         {
-            lease = !this.disposed && this.results.TryGetValue(placeholder, out var result) ? result.Lease : null;
-            return lease is not null;
+            lease = null;
+            if (this.disposed)
+                return false;
+            if (this.results.TryGetValue(placeholder, out var result))
+            {
+                lease = result.Lease;
+                return true;
+            }
+            return this.parent?.TryResolve(placeholder, out lease) == true;
         }
     }
 
