@@ -12,6 +12,91 @@ namespace Phantom.Workspaces.Tests;
 public sealed class RunningAgentSessionDisplaySubscriptionTests
 {
     [Fact]
+    public async Task PersistedEntityAddedThenRemoved_AppliesLateMetadataAndUnsubscribesRemovedEntity()
+    {
+        await using var repository = await EntityRepository.CreateAsync(new UnknownRepositorySource());
+        repository.SetDataAccessLayerForTesting(new InMemoryDataAccessLayer());
+        var broker = new EntityBroker(repository);
+        var sessionId = new AgentSessionId("late-session");
+        var record = CreateRecord(sessionId, "");
+        var records = new ObservableCollection<RunningAgentChatWithEntityInfo> { record };
+        var table = new Mock<IRunningAgentChatTable>();
+        table.SetupGet(value => value.RunningSessions).Returns(records);
+        table.Setup(value => value.ApplyAuthoritativeDisplayName(sessionId, It.IsAny<string?>()))
+            .Callback<AgentSessionId, string?>((_, name) => record.ApplyAuthoritativeDisplayName(name));
+        using var subscription = await RunningAgentSessionDisplaySubscription.CreateAsync(
+            broker,
+            table.Object,
+            TestContext.Current.CancellationToken);
+        using var row = new RunningAgentRowViewModel(
+            record,
+            workspacePaneTitle: null,
+            tabTitle: null,
+            entityName: null,
+            hasOpenTab: false,
+            isThinking: false,
+            activateCommand: new RelayCommand(_ => { }),
+            interruptAsync: _ => Task.CompletedTask,
+            terminateAsync: _ => Task.CompletedTask,
+            setContinueInBackgroundAsync: (_, _) => Task.CompletedTask);
+        Assert.False(row.HasOpenTab);
+        Assert.Equal("Agent session late-ses", row.SessionTitle);
+
+        var entityId = new EntityId(Guid.NewGuid());
+        var data = JsonSerializer.SerializeToElement(new Dictionary<string, object?>
+        {
+            ["entity-types"] = new[] { "agent-session" },
+            ["agent-session-id"] = sessionId.Value,
+            ["display-name"] = new Dictionary<string, string> { ["default"] = "Late persisted title" },
+        });
+        await broker.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "Create late session metadata" } },
+            Changes = [new EntityChange { EntityId = entityId, Data = data, EntityChangeMode = EntityChangeMode.Replace }],
+        }, TestContext.Current.CancellationToken);
+        Assert.Equal("Late persisted title", row.SessionTitle);
+        var entity = Assert.Single(await broker.GetEntitiesAsync([entityId], TestContext.Current.CancellationToken));
+        await entity.SaveDisplayNameAsync("Late rename");
+        Assert.Equal("Late rename", row.SessionTitle);
+
+        await broker.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "Remove session metadata" } },
+            Changes =
+            [
+                new EntityChange
+                {
+                    EntityId = entityId,
+                    ConcurrencyTag = entity.Snapshot.ConcurrencyTag,
+                    Data = null,
+                    EntityChangeMode = EntityChangeMode.Replace,
+                },
+            ],
+        }, TestContext.Current.CancellationToken);
+        var titleAfterRemoval = row.SessionTitle;
+        table.Invocations.Clear();
+
+        // A retained view model can still change after query removal; it must no longer publish.
+        entity.UpdateSnapshot(new EntitySnapshot
+        {
+            EntityId = entityId,
+            ConcurrencyTag = entity.Snapshot.ConcurrencyTag,
+            ModifiedTime = entity.Snapshot.ModifiedTime,
+            Data = data,
+            Relationships = [],
+        });
+        table.Verify(
+            value => value.ApplyAuthoritativeDisplayName(It.IsAny<AgentSessionId>(), It.IsAny<string?>()),
+            Times.Never);
+        Assert.Equal(titleAfterRemoval, row.SessionTitle);
+        records.Remove(record);
+        records.Add(record);
+        table.Verify(
+            value => value.ApplyAuthoritativeDisplayName(It.IsAny<AgentSessionId>(), It.IsAny<string?>()),
+            Times.Never);
+    }
+
+    [Fact]
     public async Task PersistedRename_WithoutViewers_UpdatesCurrentRecordAndDefaultHeaders()
     {
         await using var repository = await EntityRepository.CreateAsync(new UnknownRepositorySource());

@@ -570,6 +570,85 @@ public sealed class RunningAgentChatTableTests
         Assert.Empty(table.RunningSessions);
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("launch-repair")]
+    public async Task AcquireAsync_LaterLaunchOnlyName_RepairsSameRuntimeAndNotifiesOnlyOnChange(string initialName)
+    {
+        var table = new RunningAgentChatTable(new FakeRunningAgentChatFactory());
+        var sessionId = new AgentSessionId("launch-repair");
+        await using var first = await table.AcquireAsync(
+            Request(sessionId, entityName: initialName),
+            TestContext.Current.CancellationToken);
+        var record = Assert.Single(table.RunningSessions);
+        Assert.Equal("Agent session launch-r", record.SessionTitle);
+        var notifications = new List<string>();
+        record.PropertyChanged += (_, change) =>
+        {
+            if (change.PropertyName == nameof(record.SessionTitle))
+                notifications.Add(record.SessionTitle);
+        };
+
+        await using var second = await table.AcquireAsync(
+            Request(sessionId, entityName: "Useful launch name"),
+            TestContext.Current.CancellationToken);
+        Assert.Same(record, Assert.Single(table.RunningSessions));
+        Assert.Same(first.AgentChat, second.AgentChat);
+        Assert.Equal("Useful launch name", record.SessionTitle);
+        Assert.Equal(["Useful launch name"], notifications);
+
+        await using var third = await table.AcquireAsync(
+            Request(sessionId, entityName: "Useful launch name"),
+            TestContext.Current.CancellationToken);
+        await using var fourth = await table.AcquireAsync(
+            Request(sessionId, entityName: ""),
+            TestContext.Current.CancellationToken);
+        Assert.Same(record, Assert.Single(table.RunningSessions));
+        Assert.Same(first.AgentChat, fourth.AgentChat);
+        Assert.Equal("Useful launch name", record.SessionTitle);
+        Assert.Equal(["Useful launch name"], notifications);
+    }
+
+    [Theory]
+    [InlineData("", "Canonical remote title", "Canonical remote title")]
+    [InlineData("remote-title", "Canonical remote title", "Canonical remote title")]
+    [InlineData("Stale name", "Canonical remote title", "Canonical remote title")]
+    [InlineData("", null, "Agent session remote-t")]
+    [InlineData("remote-title", null, "Agent session remote-t")]
+    [InlineData("Launch title", null, "Launch title")]
+    public async Task AcquireAsync_RemoteTitle_PrefersPersistedCanonicalNameThenLaunchOrStableFallback(
+        string launchName,
+        string? canonicalName,
+        string expectedTitle)
+    {
+        var factory = new FakeRunningAgentChatFactory();
+        var table = new RunningAgentChatTable(factory, new FakeRuntimeContextFactory());
+        var sessionId = new AgentSessionId("remote-title");
+        var entity = new JsonObject
+        {
+            ["host-profile-entity-id"] = "11111111-1111-1111-1111-111111111111",
+            ["ownership-generation"] = 2,
+        };
+        if (canonicalName is not null)
+            entity["display-name"] = new JsonObject { ["default"] = canonicalName };
+
+        await using var lease = await table.AcquireAsync(new AcquireAgentChatRequest
+        {
+            AgentSessionId = sessionId,
+            EntityName = launchName,
+            AgentSessionEntity = JsonSerializer.SerializeToElement(entity),
+            AcquisitionMode = AgentChatAcquisitionMode.AttachRemote,
+            OwningProfileTransport = new SnapshotTransport(sessionId.Value),
+        }, TestContext.Current.CancellationToken);
+
+        var record = Assert.Single(table.RunningSessions);
+        Assert.True(record.IsRemote);
+        Assert.Equal(sessionId, record.SessionId);
+        Assert.Equal(expectedTitle, record.SessionTitle);
+        Assert.IsType<RemoteAgentChat>(lease.AgentChat);
+        Assert.Empty(factory.RunningSessions);
+    }
+
     [Fact]
     public async Task AcquireAsync_LastLeaseDisposed_RemovesFromRunningSessions()
     {
