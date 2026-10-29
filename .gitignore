@@ -23,6 +23,7 @@ worktrees/
 mono_crash.*
 
 # Build results
+/.mxc/
 [Dd]ebug/
 [Dd]ebugPublic/
 [Rr]elease/

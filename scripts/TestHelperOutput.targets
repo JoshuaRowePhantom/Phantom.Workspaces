@@ -1,0 +1,40 @@
+<Project>
+  <Target Name="CopyTestHelperOutput"
+          AfterTargets="Build"
+          DependsOnTargets="PrepareProjectReferences"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <ItemGroup>
+      <_TestHelperReference Include="@(_MSBuildProjectReferenceExistent)"
+                            Condition="'%(_MSBuildProjectReferenceExistent.CopyTestHelper)' == 'true'" />
+    </ItemGroup>
+    <!-- Match ResolveProjectReferences so configuration, framework selection and removed
+         global properties describe the producer that the project-reference graph built. -->
+    <MSBuild Projects="@(_TestHelperReference)"
+             Targets="GetTargetPath"
+             Properties="%(_TestHelperReference.SetConfiguration);%(_TestHelperReference.SetPlatform);%(_TestHelperReference.SetTargetFramework)"
+             RemoveProperties="%(_TestHelperReference.GlobalPropertiesToRemove);$(_GlobalPropertiesToRemoveFromProjectReferences)">
+      <Output TaskParameter="TargetOutputs" ItemName="_TestHelperTargetPath" />
+    </MSBuild>
+    <Error Condition="'@(_TestHelperTargetPath->Count())' != '1'"
+           Text="Exactly one evaluated test helper output is required." />
+    <PropertyGroup>
+      <_TestHelperDirectory>@(_TestHelperTargetPath->'%(RootDir)%(Directory)')</_TestHelperDirectory>
+      <_TestHelperName>@(_TestHelperTargetPath->'%(Filename)')</_TestHelperName>
+      <_TestHelperDestination>$(OutDir)@(_TestHelperReference->'%(TestHelperDestination)')</_TestHelperDestination>
+      <_TestHelperFullDestination>$([MSBuild]::EnsureTrailingSlash($([System.IO.Path]::GetFullPath('$(_TestHelperDestination)', '$(MSBuildProjectDirectory)'))))</_TestHelperFullDestination>
+    </PropertyGroup>
+    <Error Condition="$([System.String]::Copy('$(_TestHelperFullDestination)').StartsWith('$(_TestHelperDirectory)', System.StringComparison.OrdinalIgnoreCase))"
+           Text="Test helper destination must not be inside its producer output: $(_TestHelperFullDestination)" />
+    <ItemGroup>
+      <_RequiredTestHelperOutput Include="@(_TestHelperTargetPath);$(_TestHelperDirectory)$(_TestHelperName).exe;$(_TestHelperDirectory)$(_TestHelperName).deps.json;$(_TestHelperDirectory)$(_TestHelperName).runtimeconfig.json" />
+    </ItemGroup>
+    <Error Condition="!Exists('%(_RequiredTestHelperOutput.Identity)')"
+           Text="Required test helper output is missing: %(_RequiredTestHelperOutput.Identity)" />
+    <ItemGroup>
+      <_TestHelperFiles Include="$(_TestHelperDirectory)**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_TestHelperFiles)"
+          DestinationFiles="@(_TestHelperFiles->'$(_TestHelperDestination)%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+</Project>
