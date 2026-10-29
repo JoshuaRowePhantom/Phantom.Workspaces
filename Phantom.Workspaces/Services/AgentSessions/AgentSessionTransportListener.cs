@@ -37,6 +37,9 @@ public sealed class AgentSessionTransportListener : ITransportListener
             return null;
         lock (this.gate) ObjectDisposedException.ThrowIf(this.disposed, this);
         var stage = "validate-request";
+        var attempt = SessionAttachDiagnosticScope.ReadValidated(request);
+        string? agentSessionId = null;
+        string? ownerProfileEntityId = null;
         try
         {
             var peer = this.peerIdentityProvider.GetRequiredIdentity(channel);
@@ -62,6 +65,9 @@ public sealed class AgentSessionTransportListener : ITransportListener
 
             stage = "deserialize-open";
             var open = AgentSessionProtocolCodec.DeserializeOpen(request);
+            attempt ??= open.DiagnosticAttempt;
+            agentSessionId = open.AgentSessionId;
+            ownerProfileEntityId = open.ExpectedOwningProfileEntityId;
             if (open.OpenIntent == AgentSessionOpenIntent.Status)
             {
                 stage = "status";
@@ -87,14 +93,20 @@ public sealed class AgentSessionTransportListener : ITransportListener
         catch (Exception error)
         {
             var category = Categorize(error);
-            this.logger.LogError(
-                "Remote agent-session attach failed at {Stage} with category {ErrorCategory} and type {ErrorType}.",
+            var diagnosticId = Guid.NewGuid();
+            this.logger.LogError(error,
+                "Remote agent-session attach failed at {Stage} with category {ErrorCategory} and type {ErrorType}. "
+                + "attempt {Attempt}; agent-session-id {AgentSessionId}; owner-profile-entity-id {OwnerProfileEntityId}; diagnostic-id {DiagnosticId}.",
                 stage,
                 category,
-                error.GetType().Name);
+                error.GetType().Name,
+                attempt ?? "none",
+                agentSessionId ?? "unknown",
+                ownerProfileEntityId ?? "unknown",
+                diagnosticId);
             this.AttachFailed?.Invoke(
                 new AgentSessionAttachFailure(stage, category, error));
-            await WriteSanitizedErrorAsync(channel, error, ct).ConfigureAwait(false);
+            await WriteSanitizedErrorAsync(channel, error, diagnosticId, ct).ConfigureAwait(false);
             await channel.DisposeAsync().ConfigureAwait(false);
             return null;
         }
@@ -120,7 +132,7 @@ public sealed class AgentSessionTransportListener : ITransportListener
     }
 
     private static async ValueTask WriteSanitizedErrorAsync(
-        IMessageChannel channel, Exception error, CancellationToken ct)
+        IMessageChannel channel, Exception error, Guid correlationId, CancellationToken ct)
     {
         var (code, operation, message) = error switch
         {
@@ -130,7 +142,6 @@ public sealed class AgentSessionTransportListener : ITransportListener
                 ("takeover-blocked", "takeover", "The agent session takeover could not be completed."),
             _ => ("invalid-request", "attach", "The attach request could not be processed."),
         };
-        var correlationId = Guid.NewGuid();
         var completion = JsonSerializer.SerializeToElement(new Dictionary<string, object?>
         {
             ["code"] = code,

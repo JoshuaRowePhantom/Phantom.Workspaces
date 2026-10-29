@@ -628,6 +628,23 @@ public sealed class RunningAgentChatTableTests
     }
 
     [Fact]
+    public async Task AcquireAsync_RemoteRequestWithinDiagnosticScope_PropagatesAttemptToOpenRequest()
+    {
+        var table = new RunningAgentChatTable(
+            new FakeRunningAgentChatFactory(),
+            new FakeRuntimeContextFactory());
+        var transport = new SnapshotTransport("remote-attempt");
+
+        using var scope = SessionAttachDiagnosticScope.Begin();
+        var attempt = SessionAttachDiagnosticScope.CurrentAttempt;
+        await using var lease = await table.AcquireAsync(
+            RemoteRequest("remote-attempt", transport),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(attempt, transport.LastOpenRequest?.DiagnosticAttempt);
+    }
+
+    [Fact]
     public async Task AcquireAsync_InvalidRemoteCombination_RejectsBeforeFactoryMutation()
     {
         var factory = new FakeRunningAgentChatFactory();
@@ -1657,6 +1674,7 @@ public sealed class RunningAgentChatTableTests
 
         internal int ConnectCount { get; private set; }
         internal int DisposeCount { get; private set; }
+        internal AgentSessionOpenRequest? LastOpenRequest { get; private set; }
         internal TaskCompletionSource DisposedSource { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal Task Disposed => this.DisposedSource.Task;
@@ -1672,6 +1690,7 @@ public sealed class RunningAgentChatTableTests
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            this.LastOpenRequest = AgentSessionProtocolCodec.DeserializeOpen(request);
             this.ConnectCount++;
             return Task.FromResult<IMessageChannel>(this.channel);
         }

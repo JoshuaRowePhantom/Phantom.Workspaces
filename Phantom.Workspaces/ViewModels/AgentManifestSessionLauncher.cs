@@ -282,6 +282,15 @@ internal static class AgentManifestSessionLauncher
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(lifetimeToken, loadingTab.StartupCancellation);
         using var scope = Phantom.Workspaces.Transport.SessionAttachDiagnosticScope.Begin();
         var attempt = Phantom.Workspaces.Transport.SessionAttachDiagnosticScope.CurrentAttempt!;
+        var sessionEntityId = createdAgentSessionEntity.EntityId.ToString();
+        var agentSessionId = loadingTab.AgentSessionId
+            ?? (createdAgentSessionEntity.Data is JsonElement data
+                ? ReadStringProperty(data, "agent-session-id")
+                : null)
+            ?? "unknown";
+        var ownerProfileEntityId = createdAgentSessionEntity.Data is JsonElement ownerData
+            ? ReadOwnerProfileEntityId(ownerData) ?? "unknown"
+            : "unknown";
         var started = clock.GetTimestamp();
         var stage = "service-initialization";
         var logger = mainWindowViewModel.ApplicationServices.LoggerFactory
@@ -291,8 +300,14 @@ internal static class AgentManifestSessionLauncher
             stage = value;
             loadingTab.StartupProgress.Report(loadingTab.Title, value);
             logger.LogInformation(
-                "Session loading; attempt {Attempt}; stage {Stage}; elapsed-ms {ElapsedMs}; outcome started.",
-                attempt, stage, clock.GetElapsedTime(started).TotalMilliseconds);
+                "Session loading; attempt {Attempt}; stage {Stage}; elapsed-ms {ElapsedMs}; outcome started. "
+                + "session-entity-id {SessionEntityId}; agent-session-id {AgentSessionId}; owner-profile-entity-id {OwnerProfileEntityId}.",
+                attempt,
+                stage,
+                clock.GetElapsedTime(started).TotalMilliseconds,
+                sessionEntityId,
+                agentSessionId,
+                ownerProfileEntityId);
         }
         RunningAgentChatLease? lease = null;
         var transferred = false;
@@ -331,22 +346,53 @@ internal static class AgentManifestSessionLauncher
         }
         catch (OperationCanceledException) when (deadline.IsCancellationRequested)
         {
+            logger.LogInformation(
+                "Session loading; attempt {Attempt}; stage {Stage}; elapsed-ms {ElapsedMs}; outcome cancelled. "
+                + "session-entity-id {SessionEntityId}; agent-session-id {AgentSessionId}; owner-profile-entity-id {OwnerProfileEntityId}.",
+                attempt,
+                stage,
+                clock.GetElapsedTime(started).TotalMilliseconds,
+                sessionEntityId,
+                agentSessionId,
+                ownerProfileEntityId);
         }
-        catch (TimeoutException)
+        catch (TimeoutException error)
         {
-            logger.LogWarning(
-                "Session loading; attempt {Attempt}; stage {Stage}; elapsed-ms {ElapsedMs}; reason stage-timeout.",
-                attempt, stage, clock.GetElapsedTime(started).TotalMilliseconds);
+            logger.LogWarning(error,
+                "Session loading; attempt {Attempt}; stage {Stage}; elapsed-ms {ElapsedMs}; reason stage-timeout. "
+                + "session-entity-id {SessionEntityId}; agent-session-id {AgentSessionId}; owner-profile-entity-id {OwnerProfileEntityId}.",
+                attempt,
+                stage,
+                clock.GetElapsedTime(started).TotalMilliseconds,
+                sessionEntityId,
+                agentSessionId,
+                ownerProfileEntityId);
             if (loadingTab.State == AgentTabState.Loading)
                 loadingTab.SetFailed($"Session loading timed out at {stage}. Check remote reachability and retry opening the session.");
         }
         catch (Exception error)
         {
-            logger.LogWarning(
-                "Session loading; attempt {Attempt}; stage {Stage}; reason {Reason}.",
-                attempt, stage, error is RemoteAgentStatusException status ? status.ReasonCode : "session-load-failure");
+            var diagnosticId = error is RemoteAgentSessionException remote
+                ? remote.CorrelationId.ToString("D")
+                : "none";
+            logger.LogWarning(error,
+                "Session loading; attempt {Attempt}; stage {Stage}; elapsed-ms {ElapsedMs}; reason {Reason}. "
+                + "session-entity-id {SessionEntityId}; agent-session-id {AgentSessionId}; owner-profile-entity-id {OwnerProfileEntityId}; diagnostic-id {DiagnosticId}.",
+                attempt,
+                stage,
+                clock.GetElapsedTime(started).TotalMilliseconds,
+                error is RemoteAgentStatusException status ? status.ReasonCode : "session-load-failure",
+                sessionEntityId,
+                agentSessionId,
+                ownerProfileEntityId,
+                diagnosticId);
             if (loadingTab.State == AgentTabState.Loading)
-                loadingTab.SetFailed($"Session loading failed at {stage}. Check remote reachability and retry opening the session.");
+            {
+                var diagnosticSuffix = error is RemoteAgentSessionException remoteSession
+                    ? $" Diagnostic id: {remoteSession.CorrelationId:D}."
+                    : string.Empty;
+                loadingTab.SetFailed($"Session loading failed at {stage}. Check remote reachability and retry opening the session.{diagnosticSuffix}");
+            }
         }
         finally
         {
@@ -354,6 +400,16 @@ internal static class AgentManifestSessionLauncher
                 await openAgentSessionShortcutHandler.AwaitLoadingCleanupAsync(lease.DisposeAsync().AsTask(), logger);
         }
     }
+
+    private static string? ReadStringProperty(JsonElement data, string propertyName)
+        => data.TryGetProperty(propertyName, out var value)
+            && value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
+
+    private static string? ReadOwnerProfileEntityId(JsonElement entityData)
+        => ReadStringProperty(entityData, "host-profile-entity-id")
+            ?? ReadStringProperty(entityData, "owning-profile-entity-id");
 
     private static async Task DisposeLateLeaseAsync(
         Task<(RunningAgentChatLease Lease, ObservableLoggerFactory LoggerFactory)> task,

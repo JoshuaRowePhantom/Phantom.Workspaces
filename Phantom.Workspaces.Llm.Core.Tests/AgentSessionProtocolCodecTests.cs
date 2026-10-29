@@ -215,6 +215,24 @@ public sealed class AgentSessionProtocolCodecTests
     }
 
     [Fact]
+    public void AgentSessionOpenRequest_DiagnosticAttempt_IsOptionalAndValidated()
+    {
+        var attempt = Guid.NewGuid().ToString("N");
+        var withAttempt = AgentSessionProtocolCodec.SerializeOpen(
+            Open() with { DiagnosticAttempt = attempt });
+        Assert.Equal(attempt, withAttempt.GetProperty("diagnostic-attempt").GetString());
+        Assert.Equal(attempt, AgentSessionProtocolCodec.DeserializeOpen(withAttempt).DiagnosticAttempt);
+
+        var withoutAttempt = AgentSessionProtocolCodec.SerializeOpen(
+            Open() with { DiagnosticAttempt = null });
+        Assert.False(withoutAttempt.TryGetProperty("diagnostic-attempt", out _));
+        Assert.Null(AgentSessionProtocolCodec.DeserializeOpen(withoutAttempt).DiagnosticAttempt);
+
+        Assert.Throws<RemoteAgentProtocolException>(() =>
+            AgentSessionProtocolCodec.SerializeOpen(Open() with { DiagnosticAttempt = "not-a-guid" }));
+    }
+
+    [Fact]
     public void AgentSessionOpenRequest_InvalidVersionOrGeneration_RejectsInitialization()
     {
         Assert.Throws<RemoteAgentProtocolException>(() =>

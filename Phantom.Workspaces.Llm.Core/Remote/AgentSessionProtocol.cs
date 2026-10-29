@@ -39,6 +39,7 @@ public sealed record AgentSessionOpenRequest
     public required long ExpectedOwnershipGeneration { get; init; }
     public required AgentSessionOpenIntent OpenIntent { get; init; }
     public required string AttachmentToken { get; init; }
+    public string? DiagnosticAttempt { get; init; }
     public ReplayCursor? ReplayCursor { get; init; }
     public required IReadOnlyList<string> Capabilities { get; init; }
 }
@@ -492,6 +493,9 @@ internal static class AgentSessionProtocolCodec
         RequireText(value.AttachmentToken, nameof(value.AttachmentToken));
         if (!Guid.TryParseExact(value.AttachmentToken, "N", out _))
             throw Protocol("Attachment token must be a 128-bit hexadecimal value.");
+        if (value.DiagnosticAttempt is { } diagnosticAttempt
+            && !Guid.TryParseExact(diagnosticAttempt, "N", out _))
+            throw Protocol("Diagnostic attempt must be a 128-bit hexadecimal value.");
         if (value.ExpectedOwnershipGeneration < 0) throw Protocol("Ownership generation cannot be negative.");
         if (value.ReplayCursor is { } cursor && cursor.Epoch.Value == Guid.Empty)
             throw Protocol("Replay cursor epoch cannot be empty.");
@@ -794,7 +798,8 @@ internal static class AgentSessionProtocolCodec
     private static readonly HashSet<string> OpenNames = new(StringComparer.Ordinal)
     {
         "type", "protocol-version", "agent-session-id", "expected-owning-profile-entity-id",
-        "expected-ownership-generation", "open-intent", "attachment-token", "replay-cursor", "capabilities",
+        "expected-ownership-generation", "open-intent", "attachment-token", "diagnostic-attempt",
+        "replay-cursor", "capabilities",
     };
     private static readonly HashSet<string> FrameNames = new(StringComparer.Ordinal)
     {

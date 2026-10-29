@@ -424,6 +424,7 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                             ? AgentSessionOpenIntent.Attach
                             : AgentSessionOpenIntent.StartOrAttach,
                         AttachmentToken = Guid.NewGuid().ToString("N"),
+                        DiagnosticAttempt = SessionAttachDiagnosticScope.CurrentAttempt,
                         ReplayCursor = request.ReplayCursor,
                         Capabilities = [],
                     },

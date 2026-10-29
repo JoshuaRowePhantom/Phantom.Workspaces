@@ -176,6 +176,15 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         using var diagnosticScope = SessionAttachDiagnosticScope.Begin();
         var stage = "service-initialization";
         var correlation = SessionAttachDiagnosticScope.CurrentAttempt!;
+        var sessionEntityId = agentSessionEntity.EntityId.ToString();
+        var agentSessionId = tab.AgentSessionId
+            ?? (agentSessionEntity.Data is JsonElement data
+                ? ReadStringProperty(data, "agent-session-id")
+                : null)
+            ?? "unknown";
+        var ownerProfileEntityId = agentSessionEntity.Data is JsonElement ownerData
+            ? ReadOwnerProfileEntityId(ownerData) ?? "unknown"
+            : "unknown";
         var started = this.timeProvider.GetTimestamp();
         void SetWaitingForOwnerDecision(bool waiting)
         {
@@ -187,8 +196,14 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         void ReportStage(string next)
         {
             logger.LogInformation(
-                "Session loading; attempt {Attempt}; stage {Stage}; elapsed-ms {ElapsedMs}; outcome started.",
-                correlation, next, this.timeProvider.GetElapsedTime(started).TotalMilliseconds);
+                "Session loading; attempt {Attempt}; stage {Stage}; elapsed-ms {ElapsedMs}; outcome started. "
+                + "session-entity-id {SessionEntityId}; agent-session-id {AgentSessionId}; owner-profile-entity-id {OwnerProfileEntityId}.",
+                correlation,
+                next,
+                this.timeProvider.GetElapsedTime(started).TotalMilliseconds,
+                sessionEntityId,
+                agentSessionId,
+                ownerProfileEntityId);
             stage = next;
             _ = this.invokeOnUiThreadAsync(() =>
             {
@@ -227,17 +242,36 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             }), deadline.Token, "ready-publication");
             if (result is not null)
                 logger.LogInformation(
-                    "Session loading; attempt {Attempt}; stage ready-publication; outcome ready.",
-                    correlation);
+                    "Session loading; attempt {Attempt}; stage ready-publication; outcome ready. "
+                    + "session-entity-id {SessionEntityId}; agent-session-id {AgentSessionId}; owner-profile-entity-id {OwnerProfileEntityId}.",
+                    correlation,
+                    sessionEntityId,
+                    agentSessionId,
+                    ownerProfileEntityId);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
+            logger.LogInformation(
+                "Session loading; attempt {Attempt}; stage {Stage}; elapsed-ms {ElapsedMs}; outcome cancelled. "
+                + "session-entity-id {SessionEntityId}; agent-session-id {AgentSessionId}; owner-profile-entity-id {OwnerProfileEntityId}.",
+                correlation,
+                stage,
+                this.timeProvider.GetElapsedTime(started).TotalMilliseconds,
+                sessionEntityId,
+                agentSessionId,
+                ownerProfileEntityId);
         }
         catch (SessionLoadingStageTimeoutException error)
         {
-            logger.LogWarning(
-                "Session loading; attempt {Attempt}; stage {Stage}; elapsed-ms {ElapsedMs}; reason stage-timeout.",
-                correlation, error.Stage, this.timeProvider.GetElapsedTime(started).TotalMilliseconds);
+            logger.LogWarning(error,
+                "Session loading; attempt {Attempt}; stage {Stage}; elapsed-ms {ElapsedMs}; reason stage-timeout. "
+                + "session-entity-id {SessionEntityId}; agent-session-id {AgentSessionId}; owner-profile-entity-id {OwnerProfileEntityId}.",
+                correlation,
+                error.Stage,
+                this.timeProvider.GetElapsedTime(started).TotalMilliseconds,
+                sessionEntityId,
+                agentSessionId,
+                ownerProfileEntityId);
             await this.PublishLoadingFailureAsync(() =>
             {
                 if (!ct.IsCancellationRequested && tab.State == AgentTabState.Loading)
@@ -249,11 +283,21 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         }
         catch (Exception ex)
         {
-            logger.LogWarning(
-                "Session loading; attempt {Attempt}; stage {Stage}; elapsed-ms {ElapsedMs}; reason {Reason}.",
-                correlation, stage, this.timeProvider.GetElapsedTime(started).TotalMilliseconds,
+            var diagnosticId = ex is RemoteAgentSessionException remote
+                ? remote.CorrelationId.ToString("D")
+                : "none";
+            logger.LogWarning(ex,
+                "Session loading; attempt {Attempt}; stage {Stage}; elapsed-ms {ElapsedMs}; reason {Reason}. "
+                + "session-entity-id {SessionEntityId}; agent-session-id {AgentSessionId}; owner-profile-entity-id {OwnerProfileEntityId}; diagnostic-id {DiagnosticId}.",
+                correlation,
+                stage,
+                this.timeProvider.GetElapsedTime(started).TotalMilliseconds,
                 ex is RemoteAgentStatusTimeoutException ? "status-timeout"
-                    : ex is RemoteAgentStatusException status ? status.ReasonCode : "session-load-failure");
+                    : ex is RemoteAgentStatusException status ? status.ReasonCode : "session-load-failure",
+                sessionEntityId,
+                agentSessionId,
+                ownerProfileEntityId,
+                diagnosticId);
             await this.PublishLoadingFailureAsync(() =>
             {
                 if (ct.IsCancellationRequested)
@@ -261,7 +305,10 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
                     return;
                 }
 
-                tab.SetFailed($"Session loading failed at {stage}. Check remote reachability and retry opening the session.");
+                var diagnosticSuffix = ex is RemoteAgentSessionException remoteSession
+                    ? $" Diagnostic id: {remoteSession.CorrelationId:D}."
+                    : string.Empty;
+                tab.SetFailed($"Session loading failed at {stage}. Check remote reachability and retry opening the session.{diagnosticSuffix}");
                 mainWindowViewModel.NotifyAgentTabStateChanged();
             }, logger);
         }
@@ -911,6 +958,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
                 ExpectedOwnershipGeneration = generation,
                 OpenIntent = AgentSessionOpenIntent.Status,
                 AttachmentToken = Guid.NewGuid().ToString("N"),
+                DiagnosticAttempt = SessionAttachDiagnosticScope.CurrentAttempt,
                 Capabilities = [],
             };
             var status = await RemoteAgentSessionClient.GetStatusAsync(
@@ -972,6 +1020,16 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         values["ownership-generation"] = generation;
         return JsonSerializer.SerializeToElement(values);
     }
+
+    private static string? ReadStringProperty(JsonElement data, string propertyName)
+        => data.TryGetProperty(propertyName, out var value)
+            && value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
+
+    private static string? ReadOwnerProfileEntityId(JsonElement entityData)
+        => ReadStringProperty(entityData, "host-profile-entity-id")
+            ?? ReadStringProperty(entityData, "owning-profile-entity-id");
 
     private static EntityId ReadHostProfileEntityId(JsonElement entityData)
     {

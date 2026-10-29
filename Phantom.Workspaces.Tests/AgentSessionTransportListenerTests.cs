@@ -9,6 +9,7 @@ using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.AgentSessions;
 using Phantom.Workspaces.Transport;
+using Microsoft.Extensions.Logging;
 
 namespace Phantom.Workspaces.Tests;
 
@@ -36,17 +37,35 @@ public sealed class AgentSessionTransportListenerTests
     [Fact]
     public async Task OnChannelOpenAsync_MalformedRequest_WritesSanitizedTerminalError()
     {
-        await using var listener = Listener(out _, out _, authenticated: true);
+        var logger = new CapturingLogger<AgentSessionTransportListener>();
+        await using var listener = Listener(out _, out _, authenticated: true, logger: logger);
         AgentSessionAttachFailure? failure = null;
         listener.AttachFailed += value => failure = value;
         await using var channel = new TestChannel();
+        var attempt = Guid.NewGuid().ToString("N");
+        using var request = JsonDocument.Parse($$"""
+            {
+              "type": "attach-agent-session",
+              "diagnostic-attempt": "{{attempt}}",
+              "secret": "local-path"
+            }
+            """);
         await listener.OnChannelOpenAsync(
-            JsonSerializer.SerializeToElement(new { type = "attach-agent-session", secret = "local-path" }),
+            request.RootElement,
             channel,
             TestContext.Current.CancellationToken);
         var error = await channel.Output.ReadAsync(TestContext.Current.CancellationToken);
+        var frame = AgentSessionProtocolCodec.DeserializeFrame(error);
+        var terminal = Assert.IsType<SessionTerminalEvent>(
+            AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(frame));
+        var diagnosticId = terminal.CompletionState.GetProperty("correlation-id").GetString();
         Assert.DoesNotContain("local-path", error.GetRawText(), StringComparison.Ordinal);
         Assert.Contains("invalid-request", error.GetRawText(), StringComparison.Ordinal);
+        Assert.NotNull(diagnosticId);
+        Assert.NotNull(logger.LastLog);
+        Assert.Contains(attempt, logger.LastLog.Message, StringComparison.Ordinal);
+        Assert.Contains(diagnosticId, logger.LastLog.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.IsType<RemoteAgentProtocolException>(logger.LastLog.Exception);
         Assert.NotNull(failure);
         Assert.Equal("deserialize-open", failure.Stage);
         Assert.Equal("invalid-protocol", failure.Category);
@@ -234,7 +253,8 @@ public sealed class AgentSessionTransportListenerTests
     private static AgentSessionTransportListener Listener(
         out Mock<IRemoteAgentSessionRuntimeRegistry> registry,
         out Mock<IAgentSessionRuntimeHostFactory> factory,
-        bool authenticated = false)
+        bool authenticated = false,
+        ILogger<AgentSessionTransportListener>? logger = null)
     {
         var authorizer = new Mock<IAgentSessionAttachAuthorizer>();
         registry = new Mock<IRemoteAgentSessionRuntimeRegistry>();
@@ -247,7 +267,9 @@ public sealed class AgentSessionTransportListenerTests
         else
             identity.Throws(new UnauthorizedAccessException());
         return new AgentSessionTransportListener(
-            new RemoteAgentSessionHost(authorizer.Object, registry.Object, factory.Object), provider.Object);
+            new RemoteAgentSessionHost(authorizer.Object, registry.Object, factory.Object),
+            provider.Object,
+            logger);
     }
 
     private static AgentSessionOpenRequest Open() => new()
@@ -343,5 +365,29 @@ public sealed class AgentSessionTransportListenerTests
             this.output.Writer.TryComplete();
             return ValueTask.CompletedTask;
         }
+    }
+
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        internal LogEntry? LastLog { get; private set; }
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            this.LastLog = new LogEntry(logLevel, formatter(state, exception), exception);
+        }
+
+        internal sealed record LogEntry(
+            LogLevel Level,
+            string Message,
+            Exception? Exception);
     }
 }
