@@ -310,6 +310,40 @@ public sealed partial class RemoteAgentSessionClientTests
     }
 
     [Fact]
+    public async Task RemoteAgentSessionClient_AttachTerminalFailure_PreservesCategoryAndDiagnosticId()
+    {
+        var transport = new TestTransport();
+        await using var client = new RemoteAgentSessionClient(transport);
+        var connecting = client.ConnectAsync(AgentSessionProtocolCodecTests.Open());
+        var diagnosticId = Guid.NewGuid();
+
+        // The owner answers the attach with a sanitized terminal frame carrying the same diagnostic
+        // id it logged, instead of streaming the opening snapshot.
+        await transport.ServerSendAsync(Frame(1, new SessionTerminalEvent
+        {
+            Reason = "not-found",
+            CompletionState = JsonSerializer.SerializeToElement(new Dictionary<string, object?>
+            {
+                ["code"] = "not-found",
+                ["operation"] = "attach",
+                ["retryable"] = false,
+                ["message"] = "The agent session is unavailable.",
+                ["correlation-id"] = diagnosticId,
+            }),
+        }, diagnosticId));
+
+        var error = await Assert.ThrowsAsync<RemoteAgentSessionException>(() => connecting);
+        // Wire category/operation survive instead of collapsing into a generic session-load reason.
+        Assert.Equal("not-found", error.Code);
+        Assert.Equal("attach", error.Operation);
+        Assert.False(error.IsRetryable);
+        Assert.Equal("The agent session is unavailable.", error.Message);
+        // The owner's diagnostic id reaches the caller so loading logs can join owner diagnostics
+        // rather than losing the correlation.
+        Assert.Equal(diagnosticId, error.CorrelationId);
+    }
+
+    [Fact]
     public async Task MalformedOperationError_PendingRequest_FailsWithProtocolException()
     {
         var transport = new TestTransport();

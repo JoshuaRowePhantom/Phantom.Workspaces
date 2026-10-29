@@ -302,6 +302,8 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
             flight.AddWaiter();
         }
 
+        // Each waiter keeps its own attempt correlation; the flight id joins them to one host operation.
+        var waiterAttempt = SessionAttachDiagnosticScope.CurrentAttempt;
         var cancelledWaiter = false;
         RemoteRunningSession? abandonedSession = null;
         try
@@ -317,9 +319,28 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
             cancelledWaiter = true;
             throw;
         }
-        catch
+        catch (Exception error)
         {
             this.RemoveFailedRemoteFlight(key, flight);
+            try
+            {
+                this.logger.LogWarning(
+                    error,
+                    "Remote session acquisition failed; shared-flight {FlightDiagnosticId}; waiter-attempt {WaiterAttempt}; "
+                    + "agent-session-id {AgentSessionId}; owner-profile-entity-id {OwnerProfileEntityId}; "
+                    + "ownership-generation {OwnershipGeneration}; reason remote-flight-failure.",
+                    flight.DiagnosticId,
+                    waiterAttempt ?? "none",
+                    key.SessionId.Value,
+                    key.Owner,
+                    key.Generation);
+            }
+            catch
+            {
+                // A diagnostics/redaction failure must never replace the original acquisition
+                // failure, block this flight's cleanup, or disturb other sessions' leases.
+            }
+
             throw;
         }
         finally
@@ -949,6 +970,10 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
 
         internal ITransport Transport { get; }
         internal Task<RemoteRunningSession> Creation { get; }
+
+        // One stable id for the whole shared acquisition so every joined waiter's failure record can
+        // be correlated back to the single host operation without confusing their distinct attempts.
+        internal string DiagnosticId { get; } = Guid.NewGuid().ToString("D");
 
         internal bool WasCreatedFor(RemoteRunningSession session) =>
             ReferenceEquals(Volatile.Read(ref this.createdSession), session);

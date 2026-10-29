@@ -20,6 +20,7 @@ using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.AgentSessions;
 using Phantom.Workspaces.Transport;
+using Phantom.Workspaces.Agent.Gui;
 using Moq;
 using IRunningAgentChatFactory = Phantom.Workspaces.Llm.IRunningAgentChatFactory;
 
@@ -1041,6 +1042,93 @@ public sealed class RunningAgentChatTableTests
 
         Assert.Equal("unauthorized", error.Code);
         Assert.Empty(table.RunningSessions);
+    }
+
+    [Fact]
+    public async Task RunningAgentChatTable_SharedRemoteFlightFails_PreservesWaiterCorrelationAndCleanup()
+    {
+        using var loggerFactory = new ObservableLoggerFactory();
+        var table = new RunningAgentChatTable(
+            new FakeRunningAgentChatFactory(),
+            new FakeRuntimeContextFactory(),
+            loggerFactory.CreateLogger<RunningAgentChatTable>());
+
+        // Each waiter joins the shared host operation under its own attempt scope; the records must
+        // never be cross-attributed between attempts.
+        string? attemptA;
+        using (SessionAttachDiagnosticScope.Begin())
+        {
+            attemptA = SessionAttachDiagnosticScope.CurrentAttempt;
+            await Assert.ThrowsAsync<RemoteAgentSessionException>(() =>
+                table.AcquireAsync(RemoteRequest("shared-denied", new DeniedTransport()), TestContext.Current.CancellationToken));
+        }
+
+        string? attemptB;
+        using (SessionAttachDiagnosticScope.Begin())
+        {
+            attemptB = SessionAttachDiagnosticScope.CurrentAttempt;
+            await Assert.ThrowsAsync<RemoteAgentSessionException>(() =>
+                table.AcquireAsync(RemoteRequest("shared-denied", new DeniedTransport()), TestContext.Current.CancellationToken));
+        }
+
+        Assert.NotNull(attemptA);
+        Assert.NotNull(attemptB);
+        Assert.NotEqual(attemptA, attemptB);
+        Assert.Empty(table.RunningSessions);
+
+        var failures = loggerFactory.Entries
+            .Where(entry => entry.Contains("remote-flight-failure", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Equal(2, failures.Length);
+        Assert.All(failures, entry =>
+        {
+            Assert.Contains("shared-flight", entry, StringComparison.Ordinal);
+            Assert.Contains("agent-session-id shared-denied", entry, StringComparison.Ordinal);
+            Assert.Contains("owner-profile-entity-id", entry, StringComparison.Ordinal);
+            Assert.Contains("RemoteAgentSessionException", entry, StringComparison.Ordinal);
+        });
+
+        var recordA = Assert.Single(failures, entry => entry.Contains(attemptA!, StringComparison.Ordinal));
+        var recordB = Assert.Single(failures, entry => entry.Contains(attemptB!, StringComparison.Ordinal));
+        Assert.DoesNotContain(attemptB!, recordA, StringComparison.Ordinal);
+        Assert.DoesNotContain(attemptA!, recordB, StringComparison.Ordinal);
+
+        // A diagnostics/logging failure must not replace the original acquisition failure, block the
+        // flight's cleanup, or disturb other sessions' leases.
+        var throwingTable = new RunningAgentChatTable(
+            new FakeRunningAgentChatFactory(),
+            new FakeRuntimeContextFactory(),
+            new ThrowingRemoteFlightLogger());
+        await Assert.ThrowsAsync<RemoteAgentSessionException>(() =>
+            throwingTable.AcquireAsync(RemoteRequest("shared-denied-2", new DeniedTransport()), TestContext.Current.CancellationToken));
+        Assert.Empty(throwingTable.RunningSessions);
+
+        await using var survivor = await throwingTable.AcquireAsync(
+            Request(new AgentSessionId("survivor-lease")), TestContext.Current.CancellationToken);
+        Assert.NotNull(survivor.AgentChat);
+        Assert.NotEmpty(throwingTable.RunningSessions);
+    }
+
+    private sealed class ThrowingRemoteFlightLogger : ILogger<RunningAgentChatTable>
+    {
+        public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullDisposable.Instance;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (formatter(state, exception).Contains("remote-flight-failure", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("diagnostic sink failure must not surface");
+            }
+        }
+
+        private sealed class NullDisposable : IDisposable
+        {
+            public static readonly NullDisposable Instance = new();
+            public void Dispose() { }
+        }
     }
 
     [Fact]

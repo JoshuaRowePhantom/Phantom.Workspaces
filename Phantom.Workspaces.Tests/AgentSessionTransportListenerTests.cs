@@ -9,6 +9,7 @@ using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.AgentSessions;
 using Phantom.Workspaces.Transport;
+using Phantom.Workspaces.Agent.Gui;
 using Microsoft.Extensions.Logging;
 
 namespace Phantom.Workspaces.Tests;
@@ -248,6 +249,108 @@ public sealed class AgentSessionTransportListenerTests
         Assert.Equal("takeover-blocked", terminal.Reason);
         Assert.Equal("takeover-blocked", terminal.CompletionState.GetProperty("code").GetString());
         Assert.Equal("takeover", terminal.CompletionState.GetProperty("operation").GetString());
+    }
+
+    [Fact]
+    public async Task OnChannelOpenAsync_HostOpenFails_LogsFullFailureAndMatchingDiagnosticCorrelation()
+    {
+        using var loggerFactory = new ObservableLoggerFactory(verboseMetadataEnabled: true);
+        var attempt = Guid.NewGuid().ToString("N");
+        var hostFailure = new InvalidOperationException(
+            "Session materialization failed for workspace planner. Authorization: Bearer secret-wire-canary",
+            new IOException("runtime snapshot store offline at agent-host-7"));
+        var registry = new Mock<IRemoteAgentSessionRuntimeRegistry>();
+        registry.Setup(value => value.TryGetAsync("session", 1, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(hostFailure);
+        var provider = new Mock<ITransportPeerIdentityProvider>();
+        provider.Setup(value => value.GetRequiredIdentity(It.IsAny<IMessageChannel>())).Returns(Peer());
+        await using var listener = new AgentSessionTransportListener(
+            new RemoteAgentSessionHost(
+                AllowingAuthorizer().Object, registry.Object, Mock.Of<IAgentSessionRuntimeHostFactory>()),
+            provider.Object,
+            loggerFactory.CreateLogger<AgentSessionTransportListener>());
+        await using var channel = new TestChannel();
+
+        await listener.OnChannelOpenAsync(
+            AgentSessionProtocolCodec.SerializeOpen(Open() with { DiagnosticAttempt = attempt }),
+            channel,
+            TestContext.Current.CancellationToken);
+
+        var wireElement = await channel.Output.ReadAsync(TestContext.Current.CancellationToken);
+        var wire = wireElement.GetRawText();
+        var frame = AgentSessionProtocolCodec.DeserializeFrame(wireElement);
+        var terminal = Assert.IsType<SessionTerminalEvent>(
+            AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(frame));
+        var correlationId = terminal.CompletionState.GetProperty("correlation-id").GetString();
+        Assert.NotNull(correlationId);
+
+        // The wire response stays a sanitized non-dump: generic code, no raw cause or credential.
+        Assert.Contains("invalid-request", wire, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret-wire-canary", wire, StringComparison.Ordinal);
+        Assert.DoesNotContain("workspace planner", wire, StringComparison.Ordinal);
+
+        var record = Assert.Single(
+            loggerFactory.Entries, entry => entry.Contains("host-open", StringComparison.Ordinal));
+        // The same validated attempt and diagnostic id join the owner log to the terminal response.
+        Assert.Contains(attempt, record, StringComparison.Ordinal);
+        Assert.Contains(correlationId!, record, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("agent-session-id session", record, StringComparison.Ordinal);
+        // Full protected-aware failure detail: the ordinary message and every inner cause survive...
+        Assert.Contains("Session materialization failed for workspace planner", record, StringComparison.Ordinal);
+        Assert.Contains("runtime snapshot store offline at agent-host-7", record, StringComparison.Ordinal);
+        Assert.Contains("InvalidOperationException", record, StringComparison.Ordinal);
+        // ...while the credential fragment is scrubbed before it ever reaches the sink.
+        Assert.DoesNotContain("secret-wire-canary", record, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task OnChannelOpenAsync_UnauthorizedPeer_PreservesSanitizedNonDisclosure()
+    {
+        using var loggerFactory = new ObservableLoggerFactory(verboseMetadataEnabled: true);
+        var attempt = Guid.NewGuid().ToString("N");
+        var open = Open() with { DiagnosticAttempt = attempt };
+        var authorizer = new Mock<IAgentSessionAttachAuthorizer>();
+        authorizer.Setup(value => value.AuthorizeAsync(
+                It.IsAny<TransportPeerIdentity>(), It.IsAny<AgentSessionAuthorizationRequest>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AgentSessionAuthorizationDecision { IsAllowed = false });
+        var registry = new Mock<IRemoteAgentSessionRuntimeRegistry>();
+        var provider = new Mock<ITransportPeerIdentityProvider>();
+        provider.Setup(value => value.GetRequiredIdentity(It.IsAny<IMessageChannel>())).Returns(Peer());
+        await using var listener = new AgentSessionTransportListener(
+            new RemoteAgentSessionHost(authorizer.Object, registry.Object, Mock.Of<IAgentSessionRuntimeHostFactory>()),
+            provider.Object,
+            loggerFactory.CreateLogger<AgentSessionTransportListener>());
+        await using var channel = new TestChannel();
+
+        await listener.OnChannelOpenAsync(
+            AgentSessionProtocolCodec.SerializeOpen(open), channel, TestContext.Current.CancellationToken);
+
+        var wireElement = await channel.Output.ReadAsync(TestContext.Current.CancellationToken);
+        var wire = wireElement.GetRawText();
+        var frame = AgentSessionProtocolCodec.DeserializeFrame(wireElement);
+        var terminal = Assert.IsType<SessionTerminalEvent>(
+            AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(frame));
+        var correlationId = terminal.CompletionState.GetProperty("correlation-id").GetString();
+
+        // Anti-enumeration: the unauthorized peer only sees the generic not-found denial, never the
+        // session identity, private owner, or the authorization/materialization cause.
+        Assert.Equal("not-found", terminal.Reason);
+        Assert.DoesNotContain("agent-session-id", wire, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(open.ExpectedOwningProfileEntityId, wire, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("unauthorized", wire, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("authoriz", wire, StringComparison.OrdinalIgnoreCase);
+        // The session lookup never runs, so existence cannot be probed through this path.
+        registry.Verify(value => value.TryGetAsync(
+            It.IsAny<string>(), It.IsAny<long>(), It.IsAny<CancellationToken>()), Times.Never);
+
+        // Correlation still works for support: the terminal id matches the local owner record, which
+        // retains the real (private) identity that the wire withholds.
+        Assert.NotNull(correlationId);
+        var record = Assert.Single(
+            loggerFactory.Entries, entry => entry.Contains(correlationId!, StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("agent-session-id session", record, StringComparison.Ordinal);
+        Assert.Contains(attempt, record, StringComparison.Ordinal);
     }
 
     private static AgentSessionTransportListener Listener(
