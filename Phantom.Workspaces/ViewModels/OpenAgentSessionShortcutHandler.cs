@@ -286,18 +286,25 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             var diagnosticId = ex is RemoteAgentSessionException remote
                 ? remote.CorrelationId.ToString("D")
                 : "none";
+            var reason = ex is RemoteAgentStatusTimeoutException ? "status-timeout"
+                : ex is RemoteAgentStatusException status ? status.ReasonCode : "session-load-failure";
+            var snapshot = SessionLoadingDiagnostics.CaptureOperationalSnapshot(
+                stage, correlation, sessionEntityId, agentSessionId, ownerProfileEntityId,
+                this.timeProvider.GetElapsedTime(started).TotalMilliseconds,
+                agentSessionEntity.Data, diagnosticId, reason);
             logger.LogWarning(ex,
                 "Session loading; attempt {Attempt}; stage {Stage}; elapsed-ms {ElapsedMs}; reason {Reason}. "
-                + "session-entity-id {SessionEntityId}; agent-session-id {AgentSessionId}; owner-profile-entity-id {OwnerProfileEntityId}; diagnostic-id {DiagnosticId}.",
+                + "session-entity-id {SessionEntityId}; agent-session-id {AgentSessionId}; owner-profile-entity-id {OwnerProfileEntityId}; diagnostic-id {DiagnosticId}; "
+                + "operational-snapshot {Snapshot}.",
                 correlation,
                 stage,
                 this.timeProvider.GetElapsedTime(started).TotalMilliseconds,
-                ex is RemoteAgentStatusTimeoutException ? "status-timeout"
-                    : ex is RemoteAgentStatusException status ? status.ReasonCode : "session-load-failure",
+                reason,
                 sessionEntityId,
                 agentSessionId,
                 ownerProfileEntityId,
-                diagnosticId);
+                diagnosticId,
+                snapshot);
             await this.PublishLoadingFailureAsync(() =>
             {
                 if (ct.IsCancellationRequested)

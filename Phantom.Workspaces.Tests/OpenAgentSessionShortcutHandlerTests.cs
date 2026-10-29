@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Security;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Channels;
@@ -394,6 +396,543 @@ public sealed class OpenAgentSessionShortcutHandlerTests
         internal AgentSessionCloseDecision Decision { get; set; } = AgentSessionCloseDecision.Cancel;
         public Task<AgentSessionCloseDecision> ChooseAsync(string sessionName, CancellationToken cancellationToken)
             => Task.FromResult(this.Decision);
+    }
+
+    // ── #1670 session-loading diagnostics (launcher/acquisition boundary) ──────────
+
+    private sealed record LoadingDiagnosticsFixture(
+        IDisposable Process,
+        MainWindowViewModel ViewModel,
+        SubscribedEntityViewModel Session,
+        AgentSessionWorkspaceTabViewModel Tab,
+        OpenAgentSessionShortcutHandler Handler,
+        string Directory);
+
+    private static async Task<LoadingDiagnosticsFixture> CreateLoadingDiagnosticsFixtureAsync(string idSuffix)
+    {
+        var directory = Path.Combine(AppContext.BaseDirectory, "launcher-diagnostics-tests", Guid.NewGuid().ToString("N"));
+        var process = HostFileLoggerFactory.Create(directory);
+        var table = MainWindowIntegrationTests.CreateTestRunningAgentChatTable();
+        var appServices = new ApplicationServices(
+            table,
+            new AgentPersistenceStoreCache(),
+            process,
+            accessBroker: Moq.Mock.Of<Phantom.Workspaces.Llm.Interfaces.Access.IAccessBroker>());
+        var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel(applicationServices: appServices);
+        await viewModel.InitializeAsync();
+        var broker = MainWindowIntegrationTests.GetEntityBroker(viewModel);
+        var entityId = $"bb701670-0000-4000-8000-{idSuffix}";
+        var definition = await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(
+            broker,
+            new EntityId(entityId),
+            $$"""
+            {
+              "entity-id": "{{entityId}}",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "diag-{{idSuffix}}"]],
+              "display-name": { "default": "Diag {{idSuffix}}" },
+              "definition": {
+                "kind": "prompt",
+                "name": "diag-{{idSuffix}}",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+        var session = await new AgentSessionShortcutContext()
+            .CreateAgentSessionEntityAsync(viewModel, definition, "diag-" + idSuffix);
+        Assert.NotNull(session);
+        var tab = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = session!.EntityId.ToString(),
+            Title = session.DisplayName,
+            Entity = session,
+        };
+        await viewModel.OpenTabAsync(tab);
+        var handler = new OpenAgentSessionShortcutHandler(
+            new AgentSessionShortcutContext(),
+            MainWindowIntegrationTests.CreateLocalTrustedExecutorSelector(),
+            table);
+        return new LoadingDiagnosticsFixture(process, viewModel, session, tab, handler, directory);
+    }
+
+    private static string[] AttemptTokens(string log)
+        => System.Text.RegularExpressions.Regex.Matches(log, @"attempt (\S+);")
+            .Select(match => match.Groups[1].Value)
+            .ToArray();
+
+    private sealed class CanaryProtectedValue : ISensitiveDiagnosticValue
+    {
+        public string Plaintext => "canary-protected-material";
+        public string ToDiagnosticMarker() => "[protected:canary]";
+    }
+
+    private sealed class ThrowingDiagnosticValue
+    {
+        public string Boom => throw new InvalidOperationException("formatter-boom-should-not-surface");
+    }
+
+    private static SecureString MakeSecure(string value)
+    {
+        var secure = new SecureString();
+        foreach (var character in value)
+        {
+            secure.AppendChar(character);
+        }
+
+        secure.MakeReadOnly();
+        return secure;
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task Handle_RemoteAcquisitionFails_LogsSessionIdentityAndFullException()
+    {
+        var fixture = await CreateLoadingDiagnosticsFixtureAsync("000000000001");
+        using var process = fixture.Process;
+        await using var viewModel = fixture.ViewModel;
+        await using var handler = fixture.Handler;
+
+        await AgentManifestSessionLauncher.InitializeSessionTabAsync(
+            handler, viewModel, (_, stage) =>
+            {
+                stage("remote-flight-chat-acquisition");
+                var aggregate = new AggregateException(
+                    "aggregate-root",
+                    new TimeoutException("inner-timeout status=504"),
+                    new InvalidOperationException("second-branch ordinary-detail"));
+                throw new InvalidOperationException("remote attach failed ordinary-detail", aggregate);
+            },
+            fixture.Session, fixture.Tab, TaskScheduler.Default, CancellationToken.None);
+
+        var log = ProcessLogTestFile.ReadAll(fixture.Directory);
+        Assert.Contains(fixture.Session.EntityId.ToString(), log, StringComparison.Ordinal);
+        Assert.Contains("agent-session-id", log, StringComparison.Ordinal);
+        Assert.Contains("owner-profile-entity-id", log, StringComparison.Ordinal);
+        Assert.NotEmpty(AttemptTokens(log));
+        Assert.Contains("stage remote-flight-chat-acquisition", log, StringComparison.Ordinal);
+        Assert.Contains("remote attach failed ordinary-detail", log, StringComparison.Ordinal);
+        Assert.Contains("InvalidOperationException", log, StringComparison.Ordinal);
+        Assert.Contains("AggregateException", log, StringComparison.Ordinal);
+        Assert.Contains("aggregate-root", log, StringComparison.Ordinal);
+        Assert.Contains("inner-timeout status=504", log, StringComparison.Ordinal);
+        Assert.Contains("second-branch ordinary-detail", log, StringComparison.Ordinal);
+        Assert.Contains("operational-snapshot", log, StringComparison.Ordinal);
+        Assert.Contains("AgentManifestSessionLauncher", log, StringComparison.Ordinal);
+        Assert.Equal(AgentTabState.Failed, fixture.Tab.State);
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task Handle_RemoteAcquisitionSucceeds_LogsCorrelatedStageTransitionsAndReady()
+    {
+        var fixture = await CreateLoadingDiagnosticsFixtureAsync("000000000002");
+        using var process = fixture.Process;
+        await using var viewModel = fixture.ViewModel;
+        await using var handler = fixture.Handler;
+
+        var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+        {
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(
+                """
+                {
+                  "kind": "prompt",
+                  "name": "diag-ready",
+                  "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                  "tools": []
+                }
+                """),
+            ForegroundScheduler = TaskScheduler.Default,
+        });
+        var disposed = 0;
+        var lease = new RunningAgentChatLease(
+            new AgentSessionId("ready-session"), chat, () =>
+            {
+                Interlocked.Increment(ref disposed);
+                return ValueTask.CompletedTask;
+            });
+
+        try
+        {
+            await AgentManifestSessionLauncher.InitializeSessionTabAsync(
+                handler, viewModel, (_, stage) =>
+                {
+                    stage("remote-flight-chat-acquisition");
+                    stage("owner-authorization");
+                    return Task.FromResult((lease, new ObservableLoggerFactory()));
+                },
+                fixture.Session, fixture.Tab, TaskScheduler.Default, CancellationToken.None);
+
+            Assert.Equal(AgentTabState.Ready, fixture.Tab.State);
+            Assert.Same(lease, fixture.Tab.Lease);
+            Assert.Equal(0, disposed);
+
+            var log = ProcessLogTestFile.ReadAll(fixture.Directory);
+            Assert.Contains("stage remote-flight-chat-acquisition", log, StringComparison.Ordinal);
+            Assert.Contains("stage owner-authorization", log, StringComparison.Ordinal);
+            Assert.Contains("stage ready-publication", log, StringComparison.Ordinal);
+            Assert.DoesNotContain("reason session-load-failure", log, StringComparison.Ordinal);
+            var attempts = AttemptTokens(log);
+            Assert.NotEmpty(attempts);
+            Assert.Single(attempts.Distinct());
+        }
+        finally
+        {
+            await fixture.Tab.DisposeAsync();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 45_000)]
+    public async Task Handle_ConcurrentSessionsFail_KeepsDiagnosticScopesIsolated()
+    {
+        var fixture = await CreateLoadingDiagnosticsFixtureAsync("000000000003");
+        using var process = fixture.Process;
+        await using var viewModel = fixture.ViewModel;
+        await using var handler = fixture.Handler;
+        var broker = MainWindowIntegrationTests.GetEntityBroker(viewModel);
+        var secondDefinition = await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(
+            broker,
+            new EntityId("bb701670-0000-4000-8000-000000000103"),
+            """
+            {
+              "entity-id": "bb701670-0000-4000-8000-000000000103",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "diag-concurrent-b"]],
+              "display-name": { "default": "Diag concurrent B" },
+              "definition": {
+                "kind": "prompt",
+                "name": "diag-concurrent-b",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+        var sessionB = await new AgentSessionShortcutContext()
+            .CreateAgentSessionEntityAsync(viewModel, secondDefinition, "diag-concurrent-b");
+        Assert.NotNull(sessionB);
+        var tabB = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = sessionB!.EntityId.ToString(),
+            Title = sessionB.DisplayName,
+            Entity = sessionB,
+        };
+        await viewModel.OpenTabAsync(tabB);
+
+        async Task RunFailureAsync(SubscribedEntityViewModel session, AgentSessionWorkspaceTabViewModel tab, string canary)
+            => await AgentManifestSessionLauncher.InitializeSessionTabAsync(
+                handler, viewModel, async (_, stage) =>
+                {
+                    stage("remote-flight-chat-acquisition");
+                    await Task.Yield();
+                    throw new InvalidOperationException($"acquisition failed {canary}");
+                },
+                session, tab, TaskScheduler.Default, CancellationToken.None);
+
+        await Task.WhenAll(
+            RunFailureAsync(fixture.Session, fixture.Tab, "canary-session-a"),
+            RunFailureAsync(sessionB, tabB, "canary-session-b"));
+
+        var log = ProcessLogTestFile.ReadAll(fixture.Directory);
+        Assert.Contains("canary-session-a", log, StringComparison.Ordinal);
+        Assert.Contains("canary-session-b", log, StringComparison.Ordinal);
+        Assert.Contains(fixture.Session.EntityId.ToString(), log, StringComparison.Ordinal);
+        Assert.Contains(sessionB.EntityId.ToString(), log, StringComparison.Ordinal);
+        Assert.Equal(AgentTabState.Failed, fixture.Tab.State);
+        Assert.Equal(AgentTabState.Failed, tabB.State);
+        var concurrentAttempts = AttemptTokens(log).Distinct().ToArray();
+        Assert.Equal(2, concurrentAttempts.Length);
+
+        // A retry on the first session must receive a fresh, distinct attempt scope.
+        await RunFailureAsync(fixture.Session, fixture.Tab, "canary-session-a-retry");
+        var afterRetry = AttemptTokens(ProcessLogTestFile.ReadAll(fixture.Directory)).Distinct().ToArray();
+        Assert.Equal(3, afterRetry.Length);
+    }
+
+    [AvaloniaFact(Timeout = 45_000)]
+    public async Task Handle_LoadingIsCanceledOrTimesOut_LogsDistinctTerminalOutcomes()
+    {
+        var fixture = await CreateLoadingDiagnosticsFixtureAsync("000000000004");
+        using var process = fixture.Process;
+        await using var viewModel = fixture.ViewModel;
+        await using var handler = fixture.Handler;
+
+        // Supported timeout outcome.
+        await AgentManifestSessionLauncher.InitializeSessionTabAsync(
+            handler, viewModel, (_, stage) =>
+            {
+                stage("remote-flight-chat-acquisition");
+                throw new TimeoutException("acquisition stage timed out");
+            },
+            fixture.Session, fixture.Tab, TaskScheduler.Default, CancellationToken.None);
+        Assert.Equal(AgentTabState.Failed, fixture.Tab.State);
+
+        // Lifetime cancellation outcome on a second session.
+        var broker = MainWindowIntegrationTests.GetEntityBroker(viewModel);
+        var cancelDefinition = await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(
+            broker,
+            new EntityId("bb701670-0000-4000-8000-000000000104"),
+            """
+            {
+              "entity-id": "bb701670-0000-4000-8000-000000000104",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "diag-cancel"]],
+              "display-name": { "default": "Diag cancel" },
+              "definition": {
+                "kind": "prompt",
+                "name": "diag-cancel",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+        var cancelSession = await new AgentSessionShortcutContext()
+            .CreateAgentSessionEntityAsync(viewModel, cancelDefinition, "diag-cancel");
+        var cancelTab = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = cancelSession!.EntityId.ToString(),
+            Title = cancelSession.DisplayName,
+            Entity = cancelSession,
+        };
+        await viewModel.OpenTabAsync(cancelTab);
+        using var cts = new CancellationTokenSource();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelLoad = AgentManifestSessionLauncher.InitializeSessionTabAsync(
+            handler, viewModel, async (ct, stage) =>
+            {
+                stage("remote-flight-chat-acquisition");
+                entered.TrySetResult();
+                await Task.Delay(Timeout.Infinite, ct);
+                throw new InvalidOperationException("unreachable");
+            },
+            cancelSession, cancelTab, TaskScheduler.Default, cts.Token);
+        await entered.Task;
+        cts.Cancel();
+        await cancelLoad;
+
+        var log = ProcessLogTestFile.ReadAll(fixture.Directory);
+        Assert.Contains("reason stage-timeout", log, StringComparison.Ordinal);
+        Assert.Contains("outcome cancelled", log, StringComparison.Ordinal);
+        Assert.DoesNotContain("outcome ready", log, StringComparison.Ordinal);
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task AgentManifestSessionLauncher_AcquisitionFails_UsesSameDetailedDiagnosticContract()
+    {
+        var fixture = await CreateLoadingDiagnosticsFixtureAsync("000000000005");
+        using var process = fixture.Process;
+        await using var viewModel = fixture.ViewModel;
+        await using var handler = fixture.Handler;
+
+        await AgentManifestSessionLauncher.InitializeSessionTabAsync(
+            handler, viewModel, (_, stage) =>
+            {
+                stage("remote-flight-chat-acquisition");
+                throw new InvalidOperationException(
+                    "launcher acquisition failed ordinary-detail",
+                    new TimeoutException("inner-timeout status=504"));
+            },
+            fixture.Session, fixture.Tab, TaskScheduler.Default, CancellationToken.None);
+
+        // Same identity/timing/exception contract as restored-session loading.
+        var log = ProcessLogTestFile.ReadAll(fixture.Directory);
+        foreach (var token in new[]
+        {
+            fixture.Session.EntityId.ToString(), "agent-session-id", "owner-profile-entity-id",
+            "elapsed-ms", "launcher acquisition failed ordinary-detail", "inner-timeout status=504",
+            "TimeoutException", "operational-snapshot",
+        })
+        {
+            Assert.Contains(token, log, StringComparison.Ordinal);
+        }
+
+        Assert.NotEmpty(AttemptTokens(log));
+        Assert.Equal(AgentTabState.Failed, fixture.Tab.State);
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task Handle_OperationalSnapshotsContainOrdinaryValues_PreservesDetailedData()
+    {
+        var fixture = await CreateLoadingDiagnosticsFixtureAsync("000000000006");
+        using var process = fixture.Process;
+        await using var viewModel = fixture.ViewModel;
+        await using var handler = fixture.Handler;
+
+        await AgentManifestSessionLauncher.InitializeSessionTabAsync(
+            handler, viewModel, (_, stage) =>
+            {
+                stage("remote-flight-chat-acquisition");
+                throw new InvalidOperationException(
+                    "config https://example.com/agents?region=westus&retries=3 status=200 ordinary-diagnostic-text");
+            },
+            fixture.Session, fixture.Tab, TaskScheduler.Default, CancellationToken.None);
+
+        var log = ProcessLogTestFile.ReadAll(fixture.Directory);
+        foreach (var token in new[]
+        {
+            "region=westus", "retries=3", "status=200", "ordinary-diagnostic-text", "example.com",
+            "operational-snapshot",
+        })
+        {
+            Assert.Contains(token, log, StringComparison.Ordinal);
+        }
+
+        // Snapshot limits are explicit (truncation/cycle), not a field allowlist.
+        var longText = new string('x', 10_000);
+        var cyclic = new Dictionary<string, object?>(StringComparer.Ordinal) { ["ordinary"] = "kept-value" };
+        cyclic["self"] = cyclic;
+        cyclic["long"] = longText;
+        var rendered = DiagnosticSnapshot.Capture(cyclic);
+        Assert.Contains("kept-value", rendered, StringComparison.Ordinal);
+        Assert.Contains("cycle", rendered, StringComparison.Ordinal);
+        Assert.Contains("truncated", rendered, StringComparison.Ordinal);
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task Handle_ProtectedValuesAreNested_DoesNotLeakCanaries()
+    {
+        var fixture = await CreateLoadingDiagnosticsFixtureAsync("000000000007");
+        using var process = fixture.Process;
+        await using var viewModel = fixture.ViewModel;
+        await using var handler = fixture.Handler;
+
+        await AgentManifestSessionLauncher.InitializeSessionTabAsync(
+            handler, viewModel, (_, stage) =>
+            {
+                stage("remote-flight-chat-acquisition");
+                var error = new InvalidOperationException(
+                    "attach failed https://user:canary-url-secret@host/x ordinary-tail");
+                error.Data["secure"] = MakeSecure("canary-secure-material");
+                error.Data["typed"] = new CanaryProtectedValue();
+                error.Data["nested"] = new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["ordinary-nested"] = "ordinary-nested-value",
+                    ["deep-secure"] = MakeSecure("canary-deep-material"),
+                };
+                throw error;
+            },
+            fixture.Session, fixture.Tab, TaskScheduler.Default, CancellationToken.None);
+
+        var log = ProcessLogTestFile.ReadAll(fixture.Directory);
+        Assert.Contains("ordinary-tail", log, StringComparison.Ordinal);
+        Assert.Contains("ordinary-nested-value", log, StringComparison.Ordinal);
+        Assert.Contains("[protected:SecureString]", log, StringComparison.Ordinal);
+        Assert.Contains("[protected:canary]", log, StringComparison.Ordinal);
+        foreach (var canary in new[]
+        {
+            "canary-url-secret", "canary-secure-material", "canary-protected-material", "canary-deep-material",
+        })
+        {
+            Assert.DoesNotContain(canary, log, StringComparison.Ordinal);
+        }
+
+        Assert.Equal(AgentTabState.Failed, fixture.Tab.State);
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task Handle_UpstreamExceptionContainsCredentialFragments_RedactsOnlyProtectedParts()
+    {
+        var fixture = await CreateLoadingDiagnosticsFixtureAsync("000000000008");
+        using var process = fixture.Process;
+        await using var viewModel = fixture.ViewModel;
+        await using var handler = fixture.Handler;
+
+        await AgentManifestSessionLauncher.InitializeSessionTabAsync(
+            handler, viewModel, (_, stage) =>
+            {
+                stage("remote-flight-chat-acquisition");
+                var inner = new TimeoutException(
+                    "upstream https://api.example.com/v1?access_token=secretcanarytoken status=502 ordinary-inner");
+                throw new InvalidOperationException(
+                    "sdk failure Authorization: Bearer secretbearercanary ordinary-outer status=401", inner);
+            },
+            fixture.Session, fixture.Tab, TaskScheduler.Default, CancellationToken.None);
+
+        var log = ProcessLogTestFile.ReadAll(fixture.Directory);
+        foreach (var kept in new[]
+        {
+            "ordinary-outer", "ordinary-inner", "status=401", "status=502", "api.example.com", "TimeoutException",
+        })
+        {
+            Assert.Contains(kept, log, StringComparison.Ordinal);
+        }
+
+        foreach (var removed in new[] { "secretcanarytoken", "secretbearercanary" })
+        {
+            Assert.DoesNotContain(removed, log, StringComparison.Ordinal);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task Handle_DiagnosticFormattingFails_PreservesOriginalFailureAndRollback()
+    {
+        var fixture = await CreateLoadingDiagnosticsFixtureAsync("000000000017");
+        using var process = fixture.Process;
+        await using var viewModel = fixture.ViewModel;
+        await using var handler = fixture.Handler;
+
+        // Phase 1: a formatting hazard in the exception must degrade to a marker, never replacing
+        // the original failure or preventing the friendly Failed publication.
+        await AgentManifestSessionLauncher.InitializeSessionTabAsync(
+            handler, viewModel, (_, stage) =>
+            {
+                stage("remote-flight-chat-acquisition");
+                var error = new InvalidOperationException("original load failure ordinary-detail");
+                error.Data["hazard"] = new ThrowingDiagnosticValue();
+                throw error;
+            },
+            fixture.Session, fixture.Tab, TaskScheduler.Default, CancellationToken.None);
+
+        var log = ProcessLogTestFile.ReadAll(fixture.Directory);
+        Assert.Contains("original load failure ordinary-detail", log, StringComparison.Ordinal);
+        Assert.Contains("getter-failed", log, StringComparison.Ordinal);
+        Assert.DoesNotContain("formatter-boom-should-not-surface", log, StringComparison.Ordinal);
+        Assert.Equal(AgentTabState.Failed, fixture.Tab.State);
+
+        // Phase 2: an acquired-but-unpublishable lease (null chat fails composition) must be
+        // disposed exactly once — never leaked — while the original failure is still recorded.
+        var broker = MainWindowIntegrationTests.GetEntityBroker(viewModel);
+        var leakDefinition = await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(
+            broker,
+            new EntityId("bb701670-0000-4000-8000-000000000117"),
+            """
+            {
+              "entity-id": "bb701670-0000-4000-8000-000000000117",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "diag-leak"]],
+              "display-name": { "default": "Diag leak" },
+              "definition": {
+                "kind": "prompt",
+                "name": "diag-leak",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+        var leakSession = await new AgentSessionShortcutContext()
+            .CreateAgentSessionEntityAsync(viewModel, leakDefinition, "diag-leak");
+        var leakTab = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = leakSession!.EntityId.ToString(),
+            Title = leakSession.DisplayName,
+            Entity = leakSession,
+        };
+        await viewModel.OpenTabAsync(leakTab);
+        var disposed = 0;
+        var lease = new RunningAgentChatLease(
+            new AgentSessionId("leak-session"), null!, () =>
+            {
+                Interlocked.Increment(ref disposed);
+                return ValueTask.CompletedTask;
+            });
+        await AgentManifestSessionLauncher.InitializeSessionTabAsync(
+            handler, viewModel, (_, stage) =>
+            {
+                stage("remote-flight-chat-acquisition");
+                return Task.FromResult((lease, new ObservableLoggerFactory()));
+            },
+            leakSession, leakTab, TaskScheduler.Default, CancellationToken.None);
+
+        Assert.Equal(1, disposed);
+        Assert.Equal(AgentTabState.Failed, leakTab.State);
+        Assert.Null(leakTab.Lease);
     }
 
     [AvaloniaFact]

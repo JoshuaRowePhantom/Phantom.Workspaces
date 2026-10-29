@@ -79,8 +79,10 @@ public static class SensitiveTextRedactor
 
         var scrubbed = UrlUserInfo.Replace(text, match => $"{match.Groups["scheme"].Value}{RedactionMarker}@");
         scrubbed = SecretParameter.Replace(scrubbed, match => $"{match.Groups["prefix"].Value}{RedactionMarker}");
-        scrubbed = SecretAssignment.Replace(scrubbed, match => $"{match.Groups["prefix"].Value}{RedactionMarker}");
+        // Redact the credential token after an auth scheme before the generic assignment scrub, so
+        // "Authorization: Bearer <token>" loses the token rather than only the scheme word.
         scrubbed = AuthorizationScheme.Replace(scrubbed, match => $"{match.Groups["prefix"].Value}{RedactionMarker}");
+        scrubbed = SecretAssignment.Replace(scrubbed, match => $"{match.Groups["prefix"].Value}{RedactionMarker}");
         return scrubbed;
     }
 }

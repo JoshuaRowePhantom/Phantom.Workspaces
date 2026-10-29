@@ -375,17 +375,24 @@ internal static class AgentManifestSessionLauncher
             var diagnosticId = error is RemoteAgentSessionException remote
                 ? remote.CorrelationId.ToString("D")
                 : "none";
+            var reason = error is RemoteAgentStatusException status ? status.ReasonCode : "session-load-failure";
+            var snapshot = SessionLoadingDiagnostics.CaptureOperationalSnapshot(
+                stage, attempt, sessionEntityId, agentSessionId, ownerProfileEntityId,
+                clock.GetElapsedTime(started).TotalMilliseconds,
+                createdAgentSessionEntity.Data, diagnosticId, reason);
             logger.LogWarning(error,
                 "Session loading; attempt {Attempt}; stage {Stage}; elapsed-ms {ElapsedMs}; reason {Reason}. "
-                + "session-entity-id {SessionEntityId}; agent-session-id {AgentSessionId}; owner-profile-entity-id {OwnerProfileEntityId}; diagnostic-id {DiagnosticId}.",
+                + "session-entity-id {SessionEntityId}; agent-session-id {AgentSessionId}; owner-profile-entity-id {OwnerProfileEntityId}; diagnostic-id {DiagnosticId}; "
+                + "operational-snapshot {Snapshot}.",
                 attempt,
                 stage,
                 clock.GetElapsedTime(started).TotalMilliseconds,
-                error is RemoteAgentStatusException status ? status.ReasonCode : "session-load-failure",
+                reason,
                 sessionEntityId,
                 agentSessionId,
                 ownerProfileEntityId,
-                diagnosticId);
+                diagnosticId,
+                snapshot);
             if (loadingTab.State == AgentTabState.Loading)
             {
                 var diagnosticSuffix = error is RemoteAgentSessionException remoteSession
