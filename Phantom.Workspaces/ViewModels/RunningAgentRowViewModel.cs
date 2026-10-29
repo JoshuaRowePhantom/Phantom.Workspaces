@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Windows.Input;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Services;
 
 namespace Phantom.Workspaces.ViewModels;
@@ -157,30 +158,11 @@ public sealed class RunningAgentRowViewModel : ViewModelBase, IDisposable
         string? entityName,
         string tabTitle,
         string workspacePaneTitle)
-    {
-        if (!string.IsNullOrWhiteSpace(entityName))
-        {
-            return entityName!;
-        }
-
-        if (!string.IsNullOrWhiteSpace(tabTitle))
-        {
-            return tabTitle;
-        }
-
-        if (!string.IsNullOrWhiteSpace(workspacePaneTitle))
-        {
-            return workspacePaneTitle;
-        }
-
-        if (string.IsNullOrEmpty(sessionKey))
-        {
-            return "Agent session (unknown)";
-        }
-
-        var shortId = sessionKey.Length <= 8 ? sessionKey : sessionKey[..8];
-        return $"Agent session {shortId}";
-    }
+        => SessionIdentityTitlePolicy.ResolveFallback(
+            new AgentSessionId(sessionKey),
+            entityName,
+            tabTitle,
+            workspacePaneTitle);
 
     public bool IsThinking
     {
