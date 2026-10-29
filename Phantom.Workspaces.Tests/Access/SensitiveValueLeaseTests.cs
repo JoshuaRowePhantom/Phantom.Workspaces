@@ -3,6 +3,7 @@ using Moq;
 using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Llm.Interfaces.Access.Execution;
 using Phantom.Workspaces.Services.Access;
+using Phantom.Workspaces.Services.Logging;
 
 namespace Phantom.Workspaces.Tests.Access;
 
@@ -16,6 +17,49 @@ public sealed class SensitiveValueLeaseTests : IDisposable
         {
             Directory.Delete(this.directory, recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task SensitiveValueLease_DiagnosticRendering_DoesNotReleaseMaterial()
+    {
+        // #1670: logging a lease/binding/typed protected value must render a non-materializing
+        // marker — it must not acquire credentials, invoke the authorized-use callback, or
+        // materialize plaintext, while ordinary neighbouring values survive.
+        var (binding, context) = await this.CreateAsync(ReleaseMemoryScopeKind.AllowOnce);
+        await using var lease = new SensitiveValueLease("canary-lease-material".AsMemory(), binding, context);
+
+        var leaseSnapshot = DiagnosticSnapshot.Capture(lease);
+        var bindingSnapshot = DiagnosticSnapshot.Capture(binding);
+        var contextObject = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["ordinary-field"] = "ordinary-operational-value",
+            ["lease"] = lease,
+            ["binding"] = binding,
+        };
+        var contextSnapshot = DiagnosticSnapshot.Capture(contextObject);
+
+        var carrier = new InvalidOperationException("remote attach failed ordinary-detail");
+        carrier.Data["lease"] = lease;
+        var exceptionText = ExceptionDiagnostics.Render(carrier);
+
+        Assert.Equal("[protected:SensitiveValueLease]", leaseSnapshot);
+        Assert.Equal("[protected:CredentialLeaseBinding]", bindingSnapshot);
+        Assert.Contains("ordinary-operational-value", contextSnapshot, StringComparison.Ordinal);
+        Assert.Contains("[protected:SensitiveValueLease]", contextSnapshot, StringComparison.Ordinal);
+        Assert.Contains("[protected:CredentialLeaseBinding]", contextSnapshot, StringComparison.Ordinal);
+        Assert.Contains("ordinary-detail", exceptionText, StringComparison.Ordinal);
+        Assert.Contains("[protected:SensitiveValueLease]", exceptionText, StringComparison.Ordinal);
+
+        foreach (var rendered in new[] { leaseSnapshot, bindingSnapshot, contextSnapshot, exceptionText })
+        {
+            Assert.DoesNotContain("canary-lease-material", rendered, StringComparison.Ordinal);
+        }
+
+        // No validation, generation check, or material release ran to produce the diagnostics.
+        Assert.Equal(0, context.GenerationChecks);
+        Assert.Null(context.RequiredAction);
+        Assert.Equal("canary-lease-material", Assert.IsType<SensitiveValueUseSucceeded<string>>(await lease.UseAsync(
+            (material, _) => ValueTask.FromResult(material), TestContext.Current.CancellationToken)).Result);
     }
 
     [Fact]

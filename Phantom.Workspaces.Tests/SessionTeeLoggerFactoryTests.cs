@@ -1,3 +1,4 @@
+using System.Security;
 using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Services.Logging;
@@ -98,6 +99,60 @@ public sealed class SessionTeeLoggerFactoryTests
             if (Directory.Exists(directory))
                 Directory.Delete(directory, recursive: true);
         }
+    }
+
+    [Fact]
+    public void SessionTeeLoggerFactory_ProtectedDiagnostics_ReachesBothSinksWithoutLeaks()
+    {
+        // #1670: identical protected-aware detail must reach both the process (durable) and the
+        // session-memory (UI) sinks exactly once; neither sink may bypass redaction or leak a
+        // protected/credential fragment.
+        var directory = Path.Combine(AppContext.BaseDirectory, "session-tee-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var process = HostFileLoggerFactory.Create(directory);
+            using var memory = new ObservableLoggerFactory();
+            using var session = new SessionTeeLoggerFactory(process, memory);
+            var cause = new InvalidOperationException("inner-ordinary-cause status=502");
+            var error = new Exception(
+                "attach failed https://user:topsecretpw@host/x?access_token=topsecrettoken ordinary-tail",
+                cause);
+            error.Data["secure"] = MakeSecure("canary-secure-material");
+
+            session.CreateLogger("SafeLifecycle").LogError(error, "role=caller stage=host-open ordinary-context");
+
+            var memoryEntry = Assert.Single(memory.Entries);
+            var fileContents = ProcessLogTestFile.ReadAll(directory);
+            foreach (var sink in new[] { memoryEntry, fileContents })
+            {
+                Assert.Contains("ordinary-context", sink, StringComparison.Ordinal);
+                Assert.Contains("inner-ordinary-cause status=502", sink, StringComparison.Ordinal);
+                Assert.Contains("ordinary-tail", sink, StringComparison.Ordinal);
+                Assert.Contains("[protected:SecureString]", sink, StringComparison.Ordinal);
+                Assert.DoesNotContain("topsecretpw", sink, StringComparison.Ordinal);
+                Assert.DoesNotContain("topsecrettoken", sink, StringComparison.Ordinal);
+                Assert.DoesNotContain("canary-secure-material", sink, StringComparison.Ordinal);
+            }
+
+            Assert.Equal(1, Count(fileContents, "ordinary-context"));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static SecureString MakeSecure(string value)
+    {
+        var secure = new SecureString();
+        foreach (var character in value)
+        {
+            secure.AppendChar(character);
+        }
+
+        secure.MakeReadOnly();
+        return secure;
     }
 
     private static int Count(string text, string value)

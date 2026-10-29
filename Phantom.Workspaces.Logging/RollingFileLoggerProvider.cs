@@ -65,11 +65,13 @@ public sealed class RollingFileLoggerProvider : ILoggerProvider
             builder.Append(" [").Append(logLevel).Append("] ");
             builder.Append(categoryName);
             builder.Append(" - ");
-            builder.Append(message);
+            // Scrub credential fragments and render the exception protected-aware before the value
+            // reaches durable storage, so an upstream SDK message/URL/stack cannot leak plaintext.
+            builder.Append(SensitiveTextRedactor.Redact(message));
             if (exception is not null)
             {
                 builder.AppendLine();
-                builder.Append(exception);
+                builder.Append(ExceptionDiagnostics.Render(exception));
             }
 
             this.writer!.WriteLine(builder.ToString());

@@ -104,7 +104,7 @@ internal sealed class ObservableLogger(ObservableLoggerFactory factory, string c
     {
         if (!this.IsEnabled(logLevel))
             return;
-        var message = formatter(state, exception);
+        var message = SensitiveTextRedactor.Redact(formatter(state, exception));
         var timestamp = DateTime.Now.ToString("HH:mm:ss.fff");
         var levelStr = logLevel switch
         {
@@ -120,7 +120,7 @@ internal sealed class ObservableLogger(ObservableLoggerFactory factory, string c
         var entry = $"[{timestamp}] [{levelStr}] {category}: {message}";
         if (exception != null)
         {
-            entry += $"\n  Exception: {exception}";
+            entry += $"\n  Exception: {ExceptionDiagnostics.Render(exception)}";
         }
 
         factory.AddEntry(entry);

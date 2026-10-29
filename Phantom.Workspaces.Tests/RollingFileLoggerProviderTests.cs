@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Security;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
 using Phantom.Workspaces.Services.Logging;
@@ -124,6 +125,58 @@ public sealed class RollingFileLoggerProviderTests
             provider.Dispose();
             DeleteDirectory(directory);
         }
+    }
+
+    [Fact]
+    public void RollingFileLogger_ProtectedAwareDiagnostics_PreservesFullOrdinaryException()
+    {
+        // #1670: the durable sink must keep full ordinary exception detail — message, every inner
+        // cause, type names and stack — while scrubbing credential fragments and never materializing
+        // a protected value carried in exception Data.
+        var directory = CreateTempDirectoryPath();
+        var provider = new RollingFileLoggerProvider(directory, TimeSpan.FromDays(7));
+        try
+        {
+            var logger = provider.CreateLogger("Cat");
+            var inner = new InvalidOperationException("inner-ordinary-cause status=503");
+            var outer = new Exception(
+                "attach failed https://user:topsecretpw@remote.host/attach?access_token=topsecrettoken trailing-ordinary-detail",
+                inner);
+            outer.Data["credential"] = MakeSecure("canary-secure-material");
+
+            logger.LogError(outer, "session attach failed stage=host-open ordinary-context");
+            provider.Dispose();
+
+            var content = ProcessLogTestFile.ReadAll(directory);
+            // Ordinary detail preserved.
+            Assert.Contains("session attach failed stage=host-open ordinary-context", content, StringComparison.Ordinal);
+            Assert.Contains("inner-ordinary-cause status=503", content, StringComparison.Ordinal);
+            Assert.Contains("InvalidOperationException", content, StringComparison.Ordinal);
+            Assert.Contains("trailing-ordinary-detail", content, StringComparison.Ordinal);
+            // Credential fragments and protected material scrubbed.
+            Assert.Contains("[redacted]", content, StringComparison.Ordinal);
+            Assert.Contains("[protected:SecureString]", content, StringComparison.Ordinal);
+            Assert.DoesNotContain("topsecretpw", content, StringComparison.Ordinal);
+            Assert.DoesNotContain("topsecrettoken", content, StringComparison.Ordinal);
+            Assert.DoesNotContain("canary-secure-material", content, StringComparison.Ordinal);
+        }
+        finally
+        {
+            provider.Dispose();
+            DeleteDirectory(directory);
+        }
+    }
+
+    private static SecureString MakeSecure(string value)
+    {
+        var secure = new SecureString();
+        foreach (var character in value)
+        {
+            secure.AppendChar(character);
+        }
+
+        secure.MakeReadOnly();
+        return secure;
     }
 
     private static string CreateTempDirectoryPath()
