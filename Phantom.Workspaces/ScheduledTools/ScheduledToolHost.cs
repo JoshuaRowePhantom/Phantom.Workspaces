@@ -31,9 +31,21 @@ public sealed class ScheduledToolHost
     private readonly ILogger<ScheduledToolHost> logger;
     private readonly HashSet<EntityId> runningRelationships = new();
     private readonly Dictionary<EntityId, RunningScheduledTool> runningExecutions = new();
-    private readonly Dictionary<EntityId, CancellationTokenSource> runningCancellations = new();
+    private readonly Dictionary<EntityId, RunningCancellation> runningCancellations = new();
     private readonly HashSet<Task> inFlightRuns = new();
     private readonly object runningLock = new();
+
+    // Lifetime state is protected by runningLock; callbacks and disposal must run outside it.
+    private sealed class RunningCancellation(EntityId relationshipId, CancellationTokenSource source)
+    {
+        public EntityId RelationshipId { get; } = relationshipId;
+
+        public CancellationTokenSource Source { get; } = source;
+
+        public int CancellationLeases { get; set; }
+
+        public bool Retired { get; set; }
+    }
 
     public ScheduledToolHost(
         IDataAccessLayer dataAccessLayer,
@@ -53,6 +65,11 @@ public sealed class ScheduledToolHost
 
     /// <summary>Raised whenever the set of currently-running scheduled tools changes.</summary>
     public event EventHandler? RunningExecutionsChanged;
+
+    // Test observers run outside host locks to coordinate cancellation/completion interleavings.
+    internal Action? CancellationSnapshotAcquired { get; set; }
+
+    internal Action<EntityId>? ExecutionCancellationDisposed { get; set; }
 
     /// <summary>A snapshot of the scheduled tools currently running on this host.</summary>
     public IReadOnlyList<RunningScheduledTool> GetRunningExecutions()
@@ -215,15 +232,44 @@ public sealed class ScheduledToolHost
     /// </summary>
     public void StopAllRunningExecutions()
     {
-        CancellationTokenSource[] sources;
+        RunningCancellation[] cancellations;
         lock (this.runningLock)
         {
-            sources = this.runningCancellations.Values.ToArray();
+            cancellations = this.runningCancellations.Values.ToArray();
+            foreach (var cancellation in cancellations)
+            {
+                cancellation.CancellationLeases++;
+            }
         }
 
-        foreach (var source in sources)
+        try
         {
-            source.Cancel();
+            this.CancellationSnapshotAcquired?.Invoke();
+            foreach (var cancellation in cancellations)
+            {
+                cancellation.Source.Cancel();
+            }
+        }
+        finally
+        {
+            // Release every lease, even when a callback throws before later entries are visited.
+            var readyForDisposal = new List<RunningCancellation>();
+            lock (this.runningLock)
+            {
+                foreach (var cancellation in cancellations)
+                {
+                    cancellation.CancellationLeases--;
+                    if (cancellation.Retired && cancellation.CancellationLeases == 0)
+                    {
+                        readyForDisposal.Add(cancellation);
+                    }
+                }
+            }
+
+            foreach (var cancellation in readyForDisposal)
+            {
+                this.DisposeCancellation(cancellation);
+            }
         }
     }
 
@@ -345,14 +391,16 @@ public sealed class ScheduledToolHost
             return false;
         }
 
-        var executionCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var handle = await this.resultWriter.StartAsync(hostNameComponents, toolType, cancellationToken).ConfigureAwait(false);
-        this.AddRunningExecution(relationship.RelationshipId, toolType, hostNameComponents, executionCancellation);
         var hostLabel = string.Join(" / ", hostNameComponents);
-        this.logger.LogInformation("Scheduled tool {Tool} starting on host {Host}.", toolType, hostLabel);
         var stopwatch = Stopwatch.StartNew();
+        var executionCancellation = new RunningCancellation(
+            relationship.RelationshipId,
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken));
         try
         {
+            this.AddRunningExecution(relationship.RelationshipId, toolType, hostNameComponents, executionCancellation);
+            this.logger.LogInformation("Scheduled tool {Tool} starting on host {Host}.", toolType, hostLabel);
             // Route via a registered executor when one can handle the target client instance (e.g.
             // a reverse-tunnel or forward-HTTP executor for a remote machine).
             var targetInstanceId = hostEntityId.ToString();
@@ -367,7 +415,7 @@ public sealed class ScheduledToolHost
                             ToolEntityId = relationship.ToolEntityId.ToString(),
                             TargetClientInstance = targetInstanceId,
                         },
-                        executionCancellation.Token).ConfigureAwait(false);
+                        executionCancellation.Source.Token).ConfigureAwait(false);
 
                     stopwatch.Stop();
                     this.logger.LogInformation(
@@ -393,7 +441,7 @@ public sealed class ScheduledToolHost
                 return false;
             }
 
-            var executionContext = await this.CreateExecutionContextAsync(relationship, hostEntityId, executionCancellation.Token).ConfigureAwait(false);
+            var executionContext = await this.CreateExecutionContextAsync(relationship, hostEntityId, executionCancellation.Source.Token).ConfigureAwait(false);
             if (executionContext is null)
             {
                 stopwatch.Stop();
@@ -436,7 +484,7 @@ public sealed class ScheduledToolHost
         }
         finally
         {
-            this.RemoveRunningExecution(relationship.RelationshipId);
+            this.RemoveRunningExecution(executionCancellation);
         }
     }
 
@@ -727,7 +775,7 @@ public sealed class ScheduledToolHost
         EntityId relationshipId,
         string toolType,
         IReadOnlyList<string> hostNameComponents,
-        CancellationTokenSource executionCancellation)
+        RunningCancellation executionCancellation)
     {
         lock (this.runningLock)
         {
@@ -742,22 +790,33 @@ public sealed class ScheduledToolHost
         this.RunningExecutionsChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    private void RemoveRunningExecution(EntityId relationshipId)
+    private void RemoveRunningExecution(RunningCancellation executionCancellation)
     {
         bool removed;
-        CancellationTokenSource? executionCancellation;
+        bool disposeCancellation;
         lock (this.runningLock)
         {
-            removed = this.runningExecutions.Remove(relationshipId);
-            this.runningCancellations.Remove(relationshipId, out executionCancellation);
+            removed = this.runningExecutions.Remove(executionCancellation.RelationshipId);
+            this.runningCancellations.Remove(executionCancellation.RelationshipId);
+            executionCancellation.Retired = true;
+            disposeCancellation = executionCancellation.CancellationLeases == 0;
         }
 
-        executionCancellation?.Dispose();
+        if (disposeCancellation)
+        {
+            this.DisposeCancellation(executionCancellation);
+        }
 
         if (removed)
         {
             this.RunningExecutionsChanged?.Invoke(this, EventArgs.Empty);
         }
+    }
+
+    private void DisposeCancellation(RunningCancellation cancellation)
+    {
+        cancellation.Source.Dispose();
+        this.ExecutionCancellationDisposed?.Invoke(cancellation.RelationshipId);
     }
 
     private async Task<WorkspaceToolExecutionContext?> CreateExecutionContextAsync(

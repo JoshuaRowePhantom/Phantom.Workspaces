@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -23,6 +24,15 @@ public sealed class ScheduledToolHostTests
         public DateTimeOffset Now { get; set; } = new(2026, 6, 17, 9, 30, 0, TimeSpan.Zero); // Wednesday.
 
         public override DateTimeOffset GetUtcNow() => this.Now;
+    }
+
+    private sealed class RegistrationFailureTimeProvider : TimeProvider
+    {
+        private int readCount;
+
+        public override DateTimeOffset GetUtcNow() => Interlocked.Increment(ref this.readCount) == 2
+            ? throw new InvalidOperationException("registration failure")
+            : new DateTimeOffset(2026, 6, 17, 9, 30, 0, TimeSpan.Zero);
     }
 
     private sealed class RecordingTool : IWorkspaceTool
@@ -73,10 +83,253 @@ public sealed class ScheduledToolHostTests
 
         public async Task<WorkspaceToolExecutionResult> ExecuteAsync(WorkspaceToolExecutionContext context)
         {
+            var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var registration = context.CancellationToken.Register(() => cancelled.TrySetCanceled(context.CancellationToken));
             this.started.SetResult();
-            await Task.Delay(Timeout.Infinite, context.CancellationToken);
+            await cancelled.Task;
             return new WorkspaceToolExecutionResult();
         }
+    }
+
+    private sealed class CompletionControlledTool(string toolType) : IWorkspaceTool
+    {
+        public string ToolType { get; } = toolType;
+
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Complete { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource CancellationObserved { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Action? CancellationCallback { get; set; }
+
+        public bool CompleteOnCancellation { get; set; } = true;
+
+        public async Task<WorkspaceToolExecutionResult> ExecuteAsync(WorkspaceToolExecutionContext context)
+        {
+            // The source owns this registration so completion can proceed while its callback is gated.
+            context.CancellationToken.Register(() =>
+            {
+                this.CancellationObserved.TrySetResult();
+                this.CancellationCallback?.Invoke();
+                if (this.CompleteOnCancellation)
+                {
+                    this.Complete.TrySetResult();
+                }
+            });
+            this.Started.TrySetResult();
+            await this.Complete.Task;
+            context.CancellationToken.ThrowIfCancellationRequested();
+            return WorkspaceToolExecutionResult.Success();
+        }
+    }
+
+    private static async Task<(ScheduledToolHost Host, EntityId HostId, EntityId[] Relationships)> CreateCancellationScenarioAsync(
+        CompletionControlledTool[] tools,
+        TimeProvider? timeProvider = null)
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var hostId = Guid.NewGuid();
+        var scheduleId = Guid.NewGuid();
+        var toolId = Guid.NewGuid();
+        var relationshipId = Guid.NewGuid();
+        await SeedScenarioAsync(dataAccessLayer, hostId, Guid.NewGuid(), Guid.NewGuid(), toolId, scheduleId, relationshipId,
+            """{ "frequency": "00:00:01Z", "days-of-week": [], "start-at": [] }""");
+        await AddToolAsync(dataAccessLayer, toolId, tools[0].ToolType);
+        var relationships = new List<EntityId> { new(relationshipId) };
+        foreach (var tool in tools.Skip(1))
+        {
+            toolId = Guid.NewGuid();
+            relationshipId = Guid.NewGuid();
+            await AddToolAsync(dataAccessLayer, toolId, tool.ToolType);
+            await AddRelationshipAsync(dataAccessLayer, relationshipId, toolId, scheduleId, hostId, tool.ToolType, paused: false);
+            relationships.Add(new EntityId(relationshipId));
+        }
+
+        var host = new ScheduledToolHost(
+            dataAccessLayer,
+            new ScheduledToolRegistry(tools),
+            resultWriter: new ToolExecutionResultWriter(dataAccessLayer, new FixedTimeProvider()),
+            timeProvider: timeProvider ?? new FixedTimeProvider());
+        return (host, new EntityId(hostId), relationships.ToArray());
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task StopAllRunningExecutions_WhenSnapshotRunCompletes_RetainsSourcesUntilEveryStopExits(int stopCount)
+    {
+        var completingTool = new CompletionControlledTool("stub");
+        var blockingTool = new CompletionControlledTool("blocking");
+        var (host, hostId, relationships) = await CreateCancellationScenarioAsync([completingTool, blockingTool]);
+        var disposed = new ConcurrentDictionary<EntityId, int>();
+        host.ExecutionCancellationDisposed = relationship => disposed.AddOrUpdate(relationship, 1, (_, count) => count + 1);
+        var firstSnapshot = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondSnapshot = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseFirst = new ManualResetEventSlim();
+        using var releaseSecond = new ManualResetEventSlim();
+        var snapshotCount = 0;
+        host.CancellationSnapshotAcquired = () =>
+        {
+            var first = Interlocked.Increment(ref snapshotCount) == 1;
+            (first ? firstSnapshot : secondSnapshot).TrySetResult();
+            // Only a worker thread waits here, outside host locks; the async test releases the gate.
+            (first ? releaseFirst : releaseSecond).Wait(TestContext.Current.CancellationToken);
+        };
+        var removed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.RunningExecutionsChanged += (_, _) =>
+        {
+            if (completingTool.Complete.Task.IsCompleted
+                && !host.GetRunningExecutions().Any(run => run.RelationshipId == relationships[0]))
+            {
+                removed.TrySetResult();
+            }
+        };
+        Task firstStop = Task.CompletedTask;
+        Task secondStop = Task.CompletedTask;
+        try
+        {
+            Assert.Equal(2, await host.RunDueToolsAsync(hostId, HostName, TestContext.Current.CancellationToken));
+            await Task.WhenAll(completingTool.Started.Task, blockingTool.Started.Task);
+            firstStop = Task.Run(host.StopAllRunningExecutions, TestContext.Current.CancellationToken);
+            await firstSnapshot.Task.WaitAsync(TestContext.Current.CancellationToken);
+            if (stopCount == 2)
+            {
+                secondStop = Task.Run(host.StopAllRunningExecutions, TestContext.Current.CancellationToken);
+                await secondSnapshot.Task.WaitAsync(TestContext.Current.CancellationToken);
+            }
+
+            completingTool.Complete.TrySetResult();
+            await removed.Task.WaitAsync(TestContext.Current.CancellationToken);
+            Assert.DoesNotContain(host.GetRunningExecutions(), run => run.RelationshipId == relationships[0]);
+            Assert.Empty(disposed);
+            releaseFirst.Set();
+            await firstStop;
+            await blockingTool.CancellationObserved.Task.WaitAsync(TestContext.Current.CancellationToken);
+            await host.WaitForRunningExecutionsAsync();
+            Assert.Empty(host.GetRunningExecutions());
+            if (stopCount == 2)
+            {
+                Assert.Empty(disposed);
+            }
+
+            releaseSecond.Set();
+            await secondStop;
+            Assert.Equal(2, disposed.Count);
+            Assert.All(disposed.Values, count => Assert.Equal(1, count));
+        }
+        finally
+        {
+            host.CancellationSnapshotAcquired = null;
+            releaseFirst.Set();
+            releaseSecond.Set();
+            completingTool.Complete.TrySetResult();
+            blockingTool.Complete.TrySetResult();
+            await Task.WhenAll(firstStop, secondStop);
+            await host.WaitForRunningExecutionsAsync();
+        }
+    }
+
+    [Fact]
+    public async Task StopAllRunningExecutions_WhenCallbackReentersAndRunCompletes_DefersDisposalWithoutBlockingRemoval()
+    {
+        var tool = new CompletionControlledTool("stub") { CompleteOnCancellation = false };
+        var (host, hostId, _) = await CreateCancellationScenarioAsync([tool]);
+        var callbackEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseCallback = new ManualResetEventSlim();
+        var disposalCount = 0;
+        host.ExecutionCancellationDisposed = _ => Interlocked.Increment(ref disposalCount);
+        tool.CancellationCallback = () =>
+        {
+            host.StopAllRunningExecutions();
+            callbackEntered.TrySetResult();
+            // The callback runs on the stop worker, without host locks; completion must remain free to run.
+            releaseCallback.Wait(TestContext.Current.CancellationToken);
+        };
+        Task stop = Task.CompletedTask;
+        try
+        {
+            await host.RunDueToolsAsync(hostId, HostName, TestContext.Current.CancellationToken);
+            await tool.Started.Task;
+            stop = Task.Run(host.StopAllRunningExecutions, TestContext.Current.CancellationToken);
+            await callbackEntered.Task.WaitAsync(TestContext.Current.CancellationToken);
+            tool.Complete.TrySetResult();
+            await host.WaitForRunningExecutionsAsync().WaitAsync(TestContext.Current.CancellationToken);
+            Assert.Empty(host.GetRunningExecutions());
+            Assert.Equal(0, Volatile.Read(ref disposalCount));
+            releaseCallback.Set();
+            await stop;
+            Assert.Equal(1, disposalCount);
+            host.StopAllRunningExecutions();
+            Assert.Equal(1, disposalCount);
+        }
+        finally
+        {
+            releaseCallback.Set();
+            tool.Complete.TrySetResult();
+            await stop;
+            await host.WaitForRunningExecutionsAsync();
+        }
+    }
+
+    [Fact]
+    public async Task StopAllRunningExecutions_WhenCallbackThrows_ReleasesUnvisitedSnapshotLeasesAndPropagatesFailure()
+    {
+        var first = new CompletionControlledTool("stub");
+        var second = new CompletionControlledTool("second");
+        var (host, hostId, _) = await CreateCancellationScenarioAsync([first, second]);
+        var disposed = new ConcurrentDictionary<EntityId, int>();
+        host.ExecutionCancellationDisposed = relationship => disposed.AddOrUpdate(relationship, 1, (_, count) => count + 1);
+        var expected = new InvalidOperationException("cancellation callback failure");
+        first.CancellationCallback = second.CancellationCallback = () => throw expected;
+        host.CancellationSnapshotAcquired = () =>
+        {
+            first.Complete.TrySetResult();
+            second.Complete.TrySetResult();
+        };
+        try
+        {
+            await host.RunDueToolsAsync(hostId, HostName, TestContext.Current.CancellationToken);
+            await Task.WhenAll(first.Started.Task, second.Started.Task);
+            var failure = Assert.Throws<AggregateException>(host.StopAllRunningExecutions);
+            Assert.Same(expected, Assert.Single(failure.InnerExceptions));
+            Assert.Single(new[] { first, second }, tool => tool.CancellationObserved.Task.IsCompleted);
+            await host.WaitForRunningExecutionsAsync();
+            Assert.Empty(host.GetRunningExecutions());
+            Assert.Equal(2, disposed.Count);
+            Assert.All(disposed.Values, count => Assert.Equal(1, count));
+        }
+        finally
+        {
+            first.Complete.TrySetResult();
+            second.Complete.TrySetResult();
+            await host.WaitForRunningExecutionsAsync();
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RunDueToolsAsync_WhenStartupThrows_RetiresAndDisposesCancellation(bool failBeforePublication)
+    {
+        var tool = new CompletionControlledTool("stub");
+        var (host, hostId, _) = await CreateCancellationScenarioAsync(
+            [tool],
+            failBeforePublication ? new RegistrationFailureTimeProvider() : null);
+        var disposalCount = 0;
+        host.ExecutionCancellationDisposed = _ => Interlocked.Increment(ref disposalCount);
+        host.RunningExecutionsChanged += (_, _) =>
+        {
+            if (host.GetRunningExecutions().Count != 0)
+            {
+                throw new InvalidOperationException("publication notification failure");
+            }
+        };
+        await host.RunDueToolsAsync(hostId, HostName, TestContext.Current.CancellationToken);
+        await host.WaitForRunningExecutionsAsync();
+        Assert.False(tool.Started.Task.IsCompleted);
+        Assert.Empty(host.GetRunningExecutions());
+        Assert.Equal(1, disposalCount);
     }
 
     private sealed class FailingTool : IWorkspaceTool
