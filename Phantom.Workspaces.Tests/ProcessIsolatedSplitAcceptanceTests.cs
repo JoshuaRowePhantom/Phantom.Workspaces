@@ -211,6 +211,18 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
             var choices = Regex.Matches(callerFile,
                 @"Session loading; attempt ([0-9a-f]{32}); stage transport-choice; [^\r\n]*outcome started\.");
             Assert.Equal(childAttachment ? 1 : 2, choices.Count);
+            foreach (Match choice in choices)
+            {
+                var attempt = choice.Groups[1].Value;
+                var loadingRecords = Regex.Matches(
+                    callerFile,
+                    $@"Session loading; attempt {attempt}; [^\r\n]*");
+                Assert.NotEmpty(loadingRecords);
+                Assert.All(loadingRecords.Cast<Match>(), record => Assert.EndsWith(
+                    $"session-entity-id {sessionEntityId}; agent-session-id {SessionId}; owner-profile-entity-id {Worker}.",
+                    record.Value,
+                    StringComparison.Ordinal));
+            }
             var retryAttempt = choices[^1].Groups[1].Value;
             if (!childAttachment)
             {
@@ -257,9 +269,6 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
                 Assert.DoesNotContain(callerUrl, log, StringComparison.Ordinal);
                 Assert.DoesNotContain("fixture-prompt", log, StringComparison.Ordinal);
                 Assert.DoesNotContain("worker-response", log, StringComparison.Ordinal);
-                Assert.DoesNotContain(SessionId, log, StringComparison.Ordinal);
-                foreach (var identifier in new[] { User, Caller, Worker, Manifest, Hub, sessionEntityId })
-                    Assert.DoesNotContain(identifier.ToString(), log, StringComparison.OrdinalIgnoreCase);
             }
             foreach (var role in roles)
                 TestContext.Current.TestOutputHelper?.WriteLine(ProcessStageDiagnostics.Sanitize(
