@@ -23,6 +23,7 @@ public sealed class RunningAgentChatWithEntityInfo : INotifyPropertyChanged
     private bool _isInterruptible;
     private bool _isConnected = true;
     private bool _isTerminal;
+    private string? _authoritativeDisplayName;
     private readonly INotifyCollectionChanged? runningItems;
 
     /// <summary>The agent session identifier.</summary>
@@ -39,6 +40,57 @@ public sealed class RunningAgentChatWithEntityInfo : INotifyPropertyChanged
 
     /// <summary>The display name of the agent entity that owns this session.</summary>
     public string EntityName { get; }
+
+    /// <summary>
+    /// A live, always-nonblank title that identifies this session independently of any viewer
+    /// tab. Precedence: an authoritative persisted display-name rename (see
+    /// <see cref="ApplyAuthoritativeDisplayName"/>), then the acquisition-time
+    /// <see cref="EntityName"/>, then a stable <c>Agent session &lt;short-id&gt;</c> fallback.
+    /// Never blank or whitespace, and never the "No open tab" location text; closing a viewer
+    /// changes only optional secondary location state, never this identity.
+    /// </summary>
+    public string SessionTitle => ComputeSessionTitle(this._authoritativeDisplayName, this.EntityName, this.SessionId);
+
+    /// <summary>
+    /// Applies an authoritative persisted display-name update (a canonical session rename) to the
+    /// session-backed title projection. Raises <see cref="PropertyChanged"/> for
+    /// <see cref="SessionTitle"/> only when the resolved title actually changes, so running-agent
+    /// rows and ordinary session headers observe the rename live even when no viewer tab exists.
+    /// A <see langword="null"/> or blank value falls back to the acquisition name or the stable
+    /// session-id label rather than ever blanking the title.
+    /// </summary>
+    internal void ApplyAuthoritativeDisplayName(string? name)
+    {
+        var previous = this.SessionTitle;
+        this._authoritativeDisplayName = name;
+        var current = this.SessionTitle;
+        if (!string.Equals(previous, current, StringComparison.Ordinal))
+        {
+            this.PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(this.SessionTitle)));
+        }
+    }
+
+    private static string ComputeSessionTitle(string? authoritativeName, string entityName, AgentSessionId sessionId)
+    {
+        if (!string.IsNullOrWhiteSpace(authoritativeName))
+        {
+            return authoritativeName!;
+        }
+
+        if (!string.IsNullOrWhiteSpace(entityName))
+        {
+            return entityName;
+        }
+
+        var value = sessionId.Value;
+        if (string.IsNullOrEmpty(value))
+        {
+            return "Agent session (unknown)";
+        }
+
+        var shortId = value.Length <= 8 ? value : value[..8];
+        return $"Agent session {shortId}";
+    }
 
     /// <summary>
     /// The entity store ID (UUID) of the agent-session entity, if available.

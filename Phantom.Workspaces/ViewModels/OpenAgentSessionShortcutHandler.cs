@@ -1110,6 +1110,14 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
                 {
                     await options.AgentSessionEntity.SaveDisplayNameAsync(newName);
                     options.Tab.SetTitleExplicit(newName);
+                    // Publish the canonical rename to the running-agent projection so the popup and
+                    // ordinary headers update live even when no viewer tab exists for the session.
+                    if (options.Tab.AgentSessionId is { Length: > 0 } renamedSessionId)
+                    {
+                        this.runningAgentChatTable.ApplyAuthoritativeDisplayName(
+                            new AgentSessionId(renamedSessionId),
+                            newName);
+                    }
                 },
                 SetTabTitleAsync = (newTitle, ct) =>
                 {

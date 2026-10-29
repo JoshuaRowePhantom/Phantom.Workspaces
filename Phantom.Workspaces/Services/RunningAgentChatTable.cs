@@ -882,6 +882,12 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         }
     }
 
+    /// <inheritdoc/>
+    public void ApplyAuthoritativeDisplayName(AgentSessionId sessionId, string? displayName)
+    {
+        this.FindEntry(sessionId)?.ApplyAuthoritativeDisplayName(displayName);
+    }
+
     private RunningAgentChatWithEntityInfo? FindEntry(AgentSessionId sessionId)
     {
         foreach (var entry in _runningSessions)
