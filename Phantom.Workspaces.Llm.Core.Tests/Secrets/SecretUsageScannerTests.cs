@@ -383,4 +383,94 @@ public sealed class SecretUsageScannerTests
 
         Assert.DoesNotContain("${SECRET:ModelSecret}", json);
     }
+
+    [Fact]
+    public void PartitionByOwner_ModelOptionsSecret_IsRequiredCore()
+    {
+        var partition = new SecretUsageScanner().PartitionByOwner(WithModelSecret());
+
+        Assert.Equal("ModelSecret", Assert.Single(partition.RequiredCore).SecretName);
+        Assert.Empty(partition.DeferredMcpServer);
+    }
+
+    [Fact]
+    public void PartitionByOwner_McpServerConnectionSecret_IsDeferredWhileCoreStaysRequired()
+    {
+        var definition = Load("""
+        {
+          "kind": "prompt",
+          "name": "test-agent",
+          "instructions": "${SECRET:CoreSecret}",
+          "tools": [
+            {
+              "name": "key-tool",
+              "kind": "mcp",
+              "connection": { "kind": "key", "endpoint": "https://resource.test/mcp", "apiKey": "${SECRET:McpKey}" }
+            }
+          ]
+        }
+        """);
+
+        var partition = new SecretUsageScanner().PartitionByOwner(definition);
+
+        Assert.Equal("CoreSecret", Assert.Single(partition.RequiredCore).SecretName);
+        var deferred = Assert.Single(partition.DeferredMcpServer);
+        Assert.Equal("McpKey", deferred.SecretName);
+        Assert.Equal("definition.tools.key-tool.connection.apiKey", deferred.JsonPath);
+    }
+
+    [Fact]
+    public void PartitionByOwner_McpToolDescriptionSecret_StaysRequiredCore()
+    {
+        // Only the connection subtree is owned by the server; descriptive/prompt-shaped tool text
+        // remains required-core so it is still materialized fail-closed.
+        var definition = Load("""
+        {
+          "kind": "prompt",
+          "name": "test-agent",
+          "tools": [
+            {
+              "name": "key-tool",
+              "kind": "mcp",
+              "description": "tool ${SECRET:ToolText}",
+              "connection": { "kind": "key", "endpoint": "https://resource.test/mcp", "apiKey": "${SECRET:McpKey}" }
+            }
+          ]
+        }
+        """);
+
+        var partition = new SecretUsageScanner().PartitionByOwner(definition);
+
+        Assert.Equal("ToolText", Assert.Single(partition.RequiredCore).SecretName);
+        Assert.Equal("McpKey", Assert.Single(partition.DeferredMcpServer).SecretName);
+    }
+
+    [Fact]
+    public void PartitionByOwner_ProviderOwnedOAuthClientSecret_IsInNeitherPartition()
+    {
+        var definition = Load("""
+        {
+          "kind": "prompt",
+          "name": "test-agent",
+          "instructions": "${SECRET:CoreSecret}",
+          "tools": [
+            {
+              "name": "oauth-tool",
+              "kind": "mcp",
+              "connection": {
+                "kind": "oauth",
+                "endpoint": "https://resource.test/mcp",
+                "clientId": "client",
+                "clientSecret": "${SECRET:ProviderSecret}"
+              }
+            }
+          ]
+        }
+        """);
+
+        var partition = new SecretUsageScanner().PartitionByOwner(definition);
+
+        Assert.Equal("CoreSecret", Assert.Single(partition.RequiredCore).SecretName);
+        Assert.Empty(partition.DeferredMcpServer);
+    }
 }

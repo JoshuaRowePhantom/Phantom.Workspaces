@@ -2,6 +2,8 @@ using System.Text.RegularExpressions;
 using System.Text.Json;
 using AgentSchema;
 using Moq;
+using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Llm.Secrets;
 
@@ -164,6 +166,84 @@ public sealed class AgentDefinitionSecretMaterializerTests
             definition, broker, new CredentialUseLineage(), CancellationToken.None));
         Assert.Single(broker.Requests);
         Assert.Equal(original, definition.ToJson());
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_McpServerApiKey_IsDeferredAndNotAcquired()
+    {
+        var definition = AgentDefinition.FromJson("""
+        {
+          "kind":"prompt","name":"test",
+          "tools":[{"name":"key-tool","kind":"mcp","connection":{"kind":"key","endpoint":"https://resource.test/mcp","apiKey":"${SECRET:McpKey}"}}]
+        }
+        """)!;
+        var original = definition.ToJson();
+        await using var broker = new ManifestAccessTestBroker();
+        await using var result = await new AgentDefinitionSecretMaterializer().MaterializeAsync(
+            definition, broker, new CredentialUseLineage(), CancellationToken.None);
+
+        Assert.Empty(broker.Requests);
+        Assert.Equal(original, definition.ToJson());
+        Assert.Equal("${SECRET:McpKey}", Assert.Single(result.DeferredSecretReferences));
+        Assert.False(result.Resolver.TryResolve("${SECRET:McpKey}", out _));
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_CoreAndMcp_MaterializesOnlyCoreAndDefersMcp()
+    {
+        var definition = AgentDefinition.FromJson("""
+        {
+          "kind":"prompt","name":"test","instructions":"${SECRET:CoreSecret}",
+          "tools":[{"name":"key-tool","kind":"mcp","connection":{"kind":"key","endpoint":"https://resource.test/mcp","apiKey":"${SECRET:McpKey}"}}]
+        }
+        """)!;
+        await using var broker = new ManifestAccessTestBroker();
+        await using var result = await new AgentDefinitionSecretMaterializer().MaterializeAsync(
+            definition, broker, new CredentialUseLineage(), CancellationToken.None);
+
+        Assert.Equal("CoreSecret", Assert.Single(broker.Requests).Reference.Name);
+        Assert.Equal("${SECRET:McpKey}", Assert.Single(result.DeferredSecretReferences));
+        var json = definition.ToJson();
+        Assert.DoesNotContain("CoreSecret", json);
+        Assert.Contains("${SECRET:McpKey}", json);
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_RequiredCoreDenied_FailsClosedEvenWithDeferredMcp()
+    {
+        var definition = AgentDefinition.FromJson("""
+        {
+          "kind":"prompt","name":"test","instructions":"${SECRET:CoreSecret}",
+          "tools":[{"name":"key-tool","kind":"mcp","connection":{"kind":"key","endpoint":"https://resource.test/mcp","apiKey":"${SECRET:McpKey}"}}]
+        }
+        """)!;
+        var original = definition.ToJson();
+        await using var broker = new ManifestAccessTestBroker { Deny = true };
+        await Assert.ThrowsAsync<SecretMaterializationRefusedException>(() => new AgentDefinitionSecretMaterializer().MaterializeAsync(
+            definition, broker, new CredentialUseLineage(), CancellationToken.None));
+        Assert.Single(broker.Requests);
+        Assert.Equal(original, definition.ToJson());
+    }
+
+    [Fact]
+    public async Task MaterializeSecretsIfNeededAsync_McpServerApiKey_DefersReferenceOntoServicesWithoutAcquiring()
+    {
+        var definition = AgentDefinition.FromJson("""
+        {
+          "kind":"prompt","name":"test",
+          "tools":[{"name":"key-tool","kind":"mcp","connection":{"kind":"key","endpoint":"https://resource.test/mcp","apiKey":"${SECRET:McpKey}"}}]
+        }
+        """)!;
+        await using var broker = new ManifestAccessTestBroker();
+        var prepared = await AgentFactory.MaterializeSecretsIfNeededAsync(
+            definition,
+            new AgentServices { AccessBroker = broker },
+            manifest: null,
+            agentSessionId: null,
+            CancellationToken.None);
+
+        Assert.Empty(broker.Requests);
+        Assert.Equal("${SECRET:McpKey}", Assert.Single(prepared.Services!.DeferredSecretReferences!));
     }
 }
 
