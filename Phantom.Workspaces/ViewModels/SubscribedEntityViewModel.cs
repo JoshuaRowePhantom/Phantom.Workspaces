@@ -155,6 +155,8 @@ public sealed class SubscribedEntityViewModel : ViewModelBase
         }
 
         displayNameObject[localeKey] = newDisplayName;
+        if (this.IsEntityType("agent-session"))
+            displayNameObject["default"] = newDisplayName;
 
         using var document = JsonDocument.Parse(entityNode.ToJsonString());
         return this.SaveEditedEntityAsync(document.RootElement.Clone());

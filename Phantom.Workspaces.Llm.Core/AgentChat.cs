@@ -144,6 +144,9 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
     // InitializeAsync, so consumers can observe completion/failure without gating view rendering
     // on it. Assigned once during initialization; Task.CompletedTask when the agent has no tools.
     private Task initialization = Task.CompletedTask;
+    private readonly TaskCompletionSource requiredToolsReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private Task requiredToolInitialization = Task.CompletedTask;
+    private readonly Dictionary<string, Task> mcpInitializationTasks = new(StringComparer.Ordinal);
     private string agentSessionId = Guid.NewGuid().ToString("n");
     private AgentInformation information;
     private Usage usage;
@@ -521,10 +524,12 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
            initializationToken);
        this.chatOptions.AIContextProviders = this.runtimeContextProviderRegistrations
            .Where(registration => registration.Provider is not null)
-           .Select(registration => new ToolFilteringAIContextProvider(
-               registration.Provider!,
-               this.IsToolEnabledForRuntime,
-               this.CreateProviderEnabledGate(registration)))
+           .Select(registration => registration.Tool is McpTool mcpTool
+               ? (AIContextProvider)new RuntimeToolSnapshotContextProvider(
+                   () => this.GetMcpRuntimeContext(mcpTool))
+               : new ToolFilteringAIContextProvider(
+                   registration.Provider!,
+                   this.IsToolEnabledForRuntime))
            .ToArray();
 
        this.chatClientAgent = new ChatClientAgent(streamingMiddleware, this.chatOptions);
@@ -650,13 +655,16 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
        // InitializeMcpToolsAsync catches per-server and orchestration errors internally, so a single
        // failing server never faults this task.
        var hasToolWork = this.runtimeContextProviderRegistrations.Count > 0;
+       this.requiredToolInitialization = hasToolWork ? this.requiredToolsReady.Task : Task.CompletedTask;
        this.initialization = hasToolWork
            ? this.RunOnForegroundAsync(
                () => this.InitializeMcpToolsAsync(this.cts.Token))
            : Task.CompletedTask;
+       if (!hasToolWork)
+           this.requiredToolsReady.TrySetResult();
 
-       // Start only after `initialization` references the real task. The processing loop awaits it
-       // before the first model request so an immediately queued message cannot race MCP discovery.
+       // Establish required-tool readiness before starting the process loop. Optional MCP discovery
+       // is observable through Initialization but never delays a model turn.
        this.StartProcessingLoop();
        if (this.modelClient is not null)
        {
@@ -920,7 +928,8 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                     RecomputeAncestorEnabled(node.Parent);
                 }
 
-                if (enabled && node.Parent is null && string.Equals(node.Kind, "mcp", StringComparison.Ordinal))
+                if (enabled && node.Parent is null && string.Equals(node.Kind, "mcp", StringComparison.Ordinal)
+                    && node.Status?.StartsWith("Failed", StringComparison.Ordinal) == true)
                 {
                     reenabledServerId = node.Id;
                 }
@@ -931,9 +940,7 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                 return;
             }
 
-            // Re-enabling an MCP server clears its provider's terminal-failure latch so exactly one
-            // fresh connection attempt is made on the next turn (issue #1447). A healthy provider is
-            // left untouched by ResetInitialization.
+            // Retry only failed servers; a pending or healthy server keeps its current generation.
             if (reenabledServerId is not null)
             {
                 this.ResetMcpServerProvider(reenabledServerId);
@@ -986,7 +993,7 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(messages);
-        await this.initialization.WaitAsync(cancellationToken);
+        await this.requiredToolInitialization.WaitAsync(cancellationToken);
         var session = this.GetSession();
         var runOptions = this.CreateRunOptions();
         await foreach (var update in session
@@ -1999,6 +2006,11 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
             failures.Add(error);
         }
 
+        await this.initialization.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        Task[] pendingServers;
+        lock (this.toolsLock)
+            pendingServers = this.mcpInitializationTasks.Values.ToArray();
+        await Task.WhenAll(pendingServers).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         this.cts.Dispose();
         List<IAsyncDisposable> resourcesToDispose;
         lock (this.ownedResourcesLock)
@@ -2386,8 +2398,8 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
         CancellationToken cancellationToken)
     {
         // Keep input queueing responsive while MCP authentication/discovery runs in the background,
-        // but never dispatch a model turn until its complete tool set is available.
-        await this.initialization.WaitAsync(cancellationToken);
+        // but wait for required custom toolsets before dispatching a model turn.
+        await this.requiredToolInitialization.WaitAsync(cancellationToken);
         var currentSession = this.GetSession();
         using var queueStateSignal = new SemaphoreSlim(0);
         void OnQueueStateChanged(object? sender, AgentInputQueueManager.QueueStateChangedEventArgs e)
@@ -3166,39 +3178,29 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
             return;
         }
 
-        await this.toolMutationLock.WaitAsync(cancellationToken);
         try
         {
-            // MCP tools and custom toolsets now share a single source of truth: the runtime
-            // context provider registrations built by CreateRuntimeContextProviderRegistrationsAsync
-            // (issue #1395). Dispatching from the same registration list guarantees the provider
-            // that feeds the UI tool tree / diagnostic is the SAME instance already wired into
-            // chatOptions.AIContextProviders, so MCP tools reach the model.
-            var toolTasks = this.runtimeContextProviderRegistrations.Select(registration => registration.Tool switch
-            {
-                McpTool mcpTool => this.InitializeMcpRuntimeToolAsync(
-                    mcpTool,
-                    registration.Provider,
-                    cancellationToken),
-                CustomTool customTool => this.InitializeCustomToolRuntimeAsync(
-                    customTool,
-                    registration.Provider,
-                    registration.ErrorMessage,
-                    cancellationToken),
-                UnresolvedToolResourceTool unresolvedTool => this.InitializeUnresolvedToolResourceAsync(
-                    unresolvedTool,
-                    registration.ErrorMessage),
-                _ => Task.FromResult(new ToolInitializationResult([], [])),
-            });
-            var results = await Task.WhenAll(toolTasks);
-            var roots = results.SelectMany(static result => result.Roots).ToList();
-
-            this.ReplaceToolNodes(roots);
-
-            // Per-step running items (one per toolset / MCP server) already emit their own
-            // "Loading …" -> tool-listing diagnostics into unpersisted history, so no lumped
-            // "Agent ready. Loaded tools: …" summary running item is emitted here (issue #1072).
-            this.ToolsChanged?.Invoke(this, EventArgs.Empty);
+            var optionalTasks = this.runtimeContextProviderRegistrations
+                .Where(registration => registration.Tool is McpTool)
+                .Select(this.StartMcpInitialization)
+                .ToArray();
+            var requiredTasks = this.runtimeContextProviderRegistrations
+                .Where(registration => registration.Tool is not McpTool)
+                .Select(async registration =>
+                {
+                    var result = registration.Tool switch
+                    {
+                        CustomTool customTool => await this.InitializeCustomToolRuntimeAsync(
+                            customTool, registration.Provider, registration.ErrorMessage, cancellationToken),
+                        UnresolvedToolResourceTool unresolvedTool => await this.InitializeUnresolvedToolResourceAsync(
+                            unresolvedTool, registration.ErrorMessage),
+                        _ => new ToolInitializationResult([], []),
+                    };
+                    await this.PublishToolRootsAsync(result.Roots, cancellationToken);
+                }).ToArray();
+            await Task.WhenAll(requiredTasks);
+            this.requiredToolsReady.TrySetResult();
+            await Task.WhenAll(optionalTasks);
         }
         catch (Exception ex)
         {
@@ -3214,7 +3216,87 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
         }
         finally
         {
-            this.toolMutationLock.Release();
+            this.requiredToolsReady.TrySetResult();
+        }
+    }
+
+    private Task StartMcpInitialization(RuntimeContextProviderRegistration registration)
+    {
+        var tool = (McpTool)registration.Tool;
+        var name = string.IsNullOrWhiteSpace(tool.ServerName) ? tool.Name : tool.ServerName;
+        var serverId = BuildMcpServerToolId(name);
+        lock (this.toolsLock)
+        {
+            if (this.cts.IsCancellationRequested)
+                return Task.CompletedTask;
+            if (this.mcpInitializationTasks.TryGetValue(serverId, out var existing) && !existing.IsCompleted)
+                return existing;
+            var task = this.RunOnForegroundAsync(async () =>
+            {
+                this.completedCredentialServers.Remove(name ?? "(mcp server)");
+                var pending = new ToolStateNode(
+                    serverId, name ?? "(mcp server)", tool.Description ?? "", tool.Description ?? "",
+                    "mcp", null, null, true,
+                    tool.Connection is ApiKeyConnection or OAuthConnection
+                        ? $"Waiting for authorization for MCP server '{name}'."
+                        : $"Loading MCP server '{name}'.");
+                await this.PublishToolRootsAsync([pending], this.cts.Token);
+                var result = await this.InitializeMcpRuntimeToolAsync(tool, registration.Provider, this.cts.Token);
+                await this.PublishToolRootsAsync(result.Roots, this.cts.Token);
+            });
+            this.mcpInitializationTasks[serverId] = task;
+            return task;
+        }
+    }
+
+    private async Task PublishToolRootsAsync(
+        IReadOnlyList<ToolStateNode> roots,
+        CancellationToken cancellationToken)
+    {
+        await this.toolMutationLock.WaitAsync(cancellationToken);
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            lock (this.toolsLock)
+            {
+                foreach (var root in roots)
+                {
+                    var previous = this.toolRoots.FirstOrDefault(node => node.Id == root.Id);
+                    if (previous is not null)
+                    {
+                        // A user disabling a pending server wins over a late discovery completion.
+                        if (!previous.IsEnabled && previous.Status?.StartsWith("Failed", StringComparison.Ordinal) != true)
+                            SetNodeEnabled(root, false);
+                        this.toolRoots.Remove(previous);
+                    }
+                    this.toolRoots.Add(root);
+                }
+                this.toolIndex.Clear();
+                foreach (var root in this.toolRoots)
+                    IndexToolNode(root, this.toolIndex);
+            }
+            this.ToolsChanged?.Invoke(this, EventArgs.Empty);
+        }
+        finally { this.toolMutationLock.Release(); }
+    }
+
+    private AIContext GetMcpRuntimeContext(McpTool tool)
+    {
+        var name = string.IsNullOrWhiteSpace(tool.ServerName) ? tool.Name : tool.ServerName;
+        var identifier = BuildMcpServerToolId(name);
+        lock (this.toolsLock)
+        {
+            this.toolIndex.TryGetValue(identifier, out var server);
+            var tools = server?.IsEnabled == true
+                ? server.Children.Where(node => node.IsEnabled && node.RuntimeTool is not null)
+                    .Select(node => node.RuntimeTool!).ToArray()
+                : [];
+            return new AIContext
+            {
+                Tools = tools,
+                Instructions = tools.Length > 0 ? null
+                    : $"MCP server '{name}' is unavailable: {server?.Status ?? "Loading tools."} Its tools are not callable.",
+            };
         }
     }
 
@@ -3256,11 +3338,8 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
 
         var customRegistrations = await Task.WhenAll(providerTasks);
 
-        // Construct the MCP provider ONCE here so the SAME instance both feeds the UI tool tree /
-        // diagnostic (InitializeMcpRuntimeToolAsync) AND is wired into chatOptions.AIContextProviders,
-        // exposing MCP tools to the model exactly like CustomTool toolsets (issue #1395). No network
-        // connection happens here — McpToolContextProvider.ProvideAIContextAsync connects lazily — so
-        // the registration/reference exists at construction time without blocking on the network.
+        // One provider owns each connection. Background discovery publishes its tools into the
+        // tree; model context reads that ready snapshot without awaiting optional authorization.
         // #1430: wire this chat's credential-status reporter into the services handed to each MCP
         // provider so that, during background connection, the transport factory can surface a
         // "gathering credentials"/"waiting for sign-in" running item without the Llm.Core.Mcp layer
@@ -3743,21 +3822,6 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
     private static string BuildMcpChildToolId(string? serverName, string toolName)
         => $"{BuildMcpServerToolId(serverName)}:{toolName}";
 
-    private void ReplaceToolNodes(IReadOnlyList<ToolStateNode> roots)
-    {
-        lock (this.toolsLock)
-        {
-            this.toolRoots.Clear();
-            this.toolIndex.Clear();
-
-            foreach (var root in roots)
-            {
-                this.toolRoots.Add(root);
-                IndexToolNode(root, this.toolIndex);
-            }
-        }
-    }
-
     private static void IndexToolNode(ToolStateNode node, IDictionary<string, ToolStateNode> index)
     {
         index[node.Id] = node;
@@ -3795,37 +3859,9 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
     }
 
     /// <summary>
-    /// Builds the optional server-level enabled gate consulted by
-    /// <see cref="ToolFilteringAIContextProvider"/> before it invokes the wrapped provider. For an
-    /// MCP registration this reports the owning server <c>ToolStateNode.IsEnabled</c> so a disabled or
-    /// failure-latched server is never connected/invoked on subsequent turns (issue #1447). Non-MCP
-    /// registrations return <c>null</c> (no server-level gate; only the per-tool name filter applies).
-    /// </summary>
-    private Func<bool>? CreateProviderEnabledGate(RuntimeContextProviderRegistration registration)
-    {
-        if (registration.Tool is not McpTool mcpTool)
-        {
-            return null;
-        }
-
-        var serverId = BuildMcpServerToolId(
-            string.IsNullOrWhiteSpace(mcpTool.ServerName) ? mcpTool.Name : mcpTool.ServerName);
-        return () =>
-        {
-            lock (this.toolsLock)
-            {
-                // Before the tool tree is first built the server node is absent; treat that as enabled
-                // so the single initial connection attempt proceeds. Once the node exists, honor its
-                // IsEnabled — false for a user-disabled server or one whose init failed (issue #1447).
-                return !this.toolIndex.TryGetValue(serverId, out var node) || node.IsEnabled;
-            }
-        };
-    }
-
-    /// <summary>
     /// Clears the terminal-failure latch on the <see cref="McpToolContextProvider"/> that owns the
     /// server node with <paramref name="serverId"/>, so that re-enabling a failed MCP server makes
-    /// exactly one fresh connection attempt on the next turn (issue #1447).
+    /// exactly one fresh connection attempt and publishes its discovered tools.
     /// </summary>
     private void ResetMcpServerProvider(string serverId)
     {
@@ -3839,6 +3875,7 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                 if (string.Equals(candidateId, serverId, StringComparison.Ordinal))
                 {
                     mcpProvider.ResetInitialization();
+                    _ = this.StartMcpInitialization(registration);
                     return;
                 }
             }

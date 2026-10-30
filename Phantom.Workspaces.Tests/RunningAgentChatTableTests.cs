@@ -490,6 +490,166 @@ public sealed class RunningAgentChatTableTests
     }
 
     [Fact]
+    public async Task RunningAgentChatTable_HeadlessAcquisition_PublishesSessionDisplayMetadata()
+    {
+        var factory = new FakeRunningAgentChatFactory();
+        var table = new RunningAgentChatTable(factory);
+
+        // A headless/owner acquisition can arrive without a GUI display name (issue #1671). The
+        // session identity must still be nonblank and must not surface a raw/empty value.
+        var sessionId = new AgentSessionId("abcdef1234567890");
+        await using var lease = await table.AcquireAsync(
+            Request(sessionId, entityName: string.Empty),
+            TestContext.Current.CancellationToken);
+
+        var entry = Assert.Single(table.RunningSessions);
+        Assert.False(string.IsNullOrWhiteSpace(entry.SessionTitle));
+        Assert.Equal("Agent session abcdef12", entry.SessionTitle);
+
+        // Authoritative display metadata resolves the real title without pinning or replacing the
+        // runtime; a blank acquisition value never becomes the sole title source.
+        table.ApplyAuthoritativeDisplayName(sessionId, "Resolved Headless Title");
+        Assert.Equal("Resolved Headless Title", entry.SessionTitle);
+
+        // A later blank/null authoritative value falls back rather than blanking the title.
+        table.ApplyAuthoritativeDisplayName(sessionId, null);
+        Assert.Equal("Agent session abcdef12", entry.SessionTitle);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("persisted-title")]
+    public async Task AcquireAsync_LaterPersistedMetadata_RepairsFirstAcquisition(string initialName)
+    {
+        var table = new RunningAgentChatTable(new FakeRunningAgentChatFactory(), new FakeRuntimeContextFactory());
+        var sessionId = new AgentSessionId("persisted-title");
+        await using var first = await table.AcquireAsync(Request(sessionId, entityName: initialName),
+            TestContext.Current.CancellationToken);
+        var entity = JsonSerializer.SerializeToElement(new Dictionary<string, object?>
+        {
+            ["agent-session-id"] = sessionId.Value,
+            ["display-name"] = new Dictionary<string, string> { ["default"] = "Persisted title" },
+        });
+        await using var second = await table.AcquireAsync(new AcquireAgentChatRequest
+        {
+            AgentSessionId = sessionId,
+            AgentSessionEntity = entity,
+            EntityName = sessionId.Value,
+        }, TestContext.Current.CancellationToken);
+        var row = Assert.Single(table.RunningSessions);
+        Assert.Equal("Persisted title", row.SessionTitle);
+        await using var third = await table.AcquireAsync(Request(sessionId, entityName: ""),
+            TestContext.Current.CancellationToken);
+        Assert.Equal("Persisted title", row.SessionTitle);
+    }
+
+    [Fact]
+    public async Task LastViewerDetachesWithBackgroundRetention_KeepsNamedRuntimeWithoutTitleLease()
+    {
+        var table = new RunningAgentChatTable(new FakeRunningAgentChatFactory(), new FakeRuntimeContextFactory());
+        table.ConfigureLocalRuntimeRegistry(new FakeLocalRuntimeRegistry());
+        var sessionId = new AgentSessionId("retained-title");
+        var entity = JsonSerializer.SerializeToElement(new Dictionary<string, object?>
+        {
+            ["agent-session-id"] = sessionId.Value,
+            ["display-name"] = new Dictionary<string, string> { ["default"] = "Named retained runtime" },
+        });
+        var lease = await table.AcquireAsync(new AcquireAgentChatRequest
+        {
+            AgentSessionId = sessionId,
+            AgentSessionEntity = entity,
+        },
+            TestContext.Current.CancellationToken);
+        await table.RetainForViewerCloseAsync(sessionId, TestContext.Current.CancellationToken);
+        var row = Assert.Single(table.RunningSessions);
+        await lease.DisposeAsync();
+        Assert.Same(row, Assert.Single(table.RunningSessions));
+        Assert.Equal(0, row.ViewerCount);
+        Assert.Equal("Named retained runtime", row.SessionTitle);
+        await table.SetContinueInBackgroundAsync(sessionId, false, TestContext.Current.CancellationToken);
+        Assert.Empty(table.RunningSessions);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("launch-repair")]
+    public async Task AcquireAsync_LaterLaunchOnlyName_RepairsSameRuntimeAndNotifiesOnlyOnChange(string initialName)
+    {
+        var table = new RunningAgentChatTable(new FakeRunningAgentChatFactory());
+        var sessionId = new AgentSessionId("launch-repair");
+        await using var first = await table.AcquireAsync(
+            Request(sessionId, entityName: initialName),
+            TestContext.Current.CancellationToken);
+        var record = Assert.Single(table.RunningSessions);
+        Assert.Equal("Agent session launch-r", record.SessionTitle);
+        var notifications = new List<string>();
+        record.PropertyChanged += (_, change) =>
+        {
+            if (change.PropertyName == nameof(record.SessionTitle))
+                notifications.Add(record.SessionTitle);
+        };
+
+        await using var second = await table.AcquireAsync(
+            Request(sessionId, entityName: "Useful launch name"),
+            TestContext.Current.CancellationToken);
+        Assert.Same(record, Assert.Single(table.RunningSessions));
+        Assert.Same(first.AgentChat, second.AgentChat);
+        Assert.Equal("Useful launch name", record.SessionTitle);
+        Assert.Equal(["Useful launch name"], notifications);
+
+        await using var third = await table.AcquireAsync(
+            Request(sessionId, entityName: "Useful launch name"),
+            TestContext.Current.CancellationToken);
+        await using var fourth = await table.AcquireAsync(
+            Request(sessionId, entityName: ""),
+            TestContext.Current.CancellationToken);
+        Assert.Same(record, Assert.Single(table.RunningSessions));
+        Assert.Same(first.AgentChat, fourth.AgentChat);
+        Assert.Equal("Useful launch name", record.SessionTitle);
+        Assert.Equal(["Useful launch name"], notifications);
+    }
+
+    [Theory]
+    [InlineData("", "Canonical remote title", "Canonical remote title")]
+    [InlineData("remote-title", "Canonical remote title", "Canonical remote title")]
+    [InlineData("Stale name", "Canonical remote title", "Canonical remote title")]
+    [InlineData("", null, "Agent session remote-t")]
+    [InlineData("remote-title", null, "Agent session remote-t")]
+    [InlineData("Launch title", null, "Launch title")]
+    public async Task AcquireAsync_RemoteTitle_PrefersPersistedCanonicalNameThenLaunchOrStableFallback(
+        string launchName,
+        string? canonicalName,
+        string expectedTitle)
+    {
+        var factory = new FakeRunningAgentChatFactory();
+        var table = new RunningAgentChatTable(factory, new FakeRuntimeContextFactory());
+        var sessionId = new AgentSessionId("remote-title");
+        var entity = new JsonObject
+        {
+            ["host-profile-entity-id"] = "11111111-1111-1111-1111-111111111111",
+            ["ownership-generation"] = 2,
+        };
+        if (canonicalName is not null)
+            entity["display-name"] = new JsonObject { ["default"] = canonicalName };
+
+        await using var lease = await table.AcquireAsync(new AcquireAgentChatRequest
+        {
+            AgentSessionId = sessionId,
+            EntityName = launchName,
+            AgentSessionEntity = JsonSerializer.SerializeToElement(entity),
+            AcquisitionMode = AgentChatAcquisitionMode.AttachRemote,
+            OwningProfileTransport = new SnapshotTransport(sessionId.Value),
+        }, TestContext.Current.CancellationToken);
+
+        var record = Assert.Single(table.RunningSessions);
+        Assert.True(record.IsRemote);
+        Assert.Equal(sessionId, record.SessionId);
+        Assert.Equal(expectedTitle, record.SessionTitle);
+        Assert.IsType<RemoteAgentChat>(lease.AgentChat);
+        Assert.Empty(factory.RunningSessions);
+    }
+
+    [Fact]
     public async Task AcquireAsync_LastLeaseDisposed_RemovesFromRunningSessions()
     {
         var factory = new FakeRunningAgentChatFactory();
@@ -2684,11 +2844,16 @@ public sealed class RunningAgentChatTableTests
     }
 
     [Fact]
-    public async Task AcquireAsync_McpToolWithSecretPlaceholder_MaterializesToOpaqueHandleAndInvokesSecretProvider()
+    public async Task AcquireAsync_McpToolWithSecretPlaceholder_DefersMaterializationToConnectTime()
     {
-        // #1405: opening a session via the foreground RunningAgentChatTable path must materialize the
-        // ${SECRET:...} in an MCP tool connection — rewriting it to an opaque handle and invoking the
-        // SecretProvider — instead of passing the raw placeholder through to the MCP transport.
+        // #1405 + #1672: opening a session via the foreground RunningAgentChatTable path must NOT
+        // acquire a top-level MCP server's connection credential during preflight. The credential is
+        // owned by that server's connection boundary, so preflight leaves the ${SECRET:...} placeholder
+        // intact (surfaced as a deferred reference) and the broker is only consulted when the MCP
+        // transport connects. This keeps a missing/denied optional-server credential from aborting the
+        // whole session: the server degrades to a disabled node while the chat stays usable. The raw
+        // placeholder is still never sent to the transport — the deferred reference is resolved via the
+        // broker at connect (covered by McpTransportFactoryTests).
         var provider = new FakeAccessBroker();
         var services = new AgentServices
         {
@@ -2709,10 +2874,9 @@ public sealed class RunningAgentChatTableTests
             },
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(1, provider.CallCount);
+        Assert.Equal(0, provider.CallCount);
         var json = lease.AgentChat.Information.AgentDefinition.ToJson();
-        Assert.DoesNotContain("${SECRET:GitHubToken}", json, StringComparison.Ordinal);
-        Assert.Contains("${SECRET:", json, StringComparison.Ordinal);
+        Assert.Contains("${SECRET:GitHubToken}", json, StringComparison.Ordinal);
     }
 
     [Fact]

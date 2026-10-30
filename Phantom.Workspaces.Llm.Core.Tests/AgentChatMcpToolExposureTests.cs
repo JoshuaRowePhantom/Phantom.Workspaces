@@ -158,17 +158,14 @@ public sealed class AgentChatMcpToolExposureTests
         var registrationProviders = GetRegistrationProviders(chat)
             .OfType<McpToolContextProvider>()
             .ToArray();
-        var registrationProvider = Assert.Single(registrationProviders);
-
-        var wrappedProviders = GetAIContextProviders(chat)
-            .Select(GetWrappedProvider)
-            .OfType<McpToolContextProvider>()
-            .ToArray();
-        var wrappedProvider = Assert.Single(wrappedProviders);
-
-        // The instance that fed the UI tree/diagnostic (the registration provider) must be the very
-        // same instance wired into AIContextProviders — no duplicate MCP connection.
-        Assert.Same(registrationProvider, wrappedProvider);
+        Assert.Single(registrationProviders);
+        Assert.Single(GetAIContextProviders(chat).OfType<RuntimeToolSnapshotContextProvider>());
+        var discovered = await EnumerateProviderToolsAsync(registrationProviders);
+        var exposed = await EnumerateProviderToolsAsync(GetAIContextProviders(chat));
+        Assert.NotEmpty(discovered);
+        Assert.Equal(discovered.Length, exposed.Length);
+        foreach (var tool in discovered)
+            Assert.Same(tool, Assert.Single(exposed, candidate => candidate.Name == tool.Name));
     }
 
     [Fact]
@@ -231,7 +228,7 @@ public sealed class AgentChatMcpToolExposureTests
         Assert.Contains(diagnostics, text => text.Contains("Failed to open MCP server 'bad-mcp'", StringComparison.Ordinal));
 
         // The failed server must expose no tools to the model, and the turn must still complete
-        // (the resilient ToolFilteringAIContextProvider degrades gracefully rather than throwing).
+        // (the runtime snapshot excludes failed or still-pending servers).
         var toolNames = await ExposedToolNamesAsync(chat, client);
         Assert.DoesNotContain(toolNames, name => string.Equals(name, "ping", StringComparison.OrdinalIgnoreCase));
     }
@@ -360,13 +357,21 @@ public sealed class AgentChatMcpToolExposureTests
         var provider = GetRegistrationProviders(chat).OfType<McpToolContextProvider>().Single();
         Assert.True(GetInitializationFailed(provider));
 
-        // Re-enabling the server flips IsEnabled back to true AND clears the terminal-failure latch
-        // (ResetInitialization) so exactly one fresh attempt runs next turn (issue #1447).
-        await chat.SetToolEnabledAsync(serverNode.Id, enabled: true);
-        Assert.True(chat.Tools.Single().IsEnabled);
-        Assert.False(GetInitializationFailed(provider));
-
-        // The next turn makes one fresh connect attempt, which fails again and re-latches.
+        var failedAgain = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnToolsChanged(object? sender, EventArgs change)
+        {
+            if (chat.GetToolSnapshot().Any(node => !node.IsEnabled
+                && node.Status?.StartsWith("Failed", StringComparison.Ordinal) == true))
+                failedAgain.TrySetResult();
+        }
+        chat.ToolsChanged += OnToolsChanged;
+        try
+        {
+            // Re-enable starts discovery immediately, independently of model turns.
+            await chat.SetToolEnabledAsync(serverNode.Id, enabled: true);
+            await failedAgain.Task.WaitAsync(TimeSpan.FromSeconds(20));
+        }
+        finally { chat.ToolsChanged -= OnToolsChanged; }
         var toolNames = await ExposedToolNamesAsync(chat, client);
         Assert.DoesNotContain(toolNames, name => string.Equals(name, "ping", StringComparison.OrdinalIgnoreCase));
         Assert.True(GetInitializationFailed(provider));
@@ -449,19 +454,6 @@ public sealed class AgentChatMcpToolExposureTests
         }
 
         return providers;
-    }
-
-    private static AIContextProvider? GetWrappedProvider(AIContextProvider provider)
-    {
-        if (provider is not ToolFilteringAIContextProvider)
-        {
-            return provider;
-        }
-
-        var inner = typeof(ToolFilteringAIContextProvider)
-            .GetField("provider", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .GetValue(provider);
-        return inner as AIContextProvider;
     }
 
     private static async Task<string[]> EnumerateProvidersAsync(IReadOnlyList<AIContextProvider> providers)

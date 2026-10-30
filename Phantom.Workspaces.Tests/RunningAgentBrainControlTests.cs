@@ -15,6 +15,11 @@ using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Testing.Gui;
 using Phantom.Workspaces.ViewModels;
+using System.Collections.ObjectModel;
+using System.Text.Json;
+using Moq;
+using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Data.Offline;
 
 namespace Phantom.Workspaces.Tests;
 
@@ -488,6 +493,135 @@ public sealed class RunningAgentBrainControlTests
         Assert.Contains("AutomationProperties.Name=\"Terminate agent session\"", axaml, StringComparison.Ordinal);
         Assert.Contains("Command=\"{Binding InterruptCommand}\"", axaml, StringComparison.Ordinal);
         Assert.Contains("Command=\"{Binding TerminateCommand}\"", axaml, StringComparison.Ordinal);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void RunningAgentBrainControl_NoOpenTab_ShowsPrimaryTitleAndSeparateLocationStatus()
+    {
+        var row = CreateRemoteRow(entityName: "Named Session", isInterruptible: true);
+        var (window, rowGrid) = ShowRowAndGet<Grid>(row, HasClass<Grid>("running-agent-row"));
+
+        try
+        {
+            var textBlocks = rowGrid.GetVisualDescendants().OfType<TextBlock>().ToList();
+
+            var primary = textBlocks.FirstOrDefault(tb => tb.Text == "Named Session");
+            Assert.NotNull(primary);
+            Assert.Equal(FontWeight.SemiBold, primary!.FontWeight);
+
+            // The no-open-tab status is a separate, secondary location line — never the identity.
+            Assert.Contains(textBlocks, tb => tb.Text == "No open tab");
+
+            // Existing applicable actions remain rendered.
+            Assert.Contains(
+                rowGrid.GetVisualDescendants().OfType<Button>(),
+                button => button.Content as string == "Terminate");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task RunningAgentBrainControl_CanonicalRename_UpdatesPopupAndDefaultHeader()
+    {
+        await using var repository = await EntityRepository.CreateAsync(new UnknownRepositorySource());
+        repository.SetDataAccessLayerForTesting(new InMemoryDataAccessLayer());
+        var broker = new EntityBroker(repository);
+        var entityId = new EntityId(Guid.NewGuid());
+        var sessionId = new AgentSessionId(Guid.NewGuid().ToString("n"));
+        var session = new RunningAgentChatWithEntityInfo(
+            sessionId,
+            isSubAgent: false,
+            _ => throw new InvalidOperationException("The control test must not acquire a chat lease."),
+            entityName: "Before Rename",
+            entityId: null)
+        {
+            IsRemote = true,
+            CanSetContinueInBackground = true,
+            ViewerCount = 1,
+        };
+        var table = new Mock<IRunningAgentChatTable>();
+        table.SetupGet(value => value.RunningSessions).Returns(
+            new ObservableCollection<RunningAgentChatWithEntityInfo> { session });
+        table.Setup(value => value.ApplyAuthoritativeDisplayName(sessionId, It.IsAny<string?>()))
+            .Callback<AgentSessionId, string?>((_, name) => session.ApplyAuthoritativeDisplayName(name));
+        await broker.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "Create session" } },
+            Changes = [new EntityChange
+            {
+                EntityId = entityId,
+                EntityChangeMode = EntityChangeMode.Replace,
+                Data = JsonSerializer.SerializeToElement(new Dictionary<string, object?>
+                {
+                    ["entity-types"] = new[] { "agent-session" },
+                    ["agent-session-id"] = sessionId.Value,
+                    ["display-name"] = new Dictionary<string, string> { ["default"] = "Before Rename" },
+                }),
+            }],
+        }, TestContext.Current.CancellationToken);
+        using var displaySubscription = await RunningAgentSessionDisplaySubscription.CreateAsync(
+            broker, table.Object, TestContext.Current.CancellationToken);
+        var entity = Assert.Single(await broker.GetEntitiesAsync([entityId], TestContext.Current.CancellationToken));
+
+        var row = new RunningAgentRowViewModel(
+            session,
+            workspacePaneTitle: null,
+            tabTitle: null,
+            entityName: "Before Rename",
+            hasOpenTab: false,
+            isThinking: false,
+            activateCommand: new RelayCommand(_ => { }),
+            interruptAsync: _ => Task.CompletedTask,
+            terminateAsync: _ => Task.CompletedTask,
+            setContinueInBackgroundAsync: (_, _) => Task.CompletedTask);
+
+        var (window, rowGrid) = ShowRowAndGet<Grid>(row, HasClass<Grid>("running-agent-row"));
+        var tab = new AgentSessionWorkspaceTabViewModel { Id = "default-header", Title = "stale" };
+        tab.ObserveSessionDisplay(session);
+        var document = new WorkspaceDocument(tab);
+        var header = new TextBlock { DataContext = document.EffectiveTabHeader };
+        header.Bind(TextBlock.TextProperty, new Avalonia.Data.Binding("Title"));
+        var headerWindow = new Window { Content = header };
+        headerWindow.Show();
+
+        try
+        {
+            Assert.Contains(
+                rowGrid.GetVisualDescendants().OfType<TextBlock>(),
+                tb => tb.Text == "Before Rename");
+
+            // The popup and ordinary session headers both consume the same
+            // RunningAgentChatWithEntityInfo.SessionTitle projection, so a canonical persisted
+            // rename updates the live row without a tab and without reopening the popup.
+            await entity.SaveDisplayNameAsync("After Rename");
+            Dispatcher.UIThread.RunJobs();
+            rowGrid.UpdateLayout();
+
+            Assert.Equal("After Rename", row.SessionTitle);
+            Assert.Equal("After Rename", header.Text);
+            Assert.False(tab.IsTitleExplicit);
+            tab.SetTitleExplicit("Viewer alias");
+            await entity.SaveDisplayNameAsync("Canonical again");
+            Dispatcher.UIThread.RunJobs();
+            Assert.Equal("Viewer alias", header.Text);
+            Assert.Equal("Canonical again", row.SessionTitle);
+            Assert.Contains(
+                rowGrid.GetVisualDescendants().OfType<TextBlock>(),
+                tb => tb.Text == "Canonical again");
+            Assert.DoesNotContain(
+                rowGrid.GetVisualDescendants().OfType<TextBlock>(),
+                tb => tb.Text == "Before Rename");
+        }
+        finally
+        {
+            window.Close();
+            headerWindow.Close();
+            await document.DisposeAsync();
+            row.Dispose();
+        }
     }
 
     private static RunningAgentRowViewModel CreateRemoteRow(

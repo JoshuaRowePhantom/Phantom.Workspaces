@@ -2,6 +2,8 @@ using System.Text.RegularExpressions;
 using System.Text.Json;
 using AgentSchema;
 using Moq;
+using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Llm.Secrets;
 
@@ -9,6 +11,85 @@ namespace Phantom.Workspaces.Llm.Core.Tests.Secrets;
 
 public sealed class AgentDefinitionSecretMaterializerTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task MaterializeServerAsync_OpaqueReference_BorrowsRegisteredHandleOrFailsClosed(bool registered)
+    {
+        var core = AgentDefinition.FromJson("""{"kind":"prompt","name":"core","instructions":"${SECRET:Core}"}""")!;
+        await using var coreBroker = new ManifestAccessTestBroker();
+        await using var coreScope = await new AgentDefinitionSecretMaterializer().MaterializeAsync(
+            core, coreBroker, new CredentialUseLineage(), CancellationToken.None);
+        var token = Regex.Match(core.ToJson(), @"\$\{SECRET:[^}]+\}").Value;
+        var definition = AgentDefinition.FromJson("""
+            {"kind":"prompt","name":"server","tools":[{"kind":"mcp","name":"optional","connection":{
+            "kind":"key","endpoint":"https://optional.test/mcp","apiKey":"OPAQUE_HANDLE"}}]}
+            """.Replace("OPAQUE_HANDLE", token))!;
+        var tool = Assert.IsAssignableFrom<McpTool>(Assert.Single(Assert.IsType<PromptAgent>(definition).Tools!));
+        await using var broker = new ManifestAccessTestBroker();
+        var services = new AgentServices
+        {
+            AccessBroker = broker,
+            SecretPlaceholderResolver = registered ? coreScope.Resolver : null,
+            DeferredSecretReferences = ["${SECRET:Unrelated}"],
+        };
+        if (registered)
+        {
+            var scope = await new AgentDefinitionSecretMaterializer().MaterializeServerAsync(tool, services, CancellationToken.None);
+            Assert.True(scope.Resolver.TryResolve(token, out var lease));
+            await scope.DisposeAsync();
+            Assert.False(scope.Resolver.TryResolve(token, out _));
+            Assert.IsType<SensitiveValueUseSucceeded<int>>(await lease!.UseAsync(
+                (_, _) => ValueTask.FromResult(1), CancellationToken.None));
+        }
+        else
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                new AgentDefinitionSecretMaterializer().MaterializeServerAsync(tool, services, CancellationToken.None));
+        }
+        Assert.Empty(broker.Requests);
+    }
+
+    [Fact]
+    public async Task MaterializeServerAsync_PartialFailure_RollsBackOnlyServerAndRetriesOriginalReferences()
+    {
+        var core = AgentDefinition.FromJson("""{"kind":"prompt","name":"core","instructions":"${SECRET:Core}"}""")!;
+        await using var coreBroker = new ManifestAccessTestBroker();
+        await using var coreScope = await new AgentDefinitionSecretMaterializer().MaterializeAsync(
+            core, coreBroker, new CredentialUseLineage(), CancellationToken.None);
+        var definition = AgentDefinition.FromJson("""
+            {"kind":"prompt","name":"server","tools":[{"kind":"mcp","name":"optional","connection":{
+            "kind":"key","endpoint":"https://optional.test/${SECRET:Endpoint}","apiKey":"${SECRET:Key}"}}]}
+            """)!;
+        var tool = Assert.IsAssignableFrom<McpTool>(Assert.Single(Assert.IsType<PromptAgent>(definition).Tools!));
+        var original = definition.ToJson();
+        await using var broker = new ManifestAccessTestBroker { FailAt = 2 };
+        var services = new AgentServices
+        {
+            AccessBroker = broker,
+            DeferredSecretReferences = ["${SECRET:Endpoint}", "${SECRET:Key}"],
+        };
+        await Assert.ThrowsAsync<SecretMaterializationFailedException>(() =>
+            new AgentDefinitionSecretMaterializer().MaterializeServerAsync(tool, services, CancellationToken.None));
+        Assert.Equal(original, definition.ToJson());
+        var rolledBack = Assert.Single(broker.Results);
+        Assert.IsType<SensitiveValueUseFailed<int>>(await rolledBack.Lease.UseAsync(
+            (_, _) => ValueTask.FromResult(1), CancellationToken.None));
+        Assert.IsType<SensitiveValueUseSucceeded<int>>(await coreBroker.Results.Single().Lease.UseAsync(
+            (_, _) => ValueTask.FromResult(1), CancellationToken.None));
+        await using var retryBroker = new ManifestAccessTestBroker();
+        var retry = await new AgentDefinitionSecretMaterializer().MaterializeServerAsync(
+            tool, services with { AccessBroker = retryBroker }, CancellationToken.None);
+        var tokens = Regex.Matches(retry.Definition.ToJson(), @"\$\{SECRET:[^}]+\}")
+            .Select(match => match.Value).ToArray();
+        Assert.Equal(2, tokens.Length);
+        Assert.All(tokens, token => Assert.True(retry.Resolver.TryResolve(token, out _)));
+        Assert.All(broker.Requests, request => Assert.Equal(CredentialUseKind.Mcp, request.Use.Kind));
+        Assert.Equal(original, definition.ToJson());
+        await retry.DisposeAsync();
+        Assert.All(tokens, token => Assert.False(retry.Resolver.TryResolve(token, out _)));
+    }
+
     [Fact]
     public async Task AgentDefinitionSecretMaterializer_MultipleUses_SubmitsOneBrokerRequestPerUse()
     {
@@ -164,6 +245,84 @@ public sealed class AgentDefinitionSecretMaterializerTests
             definition, broker, new CredentialUseLineage(), CancellationToken.None));
         Assert.Single(broker.Requests);
         Assert.Equal(original, definition.ToJson());
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_McpServerApiKey_IsDeferredAndNotAcquired()
+    {
+        var definition = AgentDefinition.FromJson("""
+        {
+          "kind":"prompt","name":"test",
+          "tools":[{"name":"key-tool","kind":"mcp","connection":{"kind":"key","endpoint":"https://resource.test/mcp","apiKey":"${SECRET:McpKey}"}}]
+        }
+        """)!;
+        var original = definition.ToJson();
+        await using var broker = new ManifestAccessTestBroker();
+        await using var result = await new AgentDefinitionSecretMaterializer().MaterializeAsync(
+            definition, broker, new CredentialUseLineage(), CancellationToken.None);
+
+        Assert.Empty(broker.Requests);
+        Assert.Equal(original, definition.ToJson());
+        Assert.Equal("${SECRET:McpKey}", Assert.Single(result.DeferredSecretReferences));
+        Assert.False(result.Resolver.TryResolve("${SECRET:McpKey}", out _));
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_CoreAndMcp_MaterializesOnlyCoreAndDefersMcp()
+    {
+        var definition = AgentDefinition.FromJson("""
+        {
+          "kind":"prompt","name":"test","instructions":"${SECRET:CoreSecret}",
+          "tools":[{"name":"key-tool","kind":"mcp","connection":{"kind":"key","endpoint":"https://resource.test/mcp","apiKey":"${SECRET:McpKey}"}}]
+        }
+        """)!;
+        await using var broker = new ManifestAccessTestBroker();
+        await using var result = await new AgentDefinitionSecretMaterializer().MaterializeAsync(
+            definition, broker, new CredentialUseLineage(), CancellationToken.None);
+
+        Assert.Equal("CoreSecret", Assert.Single(broker.Requests).Reference.Name);
+        Assert.Equal("${SECRET:McpKey}", Assert.Single(result.DeferredSecretReferences));
+        var json = definition.ToJson();
+        Assert.DoesNotContain("CoreSecret", json);
+        Assert.Contains("${SECRET:McpKey}", json);
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_RequiredCoreDenied_FailsClosedEvenWithDeferredMcp()
+    {
+        var definition = AgentDefinition.FromJson("""
+        {
+          "kind":"prompt","name":"test","instructions":"${SECRET:CoreSecret}",
+          "tools":[{"name":"key-tool","kind":"mcp","connection":{"kind":"key","endpoint":"https://resource.test/mcp","apiKey":"${SECRET:McpKey}"}}]
+        }
+        """)!;
+        var original = definition.ToJson();
+        await using var broker = new ManifestAccessTestBroker { Deny = true };
+        await Assert.ThrowsAsync<SecretMaterializationRefusedException>(() => new AgentDefinitionSecretMaterializer().MaterializeAsync(
+            definition, broker, new CredentialUseLineage(), CancellationToken.None));
+        Assert.Single(broker.Requests);
+        Assert.Equal(original, definition.ToJson());
+    }
+
+    [Fact]
+    public async Task MaterializeSecretsIfNeededAsync_McpServerApiKey_DefersReferenceOntoServicesWithoutAcquiring()
+    {
+        var definition = AgentDefinition.FromJson("""
+        {
+          "kind":"prompt","name":"test",
+          "tools":[{"name":"key-tool","kind":"mcp","connection":{"kind":"key","endpoint":"https://resource.test/mcp","apiKey":"${SECRET:McpKey}"}}]
+        }
+        """)!;
+        await using var broker = new ManifestAccessTestBroker();
+        var prepared = await AgentFactory.MaterializeSecretsIfNeededAsync(
+            definition,
+            new AgentServices { AccessBroker = broker },
+            manifest: null,
+            agentSessionId: null,
+            CancellationToken.None);
+
+        Assert.Empty(broker.Requests);
+        Assert.Equal("${SECRET:McpKey}", Assert.Single(prepared.Services!.DeferredSecretReferences!));
     }
 }
 

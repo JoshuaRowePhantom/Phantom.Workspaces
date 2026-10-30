@@ -96,7 +96,14 @@ internal sealed class McpBrokerClientTransport : IClientTransport, IAsyncDisposa
         {
             throw new InvalidOperationException("MCP credential access is unavailable.");
         }
-        if (services.SecretPlaceholderResolver is ISecretPlaceholderResolver resolver)
+        // #1672: a reference the materializer deliberately deferred is acquired at this connection
+        // boundary via the broker (below), not resolved from a pre-registered handle. Only non-
+        // deferred references consult the resolver, preserving the invariant that an unregistered
+        // materialized handle fails closed instead of silently falling back to a stored name.
+        var isDeferredReference = connection.ApiKey is { } apiKeyReference
+            && services.DeferredSecretReferences is { } deferredReferences
+            && deferredReferences.Contains(apiKeyReference);
+        if (!isDeferredReference && services.SecretPlaceholderResolver is ISecretPlaceholderResolver resolver)
         {
             if (!resolver.TryResolve(connection.ApiKey, out var lease))
             {
@@ -104,7 +111,8 @@ internal sealed class McpBrokerClientTransport : IClientTransport, IAsyncDisposa
             }
             var borrowedHandler = new SensitiveUseHandler(lease, endpoint, null)
             {
-                InnerHandler = new SocketsHttpHandler { AllowAutoRedirect = false },
+                InnerHandler = services.McpHttpMessageHandlerFactory?.Invoke()
+                    ?? new SocketsHttpHandler { AllowAutoRedirect = false },
             };
             return await CreateOwnedTransportAsync(endpoint, transportMode, borrowedHandler, null, loggerFactory).ConfigureAwait(false);
         }
@@ -153,10 +161,18 @@ internal sealed class McpBrokerClientTransport : IClientTransport, IAsyncDisposa
                 SafeDisplayName = "Stored MCP credential",
             }],
         };
+        var serverName = tool.ServerName ?? tool.Name ?? "(mcp server)";
+        services.McpCredentialStatusReporter?.Invoke(serverName, $"Waiting for authorization for MCP server '{serverName}'.");
         var result = RequireResult(await broker.AcquireAsync(request, cancellationToken).ConfigureAwait(false), cancellationToken);
+        if (cancellationToken.IsCancellationRequested)
+        {
+            await result.DisposeAsync().ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
         var handler = new SensitiveUseHandler(result.Lease, endpoint, null)
         {
-            InnerHandler = new SocketsHttpHandler { AllowAutoRedirect = false },
+            InnerHandler = services.McpHttpMessageHandlerFactory?.Invoke()
+                ?? new SocketsHttpHandler { AllowAutoRedirect = false },
         };
         return await CreateOwnedTransportAsync(endpoint, transportMode, handler, result, loggerFactory).ConfigureAwait(false);
     }

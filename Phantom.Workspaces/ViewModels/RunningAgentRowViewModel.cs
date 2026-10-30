@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Windows.Input;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Services;
@@ -10,7 +11,10 @@ namespace Phantom.Workspaces.ViewModels;
 public sealed class RunningAgentRowViewModel : ViewModelBase, IDisposable
 {
     private readonly TimeProvider timeProvider;
+    private readonly RunningAgentChatWithEntityInfo? session;
+    private readonly PropertyChangedEventHandler? sessionTitleHandler;
     private readonly AgentChatInterruptState? interruptState;
+    private string sessionTitle;
     private readonly AsyncRelayCommand? interruptCommand;
     private readonly AsyncRelayCommand? terminateCommand;
     private readonly AsyncRelayCommand? setContinueInBackgroundCommand;
@@ -89,6 +93,18 @@ public sealed class RunningAgentRowViewModel : ViewModelBase, IDisposable
         this.InterruptCommand = this.interruptCommand;
         this.TerminateCommand = this.terminateCommand;
         this.SetContinueInBackgroundCommand = this.setContinueInBackgroundCommand;
+        this.session = session;
+        // Observe the authoritative session-backed title so a persisted rename updates this row
+        // live, independently of whether a viewer tab exists. Disposed in Dispose().
+        this.sessionTitleHandler = (_, e) =>
+        {
+            if (e.PropertyName is null
+                || string.Equals(e.PropertyName, nameof(RunningAgentChatWithEntityInfo.SessionTitle), StringComparison.Ordinal))
+            {
+                this.SessionTitle = session.SessionTitle;
+            }
+        };
+        session.PropertyChanged += this.sessionTitleHandler;
         this.UpdateRuntimeMetadata(session, isThinking);
     }
 
@@ -108,6 +124,7 @@ public sealed class RunningAgentRowViewModel : ViewModelBase, IDisposable
         this.TabTitle = tabTitle;
         this.EntityName = entityName;
         this.HasOpenTab = hasOpenTab;
+        this.sessionTitle = ComputeInitialTitle(sessionKey, entityName, tabTitle, workspacePaneTitle);
         this.isThinking = isThinking;
         this.ActivateCommand = activateCommand;
         this.InterruptCommand = new RelayCommand(_ => { }, _ => false);
@@ -122,6 +139,48 @@ public sealed class RunningAgentRowViewModel : ViewModelBase, IDisposable
     public string TabTitle { get; }
     public bool HasOpenTab { get; }
     public string? EntityName { get; }
+
+    /// <summary>
+    /// The always-nonblank primary title that identifies this running session. Seeded from the
+    /// session-backed projection and kept live by an authoritative rename, independently of
+    /// whether a viewer tab is open. <see cref="WorkspacePaneTitle"/>/<see cref="TabTitle"/> are
+    /// optional secondary viewer-location data and never own the identity.
+    /// </summary>
+    public string SessionTitle
+    {
+        get => this.sessionTitle;
+        private set => this.SetProperty(ref this.sessionTitle, value);
+    }
+
+    private static string ComputeInitialTitle(
+        string sessionKey,
+        string? entityName,
+        string tabTitle,
+        string workspacePaneTitle)
+    {
+        if (!string.IsNullOrWhiteSpace(entityName))
+        {
+            return entityName!;
+        }
+
+        if (!string.IsNullOrWhiteSpace(tabTitle))
+        {
+            return tabTitle;
+        }
+
+        if (!string.IsNullOrWhiteSpace(workspacePaneTitle))
+        {
+            return workspacePaneTitle;
+        }
+
+        if (string.IsNullOrEmpty(sessionKey))
+        {
+            return "Agent session (unknown)";
+        }
+
+        var shortId = sessionKey.Length <= 8 ? sessionKey : sessionKey[..8];
+        return $"Agent session {shortId}";
+    }
 
     public bool IsThinking
     {
@@ -214,6 +273,7 @@ public sealed class RunningAgentRowViewModel : ViewModelBase, IDisposable
         this.IsRemote = session.IsRemote;
         this.ContinueInBackground = session.ContinueInBackground;
         this.ViewerCount = session.ViewerCount;
+        this.SessionTitle = session.SessionTitle;
         this.canSetContinueInBackground = session.CanSetContinueInBackground;
         this.isConnected = session.IsConnected;
         this.isTerminal = session.IsTerminal;
@@ -339,6 +399,11 @@ public sealed class RunningAgentRowViewModel : ViewModelBase, IDisposable
 
     public void Dispose()
     {
+        if (this.sessionTitleHandler is not null && this.session is not null)
+        {
+            this.session.PropertyChanged -= this.sessionTitleHandler;
+        }
+
         if (this.interruptState is not null)
         {
             this.interruptState.StateChanged -= this.OnInterruptStateChanged;

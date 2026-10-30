@@ -46,27 +46,26 @@
                                                    Classes.idle="{Binding IsThinking, Converter={x:Static BoolConverters.Not}}"
                                                    Text="🧠"
                                                    VerticalAlignment="Center" />
-                                        <StackPanel Spacing="1"
-                                                    IsVisible="{Binding HasOpenTab}">
+                                        <StackPanel Spacing="1">
+                                            <!-- Primary identity: always visible, session-backed,
+                                                 never blank and never the "No open tab" status. -->
+                                            <TextBlock Text="{Binding SessionTitle}"
+                                                       FontWeight="SemiBold"
+                                                       TextWrapping="NoWrap"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <!-- Optional secondary location: the owning workspace
+                                                 pane when a viewer exists, otherwise a plain
+                                                 no-open-tab status. Location never owns identity. -->
                                             <TextBlock Text="{Binding WorkspacePaneTitle}"
                                                        Classes="muted"
                                                        FontSize="11"
                                                        TextWrapping="NoWrap"
-                                                       TextTrimming="CharacterEllipsis" />
-                                            <TextBlock Text="{Binding TabTitle}"
-                                                       FontWeight="SemiBold"
-                                                       TextWrapping="NoWrap"
-                                                       TextTrimming="CharacterEllipsis" />
-                                        </StackPanel>
-                                        <StackPanel Spacing="1"
-                                                    IsVisible="{Binding !HasOpenTab}">
-                                            <TextBlock Text="No Open Tab"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       IsVisible="{Binding HasOpenTab}" />
+                                            <TextBlock Text="No open tab"
                                                        Classes="muted"
-                                                       FontSize="11" />
-                                            <TextBlock Text="{Binding EntityName}"
-                                                       FontWeight="SemiBold"
-                                                       TextWrapping="NoWrap"
-                                                       TextTrimming="CharacterEllipsis" />
+                                                       FontSize="11"
+                                                       IsVisible="{Binding !HasOpenTab}" />
                                         </StackPanel>
                                     </StackPanel>
                                 </Button>

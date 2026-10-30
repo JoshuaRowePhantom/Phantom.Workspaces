@@ -1069,6 +1069,10 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
     public AgentViewModel ComposeSessionAgentViewModel(ComposeSessionAgentViewModelOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
+        var display = this.runningAgentChatTable.RunningSessions.FirstOrDefault(
+            session => session.SessionId.Value == options.AgentChat.Information.AgentSessionId);
+        if (display is not null)
+            options.Tab.ObserveSessionDisplay(display);
         var agent = BuildAgentViewModel(
             options.MainWindowViewModel,
             options.LoggerFactory,
@@ -1109,7 +1113,14 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
                 RenameSessionAsync = async (newName, ct) =>
                 {
                     await options.AgentSessionEntity.SaveDisplayNameAsync(newName);
-                    options.Tab.SetTitleExplicit(newName);
+                    // Publish the canonical rename to the running-agent projection so the popup and
+                    // ordinary headers update live even when no viewer tab exists for the session.
+                    if (options.Tab.AgentSessionId is { Length: > 0 } renamedSessionId)
+                    {
+                        this.runningAgentChatTable.ApplyAuthoritativeDisplayName(
+                            new AgentSessionId(renamedSessionId),
+                            newName);
+                    }
                 },
                 SetTabTitleAsync = (newTitle, ct) =>
                 {

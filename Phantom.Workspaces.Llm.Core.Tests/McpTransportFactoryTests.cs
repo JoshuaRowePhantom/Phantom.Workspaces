@@ -333,6 +333,44 @@ public sealed class McpTransportFactoryTests
         Assert.Equal(1, broker.Calls);
     }
 
+    [Fact]
+    public async Task McpTransportFactory_DeferredApiKeyReference_AcquiresAtConnectEvenWhenResolverPresent()
+    {
+        var broker = new Broker();
+        var approved = Assert.IsType<AccessSucceeded<StoredSecretAccessResult>>(
+            await broker.AcquireAsync(SecretRequest(), CancellationToken.None)).Result;
+        await using var resolver = new HandleResolver("${SECRET:some-other-handle}", approved);
+        var transport = await CreateAsync(new McpTool
+        {
+            ServerName = "MCP server",
+            Connection = new ApiKeyConnection { Endpoint = Endpoint, ApiKey = "${SECRET:configured-key}" },
+        }, new AgentServices
+        {
+            AccessBroker = broker,
+            SecretPlaceholderResolver = resolver,
+            DeferredSecretReferences = ["${SECRET:configured-key}"],
+        });
+        await using var owned = (IAsyncDisposable)transport;
+        var request = Assert.IsType<StoredSecretAccessRequest>(broker.LastRequest);
+        Assert.Equal("configured-key", request.Reference.Name);
+    }
+
+    [Fact]
+    public async Task McpTransportFactory_DeferredApiKeyReference_DeniedCredential_ThrowsWithoutConnecting()
+    {
+        var broker = new Broker { Deny = true };
+        await Assert.ThrowsAsync<InvalidOperationException>(() => CreateAsync(new McpTool
+        {
+            ServerName = "MCP server",
+            Connection = new ApiKeyConnection { Endpoint = Endpoint, ApiKey = "${SECRET:configured-key}" },
+        }, new AgentServices
+        {
+            AccessBroker = broker,
+            DeferredSecretReferences = ["${SECRET:configured-key}"],
+        }));
+        Assert.Equal(1, broker.Calls);
+    }
+
     [Theory]
     [InlineData("inline-private-key")]
     [InlineData("${ENVIRONMENT_KEY}")]

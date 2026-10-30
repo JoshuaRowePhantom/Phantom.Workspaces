@@ -60,4 +60,16 @@ public interface IRunningAgentChatTable
 
     Task RetainExactForViewerCloseAsync(AgentSessionId sessionId, IAgentChat expected, CancellationToken ct = default)
         => this.RetainForViewerCloseAsync(sessionId, ct);
+
+    /// <summary>
+    /// Publishes an authoritative persisted display-name (a canonical session rename) for the
+    /// identified session so its <see cref="RunningAgentChatWithEntityInfo.SessionTitle"/> updates
+    /// live in <see cref="RunningSessions"/>, independently of whether a viewer tab is open. A
+    /// <see langword="null"/>/blank value falls back to the acquisition name or stable session-id
+    /// label rather than blanking the title. Default implementation is a no-op for source
+    /// compatibility with existing test doubles; production tables override this.
+    /// </summary>
+    void ApplyAuthoritativeDisplayName(AgentSessionId sessionId, string? displayName)
+    {
+    }
 }

@@ -830,11 +830,17 @@ public static class AgentFactory
         }
         if (services?.AccessBroker is not IAccessBroker accessBroker)
         {
-            if (new SecretUsageScanner().Scan(definition).Count > 0)
+            var partition = new SecretUsageScanner().PartitionByOwner(definition);
+            if (partition.RequiredCore.Count > 0)
             {
                 throw new SecretMaterializationRefusedException("Credential access requires a configured access broker.");
             }
-            return (definition, services);
+            return (definition, (services ?? new AgentServices()) with
+            {
+                DeferredSecretReferences = partition.DeferredMcpServer
+                    .Select(usage => $"${{SECRET:{usage.SecretName}}}")
+                    .Distinct(StringComparer.Ordinal).ToArray(),
+            });
         }
 
         var origin = AgentManifestSecretUseMemoryFactory.CreateLineage(manifest, definition, agentSessionId);
@@ -859,6 +865,7 @@ public static class AgentFactory
         {
             AccessLineage = lineage,
             SecretPlaceholderResolver = materialized.Resolver,
+            DeferredSecretReferences = materialized.DeferredSecretReferences,
         });
     }
 

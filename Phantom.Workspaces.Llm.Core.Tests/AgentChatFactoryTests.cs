@@ -13,6 +13,66 @@ namespace Phantom.Workspaces.Llm.Tests;
 
 public sealed class AgentChatFactoryTests
 {
+    [Fact]
+    public async Task GetAsync_NoBroker_OptionalCredentialDoesNotPreventFirstAnswer()
+    {
+        var environment = new Core.Tests.McpCredentialTestEnvironment();
+        var client = Core.Tests.McpCredentialTestEnvironment.Client();
+        await using var factory = CreateFactory(client: client);
+        await using var lease = await factory.GetOrCreateAsync(
+            new AgentSessionId("no-broker-optional"),
+            Core.Tests.McpCredentialTestEnvironment.Definition(),
+            environment.Services(client) with { AccessBroker = null });
+        await Core.Tests.McpCredentialTestEnvironment.AssertUsableUnavailableAsync(
+            lease.LocalAgentChat, client, environment, expectedRequests: 0);
+        Assert.Single(factory.RunningSessions);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("failed")]
+    [InlineData("denied")]
+    [InlineData("cancelled")]
+    [InlineData("reacquisition")]
+    [InlineData("authorization")]
+    public async Task GetAsync_McpCredentialIsUnavailable_ChatStaysUsableAndServerIsUnavailable(string outcome)
+    {
+        var environment = new Core.Tests.McpCredentialTestEnvironment
+        {
+            Acquire = (_, _) => Task.FromResult(Core.Tests.McpCredentialTestEnvironment.Failure(outcome)),
+        };
+        var client = Core.Tests.McpCredentialTestEnvironment.Client();
+        await using var factory = CreateFactory(client: client);
+        await using var lease = await factory.GetOrCreateAsync(
+            new AgentSessionId("optional-" + outcome),
+            Core.Tests.McpCredentialTestEnvironment.Definition(),
+            environment.Services(client));
+        await Core.Tests.McpCredentialTestEnvironment.AssertUsableUnavailableAsync(lease.LocalAgentChat, client, environment);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("denied")]
+    [InlineData("failed")]
+    [InlineData("cancelled")]
+    [InlineData("reacquisition")]
+    [InlineData("authorization")]
+    public async Task GetAsync_RequiredCoreCredentialIsUnavailable_FailsClosed(string outcome)
+    {
+        var environment = new Core.Tests.McpCredentialTestEnvironment
+        {
+            Acquire = (_, _) => Task.FromResult(Core.Tests.McpCredentialTestEnvironment.Failure(outcome)),
+        };
+        await using var factory = CreateFactory();
+        var exception = await Record.ExceptionAsync(() => factory.GetOrCreateAsync(
+            new AgentSessionId("required-" + outcome),
+            Core.Tests.McpCredentialTestEnvironment.Definition(required: true),
+            environment.Services(Core.Tests.McpCredentialTestEnvironment.Client())));
+        Assert.True(exception is SecretMaterializationRefusedException or SecretMaterializationFailedException);
+        Assert.Empty(factory.RunningSessions);
+        Assert.Equal("Required", Assert.Single(environment.Requests).Reference.Name);
+        Assert.Empty(environment.HttpRequests);
+    }
     [Theory]
     [InlineData(AgentChatCompletionState.Unknown)]
     [InlineData(AgentChatCompletionState.Running)]
@@ -1137,7 +1197,7 @@ public sealed class AgentChatFactoryTests
         await using var factory = CreateFactory();
         var sessionId = new AgentSessionId("session-materialize-secret");
 
-        await using var lease = await factory.GetOrCreateAsync(sessionId, McpSecretDefinition(), services);
+        await using var lease = await factory.GetOrCreateAsync(sessionId, RequiredSecretDefinition(), services);
 
         Assert.Single(provider.Requests);
         var json = lease.LocalAgentChat.AgentDefinition!.ToJson();
@@ -1159,7 +1219,7 @@ public sealed class AgentChatFactoryTests
         };
 
         var (materializedDefinition, materializedServices) = await AgentFactory.MaterializeSecretsIfNeededAsync(
-            McpSecretDefinition(), baseServices, manifest: null, agentSessionId: null, CancellationToken.None);
+            RequiredSecretDefinition(), baseServices, manifest: null, agentSessionId: null, CancellationToken.None);
         Assert.Single(provider.Requests);
 
         await using var factory = CreateFactory();
@@ -1169,6 +1229,14 @@ public sealed class AgentChatFactoryTests
 
         Assert.Single(provider.Requests);
     }
+
+    private static AgentDefinition RequiredSecretDefinition() => AgentDefinitionLoader.LoadAgentFromJson("""
+        {
+          "kind":"prompt", "name":"required-secret-agent",
+          "model":{"id":"echo","provider":"echo","apiType":"Echo",
+            "connection":{"kind":"key","apiKey":"${SECRET:GitHubToken}"}}
+        }
+        """);
 
     private static AgentDefinition McpSecretDefinition() => AgentDefinitionLoader.LoadAgentFromJson("""
         {

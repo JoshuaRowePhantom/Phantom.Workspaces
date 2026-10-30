@@ -13,6 +13,7 @@ using Phantom.Workspaces.Llm.Core.Manifest;
 using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.Mcp;
+using Phantom.Workspaces.Llm.Secrets;
 
 namespace Phantom.Workspaces.Llm;
 
@@ -49,6 +50,7 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
     private IAsyncDisposable? initializingClientTransport;
     private IAsyncDisposable? connectedClientTransport;
     private AITool[]? cachedTools;
+    private IAsyncDisposable? serverCredentialScope;
 
     // Remote-executor connection resources (issue #1438), disposed with the provider or cleared on
     // <see cref="ResetInitialization"/>. Null for local (in-process) bindings.
@@ -134,16 +136,19 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
             {
                 var logger = this.loggerFactory?.CreateLogger<McpToolContextProvider>();
                 var serverName = string.IsNullOrWhiteSpace(this.tool.ServerName) ? this.tool.Name : this.tool.ServerName;
-                var initialization = this.InvokeInitializerAsync(lifetimeToken);
-                await Task.WhenAny(initialization).ConfigureAwait(false);
-                if (initialization.IsFaulted)
+                try
+                {
+                    var tools = await this.InvokeInitializerAsync(lifetimeToken).ConfigureAwait(false);
+                    lifetimeToken.ThrowIfCancellationRequested();
+                    this.cachedTools = tools;
+                }
+                catch
                 {
                     this.initializationFailed = true;
                     logger?.LogError(
                         "Failed to open MCP server; category open-failed.");
+                    throw;
                 }
-
-                this.cachedTools = await initialization.ConfigureAwait(false);
             }
 
             return new AIContext
@@ -162,27 +167,52 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
 
     private async Task<AITool[]> ConnectAndListToolsAsync(CancellationToken cancellationToken)
     {
-        this.client = IsLocalDescriptor(this.boundExecutor) || this.router is null
-            ? await this.ConnectLocalAsync(cancellationToken)
-            : await this.ConnectRemoteAsync(cancellationToken);
-
-        var mcpTools = await McpClientToolListing.ListToolsAsync(this.client, cancellationToken);
-        if (this.tool.AllowedTools is { Count: > 0 })
+        try
         {
-            var allowedSet = new HashSet<string>(this.tool.AllowedTools, StringComparer.OrdinalIgnoreCase);
-            mcpTools = [.. mcpTools.Where(tool => allowedSet.Contains(tool.Name))];
-        }
+            this.client = IsLocalDescriptor(this.boundExecutor) || this.router is null
+                ? await this.ConnectLocalAsync(cancellationToken)
+                : await this.ConnectRemoteAsync(cancellationToken);
 
-        return mcpTools.Cast<AITool>().ToArray();
+            var mcpTools = await McpClientToolListing.ListToolsAsync(this.client, cancellationToken);
+            if (this.tool.AllowedTools is { Count: > 0 })
+            {
+                var allowedSet = new HashSet<string>(this.tool.AllowedTools, StringComparer.OrdinalIgnoreCase);
+                mcpTools = [.. mcpTools.Where(tool => allowedSet.Contains(tool.Name))];
+            }
+
+            return mcpTools.Cast<AITool>().ToArray();
+        }
+        catch
+        {
+            await this.DisposeConnectionAsync().ConfigureAwait(false);
+            throw;
+        }
     }
 
     // Local (in-process) binding: connect the MCP client directly through the shared transport
     // factory exactly as before the per-component executor work (behaviour-preserving default).
     private async Task<McpClient> ConnectLocalAsync(CancellationToken cancellationToken)
     {
+        var tool = this.tool;
+        var services = this.services;
+        if (services?.DeferredSecretReferences is { Count: > 0 })
+        {
+            var serverName = tool.ServerName ?? tool.Name ?? "(mcp server)";
+            services.McpCredentialStatusReporter?.Invoke(
+                serverName, $"Waiting for authorization for MCP server '{serverName}'.");
+            var materialized = await new AgentDefinitionSecretMaterializer().MaterializeServerAsync(
+                tool, services, cancellationToken).ConfigureAwait(false);
+            this.serverCredentialScope = materialized.Resolver;
+            tool = (McpTool)AgentFactory.ExtractTools(materialized.Definition)!.Single();
+            services = services with
+            {
+                SecretPlaceholderResolver = materialized.Resolver,
+                DeferredSecretReferences = [],
+            };
+        }
         var transport = await McpTransportFactory.CreateMcpTransportAsync(
-            this.tool,
-            this.services,
+            tool,
+            services,
             this.loggerFactory,
             cancellationToken,
             this.trustContext,
@@ -224,6 +254,7 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
             this.initializationFailed = false;
             this.resetCleanupRequired = false;
             this.cachedTools = await this.InvokeInitializerAsync(cancellation.Token).ConfigureAwait(false);
+            cancellation.Token.ThrowIfCancellationRequested();
         }
         catch
         {
@@ -313,19 +344,34 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
 
     private async ValueTask DisposeConnectionAsync()
     {
-        if (this.client is not null)
+        var client = Interlocked.Exchange(ref this.client, null);
+        var transport = Interlocked.Exchange(ref this.connectedClientTransport, null);
+        var credentialScope = Interlocked.Exchange(ref this.serverCredentialScope, null);
+        try
         {
-            await this.client.DisposeAsync();
-            this.client = null;
+            if (client is not null)
+                await client.DisposeAsync().ConfigureAwait(false);
         }
-
-        if (this.connectedClientTransport is not null)
+        finally
         {
-            await this.connectedClientTransport.DisposeAsync();
-            this.connectedClientTransport = null;
+            try
+            {
+                if (transport is not null)
+                    await transport.DisposeAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                try
+                {
+                    if (credentialScope is not null)
+                        await credentialScope.DisposeAsync().ConfigureAwait(false);
+                }
+                finally
+                {
+                    await this.DisposeRemoteAsync().ConfigureAwait(false);
+                }
+            }
         }
-
-        await this.DisposeRemoteAsync();
     }
 
     // Tears down the remote-executor connection resources (issue #1438). The MCP SDK client owns and

@@ -60,6 +60,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private EntityBroker? entityBroker;
     private InterestCatalog? interestCatalog;
     private EntityTypeCatalog? entityTypeCatalog;
+    private RunningAgentSessionDisplaySubscription? runningSessionDisplaySubscription;
     private EntityTypeViewCatalog? entityTypeViewCatalog;
     private FieldEditorFactory? fieldEditorFactory;
     private SubscribedEntityViewModel? mainNavigationView;
@@ -774,6 +775,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         };
 
         this.entityBroker.Changed += this.OnEntityBrokerChanged;
+        this.runningSessionDisplaySubscription = await RunningAgentSessionDisplaySubscription.CreateAsync(
+            this.entityBroker,
+            this.ApplicationServices.RunningAgentChats,
+            this.lifetime.Token);
         this.interestCatalog = await InterestCatalog.CreateAsync(this.entityBroker);
         this.lifetime.Token.ThrowIfCancellationRequested();
         this.interestCatalog.Changed += this.OnInterestCatalogChanged;
@@ -5373,6 +5378,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         Clean(() => this.ConnectionStatus?.Dispose());
         Clean(() => this.interestCatalog?.Dispose());
         Clean(() => this.entityTypeCatalog?.Dispose());
+        Clean(() => this.runningSessionDisplaySubscription?.Dispose());
         foreach (var lease in this.autoResumeLeases)
         {
             await CleanAsync(lease.DisposeAsync);
