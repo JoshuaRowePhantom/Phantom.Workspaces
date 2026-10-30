@@ -15,6 +15,7 @@ public sealed class RunningAgentRowViewModel : ViewModelBase, IDisposable
     private readonly RunningAgentChatWithEntityInfo? session;
     private readonly PropertyChangedEventHandler? sessionTitleHandler;
     private readonly AgentChatInterruptState? interruptState;
+    private readonly object interruptProjectionLock = new();
     private string sessionTitle;
     private readonly AsyncRelayCommand? interruptCommand;
     private readonly AsyncRelayCommand? terminateCommand;
@@ -315,13 +316,41 @@ public sealed class RunningAgentRowViewModel : ViewModelBase, IDisposable
 
     private void ApplyInterruptState(AgentChatInterruptSnapshot snapshot)
     {
-        this.IsInterruptPending = snapshot.IsPending;
-        this.LastOperationError = snapshot.Outcome switch
+        bool pendingChanged;
+        bool errorChanged;
+        bool availabilityChanged;
+        lock (this.interruptProjectionLock)
         {
-            AgentChatInterruptOutcome.Failed => "Unable to interrupt agent.",
-            _ => null,
-        };
-        this.UpdateCommandAvailability();
+            if (this.interruptState!.Snapshot != snapshot)
+            {
+                return;
+            }
+
+            var error = snapshot.Outcome == AgentChatInterruptOutcome.Failed
+                ? "Unable to interrupt agent."
+                : null;
+            var enabled = !snapshot.IsPending && !this.IsTerminationPending
+                && this.IsThinking && this.isConnected && !this.isTerminal;
+            pendingChanged = this.isInterruptPending != snapshot.IsPending;
+            errorChanged = this.lastOperationError != error;
+            availabilityChanged = this.isInterruptEnabled != enabled;
+            // Commit the entire projection before any external callback can begin a retry.
+            this.isInterruptPending = snapshot.IsPending;
+            this.lastOperationError = error;
+            this.isInterruptEnabled = enabled;
+        }
+
+        bool IsCurrent() => this.interruptState!.Snapshot == snapshot;
+        if (pendingChanged)
+            this.RaiseInterruptPropertyChanged(nameof(this.IsInterruptPending), IsCurrent);
+        if (errorChanged)
+            this.RaiseInterruptPropertyChanged(nameof(this.LastOperationError), IsCurrent);
+        if (availabilityChanged)
+        {
+            this.RaiseInterruptPropertyChanged(nameof(this.IsInterruptEnabled), IsCurrent);
+            if (IsCurrent())
+                this.interruptCommand?.RaiseCanExecuteChanged();
+        }
     }
 
     private async Task SetContinueInBackgroundAsync(

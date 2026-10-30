@@ -429,12 +429,6 @@ public sealed class AgentViewModelRetryTests
             });
         await using var vm = this.CreateViewModel(chat, loggerFactory);
         var command = Assert.IsType<AsyncRelayCommand>(vm.InterruptCommand);
-        var pendingCleared = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        vm.PropertyChanged += (_, e) =>
-        {
-            if (e.PropertyName == nameof(AgentViewModel.IsInterruptPending) && !vm.IsInterruptPending)
-                pendingCleared.TrySetResult();
-        };
 
         command.Execute(null);
         var firstExecution = command.LastExecutionTask;
@@ -448,7 +442,6 @@ public sealed class AgentViewModelRetryTests
 
         firstCompletion.SetResult();
         await firstExecution!;
-        await pendingCleared.Task;
 
         Assert.False(vm.IsInterruptPending);
         Assert.False(command.IsExecuting);
@@ -479,6 +472,7 @@ public sealed class AgentViewModelRetryTests
         var failure = await Assert.ThrowsAsync<InvalidOperationException>(
             async () => await command.LastExecutionTask!);
         Assert.Equal("owner rejected", failure.Message);
+        Assert.False(vm.IsInterruptPending);
         Assert.False(command.IsExecuting);
         Assert.True(command.CanExecute(null));
 
@@ -489,6 +483,7 @@ public sealed class AgentViewModelRetryTests
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             async () => await command.LastExecutionTask!);
+        Assert.False(vm.IsInterruptPending);
         Assert.False(command.IsExecuting);
         Assert.True(command.CanExecute(null));
     }

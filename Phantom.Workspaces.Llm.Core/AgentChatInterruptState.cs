@@ -72,7 +72,7 @@ internal sealed class AgentChatInterruptState
             this.outcome = AgentChatInterruptOutcome.Pending;
         }
 
-        this.StateChanged?.Invoke(this, EventArgs.Empty);
+        this.PublishStateChanged();
         _ = this.ExecuteOwnedAsync(completion, ownedGeneration, interruptAsync, cancellationToken);
         return completion.Task;
     }
@@ -100,45 +100,62 @@ internal sealed class AgentChatInterruptState
             null => AgentChatInterruptOutcome.Succeeded,
         };
 
-        lock (this.sync)
+        try
         {
-            if (!ReferenceEquals(this.pendingTask, completion.Task)
-                || this.generation != ownedGeneration)
+            lock (this.sync)
             {
-                return;
+                if (ReferenceEquals(this.pendingTask, completion.Task)
+                    && this.generation == ownedGeneration)
+                {
+                    this.outcome = outcome;
+                }
             }
 
-            this.outcome = outcome;
+            // Publish failure before releasing ownership so an early retry still coalesces.
+            this.PublishStateChanged();
         }
-
-        // Publish the complete outcome while ownership is still held. Subscribers can
-        // update every surface before any entry point is allowed to begin a retry.
-        this.StateChanged?.Invoke(this, EventArgs.Empty);
-
-        if (failure is OperationCanceledException canceled)
+        finally
         {
-            completion.TrySetCanceled(canceled.CancellationToken);
-        }
-        else if (failure is not null)
-        {
-            completion.TrySetException(failure);
-        }
-        else
-        {
-            completion.TrySetResult();
-        }
-
-        lock (this.sync)
-        {
-            if (!ReferenceEquals(this.pendingTask, completion.Task)
-                || this.generation != ownedGeneration)
+            try
             {
-                return;
+                var released = false;
+                lock (this.sync)
+                {
+                    if (ReferenceEquals(this.pendingTask, completion.Task)
+                        && this.generation == ownedGeneration)
+                    {
+                        this.pendingTask = null;
+                        released = true;
+                    }
+                }
+
+                if (released)
+                {
+                    this.PublishStateChanged();
+                }
             }
-
-            this.pendingTask = null;
+            finally
+            {
+                // This task acknowledges cleanup and publication, not just outcome selection.
+                // A subscriber may already own a newer generation: settle only our captured task.
+                if (failure is OperationCanceledException canceled)
+                {
+                    completion.TrySetCanceled(canceled.CancellationToken);
+                }
+                else if (failure is not null)
+                {
+                    completion.TrySetException(failure);
+                }
+                else
+                {
+                    completion.TrySetResult();
+                }
+            }
         }
-
-        this.StateChanged?.Invoke(this, EventArgs.Empty);
     }
+
+    private void PublishStateChanged() =>
+        InterruptNotifications.Publish(
+            this.StateChanged,
+            handler => handler(this, EventArgs.Empty));
 }
