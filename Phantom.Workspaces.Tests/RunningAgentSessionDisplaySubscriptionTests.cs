@@ -155,6 +155,11 @@ public sealed class RunningAgentSessionDisplaySubscriptionTests
     [InlineData("short", "Launch label", " ", "Launch label")]
     [InlineData("", "", null, "Agent session (unknown)")]
     [InlineData("short", "Launch label", "Canonical", "Canonical")]
+    [InlineData("abcdefghijk", "abcdefghijk", null, "Agent session abcdefgh")]
+    [InlineData("abcdefghijk", "Launch label", "abcdefghijk", "abcdefghijk")]
+    [InlineData("abcdefghijk", "ABCDEFGHIJK", null, "ABCDEFGHIJK")]
+    [InlineData("short", "  Launch label \t", null, "  Launch label \t")]
+    [InlineData("short", "Launch label", "  Canonical \t", "  Canonical \t")]
     public void TitlePolicy_ResolvesNonblankIdentityAndSuppressesUnchangedNotifications(
         string identifier, string launchName, string? canonicalName, string expected)
     {
@@ -171,24 +176,111 @@ public sealed class RunningAgentSessionDisplaySubscriptionTests
         Assert.Equal(0, notifications);
         record.ApplyAuthoritativeDisplayName("Changed");
         Assert.Equal(1, notifications);
+        Assert.Equal("Changed", record.SessionTitle);
+        record.ApplyAuthoritativeDisplayName("Changed");
+        Assert.Equal(1, notifications);
+        record.ApplyAuthoritativeDisplayName(canonicalName);
+        Assert.Equal(2, notifications);
+        Assert.Equal(expected, record.SessionTitle);
+    }
+
+    [Fact]
+    public void TitlePolicy_ClearingCanonicalRestoresLaunchOrIdentifier_WithChangeOnlyNotifications()
+    {
+        var record = CreateRecord(new AgentSessionId("abcdefghijk"), "Launch");
+        var titles = new List<string>();
+        record.PropertyChanged += (_, change) =>
+        {
+            if (change.PropertyName == nameof(record.SessionTitle))
+                titles.Add(record.SessionTitle);
+        };
+
+        record.ApplyAuthoritativeDisplayName("Canonical");
+        record.ApplyLaunchName("New launch");
+        record.ApplyAuthoritativeDisplayName(" ");
+        record.ApplyAuthoritativeDisplayName(null);
+        record.ApplyLaunchName("New launch");
+        record.ApplyLaunchName("abcdefghijk");
+        record.ApplyLaunchName("");
+        record.ApplyLaunchName(" \t");
+
+        Assert.Equal(new[] { "Canonical", "New launch", "Agent session abcdefgh" }, titles);
+        Assert.Equal("Agent session abcdefgh", record.SessionTitle);
     }
 
     private static RunningAgentChatWithEntityInfo CreateRecord(AgentSessionId sessionId, string name)
         => new(sessionId, false, _ => throw new InvalidOperationException(), name, null);
 
     [Theory]
-    [InlineData("short", "Entity", "Tab", "Pane", "Entity")]
-    [InlineData("short", " ", "Tab", "Pane", "Tab")]
-    [InlineData("short", null, " ", "Pane", "Pane")]
-    [InlineData("short", null, "", " ", "Agent session short")]
-    [InlineData("abcdefghijk", "", "", "", "Agent session abcdefgh")]
-    [InlineData("", null, "", "", "Agent session (unknown)")]
-    public void StandaloneRowTitlePolicy_CoversEveryFallback(
-        string identifier, string? name, string tabTitle, string paneTitle, string expected)
+    [InlineData("short", "Entity", "Entity")]
+    [InlineData("short", "  Entity \t", "  Entity \t")]
+    [InlineData("abcdefghijk", "abcdefghijk", "abcdefghijk")]
+    [InlineData("short", " ", "Agent session short")]
+    [InlineData("abcdefghijk", "", "Agent session abcdefgh")]
+    [InlineData("", "", "Agent session (unknown)")]
+    public void StandaloneEntityRowTitlePolicy_CoversEveryFallback(
+        string identifier,
+        string name,
+        string expected)
     {
-        using var row = !string.IsNullOrWhiteSpace(name)
-            ? new RunningAgentRowViewModel(identifier, name, new RelayCommand(_ => { }))
-            : new RunningAgentRowViewModel(identifier, paneTitle, tabTitle, false, new RelayCommand(_ => { }));
+        using var row = new RunningAgentRowViewModel(
+            identifier,
+            name,
+            new RelayCommand(_ => { }));
         Assert.Equal(expected, row.SessionTitle);
+    }
+
+    [Theory]
+    [InlineData("short", "Tab", "Pane", "Tab")]
+    [InlineData("short", "  Tab \t", "Pane", "  Tab \t")]
+    [InlineData("short", " ", "Pane", "Pane")]
+    [InlineData("short", "", "  Pane \t", "  Pane \t")]
+    [InlineData("short", "", " ", "Agent session short")]
+    [InlineData("abcdefghijk", "", "", "Agent session abcdefgh")]
+    [InlineData("", "", "", "Agent session (unknown)")]
+    public void StandaloneViewerRowTitlePolicy_CoversEveryFallback(
+        string identifier,
+        string tabTitle,
+        string paneTitle,
+        string expected)
+    {
+        using var row = new RunningAgentRowViewModel(
+            identifier,
+            paneTitle,
+            tabTitle,
+            false,
+            new RelayCommand(_ => { }));
+        Assert.Equal(expected, row.SessionTitle);
+    }
+
+    [Theory]
+    [InlineData("Acquisition", null, "Acquisition")]
+    [InlineData("Acquisition", "Canonical", "Canonical")]
+    [InlineData("", " ", "Agent session abcdefgh")]
+    public void RuntimeRowTitlePolicy_IgnoresViewerSeeds_ObservesRenamesUntilDisposed(
+        string acquisitionName,
+        string? canonicalName,
+        string expected)
+    {
+        var record = CreateRecord(new AgentSessionId("abcdefghijk"), acquisitionName);
+        record.ApplyAuthoritativeDisplayName(canonicalName);
+        using var row = new RunningAgentRowViewModel(
+            record,
+            workspacePaneTitle: "Pane seed",
+            tabTitle: "Tab seed",
+            entityName: "Entity seed",
+            hasOpenTab: true,
+            isThinking: false,
+            activateCommand: new RelayCommand(_ => { }),
+            interruptAsync: _ => Task.CompletedTask,
+            terminateAsync: _ => Task.CompletedTask,
+            setContinueInBackgroundAsync: (_, _) => Task.CompletedTask);
+        Assert.Equal(expected, row.SessionTitle);
+
+        record.ApplyAuthoritativeDisplayName("Renamed");
+        Assert.Equal("Renamed", row.SessionTitle);
+        row.Dispose();
+        record.ApplyAuthoritativeDisplayName("After disposal");
+        Assert.Equal("Renamed", row.SessionTitle);
     }
 }

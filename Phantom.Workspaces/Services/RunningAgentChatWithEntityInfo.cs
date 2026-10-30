@@ -85,19 +85,9 @@ public sealed class RunningAgentChatWithEntityInfo : INotifyPropertyChanged
             return authoritativeName!;
         }
 
-        if (!string.IsNullOrWhiteSpace(entityName) && entityName != sessionId.Value)
-        {
-            return entityName;
-        }
-
-        var value = sessionId.Value;
-        if (string.IsNullOrEmpty(value))
-        {
-            return "Agent session (unknown)";
-        }
-
-        var shortId = value.Length <= 8 ? value : value[..8];
-        return $"Agent session {shortId}";
+        return SessionIdentityTitlePolicy.ResolveFallback(
+            sessionId,
+            entityName != sessionId.Value ? entityName : null);
     }
 
     /// <summary>
