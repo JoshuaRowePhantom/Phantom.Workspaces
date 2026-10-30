@@ -22,19 +22,42 @@ public sealed class ShortcutContentControl : ContentControl
     public static readonly StyledProperty<Shortcut?> ShortcutProperty =
         AvaloniaProperty.Register<ShortcutContentControl, Shortcut?>(nameof(Shortcut));
 
-    private static readonly Lazy<Bitmap> VisualStudioCodeImage = new(() =>
+    private static readonly Lazy<Bitmap> VisualStudioCodeImage = new(() => LoadVisualStudioCodeImage(
+        uri => AssetLoader.Open(uri)));
+
+    private readonly Lazy<Bitmap> visualStudioCodeImage;
+    private readonly IDataTemplate[] registeredTemplates;
+
+    public ShortcutContentControl()
+        : this(VisualStudioCodeImage)
     {
-        using var stream = AssetLoader.Open(
+    }
+
+    internal ShortcutContentControl(
+        Func<Uri, Stream> openAsset)
+        : this(new Lazy<Bitmap>(() => LoadVisualStudioCodeImage(openAsset)))
+    {
+    }
+
+    private ShortcutContentControl(
+        Lazy<Bitmap> visualStudioCodeImage)
+    {
+        this.visualStudioCodeImage = visualStudioCodeImage;
+        this.registeredTemplates =
+        [
+            new FuncDataTemplate<ShortcutTextContent>((descriptor, _) => CreateText(descriptor!.Text)),
+            new FuncDataTemplate<ShortcutImageContent>((descriptor, _) => this.CreateImage(descriptor!)),
+            new FuncDataTemplate<ShortcutCompositeContent>((descriptor, _) => this.CreateComposition(descriptor!)),
+        ];
+    }
+
+    private static Bitmap LoadVisualStudioCodeImage(
+        Func<Uri, Stream> openAsset)
+    {
+        using var stream = openAsset(
             new Uri("avares://Phantom.Workspaces/Assets/Shortcuts/vscode.png"));
         return new Bitmap(stream);
-    });
-
-    private static readonly IDataTemplate[] RegisteredTemplates =
-    [
-        new FuncDataTemplate<ShortcutTextContent>((descriptor, _) => CreateText(descriptor!.Text)),
-        new FuncDataTemplate<ShortcutImageContent>((descriptor, _) => CreateImage(descriptor!)),
-        new FuncDataTemplate<ShortcutCompositeContent>((descriptor, _) => CreateComposition(descriptor!)),
-    ];
+    }
 
     public Shortcut? Shortcut
     {
@@ -65,7 +88,7 @@ public sealed class ShortcutContentControl : ContentControl
         {
             this.Content = shortcut.Content is null
                 ? CreateText(shortcut.Label)
-                : Render(shortcut.Content);
+                : this.Render(shortcut.Content);
         }
         catch (Exception exception) when (exception is NotSupportedException or IOException or ArgumentException or InvalidOperationException)
         {
@@ -74,10 +97,10 @@ public sealed class ShortcutContentControl : ContentControl
         }
     }
 
-    private static Control Render(
+    private Control Render(
         ShortcutContent descriptor)
     {
-        var template = RegisteredTemplates.FirstOrDefault(candidate => candidate.Match(descriptor))
+        var template = this.registeredTemplates.FirstOrDefault(candidate => candidate.Match(descriptor))
             ?? throw new NotSupportedException("Unsupported shortcut content descriptor.");
         return template.Build(descriptor)
             ?? throw new InvalidOperationException("Shortcut template did not create content.");
@@ -103,12 +126,12 @@ public sealed class ShortcutContentControl : ContentControl
         return control;
     }
 
-    private static Control CreateImage(
+    private Control CreateImage(
         ShortcutImageContent descriptor)
     {
         var bitmap = descriptor.Resource switch
         {
-            ShortcutImageResource.VisualStudioCode => VisualStudioCodeImage.Value,
+            ShortcutImageResource.VisualStudioCode => this.visualStudioCodeImage.Value,
             _ => throw new NotSupportedException("Unsupported packaged shortcut image."),
         };
         var image = new Image
@@ -125,7 +148,7 @@ public sealed class ShortcutContentControl : ContentControl
         return new Border { Padding = new Thickness(4), Child = image, IsHitTestVisible = false };
     }
 
-    private static Control CreateComposition(
+    private Control CreateComposition(
         ShortcutCompositeContent descriptor)
     {
         var panel = new StackPanel
@@ -136,7 +159,7 @@ public sealed class ShortcutContentControl : ContentControl
         };
         foreach (var child in descriptor.Children)
         {
-            var visual = Render(child);
+            var visual = this.Render(child);
             visual.IsHitTestVisible = false;
             visual.Focusable = false;
             AutomationProperties.SetAccessibilityView(visual, AccessibilityView.Raw);

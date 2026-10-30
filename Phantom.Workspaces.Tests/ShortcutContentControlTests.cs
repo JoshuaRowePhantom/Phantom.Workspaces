@@ -1,4 +1,6 @@
 using System;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using Avalonia;
 using Avalonia.Automation;
@@ -118,6 +120,79 @@ public sealed class ShortcutContentControlTests
             {
                 window.Close();
             }
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void ShortcutContentControl_MissingPackagedImage_RendersDiagnosticActionableFallback()
+    {
+        AssertResourceFailureFallback(_ => throw new FileNotFoundException("Packaged image unavailable."));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void ShortcutContentControl_BrokenPackagedImage_RendersDiagnosticActionableFallback()
+    {
+        AssertResourceFailureFallback(_ => new MemoryStream([0, 1, 2, 3]));
+    }
+
+    private static void AssertResourceFailureFallback(
+        Func<Uri, Stream> openAsset)
+    {
+        using var diagnosticOutput = new StringWriter();
+        using var listener = new TextWriterTraceListener(diagnosticOutput);
+        Trace.Listeners.Add(listener);
+        Window? window = null;
+        try
+        {
+            var requestedAssets = 0;
+            var renderer = new ShortcutContentControl(uri =>
+            {
+                requestedAssets++;
+                Assert.Equal("avares://Phantom.Workspaces/Assets/Shortcuts/vscode.png", uri.AbsoluteUri);
+                return openAsset(uri);
+            })
+            {
+                Shortcut = Shortcut.VsCode,
+            };
+            var count = 0;
+            var parameter = new object();
+            var button = new Button
+            {
+                Content = renderer,
+                Command = new RelayCommand(value =>
+                {
+                    Assert.Same(parameter, value);
+                    count++;
+                }),
+                CommandParameter = parameter,
+            };
+            window = new Window { Content = button, Width = 320, Height = 120 };
+            window.Show();
+            Assert.Equal(1, requestedAssets);
+            Assert.Empty(renderer.GetVisualDescendants().OfType<Image>());
+            var fallback = Assert.Single(renderer.GetVisualDescendants().OfType<CopyableLinkTextBlock>());
+            Assert.Equal("Open in VS Code", fallback.Text);
+            listener.Flush();
+            Assert.Contains("Shortcut presentation failed for VsCode:", diagnosticOutput.ToString());
+            var point = button.TranslatePoint(
+                new Point(button.Bounds.Width / 2, button.Bounds.Height / 2),
+                window)!.Value;
+            window.MouseDown(point, MouseButton.Left);
+            window.MouseUp(point, MouseButton.Left);
+            Assert.Equal(1, count);
+            fallback.Focus();
+            window.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, null);
+            window.KeyRelease(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, null);
+            Assert.Equal(2, count);
+            button.Focus();
+            window.KeyPress(Key.Space, RawInputModifiers.None, PhysicalKey.Space, null);
+            window.KeyRelease(Key.Space, RawInputModifiers.None, PhysicalKey.Space, null);
+            Assert.Equal(3, count);
+        }
+        finally
+        {
+            window?.Close();
+            Trace.Listeners.Remove(listener);
         }
     }
 
