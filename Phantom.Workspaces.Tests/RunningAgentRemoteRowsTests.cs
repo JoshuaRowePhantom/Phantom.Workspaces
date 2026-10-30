@@ -159,6 +159,177 @@ public sealed class RunningAgentRemoteRowsTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InterruptCommand_EditorPropertyRetry_AbandonsSupersededNotifications(bool synchronousRetry)
+    {
+        var first = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var second = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var attempts = new Queue<Task>([first.Task, synchronousRetry ? Task.CompletedTask : second.Task]);
+        var (chat, getCalls) = CreateInterruptChat(_ => attempts.Dequeue());
+        await using var editor = CreateEditor(chat);
+        using var row = CreateRow(chat);
+        var state = AgentChatInterruptState.For(chat);
+        var command = Assert.IsType<Phantom.Workspaces.ViewModels.AsyncRelayCommand>(row.InterruptCommand);
+        Task? retry = null;
+        var retryCallbacks = 0;
+        var properties = new List<(long Generation, bool IsPending)>();
+        var availability = new List<AgentChatInterruptSnapshot>();
+        editor.PropertyChanged += (_, change) =>
+        {
+            if (change.PropertyName == nameof(editor.IsInterruptPending)
+                && !editor.IsInterruptPending
+                && state.Snapshot.Generation == 1)
+            {
+                retryCallbacks++;
+                retry = state.InterruptAsync(chat.InterruptAsync, TestContext.Current.CancellationToken);
+            }
+        };
+        editor.PropertyChanged += (_, change) =>
+        {
+            if (change.PropertyName == nameof(editor.IsInterruptPending))
+                properties.Add((state.Snapshot.Generation, editor.IsInterruptPending));
+        };
+        editor.InterruptCommand.CanExecuteChanged += (_, _) => availability.Add(state.Snapshot);
+
+        var owner = state.InterruptAsync(chat.InterruptAsync, TestContext.Current.CancellationToken);
+        var failure = new InvalidOperationException("first generation");
+        first.SetException(failure);
+        Assert.Same(failure, await Assert.ThrowsAsync<InvalidOperationException>(() => owner));
+
+        Assert.Equal(1, retryCallbacks);
+        Assert.Equal(2, getCalls());
+        Assert.NotNull(retry);
+        Assert.Equal(synchronousRetry, retry.IsCompletedSuccessfully);
+        Assert.False(command.IsExecuting);
+        Assert.Equal(!synchronousRetry, editor.IsInterruptPending);
+        Assert.Equal(!synchronousRetry, row.IsInterruptPending);
+        Assert.Equal(synchronousRetry, row.IsInterruptEnabled);
+        Assert.Equal(synchronousRetry, command.CanExecute(null));
+        Assert.Equal(synchronousRetry, editor.InterruptCommand.CanExecute(null));
+        Assert.Null(row.LastOperationError);
+        Assert.Equal(2, state.Snapshot.Generation);
+        Assert.Equal(
+            synchronousRetry ? AgentChatInterruptOutcome.Succeeded : AgentChatInterruptOutcome.Pending,
+            state.Snapshot.Outcome);
+        Assert.Equal(
+            synchronousRetry ? [(1L, true), (2L, true), (2L, false)] : new[] { (1L, true), (2L, true) },
+            properties);
+        Assert.DoesNotContain(availability, snapshot => snapshot.Generation == 1 && !snapshot.IsPending);
+        Assert.Equal(synchronousRetry ? 5 : 3, availability.Count);
+        Assert.Equal(!synchronousRetry, availability[^1].IsPending);
+
+        second.SetResult();
+        await retry;
+        Assert.Equal(new[] { (1L, true), (2L, true), (2L, false) }, properties);
+        Assert.DoesNotContain(availability, snapshot => snapshot.Generation == 1 && !snapshot.IsPending);
+        Assert.Equal(5, availability.Count);
+        Assert.False(row.IsInterruptPending);
+        Assert.False(editor.IsInterruptPending);
+        Assert.True(command.CanExecute(null));
+        Assert.Null(row.LastOperationError);
+    }
+
+    [Theory]
+    [InlineData(0, 0)]
+    [InlineData(0, 1)]
+    [InlineData(0, 2)]
+    [InlineData(1, 0)]
+    [InlineData(1, 1)]
+    [InlineData(1, 2)]
+    [InlineData(2, 0)]
+    [InlineData(2, 1)]
+    [InlineData(2, 2)]
+    [InlineData(3, 0)]
+    [InlineData(3, 1)]
+    [InlineData(3, 2)]
+    [InlineData(4, 0)]
+    [InlineData(4, 1)]
+    [InlineData(4, 2)]
+    public async Task InterruptCommand_TerminalAvailability_RespectsRuntimeConditions(
+        int condition,
+        int result)
+    {
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var (chat, getCalls) = CreateInterruptChat(_ =>
+        {
+            started.SetResult();
+            return completion.Task;
+        });
+        var table = new ControlledTable { LeaseChat = chat, DeferTermination = true };
+        var entry = table.Add("shared", isRemote: true, continueInBackground: false, viewerCount: 1);
+        entry.SetIsInterruptible(true);
+        using var brain = Create(table);
+        var row = Assert.Single(brain.Rows);
+        var command = Assert.IsType<Phantom.Workspaces.ViewModels.AsyncRelayCommand>(row.InterruptCommand);
+        var terminate = Assert.IsType<Phantom.Workspaces.ViewModels.AsyncRelayCommand>(row.TerminateCommand);
+        Assert.True(command.CanExecute(null));
+        command.Execute(null);
+        var owner = command.LastExecutionTask!;
+        await started.Task.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.True(row.IsInterruptPending);
+
+        if (condition == 1)
+        {
+            terminate.Execute(null);
+            await table.TerminationStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
+            Assert.True(row.IsTerminationPending);
+        }
+        else if (condition == 2) entry.SetIsInterruptible(false);
+        else if (condition == 3) entry.SetIsConnected(false);
+        else if (condition == 4) entry.SetIsTerminal(true);
+        Assert.False(row.IsInterruptEnabled);
+        Assert.False(command.CanExecute(null));
+        var availabilityChanges = 0;
+        var terminalProperties = new List<(bool Enabled, string? Error)>();
+        var terminalAvailability = new List<bool>();
+        row.PropertyChanged += (_, change) =>
+        {
+            if (change.PropertyName == nameof(row.IsInterruptEnabled)) availabilityChanges++;
+            if (change.PropertyName == nameof(row.IsInterruptPending) && !row.IsInterruptPending)
+                terminalProperties.Add((row.IsInterruptEnabled, row.LastOperationError));
+        };
+        command.CanExecuteChanged += (_, _) =>
+        {
+            if (!row.IsInterruptPending) terminalAvailability.Add(command.CanExecute(null));
+        };
+
+        using var cancellation = new CancellationTokenSource();
+        if (result == 0) completion.SetResult();
+        else if (result == 1) completion.SetCanceled(cancellation.Token);
+        else completion.SetException(new InvalidOperationException("interrupt failed"));
+        await owner;
+
+        var enabled = condition == 0;
+        var error = result == 2 ? "Unable to interrupt agent." : null;
+        Assert.Equal(1, getCalls());
+        Assert.Same(owner, command.LastExecutionTask);
+        Assert.False(command.IsExecuting);
+        Assert.False(row.IsInterruptPending);
+        Assert.False(entry.InterruptState.IsPending);
+        Assert.Equal(
+            result == 0 ? AgentChatInterruptOutcome.Succeeded
+                : result == 1 ? AgentChatInterruptOutcome.Canceled
+                : AgentChatInterruptOutcome.Failed,
+            entry.InterruptState.Snapshot.Outcome);
+        Assert.Equal(error, row.LastOperationError);
+        Assert.Equal(enabled, row.IsInterruptEnabled);
+        Assert.Equal(enabled, command.CanExecute(null));
+        Assert.Equal(new[] { (enabled, error) }, terminalProperties);
+        Assert.Equal(enabled ? 1 : 0, availabilityChanges);
+        Assert.Equal(enabled ? new[] { false, true } : new[] { false }, terminalAvailability);
+        Assert.Equal(condition == 1, row.IsTerminationPending);
+
+        if (condition == 1)
+        {
+            table.CompleteTermination();
+            await terminate.LastExecutionTask!;
+            Assert.Empty(brain.Rows);
+        }
+    }
+
+    [Theory]
     [InlineData(0, 0)]
     [InlineData(0, 1)]
     [InlineData(0, 2)]
