@@ -1,5 +1,8 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
+using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.ProcessAcceptance;
+using Phantom.Workspaces.Services.Logging;
 
 namespace Phantom.Workspaces.Tests;
 
@@ -36,6 +39,60 @@ public sealed class ProcessStageDiagnosticsTests
         foreach (var secret in new[] { entity, "private.example", "credential-secret",
                      "fixture-user", "fixture-host", "fixture-session" })
             Assert.DoesNotContain(secret, sanitized);
+    }
+
+    [Fact]
+    public void OperationalLoadingRecord_PreservesIdentityAndCorrelation_WhileRetainedArtifactRedactsIdentity()
+    {
+        const string sessionEntityId = "10101010-1010-4010-8010-000000001611";
+        const string ownerProfileEntityId = "10101010-1010-4010-8010-000000001613";
+        const string agentSessionId = "fixture-session";
+        const string attempt = "20202020202040208020000000001679";
+        var fixture = ProcessStageDiagnostics.GetFixtureDirectory(AppContext.BaseDirectory);
+        var artifact = Path.Combine(Path.GetDirectoryName(fixture)!, "diagnostics-" + Guid.NewGuid().ToString("N"));
+        var callerLogs = Path.Combine(fixture, "caller-logs");
+        try
+        {
+            using (var loggerFactory = LoggingBootstrap.CreateLoggerFactory(
+                new LogDirectoryProvider(new WorkspacesConfiguration { LogDirectory = callerLogs }, null)))
+            {
+                loggerFactory.CreateLogger("SessionLoading").LogInformation(
+                    "Session loading; attempt {Attempt}; stage ready-publication; outcome ready. "
+                    + "session-entity-id {SessionEntityId}; agent-session-id {AgentSessionId}; owner-profile-entity-id {OwnerProfileEntityId}.",
+                    attempt,
+                    sessionEntityId,
+                    agentSessionId,
+                    ownerProfileEntityId);
+            }
+
+            var rawFile = Assert.Single(Directory.GetFiles(callerLogs, "*.log"));
+            var raw = File.ReadAllText(rawFile);
+            var correlatedOutcome = $"Session loading; attempt {attempt}; stage ready-publication; outcome ready.";
+            Assert.Contains(
+                $"{correlatedOutcome} session-entity-id {sessionEntityId}; agent-session-id {agentSessionId}; owner-profile-entity-id {ownerProfileEntityId}.",
+                raw,
+                StringComparison.Ordinal);
+
+            ProcessStageDiagnostics.RetainRoleLogs(fixture, artifact, agentSessionId);
+
+            var retainedFile = Assert.Single(Directory.GetFiles(artifact, "*.log", SearchOption.AllDirectories));
+            Assert.Equal(Path.Combine(artifact, "caller-logs", Path.GetFileName(rawFile)), retainedFile);
+            var retained = File.ReadAllText(retainedFile);
+            Assert.Contains(
+                $"{correlatedOutcome} session-entity-id [entity-id]; agent-session-id [redacted]; owner-profile-entity-id [entity-id].",
+                retained,
+                StringComparison.Ordinal);
+            foreach (var identity in new[] { sessionEntityId, agentSessionId, ownerProfileEntityId })
+                Assert.DoesNotContain(identity, retained, StringComparison.Ordinal);
+            Assert.Equal(raw, File.ReadAllText(rawFile));
+        }
+        finally
+        {
+            if (Directory.Exists(fixture))
+                Directory.Delete(fixture, recursive: true);
+            if (Directory.Exists(artifact))
+                Directory.Delete(artifact, recursive: true);
+        }
     }
 
     [Fact]
