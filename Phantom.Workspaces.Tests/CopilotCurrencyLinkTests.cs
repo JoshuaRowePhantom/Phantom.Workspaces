@@ -58,18 +58,29 @@ public sealed class CopilotCurrencyLinkTests
     }
 
     [AvaloniaTheory(Timeout = 15_000)]
-    [InlineData(0)]
-    [InlineData(12)]
+    [InlineData("https://github.com/copilot", 0)]
+    [InlineData("https://github.com/copilot", 12)]
+    [InlineData("https://github.com/settings/billing/summary", 12)]
+    [InlineData("https://github.com/organizations/contoso/settings/billing/summary", 12)]
     public async Task UsageTrackerControl_AiCreditsDollarLink_PointerAndKeyboardOpenWithoutSelection(
+        string accountUrl,
         int spend)
     {
-        var account = await CreateAccountAsync("https://github.com/copilot", spend);
+        var account = await CreateAccountAsync(accountUrl, spend);
+        account.Metrics.Add(new UsageMetric { Title = "Account fallback", QuantityUsed = 7m });
         var metrics = new UsageMetrics();
         metrics.Accounts.Add(account);
         var opener = new RecordingOpener();
-        using var viewModel = new UsageTrackerViewModel(metrics, urlOpenerProvider: () => opener);
+        var pinnedKey = UsageAccount.ComposeKey(account.Product, account.Metrics[0].Title);
+        using var viewModel = new UsageTrackerViewModel(
+            metrics,
+            initialSelectedUsageMetricKey: pinnedKey,
+            urlOpenerProvider: () => opener);
         viewModel.IsOpen = true;
         var selectedKey = viewModel.SelectedUsageMetricKey;
+        Assert.Equal(pinnedKey, selectedKey);
+        Assert.True(account.Metrics[0].IsSelectedAsShown);
+        Assert.False(account.Metrics[1].IsSelectedAsShown);
         var label = viewModel.TopRightLabel;
         var selected = account.Metrics.Select(metric => metric.IsSelectedAsShown).ToArray();
         var control = new UsageTrackerControl { DataContext = viewModel };
@@ -86,6 +97,8 @@ public sealed class CopilotCurrencyLinkTests
             window.MouseDown(point, MouseButton.Left);
             window.MouseUp(point, MouseButton.Left);
             Assert.Equal(1, opener.Count);
+            Assert.Equal("https://github.com/settings/copilot/features", opener.Request!.Url);
+            Assert.Equal(UrlOpenPreference.Auto, opener.Request.Preference);
 
             window.GetVisualDescendants().OfType<HyperlinkButton>()
                 .Single(button => button.Name == "AccountHeaderHyperlink").Focus();
@@ -104,6 +117,8 @@ public sealed class CopilotCurrencyLinkTests
                 window.KeyPress(key, RawInputModifiers.None, physicalKey, null);
                 window.KeyRelease(key, RawInputModifiers.None, physicalKey, null);
                 Assert.Equal(previousCount + 1, opener.Count);
+                Assert.Equal("https://github.com/settings/copilot/features", opener.Request!.Url);
+                Assert.Equal(UrlOpenPreference.Auto, opener.Request.Preference);
             }
             Assert.Equal("https://github.com/settings/copilot/features", opener.Request!.Url);
             Assert.Equal(UrlOpenPreference.Auto, opener.Request.Preference);
@@ -111,11 +126,114 @@ public sealed class CopilotCurrencyLinkTests
             Assert.Equal(selectedKey, viewModel.SelectedUsageMetricKey);
             Assert.Equal(label, viewModel.TopRightLabel);
             Assert.Equal(selected, account.Metrics.Select(metric => metric.IsSelectedAsShown));
+            Assert.Equal(42m, account.Metrics[0].QuantityUsed);
             Assert.Equal(spend, account.Metrics[1].QuantityUsed);
             var header = window.GetVisualDescendants().OfType<HyperlinkButton>()
                 .Single(button => button.Name == "AccountHeaderHyperlink");
-            header.Command!.Execute(header.CommandParameter);
-            Assert.Equal(account.SettingsUrl!.AbsoluteUri, opener.Request.Url);
+            var fallback = window.GetVisualDescendants().OfType<HyperlinkButton>()
+                .Single(button => button.Name == "MetricRowHyperlink" &&
+                    button.DataContext == account.Metrics[2]);
+            Assert.Null(account.Metrics[2].WebUrl);
+            foreach (var accountLink in new[] { header, fallback })
+            {
+                var previousCount = opener.Count;
+                var accountPoint = accountLink.TranslatePoint(
+                    new Point(accountLink.Bounds.Width / 2, accountLink.Bounds.Height / 2),
+                    window)!.Value;
+                window.MouseDown(accountPoint, MouseButton.Left);
+                window.MouseUp(accountPoint, MouseButton.Left);
+                Assert.Equal(previousCount + 1, opener.Count);
+                Assert.Equal(account.SettingsUrl!.AbsoluteUri, opener.Request.Url);
+                Assert.Equal(UrlOpenPreference.Auto, opener.Request.Preference);
+                Assert.True(viewModel.IsOpen);
+                Assert.Equal(pinnedKey, viewModel.SelectedUsageMetricKey);
+                Assert.Equal(selected, account.Metrics.Select(metric => metric.IsSelectedAsShown));
+            }
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaTheory(Timeout = 15_000)]
+    [InlineData("https://github.com/settings/billing/summary")]
+    [InlineData("https://github.com/organizations/contoso/settings/billing/summary")]
+    public async Task UsageTrackerControl_ActionsQuantityAndCurrency_PreserveAccountFallbackAndValues(
+        string accountUrl)
+    {
+        var account = new UsageAccount
+        {
+            Product = "GitHub Actions",
+            SettingsUrl = new Uri(accountUrl),
+        };
+        using var httpClient = new HttpClient(new ActionsUsageHandler());
+        var provider = new GitHubActionsUsageProvider(
+            httpClient,
+            Access.GitHubUsageProviderAccessTests.CreateBroker(() => "fake-token"));
+        foreach (var metric in await provider.GetMetricsAsync(account, TestContext.Current.CancellationToken))
+        {
+            account.Metrics.Add(metric);
+        }
+        Assert.Collection(account.Metrics,
+            quantity =>
+            {
+                Assert.Equal("Included Usage", quantity.Title);
+                Assert.Equal(350m, quantity.QuantityUsed);
+                Assert.Equal(500m, quantity.QuantityTotal);
+                Assert.Equal("minutes", quantity.Unit);
+                Assert.Equal("{0:N0} / {1:N0} {2}", quantity.QuantityPresentationFormatString);
+                Assert.Null(quantity.WebUrl);
+            },
+            currency =>
+            {
+                Assert.Equal("Additional Usage", currency.Title);
+                Assert.Equal(12m, currency.QuantityUsed);
+                Assert.Equal(0m, currency.QuantityTotal);
+                Assert.Equal(string.Empty, currency.Unit);
+                Assert.Equal("{0:C2} / {1:C2}", currency.QuantityPresentationFormatString);
+                Assert.Null(currency.WebUrl);
+            });
+        var presentations = account.Metrics.Select(metric => metric.QuantityPresentation).ToArray();
+        var metrics = new UsageMetrics();
+        metrics.Accounts.Add(account);
+        var opener = new RecordingOpener();
+        using var viewModel = new UsageTrackerViewModel(metrics, urlOpenerProvider: () => opener);
+        var window = new Window
+        {
+            Content = new UsageTrackerControl { DataContext = viewModel },
+            Width = 600,
+            Height = 600,
+        };
+        window.Show();
+        try
+        {
+            var links = window.GetVisualDescendants().OfType<HyperlinkButton>()
+                .Where(button => button.Name == "MetricRowHyperlink").ToArray();
+            Assert.Equal(2, links.Length);
+            foreach (var link in links)
+            {
+                Assert.Equal(account.SettingsUrl, link.CommandParameter);
+                Assert.Null(link.NavigateUri);
+                var previousCount = opener.Count;
+                var point = link.TranslatePoint(
+                    new Point(link.Bounds.Width / 2, link.Bounds.Height / 2),
+                    window)!.Value;
+                window.MouseDown(point, MouseButton.Left);
+                window.MouseUp(point, MouseButton.Left);
+                Assert.Equal(previousCount + 1, opener.Count);
+                Assert.Equal(accountUrl, opener.Request!.Url);
+                Assert.NotEqual("https://github.com/settings/copilot/features", opener.Request.Url);
+                Assert.Equal(UrlOpenPreference.Auto, opener.Request.Preference);
+                link.Focus();
+                window.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, null);
+                window.KeyRelease(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, null);
+                Assert.Equal(previousCount + 2, opener.Count);
+                Assert.Equal(accountUrl, opener.Request.Url);
+            }
+            Assert.Equal(presentations, account.Metrics.Select(metric => metric.QuantityPresentation));
+            Assert.Equal(350m, account.Metrics[0].QuantityUsed);
+            Assert.Equal(12m, account.Metrics[1].QuantityUsed);
         }
         finally
         {
@@ -175,6 +293,19 @@ public sealed class CopilotCurrencyLinkTests
             {
                 Content = new StringContent($$"""
                     {"usageItems":[{"product":"copilot","sku":"Copilot AI Credits","quantity":42,"unitType":"AICredits","netAmount":{{spend}}}]}
+                    """),
+            });
+    }
+
+    private sealed class ActionsUsageHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""
+                    {"total_minutes_used":350,"included_minutes":500,"total_paid_minutes_used":12}
                     """),
             });
     }
