@@ -1,3 +1,4 @@
+using System.Numerics;
 using System.Text.Json;
 using System.Xml.Linq;
 
@@ -7,21 +8,69 @@ namespace Phantom.Workspaces.Install.Tests;
 public sealed class HelperOutputCopyTests
 {
     [Fact]
-    public void WindowsPathBudget_DeepCheckoutFitsCompleteNativeSkillPath()
+    public async Task CompactDirectory_PreservesIdentifierBitsIsolationAndCleanup()
+    {
+        const string alphabet = "abcdefghijklmnopqrstuvwxyz234567";
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var bit = -1; bit < 128; bit++)
+        {
+            var bytes = new byte[16];
+            if (bit >= 0)
+                bytes[bit / 8] = (byte)(1 << (bit % 8));
+            var identifier = new Guid(bytes);
+            var path = MxcRepositoryTestSupport.TestDirectory.CompactPath(
+                MxcRepositoryTestSupport.Root.FullName, identifier);
+            Assert.True(paths.Add(path));
+            var name = Path.GetFileName(path);
+            Assert.Equal(26, name.Length);
+            var decoded = BigInteger.Zero;
+            foreach (var character in name)
+            {
+                Assert.Contains(character, alphabet);
+                decoded = decoded * 32 + alphabet.IndexOf(character);
+            }
+            Assert.Equal(new BigInteger(bytes, isUnsigned: true), decoded);
+        }
+
+        var first = new MxcRepositoryTestSupport.TestDirectory(compact: true);
+        await using var second = new MxcRepositoryTestSupport.TestDirectory(compact: true);
+        Assert.NotEqual(first.Path, second.Path);
+        Assert.True(Directory.Exists(first.Path));
+        await first.DisposeAsync();
+        Assert.False(Directory.Exists(first.Path));
+        Assert.True(Directory.Exists(second.Path));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new MxcRepositoryTestSupport.TestDirectory(compact: true, compactPathPadding: -1));
+    }
+
+    [Theory]
+    [InlineData(70, "debug")]
+    [InlineData(76, "debug")]
+    [InlineData(80, "debug")]
+    [InlineData(70, "release_win-x64")]
+    [InlineData(76, "release_win-x64")]
+    [InlineData(80, "release_win-x64")]
+    public void WindowsPathBudget_DeepCheckoutFitsCompleteNativeSkillPath(
+        int checkoutLength,
+        string pivot)
     {
         var deepCheckout = Path.Combine(
-            Path.GetPathRoot(MxcRepositoryTestSupport.Root.FullName)!, new string('d', 77));
+            Path.GetPathRoot(MxcRepositoryTestSupport.Root.FullName)!,
+            new string('d', checkoutLength - Path.GetPathRoot(MxcRepositoryTestSupport.Root.FullName)!.Length));
         var payloadPath = Path.Combine(
             "remote-split-worker", "runtimes", "win-x64", "native",
             "builtin-skills", "customize-cloud-agent", "SKILL.md");
         var oldDestination = Path.Combine(
             deepCheckout, "TestResults", "mxc-integration-" + new string('0', 32),
             "$(MSBuildProjectName)", "bin", "Debug", "net10.0", payloadPath);
+        var fixture = MxcRepositoryTestSupport.TestDirectory.CompactPath(deepCheckout, Guid.Empty);
         var destination = Path.Combine(
-            deepCheckout, ".mxc", new string('0', 32), "bin",
-            "Phantom.Workspaces.Transport.Tests", "debug", payloadPath);
+            fixture, "bin", "Phantom.Workspaces.Transport.Tests", pivot, payloadPath);
+        var fixtureDestination = Path.Combine(
+            fixture, "a", "bin", "Phantom.Workspaces.Transport.Tests", pivot, payloadPath);
         Assert.True(oldDestination.Length >= 260);
         Assert.True(destination.Length < 260);
+        Assert.True(fixtureDestination.Length < 260);
     }
 
     public static IEnumerable<object[]> Consumers()
@@ -35,18 +84,27 @@ public sealed class HelperOutputCopyTests
                      "Phantom.Workspaces.Llm.Core.Tests",
                  })
         {
-            yield return [consumer, false];
-            yield return [consumer, true];
+            yield return [consumer, false, 80];
+            yield return [consumer, true, 80];
         }
+        yield return ["Phantom.Workspaces.Transport.Tests", true, 70];
+        yield return ["Phantom.Workspaces.Transport.Tests", true, 76];
     }
 
     [Theory]
     [MemberData(nameof(Consumers))]
     public async Task CopyHelper_UsesEvaluatedProducerAndCompleteRelativePayload(
         string consumer,
-        bool redirected)
+        bool redirected,
+        int checkoutLength)
     {
-        await using var fixture = new MxcRepositoryTestSupport.TestDirectory(compact: true);
+        Assert.True(MxcRepositoryTestSupport.Root.FullName.Length <= 80,
+            "The supported Windows checkout path budget is 80 characters.");
+        // Padding the isolated allocation exercises the exact prefix length of a deeper
+        // checkout without touching another worktree or sharing fixture payloads.
+        await using var fixture = new MxcRepositoryTestSupport.TestDirectory(
+            compact: true,
+            compactPathPadding: Math.Max(0, checkoutLength - MxcRepositoryTestSupport.Root.FullName.Length));
         var source = XDocument.Parse(MxcRepositoryTestSupport.Read(consumer, consumer + ".csproj"));
         var reference = Assert.Single(source.Descendants("ProjectReference"),
             element => (string?)element.Attribute("CopyTestHelper") == "true");
