@@ -162,6 +162,16 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         WorkspacesConfiguration? configuration = null,
         ProfileStore? profileStore = null,
         ApplicationServices? applicationServices = null)
+        : this(repositorySource, configuration, profileStore, applicationServices, null)
+    {
+    }
+
+    internal MainWindowViewModel(
+        RepositorySource repositorySource,
+        WorkspacesConfiguration? configuration,
+        ProfileStore? profileStore,
+        ApplicationServices? applicationServices,
+        WorkspaceEntitySession? preparedSession)
     {
         var services = applicationServices ?? CreateDefaultApplicationServices(out this.ownedAccessHost);
         this.applicationServices = services;
@@ -183,12 +193,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return factory(this.configuration?.DevTunnel?.Authentication, broker, presentationScope);
         };
         this.entityBrokerTask = EntityBroker.CreateInitializedAsync(
-            repositorySource,
-            cancellationToken: this.lifetime.Token,
-            userComputerProfileOverride: configuration?.UserComputerProfileOverride,
-            accessBroker: services.AccessBroker,
-            accessPresentationScope: services.AccessPresentationScope,
-            devTunnelIdentityRoute: services.DevTunnelIdentityRouteFactory?.Invoke(repositorySource, CredentialUseKind.Repository));
+            new EntityRepositoryInitializationOptions
+            {
+                RepositorySource = repositorySource,
+                UserComputerProfileOverride = configuration?.UserComputerProfileOverride,
+                AccessBroker = services.AccessBroker,
+                AccessPresentationScope = services.AccessPresentationScope,
+                DevTunnelIdentityRoute = services.DevTunnelIdentityRouteFactory?.Invoke(repositorySource, CredentialUseKind.Repository),
+                PreparedSession = preparedSession,
+            }, this.lifetime.Token);
         this.profileStore = profileStore ?? ProfileStore.ForCurrentUser();
 
         this.TopLevelViews = new ObservableCollection<ViewDefinitionViewModel>();

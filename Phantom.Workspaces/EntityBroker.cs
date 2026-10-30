@@ -95,20 +95,25 @@ public sealed class EntityBroker
         IAccessBroker? accessBroker = null,
         Func<AccessPresentationScope>? accessPresentationScope = null,
         DevTunnelIdentityRoute? devTunnelIdentityRoute = null)
+        => await CreateInitializedAsync(new EntityRepositoryInitializationOptions
+        {
+            RepositorySource = repositorySource,
+            UserComputerProfileOverride = userComputerProfileOverride,
+            AccessBroker = accessBroker,
+            AccessPresentationScope = accessPresentationScope,
+            DevTunnelIdentityRoute = devTunnelIdentityRoute,
+        }, cancellationToken);
+
+    internal static async Task<EntityBroker> CreateInitializedAsync(
+        EntityRepositoryInitializationOptions options,
+        CancellationToken cancellationToken = default)
     {
         using var startup = RepositoryStartupDiagnostics.Start("broker-initialization");
         // In-memory awaits can complete synchronously through seed validation. Offload only
         // repository work; broker construction and initialization retain the caller's UI context.
         var repository = await Task.Run(
             () => EntityRepository.CreateAsync(
-                new EntityRepositoryInitializationOptions
-                {
-                    RepositorySource = repositorySource,
-                    UserComputerProfileOverride = userComputerProfileOverride,
-                    AccessBroker = accessBroker,
-                    AccessPresentationScope = accessPresentationScope,
-                    DevTunnelIdentityRoute = devTunnelIdentityRoute,
-                },
+                options,
                 cancellationToken),
             cancellationToken);
 

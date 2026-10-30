@@ -101,7 +101,7 @@ public sealed class EntityRepository : IAsyncDisposable
                     underlyingDataAccessLayer,
                     options.ValidationPassStarted);
             }
-            if (!isWebSource)
+            if (!isWebSource && options.PreparedSession is null)
             {
                 // For MongoDB data access layers, ensure indexes and migrate schema before any reads
                 if (underlyingDataAccessLayer is MongoDbEntityDataAccessLayer mongoDbDataAccessLayer)
@@ -116,11 +116,26 @@ public sealed class EntityRepository : IAsyncDisposable
 
             var coreDataAccessLayer = new ScheduleDataAccessLayer(innerDataAccessLayer);
             WorkspaceEntitySession workspaceEntitySession;
-            using (RepositoryStartupDiagnostics.Start("repository-session-bootstrap"))
-                workspaceEntitySession = await WorkspaceEntitySessionBootstrapper.InitializeAsync(
-                    coreDataAccessLayer,
-                    options.UserComputerProfileOverride,
-                    cancellationToken).ConfigureAwait(false);
+            if (options.PreparedSession is { } preparedSession)
+            {
+                var profile = await coreDataAccessLayer.GetAsync(new GetRequest
+                {
+                    Entities = [new GetEntityRequest { EntityId = preparedSession.UserComputerProfileEntityId }],
+                    Timestamps = [null],
+                }, cancellationToken).ConfigureAwait(false);
+                if (!profile.Batches.SelectMany(batch => batch.Entities).Any(
+                    entity => entity.EntityId == preparedSession.UserComputerProfileEntityId))
+                    throw new InvalidOperationException("The prepared repository profile is missing.");
+                workspaceEntitySession = preparedSession;
+            }
+            else
+            {
+                using (RepositoryStartupDiagnostics.Start("repository-session-bootstrap"))
+                    workspaceEntitySession = await WorkspaceEntitySessionBootstrapper.InitializeAsync(
+                        coreDataAccessLayer,
+                        options.UserComputerProfileOverride,
+                        cancellationToken).ConfigureAwait(false);
+            }
             var repository = new EntityRepository(
                 repositorySource, coreDataAccessLayer, workspaceEntitySession,
                 options.AccessBroker, options.DevTunnelIdentityRoute, options.AccessPresentationScope, underlyingDataAccessLayer);

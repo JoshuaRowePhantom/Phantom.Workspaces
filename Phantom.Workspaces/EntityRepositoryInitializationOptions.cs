@@ -16,4 +16,8 @@ internal sealed record EntityRepositoryInitializationOptions
     public string? UserComputerProfileOverride { get; init; }
 
     public Action<SchemaValidationPass>? ValidationPassStarted { get; init; }
+
+    // The process fixture prepares and owns the real repository before launching roles.
+    // Reopening that repository must not repeat schema installation or identity discovery.
+    internal WorkspaceEntitySession? PreparedSession { get; init; }
 }

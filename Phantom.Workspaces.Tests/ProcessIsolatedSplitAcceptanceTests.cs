@@ -23,7 +23,7 @@ using Phantom.Workspaces.Services.Logging;
 
 namespace Phantom.Workspaces.Tests;
 
-public sealed class ProcessIsolatedSplitAcceptanceTests
+public sealed partial class ProcessIsolatedSplitAcceptanceTests
 {
     private static readonly EntityId User = new("10101010-1010-4010-8010-000000001611");
     private static readonly EntityId Caller = new("10101010-1010-4010-8010-000000001612");
@@ -51,9 +51,15 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
     private static async Task RunSplitScenarioAsync(
         bool startupFailure, bool childAttachment = false, bool childTransportFailure = false)
     {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(childAttachment ? 180 : 90));
-        var ct = timeout.Token;
+        SplitScenarioPhase? phase = null;
+        CancellationToken EnterPhase(string name, bool cleanup = false)
+        {
+            phase?.Dispose();
+            phase = new SplitScenarioPhase(name, TimeSpan.FromSeconds(cleanup ? 30 : 90),
+                cleanup ? default : TestContext.Current.CancellationToken);
+            return phase.Token;
+        }
+        var ct = EnterPhase("preparation");
         // Git's indexed entity paths must not inherit the deep test binary output path.
         var directory = ProcessStageDiagnostics.GetFixtureDirectory(AppContext.BaseDirectory);
         Directory.CreateDirectory(directory);
@@ -61,6 +67,10 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
         var callerLogs = Path.Combine(directory, "caller-logs");
         var workerLogs = Path.Combine(directory, "worker-logs");
         var roles = new List<RoleProcess>();
+        var resources = new SplitScenarioResources();
+        Exception? primaryFailure = null;
+        using var hubLoggerFactory = LoggingBootstrap.CreateLoggerFactory(
+            new LogDirectoryProvider(new WorkspacesConfiguration { LogDirectory = hubLogs }, null));
         var sensitiveValues = new List<string>
         {
             ProcessAcceptanceCredentials.Token, Environment.UserName, Environment.MachineName,
@@ -69,18 +79,29 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
         };
         try
         {
-            using var hubLoggerFactory = LoggingBootstrap.CreateLoggerFactory(
-                new LogDirectoryProvider(new WorkspacesConfiguration { LogDirectory = hubLogs }, null));
             var data = new MergeProcessingDataAccessLayer(
                 new GitDataAccessLayer(Path.Combine(directory, "entities")));
             var sessionEntityId = await SeedAsync(data, ct);
+            WorkspaceEntitySession? preparedSession = null;
+            await phase!.RunAsync(async token =>
+            {
+                await using var prepared = await EntityRepository.CreateAsync(
+                    new EntityRepositoryInitializationOptions
+                    {
+                        RepositorySource = new LocalGitRepositorySource(Path.Combine(directory, "entities")),
+                        UserComputerProfileOverride = "fixture-caller",
+                    }, token);
+                Assert.Equal(Caller, prepared.WorkspaceEntitySession.UserComputerProfileEntityId);
+                preparedSession = prepared.WorkspaceEntitySession;
+            });
+            ct = EnterPhase("hub-startup");
             var status = new ReverseConnectionStatusRegistry();
-            await using var reverse = new ReverseHttpServerTransportFactory(status,
+            var reverse = resources.Add(new ReverseHttpServerTransportFactory(status,
                 requireAuthenticatedRelays: true, hubProfileEntityId: Hub,
-                loggerFactory: hubLoggerFactory);
+                loggerFactory: hubLoggerFactory));
             var registry = new TransportRegistry();
             registry.Register(reverse);
-            await using var server = new HttpServerTransportFactory(registry);
+            var server = resources.Add(new HttpServerTransportFactory(registry));
             var builder = WebApplication.CreateBuilder();
             builder.Logging.ClearProviders();
             builder.Logging.AddProvider(new ForwardingLoggerProvider(hubLoggerFactory));
@@ -88,7 +109,7 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
             builder.Logging.AddFilter("Microsoft.Hosting.Lifetime", LogLevel.Warning);
             builder.WebHost.UseUrls($"http://127.0.0.1:{FreePort()}");
             builder.Services.AddSingleton<IDataAccessLayer>(data);
-            await using var app = builder.Build();
+            var app = resources.Add(builder.Build());
             app.UseWebSockets();
             app.Use(async (context, next) =>
             {
@@ -117,19 +138,22 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
             var callerUrl = $"http://127.0.0.1:{FreePort()}";
             sensitiveValues.Add(url);
             sensitiveValues.Add(callerUrl);
-            await using var caller = StartRole(childAttachment ? "caller-child"
+            ct = EnterPhase("role-startup");
+            var caller = resources.Add(StartRole(childAttachment ? "caller-child"
                     : startupFailure ? "caller-failure" : "caller",
                 url, User, Caller, callerUrl, Worker,
-                Path.Combine(directory, "entities"), callerLogs);
+                Path.Combine(directory, "entities"), callerLogs, preparedSession!.ComputerEntityId));
             roles.Add(caller);
             Assert.Equal("READY caller", await caller.NextLineAsync(ct, "READY caller"));
-            await using var worker = StartRole(childAttachment ? "worker-child"
+            ct = EnterPhase("worker-startup");
+            var worker = resources.Add(StartRole(childAttachment ? "worker-child"
                     : startupFailure ? "worker-failure" : "worker",
                 url, User, Worker, callerUrl, Worker,
-                Path.Combine(directory, "entities"), workerLogs);
+                Path.Combine(directory, "entities"), workerLogs, Worker));
             roles.Add(worker);
             Assert.Equal("READY worker", await worker.NextLineAsync(ct, "READY worker"));
             Assert.True(reverse.IsRegistered(Worker.ToString()));
+            ct = EnterPhase("route-verification");
             var store = new DataAccessReachabilityRouteStore(data);
             var routes = await store.GetRoutesAsync(Worker, ct);
             Assert.Equal(2, routes.Count);
@@ -148,8 +172,12 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
             Assert.True(route.ExpiresAt > before);
             Assert.True(reverse.IsRegistered(Worker.ToString()));
 
+            ct = EnterPhase("gui-startup");
             await caller.SendAsync("DROP", ct);
             Assert.Equal("DROPPED live", await caller.NextLineAsync(ct, "DROPPED live"));
+            Assert.Equal("READY gui", await caller.NextLineAsync(ct, "READY gui"));
+            ct = EnterPhase("operation");
+            await caller.SendAsync("RUN", ct);
             Assert.Equal("TAB Loading", await caller.NextLineAsync(ct, "TAB Loading"));
             if (!childAttachment)
                 Assert.Equal("TAB Failed transport-choice", await caller.NextLineAsync(ct, "TAB Failed transport-choice"));
@@ -180,9 +208,11 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
                     ? "RESULT caller-ui startup-type-message-stack-inner"
                     : "RESULT persisted worker-response",
                 await caller.NextLineAsync(ct));
+            ct = EnterPhase("caller-exit", cleanup: true);
             Assert.Equal(0, await caller.WaitForExitAsync(ct));
             Assert.DoesNotContain(ProcessAcceptanceCredentials.Token, caller.CapturedError, StringComparison.Ordinal);
             Assert.True(reverse.IsRegistered(Worker.ToString()));
+            ct = EnterPhase("worker-verification");
             if (!startupFailure)
             {
                 await worker.SendAsync("VERIFY", ct);
@@ -190,12 +220,18 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
             }
             Assert.DoesNotContain(ProcessAcceptanceCredentials.Token, worker.CapturedOutput, StringComparison.Ordinal);
             Assert.DoesNotContain(ProcessAcceptanceCredentials.Token, caller.CapturedOutput, StringComparison.Ordinal);
+            ct = EnterPhase("worker-stop", cleanup: true);
             await worker.SendAsync("STOP", ct);
+            Assert.Equal("STOP accepted", await worker.NextLineAsync(ct, "STOP accepted"));
+            ct = EnterPhase("worker-exit", cleanup: true);
             Assert.Equal(0, await worker.WaitForExitAsync(ct));
+            Assert.False(reverse.IsRegistered(Worker.ToString()));
             Assert.DoesNotContain(ProcessAcceptanceCredentials.Token, worker.CapturedError, StringComparison.Ordinal);
+            ct = EnterPhase("hub-stop", cleanup: true);
             await app.StopAsync(ct);
 
             // Git persists the published session and profile independently of either application process.
+            ct = EnterPhase("persistence-verification");
             var reopened = new GitDataAccessLayer(Path.Combine(directory, "entities"));
             var persisted = await reopened.GetAsync(new GetRequest
             {
@@ -282,11 +318,31 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
             foreach (var role in roles)
                 File.WriteAllText(Path.Combine(artifactDirectory, role.Role + "-protocol.log"),
                     ProcessStageDiagnostics.Sanitize(role.DiagnosticOutput, sensitiveValues.ToArray()));
-            throw new InvalidOperationException(
-                $"Split process scenario failed; sanitized diagnostic files only: {artifactDirectory}\n"
+            primaryFailure = new InvalidOperationException(
+                $"Split process scenario failed in {phase?.Name}; sanitized diagnostic files only: {artifactDirectory}\n"
                 + ProcessStageDiagnostics.Sanitize(
                     string.Join("\n", roles.Select(role => role.DiagnosticOutput))
                     + "\n" + error, sensitiveValues.ToArray()));
+        }
+        finally
+        {
+            phase?.Dispose();
+        }
+        try
+        {
+            await resources.CompleteAsync(primaryFailure);
+        }
+        catch (Exception error)
+        {
+            var artifactDirectory = Path.Combine(Path.GetDirectoryName(directory)!,
+                "diagnostics-" + Guid.NewGuid().ToString("N"));
+            ProcessStageDiagnostics.RetainRoleLogs(directory, artifactDirectory, sensitiveValues.ToArray());
+            foreach (var role in roles)
+                File.WriteAllText(Path.Combine(artifactDirectory, role.Role + "-protocol.log"),
+                    ProcessStageDiagnostics.Sanitize(role.DiagnosticOutput, sensitiveValues.ToArray()));
+            throw new InvalidOperationException(
+                $"Split scenario operation/cleanup failed; sanitized artifacts: {artifactDirectory}\n"
+                + ProcessStageDiagnostics.Sanitize(error.ToString(), sensitiveValues.ToArray()));
         }
     }
 
@@ -379,9 +435,9 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
 
     private static RoleProcess StartRole(
         string role, string url, EntityId user, EntityId profile, string callerUrl, EntityId worker,
-        string repositoryPath, string logDirectory)
+        string repositoryPath, string logDirectory, EntityId computer)
         => new(role, url, user.ToString(), profile.ToString(), SessionId, callerUrl, worker.ToString(),
-            repositoryPath, logDirectory);
+            repositoryPath, logDirectory, computer.ToString());
 
     private sealed class RoleProcess : IAsyncDisposable
     {
@@ -389,9 +445,14 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
         private readonly List<string> output = [];
         private readonly List<string> errors = [];
         private readonly Task drainError;
+        private readonly CancellationTokenSource drainCancellation = new();
+        private readonly TimeProvider clock;
+        internal TaskCompletionSource CleanupEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal bool WasTerminated { get; private set; }
         private string waiting = "none";
         private string lastCommand = "none";
         private long waitStarted;
+        private bool exitObserved;
         internal string Role { get; }
         internal string DiagnosticOutput
         {
@@ -419,7 +480,13 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
         internal string CapturedError { get; private set; } = "";
 
         internal RoleProcess(string role, params string[] args)
+            : this(TimeProvider.System, role, args)
         {
+        }
+
+        internal RoleProcess(TimeProvider clock, string role, params string[] args)
+        {
+            this.clock = clock;
             this.Role = role;
             var info = new ProcessStartInfo("dotnet")
             {
@@ -439,11 +506,15 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
 
         private async Task DrainErrorAsync()
         {
-            while (await this.process.StandardError.ReadLineAsync() is { } line)
+            try
             {
-                lock (this.errors)
-                    this.errors.Add(line);
+                while (await this.process.StandardError.ReadLineAsync(this.drainCancellation.Token) is { } line)
+                {
+                    lock (this.errors)
+                        this.errors.Add(line);
+                }
             }
+            catch (OperationCanceledException) when (this.drainCancellation.IsCancellationRequested) { }
         }
 
         internal async Task<string> NextLineAsync(CancellationToken ct, string expected = "next stdout protocol line")
@@ -453,7 +524,7 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
             var line = await this.process.StandardOutput.ReadLineAsync(ct);
             if (line is null)
             {
-                await this.drainError;
+                await this.drainError.WaitAsync(ct);
                 throw new InvalidOperationException($"Child exited before expected stage: {this.DiagnosticOutput}");
             }
             this.output.Add(line);
@@ -476,23 +547,68 @@ public sealed class ProcessIsolatedSplitAcceptanceTests
             this.waiting = "process shutdown";
             this.waitStarted = Stopwatch.GetTimestamp();
             await this.process.WaitForExitAsync(ct);
-            await this.drainError;
+            await this.drainError.WaitAsync(ct);
             this.CapturedError = string.Join("\n", this.errors);
+            this.exitObserved = true;
             if (this.process.ExitCode != 0)
                 throw new InvalidOperationException("Child failed at " + this.CapturedError);
             this.waiting = "none";
             return this.process.ExitCode;
         }
 
+        internal Task WaitForTerminationAsync(CancellationToken cancellationToken)
+            => this.process.WaitForExitAsync(cancellationToken);
+
         public async ValueTask DisposeAsync()
         {
-            if (!this.process.HasExited)
+            Exception? gracefulFailure = null;
+            try
             {
-                this.process.Kill(entireProcessTree: true);
-                await this.process.WaitForExitAsync();
+                if (!this.process.HasExited)
+                {
+                    using var graceful = new CancellationTokenSource(TimeSpan.FromSeconds(10), this.clock);
+                    try
+                    {
+                        await this.SendAsync("STOP", graceful.Token);
+                        this.process.StandardInput.Close();
+                        this.CleanupEntered.TrySetResult();
+                        await this.process.WaitForExitAsync(graceful.Token);
+                    }
+                    catch (Exception error) when (error is OperationCanceledException or IOException)
+                    {
+                        gracefulFailure = error;
+                        this.WasTerminated = !this.process.HasExited;
+                        try
+                        {
+                            if (!this.process.HasExited)
+                                this.process.Kill(entireProcessTree: true);
+                        }
+                        catch (InvalidOperationException) when (this.process.HasExited) { }
+                        using var reap = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                        await this.process.WaitForExitAsync(reap.Token);
+                    }
+                }
+                using var drain = new SplitScenarioPhase(
+                    "stderr-drain", TimeSpan.FromSeconds(5), timeProvider: this.clock);
+                await drain.RunAsync(token => this.drainError.WaitAsync(token));
+                if (this.WasTerminated)
+                {
+                    if (gracefulFailure is OperationCanceledException)
+                        throw new TimeoutException("Role required owned-process termination during cleanup.", gracefulFailure);
+                    throw new IOException("Role graceful STOP failed; owned process was terminated.", gracefulFailure);
+                }
+                if (!this.exitObserved && this.process.ExitCode != 0)
+                    throw new InvalidOperationException($"Role exited with code {this.process.ExitCode} during cleanup.");
             }
-            await this.drainError;
-            this.process.Dispose();
+            finally
+            {
+                this.drainCancellation.Cancel();
+                this.process.StandardInput.Dispose();
+                this.process.StandardOutput.Dispose();
+                this.process.StandardError.Dispose();
+                this.process.Dispose();
+                this.drainCancellation.Dispose();
+            }
         }
     }
 }

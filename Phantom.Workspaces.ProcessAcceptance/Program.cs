@@ -41,10 +41,26 @@ internal static class Program
 {
     private static async Task<int> Main(string[] args)
     {
-        if (args.Length != 9 || args[0] is not (
+        if (args is ["lifetime-probe", var behavior])
+        {
+            Console.WriteLine("READY probe");
+            if (behavior == "eof")
+                return 0;
+            if (behavior == "nonzero")
+                return 23;
+            if (await Console.In.ReadLineAsync() != "STOP")
+                return 2;
+            Console.WriteLine("STOP accepted");
+            if (behavior == "hang-cleanup")
+                await new TaskCompletionSource().Task;
+            return behavior == "fail-stop" ? 24 : 0;
+        }
+        if (args.Length != 10 || args[0] is not (
             "worker" or "caller" or "worker-failure" or "caller-failure" or "worker-child" or "caller-child"))
             return 2;
-        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        // The parent owns protocol phase deadlines and kills/reaps only its own roles on failure.
+        // This watchdog is solely a last resort for stuck native work or a lost parent.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(10));
         using var startupListener = new ActivityListener
         {
             ShouldListenTo = source => source.Name == RepositoryStartupDiagnostics.SourceName,
@@ -73,7 +89,7 @@ internal static class Program
             var session = new WorkspaceEntitySession
             {
                 UserEntityId = new EntityId(args[2]),
-                ComputerEntityId = profile,
+                ComputerEntityId = new EntityId(args[9]),
                 UserComputerProfileEntityId = profile,
             };
             using var http = new HttpClient { BaseAddress = new Uri(args[1]) };
@@ -107,6 +123,14 @@ internal static class Program
         ProcessStageDiagnostics diagnostics, ProcessStageDiagnostics cleanup,
         bool startupFailure, bool childAttachment, CancellationToken ct)
     {
+        var resources = new SplitScenarioResources();
+        Exception? primaryFailure = null;
+        try { await RunOwnedAsync(); }
+        catch (Exception error) { primaryFailure = error; }
+        await resources.CompleteAsync(primaryFailure);
+
+        async Task RunOwnedAsync()
+        {
         reportStage("worker-registration");
         var chatClient = new DeterministicTestChatClient();
         var response = chatClient.EnqueueStreamingResponse();
@@ -117,8 +141,8 @@ internal static class Program
             persistence,
             new AgentServices { ChatClientOverride = chatClient },
             TaskScheduler.Default));
-        await using var factoryLifetime = new DiagnosticAsyncLifetime(
-            factory, cleanup, "worker-chat-factory-shutdown");
+        resources.Add(new DiagnosticAsyncLifetime(
+            factory, cleanup, "worker-chat-factory-shutdown"));
         try
         {
         var chats = new RunningAgentChatTable(factory);
@@ -156,8 +180,8 @@ internal static class Program
                 CopilotClientFactory = startupFailure ? new FailingFixtureCopilotFactory() : null,
             },
             runningAgentChats: chats));
-        await using var compositionLifetime = new DiagnosticAsyncLifetime(
-            composition, cleanup, "worker-transport-composition-shutdown");
+        resources.Add(new DiagnosticAsyncLifetime(
+            composition, cleanup, "worker-transport-composition-shutdown"));
         await diagnostics.RunAsync("worker-transport-start", () => composition.StartAsync(ct));
         try
         {
@@ -172,8 +196,13 @@ internal static class Program
         {
             reportStage("worker-command-read");
             var command = await Console.In.ReadLineAsync(ct);
-            if (command == "STOP" || command is null)
+            if (command == "STOP")
+            {
+                Console.WriteLine("STOP accepted");
                 break;
+            }
+            if (command is null)
+                throw new EndOfStreamException("Worker command stream ended before STOP.");
             if (command == "VERIFY")
             {
                 reportStage("worker-turn");
@@ -232,6 +261,7 @@ internal static class Program
         {
             diagnostics.CaptureFailure(error, cleanup);
             throw;
+        }
         }
     }
 
@@ -320,19 +350,27 @@ internal static class Program
         ProcessStageDiagnostics diagnostics, ProcessStageDiagnostics cleanup,
         bool startupFailure, bool childAttachment, CancellationToken ct)
     {
+        var resources = new SplitScenarioResources();
+        Exception? primaryFailure = null;
+        try { await RunOwnedAsync(); }
+        catch (Exception error) { primaryFailure = error; }
+        await resources.CompleteAsync(primaryFailure);
+
+        async Task RunOwnedAsync()
+        {
         reportStage("caller-live-ingress");
         var liveHub = diagnostics.Run("caller-live-ingress", () => new ReverseHttpServerTransportFactory(
             new ReverseConnectionStatusRegistry(), requireAuthenticatedRelays: true,
             hubProfileEntityId: session.UserComputerProfileEntityId));
-        await using var liveHubLifetime = new DiagnosticAsyncLifetime(
-            liveHub, cleanup, "caller-live-hub-shutdown");
+        resources.Add(new DiagnosticAsyncLifetime(
+            liveHub, cleanup, "caller-live-hub-shutdown"));
         try
         {
         var listeners = new TransportRegistry();
         listeners.Register(liveHub);
         var server = diagnostics.Run("caller-live-ingress", () => new HttpServerTransportFactory(listeners));
-        await using var serverLifetime = new DiagnosticAsyncLifetime(
-            server, cleanup, "caller-live-transport-server-shutdown");
+        resources.Add(new DiagnosticAsyncLifetime(
+            server, cleanup, "caller-live-transport-server-shutdown"));
         try
         {
         var builder = WebApplication.CreateBuilder();
@@ -342,8 +380,8 @@ internal static class Program
         builder.Logging.AddFilter("Microsoft.Hosting.Lifetime", LogLevel.Warning);
         builder.WebHost.UseUrls(listenUrl);
         var app = builder.Build();
-        await using var appLifetime = new DiagnosticAsyncLifetime(
-            app, cleanup, "caller-live-web-app-shutdown");
+        resources.Add(new DiagnosticAsyncLifetime(
+            app, cleanup, "caller-live-web-app-shutdown"));
         try
         {
         app.UseWebSockets();
@@ -374,7 +412,7 @@ internal static class Program
             .UseHeadless(new AvaloniaHeadlessPlatformOptions())
             .SetupWithoutStarting();
         reportStage("caller-gui-dispatch");
-        using var loop = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        using var loop = new CancellationTokenSource();
         var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Dispatcher.UIThread.Post(async () =>
         {
@@ -415,6 +453,7 @@ internal static class Program
             diagnostics.CaptureFailure(error, cleanup);
             throw;
         }
+        }
     }
 
     private static async Task RunCallerTabAsync(
@@ -423,23 +462,31 @@ internal static class Program
         EntityId workerProfile, ProcessStageDiagnostics diagnostics, ProcessStageDiagnostics cleanup,
         bool startupFailure, bool childAttachment, CancellationToken ct)
     {
+        var resources = new SplitScenarioResources();
+        Exception? primaryFailure = null;
+        try { await RunOwnedAsync(); }
+        catch (Exception error) { primaryFailure = error; }
+        await resources.CompleteAsync(primaryFailure);
+
+        async Task RunOwnedAsync()
+        {
         reportStage("caller-gui-services-bootstrap");
         var factory = diagnostics.Run("caller-chat-factory-construction", () => new AgentChatFactory(
             new InMemoryAgentPersistenceStore(), new AgentServices(),
             TaskScheduler.FromCurrentSynchronizationContext()));
-        await using var factoryLifetime = new DiagnosticAsyncLifetime(
-            factory, cleanup, "caller-chat-factory-shutdown");
+        resources.Add(new DiagnosticAsyncLifetime(
+            factory, cleanup, "caller-chat-factory-shutdown"));
         try
         {
         var provider = new TransportFactoryRegistryProvider();
         var chats = new RunningAgentChatTable(
             factory, AgentSessionRuntimeContextFactory.FromProvider(provider));
-        await using var accessHost = Phantom.Workspaces.Services.Access.AccessHostServices.Create(
+        var accessHost = resources.Add(Phantom.Workspaces.Services.Access.AccessHostServices.Create(
             new Phantom.Workspaces.Services.Access.AccessHostOptions
             {
                 PlatformSecretStore = new Phantom.Workspaces.Llm.Secrets.NullPlatformSecretStore(),
                 Dispatch = action => Avalonia.Threading.Dispatcher.UIThread.Post(action),
-            });
+            }));
         var services = new ApplicationServices(
             chats, new AgentPersistenceStoreCache(), loggerFactory,
             accessBroker: accessHost.Broker,
@@ -454,9 +501,9 @@ internal static class Program
         var window = diagnostics.Run("caller-window-construction", () => new MainWindowViewModel(
             new LocalGitRepositorySource(repositoryPath), configuration,
             new ProfileStore(Path.Combine(Path.GetDirectoryName(repositoryPath)!, "caller-profile.json")),
-            services));
-        await using var windowLifetime = new DiagnosticAsyncLifetime(
-            window, cleanup, "caller-window-shutdown");
+            services, session));
+        resources.Add(new DiagnosticAsyncLifetime(
+            window, cleanup, "caller-window-shutdown"));
         try
         {
         reportStage("caller-gui-initialization");
@@ -464,6 +511,9 @@ internal static class Program
         if (window.EntityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId
             != session.UserComputerProfileEntityId)
             throw new InvalidOperationException("Caller GUI profile does not match the fixture.");
+        Console.WriteLine("READY gui");
+        if (await Console.In.ReadLineAsync(ct) != "RUN")
+            throw new InvalidOperationException("Expected operation start after GUI readiness.");
         reportStage("caller-persisted-session-query");
         var query = await diagnostics.RunAsync("caller-persisted-session-query",
             () => window.EntityBroker.EntityRepository.DataAccessLayer.QueryAsync(new QueryRequest
@@ -496,8 +546,8 @@ internal static class Program
             action => { action(); return Task.CompletedTask; },
             timeProvider: clock,
             stageDeadline: TimeSpan.FromSeconds(45)));
-        await using var handlerLifetime = new DiagnosticAsyncLifetime(
-            handler, cleanup, "caller-shortcut-shutdown");
+        resources.Add(new DiagnosticAsyncLifetime(
+            handler, cleanup, "caller-shortcut-shutdown"));
         try
         {
         reportStage("caller-tab-open");
@@ -627,6 +677,7 @@ internal static class Program
         {
             diagnostics.CaptureFailure(error, cleanup);
             throw;
+        }
         }
     }
 
