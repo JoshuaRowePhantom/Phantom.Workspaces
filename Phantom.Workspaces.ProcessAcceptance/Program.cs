@@ -13,6 +13,7 @@ using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
 using GitHub.Copilot;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Data.Offline;
 using Phantom.Workspaces.Data.Web.Client;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Llm;
@@ -41,6 +42,41 @@ internal static class Program
 {
     private static async Task<int> Main(string[] args)
     {
+        if (args is ["prepare", var repositoryPath, var seedPath])
+        {
+            try
+            {
+            var data = new MergeProcessingDataAccessLayer(new GitDataAccessLayer(repositoryPath));
+            var documents = JsonSerializer.Deserialize<JsonElement[]>(await File.ReadAllTextAsync(seedPath))!;
+            var update = await data.UpdateAsync(new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "Seed process acceptance." } },
+                Changes = documents.Select(document => new EntityChange
+                {
+                    EntityId = new EntityId(document.GetProperty("entity-id").GetString()!),
+                    EntityChangeMode = EntityChangeMode.Replace,
+                    Data = document,
+                }).ToArray(),
+            });
+            if (update.EntityResults.Any(entity => entity.UpdateState == UpdateState.Failed))
+                throw new InvalidOperationException("Fixture seed failed.");
+            WorkspaceEntitySession session;
+            await using (var repository = await EntityRepository.CreateAsync(
+                new EntityRepositoryInitializationOptions
+                {
+                    RepositorySource = new LocalGitRepositorySource(repositoryPath),
+                    UserComputerProfileOverride = "fixture-caller",
+                }))
+                session = repository.WorkspaceEntitySession;
+            Console.WriteLine("PREPARED " + JsonSerializer.Serialize(session));
+            return 0;
+            }
+            catch (Exception error)
+            {
+                Console.Error.WriteLine("FAIL preparation " + error.GetType().Name);
+                return 1;
+            }
+        }
         if (args is ["lifetime-probe", var behavior])
         {
             Console.WriteLine("READY probe");
@@ -48,11 +84,34 @@ internal static class Program
                 return 0;
             if (behavior == "nonzero")
                 return 23;
-            if (await Console.In.ReadLineAsync() != "STOP")
+            if (behavior == "prepared")
+            {
+                Console.WriteLine("PREPARED " + JsonSerializer.Serialize(new WorkspaceEntitySession
+                {
+                    UserEntityId = new EntityId("10101010-1010-4010-8010-000000001611"),
+                    ComputerEntityId = new EntityId("10101010-1010-4010-8010-000000001613"),
+                    UserComputerProfileEntityId = new EntityId("10101010-1010-4010-8010-000000001612"),
+                }));
+                return 0;
+            }
+            if (behavior == "pending-preparation")
+                await new TaskCompletionSource().Task;
+            var command = await Console.In.ReadLineAsync();
+            if (command == "RUN")
+            {
+                if (behavior == "pending-result")
+                    Console.WriteLine("INFO waiting");
+                else
+                    Console.WriteLine(behavior == "wrong-result" ? "RESULT unexpected" : "RESULT probe");
+                command = await Console.In.ReadLineAsync();
+            }
+            if (command != "STOP")
                 return 2;
-            Console.WriteLine("STOP accepted");
+            Console.WriteLine(behavior == "reject-stop" ? "STOP rejected" : "STOP accepted");
             if (behavior == "hang-cleanup")
                 await new TaskCompletionSource().Task;
+            if (behavior == "gated-cleanup" && await Console.In.ReadLineAsync() != "RELEASE")
+                return 2;
             return behavior == "fail-stop" ? 24 : 0;
         }
         if (args.Length != 10 || args[0] is not (
@@ -463,10 +522,35 @@ internal static class Program
         bool startupFailure, bool childAttachment, CancellationToken ct)
     {
         var resources = new SplitScenarioResources(cleanupDiagnostics: cleanup);
+        using var operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        ct = operationCancellation.Token;
+        string? cancellationStage = null;
+        var cancellationReported = false;
         Exception? primaryFailure = null;
         try { await RunOwnedAsync(); }
         catch (Exception error) { primaryFailure = error; }
         await resources.CompleteAsync(primaryFailure);
+
+        async Task CancelAtGateAsync(string name)
+        {
+            Console.WriteLine("CANCEL pending " + name);
+            if (await Console.In.ReadLineAsync() != "CANCEL")
+                throw new InvalidOperationException("Expected external cancellation.");
+            operationCancellation.Cancel();
+            Console.WriteLine("CANCELLED " + name);
+            cancellationReported = true;
+        }
+
+        async ValueTask ResumeCleanupOnDispatcherAsync()
+        {
+            var continuation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Dispatcher.UIThread.Post(() =>
+            {
+                Console.WriteLine("CLEANUP dispatcher-continuation");
+                continuation.SetResult();
+            });
+            await continuation.Task;
+        }
 
         async Task RunOwnedAsync()
         {
@@ -503,7 +587,14 @@ internal static class Program
             new ProfileStore(Path.Combine(Path.GetDirectoryName(repositoryPath)!, "caller-profile.json")),
             services, session));
         resources.Add(new DiagnosticAsyncLifetime(
-            window, cleanup, "caller-window-shutdown"));
+            new CallbackAsyncLifetime(async () =>
+            {
+                if (cancellationReported)
+                    await ResumeCleanupOnDispatcherAsync();
+                await window.DisposeAsync();
+                if (cancellationStage == "gui-disposal")
+                    ct.ThrowIfCancellationRequested();
+            }), cleanup, "caller-window-shutdown"));
         try
         {
         reportStage("caller-gui-initialization");
@@ -512,7 +603,10 @@ internal static class Program
             != session.UserComputerProfileEntityId)
             throw new InvalidOperationException("Caller GUI profile does not match the fixture.");
         Console.WriteLine("READY gui");
-        if (await Console.In.ReadLineAsync(ct) != "RUN")
+        var runCommand = await Console.In.ReadLineAsync(ct);
+        if (runCommand?.StartsWith("RUN-CANCEL-", StringComparison.Ordinal) == true)
+            cancellationStage = runCommand["RUN-CANCEL-".Length..];
+        else if (runCommand != "RUN")
             throw new InvalidOperationException("Expected operation start after GUI readiness.");
         reportStage("caller-persisted-session-query");
         var query = await diagnostics.RunAsync("caller-persisted-session-query",
@@ -533,7 +627,8 @@ internal static class Program
             () => window.EntityBroker.GetEntitiesAsync([persisted.EntityId], ct))).Single();
         var registry = window.TransportComposition?.TransportFactoryRegistry
             ?? throw new InvalidOperationException("Caller production transport was not initialized.");
-        var stalled = childAttachment ? null : new OneShotStalledProfileRegistry(registry);
+        var stalled = childAttachment ? null : new OneShotStalledProfileRegistry(
+            registry, cancellationStage == "retry");
         var failedChildTransport = childAttachment ? new OneShotFailedChildRegistry(registry) : null;
         var clock = new FakeTimeProvider();
         reportStage("caller-shortcut-construction");
@@ -574,6 +669,12 @@ internal static class Program
             if (!childAttachment)
             {
                 await stalled!.Entered.WaitAsync(ct);
+                if (cancellationStage == "attach")
+                {
+                    await CancelAtGateAsync("attach");
+                    stalled.Release();
+                    ct.ThrowIfCancellationRequested();
+                }
                 clock.Advance(TimeSpan.FromSeconds(45));
             }
             await terminal.Task.WaitAsync(ct);
@@ -600,6 +701,13 @@ internal static class Program
                 if (!await handler.Handle(window, Shortcut.Open, entity)
                     || tab.State != AgentTabState.Loading)
                     throw new InvalidOperationException("Failed tab did not retry through the shortcut.");
+                if (cancellationStage == "retry")
+                {
+                    await stalled.RetryEntered.WaitAsync(ct);
+                    await CancelAtGateAsync("retry");
+                    stalled.ReleaseRetry();
+                    ct.ThrowIfCancellationRequested();
+                }
                 await terminal.Task.WaitAsync(ct);
             }
             finally
@@ -612,6 +720,20 @@ internal static class Program
             || tab.Agent?.AgentChat is not RemoteAgentChat chat)
             throw new InvalidOperationException("Caller tab failed to open the persisted remote route.");
         Console.WriteLine("TAB Ready remote");
+        if (cancellationStage == "gui-disposal")
+        {
+            window.WorkspacePanes.First().Tabs.Add(new CallbackWorkspaceTab(async () =>
+            {
+                await CancelAtGateAsync("gui-disposal");
+                await ResumeCleanupOnDispatcherAsync();
+            })
+            {
+                Id = "fixture-cleanup",
+                Title = "Fixture cleanup",
+            });
+            diagnostics.Complete();
+            return;
+        }
         if (childAttachment)
         {
             var command = await Console.In.ReadLineAsync(ct);
@@ -911,7 +1033,17 @@ internal static class Program
 
     private sealed class FixtureApplication : Application;
 
-    private sealed class OneShotStalledProfileRegistry(ITransportFactoryRegistry inner)
+    private sealed class CallbackAsyncLifetime(Func<ValueTask> dispose) : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => dispose();
+    }
+
+    private sealed class CallbackWorkspaceTab(Func<ValueTask> dispose) : WorkspaceTabViewModel
+    {
+        public override ValueTask DisposeAsync() => dispose();
+    }
+
+    private sealed class OneShotStalledProfileRegistry(ITransportFactoryRegistry inner, bool stallRetry = false)
         : ITransportFactoryRegistry
     {
         private readonly TaskCompletionSource<ITransport> release =
@@ -921,8 +1053,12 @@ internal static class Program
         private readonly TaskCompletionSource disposed =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int attempts;
+        private readonly TaskCompletionSource retryEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource retryRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         internal Task Entered => this.entered.Task;
+        internal Task RetryEntered => this.retryEntered.Task;
+        internal void ReleaseRetry() => this.retryRelease.TrySetResult();
         internal Task LateTransportDisposed => this.disposed.Task;
         internal void Release() => this.release.TrySetResult(this.pending
             ?? throw new InvalidOperationException("No pending transport."));
@@ -933,7 +1069,14 @@ internal static class Program
         public async Task<ITransport> ConnectToAsync(JsonElement descriptor, CancellationToken ct = default)
         {
             var transport = await inner.ConnectToAsync(descriptor, ct);
-            if (Interlocked.Increment(ref this.attempts) != 1)
+            var attempt = Interlocked.Increment(ref this.attempts);
+            if (attempt == 2 && stallRetry)
+            {
+                this.retryEntered.TrySetResult();
+                await this.retryRelease.Task;
+                return transport;
+            }
+            if (attempt != 1)
                 return transport;
             this.pending = new DisposalObservedTransport(transport, this.disposed);
             this.entered.TrySetResult();

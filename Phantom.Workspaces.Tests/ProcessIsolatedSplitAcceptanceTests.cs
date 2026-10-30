@@ -49,7 +49,8 @@ public sealed partial class ProcessIsolatedSplitAcceptanceTests
         => await RunSplitScenarioAsync(startupFailure: false, childAttachment: true, childTransportFailure: true);
 
     private static async Task RunSplitScenarioAsync(
-        bool startupFailure, bool childAttachment = false, bool childTransportFailure = false)
+        bool startupFailure, bool childAttachment = false, bool childTransportFailure = false,
+        string? cancellationStage = null)
     {
         SplitScenarioPhase? phase = null;
         CancellationToken EnterPhase(string name, bool cleanup = false)
@@ -79,21 +80,18 @@ public sealed partial class ProcessIsolatedSplitAcceptanceTests
         };
         try
         {
+            var seed = CreateSeed();
+            var seedPath = Path.Combine(directory, "seed.json");
+            await File.WriteAllTextAsync(seedPath, JsonSerializer.Serialize(seed), ct);
+            var preparation = resources.Add(new RoleProcess(
+                "prepare", Path.Combine(directory, "entities"), seedPath));
+            roles.Add(preparation);
+            var protocol = new SplitScenarioProtocol(TimeProvider.System, TestContext.Current.CancellationToken);
+            var preparedSession = await protocol.PrepareAsync(preparation);
+            Assert.Equal(Caller, preparedSession.UserComputerProfileEntityId);
+            var sessionEntityId = new EntityId(seed[^1].GetProperty("entity-id").GetString()!);
             var data = new MergeProcessingDataAccessLayer(
                 new GitDataAccessLayer(Path.Combine(directory, "entities")));
-            var sessionEntityId = await SeedAsync(data, ct);
-            WorkspaceEntitySession? preparedSession = null;
-            await phase!.RunAsync(async token =>
-            {
-                await using var prepared = await EntityRepository.CreateAsync(
-                    new EntityRepositoryInitializationOptions
-                    {
-                        RepositorySource = new LocalGitRepositorySource(Path.Combine(directory, "entities")),
-                        UserComputerProfileOverride = "fixture-caller",
-                    }, token);
-                Assert.Equal(Caller, prepared.WorkspaceEntitySession.UserComputerProfileEntityId);
-                preparedSession = prepared.WorkspaceEntitySession;
-            });
             ct = EnterPhase("hub-startup");
             var status = new ReverseConnectionStatusRegistry();
             var reverse = resources.Add(new ReverseHttpServerTransportFactory(status,
@@ -176,7 +174,34 @@ public sealed partial class ProcessIsolatedSplitAcceptanceTests
             await caller.SendAsync("DROP", ct);
             Assert.Equal("DROPPED live", await caller.NextLineAsync(ct, "DROPPED live"));
             Assert.Equal("READY gui", await caller.NextLineAsync(ct, "READY gui"));
-            ct = EnterPhase("operation");
+            if (cancellationStage is not null)
+            {
+                await protocol.RunOperationAsync(async token =>
+                {
+                    await caller.SendAsync("RUN-CANCEL-" + cancellationStage, token);
+                    // The marker is emitted only after authenticated transport or GUI disposal enters its gate.
+                    string line;
+                    do { line = await caller.NextLineAsync(token); }
+                    while (line.StartsWith("TAB ", StringComparison.Ordinal));
+                    Assert.Equal("CANCEL pending " + cancellationStage, line);
+                    await caller.SendAsync("CANCEL", token);
+                    Assert.Equal("CANCELLED " + cancellationStage, await caller.NextLineAsync(token));
+                    Assert.Equal("CLEANUP dispatcher-continuation", await caller.NextLineAsync(token));
+                });
+                await Assert.ThrowsAsync<InvalidOperationException>(() => protocol.CallerExitAsync(caller));
+                Assert.Contains("OperationCanceledException", caller.CapturedError, StringComparison.Ordinal);
+                Assert.True(reverse.IsRegistered(Worker.ToString()));
+                await protocol.StopWorkerAsync(worker);
+                await protocol.WorkerExitAsync(worker);
+                Assert.False(reverse.IsRegistered(Worker.ToString()));
+                await app.StopAsync(TestContext.Current.CancellationToken);
+                await resources.CompleteAsync();
+                Assert.All(roles, role => Assert.True(role.PipesClosed && role.ProcessExited));
+                return;
+            }
+            await protocol.RunOperationAsync(async operationToken =>
+            {
+            ct = operationToken;
             await caller.SendAsync("RUN", ct);
             Assert.Equal("TAB Loading", await caller.NextLineAsync(ct, "TAB Loading"));
             if (!childAttachment)
@@ -204,12 +229,12 @@ public sealed partial class ProcessIsolatedSplitAcceptanceTests
                 Assert.Equal($"CHILD reopened {childSessionId} viewer-1", await caller.NextLineAsync(ct));
                 Assert.Equal("CHILD parent-alive", await caller.NextLineAsync(ct));
             }
-            Assert.Equal(startupFailure
+            await protocol.ExpectResultAsync(caller, startupFailure
                     ? "RESULT caller-ui startup-type-message-stack-inner"
                     : "RESULT persisted worker-response",
-                await caller.NextLineAsync(ct));
-            ct = EnterPhase("caller-exit", cleanup: true);
-            Assert.Equal(0, await caller.WaitForExitAsync(ct));
+                ct);
+            });
+            await protocol.CallerExitAsync(caller);
             Assert.DoesNotContain(ProcessAcceptanceCredentials.Token, caller.CapturedError, StringComparison.Ordinal);
             Assert.True(reverse.IsRegistered(Worker.ToString()));
             ct = EnterPhase("worker-verification");
@@ -220,11 +245,8 @@ public sealed partial class ProcessIsolatedSplitAcceptanceTests
             }
             Assert.DoesNotContain(ProcessAcceptanceCredentials.Token, worker.CapturedOutput, StringComparison.Ordinal);
             Assert.DoesNotContain(ProcessAcceptanceCredentials.Token, caller.CapturedOutput, StringComparison.Ordinal);
-            ct = EnterPhase("worker-stop", cleanup: true);
-            await worker.SendAsync("STOP", ct);
-            Assert.Equal("STOP accepted", await worker.NextLineAsync(ct, "STOP accepted"));
-            ct = EnterPhase("worker-exit", cleanup: true);
-            Assert.Equal(0, await worker.WaitForExitAsync(ct));
+            await protocol.StopWorkerAsync(worker);
+            await protocol.WorkerExitAsync(worker);
             Assert.False(reverse.IsRegistered(Worker.ToString()));
             Assert.DoesNotContain(ProcessAcceptanceCredentials.Token, worker.CapturedError, StringComparison.Ordinal);
             ct = EnterPhase("hub-stop", cleanup: true);
@@ -312,6 +334,9 @@ public sealed partial class ProcessIsolatedSplitAcceptanceTests
         }
         catch (Exception error)
         {
+            primaryFailure = error;
+            try
+            {
             var artifactDirectory = Path.Combine(Path.GetDirectoryName(directory)!,
                 "diagnostics-" + Guid.NewGuid().ToString("N"));
             ProcessStageDiagnostics.RetainRoleLogs(directory, artifactDirectory, sensitiveValues.ToArray());
@@ -323,6 +348,11 @@ public sealed partial class ProcessIsolatedSplitAcceptanceTests
                 + ProcessStageDiagnostics.Sanitize(
                     string.Join("\n", roles.Select(role => role.DiagnosticOutput))
                     + "\n" + error, sensitiveValues.ToArray()));
+            }
+            catch (Exception artifactError)
+            {
+                primaryFailure = new AggregateException("Operation and diagnostic retention failed.", error, artifactError);
+            }
         }
         finally
         {
@@ -365,7 +395,7 @@ public sealed partial class ProcessIsolatedSplitAcceptanceTests
         }
     }
 
-    private static async Task<EntityId> SeedAsync(IDataAccessLayer data, CancellationToken ct)
+    private static JsonElement[] CreateSeed()
     {
         static JsonElement Parse(string text) => JsonDocument.Parse(text).RootElement.Clone();
         var now = DateTimeOffset.UtcNow;
@@ -412,18 +442,7 @@ public sealed partial class ProcessIsolatedSplitAcceptanceTests
                 """),
             session,
         };
-        var result = await data.UpdateAsync(new UpdateRequest
-        {
-            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "Seed process acceptance." } },
-            Changes = documents.Select(document => new EntityChange
-            {
-                EntityId = new EntityId(document.GetProperty("entity-id").GetString()!),
-                EntityChangeMode = EntityChangeMode.Replace,
-                Data = document,
-            }).ToArray(),
-        }, ct);
-        Assert.All(result.EntityResults, entity => Assert.NotEqual(UpdateState.Failed, entity.UpdateState));
-        return new EntityId(session.GetProperty("entity-id").GetString()!);
+        return documents;
     }
 
     private static int FreePort()
@@ -445,10 +464,18 @@ public sealed partial class ProcessIsolatedSplitAcceptanceTests
         private readonly List<string> output = [];
         private readonly List<string> errors = [];
         private readonly Task drainError;
+        private readonly Task drainOutput;
+        private readonly System.Threading.Channels.Channel<string> protocolOutput =
+            System.Threading.Channels.Channel.CreateUnbounded<string>(
+                new System.Threading.Channels.UnboundedChannelOptions { SingleWriter = true });
         private readonly CancellationTokenSource drainCancellation = new();
         private readonly TimeProvider clock;
+        private readonly RoleProcessHooks? hooks;
         internal TaskCompletionSource CleanupEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource DrainEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal bool WasTerminated { get; private set; }
+        internal bool PipesClosed { get; private set; }
+        internal bool ProcessExited { get; private set; }
         private string waiting = "none";
         private string lastCommand = "none";
         private long waitStarted;
@@ -485,8 +512,14 @@ public sealed partial class ProcessIsolatedSplitAcceptanceTests
         }
 
         internal RoleProcess(TimeProvider clock, string role, params string[] args)
+            : this(clock, null, role, args)
+        {
+        }
+
+        internal RoleProcess(TimeProvider clock, RoleProcessHooks? hooks, string role, params string[] args)
         {
             this.clock = clock;
+            this.hooks = hooks;
             this.Role = role;
             var info = new ProcessStartInfo("dotnet")
             {
@@ -502,13 +535,43 @@ public sealed partial class ProcessIsolatedSplitAcceptanceTests
                 info.ArgumentList.Add(arg);
             this.process = Process.Start(info) ?? throw new InvalidOperationException("Child process did not start.");
             this.drainError = this.DrainErrorAsync();
+            this.drainOutput = this.DrainOutputAsync();
+        }
+
+        private async Task DrainOutputAsync()
+        {
+            Exception? failure = null;
+            try
+            {
+                while (true)
+                {
+                    if (this.hooks?.BeforeOutputRead is { } beforeRead)
+                        await beforeRead(this.drainCancellation.Token);
+                    var line = await this.process.StandardOutput.ReadLineAsync(this.drainCancellation.Token);
+                    if (line is null)
+                        break;
+                    this.protocolOutput.Writer.TryWrite(line);
+                }
+            }
+            catch (Exception error) when (this.drainCancellation.IsCancellationRequested
+                && error is OperationCanceledException or ObjectDisposedException or IOException) { }
+            catch (Exception error)
+            {
+                failure = error;
+                throw;
+            }
+            finally
+            {
+                this.protocolOutput.Writer.TryComplete(failure);
+            }
         }
 
         private async Task DrainErrorAsync()
         {
             try
             {
-                while (await this.process.StandardError.ReadLineAsync(this.drainCancellation.Token) is { } line)
+                while (await (this.hooks?.ReadError?.Invoke(this.drainCancellation.Token)
+                    ?? this.process.StandardError.ReadLineAsync(this.drainCancellation.Token)) is { } line)
                 {
                     lock (this.errors)
                         this.errors.Add(line);
@@ -521,14 +584,20 @@ public sealed partial class ProcessIsolatedSplitAcceptanceTests
         {
             this.waiting = expected;
             this.waitStarted = Stopwatch.GetTimestamp();
-            var line = await this.process.StandardOutput.ReadLineAsync(ct);
-            if (line is null)
+            string line;
+            try
+            {
+                line = await this.protocolOutput.Reader.ReadAsync(ct);
+            }
+            catch (System.Threading.Channels.ChannelClosedException error) when (error.InnerException is null)
             {
                 await this.drainError.WaitAsync(ct);
                 throw new InvalidOperationException($"Child exited before expected stage: {this.DiagnosticOutput}");
             }
             this.output.Add(line);
             this.waiting = "none";
+            if (this.hooks?.AfterLine is { } afterLine)
+                await afterLine(line, ct);
             return line;
         }
 
@@ -536,6 +605,8 @@ public sealed partial class ProcessIsolatedSplitAcceptanceTests
         {
             this.waiting = "stdin command write";
             this.waitStarted = Stopwatch.GetTimestamp();
+            if (this.hooks?.BeforeSend is { } beforeSend)
+                await beforeSend(command, ct);
             await this.process.StandardInput.WriteLineAsync(command.AsMemory(), ct);
             await this.process.StandardInput.FlushAsync(ct);
             this.lastCommand = command;
@@ -561,7 +632,9 @@ public sealed partial class ProcessIsolatedSplitAcceptanceTests
 
         public async ValueTask DisposeAsync()
         {
-            Exception? gracefulFailure = null;
+            if (this.PipesClosed)
+                return;
+            var failures = new List<Exception>();
             try
             {
                 if (!this.process.HasExited)
@@ -576,7 +649,6 @@ public sealed partial class ProcessIsolatedSplitAcceptanceTests
                     }
                     catch (Exception error) when (error is OperationCanceledException or IOException)
                     {
-                        gracefulFailure = error;
                         this.WasTerminated = !this.process.HasExited;
                         try
                         {
@@ -584,31 +656,53 @@ public sealed partial class ProcessIsolatedSplitAcceptanceTests
                                 this.process.Kill(entireProcessTree: true);
                         }
                         catch (InvalidOperationException) when (this.process.HasExited) { }
-                        using var reap = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                        using var reap = new CancellationTokenSource(TimeSpan.FromSeconds(10), this.clock);
                         await this.process.WaitForExitAsync(reap.Token);
+                        failures.Add(error is OperationCanceledException
+                            ? new TimeoutException("Role graceful STOP exceeded its owned cleanup deadline.", error)
+                            : new IOException("Role graceful STOP failed during owned-process cleanup.", error));
                     }
                 }
                 using var drain = new SplitScenarioPhase(
                     "stderr-drain", TimeSpan.FromSeconds(5), timeProvider: this.clock);
+                this.DrainEntered.TrySetResult();
                 await drain.RunAsync(token => this.drainError.WaitAsync(token));
-                if (this.WasTerminated)
-                {
-                    if (gracefulFailure is OperationCanceledException)
-                        throw new TimeoutException("Role required owned-process termination during cleanup.", gracefulFailure);
-                    throw new IOException("Role graceful STOP failed; owned process was terminated.", gracefulFailure);
-                }
-                if (!this.exitObserved && this.process.ExitCode != 0)
+                if (!this.WasTerminated && !this.exitObserved && this.process.ExitCode != 0)
                     throw new InvalidOperationException($"Role exited with code {this.process.ExitCode} during cleanup.");
+            }
+            catch (Exception error)
+            {
+                failures.Add(error);
             }
             finally
             {
+                this.ProcessExited = this.process.HasExited;
                 this.drainCancellation.Cancel();
                 this.process.StandardInput.Dispose();
                 this.process.StandardOutput.Dispose();
                 this.process.StandardError.Dispose();
-                this.process.Dispose();
-                this.drainCancellation.Dispose();
+                using var finalization = new SplitScenarioPhase(
+                    "stderr-finalization", TimeSpan.FromSeconds(5), timeProvider: this.clock);
+                try
+                {
+                    await finalization.RunAsync(token => Task.WhenAll(this.drainError, this.drainOutput).WaitAsync(token));
+                }
+                catch (Exception error)
+                {
+                    if (!failures.Contains(error))
+                        failures.Add(error);
+                }
+                finally
+                {
+                    this.process.Dispose();
+                    this.drainCancellation.Dispose();
+                    this.PipesClosed = true;
+                }
             }
+            if (failures.Count == 1)
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
+            if (failures.Count > 1)
+                throw new AggregateException("Role cleanup failed.", failures);
         }
     }
 }

@@ -121,7 +121,9 @@ public sealed class ProcessStageDiagnostics(
             {
                 var destination = Path.Combine(artifactDirectory, role + "-logs", Path.GetRelativePath(source, file));
                 Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-                File.WriteAllText(destination, Sanitize(File.ReadAllText(file), sensitiveValues));
+                using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var reader = new StreamReader(stream);
+                File.WriteAllText(destination, Sanitize(reader.ReadToEnd(), sensitiveValues));
             }
         }
     }

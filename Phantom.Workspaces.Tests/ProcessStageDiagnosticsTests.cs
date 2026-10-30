@@ -9,6 +9,30 @@ namespace Phantom.Workspaces.Tests;
 public sealed class ProcessStageDiagnosticsTests
 {
     [Fact]
+    public void RetainedDiagnosticsCanReadAnActiveRoleLogWithoutInterruptingTheWriter()
+    {
+        var fixture = ProcessStageDiagnostics.GetFixtureDirectory(AppContext.BaseDirectory);
+        var artifact = fixture + "-retained";
+        var logs = Path.Combine(fixture, "worker-logs");
+        Directory.CreateDirectory(logs);
+        try
+        {
+            using var stream = new FileStream(Path.Combine(logs, "active.log"),
+                FileMode.Create, FileAccess.Write, FileShare.Read);
+            using var writer = new StreamWriter(stream) { AutoFlush = true };
+            writer.WriteLine("active credential-secret");
+            ProcessStageDiagnostics.RetainRoleLogs(fixture, artifact, "credential-secret");
+            Assert.Contains("active [redacted]", File.ReadAllText(Path.Combine(artifact, "worker-logs", "active.log")));
+            writer.WriteLine("still active");
+        }
+        finally
+        {
+            Directory.Delete(fixture, true);
+            Directory.Delete(artifact, true);
+        }
+    }
+
+    [Fact]
     public void DeadlineDiagnostic_IdentifiesCurrentAwaitWithoutCompletingIt()
     {
         var lines = new List<string>();
