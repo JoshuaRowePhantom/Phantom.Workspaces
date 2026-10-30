@@ -49,7 +49,8 @@ public sealed class SplitScenarioPhase : IDisposable
 
 public sealed class SplitScenarioResources(
     TimeSpan? cleanupBudget = null,
-    TimeProvider? timeProvider = null)
+    TimeProvider? timeProvider = null,
+    ProcessStageDiagnostics? cleanupDiagnostics = null)
 {
     private readonly Stack<IAsyncDisposable> owners = new();
 
@@ -74,6 +75,7 @@ public sealed class SplitScenarioResources(
             }
             catch (Exception error)
             {
+                cleanupDiagnostics?.Fail(error);
                 failures.Add(error);
             }
         }

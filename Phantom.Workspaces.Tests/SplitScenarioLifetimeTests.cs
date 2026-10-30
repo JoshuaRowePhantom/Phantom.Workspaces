@@ -156,6 +156,50 @@ public sealed class SplitScenarioLifetimeTests
         await cleanup;
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CleanupFailureAndDeadlineRemainClassifiedAsCleanupAfterAggregation(bool timeout)
+    {
+        var clock = new FakeTimeProvider();
+        var operationLines = new List<string>();
+        var cleanupLines = new List<string>();
+        var operation = new ProcessStageDiagnostics(operationLines.Add, clock);
+        var cleanup = new ProcessStageDiagnostics(cleanupLines.Add, clock);
+        var resources = new SplitScenarioResources(TimeSpan.FromSeconds(30), clock, cleanup);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        resources.Add(new DiagnosticAsyncLifetime(new Owner(() =>
+        {
+            entered.SetResult();
+            return timeout ? new ValueTask(release.Task) : ValueTask.FromException(new IOException("cleanup"));
+        }), cleanup, "window-shutdown"));
+        operation.Report("result");
+        operation.Complete();
+        var pending = resources.CompleteAsync();
+        await entered.Task;
+        if (timeout)
+            clock.Advance(TimeSpan.FromSeconds(30));
+        var failure = await Assert.ThrowsAsync<AggregateException>(() => pending);
+        operation.CaptureFailure(failure, cleanup);
+        Assert.False(operation.HasFailure);
+        Assert.True(cleanup.HasFailure);
+        Assert.Contains(cleanupLines, line => line.Contains("failed window-shutdown"));
+        release.SetResult();
+    }
+
+    [Fact]
+    public void MixedAggregateFailureIsNotMistakenForCleanupOnly()
+    {
+        var operation = new ProcessStageDiagnostics(_ => { });
+        var cleanup = new ProcessStageDiagnostics(_ => { });
+        var cleanupFailure = new IOException();
+        cleanup.Fail(cleanupFailure);
+        operation.Report("operation");
+        operation.CaptureFailure(new AggregateException(new InvalidOperationException(), cleanupFailure), cleanup);
+        Assert.True(operation.HasFailure);
+    }
+
     private sealed class Owner(Func<ValueTask> dispose) : IAsyncDisposable
     {
         public ValueTask DisposeAsync() => dispose();

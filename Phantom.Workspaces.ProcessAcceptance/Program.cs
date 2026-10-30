@@ -123,7 +123,7 @@ internal static class Program
         ProcessStageDiagnostics diagnostics, ProcessStageDiagnostics cleanup,
         bool startupFailure, bool childAttachment, CancellationToken ct)
     {
-        var resources = new SplitScenarioResources();
+        var resources = new SplitScenarioResources(cleanupDiagnostics: cleanup);
         Exception? primaryFailure = null;
         try { await RunOwnedAsync(); }
         catch (Exception error) { primaryFailure = error; }
@@ -350,7 +350,7 @@ internal static class Program
         ProcessStageDiagnostics diagnostics, ProcessStageDiagnostics cleanup,
         bool startupFailure, bool childAttachment, CancellationToken ct)
     {
-        var resources = new SplitScenarioResources();
+        var resources = new SplitScenarioResources(cleanupDiagnostics: cleanup);
         Exception? primaryFailure = null;
         try { await RunOwnedAsync(); }
         catch (Exception error) { primaryFailure = error; }
@@ -462,7 +462,7 @@ internal static class Program
         EntityId workerProfile, ProcessStageDiagnostics diagnostics, ProcessStageDiagnostics cleanup,
         bool startupFailure, bool childAttachment, CancellationToken ct)
     {
-        var resources = new SplitScenarioResources();
+        var resources = new SplitScenarioResources(cleanupDiagnostics: cleanup);
         Exception? primaryFailure = null;
         try { await RunOwnedAsync(); }
         catch (Exception error) { primaryFailure = error; }

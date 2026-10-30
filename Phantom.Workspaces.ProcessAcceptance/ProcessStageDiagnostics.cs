@@ -48,10 +48,16 @@ public sealed class ProcessStageDiagnostics(
 
     public void CaptureFailure(Exception error, ProcessStageDiagnostics cleanup)
     {
-        if (this.failed || cleanup.failures.Contains(error))
+        if (this.failed || cleanup.IsCleanupFailure(error))
             return;
         this.Fail(error);
     }
+
+    private bool IsCleanupFailure(Exception error)
+        => this.failures.Contains(error)
+            || error is AggregateException aggregate
+            && aggregate.InnerExceptions.Count > 0
+            && aggregate.InnerExceptions.All(this.IsCleanupFailure);
 
     public T Run<T>(string operation, Func<T> action)
     {
