@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -2127,14 +2128,31 @@ internal static class MxcRepositoryTestSupport
         internal TestDirectory(
             Action? beforeCleanup = null,
             Action<string>? cleanupProgress = null,
-            bool compact = false)
+            bool compact = false,
+            int compactPathPadding = 0)
         {
+            ArgumentOutOfRangeException.ThrowIfNegative(compactPathPadding);
             this.beforeCleanup = beforeCleanup;
             this.cleanupProgress = cleanupProgress;
             Path = compact
-                ? System.IO.Path.Combine(Root.FullName, ".mxc", $"{Guid.NewGuid():N}")
+                ? CompactPath(Root.FullName, Guid.NewGuid()) + new string('d', compactPathPadding)
                 : System.IO.Path.Combine(Root.FullName, "TestResults", $"mxc-integration-{Guid.NewGuid():N}");
             Directory.CreateDirectory(Path);
+        }
+
+        internal static string CompactPath(string root, Guid identifier)
+        {
+            // Lowercase base32 retains all 128 bits and remains distinct on Windows'
+            // case-insensitive filesystem, unlike a case-sensitive base64 alphabet.
+            const string alphabet = "abcdefghijklmnopqrstuvwxyz234567";
+            var value = new BigInteger(identifier.ToByteArray(), isUnsigned: true);
+            Span<char> name = stackalloc char[26];
+            for (var index = name.Length - 1; index >= 0; index--)
+            {
+                value = BigInteger.DivRem(value, 32, out var remainder);
+                name[index] = alphabet[(int)remainder];
+            }
+            return System.IO.Path.Combine(root, ".mxc", new string(name));
         }
 
         internal string Path { get; }
