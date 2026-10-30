@@ -114,6 +114,8 @@ public sealed class AsyncRelayCommand : ICommand
 
     public void RaiseCanExecuteChanged()
     {
-        this.CanExecuteChanged?.Invoke(this, EventArgs.Empty);
+        Phantom.Workspaces.Llm.InterruptNotifications.Publish(
+            this.CanExecuteChanged,
+            handler => handler(this, EventArgs.Empty));
     }
 }

@@ -27,4 +27,10 @@ public abstract class ViewModelBase : INotifyPropertyChanged
     {
         this.PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
     }
+
+    protected void RaiseInterruptPropertyChanged(string propertyName, Func<bool> isCurrent) =>
+        Phantom.Workspaces.Llm.InterruptNotifications.Publish(
+            this.PropertyChanged,
+            handler => handler(this, new PropertyChangedEventArgs(propertyName)),
+            isCurrent);
 }

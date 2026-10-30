@@ -54,6 +54,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private long remoteNavigationGeneration;
     private bool isDisposed;
     private readonly AgentChatInterruptState interruptState;
+    private readonly object interruptProjectionLock = new();
     private readonly AsyncRelayCommand interruptCommand;
     private bool isReasoningVisible;
     private bool isInterruptPending;
@@ -749,8 +750,25 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     private void OnInterruptStateChanged(object? sender, EventArgs e)
     {
-        this.IsInterruptPending = this.interruptState.IsPending;
-        if (!this.interruptCommand.IsExecuting)
+        var snapshot = this.interruptState.Snapshot;
+        bool changed;
+        lock (this.interruptProjectionLock)
+        {
+            if (this.interruptState.Snapshot != snapshot)
+            {
+                return;
+            }
+
+            changed = this.isInterruptPending != snapshot.IsPending;
+            this.isInterruptPending = snapshot.IsPending;
+        }
+        if (changed)
+        {
+            this.RaiseInterruptPropertyChanged(
+                nameof(this.IsInterruptPending),
+                () => this.interruptState.Snapshot == snapshot);
+        }
+        if (this.interruptState.Snapshot == snapshot && !this.interruptCommand.IsExecuting)
         {
             this.interruptCommand.RaiseCanExecuteChanged();
         }
