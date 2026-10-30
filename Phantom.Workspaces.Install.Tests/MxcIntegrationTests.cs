@@ -42,9 +42,7 @@ public sealed partial class BuildIntegrationTests
     [Fact]
     public async Task BuildSolution_MxcSourceDependency_BuildsThroughStandardEntryPoint()
     {
-        using var output = new MxcRepositoryTestSupport.TestDirectory();
-        var baseOutputPath = Path.Combine(
-            output.Path, "$(MSBuildProjectName)", "bin") + Path.DirectorySeparatorChar;
+        await using var output = new MxcRepositoryTestSupport.TestDirectory(compact: true);
         var result = await MxcRepositoryTestSupport.InvokeAsync(
             "dotnet",
             "build",
@@ -52,16 +50,48 @@ public sealed partial class BuildIntegrationTests
             "--no-restore",
             "--nologo",
             "/nodeReuse:false",
-            $"-p:BaseOutputPath={baseOutputPath}");
+            "-p:UseArtifactsOutput=true",
+            "-p:UseArtifactsIntermediateOutput=false",
+            $"-p:ArtifactsPath={output.Path}");
 
         Assert.True(
             result.ExitCode == 0,
             $"Solution build failed.\nSTDOUT:\n{result.StandardOutput}\nSTDERR:\n{result.StandardError}");
         Assert.Contains("Microsoft.Mxc.Sdk", result.StandardOutput, StringComparison.Ordinal);
-        Assert.NotEmpty(Directory.EnumerateFiles(
-            output.Path, "mxc_ffi.dll", SearchOption.AllDirectories));
-        Assert.NotEmpty(Directory.EnumerateFiles(
-            output.Path, "plm.exe", SearchOption.AllDirectories));
+        string ProjectOutput(string project) => Path.Combine(output.Path, "bin", project, "debug");
+        foreach (var project in new[] { "Phantom.Workspaces", "Microsoft.Mxc.Sdk" })
+        {
+            Assert.True(File.Exists(Path.Combine(ProjectOutput(project), "mxc_ffi.dll")));
+            Assert.True(File.Exists(Path.Combine(ProjectOutput(project), "plm.exe")));
+        }
+        var worker = ProjectOutput("Phantom.Workspaces.Transport.TestWorker");
+        var copiedWorker = Path.Combine(ProjectOutput("Phantom.Workspaces.Transport.Tests"), "remote-split-worker");
+        var workerFiles = Directory.GetFiles(worker, "*", SearchOption.AllDirectories)
+            .Select(path => Path.GetRelativePath(worker, path)).Order().ToArray();
+        Assert.NotEmpty(workerFiles);
+        Assert.Equal(workerFiles, Directory.GetFiles(copiedWorker, "*", SearchOption.AllDirectories)
+            .Select(path => Path.GetRelativePath(copiedWorker, path)).Order());
+        foreach (var relativePath in workerFiles)
+            Assert.Equal(
+                MxcRepositoryTestSupport.ComputeSha256(Path.Combine(worker, relativePath)),
+                MxcRepositoryTestSupport.ComputeSha256(Path.Combine(copiedWorker, relativePath)));
+        foreach (var (consumer, helper) in new[]
+                 {
+                     ("Phantom.Workspaces.Transport.Tests", "Phantom.Workspaces.Transport.TestWorker"),
+                     ("Phantom.Workspaces.Agent.Gui.Tests", "Phantom.Workspaces.Llm.Test.Mcp"),
+                     ("Phantom.Workspaces.Data.Core.Tests", "Phantom.Workspaces.Test.WindowsProcessProbe"),
+                     ("Phantom.Workspaces.Install.Tests", "Phantom.Workspaces.Test.WindowsProcessProbe"),
+                     ("Phantom.Workspaces.Llm.Core.Tests", "Phantom.Workspaces.Test.WindowsProcessProbe"),
+                 })
+        {
+            var destination = consumer == "Phantom.Workspaces.Transport.Tests"
+                ? copiedWorker : ProjectOutput(consumer);
+            foreach (var suffix in new[] { ".exe", ".dll", ".deps.json", ".runtimeconfig.json" })
+                Assert.True(File.Exists(Path.Combine(destination, helper + suffix)));
+        }
+        var longestDestination = Directory.GetFiles(output.Path, "*", SearchOption.AllDirectories)
+            .Max(path => path.Length);
+        Assert.True(longestDestination < 260, $"Maximum destination length: {longestDestination}");
     }
 }
 
@@ -2096,12 +2126,14 @@ internal static class MxcRepositoryTestSupport
 
         internal TestDirectory(
             Action? beforeCleanup = null,
-            Action<string>? cleanupProgress = null)
+            Action<string>? cleanupProgress = null,
+            bool compact = false)
         {
             this.beforeCleanup = beforeCleanup;
             this.cleanupProgress = cleanupProgress;
-            Path = System.IO.Path.Combine(
-                Root.FullName, "TestResults", $"mxc-integration-{Guid.NewGuid():N}");
+            Path = compact
+                ? System.IO.Path.Combine(Root.FullName, ".mxc", $"{Guid.NewGuid():N}")
+                : System.IO.Path.Combine(Root.FullName, "TestResults", $"mxc-integration-{Guid.NewGuid():N}");
             Directory.CreateDirectory(Path);
         }
 

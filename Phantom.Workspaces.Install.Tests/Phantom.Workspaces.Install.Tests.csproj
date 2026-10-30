@@ -20,16 +20,9 @@
   <ItemGroup>
     <ProjectReference Include="..\Phantom.Workspaces.Install\Phantom.Workspaces.Install.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Testing\Phantom.Workspaces.Testing.csproj" />
-    <ProjectReference Include="..\Phantom.Workspaces.Test.WindowsProcessProbe\Phantom.Workspaces.Test.WindowsProcessProbe.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\Phantom.Workspaces.Test.WindowsProcessProbe\Phantom.Workspaces.Test.WindowsProcessProbe.csproj" ReferenceOutputAssembly="false" CopyTestHelper="true" />
   </ItemGroup>
-  <Target Name="CopyWindowsProcessProbe" AfterTargets="Build">
-    <ItemGroup>
-      <WindowsProcessProbeFiles Include="..\Phantom.Workspaces.Test.WindowsProcessProbe\bin\$(Configuration)\net10.0\**\*" />
-    </ItemGroup>
-    <Copy SourceFiles="@(WindowsProcessProbeFiles)"
-          DestinationFiles="@(WindowsProcessProbeFiles->'$(OutDir)%(RecursiveDir)%(Filename)%(Extension)')"
-          SkipUnchangedFiles="true" />
-  </Target>
+  <Import Project="..\scripts\TestHelperOutput.targets" />
   <Target Name="PrepareCopilotWrapperTestPrerequisite"
           BeforeTargets="VSTest"
           Condition="$([MSBuild]::IsOSPlatform('Windows')) And '$(DesignTimeBuild)' != 'true'">
