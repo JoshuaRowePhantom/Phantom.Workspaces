@@ -140,17 +140,14 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
     public RunningAgentChatLease? Lease => this.lease;
 
     /// <summary>
-    /// Monotonic generation stamped each time a new runtime lease is installed via
-    /// <see cref="SetLease"/>. A restart request freezes this value before consent and the
-    /// provider rejects the operation if the live generation has advanced (runtime replaced)
-    /// while confirmation was open.
+    /// Viewer-local generation stamped by <see cref="SetLease"/>. This detects a replaced
+    /// view lease during consent; it is not the persisted owner's ownership generation.
     /// </summary>
     public long OwnershipGeneration => this.ownershipGeneration;
 
     /// <summary>
-    /// Identity of the currently installed runtime entry. Re-stamped with a fresh value whenever
-    /// <see cref="SetLease"/> installs a new lease, so a frozen restart request can prove it is
-    /// still targeting the exact runtime epoch it was authorized against.
+    /// Viewer-local lease identity stamped by <see cref="SetLease"/>. This is an additional
+    /// UI fence, not the runtime epoch issued by the lifecycle authority.
     /// </summary>
     public Guid RuntimeEpoch => this.runtimeEpoch;
 

@@ -507,6 +507,7 @@ public sealed class MainWindowTabCommandsIntegrationTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public List<AgentSessionRestartRequest> AllRequests { get; } = [];
+        private readonly Guid epoch = Guid.NewGuid();
 
         public AgentSessionRestartAvailability GetAvailability(
             AgentSessionWorkspaceTabViewModel tab,
@@ -514,6 +515,19 @@ public sealed class MainWindowTabCommandsIntegrationTests
             => new()
             {
                 IsAvailable = true,
+            };
+
+        public AgentSessionRestartRequest? PrepareRestart(
+            AgentSessionWorkspaceTabViewModel tab, TabCommandContext context)
+            => new()
+            {
+                SessionId = tab.AgentSessionId!,
+                ExpectedChat = tab.Lease!.AgentChat,
+                ExpectedLease = tab.Lease,
+                CommandId = Guid.NewGuid(),
+                ExpectedOwnerId = "authoritative-owner-profile",
+                OwnershipGeneration = 42,
+                RuntimeEpoch = this.epoch,
             };
 
         public Task<AgentSessionRestartResult> RestartAsync(

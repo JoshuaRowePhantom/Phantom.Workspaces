@@ -85,6 +85,19 @@ internal sealed class AgentSessionTabCommandProvider : ITabCommandProvider
             return TabCommandResult.Rejected("Session runtime is not available for restart.");
         }
 
+        var restartService = context.MainWindow.AgentSessionRestartService;
+        var request = restartService.PrepareRestart(sessionTab, context);
+        if (request is null
+            || request.SessionId != sessionId
+            || !ReferenceEquals(request.ExpectedChat, expectedChat)
+            || !ReferenceEquals(request.ExpectedLease, expectedLease)
+            || request.CommandId == Guid.Empty
+            || string.IsNullOrWhiteSpace(request.ExpectedOwnerId)
+            || request.RuntimeEpoch == Guid.Empty)
+        {
+            return TabCommandResult.Rejected("Authoritative session runtime is not available for restart.");
+        }
+
         if (AgentSessionCloseActivity.HasPendingWork(expectedChat))
         {
             var consent = await context.MainWindow.AgentSessionRestartConsentProvider
@@ -111,18 +124,7 @@ internal sealed class AgentSessionTabCommandProvider : ITabCommandProvider
         sessionTab.SetRestartInProgress(true);
         try
         {
-            var result = await context.MainWindow.AgentSessionRestartService.RestartAsync(
-                    new AgentSessionRestartRequest
-                    {
-                        SessionId = sessionId,
-                        ExpectedChat = expectedChat,
-                        ExpectedLease = expectedLease,
-                        CommandId = Guid.NewGuid(),
-                        ExpectedOwnerId = sessionId,
-                        OwnershipGeneration = expectedGeneration,
-                        RuntimeEpoch = expectedEpoch,
-                    },
-                    cancellationToken)
+            var result = await restartService.RestartAsync(request, cancellationToken)
                 .ConfigureAwait(false);
 
             return result.Outcome switch

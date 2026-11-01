@@ -15,6 +15,66 @@ namespace Phantom.Workspaces.Tests;
 public sealed class AgentSessionTabCommandProviderTests
 {
     [Fact]
+    public async Task AgentSessionTabCommands_ConsentPending_FreezesCommandIdAndOwnerIdentity()
+    {
+        await using var vm = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        var service = new RecordingRestartService();
+        vm.AgentSessionRestartService = service;
+        AgentSessionRestartRequest? frozen = null;
+        vm.AgentSessionRestartConsentProvider = new DelegateConsentProvider((_, _) =>
+        {
+            frozen = Assert.IsType<AgentSessionRestartRequest>(service.PreparedRequest);
+            Assert.NotEqual(Guid.Empty, frozen.CommandId);
+            Assert.Equal("authoritative-owner-profile", frozen.ExpectedOwnerId);
+            Assert.Equal(42, frozen.OwnershipGeneration);
+            Assert.Equal(service.AuthorityEpoch, frozen.RuntimeEpoch);
+            Assert.Equal(0, service.RestartCallCount);
+            return Task.FromResult(true);
+        });
+        var tab = CreateSessionTab("authoritative-session", CreateChat(hasPendingWork: true));
+        var context = CreateContext(vm, new WorkspacePaneViewModel(CreateWorkspaceEntity("authoritative-pane")), tab);
+        Assert.Equal(TabCommandResultKind.Succeeded,
+            (await context.Invoker.InvokeAsync(Assert.Single(tab.TabCommands.GetCommands(context)),
+                context, TestContext.Current.CancellationToken)).Kind);
+        Assert.Same(frozen, service.LastRequest);
+        Assert.NotEqual(tab.RuntimeEpoch, service.LastRequest!.RuntimeEpoch);
+        Assert.NotEqual(tab.OwnershipGeneration, service.LastRequest.OwnershipGeneration);
+    }
+
+    [Fact]
+    public async Task AgentSessionTabCommands_MultipleViewers_FreezesAuthoritativeRuntimeIdentity()
+    {
+        await using var vm = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        var service = new RecordingRestartService();
+        vm.AgentSessionRestartService = service;
+        var chat = CreateChat(hasPendingWork: false);
+        var first = CreateSessionTab("shared-authority", chat);
+        var second = CreateSessionTab("shared-authority", chat);
+        second.SetLease(new RunningAgentChatLease(new AgentSessionId("shared-authority"), chat,
+            () => ValueTask.CompletedTask));
+        Assert.NotEqual(first.OwnershipGeneration, second.OwnershipGeneration);
+        Assert.NotEqual(first.RuntimeEpoch, second.RuntimeEpoch);
+        AgentSessionRestartRequest? firstRequest = null;
+        foreach (var tab in new[] { first, second })
+        {
+            var context = CreateContext(vm, new WorkspacePaneViewModel(CreateWorkspaceEntity("shared-pane")), tab);
+            Assert.Equal(TabCommandResultKind.Succeeded,
+                (await context.Invoker.InvokeAsync(Assert.Single(tab.TabCommands.GetCommands(context)),
+                    context, TestContext.Current.CancellationToken)).Kind);
+            var request = Assert.IsType<AgentSessionRestartRequest>(service.LastRequest);
+            if (firstRequest is null)
+            {
+                firstRequest = request;
+                continue;
+            }
+            Assert.Equal(firstRequest.ExpectedOwnerId, request.ExpectedOwnerId);
+            Assert.Equal(firstRequest.OwnershipGeneration, request.OwnershipGeneration);
+            Assert.Equal(firstRequest.RuntimeEpoch, request.RuntimeEpoch);
+            Assert.NotEqual(firstRequest.CommandId, request.CommandId);
+        }
+    }
+
+    [Fact]
     public async Task AgentSessionTabCommands_NonAgentTab_ContributesNoRestart()
     {
         await using var vm = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
@@ -149,8 +209,6 @@ public sealed class AgentSessionTabCommandProviderTests
         vm.AgentSessionRestartConsentProvider = new DelegateConsentProvider((_, _) => consentGate.Task);
 
         var tab = CreateSessionTab("frozen-session", CreateChat(hasPendingWork: true));
-        var expectedEpoch = tab.RuntimeEpoch;
-        var expectedGeneration = tab.OwnershipGeneration;
         var context = CreateContext(vm, new WorkspacePaneViewModel(CreateWorkspaceEntity("pane-frozen")), tab);
         var command = Assert.Single(tab.TabCommands.GetCommands(context));
 
@@ -165,9 +223,9 @@ public sealed class AgentSessionTabCommandProviderTests
         Assert.Equal(TabCommandResultKind.Succeeded, result.Kind);
         Assert.Equal(1, restartService.RestartCallCount);
         Assert.Equal("frozen-session", restartService.LastRequest!.SessionId);
-        Assert.Equal("frozen-session", restartService.LastRequest.ExpectedOwnerId);
-        Assert.Equal(expectedEpoch, restartService.LastRequest.RuntimeEpoch);
-        Assert.Equal(expectedGeneration, restartService.LastRequest.OwnershipGeneration);
+        Assert.Equal("authoritative-owner-profile", restartService.LastRequest.ExpectedOwnerId);
+        Assert.Equal(restartService.AuthorityEpoch, restartService.LastRequest.RuntimeEpoch);
+        Assert.Equal(42, restartService.LastRequest.OwnershipGeneration);
     }
 
     [Fact]
@@ -300,6 +358,8 @@ public sealed class AgentSessionTabCommandProviderTests
         public int RestartCallCount => this.restartCallCount;
 
         public AgentSessionRestartRequest? LastRequest { get; private set; }
+        public AgentSessionRestartRequest? PreparedRequest { get; private set; }
+        public Guid AuthorityEpoch { get; } = Guid.NewGuid();
 
         public AgentSessionRestartAvailability Availability { get; set; } = new() { IsAvailable = true };
 
@@ -312,6 +372,19 @@ public sealed class AgentSessionTabCommandProviderTests
             AgentSessionWorkspaceTabViewModel tab,
             TabCommandContext context)
             => this.Availability;
+
+        public AgentSessionRestartRequest? PrepareRestart(
+            AgentSessionWorkspaceTabViewModel tab, TabCommandContext context)
+            => this.PreparedRequest = new()
+            {
+                SessionId = tab.AgentSessionId!,
+                ExpectedChat = tab.Lease!.AgentChat,
+                ExpectedLease = tab.Lease,
+                CommandId = Guid.NewGuid(),
+                ExpectedOwnerId = "authoritative-owner-profile",
+                OwnershipGeneration = 42,
+                RuntimeEpoch = this.AuthorityEpoch,
+            };
 
         public async Task<AgentSessionRestartResult> RestartAsync(
             AgentSessionRestartRequest request,

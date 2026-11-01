@@ -45,7 +45,7 @@ public sealed record AgentSessionRestartRequest
     /// <summary>Owner identity the restart was authorized against (the frozen session owner).</summary>
     public required string ExpectedOwnerId { get; init; }
 
-    /// <summary>Ownership generation frozen before consent; a newer generation means the runtime was replaced.</summary>
+    /// <summary>Authority-issued ownership generation frozen before consent; restart alone does not advance it.</summary>
     public required long OwnershipGeneration { get; init; }
 
     /// <summary>Runtime epoch/entry identity frozen before consent; a different epoch means a fresh runtime.</summary>
@@ -55,6 +55,15 @@ public sealed record AgentSessionRestartRequest
 public interface IAgentSessionRestartService
 {
     AgentSessionRestartAvailability GetAvailability(
+        AgentSessionWorkspaceTabViewModel tab,
+        TabCommandContext context);
+
+    /// <summary>
+    /// Side-effect-free capture of the lifecycle authority and command id before consent.
+    /// Viewer-local lease stamps are additional UI fences, never backend authorization.
+    /// The owner must revalidate this exact identity at destructive commit.
+    /// </summary>
+    AgentSessionRestartRequest? PrepareRestart(
         AgentSessionWorkspaceTabViewModel tab,
         TabCommandContext context);
 
@@ -88,6 +97,10 @@ internal sealed class UnavailableAgentSessionRestartService : IAgentSessionResta
             Outcome = AgentSessionRestartOutcome.Failed,
             Message = "Restart is unavailable until lifecycle restart support is enabled.",
         });
+
+    public AgentSessionRestartRequest? PrepareRestart(
+        AgentSessionWorkspaceTabViewModel tab,
+        TabCommandContext context) => null;
 }
 
 public interface IAgentSessionRestartConsentProvider
