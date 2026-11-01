@@ -355,7 +355,8 @@ public partial class MainWindow : Window
         }
         if (this.LastAccessAdministrationWindow is { } existing)
         {
-            existing.SelectPage(page);
+            if (!activate && page == CredentialAccessPage.Requests) { existing.PresentRequestsWithoutActivation(); }
+            else { existing.SelectPage(page); }
             if (activate) { existing.Activate(); }
             return;
         }

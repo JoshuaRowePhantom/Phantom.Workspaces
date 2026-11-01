@@ -48,6 +48,10 @@ the unchanged prompt. A new request or renewal generation does. One attached
 runtime owner claims presentation for the shared process rows; Bootstrap does not
 open a competing runtime surface. Shutdown detaches presentation callbacks.
 Automatic visibility never executes an authorization or provider action.
+If management currently owns keyboard focus, the exact retained Requests control
+is presented beside that unchanged page instead of hiding its focused control.
+Explicit page navigation returns Requests to its tab. This is one host and one
+Requests control, not an additional popup/window or copied rows collection.
 
 The window is shown nonmodally before administration refresh, so live requests
 and the main shell remain usable while saved lists load. Initialization tasks and

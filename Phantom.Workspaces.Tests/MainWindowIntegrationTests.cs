@@ -420,13 +420,13 @@ public sealed class MainWindowIntegrationTests
 
             var dialog = window.LastAccessAdministrationWindow;
             Assert.NotNull(dialog);
-            Assert.IsType<TabControl>(dialog!.Content);
+            Assert.IsType<Grid>(dialog!.Content);
             Assert.True(dialog.IsVisible);
             Assert.Same(window, dialog.Owner);
             Assert.Same(accessHost.AuthorizationRows, dialog.RequestRows);
             Assert.Equal(CredentialAccessPage.SavedApprovals, dialog.SelectedPage);
             Assert.Equal(new[] { "Requests", "Saved approvals", "Cached credentials", "Provider access" },
-                ((TabControl)dialog.Content!).Items.Cast<TabItem>().Select(item => item.Header));
+                dialog.Pages.Items.Cast<TabItem>().Select(item => item.Header));
             Assert.True(window.IsEnabled);
             Assert.True(shushButton.Focus());
             Assert.True(shushButton.IsFocused);
@@ -481,7 +481,7 @@ public sealed class MainWindowIntegrationTests
             await dialog.DisposeAsync();
             Assert.True(dialog.IsDisposed);
             var disposedModel = Assert.IsType<ReleaseMemoryAdministrationViewModel>(
-                ((Controls.ReleaseMemoryAdministrationControl)((TabItem)((TabControl)dialog.Content!).Items[1]!).Content!).DataContext);
+                ((Controls.ReleaseMemoryAdministrationControl)((TabItem)dialog.Pages.Items[1]!).Content!).DataContext);
             Assert.False(disposedModel.RefreshCommand.CanExecute(null));
             Assert.Null(window.LastAccessAdministrationWindow);
             await dialog.RefreshAsync(TestContext.Current.CancellationToken);
@@ -493,7 +493,7 @@ public sealed class MainWindowIntegrationTests
             Assert.Same(row, reopened.RequestRows.Rows[0]);
             Assert.False(reopened.IsDisposed);
             var reopenedModel = Assert.IsType<ReleaseMemoryAdministrationViewModel>(
-                ((Controls.ReleaseMemoryAdministrationControl)((TabItem)((TabControl)reopened.Content!).Items[1]!).Content!).DataContext);
+                ((Controls.ReleaseMemoryAdministrationControl)((TabItem)reopened.Pages.Items[1]!).Content!).DataContext);
             Assert.NotSame(disposedModel, reopenedModel);
             Assert.True(reopenedModel.RefreshCommand.CanExecute(null));
             await window.DisposeAccessAdministrationAsync();
@@ -504,6 +504,52 @@ public sealed class MainWindowIntegrationTests
         {
             await window.DisposeAccessAdministrationAsync();
             await CloseWindowAsync(window);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task CredentialAccess_NewPromptWhileManagementFocused_ShowsExactRequestsBesideUnchangedPage()
+    {
+        await using var access = Services.Access.AccessHostServices.Create(new Services.Access.AccessHostOptions
+        {
+            PlatformSecretStore = new NullPlatformSecretStore(),
+            Dispatch = action => action(),
+            ReleaseMemoryFilePath = Path.Combine(Environment.CurrentDirectory, ".nonexistent-access-admin", "management-focus.json"),
+        });
+        await using var model = CreateTestMainWindowViewModel();
+        await using var popup = new AuthorizationRequestsPopupViewModel { Rows = access.AuthorizationRows };
+        var owner = new MainWindow(model);
+        owner.AttachAccessHost(access, popup);
+        owner.Show();
+        try
+        {
+            model.OpenAccessAdministrationCommand.Execute(null);
+            await owner.AccessAdministrationReady;
+            var host = Assert.IsType<AccessAdministrationWindow>(owner.LastAccessAdministrationWindow);
+            host.UpdateLayout();
+            var management = Assert.Single(host.GetVisualDescendants().OfType<Controls.ReleaseMemoryAdministrationControl>());
+            var refresh = Assert.Single(management.GetVisualDescendants().OfType<Button>(), button => Equals(button.Content, "Refresh"));
+            Assert.True(refresh.Focus());
+            var registry = Assert.IsType<Services.Authorization.UserAuthorizationRegistry>(access.AuthorizationRegistry);
+            registry.Add(AuthorizationRequestRowsViewModelTests.Snapshot());
+            await owner.AccessAdministrationReady;
+            host.UpdateLayout();
+            Assert.Same(host, owner.LastAccessAdministrationWindow);
+            Assert.True(refresh.IsFocused);
+            Assert.True(host.RequestsAlongsideManagement);
+            Assert.Equal(CredentialAccessPage.SavedApprovals, host.SelectedPage);
+            var requests = Assert.Single(host.GetVisualDescendants().OfType<Controls.AuthorizationRequestRowsControl>());
+            Assert.True(requests.IsEffectivelyVisible);
+            Assert.Same(access.AuthorizationRows, requests.DataContext);
+            host.SelectPage(CredentialAccessPage.Requests);
+            host.UpdateLayout();
+            Assert.False(host.RequestsAlongsideManagement);
+            Assert.Same(requests, Assert.Single(host.GetVisualDescendants().OfType<Controls.AuthorizationRequestRowsControl>()));
+        }
+        finally
+        {
+            await owner.DisposeAccessAdministrationAsync();
+            owner.Close();
         }
     }
 
@@ -712,7 +758,7 @@ public sealed class MainWindowIntegrationTests
             await window.AccessAdministrationReady;
             var host = Assert.IsType<AccessAdministrationWindow>(window.LastAccessAdministrationWindow);
             var model = Assert.IsType<ReleaseMemoryAdministrationViewModel>(
-                ((Controls.ReleaseMemoryAdministrationControl)((TabItem)((TabControl)host.Content!).Items[1]!).Content!).DataContext);
+                ((Controls.ReleaseMemoryAdministrationControl)((TabItem)host.Pages.Items[1]!).Content!).DataContext);
             Assert.Equal("Operation unavailable. Refresh and try again.", model.SafeStatus);
             host.UpdateLayout();
             Assert.Contains(host.GetVisualDescendants().OfType<TextBlock>(),

@@ -88,7 +88,7 @@ public sealed class LegacyAuthorizationUiRemovalTests
                 await window.AccessAdministrationReady;
                 Dispatcher.UIThread.RunJobs();
                 var administration = Assert.IsType<AccessAdministrationWindow>(window.LastAccessAdministrationWindow);
-                var tabs = Assert.IsType<TabControl>(administration.Content);
+                var tabs = administration.Pages;
                 var items = tabs.Items.Cast<TabItem>().ToArray();
                 Assert.Equal(4, items.Length);
                 Assert.Equal(
