@@ -795,6 +795,8 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
             CancellationToken = CancellationToken.None,
         };
 
+    internal AgentServices? RuntimeServices => this.request.AgentServices;
+
     internal async ValueTask PersistFinalRuntimeStateAsync()
     {
         Task[] providerCleanup;

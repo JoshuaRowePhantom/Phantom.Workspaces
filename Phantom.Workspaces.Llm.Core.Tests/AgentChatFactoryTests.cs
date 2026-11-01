@@ -14,6 +14,40 @@ namespace Phantom.Workspaces.Llm.Tests;
 public sealed class AgentChatFactoryTests
 {
     [Fact]
+    public async Task RestartSession_PreservesPerSessionServicesInsteadOfFactoryDefaults()
+    {
+        var sessionId = new AgentSessionId("restart-per-session-services");
+        var sessionContext = new CurrentSessionContext
+        {
+            AgentSessionId = sessionId.Value,
+            OwningProfileEntityId = "specific-owner",
+            OwnershipGeneration = 7,
+            RuntimeEpoch = new Phantom.Workspaces.Llm.Remote.RuntimeEpoch { Value = Guid.NewGuid() },
+        };
+        var sessionClient = new DeterministicTestChatClient();
+        await using var factory = CreateFactory();
+        await using var original = await factory.GetOrCreateAsync(
+            sessionId,
+            EchoAgentDefinition,
+            new AgentServices
+            {
+                CurrentSessionContext = sessionContext,
+                ChatClientOverride = sessionClient,
+                LogChat = true,
+            });
+        await using var replacement = await factory.RestartExactAsync(
+            sessionId,
+            original.AgentChat,
+            null,
+            (_, _) => ValueTask.CompletedTask);
+        var replacementServices = GetRequestServices(replacement.LocalAgentChat);
+        Assert.Same(sessionContext, replacementServices.CurrentSessionContext);
+        Assert.Same(sessionClient, replacementServices.ChatClientOverride);
+        Assert.True(replacementServices.LogChat);
+        Assert.Same(factory, replacementServices.RunningAgentChatFactory);
+    }
+
+    [Fact]
     public async Task RestartSession_CancelledBeforeCommitPreservesOriginalQueueAndResources()
     {
         var sessionId = new AgentSessionId("restart-cancel-before-commit");

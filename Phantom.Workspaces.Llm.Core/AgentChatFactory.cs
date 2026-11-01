@@ -369,7 +369,8 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
                 await original.AgentChat.PersistFinalRuntimeStateAsync().ConfigureAwait(false);
                 original.ShutdownConfirmed = true;
             }
-            var effectiveServices = this.WithSelfAsFactory(services ?? this._services);
+            var effectiveServices = this.WithSelfAsFactory(
+                services ?? original.AgentChat.RuntimeServices ?? this._services);
             replacement = await this.CreateChatOnForegroundAsync(
                 original.AgentChat.CreateRuntimeReplacementRequest(effectiveServices, checkpoint),
                 CancellationToken.None).ConfigureAwait(false);
