@@ -316,12 +316,12 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
         IAgentChat expected,
         AgentServices? services,
         Func<AgentRuntimeQueueCheckpoint, CancellationToken, ValueTask> persistCheckpointAsync,
-        CancellationToken ct = default)
+        CancellationToken cancellationToken = default)
     {
         Entry original;
         AgentRuntimeQueueCheckpoint checkpoint;
         TaskCompletionSource completion;
-        await this._gate.WaitAsync(ct).ConfigureAwait(false);
+        await this._gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             ObjectDisposedException.ThrowIf(this._disposed, this);
@@ -334,8 +334,8 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
                 original.AgentChat.InputQueuesForRuntimeHandoff);
             try
             {
-                await persistCheckpointAsync(checkpoint, ct).ConfigureAwait(false);
-                ct.ThrowIfCancellationRequested();
+                await persistCheckpointAsync(checkpoint, cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
             }
             catch
             {

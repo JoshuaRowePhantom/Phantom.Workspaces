@@ -9,5 +9,5 @@ public interface IRestartableRunningAgentChatFactory
         IAgentChat expected,
         AgentServices? services,
         Func<AgentRuntimeQueueCheckpoint, CancellationToken, ValueTask> persistCheckpointAsync,
-        CancellationToken ct = default);
+        CancellationToken cancellationToken = default);
 }

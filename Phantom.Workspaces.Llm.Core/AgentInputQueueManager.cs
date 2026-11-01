@@ -48,8 +48,7 @@ public sealed class AgentInputQueueManager
         {
             if (queues is not LocalAgentInputQueuesAdapter adapter || !adapter.IsOwnedBy(this))
                 throw new InvalidOperationException("The queues belong to a different runtime.");
-            this.runtimeHandoff = true;
-            return new AgentRuntimeQueueCheckpoint
+            var checkpoint = new AgentRuntimeQueueCheckpoint
             {
                 InputQueues = System.Text.Json.JsonSerializer.Deserialize<AgentInputQueuesSnapshot>(
                     System.Text.Json.JsonSerializer.Serialize(
@@ -57,6 +56,8 @@ public sealed class AgentInputQueueManager
                     Microsoft.Extensions.AI.AIJsonUtilities.DefaultOptions),
                 HasInterruptedWork = this.dequeuedWork,
             };
+            this.runtimeHandoff = true;
+            return checkpoint;
         }
     }
 

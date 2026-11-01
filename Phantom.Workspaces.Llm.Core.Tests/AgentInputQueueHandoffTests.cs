@@ -100,6 +100,26 @@ public sealed class AgentInputQueueHandoffTests
     }
 
     [Fact]
+    public void Handoff_SnapshotSerializationFailureLeavesDispatchUnchanged()
+    {
+        var owner = new AgentInputQueueManager();
+        var queues = new AgentChatQueueManager(owner);
+        using var adapter = new LocalAgentInputQueuesAdapter(owner, queues.DefaultInputQueue.Queue);
+        var message = new ChatMessage(ChatRole.User, "pending");
+        owner.Enqueue(owner.ImmediateQueue, [new AgentInputItem { Messages = [message] }]);
+        adapter.Snapshot.Queues.Single(queue => queue.IsImmediate).Items[0].Messages[0].Contents
+            .Add(new FunctionResultContent("call", new UnserializableResult()));
+        Assert.Throws<InvalidOperationException>(() => owner.BeginRuntimeHandoff(adapter));
+        Assert.True(owner.TryDequeueNextImmediate(out var pending));
+        Assert.Equal("pending", pending.Messages[0].Text);
+    }
+
+    private sealed class UnserializableResult
+    {
+        public string Value => throw new InvalidOperationException("A queue result could not be serialized.");
+    }
+
+    [Fact]
     public void Handoff_DoesNotReplayDequeuedWorkAndCancellationCanResumeOriginal()
     {
         var manager = new AgentInputQueueManager();

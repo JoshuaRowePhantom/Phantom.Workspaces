@@ -16,15 +16,15 @@ public sealed class AgentChatFactoryTests
     [Fact]
     public async Task RestartSession_CancelledBeforeCommitPreservesOriginalQueueAndResources()
     {
-        var id = new AgentSessionId("restart-cancel-before-commit");
+        var sessionId = new AgentSessionId("restart-cancel-before-commit");
         await using var factory = CreateFactory();
-        await using var original = await factory.GetOrCreateAsync(id, EchoAgentDefinition);
+        await using var original = await factory.GetOrCreateAsync(sessionId, EchoAgentDefinition);
         var held = original.LocalAgentChat.QueueManager.CreateInputQueue("Pending", AgentInputQueueImmediacy.Held);
         original.LocalAgentChat.EnqueueUserMessage("keep", held);
         var revision = original.AgentChat.InputQueues.Snapshot.Revision;
         using var caller = new CancellationTokenSource();
         await Assert.ThrowsAsync<OperationCanceledException>(() => factory.RestartExactAsync(
-            id, original.AgentChat, null, (_, _) =>
+            sessionId, original.AgentChat, null, (_, _) =>
             {
                 caller.Cancel();
                 return ValueTask.CompletedTask;
@@ -38,37 +38,37 @@ public sealed class AgentChatFactoryTests
     [Fact]
     public async Task RestartSession_StartupFailureRetainsCheckpointForControlledStoppedRetry()
     {
-        var id = new AgentSessionId("restart-controlled-retry");
+        var sessionId = new AgentSessionId("restart-controlled-retry");
         await using var factory = CreateFactory();
-        await using var original = await factory.GetOrCreateAsync(id, EchoAgentDefinition);
+        await using var original = await factory.GetOrCreateAsync(sessionId, EchoAgentDefinition);
         var held = original.LocalAgentChat.QueueManager.CreateInputQueue("Pending", AgentInputQueueImmediacy.Held);
         original.LocalAgentChat.EnqueueUserMessage("survives failure", held);
         var client = new Moq.Mock<IChatClient>();
         client.Setup(value => value.GetService(Moq.It.IsAny<Type>(), Moq.It.IsAny<object?>()))
             .Throws(new IOException("replacement backend unavailable"));
         await Assert.ThrowsAsync<IOException>(() => factory.RestartExactAsync(
-            id, original.AgentChat, new AgentServices { ChatClientOverride = client.Object },
+            sessionId, original.AgentChat, new AgentServices { ChatClientOverride = client.Object },
             (_, _) => ValueTask.CompletedTask));
         Assert.Empty(factory.RunningSessions);
-        await Assert.ThrowsAsync<IOException>(() => factory.GetAsync(id));
+        await Assert.ThrowsAsync<IOException>(() => factory.GetAsync(sessionId));
         await using var replacement = await factory.RestartExactAsync(
-            id, original.AgentChat, null, (_, _) => ValueTask.CompletedTask);
+            sessionId, original.AgentChat, null, (_, _) => ValueTask.CompletedTask);
         Assert.Equal("survives failure", Assert.Single(
             replacement.AgentChat.InputQueues.Snapshot.Queues.Single(queue => queue.Name == "Pending").Items)
             .Messages[0].Text);
         Assert.False(replacement.LocalAgentChat.InputQueueManager.TryDequeueNextImmediateOrQueued(out _));
         Assert.Same(replacement.AgentChat, Assert.Single(factory.RunningSessions).AgentChat);
         await Assert.ThrowsAsync<InvalidOperationException>(() => factory.RestartExactAsync(
-            id, original.AgentChat, null, (_, _) => throw new InvalidOperationException("must not be called")));
+            sessionId, original.AgentChat, null, (_, _) => throw new InvalidOperationException("must not be called")));
     }
 
     [Fact]
     public async Task RestartSession_PreservesQueueAndBlocksAcquisitionUntilOldResourcesStop()
     {
-        var id = new AgentSessionId("restart-owner-boundary");
+        var sessionId = new AgentSessionId("restart-owner-boundary");
         await using var factory = CreateFactory();
-        await using var first = await factory.GetOrCreateAsync(id, EchoAgentDefinition);
-        await using var second = await factory.GetAsync(id);
+        await using var first = await factory.GetOrCreateAsync(sessionId, EchoAgentDefinition);
+        await using var second = await factory.GetAsync(sessionId);
         var held = first.LocalAgentChat.QueueManager.CreateInputQueue("Pending", AgentInputQueueImmediacy.Held);
         first.LocalAgentChat.EnqueueUserMessage("retain input", held);
         var disposing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -81,14 +81,14 @@ public sealed class AgentChatFactoryTests
         });
         first.LocalAgentChat.RegisterOwnedResource(resource.Object);
         AgentRuntimeQueueCheckpoint? durable = null;
-        var restart = factory.RestartExactAsync(id, first.AgentChat, null,
+        var restart = factory.RestartExactAsync(sessionId, first.AgentChat, null,
             (checkpoint, _) =>
             {
                 durable = checkpoint;
                 return ValueTask.CompletedTask;
             });
         await disposing.Task;
-        var acquire = factory.GetAsync(id);
+        var acquire = factory.GetAsync(sessionId);
         Assert.False(acquire.IsCompleted);
         Assert.False(restart.IsCompleted);
         release.TrySetResult();
@@ -110,12 +110,12 @@ public sealed class AgentChatFactoryTests
     [Fact]
     public async Task RestartSession_CheckpointPersistenceFailureLeavesOriginalUsable()
     {
-        var id = new AgentSessionId("restart-persist-failure");
+        var sessionId = new AgentSessionId("restart-persist-failure");
         await using var factory = CreateFactory();
-        await using var original = await factory.GetOrCreateAsync(id, EchoAgentDefinition);
+        await using var original = await factory.GetOrCreateAsync(sessionId, EchoAgentDefinition);
         var error = new IOException("checkpoint unavailable");
         Assert.Same(error, await Record.ExceptionAsync(() => factory.RestartExactAsync(
-            id, original.AgentChat, null, (_, _) => ValueTask.FromException(error))));
+            sessionId, original.AgentChat, null, (_, _) => ValueTask.FromException(error))));
         Assert.Same(original.AgentChat, Assert.Single(factory.RunningSessions).AgentChat);
         var held = original.LocalAgentChat.QueueManager.CreateInputQueue("Still usable", AgentInputQueueImmediacy.Held);
         original.LocalAgentChat.EnqueueUserMessage("unchanged", held);
@@ -125,9 +125,9 @@ public sealed class AgentChatFactoryTests
     [Fact]
     public async Task RestartSession_CancelledAfterCommitCompletesFullCleanupAndReplacement()
     {
-        var id = new AgentSessionId("restart-cancel-after-commit");
+        var sessionId = new AgentSessionId("restart-cancel-after-commit");
         await using var factory = CreateFactory();
-        await using var original = await factory.GetOrCreateAsync(id, EchoAgentDefinition);
+        await using var original = await factory.GetOrCreateAsync(sessionId, EchoAgentDefinition);
         using var caller = new CancellationTokenSource();
         var resource = new Moq.Mock<IAsyncDisposable>();
         resource.Setup(value => value.DisposeAsync()).Returns(() =>
@@ -137,7 +137,7 @@ public sealed class AgentChatFactoryTests
         });
         original.LocalAgentChat.RegisterOwnedResource(resource.Object);
         await using var replacement = await factory.RestartExactAsync(
-            id, original.AgentChat, null, (_, _) => ValueTask.CompletedTask, caller.Token);
+            sessionId, original.AgentChat, null, (_, _) => ValueTask.CompletedTask, caller.Token);
         Assert.True(caller.IsCancellationRequested);
         Assert.NotSame(original.AgentChat, replacement.AgentChat);
         Assert.Same(replacement.AgentChat, Assert.Single(factory.RunningSessions).AgentChat);
@@ -146,24 +146,24 @@ public sealed class AgentChatFactoryTests
     [Fact]
     public async Task RestartSession_OldShutdownFailureNeverStartsReplacement()
     {
-        var id = new AgentSessionId("restart-stop-failure");
+        var sessionId = new AgentSessionId("restart-stop-failure");
         await using var factory = CreateFactory();
-        await using var original = await factory.GetOrCreateAsync(id, EchoAgentDefinition);
+        await using var original = await factory.GetOrCreateAsync(sessionId, EchoAgentDefinition);
         var resource = new Moq.Mock<IAsyncDisposable>();
         resource.Setup(value => value.DisposeAsync()).Returns(ValueTask.FromException(new IOException("cannot stop")));
         original.LocalAgentChat.RegisterOwnedResource(resource.Object);
         await Assert.ThrowsAsync<AggregateException>(() => factory.RestartExactAsync(
-            id, original.AgentChat, null, (_, _) => ValueTask.CompletedTask));
-        await Assert.ThrowsAsync<AggregateException>(() => factory.GetAsync(id));
+            sessionId, original.AgentChat, null, (_, _) => ValueTask.CompletedTask));
+        await Assert.ThrowsAsync<AggregateException>(() => factory.GetAsync(sessionId));
         Assert.Empty(factory.RunningSessions);
     }
 
     [Fact]
     public async Task RestartSession_ConcurrentDirectDisposalWaitsForCompleteOldRuntimeShutdown()
     {
-        var id = new AgentSessionId("restart-concurrent-dispose");
+        var sessionId = new AgentSessionId("restart-concurrent-dispose");
         await using var factory = CreateFactory();
-        await using var original = await factory.GetOrCreateAsync(id, EchoAgentDefinition);
+        await using var original = await factory.GetOrCreateAsync(sessionId, EchoAgentDefinition);
         var disposing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var resource = new Moq.Mock<IAsyncDisposable>();
@@ -176,7 +176,7 @@ public sealed class AgentChatFactoryTests
         var directDisposal = original.LocalAgentChat.DisposeAsync().AsTask();
         await disposing.Task;
         var restart = factory.RestartExactAsync(
-            id, original.AgentChat, null, (_, _) => ValueTask.CompletedTask);
+            sessionId, original.AgentChat, null, (_, _) => ValueTask.CompletedTask);
         Assert.False(restart.IsCompleted);
         release.TrySetResult();
         await directDisposal;
@@ -188,7 +188,7 @@ public sealed class AgentChatFactoryTests
     [Fact]
     public async Task RestartSession_FinalPersistenceFailureBlocksReplacementAfterFullShutdown()
     {
-        var id = new AgentSessionId("restart-final-persistence");
+        var sessionId = new AgentSessionId("restart-final-persistence");
         var memory = new InMemoryAgentPersistenceStore();
         var failWrites = false;
         var store = new Moq.Mock<IAgentPersistenceStore>();
@@ -201,23 +201,23 @@ public sealed class AgentChatFactoryTests
         store.Setup(value => value.ReadMessagesAsync(Moq.It.IsAny<ReadMessagesRequest>(), Moq.It.IsAny<CancellationToken>()))
             .Returns((ReadMessagesRequest request, CancellationToken token) => memory.ReadMessagesAsync(request, token));
         store.Setup(value => value.ReadSubAgentChildIdsAsync(Moq.It.IsAny<string>(), Moq.It.IsAny<CancellationToken>()))
-            .Returns((string sessionId, CancellationToken token) => memory.ReadSubAgentChildIdsAsync(sessionId, token));
+            .Returns((string persistedSessionId, CancellationToken token) => memory.ReadSubAgentChildIdsAsync(persistedSessionId, token));
         await using var factory = CreateFactory(store.Object);
-        await using var original = await factory.GetOrCreateAsync(id, EchoAgentDefinition);
+        await using var original = await factory.GetOrCreateAsync(sessionId, EchoAgentDefinition);
         await Assert.ThrowsAsync<IOException>(() => factory.RestartExactAsync(
-            id, original.AgentChat, null, (_, _) =>
+            sessionId, original.AgentChat, null, (_, _) =>
             {
                 failWrites = true;
                 return ValueTask.CompletedTask;
             }));
-        await Assert.ThrowsAsync<IOException>(() => factory.GetAsync(id));
+        await Assert.ThrowsAsync<IOException>(() => factory.GetAsync(sessionId));
         Assert.Empty(factory.RunningSessions);
     }
 
     [Fact]
     public async Task RestartSession_FinalPersistenceWaitsForActualProviderDisposal()
     {
-        var id = new AgentSessionId("restart-provider-disposal");
+        var sessionId = new AgentSessionId("restart-provider-disposal");
         var client = new DeterministicTestChatClient();
         var stream = client.EnqueueStreamingResponse(isDisposalReady: false);
         var memory = new InMemoryAgentPersistenceStore();
@@ -235,13 +235,13 @@ public sealed class AgentChatFactoryTests
         store.Setup(value => value.ReadMessagesAsync(Moq.It.IsAny<ReadMessagesRequest>(), Moq.It.IsAny<CancellationToken>()))
             .Returns((ReadMessagesRequest request, CancellationToken token) => memory.ReadMessagesAsync(request, token));
         store.Setup(value => value.ReadSubAgentChildIdsAsync(Moq.It.IsAny<string>(), Moq.It.IsAny<CancellationToken>()))
-            .Returns((string sessionId, CancellationToken token) => memory.ReadSubAgentChildIdsAsync(sessionId, token));
+            .Returns((string persistedSessionId, CancellationToken token) => memory.ReadSubAgentChildIdsAsync(persistedSessionId, token));
         await using var factory = CreateFactory(store.Object, client);
-        await using var original = await factory.GetOrCreateAsync(id, EchoAgentDefinition);
+        await using var original = await factory.GetOrCreateAsync(sessionId, EchoAgentDefinition);
         original.LocalAgentChat.EnqueueUserMessage("in flight, never replay");
         await stream.WaitForClaimedAsync();
         AgentRuntimeQueueCheckpoint? checkpoint = null;
-        var restart = factory.RestartExactAsync(id, original.AgentChat, null, (state, _) =>
+        var restart = factory.RestartExactAsync(sessionId, original.AgentChat, null, (state, _) =>
         {
             restarting = true;
             checkpoint = state;
