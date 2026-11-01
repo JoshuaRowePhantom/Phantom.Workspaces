@@ -172,6 +172,7 @@ public sealed record ConfigureAgentInputQueueRequest
 /// <summary>Stable safe error codes returned in <see cref="AgentInputQueueCommandResult.ErrorCode"/>.</summary>
 public static class AgentInputQueueErrorCodes
 {
+    public const string RuntimeHandoff = "runtime-handoff";
     public const string InvalidRequest = "invalid-request";
     public const string UnknownQueue = "unknown-queue";
     public const string UnknownItem = "unknown-item";

@@ -35,6 +35,8 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
 
     public event EventHandler? Changed;
 
+    internal bool IsOwnedBy(AgentInputQueueManager owner) => ReferenceEquals(this.manager, owner);
+
     public LocalAgentInputQueuesAdapter(
         AgentInputQueueManager manager,
         AgentInputQueue defaultQueue,
@@ -47,11 +49,17 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
         this.defaultQueue = defaultQueue;
         this.foregroundScheduler = foregroundScheduler ?? TaskScheduler.Current;
 
-        manager.SetQueueName(manager.ImmediateQueue.QueueId, ImmediateQueueDisplayName);
-        manager.SetQueueName(defaultQueue.QueueId, DefaultQueueDisplayName);
+        var immediateName = manager.GetQueueName(manager.ImmediateQueue.QueueId);
+        if (string.IsNullOrWhiteSpace(immediateName))
+            immediateName = ImmediateQueueDisplayName;
+        var defaultName = manager.GetQueueName(defaultQueue.QueueId);
+        if (string.IsNullOrWhiteSpace(defaultName))
+            defaultName = DefaultQueueDisplayName;
+        manager.SetQueueName(manager.ImmediateQueue.QueueId, immediateName);
+        manager.SetQueueName(defaultQueue.QueueId, defaultName);
 
-        var immediate = new LocalAgentInputQueue(this, manager.ImmediateQueue, ImmediateQueueDisplayName, isDefault: false, isImmediate: true);
-        var def = new LocalAgentInputQueue(this, defaultQueue, DefaultQueueDisplayName, isDefault: true, isImmediate: false);
+        var immediate = new LocalAgentInputQueue(this, manager.ImmediateQueue, immediateName, isDefault: false, isImmediate: true);
+        var def = new LocalAgentInputQueue(this, defaultQueue, defaultName, isDefault: true, isImmediate: false);
         this.queues.Add(immediate);
         this.queues.Add(def);
         this.queuesById[immediate.QueueId] = immediate;
@@ -651,6 +659,8 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
         lock (this.stateLock)
         {
             ObjectDisposedException.ThrowIf(this.disposed, this);
+            if (this.manager.IsRuntimeHandoff)
+                return this.Reject(commandId, AgentInputQueueErrorCodes.RuntimeHandoff, null, null);
             if (this.commandLog.TryGetValue(commandId, out var prior))
             {
                 return string.Equals(prior.Payload, payload, StringComparison.Ordinal)

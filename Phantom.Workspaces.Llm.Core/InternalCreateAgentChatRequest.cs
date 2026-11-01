@@ -14,6 +14,8 @@ internal sealed record InternalCreateAgentChatRequest
 
     public string? AgentSessionId { get; init; }
 
+    public AgentRuntimeQueueCheckpoint? RuntimeQueueCheckpoint { get; init; }
+
     public AgentServices? AgentServices { get; init; }
 
     public AgentExecutionTrustContext? ExecutionTrustContext { get; init; }

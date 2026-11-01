@@ -17,13 +17,14 @@ public sealed class AgentChatQueueManager
         ArgumentNullException.ThrowIfNull(inputQueueManager);
         this.inputQueueManager = inputQueueManager;
 
-        var defaultQueue = new AgentInputQueue(
+        var defaultQueue = inputQueueManager.RestoredDefaultQueue ?? new AgentInputQueue(
             new AgentInputQueue.Parameters
             {
                 Priority = int.MaxValue - 1,
                 Immediacy = AgentInputQueueImmediacy.Immediate,
             });
-        this.inputQueueManager.RegisterInitialInputQueue(defaultQueue);
+        if (inputQueueManager.RestoredDefaultQueue is null)
+            this.inputQueueManager.RegisterInitialInputQueue(defaultQueue);
         this.DefaultInputQueue = new AgentChatQueue(defaultQueue, "Default Queue", isDefault: true);
         this.ImmediateInputQueue = new AgentChatQueue(
             inputQueueManager.ImmediateQueue,
@@ -36,6 +37,9 @@ public sealed class AgentChatQueueManager
         this.InputQueues = new ReadOnlyObservableCollection<AgentChatQueue>(this.inputQueues);
         this.inputQueueManager.QueueRegistered += this.OnQueueRegistered;
         this.inputQueueManager.QueueUnregistered += this.OnQueueUnregistered;
+        foreach (var queue in inputQueueManager.InputQueue)
+            this.OnQueueRegistered(inputQueueManager,
+                new AgentInputQueueManager.QueueRegistrationChangedEventArgs { Queue = queue });
     }
 
     public ReadOnlyObservableCollection<AgentChatQueue> InputQueues { get; }

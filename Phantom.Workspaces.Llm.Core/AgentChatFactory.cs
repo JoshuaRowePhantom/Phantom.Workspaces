@@ -14,13 +14,15 @@ namespace Phantom.Workspaces.Llm;
 /// from <see cref="RunningSessions"/> and disposed.
 /// All <see cref="RunningSessions"/> mutations are dispatched on the foreground scheduler.
 /// </summary>
-internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposable
+internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableRunningAgentChatFactory, IAsyncDisposable
 {
     private sealed class Entry
     {
         public required AgentChat AgentChat { get; init; }
         public int RefCount { get; set; }
         public TaskCompletionSource? DisposalCompletion { get; set; }
+        public AgentRuntimeQueueCheckpoint? RestartCheckpoint { get; set; }
+        public bool ShutdownConfirmed { get; set; }
     }
 
     private readonly IAgentPersistenceStore _store;
@@ -308,6 +310,126 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
 
     public Task<bool> TerminateExactAsync(AgentSessionId sessionId, IAgentChat expected, CancellationToken ct = default)
         => this.TerminateCoreAsync(sessionId, expected, ct);
+
+    public async Task<RunningAgentChatLease> RestartExactAsync(
+        AgentSessionId sessionId,
+        IAgentChat expected,
+        AgentServices? services,
+        Func<AgentRuntimeQueueCheckpoint, CancellationToken, ValueTask> persistCheckpointAsync,
+        CancellationToken ct = default)
+    {
+        Entry original;
+        AgentRuntimeQueueCheckpoint checkpoint;
+        TaskCompletionSource completion;
+        await this._gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            ObjectDisposedException.ThrowIf(this._disposed, this);
+            if (!this._entries.TryGetValue(sessionId, out original!)
+                || !ReferenceEquals(original.AgentChat, expected)
+                || original.DisposalCompletion is not null
+                    && !(original.ShutdownConfirmed && original.DisposalCompletion.Task.IsFaulted))
+                throw new InvalidOperationException("The expected agent runtime changed or is stopping.");
+            checkpoint = original.RestartCheckpoint ?? original.AgentChat.InputQueueManager.BeginRuntimeHandoff(
+                original.AgentChat.InputQueuesForRuntimeHandoff);
+            try
+            {
+                await persistCheckpointAsync(checkpoint, ct).ConfigureAwait(false);
+                ct.ThrowIfCancellationRequested();
+            }
+            catch
+            {
+                if (!original.ShutdownConfirmed)
+                    original.AgentChat.InputQueueManager.ResumeAfterRuntimeHandoff();
+                throw;
+            }
+            completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            original.DisposalCompletion = completion;
+            original.RefCount = 0;
+            original.RestartCheckpoint = checkpoint;
+        }
+        finally
+        {
+            this._gate.Release();
+        }
+
+        AgentChat? replacement = null;
+        try
+        {
+            await this.PostToForegroundAsync(() =>
+            {
+                var running = this._runningSessions.FirstOrDefault(item =>
+                    ReferenceEquals(item.AgentChat, original.AgentChat));
+                if (running is not null)
+                    this._runningSessions.Remove(running);
+            }).ConfigureAwait(false);
+            if (!original.ShutdownConfirmed)
+            {
+                await original.AgentChat.TerminateAsync(CancellationToken.None).ConfigureAwait(false);
+                await original.AgentChat.PersistFinalRuntimeStateAsync().ConfigureAwait(false);
+                original.ShutdownConfirmed = true;
+            }
+            var effectiveServices = this.WithSelfAsFactory(services ?? this._services);
+            replacement = await this.CreateChatOnForegroundAsync(
+                original.AgentChat.CreateRuntimeReplacementRequest(effectiveServices, checkpoint),
+                CancellationToken.None).ConfigureAwait(false);
+            PopulateAgentChatRef(effectiveServices, replacement);
+            await this._gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                ObjectDisposedException.ThrowIf(this._disposed, this);
+                if (!this._entries.TryGetValue(sessionId, out var current)
+                    || !ReferenceEquals(current, original))
+                    throw new InvalidOperationException("The restarting runtime registration changed.");
+                this._entries[sessionId] = new Entry
+                {
+                    AgentChat = replacement,
+                    RefCount = 1,
+                    DisposalCompletion = completion,
+                };
+            }
+            finally
+            {
+                this._gate.Release();
+            }
+            await this.PostToForegroundAsync(() =>
+                this._runningSessions.Add(new RunningAgentChat(sessionId, this, replacement)))
+                .ConfigureAwait(false);
+            await this._gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                ObjectDisposedException.ThrowIf(this._disposed, this);
+                this._entries[sessionId].DisposalCompletion = null;
+            }
+            finally
+            {
+                this._gate.Release();
+            }
+            completion.TrySetResult();
+            return this.MakeLease(sessionId, replacement);
+        }
+        catch (Exception error)
+        {
+            Exception failure = error;
+            if (replacement is not null)
+            {
+                try
+                {
+                    await replacement.DisposeAsync().ConfigureAwait(false);
+                }
+                catch (Exception cleanupError)
+                {
+                    failure = new AggregateException(error, cleanupError);
+                }
+            }
+            completion.TrySetException(failure);
+            // Observe the shared failure while retaining the stopped entry as an acquisition fence.
+            await completion.Task.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+            if (!ReferenceEquals(failure, error))
+                throw failure;
+            throw;
+        }
+    }
 
     private async Task<bool> TerminateCoreAsync(AgentSessionId sessionId, IAgentChat? expected, CancellationToken ct)
     {

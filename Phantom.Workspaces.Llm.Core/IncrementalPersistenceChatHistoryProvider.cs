@@ -108,6 +108,18 @@ internal sealed class IncrementalPersistenceChatHistoryProvider : ChatHistoryPro
         };
     }
 
+    internal async ValueTask PersistFinalSessionAsync(
+        AgentSession session,
+        CancellationToken cancellationToken)
+    {
+        this.cachedAgentSessionJson = await this.SerializeSessionAsync(
+            session, cancellationToken).ConfigureAwait(false);
+        await this.store.StoreAsync(new StoreRequestAgent
+        {
+            Agent = this.BuildPersistedAgent(session),
+        }, cancellationToken).ConfigureAwait(false);
+    }
+
     private static SessionState InitializeSessionState(AgentSession? session)
     {
         return new SessionState { AgentSessionId = Guid.NewGuid().ToString("n") };

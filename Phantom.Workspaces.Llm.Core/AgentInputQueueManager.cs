@@ -36,6 +36,52 @@ public sealed class AgentInputQueueManager
     private int mutationDepth;
     private bool sealedForViewerClose;
     private bool dequeuedWork;
+    private bool runtimeHandoff;
+    internal bool IsRuntimeHandoff
+    {
+        get { lock (this.syncLock) return this.runtimeHandoff; }
+    }
+
+    public AgentRuntimeQueueCheckpoint BeginRuntimeHandoff(IAgentInputQueues queues)
+    {
+        lock (this.syncLock)
+        {
+            if (queues is not LocalAgentInputQueuesAdapter adapter || !adapter.IsOwnedBy(this))
+                throw new InvalidOperationException("The queues belong to a different runtime.");
+            this.runtimeHandoff = true;
+            return new AgentRuntimeQueueCheckpoint
+            {
+                InputQueues = System.Text.Json.JsonSerializer.Deserialize<AgentInputQueuesSnapshot>(
+                    System.Text.Json.JsonSerializer.Serialize(
+                        queues.Snapshot, Microsoft.Extensions.AI.AIJsonUtilities.DefaultOptions),
+                    Microsoft.Extensions.AI.AIJsonUtilities.DefaultOptions),
+                HasInterruptedWork = this.dequeuedWork,
+            };
+        }
+    }
+
+    public void ResumeAfterRuntimeHandoff()
+    {
+        lock (this.syncLock)
+            this.runtimeHandoff = false;
+        this.QueueStateChanged?.Invoke(this, new QueueStateChangedEventArgs
+        {
+            Queue = this.ImmediateQueue,
+            ChangeKind = QueueStateChangeKind.ConfigurationChanged,
+        });
+    }
+
+    private void ThrowIfRuntimeHandoff()
+    {
+        if (this.runtimeHandoff)
+            throw new InvalidOperationException("The agent runtime is handing off its queues.");
+    }
+
+    private void MutateQueue(Action mutation) => this.Mutate(() =>
+    {
+        this.ThrowIfRuntimeHandoff();
+        mutation();
+    });
     internal bool HasDequeuedWork
     {
         get { lock (this.syncLock) return this.dequeuedWork; }
@@ -72,23 +118,53 @@ public sealed class AgentInputQueueManager
     public event EventHandler<QueueRegistrationChangedEventArgs>? QueueRegistered;
     public event EventHandler<QueueRegistrationChangedEventArgs>? QueueUnregistered;
 
-    public AgentInputQueueManager()
+    public AgentInputQueueManager(AgentRuntimeQueueCheckpoint? checkpoint = null)
     {
+        if (checkpoint is not null)
+            AgentInputQueueSnapshotValidator.Validate(checkpoint.InputQueues);
+        var restoredImmediate = checkpoint?.InputQueues.Queues.Single(queue => queue.IsImmediate);
         this.ImmediateQueue = new AgentInputQueue(
             new AgentInputQueue.Parameters
             {
-                Priority = int.MaxValue,
-                Immediacy = AgentInputQueueImmediacy.Immediate,
+                QueueId = restoredImmediate?.QueueId,
+                Priority = restoredImmediate?.Priority ?? int.MaxValue,
+                Immediacy = restoredImmediate?.Immediacy ?? AgentInputQueueImmediacy.Immediate,
+                CoalescingKey = restoredImmediate?.CoalescingKey,
                 Name = "Immediate Queue",
             });
         this.inputQueues = [this.ImmediateQueue];
         this.queueConfigurationHandlers[this.ImmediateQueue] = this.OnQueueConfigurationChanged;
         this.ImmediateQueue.ConfigurationChanged += this.OnQueueConfigurationChanged;
-        this.ImmediateQueue.ConfigureMutation = this.Mutate;
-        this.queueNames[this.ImmediateQueue.QueueId] = "Immediate Queue";
+        this.ImmediateQueue.ConfigureMutation = this.MutateQueue;
+        this.queueNames[this.ImmediateQueue.QueueId] = restoredImmediate?.Name ?? "Immediate Queue";
+        if (checkpoint is not null)
+        {
+            this.ImmediateQueue.Restore(restoredImmediate!.Value);
+            foreach (var snapshot in checkpoint.InputQueues.Queues.Where(queue => !queue.IsImmediate))
+            {
+                var queue = new AgentInputQueue(new AgentInputQueue.Parameters
+                {
+                    QueueId = snapshot.QueueId,
+                    Priority = snapshot.Priority,
+                    Immediacy = snapshot.Immediacy,
+                    CoalescingKey = snapshot.CoalescingKey,
+                });
+                queue.Restore(snapshot);
+                this.inputQueues.Add(queue);
+                queue.ConfigureMutation = this.MutateQueue;
+                queue.ConfigurationChanged += this.OnQueueConfigurationChanged;
+                this.queueConfigurationHandlers[queue] = this.OnQueueConfigurationChanged;
+                this.queueNames[queue.QueueId] = snapshot.Name;
+                if (snapshot.IsDefault)
+                    this.RestoredDefaultQueue = queue;
+            }
+            this.aggregateRevision = checkpoint.InputQueues.Revision;
+            this.runtimeHandoff = true;
+        }
     }
 
     public AgentInputQueue ImmediateQueue { get; }
+    internal AgentInputQueue? RestoredDefaultQueue { get; }
 
     /// <summary>
     /// Monotonically increasing aggregate revision (issue #1485). Bumped once per applied
@@ -147,6 +223,7 @@ public sealed class AgentInputQueueManager
         ArgumentNullException.ThrowIfNull(queue);
         this.Mutate(() =>
         {
+            this.ThrowIfRuntimeHandoff();
             Interlocked.Increment(ref this.aggregateRevision);
             this.NotifyQueueStateChanged(queue, kind);
         });
@@ -202,6 +279,7 @@ public sealed class AgentInputQueueManager
 
         return this.Mutate(() =>
         {
+            this.ThrowIfRuntimeHandoff();
             ObjectDisposedException.ThrowIf(this.sealedForViewerClose, this);
             this.RegisterInputQueue(queue);
             var beforeCount = queue.Items.Count;
@@ -232,10 +310,11 @@ public sealed class AgentInputQueueManager
 
         this.Mutate(() =>
         {
+            this.ThrowIfRuntimeHandoff();
             if (!this.inputQueues.Contains(queue))
             {
                 this.inputQueues.Add(queue);
-                queue.ConfigureMutation = this.Mutate;
+                queue.ConfigureMutation = this.MutateQueue;
                 this.queueConfigurationHandlers[queue] = this.OnQueueConfigurationChanged;
                 queue.ConfigurationChanged += this.OnQueueConfigurationChanged;
                 if (advanceRevision)
@@ -259,6 +338,7 @@ public sealed class AgentInputQueueManager
 
         return this.Mutate(() =>
         {
+            this.ThrowIfRuntimeHandoff();
             if (ReferenceEquals(queue, this.ImmediateQueue))
             {
                 return false;
@@ -296,6 +376,8 @@ public sealed class AgentInputQueueManager
     {
         var result = this.Mutate(() =>
         {
+            if (this.runtimeHandoff)
+                return (Applied: false, Item: (AgentInputItem)null!);
             var selectedQueue = this.inputQueues
                 .Where(queue => queue.Items.Count > 0)
                 .Where(queue => queue.Immediacy == AgentInputQueueImmediacy.Immediate

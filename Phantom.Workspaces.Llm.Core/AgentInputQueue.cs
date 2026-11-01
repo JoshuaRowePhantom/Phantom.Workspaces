@@ -63,6 +63,16 @@ public sealed class AgentInputQueue
     /// </summary>
     public long Revision => Volatile.Read(ref this.revision);
 
+    internal void Restore(AgentInputQueueSnapshot snapshot)
+    {
+        this.items = snapshot.Items.Select(item => new AgentInputItem
+        {
+            ItemId = item.ItemId,
+            Messages = item.Messages.ToArray(),
+        }).ToImmutableList();
+        this.revision = snapshot.Revision;
+    }
+
     public int Priority { get; private set; }
 
     public AgentInputQueueImmediacy Immediacy { get; private set; }
@@ -119,6 +129,19 @@ public sealed class AgentInputQueue
     }
 
     public bool Update(
+        ref ImmutableList<AgentInputItem> existingItems,
+        ImmutableList<AgentInputItem> newItems)
+    {
+        if (this.ConfigureMutation is not { } mutate)
+            return this.UpdateCore(ref existingItems, newItems);
+        var expected = existingItems;
+        var succeeded = false;
+        mutate(() => succeeded = this.UpdateCore(ref expected, newItems));
+        existingItems = expected;
+        return succeeded;
+    }
+
+    private bool UpdateCore(
         ref ImmutableList<AgentInputItem> existingItems,
         ImmutableList<AgentInputItem> newItems)
     {

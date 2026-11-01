@@ -223,7 +223,7 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
             ?? (SynchronizationContext.Current is not null
                 ? TaskScheduler.FromCurrentSynchronizationContext()
                 : this.foregroundSchedulerPair.ExclusiveScheduler);
-        this.queueManager = new AgentInputQueueManager();
+        this.queueManager = new AgentInputQueueManager(request.RuntimeQueueCheckpoint);
         this.chatQueueManager = new AgentChatQueueManager(this.queueManager);
         this.commonInputQueues = new LocalAgentInputQueuesAdapter(
             this.queueManager,
@@ -768,6 +768,7 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
     public ReadOnlyObservableCollection<AgentChatQueue> InputQueues => this.chatQueueManager.InputQueues;
 
     IAgentInputQueues IAgentChat.InputQueues => this.commonInputQueues;
+    internal IAgentInputQueues InputQueuesForRuntimeHandoff => this.commonInputQueues;
 
     /// <summary>The default input queue.</summary>
     public AgentChatQueue DefaultInputQueue => this.chatQueueManager.DefaultInputQueue;
@@ -780,6 +781,34 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
 
     /// <summary>Underlying queue manager, for advanced queue behaviors.</summary>
     public AgentInputQueueManager InputQueueManager => this.queueManager;
+
+    internal InternalCreateAgentChatRequest CreateRuntimeReplacementRequest(
+        AgentServices services,
+        AgentRuntimeQueueCheckpoint checkpoint)
+        => this.request with
+        {
+            AgentDefinition = null,
+            AgentServices = services,
+            RuntimeQueueCheckpoint = checkpoint,
+            ClientOverride = services.ChatClientOverride,
+            OwnedResources = null,
+            CancellationToken = CancellationToken.None,
+        };
+
+    internal async ValueTask PersistFinalRuntimeStateAsync()
+    {
+        Task[] providerCleanup;
+        lock (this.processingStateLock)
+            providerCleanup = this.providerCleanupTasks.ToArray();
+        await Task.WhenAll(providerCleanup).WaitAsync(
+            DisposeDrainTimeout, this.disposalTimeProvider).ConfigureAwait(false);
+        var persistence = this.persistenceProvider
+            ?? throw new InvalidOperationException("The runtime has no initialized persistence provider.");
+        await persistence.PersistFinalSessionAsync(
+            this.GetSession().Session, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    private readonly List<Task> providerCleanupTasks = [];
 
     public AgentChatQueueManager QueueManager => this.chatQueueManager;
 
@@ -1884,7 +1913,7 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
 
     public async ValueTask DisposeAsync()
     {
-        await this.DisposeAsyncCore(markTerminal: true).ConfigureAwait(false);
+        await this.DisposeAsyncCore(markTerminal: true, propagateExistingFailure: false).ConfigureAwait(false);
     }
 
     public async Task TerminateAsync(CancellationToken ct = default)
@@ -1934,17 +1963,33 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
         ExceptionDispatchInfo.Capture(descendantFailure).Throw();
     }
 
-    private async ValueTask DisposeAsyncCore(bool markTerminal)
+    private async ValueTask DisposeAsyncCore(bool markTerminal, bool propagateExistingFailure = true)
     {
         if (Interlocked.Exchange(ref this.disposeStarted, 1) != 0)
         {
+            await this.disposalFinished.Task.ConfigureAwait(propagateExistingFailure
+                ? ConfigureAwaitOptions.None
+                : ConfigureAwaitOptions.SuppressThrowing);
             return;
         }
 
-        await this.DisposeCoreAsync(awaitCreation: true).ConfigureAwait(false);
-        if (markTerminal)
-            Volatile.Write(ref this.disposalCompleted, 1);
+        try
+        {
+            await this.DisposeCoreAsync(awaitCreation: true).ConfigureAwait(false);
+            if (markTerminal)
+                Volatile.Write(ref this.disposalCompleted, 1);
+            this.disposalFinished.TrySetResult();
+        }
+        catch (Exception error)
+        {
+            this.disposalFinished.TrySetException(error);
+            await this.disposalFinished.Task.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+            throw;
+        }
     }
+
+    private readonly TaskCompletionSource disposalFinished =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private async Task DisposeCoreAsync(bool awaitCreation)
     {
@@ -2598,6 +2643,11 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                             providerEnumerator,
                             abandonedMoveNext,
                             runCancellation);
+                        lock (this.processingStateLock)
+                        {
+                            this.providerCleanupTasks.RemoveAll(task => task.IsCompletedSuccessfully);
+                            this.providerCleanupTasks.Add(providerCleanup);
+                        }
 
                         lock (this.steeringLock)
                         {
