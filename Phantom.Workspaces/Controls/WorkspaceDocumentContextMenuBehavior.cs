@@ -1,5 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.VisualTree;
 using Dock.Avalonia.Controls;
 using Phantom.Workspaces.Services.TabCommands;
@@ -54,6 +56,9 @@ public static class WorkspaceDocumentContextMenuBehavior
             this.item = item;
             this.item.PropertyChanged += this.OnItemPropertyChanged;
             this.item.DetachedFromVisualTree += this.OnDetachedFromVisualTree;
+            this.item.AttachedToVisualTree += this.OnAttachedToVisualTree;
+            this.item.AddHandler(Control.ContextRequestedEvent, this.OnContextRequested, RoutingStrategies.Tunnel);
+            this.item.AddHandler(InputElement.KeyDownEvent, this.OnKeyDown, RoutingStrategies.Tunnel);
             this.AttachController();
         }
 
@@ -61,17 +66,72 @@ public static class WorkspaceDocumentContextMenuBehavior
         {
             this.item.PropertyChanged -= this.OnItemPropertyChanged;
             this.item.DetachedFromVisualTree -= this.OnDetachedFromVisualTree;
+            this.item.AttachedToVisualTree -= this.OnAttachedToVisualTree;
+            this.item.RemoveHandler(Control.ContextRequestedEvent, this.OnContextRequested);
+            this.item.RemoveHandler(InputElement.KeyDownEvent, this.OnKeyDown);
             this.DetachController();
         }
 
         private void OnDetachedFromVisualTree(object? sender, VisualTreeAttachmentEventArgs args)
-            => this.Dispose();
+            => this.DetachController();
+
+        private void OnAttachedToVisualTree(object? sender, VisualTreeAttachmentEventArgs args)
+            => this.AttachController();
+
+        private void OnContextRequested(object? sender, ContextRequestedEventArgs args)
+        {
+            if (args.Source is not Visual source) { return; }
+            var origin = ResolveOrigin(source);
+            if (ReferenceEquals(origin, this.item))
+            {
+                this.controller?.CaptureOrigin(this.item);
+                if (ReferenceEquals(source, this.item) && this.menu is not null)
+                {
+                    // The theme attaches the stock menu to PART_TabBody, which is not
+                    // keyboard-focusable. A keyboard request on the container still has
+                    // an exact origin; open through Avalonia's supported owner overload.
+                    this.OpenNativeMenu();
+                    args.Handled = true;
+                }
+            }
+        }
+
+        private void OnKeyDown(object? sender, KeyEventArgs args)
+        {
+            if (args.Handled || this.menu is null ||
+                !(args.Key == Key.Apps || args.Key == Key.F10 && args.KeyModifiers == KeyModifiers.Shift))
+            {
+                return;
+            }
+            if (args.Source is not Visual source ||
+                !ReferenceEquals(ResolveOrigin(source), this.item))
+            {
+                return;
+            }
+            this.controller?.CaptureOrigin(this.item);
+            this.OpenNativeMenu();
+            args.Handled = true;
+        }
+
+        private static DocumentTabStripItem? ResolveOrigin(Visual source) =>
+            source as DocumentTabStripItem ?? source.GetVisualAncestors().OfType<DocumentTabStripItem>().FirstOrDefault();
+
+        private void OpenNativeMenu()
+        {
+            var owner = this.item.GetVisualDescendants().OfType<Control>()
+                .SingleOrDefault(control => ReferenceEquals(control.ContextMenu, this.menu));
+            if (owner is not null) { this.menu!.Open(owner); }
+        }
 
         private void OnItemPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs args)
         {
             if (args.Property == DocumentTabStripItem.DocumentContextMenuProperty)
             {
                 this.AttachController();
+            }
+            else if (args.Property == StyledElement.DataContextProperty)
+            {
+                this.controller?.InvalidateOrigin(this.item);
             }
         }
 
@@ -119,6 +179,7 @@ public static class WorkspaceDocumentContextMenuBehavior
     {
         private readonly ContextMenu menu;
         private readonly HashSet<DocumentTabStripItem> registeredItems = [];
+        private DocumentTabStripItem? origin;
 
         public MenuController(ContextMenu menu)
         {
@@ -141,12 +202,29 @@ public static class WorkspaceDocumentContextMenuBehavior
 
         public void Unregister(DocumentTabStripItem item)
         {
+            this.InvalidateOrigin(item);
             this.registeredItems.Remove(item);
+        }
+
+        public void CaptureOrigin(DocumentTabStripItem item)
+        {
+            this.origin = this.registeredItems.Contains(item) ? item : null;
+            if (this.origin is not null) { MenuFactory.Apply(this.menu, this.origin); }
+            else { MenuFactory.Clear(this.menu); }
+        }
+
+        public void InvalidateOrigin(DocumentTabStripItem item)
+        {
+            if (ReferenceEquals(this.origin, item))
+            {
+                this.origin = null;
+                MenuFactory.Clear(this.menu);
+            }
         }
 
         private void OnOpened(object? sender, EventArgs args)
         {
-            if (this.menu.PlacementTarget is not DocumentTabStripItem tabItem
+            if (this.origin is not { } tabItem
                 || !this.registeredItems.Contains(tabItem))
             {
                 MenuFactory.Clear(this.menu);
@@ -156,6 +234,10 @@ public static class WorkspaceDocumentContextMenuBehavior
             MenuFactory.Apply(this.menu, tabItem);
         }
 
-        private void OnClosed(object? sender, EventArgs args) => MenuFactory.Clear(this.menu);
+        private void OnClosed(object? sender, EventArgs args)
+        {
+            this.origin = null;
+            MenuFactory.Clear(this.menu);
+        }
     }
 }

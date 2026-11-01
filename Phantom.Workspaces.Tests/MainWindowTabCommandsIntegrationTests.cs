@@ -1,4 +1,9 @@
 using Avalonia.Controls;
+using Avalonia;
+using Avalonia.Automation;
+using Avalonia.Headless;
+using Avalonia.Input;
+using Avalonia.Threading;
 using Avalonia.Headless.XUnit;
 using Avalonia.VisualTree;
 using Dock.Avalonia.Controls;
@@ -40,12 +45,11 @@ public sealed class MainWindowTabCommandsIntegrationTests
                 .OfType<DocumentTabStripItem>()
                 .Single(item => item.DataContext is WorkspaceDocument { Id: "tab-session-a" });
             var menu = Assert.IsType<ContextMenu>(inactiveTabItem.DocumentContextMenu);
-            var factory = new WorkspaceDocumentMenuFactory();
-            factory.Apply(menu, inactiveTabItem);
+            await OpenNativeMenuAsync(window, inactiveTabItem);
             var restartItem = Assert.Single(menu.Items.OfType<MenuItem>(), item => Equals(item.Header, "Restart agent session…"));
             Assert.NotNull(restartItem.Command);
 
-            restartItem.Command!.Execute(null);
+            restartItem.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(MenuItem.ClickEvent));
             var request = await restartService.LastRequest.Task;
 
             Assert.Equal(firstTab.AgentSessionId, request.SessionId);
@@ -78,17 +82,17 @@ public sealed class MainWindowTabCommandsIntegrationTests
                 .OfType<DocumentTabStripItem>()
                 .Single(item => item.DataContext is WorkspaceDocument { Id: "tab-session-a" });
             var menu = Assert.IsType<ContextMenu>(tabItem.DocumentContextMenu);
-            var factory = new WorkspaceDocumentMenuFactory();
-
-            factory.Apply(menu, tabItem);
+            await OpenNativeMenuAsync(window, tabItem);
             var defaultHeaders = menu.Items.OfType<MenuItem>()
                 .Where(item => !Equals(item.Header, "Restart agent session…"))
                 .Select(item => item.Header)
                 .ToList();
             Assert.NotEmpty(defaultHeaders);
 
-            factory.Apply(menu, tabItem);
-            factory.Apply(menu, tabItem);
+            menu.Close();
+            await OpenNativeMenuAsync(window, tabItem);
+            menu.Close();
+            await OpenNativeMenuAsync(window, tabItem);
 
             Assert.Single(menu.Items.OfType<MenuItem>(), item => Equals(item.Header, "Restart agent session…"));
             var afterHeaders = menu.Items.OfType<MenuItem>()
@@ -124,7 +128,6 @@ public sealed class MainWindowTabCommandsIntegrationTests
                 .Where(item => item.DataContext is WorkspaceDocument)
                 .ToList();
             Assert.Equal(2, renderedItems.Count);
-            var factory = new WorkspaceDocumentMenuFactory();
 
             // Each rendered content container targets its own exact document, not the active tab.
             foreach (var item in renderedItems)
@@ -135,7 +138,7 @@ public sealed class MainWindowTabCommandsIntegrationTests
                 viewModel.AgentSessionRestartService = restartService;
 
                 var menu = Assert.IsType<ContextMenu>(item.DocumentContextMenu);
-                factory.Apply(menu, item);
+                await OpenNativeMenuAsync(window, item);
                 var restartItem = Assert.Single(
                     menu.Items.OfType<MenuItem>(),
                     menuItem => Equals(menuItem.Header, "Restart agent session…"));
@@ -145,7 +148,64 @@ public sealed class MainWindowTabCommandsIntegrationTests
                 var request = await restartService.LastRequest.Task;
                 Assert.Equal(expectedSessionId, request.SessionId);
 
-                factory.Clear(menu);
+                menu.Close();
+            }
+
+            var pane = viewModel.SelectedWorkspacePane;
+            var documentA = pane.GetDocumentForTab("tab-session-a")!;
+            var factory = Assert.IsType<WorkspaceDockFactory>(documentA.Factory);
+            factory.NewHorizontalDocumentDock(documentA);
+            window.UpdateLayout();
+            Assert.NotSame(pane.GetDocumentForTab("tab-session-a")!.Owner, pane.GetDocumentForTab("tab-session-b")!.Owner);
+            await AssertNativeTargetAsync(window, "tab-session-a");
+            await AssertNativeTargetAsync(window, "tab-session-b");
+
+            var serialized = DockLayoutCanonicalizer.SerializeCanonical(pane.ContentLayout!, pane.Tabs.Select(tab => tab.Id).ToHashSet());
+            var restored = DockLayoutCanonicalizer.Deserialize(serialized)!;
+            foreach (var dock in MainWindowViewModel.EnumerateContentDocks(pane.ContentLayout!))
+                dock.ItemsSource = null;
+            foreach (var document in MainWindowViewModel.EnumerateAllDocuments(restored))
+            {
+                var tab = pane.Tabs.Single(tab => tab.Id == document.Id);
+                document.Initialize(tab);
+                pane.RegisterDocument(document.Id, document);
+            }
+            pane.ContentLayout = restored;
+            factory.InitLayout(restored);
+            factory.DockState.Restore(restored);
+            foreach (var dock in MainWindowViewModel.EnumerateContentDocks(restored))
+                factory.WireContentDock(dock, pane, ownsTabs: false);
+            window.UpdateLayout();
+            await AssertNativeTargetAsync(window, "tab-session-a");
+            await AssertNativeTargetAsync(window, "tab-session-b");
+
+            var floatingOpened = new TaskCompletionSource<Window>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var openedSubscription = Window.WindowOpenedEvent.AddClassHandler<Window>((host, _) =>
+            {
+                if (!ReferenceEquals(host, window)) { floatingOpened.TrySetResult(host); }
+            });
+            var floatingDocument = pane.GetDocumentForTab("tab-session-a")!;
+            ((global::Dock.Model.Controls.IDocumentDock)floatingDocument.Owner!).CanCloseLastDockable = true;
+            factory.FloatDockable(floatingDocument);
+            var floating = await floatingOpened.Task.WaitAsync(TestContext.Current.CancellationToken);
+            try
+            {
+                await AssertNativeTargetAsync(floating, "tab-session-a");
+                Assert.Contains(pane.Tabs, tab => tab.Id == "tab-session-a");
+            }
+            finally { floating.Close(); }
+
+            async Task AssertNativeTargetAsync(Window host, string tabId)
+            {
+                var item = await WaitForItemAsync(host, tabId);
+                var service = new RecordingRestartService();
+                viewModel.AgentSessionRestartService = service;
+                await OpenNativeMenuAsync(host, item);
+                var menu = Assert.IsType<ContextMenu>(item.DocumentContextMenu);
+                var restart = Assert.Single(menu.Items.OfType<MenuItem>(), value => Equals(value.Header, "Restart agent session…"));
+                restart.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(MenuItem.ClickEvent));
+                Assert.Equal(tabId["tab-".Length..], (await service.LastRequest.Task).SessionId);
+                menu.Close();
             }
         }
         finally
@@ -178,17 +238,19 @@ public sealed class MainWindowTabCommandsIntegrationTests
 
             var itemA = renderedItems.Single(item => item.DataContext is WorkspaceDocument { Id: "tab-session-a" });
             var itemB = renderedItems.Single(item => item.DataContext is WorkspaceDocument { Id: "tab-session-b" });
-            var factory = new WorkspaceDocumentMenuFactory();
 
             // The rendered content containers share a single ContextMenu instance that is
             // retargeted on each open; reopening it for a different tab must drop the old
             // target, preserve the default items, and never accumulate duplicate restart items.
             var menu = Assert.IsType<ContextMenu>(itemA.DocumentContextMenu);
-            var defaultHeaders = menu.Items.OfType<MenuItem>().Select(item => item.Header).ToList();
+            await OpenNativeMenuAsync(window, itemA, keyboard: true);
+            var defaultHeaders = menu.Items.OfType<MenuItem>()
+                .Where(item => !Equals(item.Header, "Restart agent session…")).Select(item => item.Header).ToList();
+            menu.Close();
 
-            await AssertRetargetsAsync(factory, menu, itemA, "session-a", defaultHeaders);
-            await AssertRetargetsAsync(factory, menu, itemB, "session-b", defaultHeaders);
-            await AssertRetargetsAsync(factory, menu, itemA, "session-a", defaultHeaders);
+            await AssertRetargetsAsync(menu, itemA, "session-a", defaultHeaders);
+            await AssertRetargetsAsync(menu, itemB, "session-b", defaultHeaders);
+            await AssertRetargetsAsync(menu, itemA, "session-a", defaultHeaders);
         }
         finally
         {
@@ -196,13 +258,12 @@ public sealed class MainWindowTabCommandsIntegrationTests
         }
 
         async Task AssertRetargetsAsync(
-            WorkspaceDocumentMenuFactory factory,
             ContextMenu menu,
             DocumentTabStripItem item,
             string expectedSessionId,
             IReadOnlyList<object?> defaultHeaders)
         {
-            factory.Apply(menu, item);
+            await OpenNativeMenuAsync(window, item, keyboard: true);
 
             var restartItem = Assert.Single(
                 menu.Items.OfType<MenuItem>(),
@@ -218,8 +279,146 @@ public sealed class MainWindowTabCommandsIntegrationTests
             restartItem.Command!.Execute(null);
             Assert.Equal(expectedSessionId, (await restartService.LastRequest.Task).SessionId);
 
-            factory.Clear(menu);
+            menu.Close();
         }
+    }
+
+    private static async Task<DocumentTabStripItem> WaitForItemAsync(Window window, string tabId)
+    {
+        var completed = new TaskCompletionSource<DocumentTabStripItem>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Updated(object? sender, EventArgs arguments)
+        {
+            var item = window.GetVisualDescendants().OfType<DocumentTabStripItem>().FirstOrDefault(item =>
+                item.DataContext is WorkspaceDocument document && document.Id == tabId);
+            if (item is not null) { completed.TrySetResult(item); }
+        }
+        window.LayoutUpdated += Updated;
+        try
+        {
+            window.UpdateLayout();
+            Updated(null, EventArgs.Empty);
+            return await completed.Task.WaitAsync(TestContext.Current.CancellationToken);
+        }
+        finally { window.LayoutUpdated -= Updated; }
+    }
+
+    internal static async Task OpenNativeMenuAsync(Window window, DocumentTabStripItem item, bool keyboard = false)
+    {
+        window.UpdateLayout();
+        var body = item.GetVisualDescendants().OfType<Border>().Single(control => control.Name == "PART_TabBody");
+        var menu = Assert.IsType<ContextMenu>(item.DocumentContextMenu);
+        Assert.Null(menu.PlacementTarget);
+        var opened = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Opened(object? sender, EventArgs arguments) => opened.TrySetResult();
+        menu.Opened += Opened;
+        try
+        {
+            if (keyboard)
+            {
+                Assert.True(item.Focus());
+                window.KeyPress(Key.F10, RawInputModifiers.Shift, PhysicalKey.F10, null);
+                window.KeyRelease(Key.F10, RawInputModifiers.Shift, PhysicalKey.F10, null);
+            }
+            else
+            {
+                var point = body.TranslatePoint(new Point(body.Bounds.Width / 2, body.Bounds.Height / 2), window)!.Value;
+                window.MouseDown(point, MouseButton.Right);
+                window.MouseUp(point, MouseButton.Right);
+            }
+            await opened.Task.WaitAsync(TestContext.Current.CancellationToken);
+            Assert.True(menu.IsOpen);
+        }
+        finally { menu.Opened -= Opened; }
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task DocumentContextMenu_NativeDefaults_KeepCapabilitiesParametersAndNestedActions()
+    {
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        await viewModel.OpenTabAsync(CreateSessionTab("caps-a"));
+        await viewModel.OpenTabAsync(CreateSessionTab("caps-b"));
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            var strip = await WaitForContentTabStripAsync(window);
+            var item = strip.GetVisualDescendants().OfType<DocumentTabStripItem>()
+                .Single(item => item.DataContext is WorkspaceDocument { Id: "tab-caps-a" });
+            var document = Assert.IsType<WorkspaceDocument>(item.DataContext);
+            await OpenNativeMenuAsync(window, item);
+            var menu = Assert.IsType<ContextMenu>(item.DocumentContextMenu);
+            var defaults = menu.Items.OfType<MenuItem>().Where(value => !Equals(value.Header, "Restart agent session…")).ToArray();
+            Assert.Equal(13, defaults.Length);
+            Assert.All(defaults.Where(value => value.Command is not null), value => Assert.Same(document, value.CommandParameter));
+            var nested = defaults.Where(value => value.Items.Count != 0).ToArray();
+            Assert.Equal(2, nested.Length);
+            Assert.Equal(5, nested.Sum(value => value.Items.Count));
+            Assert.All(nested.SelectMany(value => value.Items.OfType<MenuItem>()),
+                value => { Assert.NotNull(value.Command); Assert.Same(document.Owner, value.CommandParameter); });
+            var floating = defaults.Single(value => Equals(value.Header, "_Float"));
+            var close = defaults.Single(value => Equals(value.Header, "_Close"));
+            Assert.True(floating.IsVisible);
+            Assert.True(close.IsVisible);
+            document.CanFloat = false;
+            document.CanClose = false;
+            menu.UpdateLayout();
+            Assert.False(floating.IsVisible);
+            Assert.False(close.IsVisible);
+            document.CanFloat = true;
+            document.CanClose = true;
+            menu.UpdateLayout();
+            Assert.True(floating.IsVisible);
+            Assert.True(close.IsVisible);
+            Assert.All(defaults, value => Assert.Contains(value, menu.Items));
+            menu.Close();
+        }
+        finally { await MainWindowIntegrationTests.CloseWindowAsync(window); }
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task RestartSession_NativeNonAgentDocument_PreservesDefaultsWithoutRestart()
+    {
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        await viewModel.OpenTabAsync(new WebViewModel("https://native-menu.example.invalid") { Id = "browser", Title = "Browser" });
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            var strip = await WaitForContentTabStripAsync(window);
+            var item = Assert.Single(strip.GetVisualDescendants().OfType<DocumentTabStripItem>());
+            await OpenNativeMenuAsync(window, item);
+            var menu = Assert.IsType<ContextMenu>(item.DocumentContextMenu);
+            Assert.DoesNotContain(menu.Items.OfType<MenuItem>(), value => Equals(value.Header, "Restart agent session…"));
+            Assert.Contains(menu.Items.OfType<MenuItem>(), value => Equals(value.Header, "_Float"));
+            Assert.Contains(menu.Items.OfType<MenuItem>(), value => Equals(value.Header, "_Close"));
+            menu.Close();
+        }
+        finally { await MainWindowIntegrationTests.CloseWindowAsync(window); }
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task RestartSession_UnavailableRuntimeNativeMenu_ShowsAccessibleDisabledExplanation()
+    {
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        await viewModel.OpenTabAsync(CreateSessionTab("unsupported"));
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            var strip = await WaitForContentTabStripAsync(window);
+            var item = Assert.Single(strip.GetVisualDescendants().OfType<DocumentTabStripItem>());
+            await OpenNativeMenuAsync(window, item);
+            var menu = Assert.IsType<ContextMenu>(item.DocumentContextMenu);
+            var restart = Assert.Single(menu.Items.OfType<MenuItem>(), value => Equals(value.Header, "Restart agent session…"));
+            Assert.False(restart.IsEnabled);
+            Assert.Equal("Restart agent session", AutomationProperties.GetName(restart));
+            Assert.False(string.IsNullOrWhiteSpace(AutomationProperties.GetHelpText(restart)));
+            menu.Close();
+        }
+        finally { await MainWindowIntegrationTests.CloseWindowAsync(window); }
     }
 
     private static async Task<DocumentTabStrip> WaitForContentTabStripAsync(Window window)

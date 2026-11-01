@@ -55,6 +55,9 @@ internal sealed class WorkspaceDocumentMenuFactory
         }
 
         var contributedItems = new List<object>();
+        var presentation = new object();
+        bool IsCurrentPresentation() => this.activeSubscriptions.TryGetValue(menu, out var current)
+            && ReferenceEquals(current.Presentation, presentation);
         var hasVisibleDefaults = items.Cast<object>().OfType<Control>().Any(control => control.IsVisible);
         if (hasVisibleDefaults)
         {
@@ -86,7 +89,7 @@ internal sealed class WorkspaceDocumentMenuFactory
                         Dispatcher.UIThread.Post(
                             () =>
                             {
-                                if (menu.IsOpen)
+                                if (menu.IsOpen && IsCurrentPresentation())
                                 {
                                     this.Apply(menu, tabItem);
                                 }
@@ -102,6 +105,7 @@ internal sealed class WorkspaceDocumentMenuFactory
             if (!entry.Availability.IsEnabled && !string.IsNullOrWhiteSpace(entry.Availability.DisabledReason))
             {
                 ToolTip.SetTip(menuItem, entry.Availability.DisabledReason);
+                AutomationProperties.SetHelpText(menuItem, entry.Availability.DisabledReason);
             }
 
             contributedItems.Add(menuItem);
@@ -118,7 +122,7 @@ internal sealed class WorkspaceDocumentMenuFactory
             Dispatcher.UIThread.Post(
                 () =>
                 {
-                    if (menu.IsOpen)
+                    if (menu.IsOpen && IsCurrentPresentation())
                     {
                         this.Apply(menu, tabItem);
                     }
@@ -127,7 +131,7 @@ internal sealed class WorkspaceDocumentMenuFactory
         };
 
         provider.CommandsChanged += commandsChanged;
-        this.activeSubscriptions[menu] = new ActiveSubscription(provider, commandsChanged);
+        this.activeSubscriptions[menu] = new ActiveSubscription(provider, commandsChanged, presentation);
     }
 
     internal void Clear(ContextMenu menu)
@@ -180,6 +184,14 @@ internal sealed class WorkspaceDocumentMenuFactory
             }
         }
 
+        if (document.Factory is WorkspaceDockFactory { ContextLocator: { } locator }
+            && locator.TryGetValue("Root", out var resolveRoot)
+            && resolveRoot() is MainWindowViewModel factoryOwner)
+        {
+            mainWindow = factoryOwner;
+            return true;
+        }
+
         if (TopLevel.GetTopLevel(tabItem) is { DataContext: MainWindowViewModel topLevelVm })
         {
             mainWindow = topLevelVm;
@@ -189,5 +201,5 @@ internal sealed class WorkspaceDocumentMenuFactory
         return false;
     }
 
-    private sealed record ActiveSubscription(ITabCommandProvider Provider, EventHandler Handler);
+    private sealed record ActiveSubscription(ITabCommandProvider Provider, EventHandler Handler, object Presentation);
 }

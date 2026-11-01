@@ -11,9 +11,7 @@
         <FluentTheme />
         <dockFluent:DockFluentTheme CacheDocumentTabContent="True" />
         <ts:DockTabSwitchTheme />
-        <Style Selector="DocumentTabStripItem">
-            <Setter Property="controls:WorkspaceDocumentContextMenuBehavior.IsEnabled" Value="True" />
-        </Style>
+        <StyleInclude Source="avares://Phantom.Workspaces/Styles/WorkspaceDocumentContextMenus.axaml" />
         <StyleInclude Source="avares://Phantom.Workspaces.Gui.Shared/Styles/SharedStyles.axaml" />
         <StyleInclude Source="avares://Phantom.Workspaces.Gui.Shared/Styles/AgentChatStatusLineStyles.axaml" />
         <StyleInclude Source="avares://Phantom.Workspaces.Gui.Shared/Styles/NotificationsStyles.axaml" />

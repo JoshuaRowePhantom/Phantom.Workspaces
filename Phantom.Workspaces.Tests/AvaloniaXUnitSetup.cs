@@ -43,6 +43,10 @@ public static class AvaloniaTestAppBuilder
             Styles.Add(new DockFluentTheme());
             Styles.Add(new StyleInclude(new Uri("avares://Phantom.Workspaces.Tests/"))
             {
+                Source = new Uri("avares://Phantom.Workspaces/Styles/WorkspaceDocumentContextMenus.axaml")
+            });
+            Styles.Add(new StyleInclude(new Uri("avares://Phantom.Workspaces.Tests/"))
+            {
                 Source = new Uri("avares://Phantom.Workspaces.Gui.Shared/Styles/SharedStyles.axaml")
             });
             Styles.Add(new StyleInclude(new Uri("avares://Phantom.Workspaces.Tests/"))

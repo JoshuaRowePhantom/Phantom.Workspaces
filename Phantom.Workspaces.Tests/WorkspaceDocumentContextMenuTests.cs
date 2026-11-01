@@ -15,6 +15,36 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class WorkspaceDocumentContextMenuTests
 {
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task DocumentContextMenu_DetachAndReattach_ReinstallsNativeSubscriptions()
+    {
+        await using var vm = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        var provider = new ConfigurableProvider(Contributed("contributed", "Contributed command"));
+        var context = CreateMenuContext(vm, "reattached", provider, resetPaneTabs: true);
+        var item = new DocumentTabStripItem { DataContext = context.Document, DocumentContextMenu = CreateDefaultMenu() };
+        var panel = new StackPanel { Children = { item } };
+        var window = new Window { Content = panel, DataContext = vm, Width = 400, Height = 200 };
+        window.Show();
+        try
+        {
+            await MainWindowTabCommandsIntegrationTests.OpenNativeMenuAsync(window, item);
+            Assert.Equal(1, provider.SubscriberCount);
+            var menu = Assert.IsType<ContextMenu>(item.DocumentContextMenu);
+            menu.Close();
+            Assert.Equal(0, provider.SubscriberCount);
+            panel.Children.Remove(item);
+            panel.Children.Add(item);
+            await MainWindowTabCommandsIntegrationTests.OpenNativeMenuAsync(window, item);
+            Assert.True(Controls.WorkspaceDocumentContextMenuBehavior.GetIsEnabled(item));
+            Assert.Equal(1, provider.SubscriberCount);
+            Assert.Single(menu.Items.OfType<MenuItem>(), value => Equals(value.Header, "Contributed command"));
+            panel.Children.Remove(item);
+            Assert.Equal(0, provider.SubscriberCount);
+            menu.Close();
+        }
+        finally { window.Close(); }
+    }
+
     [AvaloniaFact]
     public async Task DocumentContextMenu_RepeatedOpen_DoesNotDuplicateCommands()
     {
