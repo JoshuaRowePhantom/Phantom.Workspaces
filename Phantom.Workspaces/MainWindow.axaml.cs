@@ -17,6 +17,8 @@ public partial class MainWindow : Window
     private AccessHostServices? accessHost;
     private readonly System.Collections.Generic.List<Task> accessAdministrationDisposals = [];
     private bool accessAdministrationShuttingDown;
+    private AuthorizationRequestsPopupViewModel? authorizationRequests;
+    private bool ownsAuthorizationPresentation;
     internal Task AccessAdministrationReady { get; private set; } = Task.CompletedTask;
 
     public void AttachAccessHost(AccessHostServices host, AuthorizationRequestsPopupViewModel popup)
@@ -32,33 +34,57 @@ public partial class MainWindow : Window
 
     public void AttachAuthorizationRequests(AuthorizationRequestsPopupViewModel popup)
     {
-        popup.Rows.SetPresentationMode(AuthorizationRowsPresentationMode.Runtime);
+        this.DetachAuthorizationPresentation();
+        this.authorizationRequests = popup;
+        popup.Rows.RuntimeOwnerAvailable += this.OnRuntimeOwnerAvailable;
         this.AuthorizationRequestsHost.DataContext = popup;
         this.AuthorizationRequestsHost.IsVisible = true;
+        if (this.IsVisible) { this.StartAuthorizationPresentation(); }
     }
 
-    private void OnAuthorizationKeyClicked(object? sender, RoutedEventArgs arguments)
+    private void OnRuntimeOwnerAvailable(object? sender, EventArgs arguments)
     {
-        if (this.accessHost is not null)
+        if (this.IsVisible) { this.StartAuthorizationPresentation(); }
+    }
+
+    private void StartAuthorizationPresentation()
+    {
+        if (this.accessAdministrationShuttingDown || this.authorizationRequests is not { } popup ||
+            this.ownsAuthorizationPresentation || !popup.Rows.ClaimRuntimeOwner(this)) { return; }
+        this.ownsAuthorizationPresentation = true;
+        popup.Rows.NewActionablePrompt += this.OnNewAuthorizationPrompt;
+        popup.Rows.SetPresentationMode(AuthorizationRowsPresentationMode.Runtime);
+    }
+
+    private void OnNewAuthorizationPrompt(object? sender, EventArgs arguments)
+    {
+        if (this.accessAdministrationShuttingDown || !this.ownsAuthorizationPresentation || !this.IsVisible) { return; }
+        if (this.accessHost is not null) { this.BeginOpenAccessAdministration(CredentialAccessPage.Requests, activate: false); }
+        else if (this.authorizationRequests is { } popup) { popup.ShowRequests(); }
+    }
+
+    private void DetachAuthorizationPresentation()
+    {
+        if (this.authorizationRequests is { } popup)
         {
-            this.BeginOpenAccessAdministration(CredentialAccessPage.Requests);
-            return;
+            popup.Rows.NewActionablePrompt -= this.OnNewAuthorizationPrompt;
+            popup.Rows.RuntimeOwnerAvailable -= this.OnRuntimeOwnerAvailable;
+            popup.Rows.ReleaseRuntimeOwner(this);
         }
-        (this.AuthorizationRequestsHost.DataContext as AuthorizationRequestsPopupViewModel)?.ToggleOpen();
+        this.ownsAuthorizationPresentation = false;
     }
 
     private void OnAuthorizationPopupKeyDown(object? sender, KeyEventArgs arguments)
     {
         if (arguments.Key != Key.Escape) { return; }
         (this.AuthorizationRequestsHost.DataContext as AuthorizationRequestsPopupViewModel)?.Dismiss();
-        this.AuthorizationKey.Focus();
+        this.CredentialAccessKey.Focus();
         arguments.Handled = true;
     }
 
     private void OnAuthorizationPopupClosed(object? sender, EventArgs arguments)
     {
         (this.AuthorizationRequestsHost.DataContext as AuthorizationRequestsPopupViewModel)?.NotifyLightDismissed();
-        this.AuthorizationKey.Focus();
     }
 
     private bool ctrlIsDown;
@@ -76,10 +102,12 @@ public partial class MainWindow : Window
         AddDockDataTemplates();
         this.DataContext = viewModel;
         viewModel.OpenAccessAdministrationRequested += this.OnOpenAccessAdministrationRequested;
+        this.Opened += (_, _) => this.StartAuthorizationPresentation();
         this.Closed += (_, _) =>
         {
             viewModel.OpenAccessAdministrationRequested -= this.OnOpenAccessAdministrationRequested;
             this.accessAdministrationShuttingDown = true;
+            this.DetachAuthorizationPresentation();
             this.LastAccessAdministrationWindow?.Close();
         };
         this.AddHandler(InputElement.KeyDownEvent, this.OnPreviewKeyDown, RoutingStrategies.Tunnel);
@@ -114,7 +142,7 @@ public partial class MainWindow : Window
             this.AuthorizationRequestsHost.DataContext is AuthorizationRequestsPopupViewModel { IsOpen: true } authorizationPopup)
         {
             authorizationPopup.Dismiss();
-            this.AuthorizationKey.Focus();
+            this.CredentialAccessKey.Focus();
             e.Handled = true;
             return;
         }
@@ -287,6 +315,11 @@ public partial class MainWindow : Window
         object? sender,
         RoutedEventArgs e)
     {
+        if (this.accessHost is null && this.authorizationRequests is { } popup)
+        {
+            popup.ToggleOpen();
+            return;
+        }
         if (this.DataContext is MainWindowViewModel viewModel)
         {
             viewModel.OpenAccessAdministrationCommand.Execute(null);
@@ -295,19 +328,20 @@ public partial class MainWindow : Window
 
     private void OnOpenAccessAdministrationRequested()
     {
-        this.BeginOpenAccessAdministration(CredentialAccessPage.SavedApprovals);
+        this.BeginOpenAccessAdministration(this.authorizationRequests?.ActionableCount > 0
+            ? CredentialAccessPage.Requests : CredentialAccessPage.SavedApprovals);
     }
 
-    private void BeginOpenAccessAdministration(CredentialAccessPage page)
+    private void BeginOpenAccessAdministration(CredentialAccessPage page, bool activate = true)
     {
-        var opening = this.OpenAccessAdministrationAsync(page);
+        var opening = this.OpenAccessAdministrationAsync(page, activate);
         this.AccessAdministrationReady = Task.WhenAll(this.AccessAdministrationReady, opening);
     }
 
     /// <summary>The most recently opened access-administration window.</summary>
     internal AccessAdministrationWindow? LastAccessAdministrationWindow { get; private set; }
 
-    private async Task OpenAccessAdministrationAsync(CredentialAccessPage page)
+    private async Task OpenAccessAdministrationAsync(CredentialAccessPage page, bool activate)
     {
         if (this.DataContext is not MainWindowViewModel || this.accessAdministrationShuttingDown)
         {
@@ -322,7 +356,7 @@ public partial class MainWindow : Window
         if (this.LastAccessAdministrationWindow is { } existing)
         {
             existing.SelectPage(page);
-            existing.Activate();
+            if (activate) { existing.Activate(); }
             return;
         }
         var window = new AccessAdministrationWindow(host);
@@ -333,11 +367,12 @@ public partial class MainWindow : Window
         {
             if (arguments.Key != Key.Escape) { return; }
             window.Close();
-            this.AuthorizationKey.Focus();
+            this.CredentialAccessKey.Focus();
             arguments.Handled = true;
         };
         try
         {
+            window.ShowActivated = activate;
             window.Show(this);
             await window.RefreshAsync();
         }
@@ -381,6 +416,7 @@ public partial class MainWindow : Window
     internal async ValueTask DisposeAccessAdministrationAsync()
     {
         this.accessAdministrationShuttingDown = true;
+        this.DetachAuthorizationPresentation();
         this.LastAccessAdministrationWindow?.Close();
         await this.AccessAdministrationReady;
         await this.DisposeClosedAccessAdministrationAsync();

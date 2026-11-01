@@ -22,6 +22,7 @@ public sealed class AuthorizationRequestRowViewModel : ViewModelBase
     public required IUserAuthorizationRegistry Registry { private get; init; }
     public UserAuthorizationRequestIdentifier Identifier => this.snapshot.Identifier;
     public long Revision => this.snapshot.Revision;
+    public long PromptGeneration => this.snapshot.PromptGeneration;
     public string UseDisplayName => this.snapshot.UseDisplayName;
     public string SafeStatus => this.snapshot.SafeStatus;
     public UserAuthorizationState State => this.snapshot.State;

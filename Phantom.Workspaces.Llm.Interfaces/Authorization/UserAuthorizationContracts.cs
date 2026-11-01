@@ -9,6 +9,7 @@ public sealed record UserAuthorizationSnapshot
 {
     public required UserAuthorizationRequestIdentifier Identifier { get; init; }
     public required long Revision { get; init; }
+    public long PromptGeneration { get; init; }
     public required string UseDisplayName { get; init; }
     public required UserAuthorizationState State { get; init; }
     public UserAuthorizationPrimaryActionKind? PrimaryAction { get; init; }

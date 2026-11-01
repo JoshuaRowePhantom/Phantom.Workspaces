@@ -15,7 +15,7 @@ namespace Phantom.Workspaces.Tests;
 public sealed class AuthorizationRequestsPopupViewModelTests
 {
     [Fact]
-    public async Task LiveCountsNeverAutoOpenAndOpenRowsSurviveProviderFlow()
+    public async Task UnattachedPopup_CountsDoNotPresentAndOpenRowsSurviveProviderFlow()
     {
         var registry = new AuthorizationRequestRowsViewModelTests.Registry();
         using var rows = new AuthorizationRequestRowsViewModel { Dispatch = action => action(), Registry = registry };
@@ -44,7 +44,7 @@ public sealed class AuthorizationRequestsPopupViewModelTests
     }
 
     [AvaloniaFact]
-    public async Task RuntimeKeyUsesSharedRowsAndEscapeRestoresFocusWithoutAutoOpening()
+    public async Task RuntimeKeyUsesSharedRowsAndEscapeRestoresFocusAfterAutomaticOpening()
     {
         var directory = Path.Combine(Environment.CurrentDirectory, ".access-ui-tests", Guid.NewGuid().ToString("N"));
         try
@@ -58,17 +58,15 @@ public sealed class AuthorizationRequestsPopupViewModelTests
             window.AttachAuthorizationRequests(popup);
             window.Show();
             Dispatcher.UIThread.RunJobs();
-            var key = window.FindControl<Button>("AuthorizationKey")!;
-            Assert.Equal("Authorization requests", AutomationProperties.GetName(key));
+            var key = window.FindControl<Button>("CredentialAccessKey")!;
+            Assert.Equal("Credential access", AutomationProperties.GetName(key));
             Assert.True(key.Focus());
             registry.Snapshot = [AuthorizationRequestRowsViewModelTests.Snapshot()];
             registry.Notify();
             Dispatcher.UIThread.RunJobs();
-            Assert.False(popup.IsOpen);
-            Assert.True(key.IsFocused);
-            key.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-            Dispatcher.UIThread.RunJobs();
             Assert.True(popup.IsOpen);
+            Assert.True(key.IsFocused);
+            Assert.Equal("Credential access — 1 requests need attention", AutomationProperties.GetName(key));
             var escape = new KeyEventArgs { Key = Key.Escape, RoutedEvent = InputElement.KeyDownEvent };
             key.RaiseEvent(escape);
             Dispatcher.UIThread.RunJobs();
@@ -103,12 +101,10 @@ public sealed class AuthorizationRequestsPopupViewModelTests
             window.Show();
             RaisePlatformCallback(window, "Activated");
             Dispatcher.UIThread.RunJobs();
-            var key = window.FindControl<Button>("AuthorizationKey")!;
+            var key = window.FindControl<Button>("CredentialAccessKey")!;
             var frameworkPopup = window.FindControl<Popup>("AuthorizationPopup")!;
             Assert.False(frameworkPopup.IsLightDismissEnabled);
             Assert.True(key.Focus());
-            key.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-            Dispatcher.UIThread.RunJobs();
             Assert.True(popup.IsOpen);
             Assert.True(frameworkPopup.IsOpen);
             Assert.True(key.IsFocused);

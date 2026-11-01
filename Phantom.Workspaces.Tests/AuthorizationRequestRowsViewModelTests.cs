@@ -25,7 +25,8 @@ public sealed class AuthorizationRequestRowsViewModelTests
         }
         public void Notify() => this.Changed?.Invoke(this, new()
         {
-            Identifier = this.Snapshot[0].Identifier, Revision = this.Snapshot[0].Revision,
+            Identifier = this.Snapshot.FirstOrDefault()?.Identifier ?? AuthorizationRequestRowsViewModelTests.Snapshot().Identifier,
+            Revision = this.Snapshot.FirstOrDefault()?.Revision ?? 0,
         });
         public Task ActAsync(UserAuthorizationAction action, CancellationToken cancellationToken = default)
         {
@@ -64,6 +65,82 @@ public sealed class AuthorizationRequestRowsViewModelTests
         IsBootstrapBlocking = true,
         CanAct = true,
     };
+
+    [Fact]
+    public async Task ActionableCount_LocalSubmissionAndRejection_NotifiesWithoutRegistryRevision()
+    {
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var registry = new Registry { Snapshot = [Snapshot()], ExecuteAction = _ => completion.Task };
+        using var rows = new AuthorizationRequestRowsViewModel { Dispatch = action => action(), Registry = registry };
+        var counts = new List<int>();
+        rows.Changed += (_, _) => counts.Add(rows.ActionableCount);
+        var action = Assert.Single(rows.Rows).ApplyCommand.ExecuteAsync(null);
+        Assert.Equal(0, rows.ActionableCount);
+        completion.SetException(new UserAuthorizationActionRejectedException(UserAuthorizationActionRejection.StaleRevision));
+        await action;
+        Assert.Equal(1, rows.ActionableCount);
+        Assert.Contains(0, counts);
+        Assert.Equal(1, counts[^1]);
+    }
+
+    [Fact]
+    public async Task PromptGeneration_SourceRefreshAndCoalescedRenewal_PresentsOnlyFreshPrompts()
+    {
+        await using var registry = new UserAuthorizationRegistry();
+        var snapshot = Snapshot();
+        registry.Add(snapshot);
+        var callbacks = new List<Action>();
+        using var rows = new AuthorizationRequestRowsViewModel { Dispatch = callbacks.Add, Registry = registry };
+        callbacks[0]();
+        var prompts = 0;
+        rows.NewActionablePrompt += (_, _) => prompts++;
+        rows.SetPresentationMode(AuthorizationRowsPresentationMode.Runtime);
+        Assert.Equal(1, prompts);
+        Assert.True(registry.UpdateSources(snapshot.Identifier, 1, snapshot.SourceOptions));
+        callbacks[^1]();
+        Assert.Equal(1, prompts);
+        await registry.ActAsync(new ApplyUserAuthorizationAction
+        {
+            RequestIdentifier = snapshot.Identifier, ExpectedRevision = 2,
+            Memory = snapshot.SelectedMemory, Source = snapshot.SelectedSource,
+        }, TestContext.Current.CancellationToken);
+        Assert.True(registry.Complete(snapshot.Identifier, 3, UserAuthorizationState.RenewalNeeded));
+        callbacks[^1]();
+        callbacks[^2]();
+        rows.SetPresentationMode(AuthorizationRowsPresentationMode.Runtime);
+        Assert.Equal(2, prompts);
+        Assert.Equal(2, Assert.Single(registry.GetSnapshot()).PromptGeneration);
+    }
+
+    [Theory]
+    [InlineData(UserAuthorizationState.Pending, true, 1)]
+    [InlineData(UserAuthorizationState.Failed, true, 1)]
+    [InlineData(UserAuthorizationState.RenewalNeeded, true, 1)]
+    [InlineData(UserAuthorizationState.Pending, false, 0)]
+    [InlineData(UserAuthorizationState.Performing, true, 0)]
+    [InlineData(UserAuthorizationState.Completed, true, 0)]
+    [InlineData(UserAuthorizationState.Denied, true, 0)]
+    [InlineData(UserAuthorizationState.Cancelled, true, 0)]
+    public void ActionableCount_StatesAndRemoval_UsesUniqueLiveRows(UserAuthorizationState state, bool canAct, int count)
+    {
+        var registry = new Registry { Snapshot = [Snapshot() with { State = state, CanAct = canAct }] };
+        using var rows = new AuthorizationRequestRowsViewModel { Dispatch = action => action(), Registry = registry };
+        var prompts = 0;
+        rows.NewActionablePrompt += (_, _) => prompts++;
+        Assert.Equal(0, prompts);
+        rows.SetPresentationMode(AuthorizationRowsPresentationMode.Runtime);
+        registry.Notify();
+        Assert.Equal(count, rows.ActionableCount);
+        Assert.Equal(count, prompts);
+        rows.SetPresentationMode(AuthorizationRowsPresentationMode.Bootstrap);
+        rows.SetPresentationMode(AuthorizationRowsPresentationMode.Runtime);
+        Assert.Equal(count, prompts);
+        registry.Snapshot = [];
+        registry.Notify();
+        Assert.Equal(0, rows.ActionableCount);
+        Assert.Empty(rows.Rows);
+        Assert.Equal(count, prompts);
+    }
 
     [Fact]
     public void SubscribesBeforeInitialSnapshotAndDiscardsOutOfOrderQueuedSnapshots()

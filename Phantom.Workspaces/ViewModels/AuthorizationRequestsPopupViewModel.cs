@@ -23,7 +23,14 @@ public sealed class AuthorizationRequestsPopupViewModel : TransientPopupViewMode
     }
 
     public int ActionableCount => this.Rows.ActionableCount;
-    public string KeyLabel => $"Authorizations ({this.ActionableCount})";
+    public string KeyLabel => this.ActionableCount == 0 ? "🤫" : $"🤫 {this.ActionableCount}";
+    public string AccessibleLabel => this.ActionableCount == 0 ? "Credential access" :
+        $"Credential access — {this.ActionableCount} requests need attention";
+    public void ShowRequests()
+    {
+        this.IsAutoClosing = false;
+        this.IsOpen = true;
+    }
     public void ToggleOpen()
     {
         if (this.IsOpen) { this.Dismiss(); return; }
@@ -36,6 +43,7 @@ public sealed class AuthorizationRequestsPopupViewModel : TransientPopupViewMode
     {
         this.RaisePropertyChanged(nameof(this.ActionableCount));
         this.RaisePropertyChanged(nameof(this.KeyLabel));
+        this.RaisePropertyChanged(nameof(this.AccessibleLabel));
     }
 
     public override ValueTask DisposeAsync()

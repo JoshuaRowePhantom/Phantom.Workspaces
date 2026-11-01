@@ -431,7 +431,10 @@ public sealed class MainWindowIntegrationTests
             Assert.True(shushButton.Focus());
             Assert.True(shushButton.IsFocused);
 
-            var authorizationKey = window.FindControl<Button>("AuthorizationKey")!;
+            var authorizationKey = window.FindControl<Button>("CredentialAccessKey")!;
+            var registry = Assert.IsType<Services.Authorization.UserAuthorizationRegistry>(accessHost.AuthorizationRegistry);
+            var snapshot = AuthorizationRequestRowsViewModelTests.Snapshot();
+            registry.Add(snapshot);
             authorizationKey.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             await window.AccessAdministrationReady;
             Assert.Same(dialog, window.LastAccessAdministrationWindow);
@@ -440,9 +443,6 @@ public sealed class MainWindowIntegrationTests
             var requests = Assert.Single(dialog.GetVisualDescendants().OfType<Controls.AuthorizationRequestRowsControl>());
             Assert.Same(accessHost.AuthorizationRows, requests.DataContext);
 
-            var registry = Assert.IsType<Services.Authorization.UserAuthorizationRegistry>(accessHost.AuthorizationRegistry);
-            var snapshot = AuthorizationRequestRowsViewModelTests.Snapshot();
-            registry.Add(snapshot);
             dialog.UpdateLayout();
             var row = Assert.Single(accessHost.AuthorizationRows.Rows);
             var selectedSource = row.SelectedSource;
@@ -508,6 +508,92 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task CredentialAccess_AutomaticArrivalAndDismissal_PreservesTypingAndSingleLiveOwner()
+    {
+        await using var access = Services.Access.AccessHostServices.Create(new Services.Access.AccessHostOptions
+        {
+            PlatformSecretStore = new NullPlatformSecretStore(),
+            Dispatch = action => Dispatcher.UIThread.Post(action),
+            ReleaseMemoryFilePath = Path.Combine(Environment.CurrentDirectory, ".nonexistent-access-admin", "arrival.json"),
+        });
+        await using var model = CreateTestMainWindowViewModel();
+        await using var secondModel = CreateTestMainWindowViewModel();
+        await using var popup = new AuthorizationRequestsPopupViewModel { Rows = access.AuthorizationRows };
+        await using var secondPopup = new AuthorizationRequestsPopupViewModel { Rows = access.AuthorizationRows };
+        var owner = new MainWindow(model);
+        var second = new MainWindow(secondModel);
+        owner.AttachAccessHost(access, popup);
+        second.AttachAccessHost(access, secondPopup);
+        owner.Show();
+        second.Show();
+        try
+        {
+            var input = new TextBox { Text = "continue typing", CaretIndex = 4, SelectionStart = 2, SelectionEnd = 4 };
+            ((Panel)owner.Content!).Children.Add(input);
+            owner.UpdateLayout();
+            Assert.True(input.Focus());
+            var key = owner.FindControl<Button>("CredentialAccessKey")!;
+            Assert.Null(owner.FindControl<Button>("AuthorizationKey"));
+            var registry = Assert.IsType<Services.Authorization.UserAuthorizationRegistry>(access.AuthorizationRegistry);
+            var snapshot = AuthorizationRequestRowsViewModelTests.Snapshot();
+            async Task PublishAsync(Action publish, Func<bool> accepted, Action? beforePresentation = null)
+            {
+                var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                void Changed(object? sender, EventArgs arguments)
+                {
+                    if (accepted())
+                    {
+                        beforePresentation?.Invoke();
+                        changed.TrySetResult();
+                    }
+                }
+                access.AuthorizationRows.Changed += Changed;
+                try
+                {
+                    await Task.Run(publish, TestContext.Current.CancellationToken);
+                    await changed.Task.WaitAsync(TestContext.Current.CancellationToken);
+                    await owner.AccessAdministrationReady;
+                }
+                finally { access.AuthorizationRows.Changed -= Changed; }
+            }
+            await PublishAsync(() => registry.Add(snapshot), () => access.AuthorizationRows.Rows.Count == 1);
+            var host = Assert.IsType<AccessAdministrationWindow>(owner.LastAccessAdministrationWindow);
+            Assert.True(host.IsVisible);
+            Assert.False(host.ShowActivated);
+            Assert.Equal(CredentialAccessPage.Requests, host.SelectedPage);
+            Assert.Same(access.AuthorizationRows, host.RequestRows);
+            Assert.Null(second.LastAccessAdministrationWindow);
+            Assert.True(input.IsFocused);
+            Assert.Equal(2, input.SelectionStart);
+            Assert.Equal(4, input.SelectionEnd);
+            Assert.Equal("🤫 1", key.Content);
+            Assert.Equal("Credential access — 1 requests need attention", Avalonia.Automation.AutomationProperties.GetName(key));
+            host.Close();
+            await owner.DisposeClosedAccessAdministrationAsync();
+            await PublishAsync(() => Assert.True(registry.UpdateSources(snapshot.Identifier, 1, snapshot.SourceOptions)),
+                () => access.AuthorizationRows.Rows[0].Revision == 2);
+            Assert.Null(owner.LastAccessAdministrationWindow);
+            await PublishAsync(() => registry.Add(snapshot with { Identifier = new() { Value = Guid.NewGuid() } }),
+                () => access.AuthorizationRows.Rows.Count == 2, () => Assert.True(input.Focus()));
+            Assert.True(owner.LastAccessAdministrationWindow!.IsVisible);
+            Assert.True(input.IsFocused, $"Focus moved to {owner.FocusManager?.GetFocusedElement()} / {owner.LastAccessAdministrationWindow.FocusManager?.GetFocusedElement()}");
+            await owner.DisposeAccessAdministrationAsync();
+            await PublishAsync(() => registry.Add(snapshot with { Identifier = new() { Value = Guid.NewGuid() } }),
+                () => access.AuthorizationRows.Rows.Count == 3);
+            await second.AccessAdministrationReady;
+            Assert.True(second.LastAccessAdministrationWindow!.IsVisible);
+            Assert.Null(owner.LastAccessAdministrationWindow);
+        }
+        finally
+        {
+            await owner.DisposeAccessAdministrationAsync();
+            await second.DisposeAccessAdministrationAsync();
+            owner.Close();
+            second.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task AuthorizationHost_ScrollableRequests_PreservesScrollAcrossPagesRevisionsAndReopen()
     {
         await using var access = Services.Access.AccessHostServices.Create(new Services.Access.AccessHostOptions
@@ -530,7 +616,7 @@ public sealed class MainWindowIntegrationTests
         foreach (var snapshot in snapshots) { registry.Add(snapshot); }
         try
         {
-            var key = owner.FindControl<Button>("AuthorizationKey")!;
+            var key = owner.FindControl<Button>("CredentialAccessKey")!;
             key.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             await owner.AccessAdministrationReady;
             var host = Assert.IsType<AccessAdministrationWindow>(owner.LastAccessAdministrationWindow);

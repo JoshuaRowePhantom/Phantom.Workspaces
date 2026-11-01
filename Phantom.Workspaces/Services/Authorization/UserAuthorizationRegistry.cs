@@ -127,6 +127,9 @@ public sealed class UserAuthorizationRegistry : IUserAuthorizationRegistry
             MemoryOptions = Array.AsReadOnly(snapshot.MemoryOptions.ToArray()),
             SourceOptions = Array.AsReadOnly(snapshot.SourceOptions.ToArray()),
             SafeStatus = Status(snapshot.State),
+            PromptGeneration = snapshot.CanAct &&
+                snapshot.State is UserAuthorizationState.Pending or UserAuthorizationState.Failed or UserAuthorizationState.RenewalNeeded
+                    ? Math.Max(1, snapshot.PromptGeneration) : snapshot.PromptGeneration,
         };
         lock (this.gate)
         {
@@ -211,6 +214,9 @@ public sealed class UserAuthorizationRegistry : IUserAuthorizationRegistry
                 Revision = row.Snapshot.Revision + 1,
                 State = state,
                 CanAct = state is UserAuthorizationState.Failed or UserAuthorizationState.RenewalNeeded,
+                PromptGeneration = state is UserAuthorizationState.Failed or UserAuthorizationState.RenewalNeeded &&
+                    (!row.Snapshot.CanAct || row.Snapshot.State != state)
+                        ? row.Snapshot.PromptGeneration + 1 : row.Snapshot.PromptGeneration,
                 PrimaryAction = state switch
                 {
                     UserAuthorizationState.Failed => UserAuthorizationPrimaryActionKind.Retry,

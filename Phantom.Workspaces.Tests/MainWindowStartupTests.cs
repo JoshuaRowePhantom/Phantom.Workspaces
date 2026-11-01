@@ -377,7 +377,7 @@ public sealed class MainWindowStartupTests(ITestOutputHelper output)
             await heartbeat.Task.WaitAsync(token);
             var registry = Assert.IsType<Services.Authorization.UserAuthorizationRegistry>(access.AuthorizationRegistry);
             registry.Add(AuthorizationRequestRowsViewModelTests.Snapshot());
-            window.FindControl<Avalonia.Controls.Button>("AuthorizationKey")!
+            window.FindControl<Avalonia.Controls.Button>("CredentialAccessKey")!
                 .RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
             await window.AccessAdministrationReady;
             Assert.Same(access.AuthorizationRows, window.LastAccessAdministrationWindow!.RequestRows);

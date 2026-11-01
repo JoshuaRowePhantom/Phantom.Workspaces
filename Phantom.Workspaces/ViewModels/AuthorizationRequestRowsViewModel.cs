@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Linq;
 using Avalonia.Threading;
 using Phantom.Workspaces.Llm.Interfaces.Access;
@@ -20,6 +21,9 @@ public sealed class AuthorizationRequestRowsViewModel : IDisposable
     private long queuedVersion;
     private long appliedVersion;
     private bool disposed;
+    private bool projecting;
+    private object? runtimeOwner;
+    private readonly Dictionary<UserAuthorizationRequestIdentifier, long> presentedPrompts = new();
 
     public AuthorizationRequestRowsViewModel() => this.Rows = new(this.rows);
 
@@ -51,7 +55,25 @@ public sealed class AuthorizationRequestRowsViewModel : IDisposable
     public ReadOnlyObservableCollection<AuthorizationRequestRowViewModel> Rows { get; }
     public AuthorizationRowsPresentationState Presentation { get; } = new();
     public event EventHandler? Changed;
+    public event EventHandler? NewActionablePrompt;
+    internal event EventHandler? RuntimeOwnerAvailable;
     public int ActionableCount => this.keyedRows.Values.Count(row => row.CanAct);
+
+    internal bool ClaimRuntimeOwner(object owner)
+    {
+        if (this.disposed || this.runtimeOwner is not null && !ReferenceEquals(this.runtimeOwner, owner)) { return false; }
+        this.runtimeOwner = owner;
+        return true;
+    }
+
+    internal void ReleaseRuntimeOwner(object owner)
+    {
+        if (ReferenceEquals(this.runtimeOwner, owner))
+        {
+            this.runtimeOwner = null;
+            this.RuntimeOwnerAvailable?.Invoke(this, EventArgs.Empty);
+        }
+    }
 
     public void SetPresentationMode(AuthorizationRowsPresentationMode mode)
     {
@@ -79,6 +101,7 @@ public sealed class AuthorizationRequestRowsViewModel : IDisposable
         var identifiers = snapshot.Select(value => value.Identifier).ToHashSet();
         foreach (var identifier in this.keyedRows.Keys.Where(identifier => !identifiers.Contains(identifier)).ToArray())
         {
+            this.keyedRows[identifier].PropertyChanged -= this.OnRowPropertyChanged;
             this.keyedRows[identifier].Deactivate();
             this.keyedRows.Remove(identifier);
         }
@@ -88,8 +111,11 @@ public sealed class AuthorizationRequestRowsViewModel : IDisposable
             {
                 row = new AuthorizationRequestRowViewModel { Registry = this.Registry };
                 this.keyedRows.Add(value.Identifier, row);
+                row.PropertyChanged += this.OnRowPropertyChanged;
             }
-            row.Apply(value);
+            this.projecting = true;
+            try { row.Apply(value); }
+            finally { this.projecting = false; }
         }
         this.Project();
     }
@@ -103,6 +129,30 @@ public sealed class AuthorizationRequestRowsViewModel : IDisposable
         foreach (var row in this.rows.Where(row => !visible.Contains(row)).ToArray()) { this.rows.Remove(row); }
         foreach (var row in visible.Where(row => !this.rows.Contains(row))) { this.rows.Add(row); }
         this.Changed?.Invoke(this, EventArgs.Empty);
+        this.PresentFreshPrompts();
+    }
+
+    private void OnRowPropertyChanged(object? sender, PropertyChangedEventArgs arguments)
+    {
+        if (!this.disposed && !this.projecting &&
+            (string.IsNullOrEmpty(arguments.PropertyName) || arguments.PropertyName == nameof(AuthorizationRequestRowViewModel.CanAct)))
+        {
+            this.Changed?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    private void PresentFreshPrompts()
+    {
+        if (this.mode != AuthorizationRowsPresentationMode.Runtime || this.NewActionablePrompt is null) { return; }
+        var fresh = false;
+        foreach (var row in this.keyedRows.Values.Where(row => row.CanAct))
+        {
+            var generation = Math.Max(1, row.PromptGeneration);
+            if (this.presentedPrompts.TryGetValue(row.Identifier, out var previous) && previous >= generation) { continue; }
+            this.presentedPrompts[row.Identifier] = generation;
+            fresh = true;
+        }
+        if (fresh) { this.NewActionablePrompt.Invoke(this, EventArgs.Empty); }
     }
 
     public void Dispose()
@@ -115,11 +165,18 @@ public sealed class AuthorizationRequestRowsViewModel : IDisposable
         }
         this.Dispatch(() =>
         {
-            foreach (var row in this.keyedRows.Values) { row.Deactivate(); }
+            foreach (var row in this.keyedRows.Values)
+            {
+                row.PropertyChanged -= this.OnRowPropertyChanged;
+                row.Deactivate();
+            }
             this.keyedRows.Clear();
             this.rows.Clear();
             this.Presentation.Clear();
             this.Changed = null;
+            this.NewActionablePrompt = null;
+            this.RuntimeOwnerAvailable = null;
+            this.runtimeOwner = null;
         });
     }
 }

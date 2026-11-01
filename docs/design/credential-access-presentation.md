@@ -33,11 +33,21 @@ remain strictly validated.
 
 ## One nonmodal host
 
-Both top-right shortcuts route to one retained, owned `AccessAdministrationWindow`.
-The count key selects Requests; the management shortcut selects Saved approvals.
+One top-right Credential access glyph routes to one retained, owned
+`AccessAdministrationWindow`. Its live badge counts unique actionable process
+rows, including local submitting/rejection transitions. Zero shows no alert.
+Manual navigation selects Requests when attention is needed, otherwise Saved approvals.
 The host also contains Cached credentials and Provider access. Requests binds the
 exact process-owned rows instance, never a copied collection or a second registry.
-New requests only update counts; they do not activate or open a window.
+Fresh actionable prompts automatically show Requests after the shell opens,
+without activation. The registry issues a monotonic prompt generation, independent
+of source-only revisions; accepted snapshots deduplicate these generations even
+when intermediate Performing snapshots are skipped. Dismissal acknowledges only
+presentation: source refresh, count decreases and projection changes do not reopen
+the unchanged prompt. A new request or renewal generation does. One attached
+runtime owner claims presentation for the shared process rows; Bootstrap does not
+open a competing runtime surface. Shutdown detaches presentation callbacks.
+Automatic visibility never executes an authorization or provider action.
 
 The window is shown nonmodally before administration refresh, so live requests
 and the main shell remain usable while saved lists load. Initialization tasks and
@@ -45,7 +55,7 @@ Closed-triggered disposal tasks remain owned/observed. Closing cancels refresh
 and disposes only the three administration models; application shutdown awaits
 this lifecycle before the process access graph. Reopening creates fresh models
 while retaining process row identity and presentation state. Escape closes the
-host and returns keyboard focus to the authorization key. Failures are reported
+host and returns keyboard focus to the credential key. Failures are reported
 using fixed safe UI/log text without backend/provider exception content.
 The real owned-host regression keeps thirty process-owned requests at a nonzero
 scroll offset across page changes, provider revisions and close/reopen, checking

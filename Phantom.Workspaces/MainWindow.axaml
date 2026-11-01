@@ -95,13 +95,15 @@
                                      Classes.paused="{Binding ScheduledToolsPause.IsPaused, FallbackValue=False}" />
                     </Button>
 
-                    <Panel x:Name="AuthorizationRequestsHost" IsVisible="False"
+                    <Panel x:Name="AuthorizationRequestsHost"
                            x:DataType="vm:AuthorizationRequestsPopupViewModel">
-                        <Button x:Name="AuthorizationKey" Content="{Binding KeyLabel}"
-                                AutomationProperties.Name="Authorization requests"
-                                Click="OnAuthorizationKeyClicked" />
+                        <Button x:Name="CredentialAccessKey" Classes="settings-gear top-right"
+                                Content="{Binding KeyLabel, FallbackValue=🤫}"
+                                ToolTip.Tip="Credential access"
+                                AutomationProperties.Name="{Binding AccessibleLabel, FallbackValue=Credential access}"
+                                Click="OnOpenAccessAdministrationClicked" />
                         <Popup x:Name="AuthorizationPopup" IsOpen="{Binding IsOpen, Mode=TwoWay}"
-                               PlacementTarget="{Binding #AuthorizationKey}"
+                               PlacementTarget="{Binding #CredentialAccessKey}"
                                IsLightDismissEnabled="False" Closed="OnAuthorizationPopupClosed">
                             <Border Background="{DynamicResource Theme.Background}" Padding="12"
                                     Width="900" KeyDown="OnAuthorizationPopupKeyDown">
@@ -109,11 +111,6 @@
                             </Border>
                         </Popup>
                     </Panel>
-
-                    <Button Classes="settings-gear top-right"
-                            Content="🤫"
-                            ToolTip.Tip="Credential access"
-                            Click="OnOpenAccessAdministrationClicked" />
 
                     <Panel VerticalAlignment="Stretch"
                            IsVisible="{Binding RunningAgentBrain, Converter={x:Static ObjectConverters.IsNotNull}}">
