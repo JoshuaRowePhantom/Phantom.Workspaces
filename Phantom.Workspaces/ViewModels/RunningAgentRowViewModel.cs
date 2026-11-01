@@ -329,8 +329,7 @@ public sealed class RunningAgentRowViewModel : ViewModelBase, IDisposable
             var error = snapshot.Outcome == AgentChatInterruptOutcome.Failed
                 ? "Unable to interrupt agent."
                 : null;
-            var enabled = !snapshot.IsPending && !this.IsTerminationPending
-                && this.IsThinking && this.isConnected && !this.isTerminal;
+            var enabled = this.IsInterruptAvailable(snapshot.IsPending);
             pendingChanged = this.isInterruptPending != snapshot.IsPending;
             errorChanged = this.lastOperationError != error;
             availabilityChanged = this.isInterruptEnabled != enabled;
@@ -385,12 +384,7 @@ public sealed class RunningAgentRowViewModel : ViewModelBase, IDisposable
 
     private void UpdateCommandAvailability()
     {
-        this.IsInterruptEnabled =
-            !this.IsInterruptPending
-            && !this.IsTerminationPending
-            && this.IsThinking
-            && this.isConnected
-            && !this.isTerminal;
+        this.IsInterruptEnabled = this.IsInterruptAvailable(this.IsInterruptPending);
         this.IsTerminateEnabled =
             !this.IsTerminationPending && this.isConnected && !this.isTerminal;
         this.IsBackgroundOptionEnabled =
@@ -401,6 +395,9 @@ public sealed class RunningAgentRowViewModel : ViewModelBase, IDisposable
             && this.isConnected
             && !this.isTerminal;
     }
+
+    private bool IsInterruptAvailable(bool pending) =>
+        !pending && !this.IsTerminationPending && this.IsThinking && this.isConnected && !this.isTerminal;
 
     /// <summary>Navigates to the agent tab or opens a new one when clicked.</summary>
     public ICommand ActivateCommand { get; }

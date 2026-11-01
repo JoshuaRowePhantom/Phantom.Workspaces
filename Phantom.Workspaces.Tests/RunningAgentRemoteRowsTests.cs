@@ -327,6 +327,14 @@ public sealed class RunningAgentRemoteRowsTests
             await terminate.LastExecutionTask!;
             Assert.Empty(brain.Rows);
         }
+        else if (condition is 2 or 3)
+        {
+            entry.SetIsInterruptible(true);
+            entry.SetIsConnected(true);
+            Assert.True(row.IsInterruptEnabled);
+            Assert.True(command.CanExecute(null));
+            Assert.Equal(error, row.LastOperationError);
+        }
     }
 
     [Theory]
