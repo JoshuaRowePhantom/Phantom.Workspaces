@@ -142,6 +142,50 @@ public sealed class AuthorizationRequestRowsViewModelTests
         Assert.Equal(count, prompts);
     }
 
+    [Fact]
+    public async Task ActionableCount_MixedUniqueRows_RemainsIndependentOfBootstrapFilterAndRevisions()
+    {
+        var states = new[]
+        {
+            UserAuthorizationState.Pending, UserAuthorizationState.Failed, UserAuthorizationState.RenewalNeeded,
+            UserAuthorizationState.Performing, UserAuthorizationState.Completed, UserAuthorizationState.Denied,
+            UserAuthorizationState.Cancelled, UserAuthorizationState.Pending,
+        };
+        var snapshots = states.Select((state, index) => Snapshot() with
+        {
+            Identifier = new() { Value = Guid.NewGuid() },
+            State = state,
+            CanAct = index != 7,
+            IsBootstrapBlocking = index != 2,
+        }).ToArray();
+        var registry = new Registry { Snapshot = snapshots };
+        using var rows = new AuthorizationRequestRowsViewModel { Dispatch = action => action(), Registry = registry };
+        Assert.Equal(7, rows.Rows.Count);
+        Assert.Equal(3, rows.ActionableCount);
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        registry.ExecuteAction = _ => completion.Task;
+        var submitting = rows.Rows[0].ApplyCommand.ExecuteAsync(null);
+        Assert.Equal(2, rows.ActionableCount);
+        completion.SetException(new UserAuthorizationActionRejectedException(UserAuthorizationActionRejection.StaleRevision));
+        await submitting;
+        Assert.Equal(3, rows.ActionableCount);
+        registry.Snapshot = snapshots.Select(snapshot => snapshot with { Revision = 2 }).ToArray();
+        registry.Notify();
+        registry.Notify();
+        Assert.Equal(3, rows.ActionableCount);
+        rows.SetPresentationMode(AuthorizationRowsPresentationMode.Runtime);
+        Assert.Equal(8, rows.Rows.Count);
+        Assert.Equal(3, rows.ActionableCount);
+        var removed = rows.Rows[1];
+        registry.Snapshot = registry.Snapshot.Where(snapshot => snapshot.Identifier != removed.Identifier).ToArray();
+        registry.Notify();
+        Assert.False(removed.CanAct);
+        Assert.Equal(2, rows.ActionableCount);
+        rows.SetPresentationMode(AuthorizationRowsPresentationMode.Bootstrap);
+        Assert.Equal(1, rows.Rows.Count(row => row.CanAct));
+        Assert.Equal(2, rows.ActionableCount);
+    }
+
     [Theory]
     [InlineData(UserAuthorizationState.Failed)]
     [InlineData(UserAuthorizationState.RenewalNeeded)]
