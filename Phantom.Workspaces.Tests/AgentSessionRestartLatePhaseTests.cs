@@ -38,6 +38,11 @@ public sealed partial class DataAccessAgentSessionRuntimeHostFactoryTests
         try
         {
             await entered.Task.WaitAsync(TestContext.Current.CancellationToken);
+            // Normal cleanup has two outer waits and two exact-termination deadlines:
+            // explicit table cleanup and wrapper cleanup after ownership quiescence.
+            // Authority-refresh failure retires the wrapper without exact termination.
+            await Assert.IsType<RestartTestTimeProvider>(environment.Time).WaitForPendingTimersAsync(
+                TimeSpan.FromSeconds(15), failAuthorityRefresh ? 2 : 4);
             environment.Time.Advance(TimeSpan.FromSeconds(15));
             Assert.NotNull(await Record.ExceptionAsync(() => restarting.WaitAsync(TestContext.Current.CancellationToken)));
             environment.BeforeQueryAsync = null;

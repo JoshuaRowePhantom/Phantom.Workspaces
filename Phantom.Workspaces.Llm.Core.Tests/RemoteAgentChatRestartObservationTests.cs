@@ -18,7 +18,7 @@ public sealed partial class RemoteAgentChatTests
     public async Task ReconnectAfterLoss_ObservationUnavailable_PreservesOrdinaryReconnectWithoutBypassingAuthority(
         string observation, bool reconnect)
     {
-        var time = new FakeTimeProvider();
+        var time = new ReconnectObservationTimeProvider();
         var transport = new ReconnectObservationTransport(observation);
         var client = new RemoteAgentSessionClient(transport, time);
         await transport.Initial.Incoming.Writer.WriteAsync(Frame(1, new SessionSnapshotEvent
@@ -44,9 +44,10 @@ public sealed partial class RemoteAgentChatTests
         }));
         transport.Initial.Incoming.Writer.TryComplete();
         await disconnected.Task;
-        time.Advance(TimeSpan.FromMilliseconds(250));
         if (reconnect)
         {
+            await time.ReconnectScheduled.Task;
+            time.Advance(TimeSpan.FromMilliseconds(250));
             await reconnected.Task;
             Assert.True(chat.IsConnected);
             Assert.False(chat.IsTerminal);
@@ -54,10 +55,30 @@ public sealed partial class RemoteAgentChatTests
         }
         else
         {
+            // Disconnection is raised before observation/rejection finishes. Await that
+            // actual operation, not just the earlier transport-loss notification.
+            var reconnecting = (Task)typeof(RemoteAgentChat).GetField("reconnectAfterLoss",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(chat)!;
+            await reconnecting;
+            Assert.False(time.ReconnectScheduled.Task.IsCompleted);
             Assert.Equal(1, transport.Attachments);
         }
         Assert.Equal(1, transport.Observations);
         Assert.Null(client.RestartCommandState.Pending);
+    }
+
+    private sealed class ReconnectObservationTimeProvider : FakeTimeProvider
+    {
+        internal TaskCompletionSource ReconnectScheduled { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = base.CreateTimer(callback, state, dueTime, period);
+            if (dueTime == TimeSpan.FromMilliseconds(250))
+                this.ReconnectScheduled.TrySetResult();
+            return timer;
+        }
     }
 
     private sealed class ReconnectObservationTransport(string observation) : ITransport

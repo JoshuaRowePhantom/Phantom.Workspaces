@@ -27,6 +27,8 @@ public sealed partial class DataAccessAgentSessionRuntimeHostFactoryTests
         var restarting = viewer.RestartRuntimeAsync!(request, TestContext.Current.CancellationToken);
         await channel.Blocked.Task.WaitAsync(TestContext.Current.CancellationToken);
         Assert.False(restarting.IsCompleted);
+        await Assert.IsType<RestartTestTimeProvider>(environment.Time)
+            .WaitForPendingTimersAsync(TimeSpan.FromSeconds(5));
         environment.Time.Advance(TimeSpan.FromSeconds(5));
         Assert.Equal(AgentSessionOwnerRestartState.Blocked,
             (await restarting.WaitAsync(TestContext.Current.CancellationToken)).State);
@@ -117,6 +119,8 @@ public sealed partial class DataAccessAgentSessionRuntimeHostFactoryTests
         {
             await disposing.Task.WaitAsync(TestContext.Current.CancellationToken);
             if (disconnectCaller) caller.Cancel();
+            await Assert.IsType<RestartTestTimeProvider>(environment.Time)
+                .WaitForPendingTimersAsync(TimeSpan.FromSeconds(15), 4);
             environment.Time.Advance(TimeSpan.FromSeconds(15));
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => restarting);
             await blocked.Task.WaitAsync(TestContext.Current.CancellationToken);

@@ -492,6 +492,8 @@ public sealed partial class DataAccessAgentSessionRuntimeHostFactoryTests
         Assert.Empty(environment.Table.RunningSessions);
         Assert.False(restart.IsCompleted);
 
+        await Assert.IsType<RestartTestTimeProvider>(environment.Time)
+            .WaitForPendingTimersAsync(TimeSpan.FromSeconds(5));
         environment.Time.Advance(TimeSpan.FromSeconds(5));
         var result = await restart.WaitAsync(TestContext.Current.CancellationToken);
 

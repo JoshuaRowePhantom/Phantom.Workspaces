@@ -581,7 +581,7 @@ public sealed partial class DataAccessAgentSessionRuntimeHostFactoryTests
         private readonly object gate = new();
         private QueryEntitySnapshot current = Entity();
         private int revision;
-        internal FakeTimeProvider Time { get; } = new(DateTimeOffset.Parse("2026-09-09T00:00:00Z"));
+        internal FakeTimeProvider Time { get; } = new RestartTestTimeProvider();
         internal Mock<IDataAccessLayer> Layer { get; } = new();
         internal RunningAgentChatTable Table { get; }
         internal RemoteAgentSessionRuntimeRegistry Registry { get; }
