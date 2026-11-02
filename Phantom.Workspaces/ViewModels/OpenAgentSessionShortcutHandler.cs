@@ -1069,6 +1069,12 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
     public AgentViewModel ComposeSessionAgentViewModel(ComposeSessionAgentViewModelOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
+        options.Tab.ComposeRuntimeReplacement = replacement =>
+            Task.Factory.StartNew(
+                () => this.ComposeSessionAgentViewModel(options with { AgentChat = replacement }),
+                CancellationToken.None,
+                TaskCreationOptions.DenyChildAttach,
+                options.ForegroundScheduler);
         var display = this.runningAgentChatTable.RunningSessions.FirstOrDefault(
             session => session.SessionId.Value == options.AgentChat.Information.AgentSessionId);
         if (display is not null)

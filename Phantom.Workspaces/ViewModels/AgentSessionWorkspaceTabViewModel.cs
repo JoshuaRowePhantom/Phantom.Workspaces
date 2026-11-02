@@ -162,6 +162,8 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
         this.leaseDisposables.Add(value);
     }
 
+    internal Func<IAgentChat, Task<AgentViewModel>>? ComposeRuntimeReplacement { get; set; }
+
     private async Task ReattachRuntimeAsync(RunningAgentChatLease replacement)
     {
         await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(async () =>
@@ -173,7 +175,9 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
             }
             var original = this.agent;
             var originalLease = this.lease;
-            var view = original.CreateRuntimeReplacement(replacement.AgentChat);
+            var view = this.ComposeRuntimeReplacement is { } compose
+                ? await compose(replacement.AgentChat)
+                : original.CreateRuntimeReplacement(replacement.AgentChat);
             original.PropertyChanged -= this.OnAgentPropertyChanged;
             original.AltKeyStateChanged -= this.OnAgentAltKeyStateChanged;
             original.GoToTabAtIndexRequested -= this.OnAgentGoToTabAtIndexRequested;
