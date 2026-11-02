@@ -181,6 +181,7 @@ internal sealed class RemoteAgentSessionRuntimeRegistry :
     private void OnTerminated(object? sender, EventArgs args)
     {
         if (sender is not RemoteAgentSessionLease lease) return;
+        if (lease.IsRestartRetirement) return;
         lock (this.gate)
         {
             var key = new RuntimeKey(lease.SessionId, lease.OwnershipGeneration);

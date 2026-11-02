@@ -169,6 +169,8 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory :
             runtime.HasDurableRestartAuthority = true;
             runtime.Terminated += (_, _) =>
             {
+                if (runtime.IsRestartRetirement)
+                    return;
                 if (this.hostedRuntimes.TryGetValue(intent.AgentSessionId, out var current)
                     && ReferenceEquals(current.Runtime, runtime))
                     this.hostedRuntimes.TryRemove(
@@ -370,6 +372,9 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory :
             && result.EntityResults.Single().ConcurrencyMatchState != ConcurrencyMatchState.NotMatched;
     }
 
+    private sealed class AgentSessionConcurrentUpdateException()
+        : InvalidOperationException("The persisted agent session changed concurrently.");
+
     private sealed class PersistedRuntimeState
     {
         private readonly IDataAccessLayer dataAccessLayer;
@@ -433,6 +438,8 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory :
                 this.entity = query.Entity;
                 this.data = refreshed;
                 this.authoritativeTime = query.GetRequiredAuthoritativeTime();
+                if (this.Epoch != default)
+                    this.Expiry = TryReadLeaseExpiry(refreshed, out var expiry) ? expiry : default;
                 return query;
             }
             finally { this.gate.Release(); }
@@ -598,7 +605,7 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory :
             IReadOnlyDictionary<string, object?> updates, string comment, CancellationToken ct)
         {
             if (!await this.TryReplaceAsync(updates, comment, ct).ConfigureAwait(false))
-                throw new InvalidOperationException("The persisted agent session changed concurrently.");
+                throw new AgentSessionConcurrentUpdateException();
         }
 
         private async ValueTask<bool> TryReplaceAsync(
@@ -623,9 +630,10 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory :
                     ],
                 }, ct).ConfigureAwait(false);
                 var changed = result.EntityResults.SingleOrDefault();
-                if (changed is null || changed.Errors.Count != 0
-                    || changed.ConcurrencyMatchState == ConcurrencyMatchState.NotMatched)
+                if (changed is null || changed.ConcurrencyMatchState == ConcurrencyMatchState.NotMatched)
                     return false;
+                if (changed.Errors.Count != 0)
+                    throw new InvalidOperationException("The persisted agent session update was rejected.");
                 this.data = replacement;
                 this.entity = changed.CurrentEntity ?? this.entity with
                 {

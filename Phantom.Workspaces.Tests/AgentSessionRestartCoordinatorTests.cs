@@ -122,6 +122,64 @@ public sealed partial class DataAccessAgentSessionRuntimeHostFactoryTests
     }
 
     [Fact]
+    public async Task RestartSession_InitialJournalFailureOnce_DoesNotPoisonUnchangedRuntime()
+    {
+        await using var environment = new RestartEnvironment();
+        await using var viewer = await environment.AcquireAsync();
+        var original = Assert.IsType<AgentChat>(viewer.AgentChat);
+        var request = new AgentSessionOwnerRestartRequest
+        {
+            CommandId = Guid.NewGuid(),
+            ExpectedRuntime = viewer.RestartIdentity!,
+        };
+        var writes = 0;
+        environment.OnUpdate = update =>
+        {
+            if (update.UpdateMetadata.Comment.Text == "Record agent session restart operation"
+                && ++writes == 1)
+                throw new IOException("One failed write before persistence.");
+        };
+
+        await Assert.ThrowsAsync<IOException>(() =>
+            viewer.RestartRuntimeAsync!(request, TestContext.Current.CancellationToken));
+
+        Assert.False(original.IsTerminal);
+        Assert.Null(await viewer.RestartStatusAsync!(request, TestContext.Current.CancellationToken));
+        Assert.Equal(1, writes);
+        Assert.Equal(AgentSessionOwnerRestartState.Succeeded,
+            (await viewer.RestartRuntimeAsync!(request, TestContext.Current.CancellationToken)).State);
+    }
+
+    [Fact]
+    public async Task RestartSession_CancelledInitialJournalWrite_DoesNotInstallBlockedOperation()
+    {
+        await using var environment = new RestartEnvironment();
+        await using var viewer = await environment.AcquireAsync();
+        using var cancellation = new CancellationTokenSource();
+        var request = new AgentSessionOwnerRestartRequest
+        {
+            CommandId = Guid.NewGuid(),
+            ExpectedRuntime = viewer.RestartIdentity!,
+        };
+        environment.OnUpdate = update =>
+        {
+            if (update.UpdateMetadata.Comment.Text != "Record agent session restart operation")
+                return;
+            cancellation.Cancel();
+            throw new OperationCanceledException(cancellation.Token);
+        };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            viewer.RestartRuntimeAsync!(request, cancellation.Token));
+
+        Assert.False(Assert.IsType<AgentChat>(viewer.AgentChat).IsTerminal);
+        environment.OnUpdate = null;
+        Assert.Null(await viewer.RestartStatusAsync!(request, TestContext.Current.CancellationToken));
+        Assert.Equal(AgentSessionOwnerRestartState.Succeeded,
+            (await viewer.RestartRuntimeAsync!(request, TestContext.Current.CancellationToken)).State);
+    }
+
+    [Fact]
     public async Task RestartSession_RealOwnerFactory_CheckpointPersistenceFailureLeavesOriginalUsable()
     {
         await using var environment = new RestartEnvironment();
@@ -534,14 +592,32 @@ public sealed partial class DataAccessAgentSessionRuntimeHostFactoryTests
         private readonly LocalTransportFactory localTransportFactory;
         internal Action<UpdateRequest>? OnUpdate { get; set; }
         internal Action<UpdateRequest>? OnUpdated { get; set; }
+        internal Action<RemoteAgentSessionLease>? BeforePublication { get; set; }
         internal bool FailStartup { get; set; }
+        internal bool FailNextQuery { get; set; }
         internal bool FailFinalPersistence { get; set; }
         internal InMemoryAgentPersistenceStore Store { get; }
         internal QueryEntitySnapshot Persisted => this.current;
 
+        internal void ChangeAuthority(IReadOnlyDictionary<string, JsonElement> updates)
+        {
+            lock (this.gate)
+            {
+                var data = this.current.Data!.Value.EnumerateObject()
+                    .ToDictionary(property => property.Name, property => property.Value.Clone());
+                foreach (var update in updates)
+                    data[update.Key] = update.Value;
+                this.current = this.current with
+                {
+                    Data = JsonSerializer.SerializeToElement(data),
+                    ConcurrencyTag = new ConcurrencyTag($"external-{++this.revision}"),
+                };
+            }
+        }
+
         internal RestartEnvironment(
             InMemoryAgentPersistenceStore? store = null, QueryEntitySnapshot? persisted = null, bool dropHandoff = false,
-            TaskScheduler? foregroundScheduler = null)
+            TaskScheduler? foregroundScheduler = null, bool dropRestartResult = false)
         {
             this.current = persisted ?? Entity();
             this.Store = store ?? new InMemoryAgentPersistenceStore();
@@ -549,6 +625,12 @@ public sealed partial class DataAccessAgentSessionRuntimeHostFactoryTests
                 .ReturnsAsync(() =>
                 {
                     lock (this.gate)
+                    {
+                        if (this.FailNextQuery)
+                        {
+                            this.FailNextQuery = false;
+                            throw new IOException("Authoritative query unavailable once.");
+                        }
                         return new QueryResult
                         {
                             AuthoritativeTimestamp = new Timestamp(this.Time.GetUtcNow(), "query"),
@@ -570,6 +652,7 @@ public sealed partial class DataAccessAgentSessionRuntimeHostFactoryTests
                                 ],
                             }],
                         };
+                    }
                 });
             this.Layer.Setup(layer => layer.UpdateAsync(It.IsAny<UpdateRequest>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync((UpdateRequest request, CancellationToken token) =>
@@ -615,7 +698,9 @@ public sealed partial class DataAccessAgentSessionRuntimeHostFactoryTests
             var runtimeFactory = new DataAccessAgentSessionRuntimeHostFactory(
                 this.Layer.Object, this.Table, new AgentSessionRuntimeContextFactory(null), this.Time, services);
             this.Host = new RemoteAgentSessionHost(
-                new AgentSessionAttachAuthorizer(this.Layer.Object, this.Registry), this.Registry, runtimeFactory);
+                new AgentSessionAttachAuthorizer(this.Layer.Object, this.Registry),
+                new RestartPublicationRegistry(this.Registry, replacement => this.BeforePublication?.Invoke(replacement)),
+                runtimeFactory);
             var peer = new TransportPeerIdentity
             {
                 AuthenticationScheme = "local-workspace-session",
@@ -625,7 +710,9 @@ public sealed partial class DataAccessAgentSessionRuntimeHostFactoryTests
             };
             this.Table.ConfigureOwnerRuntime(this.Host, peer);
             var listener = new AgentSessionTransportListener(this.Host, this.peerIdentities);
-            this.listeners.Register(dropHandoff
+            this.listeners.Register(dropRestartResult
+                ? new RestartResultDroppingListener(listener, this.peerIdentities)
+                : dropHandoff
                 ? new RestartHandoffDroppingListener(listener, this.peerIdentities)
                 : listener);
             this.localTransportFactory = new LocalTransportFactory(
@@ -703,6 +790,45 @@ public sealed partial class DataAccessAgentSessionRuntimeHostFactoryTests
             public ChannelReader<JsonElement> Reader => inner.Reader;
             public ChannelWriter<JsonElement> Writer { get; } = new HandoffDroppingWriter(inner.Writer);
             public ValueTask DisposeAsync() => inner.DisposeAsync();
+        }
+
+        private sealed class RestartResultDroppingListener(
+            ITransportListener inner, TransportPeerIdentityProvider identities) : ITransportListener
+        {
+            private int dropped;
+            public Task<IAsyncDisposable?> OnChannelOpenAsync(JsonElement request, IMessageChannel channel, CancellationToken ct = default)
+            {
+                if (request.GetProperty("type").GetString() == "restart-agent-session"
+                    && Interlocked.Exchange(ref this.dropped, 1) == 0)
+                {
+                    var filtered = new RestartResultDroppingChannel(channel);
+                    identities.SetIdentity(filtered, identities.GetRequiredIdentity(channel));
+                    channel = filtered;
+                }
+                return inner.OnChannelOpenAsync(request, channel, ct);
+            }
+            public Task<IAsyncDisposable?> OnStreamOpenAsync(JsonElement request, Stream stream, CancellationToken ct = default)
+                => inner.OnStreamOpenAsync(request, stream, ct);
+            public ValueTask DisposeAsync() => inner.DisposeAsync();
+        }
+
+        private sealed class RestartResultDroppingChannel(IMessageChannel inner) : IMessageChannel
+        {
+            public ChannelReader<JsonElement> Reader => inner.Reader;
+            public ChannelWriter<JsonElement> Writer { get; } = new RestartResultDroppingWriter(inner.Writer);
+            public ValueTask DisposeAsync() => inner.DisposeAsync();
+        }
+
+        private sealed class RestartResultDroppingWriter(ChannelWriter<JsonElement> inner) : ChannelWriter<JsonElement>
+        {
+            public override bool TryComplete(Exception? error = null) => inner.TryComplete(error);
+            public override bool TryWrite(JsonElement item)
+            {
+                inner.TryComplete();
+                return true;
+            }
+            public override ValueTask<bool> WaitToWriteAsync(CancellationToken cancellationToken = default)
+                => ValueTask.FromResult(true);
         }
 
         private sealed class HandoffDroppingWriter(ChannelWriter<JsonElement> inner) : ChannelWriter<JsonElement>

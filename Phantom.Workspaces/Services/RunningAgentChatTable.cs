@@ -317,6 +317,11 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
             lease.AgentChat,
             onDispose: async () =>
             {
+                if (request.OwnerRuntimeAcquisition && lease.AgentChat is AgentChat { IsTerminal: true })
+                {
+                    await lease.DisposeAsync().ConfigureAwait(false);
+                    return;
+                }
                 await localGate.WaitAsync().ConfigureAwait(false);
                 try
                 {
@@ -359,7 +364,7 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         {
             viewer.RestartIdentity = this.ownerRuntimeHost?.GetIdentity(lease.AgentChat);
             viewer.RestartIdentityProvider = () => this.ownerRuntimeHost?.GetIdentity(lease.AgentChat);
-            if (viewer.RestartIdentity is not null && this.ownerRuntimeHost is { } runtimeHost)
+            if (this.ownerRuntimeHost is { } runtimeHost)
             {
                 viewer.RestartRuntimeAsync = (restart, token) =>
                     runtimeHost.RestartAsync(this.localPeer!, restart, token);
@@ -1416,6 +1421,7 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
 
         private void OnRuntimeStateChanged(object? sender, EventArgs args)
         {
+            TabCommands.AgentSessionTabCommandProvider.Instance.NotifyCommandsChanged();
             void Publish()
             {
                 this.Row?.SetIsConnected(this.Chat.IsConnected);

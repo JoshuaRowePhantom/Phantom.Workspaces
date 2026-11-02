@@ -39,7 +39,7 @@
     },
     "runtime-state": {
       "type": "string",
-      "enum": ["running", "stopped", "interrupted"],
+      "enum": ["running", "stopped", "interrupted", "restarting"],
       "description": "Persisted state of the owner runtime."
     },
     "runtime-epoch": {
@@ -56,6 +56,12 @@
       "type": "string",
       "format": "uuid",
       "description": "Epoch most recently stopped or recovered as interrupted."
+    },
+    "restart-operations": {
+      "type": "object",
+      "description": "Owner-authorized restart journal keyed by command UUID, including runtime identity, durable pending-input/effective-configuration checkpoint, viewer barrier and reconciliation outcome.",
+      "propertyNames": { "format": "uuid" },
+      "additionalProperties": { "type": "object" }
     },
     "trust-profile-reference": {
       "type": "string",
