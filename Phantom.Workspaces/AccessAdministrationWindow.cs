@@ -63,6 +63,10 @@ public sealed class AccessAdministrationWindow : Window, IAsyncDisposable
             },
         };
         this.presentation = new Grid { ColumnDefinitions = new ColumnDefinitions("0,*"), Children = { this.pages } };
+        this.pages.SelectionChanged += (_, arguments) =>
+        {
+            if (ReferenceEquals(arguments.Source, this.pages)) { this.RestoreRequestsTab(); }
+        };
         Grid.SetColumn(this.pages, 1);
         this.Content = this.presentation;
         this.SelectPage(CredentialAccessPage.SavedApprovals);
@@ -73,15 +77,18 @@ public sealed class AccessAdministrationWindow : Window, IAsyncDisposable
         if (!Enum.IsDefined(page)) { throw new ArgumentOutOfRangeException(nameof(page)); }
         if (!this.IsDisposed)
         {
-            if (this.RequestsAlongsideManagement)
-            {
-                this.presentation.Children.Remove(this.requests);
-                this.requests.Margin = default;
-                this.requestsPage.Content = this.requests;
-                this.presentation.ColumnDefinitions[0].Width = new GridLength(0);
-            }
+            this.RestoreRequestsTab();
             this.pages.SelectedIndex = (int)page;
         }
+    }
+
+    private void RestoreRequestsTab()
+    {
+        if (!this.RequestsAlongsideManagement) { return; }
+        this.presentation.Children.Remove(this.requests);
+        this.requests.Margin = default;
+        this.requestsPage.Content = this.requests;
+        this.presentation.ColumnDefinitions[0].Width = new GridLength(0);
     }
 
     internal void PresentRequestsWithoutActivation()

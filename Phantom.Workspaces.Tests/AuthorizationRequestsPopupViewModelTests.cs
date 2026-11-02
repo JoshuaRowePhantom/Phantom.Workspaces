@@ -155,7 +155,7 @@ public sealed class AuthorizationRequestsPopupViewModelTests
         }
     }
 
-    private static void RaisePlatformCallback(
+    internal static void RaisePlatformCallback(
         Window window,
         string callbackName)
     {

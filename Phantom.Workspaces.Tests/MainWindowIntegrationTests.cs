@@ -541,8 +541,12 @@ public sealed class MainWindowIntegrationTests
             var requests = Assert.Single(host.GetVisualDescendants().OfType<Controls.AuthorizationRequestRowsControl>());
             Assert.True(requests.IsEffectivelyVisible);
             Assert.Same(access.AuthorizationRows, requests.DataContext);
-            host.SelectPage(CredentialAccessPage.Requests);
+            var requestsHeader = (TabItem)host.Pages.Items[0]!;
+            var point = requestsHeader.TranslatePoint(new Point(12, 12), host)!.Value;
+            host.MouseDown(point, MouseButton.Left);
+            host.MouseUp(point, MouseButton.Left);
             host.UpdateLayout();
+            Assert.Equal(CredentialAccessPage.Requests, host.SelectedPage);
             Assert.False(host.RequestsAlongsideManagement);
             Assert.Same(requests, Assert.Single(host.GetVisualDescendants().OfType<Controls.AuthorizationRequestRowsControl>()));
         }
@@ -636,6 +640,284 @@ public sealed class MainWindowIntegrationTests
             await second.DisposeAccessAdministrationAsync();
             owner.Close();
             second.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task CredentialAccess_RelevantOwnerAndHiddenArrival_RoutesBrokerRequestAndReplaysOnlyUndeliveredPrompts()
+    {
+        await using var access = Services.Access.AccessHostServices.Create(new Services.Access.AccessHostOptions
+        {
+            PlatformSecretStore = new NullPlatformSecretStore(),
+            Dispatch = action => action(),
+            ReleaseMemoryFilePath = Path.Combine(Environment.CurrentDirectory, ".nonexistent-access-admin", "owners.json"),
+        });
+        await using var firstModel = CreateTestMainWindowViewModel();
+        await using var secondModel = CreateTestMainWindowViewModel();
+        await using var firstPopup = new AuthorizationRequestsPopupViewModel { Rows = access.AuthorizationRows };
+        await using var secondPopup = new AuthorizationRequestsPopupViewModel { Rows = access.AuthorizationRows };
+        var first = new MainWindow(firstModel);
+        var second = new MainWindow(secondModel);
+        var secondIdentity = new Llm.Interfaces.Access.AccessPresentationOwnerIdentifier { Value = Guid.NewGuid() };
+        first.AttachAccessHost(access, firstPopup);
+        second.AttachAccessHost(access, secondPopup, secondIdentity);
+        first.Show();
+        second.Show();
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        try
+        {
+            var request = Access.StoredSecretAccessExecutorTests.Request() with { PresentationOwner = secondIdentity };
+            var pending = access.Broker.AcquireAsync(request, cancellation.Token);
+            await second.AccessAdministrationReady;
+            var host = Assert.IsType<AccessAdministrationWindow>(second.LastAccessAdministrationWindow);
+            Assert.True(host.IsVisible);
+            Assert.False(host.ShowActivated);
+            Assert.Null(first.LastAccessAdministrationWindow);
+            Assert.Equal(secondIdentity, Assert.Single(access.AuthorizationRegistry.GetSnapshot()).PresentationOwner);
+            host.Close();
+            await second.DisposeClosedAccessAdministrationAsync();
+            second.Hide();
+            var registry = Assert.IsType<Services.Authorization.UserAuthorizationRegistry>(access.AuthorizationRegistry);
+            var snapshot = Assert.Single(registry.GetSnapshot());
+            Assert.True(registry.UpdateSources(snapshot.Identifier, snapshot.Revision, snapshot.SourceOptions));
+            second.Show();
+            await second.AccessAdministrationReady;
+            Assert.Null(second.LastAccessAdministrationWindow);
+            second.Hide();
+            var next = access.Broker.AcquireAsync(request, cancellation.Token);
+            Assert.Null(first.LastAccessAdministrationWindow);
+            Assert.Null(second.LastAccessAdministrationWindow);
+            second.Show();
+            await second.AccessAdministrationReady;
+            var recovered = Assert.IsType<AccessAdministrationWindow>(second.LastAccessAdministrationWindow);
+            Assert.True(recovered.IsVisible);
+            Assert.False(recovered.ShowActivated);
+            Assert.Equal(2, recovered.RequestRows.Rows.Count);
+            Assert.Null(first.LastAccessAdministrationWindow);
+            second.Hide();
+            recovered.Hide();
+            var third = access.Broker.AcquireAsync(request, cancellation.Token);
+            Assert.False(recovered.IsVisible);
+            second.Show();
+            await second.AccessAdministrationReady;
+            Assert.Same(recovered, second.LastAccessAdministrationWindow);
+            Assert.True(recovered.IsVisible);
+            Assert.False(recovered.ShowActivated);
+            Assert.Equal(3, recovered.RequestRows.Rows.Count);
+            recovered.Close();
+            await second.DisposeClosedAccessAdministrationAsync();
+            second.Hide();
+            first.Hide();
+            // An unscoped process request is available to a live shell, not held by a hidden first attachment.
+            registry.Add(AuthorizationRequestRowsViewModelTests.Snapshot());
+            second.Show();
+            await second.AccessAdministrationReady;
+            Assert.True(second.LastAccessAdministrationWindow!.IsVisible);
+            Assert.Null(first.LastAccessAdministrationWindow);
+            cancellation.Cancel();
+            await Task.WhenAll(pending, next, third);
+        }
+        finally
+        {
+            cancellation.Cancel();
+            await first.DisposeAccessAdministrationAsync();
+            await second.DisposeAccessAdministrationAsync();
+            first.Close();
+            second.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task CredentialAccess_HiddenDefaultOwner_LiveScopePeerPresentsWithoutReplayingOnRestore()
+    {
+        await using var access = Services.Access.AccessHostServices.Create(new Services.Access.AccessHostOptions
+        {
+            PlatformSecretStore = new NullPlatformSecretStore(),
+            Dispatch = action => action(),
+            ReleaseMemoryFilePath = Path.Combine(Environment.CurrentDirectory, ".nonexistent-access-admin", "live-owner.json"),
+        });
+        await using var firstModel = CreateTestMainWindowViewModel();
+        await using var secondModel = CreateTestMainWindowViewModel();
+        await using var firstPopup = new AuthorizationRequestsPopupViewModel { Rows = access.AuthorizationRows };
+        await using var secondPopup = new AuthorizationRequestsPopupViewModel { Rows = access.AuthorizationRows };
+        var first = new MainWindow(firstModel);
+        var second = new MainWindow(secondModel);
+        first.AttachAccessHost(access, firstPopup);
+        second.AttachAccessHost(access, secondPopup);
+        first.Show();
+        second.Show();
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        try
+        {
+            first.Hide();
+            var pending = access.Broker.AcquireAsync(Access.StoredSecretAccessExecutorTests.Request(), cancellation.Token);
+            await second.AccessAdministrationReady;
+            await access.AuthorizationRows.PresentationReady;
+            var host = Assert.IsType<AccessAdministrationWindow>(second.LastAccessAdministrationWindow);
+            Assert.True(host.IsVisible);
+            Assert.False(host.ShowActivated);
+            Assert.Equal(access.PresentationOwner, Assert.Single(access.AuthorizationRegistry.GetSnapshot()).PresentationOwner);
+            Assert.Null(first.LastAccessAdministrationWindow);
+            host.Close();
+            await second.DisposeClosedAccessAdministrationAsync();
+            first.Show();
+            await first.AccessAdministrationReady;
+            Assert.Null(first.LastAccessAdministrationWindow);
+            Assert.Null(second.LastAccessAdministrationWindow);
+            cancellation.Cancel();
+            await pending;
+        }
+        finally
+        {
+            cancellation.Cancel();
+            await first.DisposeAccessAdministrationAsync();
+            await second.DisposeAccessAdministrationAsync();
+            first.Close();
+            second.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task CredentialAccess_FailedNativeShow_RetriesPendingGenerationOnOwnerAvailability()
+    {
+        await using var access = Services.Access.AccessHostServices.Create(new Services.Access.AccessHostOptions
+        {
+            PlatformSecretStore = new NullPlatformSecretStore(),
+            Dispatch = action => action(),
+            ReleaseMemoryFilePath = Path.Combine(Environment.CurrentDirectory, ".nonexistent-access-admin", "show-recovery.json"),
+        });
+        await using var model = CreateTestMainWindowViewModel();
+        await using var popup = new AuthorizationRequestsPopupViewModel { Rows = access.AuthorizationRows };
+        var shows = 0;
+        var owner = new MainWindow(model)
+        {
+            AccessAdministrationWindowFactory = host =>
+            {
+                var window = new AccessAdministrationWindow(host);
+                window.Opened += (_, _) =>
+                {
+                    if (++shows == 1) { throw new InvalidOperationException("Native show did not complete."); }
+                };
+                return window;
+            },
+        };
+        owner.AttachAccessHost(access, popup);
+        owner.Show();
+        try
+        {
+            var registry = Assert.IsType<Services.Authorization.UserAuthorizationRegistry>(access.AuthorizationRegistry);
+            registry.Add(AuthorizationRequestRowsViewModelTests.Snapshot());
+            await owner.AccessAdministrationReady;
+            Assert.Equal(1, shows);
+            Assert.Null(owner.LastAccessAdministrationWindow);
+            Assert.Equal(1, access.AuthorizationRows.ActionableCount);
+            owner.Hide();
+            owner.Show();
+            await owner.AccessAdministrationReady;
+            Assert.Equal(2, shows);
+            var recovered = Assert.IsType<AccessAdministrationWindow>(owner.LastAccessAdministrationWindow);
+            Assert.True(recovered.IsVisible);
+            Assert.False(recovered.ShowActivated);
+            recovered.Close();
+            await owner.DisposeClosedAccessAdministrationAsync();
+            owner.Hide();
+            owner.Show();
+            await owner.AccessAdministrationReady;
+            Assert.Equal(2, shows);
+            Assert.Null(owner.LastAccessAdministrationWindow);
+        }
+        finally
+        {
+            await owner.DisposeAccessAdministrationAsync();
+            owner.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task CredentialAccess_ProductionProviderFlow_FreshArrivalRetainsExternalFocusRowsSelectionsAndScroll()
+    {
+        await using var access = Services.Access.AccessHostServices.Create(new Services.Access.AccessHostOptions
+        {
+            PlatformSecretStore = new NullPlatformSecretStore(),
+            Dispatch = action => action(),
+            ReleaseMemoryFilePath = Path.Combine(Environment.CurrentDirectory, ".nonexistent-access-admin", "provider-focus.json"),
+        });
+        await using var model = CreateTestMainWindowViewModel();
+        await using var popup = new AuthorizationRequestsPopupViewModel { Rows = access.AuthorizationRows };
+        var owner = new MainWindow(model);
+        owner.AttachAccessHost(access, popup);
+        owner.Show();
+        var externalInput = new TextBox { Text = "provider account", CaretIndex = 8, SelectionStart = 2, SelectionEnd = 8 };
+        var external = new Window { Content = externalInput };
+        try
+        {
+            var registry = Assert.IsType<Services.Authorization.UserAuthorizationRegistry>(access.AuthorizationRegistry);
+            foreach (var index in Enumerable.Range(0, 30))
+            {
+                registry.Add(Access.UserAuthorizationRegistryTests.Snapshot());
+            }
+            await owner.AccessAdministrationReady;
+            var host = Assert.IsType<AccessAdministrationWindow>(owner.LastAccessAdministrationWindow);
+            host.UpdateLayout();
+            var control = Assert.Single(host.GetVisualDescendants().OfType<Controls.AuthorizationRequestRowsControl>());
+            var row = access.AuthorizationRows.Rows[5];
+            row.IsDetailsExpanded = true;
+            var selectedSource = row.SelectedSource;
+            var selectedMemory = row.SelectedMemory;
+            var perform = control.GetVisualDescendants().OfType<Button>()
+                .Single(button => ReferenceEquals(button.DataContext, row) && Equals(button.Content, "Perform"));
+            perform.BringIntoView();
+            host.UpdateLayout();
+            var performPoint = perform.TranslatePoint(new Point(perform.Bounds.Width / 2, perform.Bounds.Height / 2), host)!.Value;
+            host.MouseDown(performPoint, MouseButton.Left);
+            host.MouseUp(performPoint, MouseButton.Left);
+            await Assert.IsAssignableFrom<Task>(row.ApplyCommand.ExecutionTask);
+            var decision = await registry.WaitForDecisionAsync(row.Identifier, TestContext.Current.CancellationToken);
+            Assert.Equal(Llm.Interfaces.Authorization.UserAuthorizationPrimaryActionKind.Perform, decision.PrimaryAction);
+            Assert.Equal(Llm.Interfaces.Authorization.UserAuthorizationState.Performing, row.State);
+            external.Show();
+            AuthorizationRequestsPopupViewModelTests.RaisePlatformCallback(owner, "Deactivated");
+            AuthorizationRequestsPopupViewModelTests.RaisePlatformCallback(host, "Deactivated");
+            AuthorizationRequestsPopupViewModelTests.RaisePlatformCallback(external, "Activated");
+            Assert.True(externalInput.Focus());
+            var activations = 0;
+            owner.Activated += (_, _) => activations++;
+            host.Activated += (_, _) => activations++;
+            var scroll = control.FindControl<ScrollViewer>("RowsScroller")!;
+            host.UpdateLayout();
+            scroll.Offset = new Vector(0, 180);
+            host.UpdateLayout();
+            var offset = scroll.Offset;
+            Assert.True(offset.Y > 0);
+            registry.Add(Access.UserAuthorizationRegistryTests.Snapshot());
+            await owner.AccessAdministrationReady;
+            host.UpdateLayout();
+            Assert.Same(host, owner.LastAccessAdministrationWindow);
+            Assert.Same(control, Assert.Single(host.GetVisualDescendants().OfType<Controls.AuthorizationRequestRowsControl>()));
+            Assert.Same(access.AuthorizationRows, control.DataContext);
+            Assert.Same(row, access.AuthorizationRows.Rows[5]);
+            Assert.Equal(offset, scroll.Offset);
+            Assert.Equal(selectedSource, row.SelectedSource);
+            Assert.Equal(selectedMemory, row.SelectedMemory);
+            Assert.True(row.IsDetailsExpanded);
+            Assert.True(host.IsVisible);
+            Assert.False(popup.IsOpen);
+            Assert.False(host.IsActive);
+            Assert.False(owner.IsActive);
+            Assert.True(external.IsActive);
+            Assert.True(externalInput.IsFocused);
+            Assert.Equal(2, externalInput.SelectionStart);
+            Assert.Equal(8, externalInput.SelectionEnd);
+            Assert.Equal(0, activations);
+            Assert.Single(registry.GetSnapshot(), snapshot => snapshot.State == Llm.Interfaces.Authorization.UserAuthorizationState.Performing);
+            Assert.Equal(30, access.AuthorizationRows.ActionableCount);
+            Assert.Equal(1, Assert.Single(registry.GetSnapshot(), snapshot => snapshot.Identifier == row.Identifier).PromptGeneration);
+        }
+        finally
+        {
+            external.Close();
+            await owner.DisposeAccessAdministrationAsync();
+            owner.Close();
         }
     }
 

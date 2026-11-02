@@ -2,12 +2,18 @@ namespace Phantom.Workspaces.Llm.Interfaces.Access;
 
 public enum AccessPresentationScope { Runtime, Bootstrap }
 
+public sealed record AccessPresentationOwnerIdentifier
+{
+    public required Guid Value { get; init; }
+}
+
 public abstract record AccessRequest<TResult>
     where TResult : IAccessResult
 {
     public required AccessRequestor Requestor { get; init; }
     public required CredentialUseDescriptor Use { get; init; }
     public required AccessPresentationScope PresentationScope { get; init; }
+    public AccessPresentationOwnerIdentifier? PresentationOwner { get; init; }
 }
 
 public abstract record CredentialAccessRequest<TResult> : AccessRequest<TResult>

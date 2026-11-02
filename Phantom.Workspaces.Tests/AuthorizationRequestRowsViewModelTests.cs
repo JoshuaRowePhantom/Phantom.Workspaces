@@ -93,7 +93,7 @@ public sealed class AuthorizationRequestRowsViewModelTests
         using var rows = new AuthorizationRequestRowsViewModel { Dispatch = callbacks.Add, Registry = registry };
         callbacks[0]();
         var prompts = 0;
-        rows.NewActionablePrompt += (_, _) => prompts++;
+        rows.NewActionablePrompt += (_, arguments) => { prompts++; arguments.Presentation = Task.FromResult(true); };
         rows.SetPresentationMode(AuthorizationRowsPresentationMode.Runtime);
         Assert.Equal(1, prompts);
         Assert.True(registry.UpdateSources(snapshot.Identifier, 1, snapshot.SourceOptions));
@@ -126,7 +126,7 @@ public sealed class AuthorizationRequestRowsViewModelTests
         var registry = new Registry { Snapshot = [Snapshot() with { State = state, CanAct = canAct }] };
         using var rows = new AuthorizationRequestRowsViewModel { Dispatch = action => action(), Registry = registry };
         var prompts = 0;
-        rows.NewActionablePrompt += (_, _) => prompts++;
+        rows.NewActionablePrompt += (_, arguments) => { prompts++; arguments.Presentation = Task.FromResult(true); };
         Assert.Equal(0, prompts);
         rows.SetPresentationMode(AuthorizationRowsPresentationMode.Runtime);
         registry.Notify();
@@ -140,6 +140,97 @@ public sealed class AuthorizationRequestRowsViewModelTests
         Assert.Equal(0, rows.ActionableCount);
         Assert.Empty(rows.Rows);
         Assert.Equal(count, prompts);
+    }
+
+    [Theory]
+    [InlineData(UserAuthorizationState.Failed)]
+    [InlineData(UserAuthorizationState.RenewalNeeded)]
+    public async Task PromptGeneration_RepeatedCompletionSourcesAndRetry_OnlyNewAttemptsPresent(
+        UserAuthorizationState completionState)
+    {
+        await using var registry = new UserAuthorizationRegistry();
+        var snapshot = Snapshot();
+        registry.Add(snapshot);
+        var callbacks = new List<Action>();
+        using var rows = new AuthorizationRequestRowsViewModel { Dispatch = callbacks.Add, Registry = registry };
+        callbacks[0]();
+        var prompts = 0;
+        rows.NewActionablePrompt += (_, arguments) => { prompts++; arguments.Presentation = Task.FromResult(true); };
+        rows.SetPresentationMode(AuthorizationRowsPresentationMode.Runtime);
+        Assert.Equal(1, Assert.Single(registry.GetSnapshot()).PromptGeneration);
+        Assert.Equal(1, prompts);
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            var before = Assert.Single(registry.GetSnapshot());
+            if (attempt == 0)
+            {
+                await registry.ActAsync(new ApplyUserAuthorizationAction
+                {
+                    RequestIdentifier = snapshot.Identifier, ExpectedRevision = before.Revision,
+                    Source = snapshot.SelectedSource, Memory = snapshot.SelectedMemory,
+                }, TestContext.Current.CancellationToken);
+            }
+            else
+            {
+                await registry.ActAsync(new RetryUserAuthorizationAction
+                {
+                    RequestIdentifier = snapshot.Identifier, ExpectedRevision = before.Revision,
+                }, TestContext.Current.CancellationToken);
+            }
+            var performing = Assert.Single(registry.GetSnapshot());
+            Assert.Equal(before.PromptGeneration, performing.PromptGeneration);
+            Assert.True(registry.Complete(snapshot.Identifier, performing.Revision, completionState));
+            var completed = Assert.Single(registry.GetSnapshot());
+            Assert.Equal(attempt + 2, completed.PromptGeneration);
+            callbacks[^1]();
+            callbacks[^2]();
+            Assert.Equal(attempt + 2, prompts);
+            Assert.True(registry.Complete(snapshot.Identifier, completed.Revision, completionState));
+            var repeated = Assert.Single(registry.GetSnapshot());
+            Assert.Equal(completed.PromptGeneration, repeated.PromptGeneration);
+            Assert.True(registry.UpdateSources(snapshot.Identifier, repeated.Revision, snapshot.SourceOptions));
+            callbacks[^1]();
+            callbacks[^2]();
+            rows.SetPresentationMode(AuthorizationRowsPresentationMode.Runtime);
+            Assert.Equal(completed.PromptGeneration, Assert.Single(registry.GetSnapshot()).PromptGeneration);
+            Assert.Equal(attempt + 2, prompts);
+        }
+    }
+
+    [Fact]
+    public async Task Presentation_InFlightRevisionsAndFailure_OnlySuccessfulDeliveryAcknowledgesGeneration()
+    {
+        var registry = new Registry { Snapshot = [Snapshot() with { PromptGeneration = 1 }] };
+        using var rows = new AuthorizationRequestRowsViewModel { Dispatch = action => action(), Registry = registry };
+        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var prompts = 0;
+        rows.NewActionablePrompt += (_, arguments) =>
+        {
+            prompts++;
+            arguments.Presentation = completion.Task;
+        };
+        rows.SetPresentationMode(AuthorizationRowsPresentationMode.Runtime);
+        registry.Snapshot = [registry.Snapshot[0] with { Revision = 2 }];
+        registry.Notify();
+        rows.PresentFreshPrompts();
+        Assert.Equal(1, prompts);
+        completion.SetResult(false);
+        await rows.PresentationReady;
+        completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        rows.PresentFreshPrompts();
+        Assert.Equal(2, prompts);
+        var failed = completion;
+        completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        rows.NotifyPresentationOwnerAvailabilityChanged();
+        failed.SetResult(false);
+        await rows.PresentationReady;
+        Assert.Equal(3, prompts);
+        completion.SetResult(true);
+        await rows.PresentationReady;
+        registry.Snapshot = [registry.Snapshot[0] with { Revision = 3 }];
+        registry.Notify();
+        rows.PresentFreshPrompts();
+        Assert.Equal(3, prompts);
     }
 
     [Fact]

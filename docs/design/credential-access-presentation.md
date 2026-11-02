@@ -44,13 +44,21 @@ without activation. The registry issues a monotonic prompt generation, independe
 of source-only revisions; accepted snapshots deduplicate these generations even
 when intermediate Performing snapshots are skipped. Dismissal acknowledges only
 presentation: source refresh, count decreases and projection changes do not reopen
-the unchanged prompt. A new request or renewal generation does. One attached
-runtime owner claims presentation for the shared process rows; Bootstrap does not
-open a competing runtime surface. Shutdown detaches presentation callbacks.
+the unchanged prompt. A new request or renewal generation does. Broker requests
+carry an opaque presentation-owner identifier into safe snapshots (including nested
+acquisitions); the process host supplies the default identity and shells attach to
+their scope. A matching visible shell accepts each presentation once. Unscoped
+process work can use any visible shell, but scoped work never opens an unrelated
+owner. Hidden shells do not consume prompts. Successful show/refresh acknowledges
+the delivered generations; a failed presentation leaves them pending for a later
+availability change or accepted snapshot. Restoring a hidden shell retries pending
+work, not genuinely dismissed generations. Bootstrap does not open a competing
+runtime surface. Shutdown detaches presentation callbacks.
 Automatic visibility never executes an authorization or provider action.
 If management currently owns keyboard focus, the exact retained Requests control
 is presented beside that unchanged page instead of hiding its focused control.
-Explicit page navigation returns Requests to its tab. This is one host and one
+Actual tab-header selection returns Requests to its tab and collapses the side
+column, as does explicit programmatic navigation. This is one host and one
 Requests control, not an additional popup/window or copied rows collection.
 
 The window is shown nonmodally before administration refresh, so live requests

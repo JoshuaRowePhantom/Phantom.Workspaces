@@ -95,7 +95,7 @@ public sealed class UserAuthorizationRegistryTests
         registry.Add(snapshot);
         var allowed = new[]
         {
-            "Identifier", "Revision", "PromptGeneration", "UseDisplayName", "State", "PrimaryAction", "MemoryOptions", "SelectedMemory",
+            "Identifier", "Revision", "PromptGeneration", "PresentationOwner", "UseDisplayName", "State", "PrimaryAction", "MemoryOptions", "SelectedMemory",
             "SourceOptions", "SelectedSource", "SafeStatus", "IsBootstrapBlocking", "CanAct",
         };
         Assert.Equal(allowed.Order(), typeof(UserAuthorizationSnapshot).GetProperties().Select(property => property.Name).Order());

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
+using System.Threading.Tasks;
 using Avalonia.Threading;
 using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Llm.Interfaces.Authorization;
@@ -10,6 +11,12 @@ using Phantom.Workspaces.Llm.Interfaces.Authorization;
 namespace Phantom.Workspaces.ViewModels;
 
 public enum AuthorizationRowsPresentationMode { Bootstrap, Runtime }
+
+public sealed class AuthorizationPromptEventArgs : EventArgs
+{
+    public AccessPresentationOwnerIdentifier? PresentationOwner { get; init; }
+    public Task<bool>? Presentation { get; set; }
+}
 
 public sealed class AuthorizationRequestRowsViewModel : IDisposable
 {
@@ -22,8 +29,9 @@ public sealed class AuthorizationRequestRowsViewModel : IDisposable
     private long appliedVersion;
     private bool disposed;
     private bool projecting;
-    private object? runtimeOwner;
+    private long presentationAvailabilityVersion;
     private readonly Dictionary<UserAuthorizationRequestIdentifier, long> presentedPrompts = new();
+    private readonly HashSet<(UserAuthorizationRequestIdentifier Identifier, long Generation)> deliveringPrompts = new();
 
     public AuthorizationRequestRowsViewModel() => this.Rows = new(this.rows);
 
@@ -55,25 +63,10 @@ public sealed class AuthorizationRequestRowsViewModel : IDisposable
     public ReadOnlyObservableCollection<AuthorizationRequestRowViewModel> Rows { get; }
     public AuthorizationRowsPresentationState Presentation { get; } = new();
     public event EventHandler? Changed;
-    public event EventHandler? NewActionablePrompt;
-    internal event EventHandler? RuntimeOwnerAvailable;
+    public event EventHandler<AuthorizationPromptEventArgs>? NewActionablePrompt;
     public int ActionableCount => this.keyedRows.Values.Count(row => row.CanAct);
-
-    internal bool ClaimRuntimeOwner(object owner)
-    {
-        if (this.disposed || this.runtimeOwner is not null && !ReferenceEquals(this.runtimeOwner, owner)) { return false; }
-        this.runtimeOwner = owner;
-        return true;
-    }
-
-    internal void ReleaseRuntimeOwner(object owner)
-    {
-        if (ReferenceEquals(this.runtimeOwner, owner))
-        {
-            this.runtimeOwner = null;
-            this.RuntimeOwnerAvailable?.Invoke(this, EventArgs.Empty);
-        }
-    }
+    internal Task PresentationReady { get; private set; } = Task.CompletedTask;
+    internal void NotifyPresentationOwnerAvailabilityChanged() => this.presentationAvailabilityVersion++;
 
     public void SetPresentationMode(AuthorizationRowsPresentationMode mode)
     {
@@ -141,18 +134,50 @@ public sealed class AuthorizationRequestRowsViewModel : IDisposable
         }
     }
 
-    private void PresentFreshPrompts()
+    internal void PresentFreshPrompts()
     {
-        if (this.mode != AuthorizationRowsPresentationMode.Runtime || this.NewActionablePrompt is null) { return; }
-        var fresh = false;
-        foreach (var row in this.keyedRows.Values.Where(row => row.CanAct))
+        if (this.disposed || this.mode != AuthorizationRowsPresentationMode.Runtime || this.NewActionablePrompt is null) { return; }
+        var fresh = this.keyedRows.Values.Where(row => row.CanAct &&
+            (!this.presentedPrompts.TryGetValue(row.Identifier, out var previous) || previous < Math.Max(1, row.PromptGeneration)) &&
+            !this.deliveringPrompts.Contains((row.Identifier, Math.Max(1, row.PromptGeneration))))
+            .GroupBy(row => row.PresentationOwner).ToArray();
+        foreach (var group in fresh)
         {
-            var generation = Math.Max(1, row.PromptGeneration);
-            if (this.presentedPrompts.TryGetValue(row.Identifier, out var previous) && previous >= generation) { continue; }
-            this.presentedPrompts[row.Identifier] = generation;
-            fresh = true;
+            var prompts = group.Select(row => (row.Identifier, Generation: Math.Max(1, row.PromptGeneration))).ToArray();
+            foreach (var prompt in prompts) { this.deliveringPrompts.Add(prompt); }
+            var arguments = new AuthorizationPromptEventArgs { PresentationOwner = group.Key };
+            var availabilityVersion = this.presentationAvailabilityVersion;
+            this.NewActionablePrompt.Invoke(this, arguments);
+            var completion = this.CompletePresentationAsync(prompts, arguments.Presentation, availabilityVersion);
+            this.PresentationReady = Task.WhenAll(this.PresentationReady, completion);
         }
-        if (fresh) { this.NewActionablePrompt.Invoke(this, EventArgs.Empty); }
+    }
+
+    private async Task CompletePresentationAsync(
+        (UserAuthorizationRequestIdentifier Identifier, long Generation)[] prompts,
+        Task<bool>? presentation,
+        long availabilityVersion)
+    {
+        var delivered = false;
+        try
+        {
+            if (presentation is not null && await presentation && !this.disposed)
+            {
+                delivered = true;
+                foreach (var prompt in prompts)
+                {
+                    this.presentedPrompts[prompt.Identifier] = Math.Max(
+                        this.presentedPrompts.GetValueOrDefault(prompt.Identifier), prompt.Generation);
+                }
+            }
+        }
+        finally
+        {
+            foreach (var prompt in prompts) { this.deliveringPrompts.Remove(prompt); }
+        }
+        // An owner may become available while an earlier show/refresh is still
+        // in flight. Replay that availability edge, not an unbounded retry loop.
+        if (!delivered && availabilityVersion != this.presentationAvailabilityVersion) { this.PresentFreshPrompts(); }
     }
 
     public void Dispose()
@@ -175,8 +200,6 @@ public sealed class AuthorizationRequestRowsViewModel : IDisposable
             this.Presentation.Clear();
             this.Changed = null;
             this.NewActionablePrompt = null;
-            this.RuntimeOwnerAvailable = null;
-            this.runtimeOwner = null;
         });
     }
 }

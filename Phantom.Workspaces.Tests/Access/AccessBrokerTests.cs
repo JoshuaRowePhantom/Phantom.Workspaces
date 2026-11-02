@@ -771,7 +771,11 @@ public sealed class AccessBrokerTests : IDisposable
     [Fact]
     public async Task AccessBroker_ExportedDependency_PreservesParentPurposeLineageAndBootstrapPresentation()
     {
-        var request = Request() with { PresentationScope = AccessPresentationScope.Bootstrap };
+        var request = Request() with
+        {
+            PresentationScope = AccessPresentationScope.Bootstrap,
+            PresentationOwner = new() { Value = Guid.NewGuid() },
+        };
         var secondRow = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var executor = new Executor
         {
@@ -784,6 +788,7 @@ public sealed class AccessBrokerTests : IDisposable
                         Credential = current.Credential with { LogicalIdentifier = new() { Digest = new string('e', 64) } },
                         Use = current.Use with { Lineage = new() },
                         PresentationScope = AccessPresentationScope.Runtime,
+                        PresentationOwner = new() { Value = Guid.NewGuid() },
                     };
                     var acquired = await context.AcquireDependencyAsync(dependency, cancellationToken);
                     await Assert.IsType<AccessSucceeded<Result>>(acquired).Result.DisposeAsync();
@@ -793,6 +798,7 @@ public sealed class AccessBrokerTests : IDisposable
                     Assert.Equal(request.Requestor, current.Requestor);
                     Assert.Equal(request.Use, current.Use);
                     Assert.Equal(request.PresentationScope, current.PresentationScope);
+                    Assert.Equal(request.PresentationOwner, current.PresentationOwner);
                 }
 
                 return new CredentialExecutionReady<Result> { Materializer = new Materializer(() => new Result()) };
@@ -808,11 +814,13 @@ public sealed class AccessBrokerTests : IDisposable
             }
         };
         var task = broker.AcquireAsync(request, TestContext.Current.CancellationToken);
+        Assert.Equal(request.PresentationOwner, Assert.Single(registry.GetSnapshot()).PresentationOwner);
         await ApplyAsync(registry, Assert.Single(registry.GetSnapshot()));
         await secondRow.Task.WaitAsync(TestContext.Current.CancellationToken);
         var child = registry.GetSnapshot()[1];
         Assert.True(child.IsBootstrapBlocking);
         Assert.Equal(request.Use.SafeDisplayName, child.UseDisplayName);
+        Assert.Equal(request.PresentationOwner, child.PresentationOwner);
         await ApplyAsync(registry, child);
         await using var result = Assert.IsType<AccessSucceeded<Result>>(await task).Result;
         Assert.All(registry.GetSnapshot(), snapshot => Assert.Equal(UserAuthorizationState.Completed, snapshot.State));

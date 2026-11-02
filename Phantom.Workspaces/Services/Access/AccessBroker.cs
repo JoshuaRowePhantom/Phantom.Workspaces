@@ -18,6 +18,7 @@ internal sealed class AccessBroker : IAccessBroker
     private readonly ConcurrentDictionary<UserAuthorizationRequestIdentifier, ExecutionGeneration> activeExecutions = new();
     private readonly TaskCompletionSource disposal = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int disposed;
+    internal AccessPresentationOwnerIdentifier? PresentationOwner { private get; init; }
 
     internal AccessBroker(
         IReleaseAuthorizationPolicy policy,
@@ -45,6 +46,10 @@ internal sealed class AccessBroker : IAccessBroker
         CancellationToken cancellationToken)
         where TResult : IAccessResult
     {
+        request = request with
+        {
+            PresentationOwner = request.PresentationOwner ?? this.PresentationOwner,
+        };
         CancellationTokenSource cancellation;
         lock (this.lifetimeGate)
         {
@@ -376,7 +381,8 @@ internal sealed class AccessBroker : IAccessBroker
             acquisitionGeneration, request.Requestor, request.Use, request.PresentationScope,
             policyRequest, permit is not null,
             (action, token) => this.RequireCredentialAsync(
-                request, executor, inspection, policyRequest.SourceIdentifier, authorization.Scope, chain, action, token));
+                request, executor, inspection, policyRequest.SourceIdentifier, authorization.Scope, chain, action, token),
+            request.PresentationOwner);
         this.activeExecutions[context.RequestIdentifier] = new ExecutionGeneration
         {
             Revision = context.Revision,
@@ -539,7 +545,7 @@ internal sealed class AccessBroker : IAccessBroker
                         () => this.IsCurrentExecution(identifier, decision.Revision, generation));
                     var context = new CredentialExecutionContext(
                         this, chain, identifier, revision, generation,
-                        request.Requestor, request.Use, request.PresentationScope, null, true, null);
+                        request.Requestor, request.Use, request.PresentationScope, null, true, null, request.PresentationOwner);
                     this.activeExecutions[identifier] = new ExecutionGeneration { Revision = revision, Generation = generation };
                     CredentialExecutionOutcome<TResult> executed;
                     try
@@ -830,7 +836,7 @@ internal sealed class AccessBroker : IAccessBroker
         };
     }
 
-    private static UserAuthorizationSnapshot CreateSnapshot<TResult>(
+    private UserAuthorizationSnapshot CreateSnapshot<TResult>(
         AccessRequest<TResult> request,
         IReadOnlyList<CredentialSourceChoiceDescriptor> sources,
         CredentialSourceIdentifier selectedSource,
@@ -851,6 +857,7 @@ internal sealed class AccessBroker : IAccessBroker
         {
             Identifier = identifier,
             Revision = 1,
+            PresentationOwner = request.PresentationOwner ?? this.PresentationOwner,
             UseDisplayName = request.Use.SafeDisplayName,
             State = UserAuthorizationState.Pending,
             PrimaryAction = selected.Usability == CredentialSourceUsability.Usable

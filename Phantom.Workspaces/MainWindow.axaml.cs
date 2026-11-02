@@ -6,6 +6,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Access;
+using Phantom.Workspaces.Llm.Interfaces.Access;
 using Phantom.Workspaces.Templates;
 using Phantom.Workspaces.ViewModels;
 using Phantom.Workspaces.ViewModels.Configuration;
@@ -18,16 +19,23 @@ public partial class MainWindow : Window
     private readonly System.Collections.Generic.List<Task> accessAdministrationDisposals = [];
     private bool accessAdministrationShuttingDown;
     private AuthorizationRequestsPopupViewModel? authorizationRequests;
-    private bool ownsAuthorizationPresentation;
+    private AccessPresentationOwnerIdentifier? authorizationPresentationOwner;
+    private bool authorizationShellOpened;
     internal Task AccessAdministrationReady { get; private set; } = Task.CompletedTask;
+    internal Func<AccessHostServices, AccessAdministrationWindow> AccessAdministrationWindowFactory { get; init; } =
+        host => new AccessAdministrationWindow(host);
 
-    public void AttachAccessHost(AccessHostServices host, AuthorizationRequestsPopupViewModel popup)
+    public void AttachAccessHost(
+        AccessHostServices host,
+        AuthorizationRequestsPopupViewModel popup,
+        AccessPresentationOwnerIdentifier? presentationOwner = null)
     {
         if (!ReferenceEquals(host.AuthorizationRows, popup.Rows))
         {
             throw new ArgumentException("The popup must use the process authorization rows.", nameof(popup));
         }
         this.accessHost = host;
+        this.authorizationPresentationOwner = presentationOwner ?? host.PresentationOwner;
         host.EnterRuntime();
         this.AttachAuthorizationRequests(popup);
     }
@@ -36,31 +44,33 @@ public partial class MainWindow : Window
     {
         this.DetachAuthorizationPresentation();
         this.authorizationRequests = popup;
-        popup.Rows.RuntimeOwnerAvailable += this.OnRuntimeOwnerAvailable;
+        popup.Rows.NewActionablePrompt += this.OnNewAuthorizationPrompt;
         this.AuthorizationRequestsHost.DataContext = popup;
         this.AuthorizationRequestsHost.IsVisible = true;
-        if (this.IsVisible) { this.StartAuthorizationPresentation(); }
-    }
-
-    private void OnRuntimeOwnerAvailable(object? sender, EventArgs arguments)
-    {
         if (this.IsVisible) { this.StartAuthorizationPresentation(); }
     }
 
     private void StartAuthorizationPresentation()
     {
         if (this.accessAdministrationShuttingDown || this.authorizationRequests is not { } popup ||
-            this.ownsAuthorizationPresentation || !popup.Rows.ClaimRuntimeOwner(this)) { return; }
-        this.ownsAuthorizationPresentation = true;
-        popup.Rows.NewActionablePrompt += this.OnNewAuthorizationPrompt;
+            !this.IsVisible || !this.authorizationShellOpened) { return; }
+        popup.Rows.NotifyPresentationOwnerAvailabilityChanged();
         popup.Rows.SetPresentationMode(AuthorizationRowsPresentationMode.Runtime);
     }
 
-    private void OnNewAuthorizationPrompt(object? sender, EventArgs arguments)
+    private void OnNewAuthorizationPrompt(object? sender, AuthorizationPromptEventArgs arguments)
     {
-        if (this.accessAdministrationShuttingDown || !this.ownsAuthorizationPresentation || !this.IsVisible) { return; }
-        if (this.accessHost is not null) { this.BeginOpenAccessAdministration(CredentialAccessPage.Requests, activate: false); }
-        else if (this.authorizationRequests is { } popup) { popup.ShowRequests(); }
+        if (arguments.Presentation is not null || this.accessAdministrationShuttingDown || !this.IsVisible || !this.authorizationShellOpened ||
+            arguments.PresentationOwner is { } owner && owner != this.authorizationPresentationOwner) { return; }
+        if (this.accessHost is not null)
+        {
+            arguments.Presentation = this.BeginOpenAccessAdministration(CredentialAccessPage.Requests, activate: false);
+        }
+        else if (this.authorizationRequests is { } popup)
+        {
+            popup.ShowRequests();
+            arguments.Presentation = Task.FromResult(true);
+        }
     }
 
     private void DetachAuthorizationPresentation()
@@ -68,10 +78,10 @@ public partial class MainWindow : Window
         if (this.authorizationRequests is { } popup)
         {
             popup.Rows.NewActionablePrompt -= this.OnNewAuthorizationPrompt;
-            popup.Rows.RuntimeOwnerAvailable -= this.OnRuntimeOwnerAvailable;
-            popup.Rows.ReleaseRuntimeOwner(this);
+            // A hidden or closed shell must not hold any undelivered prompt.
+            popup.Rows.NotifyPresentationOwnerAvailabilityChanged();
+            popup.Rows.PresentFreshPrompts();
         }
-        this.ownsAuthorizationPresentation = false;
     }
 
     private void OnAuthorizationPopupKeyDown(object? sender, KeyEventArgs arguments)
@@ -102,7 +112,22 @@ public partial class MainWindow : Window
         AddDockDataTemplates();
         this.DataContext = viewModel;
         viewModel.OpenAccessAdministrationRequested += this.OnOpenAccessAdministrationRequested;
-        this.Opened += (_, _) => this.StartAuthorizationPresentation();
+        this.Opened += (_, _) =>
+        {
+            if (this.authorizationShellOpened) { return; }
+            this.authorizationShellOpened = true;
+            this.StartAuthorizationPresentation();
+        };
+        this.PropertyChanged += (_, arguments) =>
+        {
+            if (arguments.Property != IsVisibleProperty) { return; }
+            if (this.IsVisible) { this.StartAuthorizationPresentation(); }
+            else if (this.authorizationRequests is { } popup)
+            {
+                popup.Rows.NotifyPresentationOwnerAvailabilityChanged();
+                popup.Rows.PresentFreshPrompts();
+            }
+        };
         this.Closed += (_, _) =>
         {
             viewModel.OpenAccessAdministrationRequested -= this.OnOpenAccessAdministrationRequested;
@@ -332,58 +357,78 @@ public partial class MainWindow : Window
             ? CredentialAccessPage.Requests : CredentialAccessPage.SavedApprovals);
     }
 
-    private void BeginOpenAccessAdministration(CredentialAccessPage page, bool activate = true)
+    private Task<bool> BeginOpenAccessAdministration(CredentialAccessPage page, bool activate = true)
     {
         var opening = this.OpenAccessAdministrationAsync(page, activate);
         this.AccessAdministrationReady = Task.WhenAll(this.AccessAdministrationReady, opening);
+        return opening;
     }
 
     /// <summary>The most recently opened access-administration window.</summary>
     internal AccessAdministrationWindow? LastAccessAdministrationWindow { get; private set; }
 
-    private async Task OpenAccessAdministrationAsync(CredentialAccessPage page, bool activate)
+    private async Task<bool> OpenAccessAdministrationAsync(CredentialAccessPage page, bool activate)
     {
         if (this.DataContext is not MainWindowViewModel || this.accessAdministrationShuttingDown)
         {
-            return;
+            return false;
         }
 
         if (this.accessHost is not { } host)
         {
             this.ReportAccessAdministrationFailure();
-            return;
+            return false;
         }
-        if (this.LastAccessAdministrationWindow is { } existing)
-        {
-            if (!activate && page == CredentialAccessPage.Requests) { existing.PresentRequestsWithoutActivation(); }
-            else { existing.SelectPage(page); }
-            if (activate) { existing.Activate(); }
-            return;
-        }
-        var window = new AccessAdministrationWindow(host);
-        this.LastAccessAdministrationWindow = window;
-        window.SelectPage(page);
-        window.Closed += (_, _) => this.ReleaseAccessAdministration(window);
-        window.KeyDown += (_, arguments) =>
-        {
-            if (arguments.Key != Key.Escape) { return; }
-            window.Close();
-            this.CredentialAccessKey.Focus();
-            arguments.Handled = true;
-        };
+        AccessAdministrationWindow? window = this.LastAccessAdministrationWindow;
+        var shown = window?.IsVisible == true;
         try
         {
-            window.ShowActivated = activate;
-            window.Show(this);
+            if (window is null)
+            {
+                window = this.AccessAdministrationWindowFactory(host);
+                this.LastAccessAdministrationWindow = window;
+                window.SelectPage(page);
+                var retainedWindow = window;
+                window.Closed += (_, _) => this.ReleaseAccessAdministration(retainedWindow);
+                window.KeyDown += (_, arguments) =>
+                {
+                    if (arguments.Key != Key.Escape) { return; }
+                    retainedWindow.Close();
+                    this.CredentialAccessKey.Focus();
+                    arguments.Handled = true;
+                };
+            }
+            else
+            {
+                if (!activate && page == CredentialAccessPage.Requests) { window.PresentRequestsWithoutActivation(); }
+                else { window.SelectPage(page); }
+            }
+            if (!window.IsVisible)
+            {
+                window.ShowActivated = activate;
+                window.Show(this);
+                shown = true;
+            }
+            else if (activate) { window.Activate(); }
             await window.RefreshAsync();
+            return shown && !this.accessAdministrationShuttingDown;
         }
-        catch (OperationCanceledException) when (window.IsDisposed || this.accessAdministrationShuttingDown) { }
+        catch (OperationCanceledException) when (window?.IsDisposed == true || this.accessAdministrationShuttingDown)
+        {
+            // Closing a successfully shown surface acknowledges presentation, even
+            // when its owned administration refresh is still being cancelled.
+            return shown && !this.accessAdministrationShuttingDown;
+        }
         catch (Exception)
         {
             this.ReportAccessAdministrationFailure();
-            window.Close();
-            this.ReleaseAccessAdministration(window);
+            if (window is not null)
+            {
+                window.Close();
+                this.ReleaseAccessAdministration(window);
+            }
         }
+        return false;
     }
 
     private void ReleaseAccessAdministration(AccessAdministrationWindow window)

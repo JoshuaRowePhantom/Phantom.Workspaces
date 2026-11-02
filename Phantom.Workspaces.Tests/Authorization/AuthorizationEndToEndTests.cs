@@ -1,5 +1,7 @@
 using System.IO;
 using Avalonia.Headless.XUnit;
+using Avalonia.Controls;
+using Avalonia.VisualTree;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Phantom.Workspaces.Llm.Interfaces.Access;
@@ -26,6 +28,8 @@ public sealed class AuthorizationEndToEndTests
             ReleaseMemoryFilePath = Path.Combine(Environment.CurrentDirectory, ".nonexistent-startup-authorization", "release-memory.json"),
         });
         var loading = new LoadingWindowViewModel { AuthorizationRows = host.AuthorizationRows };
+        var loadingWindow = new LoadingWindow(loading);
+        loadingWindow.Show();
         var request = StoredSecretAccessExecutorTests.Request() with { PresentationScope = AccessPresentationScope.Bootstrap };
         var pending = host.Broker.AcquireAsync(request, TestContext.Current.CancellationToken);
         var row = Assert.Single(loading.AuthorizationRows.Rows);
@@ -39,6 +43,11 @@ public sealed class AuthorizationEndToEndTests
         var window = new MainWindow(viewModel);
         window.AttachAccessHost(host, popup);
 
+        Assert.True(loadingWindow.IsVisible);
+        Assert.Same(host.AuthorizationRows,
+            Assert.Single(loadingWindow.GetVisualDescendants().OfType<Controls.AuthorizationRequestRowsControl>()).DataContext);
+        Assert.Null(window.LastAccessAdministrationWindow);
+        Assert.False(popup.IsOpen);
         Assert.Same(loading.AuthorizationRows, popup.Rows);
         Assert.Same(row, Assert.Single(popup.Rows.Rows));
         Assert.Same(host.Broker, viewModel.ApplicationServices.AccessBroker);
@@ -46,10 +55,27 @@ public sealed class AuthorizationEndToEndTests
         Assert.Single(host.AuthorizationRegistry.GetSnapshot());
         Assert.False(pending.IsCompleted);
         Assert.Equal(AccessPresentationScope.Runtime, services.AccessPresentationScope());
+        loadingWindow.Close();
+        window.Show();
+        await window.AccessAdministrationReady;
+        var presentation = Assert.IsType<AccessAdministrationWindow>(window.LastAccessAdministrationWindow);
+        Assert.True(presentation.IsVisible);
+        Assert.False(presentation.ShowActivated);
+        Assert.Equal(CredentialAccessPage.Requests, presentation.SelectedPage);
+        Assert.Same(row, Assert.Single(presentation.RequestRows.Rows));
+        presentation.Close();
+        await window.DisposeClosedAccessAdministrationAsync();
+        window.AttachAccessHost(host, popup);
+        host.AuthorizationRows.SetPresentationMode(AuthorizationRowsPresentationMode.Bootstrap);
+        host.EnterRuntime();
+        await window.AccessAdministrationReady;
+        Assert.Null(window.LastAccessAdministrationWindow);
 
         await host.DisposeAsync();
         Assert.IsType<AccessShuttingDown<StoredSecretAccessResult>>(await pending);
         Assert.Empty(popup.Rows.Rows);
+        await window.DisposeAccessAdministrationAsync();
+        window.Close();
     }
 
     [AvaloniaFact]

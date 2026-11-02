@@ -31,6 +31,7 @@ public sealed class AccessHostServices : IAsyncDisposable
     internal IRemoteCopilotProviderCatalog RemoteCopilotProviders { get; } =
         new EnvironmentRemoteCopilotProviderCatalog();
     public required IAccessBroker Broker { get; init; }
+    public AccessPresentationOwnerIdentifier PresentationOwner { get; private init; } = new() { Value = Guid.NewGuid() };
     public required IUserAuthorizationRegistry AuthorizationRegistry { get; init; }
     public required AuthorizationRequestRowsViewModel AuthorizationRows { get; init; }
     public required IReleaseMemoryAdministration ReleaseMemoryAdministration { get; init; }
@@ -152,7 +153,8 @@ public sealed class AccessHostServices : IAsyncDisposable
         executors.Add<DevTunnelConnectCredentialAccessRequest, DevTunnelConnectCredentialAccessResult>(connect);
         executors.AddCompletion<CliOwnedAuthorizationRequest, AuthorizationCompletedAccessResult>(
             new VsCodeTunnelCliAuthorizationExecutor());
-        var broker = new AccessBroker(policy, executors, coordinator, registry);
+        var presentationOwner = new AccessPresentationOwnerIdentifier { Value = Guid.NewGuid() };
+        var broker = new AccessBroker(policy, executors, coordinator, registry) { PresentationOwner = presentationOwner };
         try
         {
             var rows = new AuthorizationRequestRowsViewModel { Dispatch = options.Dispatch, Registry = registry };
@@ -160,6 +162,7 @@ public sealed class AccessHostServices : IAsyncDisposable
             return new AccessHostServices(oauthProviders, mcpCatalog)
             {
                 Broker = broker,
+                PresentationOwner = presentationOwner,
                 AuthorizationRegistry = registry,
                 AuthorizationRows = rows,
                 ReleaseMemoryAdministration = new ReleaseMemoryAdministration { Policy = policy },

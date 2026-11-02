@@ -9,6 +9,7 @@ internal sealed class CredentialExecutionContext : ICredentialExecutionContext
     private readonly IReadOnlyList<CredentialDependencyKey> chain;
     private readonly Func<CredentialLeaseRequiredActionKind, CancellationToken, ValueTask<UserAuthorizationRequestIdentifier>>? require;
     private readonly bool canPerform;
+    private readonly AccessPresentationOwnerIdentifier? presentationOwner;
 
     internal CredentialExecutionContext(
         AccessBroker broker,
@@ -21,7 +22,8 @@ internal sealed class CredentialExecutionContext : ICredentialExecutionContext
         AccessPresentationScope presentationScope,
         ReleasePolicyRequest? policyRequest,
         bool canPerform,
-        Func<CredentialLeaseRequiredActionKind, CancellationToken, ValueTask<UserAuthorizationRequestIdentifier>>? require)
+        Func<CredentialLeaseRequiredActionKind, CancellationToken, ValueTask<UserAuthorizationRequestIdentifier>>? require,
+        AccessPresentationOwnerIdentifier? presentationOwner = null)
     {
         this.broker = broker;
         this.chain = chain;
@@ -34,6 +36,7 @@ internal sealed class CredentialExecutionContext : ICredentialExecutionContext
         this.PolicyRequest = policyRequest;
         this.canPerform = canPerform;
         this.require = require;
+        this.presentationOwner = presentationOwner;
     }
 
     public UserAuthorizationRequestIdentifier RequestIdentifier { get; }
@@ -60,6 +63,7 @@ internal sealed class CredentialExecutionContext : ICredentialExecutionContext
             Requestor = this.Requestor,
             Use = this.Use,
             PresentationScope = this.PresentationScope,
+            PresentationOwner = this.presentationOwner,
         }, this.chain, cancellationToken).ConfigureAwait(false);
     }
 
