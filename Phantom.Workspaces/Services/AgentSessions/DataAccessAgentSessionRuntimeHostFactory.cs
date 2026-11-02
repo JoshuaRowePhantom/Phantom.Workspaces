@@ -147,26 +147,30 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory :
                 async (value, token) =>
                 {
                     await state.PersistRetentionAsync(value, token).ConfigureAwait(false);
-                    (this.runningChats as RunningAgentChatTable)?.ApplyOwnerRuntimeRetention(
-                        new AgentSessionId(intent.AgentSessionId), value);
+                    if (this.runningChats is RunningAgentChatTable table)
+                        await table.ApplyOwnerRuntimeRetentionAsync(
+                            new AgentSessionId(intent.AgentSessionId), value, token).ConfigureAwait(false);
                 },
                 token => state.PersistStoppedAsync(token),
                 this.timeProvider,
                 ownership,
                 chatLease,
                 sessionContext,
-                terminateRuntimeAsync: async () =>
+                terminateRuntimeAsync: async cleanupCancellation =>
                 {
                     var terminated = this.runningChats is RunningAgentChatTable table
                         ? await table.TerminateOwnerRuntimeExactAsync(
-                            chatLease.SessionId, chat, CancellationToken.None, this.timeProvider).ConfigureAwait(false)
+                            chatLease.SessionId, chat, cleanupCancellation, this.timeProvider).ConfigureAwait(false)
                         : await this.runningChats.TerminateExactAsync(
-                            chatLease.SessionId, chat, CancellationToken.None).ConfigureAwait(false);
+                            chatLease.SessionId, chat, cleanupCancellation).ConfigureAwait(false);
                     if (!terminated
                         && !chatLease.IsRuntimeTerminal)
                         throw new InvalidOperationException("The owning runtime could not be terminated.");
                 });
             runtime.HasDurableRestartAuthority = true;
+            if (this.runningChats is RunningAgentChatTable runningTable)
+                runtime.ViewerCountChanged += count => runningTable.ApplyOwnerRuntimeViewerCount(
+                    chatLease.SessionId, chat, count);
             runtime.Terminated += (_, _) =>
             {
                 if (runtime.IsRestartRetirement)

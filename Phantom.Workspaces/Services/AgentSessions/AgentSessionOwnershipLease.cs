@@ -111,10 +111,12 @@ internal sealed class AgentSessionOwnershipLease : IAsyncDisposable
                 if (await Task.WhenAny(renewal, deadline).ConfigureAwait(false) != renewal)
                 {
                     renewalCancellation.Cancel();
-                    await this.FenceAsync(ct).ConfigureAwait(false);
+                    if (!ct.IsCancellationRequested)
+                        await this.FenceAsync(ct).ConfigureAwait(false);
                     try { await renewal.ConfigureAwait(false); }
                     catch (OperationCanceledException) when (renewalCancellation.IsCancellationRequested) { }
                     catch { }
+                    ct.ThrowIfCancellationRequested();
                     return;
                 }
                 deadlineCancellation.Cancel();

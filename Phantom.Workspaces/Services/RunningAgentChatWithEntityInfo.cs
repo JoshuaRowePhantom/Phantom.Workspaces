@@ -320,6 +320,12 @@ public sealed class RunningAgentChatWithEntityInfo : INotifyPropertyChanged
         this.PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
     }
 
+    internal void SetViewerCountForRuntime(IAgentChat expected, int count)
+    {
+        if (ReferenceEquals(this._chat?.AgentChat, expected))
+            this.SetViewerCount(count);
+    }
+
     /// <summary>
     /// #1485: bump the viewer count. Used by <c>RunningAgentChatTable</c> on lease
     /// acquisition/release so viewer counts reflect actual attach state.

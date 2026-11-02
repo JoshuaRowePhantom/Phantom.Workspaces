@@ -75,6 +75,41 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
     internal void ApplyOwnerRuntimeRetention(AgentSessionId sessionId, bool continueInBackground)
         => this.FindEntry(sessionId)?.SetContinueInBackground(continueInBackground);
 
+    internal async ValueTask ApplyOwnerRuntimeRetentionAsync(
+        AgentSessionId sessionId,
+        bool continueInBackground,
+        CancellationToken cancellationToken)
+    {
+        SemaphoreSlim gate;
+        lock (this._entityInfoLock)
+            gate = this.localAcquisitionGates[sessionId];
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            RunningAgentChatLease? retained;
+            lock (this._entityInfoLock)
+                this._continueInBackgroundLeases.TryGetValue(sessionId, out retained);
+            if (continueInBackground && retained is null)
+            {
+                retained = await this._factory.GetAsync(
+                    sessionId, registerAsRunningAgent: false, cancellationToken).ConfigureAwait(false);
+                lock (this._entityInfoLock)
+                    this._continueInBackgroundLeases[sessionId] = retained;
+            }
+            else if (!continueInBackground && retained is not null)
+            {
+                lock (this._entityInfoLock)
+                    this._continueInBackgroundLeases.Remove(sessionId);
+                await retained.DisposeAsync().ConfigureAwait(false);
+            }
+            this.ApplyOwnerRuntimeRetention(sessionId, continueInBackground);
+        }
+        finally { gate.Release(); }
+    }
+
+    internal void ApplyOwnerRuntimeViewerCount(AgentSessionId sessionId, IAgentChat expected, int count)
+        => this.FindEntry(sessionId)?.SetViewerCountForRuntime(expected, count);
+
     internal async Task<RunningAgentChatLease> RestartOwnedRuntimeAsync(
         AgentSessionOwnerRestartRequest request,
         IAgentChat expected,
@@ -96,10 +131,22 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                 this.restartingSessions.Add(sessionId);
             if (this._factory is not AgentChatFactory factory)
                 throw new InvalidOperationException("The owning factory does not support runtime replacement.");
-            return await factory.RestartExactAsync(
+            var replacement = await factory.RestartExactAsync(
                 sessionId, expected, services, persistCheckpointAsync, cancellationToken,
                 persistStoppedAsync, runtimeLifetimeCancellationToken,
                 cleanupTimeProvider: cleanupTimeProvider).ConfigureAwait(false);
+            RunningAgentChatLease? previousPin;
+            lock (this._entityInfoLock)
+                this._continueInBackgroundLeases.TryGetValue(sessionId, out previousPin);
+            if (previousPin is not null && ReferenceEquals(previousPin.AgentChat, expected))
+            {
+                var replacementPin = await factory.GetAsync(
+                    sessionId, registerAsRunningAgent: false, runtimeLifetimeCancellationToken).ConfigureAwait(false);
+                lock (this._entityInfoLock)
+                    this._continueInBackgroundLeases[sessionId] = replacementPin;
+                await previousPin.DisposeAsync().ConfigureAwait(false);
+            }
+            return replacement;
         }
 
         finally
@@ -322,7 +369,7 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                 entry.ApplyLaunchName(GetEntityInfo(sessionId).EntityName);
             if (isViewer)
                 entry.IncrementViewerCount();
-            if (isViewer && !isRunning && continueInBackground)
+            if (!isRunning && continueInBackground)
             {
                 var retainedLease = await _factory.GetAsync(
                     sessionId,
@@ -340,8 +387,10 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
             lease.AgentChat,
             onDispose: async () =>
             {
-                if (request.OwnerRuntimeAcquisition && lease.AgentChat is AgentChat { IsTerminal: true })
+                if (!isViewer)
                 {
+                    // The factory fences this exact owner lease. Its pending cleanup
+                    // must not reacquire the gate after an outer cleanup deadline.
                     await lease.DisposeAsync().ConfigureAwait(false);
                     return;
                 }
@@ -924,6 +973,11 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                 : await terminating.ConfigureAwait(false);
             if (!terminated)
                 return false;
+
+            // Legacy self-closing tools must return before their own provider unwinds.
+            // Durable owner handoff instead holds acquisition until that cleanup settles.
+            if (boundCleanup && expected is AgentChat local)
+                await local.WaitForProviderCleanupAsync(ct).ConfigureAwait(false);
 
             RunningAgentChatLease? retained = null;
             lock (this._entityInfoLock)

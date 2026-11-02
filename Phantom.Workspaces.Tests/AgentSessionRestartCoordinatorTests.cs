@@ -51,6 +51,14 @@ public sealed partial class DataAccessAgentSessionRuntimeHostFactoryTests
         Assert.Equal(originalRow.EntityId, replacementRow.EntityId);
         Assert.Equal(originalRow.WorkspaceId, replacementRow.WorkspaceId);
         Assert.True(replacementRow.ContinueInBackground);
+        Assert.Equal(2, replacementRow.ViewerCount);
+        environment.Table.ApplyOwnerRuntimeViewerCount(first.SessionId, original, 42);
+        Assert.Equal(2, replacementRow.ViewerCount);
+        var pins = Assert.IsType<Dictionary<AgentSessionId, RunningAgentChatLease>>(
+            typeof(RunningAgentChatTable).GetField("_continueInBackgroundLeases",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .GetValue(environment.Table));
+        Assert.Same(reattached[0].AgentChat, pins[first.SessionId].AgentChat);
         var preserved = Assert.Single(reattached[0].AgentChat.InputQueues.Snapshot.Queues,
             item => item.Name == "Preserved");
         Assert.Equal(queue.Queue.QueueId, preserved.QueueId);
@@ -59,8 +67,11 @@ public sealed partial class DataAccessAgentSessionRuntimeHostFactoryTests
         await first.DisposeAsync();
         await second.DisposeAsync();
         Assert.Single(environment.Table.RunningSessions);
+        Assert.Equal(2, replacementRow.ViewerCount);
         foreach (var lease in reattached)
             await lease.DisposeAsync();
+        Assert.Equal(0, replacementRow.ViewerCount);
+        Assert.Same(reattached[0].AgentChat, pins[first.SessionId].AgentChat);
     }
 
     [Fact]

@@ -30,10 +30,13 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory
         }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
 
-    private async Task WaitForRestartCleanupAsync(Func<Task> startCleanup)
+    private Task WaitForRestartCleanupAsync(Func<Task> startCleanup)
+        => this.WaitForRestartCleanupAsync(_ => startCleanup());
+
+    private async Task WaitForRestartCleanupAsync(Func<CancellationToken, Task> startCleanup)
     {
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15), this.timeProvider);
-        var cleanup = startCleanup();
+        var cleanup = startCleanup(deadline.Token);
         this.unfinishedRestartCleanup.TryAdd(cleanup, 0);
         _ = cleanup.ContinueWith(task =>
         {
@@ -665,7 +668,7 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory
         bool retireOnly = false)
     {
         var errors = new List<Exception>();
-        async Task CleanAsync(Func<Task> cleanup)
+        async Task CleanAsync(Func<CancellationToken, Task> cleanup)
         {
             try { await this.WaitForRestartCleanupAsync(cleanup).ConfigureAwait(false); }
             catch (Exception error)
@@ -676,19 +679,25 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory
         }
         var cleanups = new List<Task>();
         if (ownership is not null)
-            cleanups.Add(CleanAsync(() => ownership.DisposeAsync().AsTask()));
+            cleanups.Add(CleanAsync(_ => ownership.DisposeAsync().AsTask()));
         if (replacement is not null && !retireOnly)
-            cleanups.Add(CleanAsync(() => replacement.DisposeAsync().AsTask()));
+            cleanups.Add(CleanAsync(token => replacement.DisposeForRestartCleanupAsync(token).AsTask()));
         if (replacementLease is not null)
-            cleanups.Add(CleanAsync(() => table.TerminateOwnerRuntimeExactAsync(
-                replacementLease.SessionId, replacementLease.AgentChat, CancellationToken.None, this.timeProvider)));
+            cleanups.Add(CleanAsync(token => table.TerminateOwnerRuntimeExactAsync(
+                replacementLease.SessionId, replacementLease.AgentChat, token, this.timeProvider)));
         if (replacement is not null && retireOnly)
-            cleanups.Add(CleanAsync(() => replacement.RetireForRestartAsync(replacement.Epoch).AsTask()));
+            cleanups.Add(CleanAsync(_ => replacement.RetireForRestartAsync(replacement.Epoch).AsTask()));
         await Task.WhenAll(cleanups).ConfigureAwait(false);
         if (replacementLease is not null)
-            await CleanAsync(() => replacementLease.DisposeAsync().AsTask()).ConfigureAwait(false);
-        if (errors.Count != 0 && (errors.Count == 1 || errors.All(error => error is OperationCanceledException)))
-            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(errors[0]).Throw();
+            await CleanAsync(_ => replacementLease.DisposeAsync().AsTask()).ConfigureAwait(false);
+        if (errors.Count != 0)
+        {
+            var flattened = new AggregateException(errors).Flatten().InnerExceptions;
+            if (flattened.Count != 0 && flattened.All(error => error is OperationCanceledException))
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(flattened[0]).Throw();
+            if (errors.Count == 1)
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(errors[0]).Throw();
+        }
         if (errors.Count > 1)
             throw new AggregateException(errors);
     }

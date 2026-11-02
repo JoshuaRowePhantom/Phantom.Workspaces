@@ -9,6 +9,64 @@ namespace Phantom.Workspaces.Tests;
 public sealed partial class DataAccessAgentSessionRuntimeHostFactoryTests
 {
     [Fact]
+    public async Task RestartSession_CleanupDeadlineBeforeOwnershipQuiescence_CancelsLateOwnerCleanup()
+    {
+        await using var environment = new RestartEnvironment();
+        await using var viewer = await environment.AcquireAsync();
+        var renewing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseRenewal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ownerCleanup = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fences = 0;
+        var ownership = new AgentSessionOwnershipLease(environment.Time,
+            async _ =>
+            {
+                renewing.TrySetResult();
+                await releaseRenewal.Task;
+                return new AgentSessionOwnershipLeasePeriod(
+                    environment.Time.GetUtcNow(), environment.Time.GetUtcNow().AddMinutes(1));
+            }, _ =>
+            {
+                Interlocked.Increment(ref fences);
+                return ValueTask.CompletedTask;
+            }, _ => ValueTask.CompletedTask);
+        ownership.Start(new AgentSessionOwnershipLeasePeriod(
+            environment.Time.GetUtcNow(), environment.Time.GetUtcNow().AddMinutes(1)));
+        var lifetime = new Mock<IAsyncDisposable>();
+        lifetime.Setup(value => value.DisposeAsync()).Returns(ValueTask.CompletedTask);
+        var runtime = new RemoteAgentSessionLease(
+            "isolated", 3, viewer.RestartIdentity!.RuntimeEpoch, viewer.AgentChat, false,
+            () => throw new InvalidOperationException(), timeProvider: environment.Time,
+            ownershipLease: ownership, runtimeLifetime: lifetime.Object,
+            terminateRuntimeAsync: token =>
+            {
+                ownerCleanup.TrySetResult(token);
+                token.ThrowIfCancellationRequested();
+                return Task.CompletedTask;
+            });
+        using var deadline = new CancellationTokenSource();
+        try
+        {
+            environment.Time.Advance(TimeSpan.FromSeconds(10));
+            await renewing.Task.WaitAsync(TestContext.Current.CancellationToken);
+            var cleanup = runtime.DisposeForRestartCleanupAsync(deadline.Token).AsTask();
+            deadline.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cleanup);
+            Assert.False(ownerCleanup.Task.IsCompleted);
+            releaseRenewal.TrySetResult();
+            Assert.True((await ownerCleanup.Task.WaitAsync(TestContext.Current.CancellationToken)).IsCancellationRequested);
+            await Assert.ThrowsAnyAsync<Exception>(() => runtime.DisposeAsync().AsTask());
+            lifetime.Verify(value => value.DisposeAsync(), Times.Once);
+            Assert.Equal(0, fences);
+        }
+        finally
+        {
+            releaseRenewal.TrySetResult();
+            await Record.ExceptionAsync(() => runtime.DisposeAsync().AsTask());
+            await ownership.DisposeAsync();
+        }
+    }
+
+    [Fact]
     public async Task RestartSession_BlockedDiagnosticBackpressure_HasOwnerDeadlineAndFencesRuntime()
     {
         await using var environment = new RestartEnvironment();
@@ -61,7 +119,7 @@ public sealed partial class DataAccessAgentSessionRuntimeHostFactoryTests
         await using var runtime = new RemoteAgentSessionLease("isolated", 3, viewer.RestartIdentity!.RuntimeEpoch,
             viewer.AgentChat, false, () => throw new InvalidOperationException(),
             timeProvider: environment.Time, ownershipLease: ownership, runtimeLifetime: lifetime.Object,
-            terminateRuntimeAsync: () => Task.CompletedTask);
+            terminateRuntimeAsync: _ => Task.CompletedTask);
         environment.Time.Advance(TimeSpan.FromSeconds(10));
         try
         {

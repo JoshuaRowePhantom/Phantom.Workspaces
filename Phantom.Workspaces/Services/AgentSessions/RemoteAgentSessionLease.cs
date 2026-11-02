@@ -14,6 +14,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     private static readonly TimeSpan ReconnectGrace = TimeSpan.FromSeconds(5);
     private readonly object gate = new();
     private readonly SemaphoreSlim transitionGate = new(1, 1);
+    private readonly CancellationTokenSource commandAdmissionCancellation = new();
     private readonly Dictionary<string, AttachmentState> attachments = new(StringComparer.Ordinal);
     // An authorized subagent is owned by its parent runtime, not by its last transcript viewer.
     private readonly HashSet<RemoteAgentSessionLease> ownedChildRuntimes = new(ReferenceEqualityComparer.Instance);
@@ -42,7 +43,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     private readonly Func<AgentSessionSnapshot> snapshotFactory;
     private readonly AgentSessionOwnershipLease? ownershipLease;
     private readonly IAsyncDisposable? runtimeLifetime;
-    private readonly Func<Task>? terminateRuntimeAsync;
+    private readonly Func<CancellationToken, Task>? terminateRuntimeAsync;
     private readonly AttachmentPublisherLifetimeHooks? publisherLifetimeHooks;
     private readonly IAgentChatRunningItemsSnapshotProvider? runningItemsSnapshotProvider;
     private HashSet<string> queueIds;
@@ -54,6 +55,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     private bool continueInBackground;
     private int owningParentCount;
     private int localViewerCount;
+    internal event Action<int>? ViewerCountChanged;
     private HashSet<string>? pendingRestartViewers;
     private Action? resumeRestartDispatch;
     private ITimer? restartViewerGrace;
@@ -191,7 +193,10 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         {
             if (blockRuntime)
                 lock (this.gate)
+                {
                     this.fenced = true;
+                    this.commandAdmissionCancellation.Cancel();
+                }
         }
     }
 
@@ -208,6 +213,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             if (this.fenced)
                 throw new InvalidOperationException("The owning runtime is stopping.");
             this.localViewerCount++;
+            this.ViewerCountChanged?.Invoke(this.ConnectedViewerCountUnderLock());
         }
     }
 
@@ -220,6 +226,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             lock (this.gate)
             {
                 this.localViewerCount--;
+                this.ViewerCountChanged?.Invoke(this.ConnectedViewerCountUnderLock());
                 if (!this.fenced && this.localViewerCount == 0
                     && this.attachments.Count == 0 && !this.continueInBackground && this.owningParentCount == 0)
                     shutdown = this.BeginTerminationUnderLock("runtime-stopped");
@@ -244,7 +251,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         IAsyncDisposable? runtimeLifetime = null,
         CurrentSessionContext? sessionContext = null,
         AttachmentPublisherLifetimeHooks? publisherLifetimeHooks = null,
-        Func<Task>? terminateRuntimeAsync = null)
+        Func<CancellationToken, Task>? terminateRuntimeAsync = null)
     {
         this.SessionId = !string.IsNullOrWhiteSpace(sessionId) ? sessionId : throw new ArgumentException("Session id is required.", nameof(sessionId));
         this.OwnershipGeneration = ownershipGeneration >= 0 ? ownershipGeneration : throw new ArgumentOutOfRangeException(nameof(ownershipGeneration));
@@ -334,6 +341,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     internal CurrentSessionContext? SessionContext { get; }
     internal AgentSessionReplayBuffer Replay { get; }
     internal bool IsFenced { get { lock (this.gate) return this.fenced; } }
+    internal CancellationToken CommandAdmissionCancellation => this.commandAdmissionCancellation.Token;
     internal bool HasTerminated { get { lock (this.gate) return this.hasTerminated; } }
     internal int ViewerCount
     {
@@ -499,6 +507,8 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
                     attachment = this.AttachUnderLock(request, staged: true);
                     if (!reconnecting)
                         this.PublishRetentionChangedUnderLock(request.Channel);
+                    else
+                        this.ViewerCountChanged?.Invoke(this.ConnectedViewerCountUnderLock());
                     ProtocolReplayCursor? replayResetCursor = null;
                     if (request.Cursor is { } cursor)
                     {
@@ -648,14 +658,15 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     internal async ValueTask ReportFatalFailureAsync(CancellationToken ct = default)
         => await this.TerminateAsync("runtime-failed", ct).ConfigureAwait(false);
 
-    private async ValueTask<bool> TerminateAsync(string reason, CancellationToken ct)
+    private async ValueTask<bool> TerminateAsync(
+        string reason, CancellationToken ct, CancellationToken cleanupCancellation = default)
     {
         await this.transitionGate.WaitAsync(ct).ConfigureAwait(false);
         Task task;
         try
         {
             lock (this.gate)
-                task = this.BeginTerminationUnderLock(reason);
+                task = this.BeginTerminationUnderLock(reason, cleanupCancellation);
         }
         finally
         {
@@ -852,13 +863,17 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
 
     public async ValueTask DisposeAsync() => await this.TryTerminateAsync().ConfigureAwait(false);
 
-    private Task BeginTerminationUnderLock(string reason)
+    internal async ValueTask DisposeForRestartCleanupAsync(CancellationToken cancellationToken)
+        => await this.TerminateAsync("runtime-stopped", cancellationToken, cancellationToken).ConfigureAwait(false);
+
+    private Task BeginTerminationUnderLock(string reason, CancellationToken cleanupCancellation = default)
     {
         if (this.termination is not null)
             return this.termination;
         this.fenced = true;
+        this.commandAdmissionCancellation.Cancel();
         this.terminalReason = reason;
-        return this.termination = this.TerminateCoreAsync();
+        return this.termination = this.TerminateCoreAsync(cleanupCancellation);
     }
 
     private async Task ExpireDisconnectedAsync(string token, long generation)
@@ -875,6 +890,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
 
     private void PublishRetentionChangedUnderLock(IMessageChannel? excludedChannel)
     {
+        this.ViewerCountChanged?.Invoke(this.ConnectedViewerCountUnderLock());
         var recipients = this.attachments.Values.Where(
             value => !value.Disconnected
                 && (excludedChannel is null
@@ -900,6 +916,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
             if (this.fenced) return;
             background = this.continueInBackground;
             viewers = this.ConnectedViewerCountUnderLock();
+            this.ViewerCountChanged?.Invoke(viewers);
         }
         await this.PublishAsync(new SessionRetentionChangedEvent
         {
@@ -908,7 +925,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         }, ct: ct).ConfigureAwait(false);
     }
 
-    private async Task TerminateCoreAsync()
+    private async Task TerminateCoreAsync(CancellationToken cleanupCancellation)
     {
         this.restartViewerGrace?.Dispose();
         var failures = new List<Exception>();
@@ -983,7 +1000,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
                 // The exact factory entry has already been fully stopped and replaced.
             }
             else if (this.terminateRuntimeAsync is not null)
-                await this.terminateRuntimeAsync().ConfigureAwait(false);
+                await this.terminateRuntimeAsync(cleanupCancellation).ConfigureAwait(false);
             else if (this.Chat is AgentChat local)
                 await local.TerminateAsync().ConfigureAwait(false);
         }

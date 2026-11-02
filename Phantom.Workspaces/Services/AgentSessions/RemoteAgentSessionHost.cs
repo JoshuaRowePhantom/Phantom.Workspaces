@@ -117,12 +117,13 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
         var attachment = initial.Attachment;
         try
         {
-            if (open.ReplayCursor is { } previous && previous.Epoch != runtime.Epoch)
+            if (open.ReplayCursor is { } previous && previous.Epoch != runtime.Epoch
+                && this.runtimeFactory is DataAccessAgentSessionRuntimeHostFactory restartFactory
+                && await restartFactory.CanReconcileEpochAsync(
+                    open.AgentSessionId, previous.Epoch, runtime.Epoch, ct).ConfigureAwait(false))
             {
-                if (this.runtimeFactory is not DataAccessAgentSessionRuntimeHostFactory restartFactory
-                    || !await restartFactory.CanReconcileEpochAsync(
-                        open.AgentSessionId, previous.Epoch, runtime.Epoch, ct).ConfigureAwait(false))
-                    throw new AgentSessionUnavailableException();
+                // A stale cursor still permits an authenticated full snapshot. Only a
+                // proven restart may authorize an existing client to switch epochs.
                 var handoff = AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.CreateFrame(
                     previous.Epoch, previous.Sequence + 1, Guid.NewGuid(),
                     new SessionRestartingEvent { ReplacementRuntimeEpoch = runtime.Epoch });
@@ -401,7 +402,22 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
     {
         try
         {
-            using var transition = await this.EnterTransitionAsync(open.AgentSessionId, ct).ConfigureAwait(false);
+            if (command.RuntimeEpoch != runtime.Epoch || runtime.IsFenced)
+                throw new AgentSessionUnavailableException();
+            attachment.EnsureConnected();
+            using var admissionCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                ct, runtime.CommandAdmissionCancellation);
+            IDisposable transition;
+            try
+            {
+                transition = await this.EnterTransitionAsync(
+                    open.AgentSessionId, admissionCancellation.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                throw new AgentSessionUnavailableException();
+            }
+            using var admitted = transition;
             var operation = command switch
             {
             SetToolEnabledCommand => AgentSessionAuthorizationOperation.SetToolState,
@@ -421,13 +437,14 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
             ChildAgentId = command is OpenSubagentCommand child ? child.AgentId : null,
             }, ct).ConfigureAwait(false);
             if (!authorized.IsAllowed) throw new AgentSessionUnavailableException();
-            if (command.RuntimeEpoch != runtime.Epoch)
+            if (command.RuntimeEpoch != runtime.Epoch || runtime.IsFenced)
                 throw new AgentSessionUnavailableException();
             attachment.EnsureConnected();
 
             if (command is RestartViewerReadyCommand)
             {
                 runtime.AcknowledgeRestartViewer(attachment.AttachmentToken);
+                transition.Dispose();
                 await attachment.PublishAsync(new CommandCompletedEvent
                 {
                     CommandId = command.CommandId,
@@ -438,18 +455,24 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
 
             if (command is TerminateSessionCommand)
             {
-                await runtime.TryTerminateAsync(ct).ConfigureAwait(false);
+                var termination = runtime.TryTerminateAsync(ct);
+                transition.Dispose();
+                await termination.ConfigureAwait(false);
                 return;
             }
 
             if (command is DetachCommand)
             {
-                await attachment.ReleaseExplicitlyAsync().ConfigureAwait(false);
+                var release = attachment.ReleaseExplicitlyAsync();
+                transition.Dispose();
+                await release.ConfigureAwait(false);
                 return;
             }
             if (command is DetachIfIdleCommand)
             {
-                if (!await attachment.TryReleaseIdleAsync(command).ConfigureAwait(false))
+                var release = attachment.TryReleaseIdleAsync(command);
+                transition.Dispose();
+                if (!await release.ConfigureAwait(false))
                     await attachment.PublishAsync(new CommandCompletedEvent
                     {
                         CommandId = command.CommandId,
@@ -459,8 +482,13 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
             }
             if (command is OpenSubagentCommand childCommand)
                 await this.AuthorizeSubagentAsync(peer, runtime, childCommand, ct).ConfigureAwait(false);
-            var result = await runtime.ExecuteCommandOnceAsync(
-                command, token => this.ExecuteCommandAsync(runtime, command, token), ct).ConfigureAwait(false);
+            var execution = runtime.ExecuteCommandOnceAsync(
+                command, token => this.ExecuteCommandAsync(runtime, command, token), ct);
+            // Serialize admission, not completion: modal responses and cleanup may
+            // depend on another viewer while queue/configuration handoff fences live
+            // in the runtime itself. Outbound backpressure must not own this gate.
+            transition.Dispose();
+            var result = await execution.ConfigureAwait(false);
             await attachment.PublishAsync(result, command.CorrelationId, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }

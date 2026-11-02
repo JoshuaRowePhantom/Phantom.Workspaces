@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.Text.Json;
 using System.Threading.Channels;
@@ -7,6 +8,7 @@ using Avalonia.Headless.XUnit;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
+using Moq;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
 using Phantom.Workspaces.Agent.Gui;
@@ -25,6 +27,63 @@ namespace Phantom.Workspaces.Tests.Scenarios;
 
 public sealed class RemoteAgentSessionScenarioTests
 {
+    [Fact]
+    public async Task OwnerRunningRow_RemoteAndLocalViewers_TracksAuthoritativeCountWithoutOwnerLease()
+    {
+        await using var fixture = await ScenarioFixture.CreateAsync(Session("viewer-count", background: true));
+        await using var first = await fixture.OpenProxyAsync("viewer-count", AgentSessionOpenIntent.Start);
+        var runtime = await fixture.RuntimeAsync("viewer-count", 0);
+        var row = Assert.Single(fixture.RunningChats.RunningSessions);
+        Assert.Equal(1, row.ViewerCount);
+        Assert.Same(runtime.Chat, fixture.RetainedChat("viewer-count"));
+        await using var second = await fixture.OpenProxyAsync("viewer-count", AgentSessionOpenIntent.Attach);
+        await using var local = await fixture.AcquireOwnerViewerAsync("viewer-count");
+        Assert.Equal(3, row.ViewerCount);
+        await local.DisposeAsync();
+        Assert.Equal(2, row.ViewerCount);
+        var oneRemaining = WaitForCountAsync(1);
+        await runtime.ReleaseAsync(second.OpenRequest.AttachmentToken, 1);
+        Assert.Equal(1, row.ViewerCount);
+        await second.DisposeAsync();
+        await oneRemaining;
+        await first.Chat.SetContinueInBackgroundAsync(false, TestContext.Current.CancellationToken);
+        Assert.False(row.ContinueInBackground);
+        Assert.Null(fixture.RetainedChat("viewer-count"));
+        await first.Chat.SetContinueInBackgroundAsync(true, TestContext.Current.CancellationToken);
+        Assert.True(row.ContinueInBackground);
+        Assert.Same(runtime.Chat, fixture.RetainedChat("viewer-count"));
+        var noViewers = WaitForCountAsync(0);
+        await first.Transport.DropConnectionsAsync();
+        await noViewers;
+        Assert.False(runtime.IsFenced);
+        Assert.Same(runtime.Chat, fixture.RetainedChat("viewer-count"));
+        await using var reconnected = await fixture.OpenProxyAsync(
+            "viewer-count", AgentSessionOpenIntent.Attach,
+            attachmentToken: first.OpenRequest.AttachmentToken,
+            cursor: new ReplayCursor { Epoch = runtime.Epoch, Sequence = runtime.Replay.HighWaterMark });
+        Assert.Equal(1, row.ViewerCount);
+        await runtime.ReleaseAsync(reconnected.OpenRequest.AttachmentToken, 2);
+        Assert.Equal(0, row.ViewerCount);
+
+        async Task WaitForCountAsync(int expected)
+        {
+            var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            void OnChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs arguments)
+            {
+                if (row.ViewerCount == expected)
+                    changed.TrySetResult();
+            }
+            row.PropertyChanged += OnChanged;
+            try
+            {
+                if (row.ViewerCount == expected)
+                    changed.TrySetResult();
+                await changed.Task.WaitAsync(TestContext.Current.CancellationToken);
+            }
+            finally { row.PropertyChanged -= OnChanged; }
+        }
+    }
+
     [Fact]
     public async Task TransportFrames_SnapshotAndConcurrentDeltas_ArriveInSequence()
     {
@@ -1144,6 +1203,58 @@ public sealed class RemoteAgentSessionScenarioTests
         Assert.Equal(background, persisted.GetProperty("continue-in-background").GetBoolean());
         Assert.NotEqual(oldRuntime.Epoch, newProxy.Client.LastAppliedCursor!.Value.Epoch);
         Assert.Equal(1, (await fixture.RuntimeAsync("takeover", 1)).SessionContext!.OwnershipGeneration);
+    }
+
+    [Fact]
+    public async Task OwnerTermination_AwaitsProviderCleanupAfterChatDisposal()
+    {
+        await using var fixture = await ScenarioFixture.CreateAsync(Session("provider-cleanup", background: true));
+        await using var proxy = await fixture.OpenProxyAsync("provider-cleanup", AgentSessionOpenIntent.Start);
+        var chat = await fixture.OwnerChatAsync("provider-cleanup", 0);
+        var stream = fixture.Model.EnqueueStreamingResponse(isDisposalReady: false);
+        chat.EnqueueUserMessage("active provider cleanup");
+        await stream.WaitForClaimedAsync(TestContext.Current.CancellationToken);
+        var disposal = chat.TerminateAsync(TestContext.Current.CancellationToken);
+        Task<bool>? termination = null;
+        Task? providerCleanup = null;
+        try
+        {
+            await stream.WaitForDisposalStartedAsync(TestContext.Current.CancellationToken);
+            await disposal;
+            var sessionId = new AgentSessionId("provider-cleanup");
+            var factory = new Mock<Phantom.Workspaces.Llm.IRunningAgentChatFactory>();
+            factory.SetupGet(value => value.RunningSessions).Returns(new ObservableCollection<RunningAgentChat>());
+            factory.Setup(value => value.GetOrCreateAsync(
+                    sessionId, It.IsAny<AgentDefinition?>(), It.IsAny<AgentServices?>(),
+                    It.IsAny<string?>(), It.IsAny<string?>(), true, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new RunningAgentChatLease(sessionId, chat, () => ValueTask.CompletedTask));
+            factory.Setup(value => value.TerminateExactAsync(sessionId, chat, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(true);
+            var table = new RunningAgentChatTable(factory.Object);
+            await using var lease = await table.AcquireAsync(new AcquireAgentChatRequest
+            {
+                AgentSessionId = sessionId,
+                OwnerRuntimeAcquisition = true,
+                EntityName = "provider-cleanup",
+            }, TestContext.Current.CancellationToken);
+            providerCleanup = chat.WaitForProviderCleanupAsync(TestContext.Current.CancellationToken);
+            termination = table.TerminateOwnerRuntimeExactAsync(
+                sessionId, chat, TestContext.Current.CancellationToken, fixture.Time);
+            Assert.False(providerCleanup.IsCompleted);
+            Assert.False(termination.IsCompleted);
+            Assert.Equal(0, stream.DisposalCount);
+        }
+        finally
+        {
+            stream.ReleaseDisposal();
+            await disposal;
+            if (providerCleanup is not null)
+                await providerCleanup;
+            if (termination is not null)
+                Assert.True(await termination);
+        }
+        Assert.Equal(1, stream.DisposalCount);
+        Assert.True(chat.IsTerminal);
     }
 
     [Theory]
