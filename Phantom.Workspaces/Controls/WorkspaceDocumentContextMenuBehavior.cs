@@ -2,9 +2,14 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Data;
+using Avalonia.Data.Converters;
+using Avalonia.Markup.Xaml.Styling;
 using Avalonia.VisualTree;
 using Dock.Avalonia.Controls;
+using Dock.Avalonia.Converters;
 using Phantom.Workspaces.Services.TabCommands;
+using Phantom.Workspaces.ViewModels;
 using System.Runtime.CompilerServices;
 
 namespace Phantom.Workspaces.Controls;
@@ -13,6 +18,7 @@ public static class WorkspaceDocumentContextMenuBehavior
 {
     private static readonly ConditionalWeakTable<DocumentTabStripItem, ItemSubscription> ItemSubscriptions = [];
     private static readonly ConditionalWeakTable<ContextMenu, MenuController> MenuControllers = [];
+    private static readonly ConditionalWeakTable<ContextMenu, DocumentTabStripItem> StockMenuOwners = [];
     private static readonly WorkspaceDocumentMenuFactory MenuFactory = new();
 
     public static readonly AttachedProperty<bool> IsEnabledProperty =
@@ -58,7 +64,7 @@ public static class WorkspaceDocumentContextMenuBehavior
             this.item.DetachedFromVisualTree += this.OnDetachedFromVisualTree;
             this.item.AttachedToVisualTree += this.OnAttachedToVisualTree;
             this.item.AddHandler(Control.ContextRequestedEvent, this.OnContextRequested, RoutingStrategies.Tunnel);
-            this.item.AddHandler(InputElement.KeyDownEvent, this.OnKeyDown, RoutingStrategies.Tunnel);
+            this.item.AddHandler(InputElement.KeyUpEvent, this.OnKeyUp, RoutingStrategies.Tunnel);
             this.AttachController();
         }
 
@@ -68,7 +74,7 @@ public static class WorkspaceDocumentContextMenuBehavior
             this.item.DetachedFromVisualTree -= this.OnDetachedFromVisualTree;
             this.item.AttachedToVisualTree -= this.OnAttachedToVisualTree;
             this.item.RemoveHandler(Control.ContextRequestedEvent, this.OnContextRequested);
-            this.item.RemoveHandler(InputElement.KeyDownEvent, this.OnKeyDown);
+            this.item.RemoveHandler(InputElement.KeyUpEvent, this.OnKeyUp);
             this.DetachController();
         }
 
@@ -84,7 +90,7 @@ public static class WorkspaceDocumentContextMenuBehavior
             var origin = ResolveOrigin(source);
             if (ReferenceEquals(origin, this.item))
             {
-                this.controller?.CaptureOrigin(this.item);
+                this.CaptureOrigin();
                 if (ReferenceEquals(source, this.item) && this.menu is not null)
                 {
                     // The theme attaches the stock menu to PART_TabBody, which is not
@@ -96,7 +102,7 @@ public static class WorkspaceDocumentContextMenuBehavior
             }
         }
 
-        private void OnKeyDown(object? sender, KeyEventArgs args)
+        private void OnKeyUp(object? sender, KeyEventArgs args)
         {
             if (args.Handled || this.menu is null ||
                 !(args.Key == Key.Apps || args.Key == Key.F10 && args.KeyModifiers == KeyModifiers.Shift))
@@ -108,13 +114,74 @@ public static class WorkspaceDocumentContextMenuBehavior
             {
                 return;
             }
-            this.controller?.CaptureOrigin(this.item);
+            // Opening on KeyDown lets Avalonia's popup consume the same gesture's
+            // KeyUp as a close request (notably Apps). Open on release instead.
+            this.CaptureOrigin();
             this.OpenNativeMenu();
             args.Handled = true;
         }
 
         private static DocumentTabStripItem? ResolveOrigin(Visual source) =>
             source as DocumentTabStripItem ?? source.GetVisualAncestors().OfType<DocumentTabStripItem>().FirstOrDefault();
+
+        private void CaptureOrigin()
+        {
+            if (this.menu is not null && this.OwnsStockMenu(this.menu)
+                && this.item.DataContext is WorkspaceDocument document
+                && this.item.GetVisualAncestors().OfType<DocumentControl>().FirstOrDefault() is { } documentControl)
+            {
+                // Popup is a logical root in the consumed Avalonia version, so Dock's
+                // $parent[DocumentControl] lookup cannot reach the owning tab layout.
+                // Keep the stock capability/count converters and give only these four
+                // directional bindings an explicit, live orientation source.
+                foreach (var (index, layouts) in new[]
+                {
+                    (5, "Top"),
+                    (7, "Top"),
+                    (6, "Left,Right"),
+                    (8, "Left,Right"),
+                })
+                {
+                    // Pinned stock item order; localized headers are unresolved until
+                    // first opening and must never be used as command identities.
+                    var action = this.menu!.Items.OfType<MenuItem>().ElementAt(index);
+                    action.Bind(Visual.IsVisibleProperty, new MultiBinding
+                    {
+                        Converter = BoolConverters.And,
+                        Bindings =
+                        {
+                            new MultiBinding
+                            {
+                                Converter = DockCapabilityConverters.CanCloseMultiConverter,
+                                Bindings =
+                                {
+                                    new Binding { Source = document },
+                                    new Binding(nameof(document.CanClose)) { Source = document },
+                                    new Binding("DockCapabilityOverrides.CanClose") { Source = document },
+                                    new Binding("Owner.DockCapabilityPolicy.CanClose") { Source = document },
+                                },
+                            },
+                            new MultiBinding
+                            {
+                                Converter = CanRemoveDockableConverter.Instance,
+                                Bindings =
+                                {
+                                    new Binding("Owner.CanCloseLastDockable") { Source = document, FallbackValue = true },
+                                    new Binding("Owner.VisibleDockables.Count") { Source = document, FallbackValue = 0 },
+                                },
+                            },
+                            new Binding(nameof(documentControl.TabsLayout))
+                            {
+                                Source = documentControl,
+                                Converter = DocumentTabLayoutMatchConverter.Instance,
+                                ConverterParameter = layouts,
+                            },
+                        },
+                    });
+                }
+            }
+            this.controller?.CaptureOrigin(this.item);
+        }
 
         private void OpenNativeMenu()
         {
@@ -132,12 +199,31 @@ public static class WorkspaceDocumentContextMenuBehavior
             else if (args.Property == StyledElement.DataContextProperty)
             {
                 this.controller?.InvalidateOrigin(this.item);
+                this.AttachController();
             }
         }
 
         private void AttachController()
         {
             var nextMenu = this.item.DocumentContextMenu as ContextMenu;
+            if (this.item.DataContext is WorkspaceDocument
+                && nextMenu is not null
+                && !this.OwnsStockMenu(nextMenu)
+                && (StockMenuOwners.TryGetValue(nextMenu, out _)
+                    || ReferenceEquals(nextMenu, this.item.FindResource("DocumentTabStripItemContextMenu"))))
+            {
+                // Instantiate the consumed compiled Dock resource, not a shallow copy of
+                // already-parented controls. Each content header owns its stock bindings.
+                var source = new Uri("avares://Dock.Avalonia.Themes.Fluent/Controls/DocumentTabStripItem.axaml");
+                var resources = new ResourceInclude(source) { Source = source };
+                if (resources.TryGetResource("DocumentTabStripItemContextMenu", this.item.ActualThemeVariant, out var value)
+                    && value is ContextMenu stockMenu)
+                {
+                    StockMenuOwners.Add(stockMenu, this.item);
+                    this.item.SetCurrentValue(DocumentTabStripItem.DocumentContextMenuProperty, stockMenu);
+                    return;
+                }
+            }
             if (ReferenceEquals(this.menu, nextMenu))
             {
                 return;
@@ -153,6 +239,9 @@ public static class WorkspaceDocumentContextMenuBehavior
             this.controller = MenuControllers.GetValue(this.menu, static menu => new MenuController(menu));
             this.controller.Register(this.item);
         }
+
+        private bool OwnsStockMenu(ContextMenu candidate) =>
+            StockMenuOwners.TryGetValue(candidate, out var owner) && ReferenceEquals(owner, this.item);
 
         private void DetachController()
         {

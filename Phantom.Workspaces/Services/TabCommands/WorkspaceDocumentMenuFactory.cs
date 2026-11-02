@@ -44,11 +44,6 @@ internal sealed class WorkspaceDocumentMenuFactory
             .ThenBy(entry => entry.Descriptor.Id, StringComparer.Ordinal)
             .ToArray();
 
-        if (descriptors.Length == 0)
-        {
-            return;
-        }
-
         if (menu.Items is not IList items)
         {
             return;
@@ -59,7 +54,7 @@ internal sealed class WorkspaceDocumentMenuFactory
         bool IsCurrentPresentation() => this.activeSubscriptions.TryGetValue(menu, out var current)
             && ReferenceEquals(current.Presentation, presentation);
         var hasVisibleDefaults = items.Cast<object>().OfType<Control>().Any(control => control.IsVisible);
-        if (hasVisibleDefaults)
+        if (hasVisibleDefaults && descriptors.Length != 0)
         {
             contributedItems.Add(CreateContributionSeparator());
         }

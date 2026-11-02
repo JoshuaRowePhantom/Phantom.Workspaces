@@ -22,7 +22,7 @@ using System.Text.Json;
 
 namespace Phantom.Workspaces.Tests;
 
-public sealed class MainWindowTabCommandsIntegrationTests
+public sealed partial class MainWindowTabCommandsIntegrationTests
 {
     [AvaloniaFact]
     public async Task RestartSession_DefaultProductionCoordinator_RendersMenuAndReplacesTheActualOwnerInPlace()
@@ -257,9 +257,10 @@ public sealed class MainWindowTabCommandsIntegrationTests
                 var item = await WaitForItemAsync(host, tabId);
                 var service = new RecordingRestartService();
                 viewModel.AgentSessionRestartService = service;
-                await OpenNativeMenuAsync(host, item);
+                await OpenNativeMenuAsync(host, item, keyboard: true);
                 var menu = Assert.IsType<ContextMenu>(item.DocumentContextMenu);
                 var restart = Assert.Single(menu.Items.OfType<MenuItem>(), value => Equals(value.Header, "Restart agent session…"));
+                AssertStockTargets(menu, Assert.IsType<WorkspaceDocument>(item.DataContext));
                 restart.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(MenuItem.ClickEvent));
                 Assert.Equal(tabId["tab-".Length..], (await service.LastRequest.Task).SessionId);
                 menu.Close();
@@ -296,9 +297,8 @@ public sealed class MainWindowTabCommandsIntegrationTests
             var itemA = renderedItems.Single(item => item.DataContext is WorkspaceDocument { Id: "tab-session-a" });
             var itemB = renderedItems.Single(item => item.DataContext is WorkspaceDocument { Id: "tab-session-b" });
 
-            // The rendered content containers share a single ContextMenu instance that is
-            // retargeted on each open; reopening it for a different tab must drop the old
-            // target, preserve the default items, and never accumulate duplicate restart items.
+            // Revisit A/B/A through each isolated native menu without losing defaults
+            // or accumulating contributions from a previous presentation.
             var menu = Assert.IsType<ContextMenu>(itemA.DocumentContextMenu);
             await OpenNativeMenuAsync(window, itemA, keyboard: true);
             var defaultHeaders = menu.Items.OfType<MenuItem>()
@@ -320,6 +320,7 @@ public sealed class MainWindowTabCommandsIntegrationTests
             string expectedSessionId,
             IReadOnlyList<object?> defaultHeaders)
         {
+            menu = Assert.IsType<ContextMenu>(item.DocumentContextMenu);
             await OpenNativeMenuAsync(window, item, keyboard: true);
 
             var restartItem = Assert.Single(
@@ -359,7 +360,8 @@ public sealed class MainWindowTabCommandsIntegrationTests
         finally { window.LayoutUpdated -= Updated; }
     }
 
-    internal static async Task OpenNativeMenuAsync(Window window, DocumentTabStripItem item, bool keyboard = false)
+    internal static async Task OpenNativeMenuAsync(Window window, DocumentTabStripItem item, bool keyboard = false,
+        Control? pointerOrigin = null, bool appsKey = false)
     {
         window.UpdateLayout();
         var body = item.GetVisualDescendants().OfType<Border>().Single(control => control.Name == "PART_TabBody");
@@ -370,15 +372,18 @@ public sealed class MainWindowTabCommandsIntegrationTests
         menu.Opened += Opened;
         try
         {
-            if (keyboard)
+            if (keyboard || appsKey)
             {
                 Assert.True(item.Focus());
-                window.KeyPress(Key.F10, RawInputModifiers.Shift, PhysicalKey.F10, null);
-                window.KeyRelease(Key.F10, RawInputModifiers.Shift, PhysicalKey.F10, null);
+                window.KeyPress(appsKey ? Key.Apps : Key.F10, appsKey ? RawInputModifiers.None : RawInputModifiers.Shift,
+                    appsKey ? PhysicalKey.ContextMenu : PhysicalKey.F10, null);
+                window.KeyRelease(appsKey ? Key.Apps : Key.F10, appsKey ? RawInputModifiers.None : RawInputModifiers.Shift,
+                    appsKey ? PhysicalKey.ContextMenu : PhysicalKey.F10, null);
             }
             else
             {
-                var point = body.TranslatePoint(new Point(body.Bounds.Width / 2, body.Bounds.Height / 2), window)!.Value;
+                var target = pointerOrigin ?? body;
+                var point = target.TranslatePoint(new Point(target.Bounds.Width / 2, target.Bounds.Height / 2), window)!.Value;
                 window.MouseDown(point, MouseButton.Right);
                 window.MouseUp(point, MouseButton.Right);
             }
@@ -470,6 +475,7 @@ public sealed class MainWindowTabCommandsIntegrationTests
             await OpenNativeMenuAsync(window, item);
             var menu = Assert.IsType<ContextMenu>(item.DocumentContextMenu);
             var restart = Assert.Single(menu.Items.OfType<MenuItem>(), value => Equals(value.Header, "Restart agent session…"));
+            AssertStockTargets(menu, Assert.IsType<WorkspaceDocument>(item.DataContext));
             Assert.False(restart.IsEnabled);
             Assert.Equal("Restart agent session", AutomationProperties.GetName(restart));
             Assert.False(string.IsNullOrWhiteSpace(AutomationProperties.GetHelpText(restart)));

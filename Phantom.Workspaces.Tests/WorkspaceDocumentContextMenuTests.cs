@@ -13,7 +13,7 @@ using System.Text.Json;
 
 namespace Phantom.Workspaces.Tests;
 
-public sealed class WorkspaceDocumentContextMenuTests
+public sealed partial class WorkspaceDocumentContextMenuTests
 {
     [AvaloniaFact(Timeout = 30_000)]
     public async Task DocumentContextMenu_DetachAndReattach_ReinstallsNativeSubscriptions()
@@ -217,55 +217,6 @@ public sealed class WorkspaceDocumentContextMenuTests
     }
 
     [AvaloniaFact]
-    public async Task DocumentContextMenu_DefaultCapabilitiesChange_PreservesPinnedThemeBindings()
-    {
-        await using var vm = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
-        var provider = new ConfigurableProvider(Contributed("contributed", "Contributed command"));
-        var context = CreateMenuContext(vm, "doc-defaults", provider, resetPaneTabs: true);
-        var factory = new WorkspaceDocumentMenuFactory();
-        var menu = CreateStockMenu(out var defaultHeaders);
-        var tabItem = new DocumentTabStripItem { DataContext = context.Document, DocumentContextMenu = menu };
-
-        factory.Apply(menu, tabItem);
-
-        foreach (var header in defaultHeaders)
-        {
-            var defaultItem = Assert.Single(menu.Items.OfType<MenuItem>(), item => Equals(item.Header, header));
-            Assert.NotNull(defaultItem.Command);
-        }
-
-        factory.Clear(menu);
-
-        Assert.Equal(defaultHeaders.Count, menu.Items.OfType<MenuItem>().Count());
-        Assert.Empty(menu.Items.OfType<Separator>());
-    }
-
-    [AvaloniaFact]
-    public async Task DocumentContextMenu_TabOrientationChanges_PreservesDirectionalCloseBindings()
-    {
-        await using var vm = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
-        var provider = new ConfigurableProvider(Contributed("contributed", "Contributed command"));
-        var context = CreateMenuContext(vm, "doc-orientation", provider, resetPaneTabs: true);
-        var factory = new WorkspaceDocumentMenuFactory();
-        var menu = new ContextMenu();
-        var directional = new[] { "Close tabs to the left", "Close tabs to the right", "Close tabs above", "Close tabs below" };
-        foreach (var header in directional)
-        {
-            menu.Items.Add(new MenuItem { Header = header, Command = new AsyncRelayCommand(_ => Task.CompletedTask) });
-        }
-        var tabItem = new DocumentTabStripItem { DataContext = context.Document, DocumentContextMenu = menu };
-
-        factory.Apply(menu, tabItem);
-        factory.Clear(menu);
-
-        foreach (var header in directional)
-        {
-            var item = Assert.Single(menu.Items.OfType<MenuItem>(), candidate => Equals(candidate.Header, header));
-            Assert.NotNull(item.Command);
-        }
-    }
-
-    [AvaloniaFact]
     public async Task DocumentContextMenu_DisabledContribution_ExposesAccessibleLabelAndReason()
     {
         await using var vm = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
@@ -336,19 +287,6 @@ public sealed class WorkspaceDocumentContextMenuTests
             Availability = _ => visible ? TabCommandAvailability.Enabled : TabCommandAvailability.Hidden,
             ExecuteAsync = (_, _) => Task.FromResult(TabCommandResult.Success()),
         };
-
-    private static ContextMenu CreateStockMenu(out IReadOnlyList<string> headers)
-    {
-        var stock = new[] { "Float", "Float all", "Close", "Close other tabs", "Close all tabs" };
-        var menu = new ContextMenu();
-        foreach (var header in stock)
-        {
-            menu.Items.Add(new MenuItem { Header = header, Command = new AsyncRelayCommand(_ => Task.CompletedTask) });
-        }
-
-        headers = stock;
-        return menu;
-    }
 
     private static ContextMenu CreateDefaultMenu()
     {
