@@ -395,21 +395,23 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
         }
 
         AgentChat? replacement = null;
+        var shutdownAttempted = false;
         try
         {
-            await this.PostToForegroundAsync(() =>
+            await this.PostRestartForegroundAsync(() =>
             {
                 var running = this._runningSessions.FirstOrDefault(item =>
                     ReferenceEquals(item.AgentChat, original.AgentChat));
                 if (running is not null)
                     this._runningSessions.Remove(running);
-            }).ConfigureAwait(false);
+            }, runtimeLifetimeCancellationToken, cleanupTimeProvider ?? TimeProvider.System).ConfigureAwait(false);
             if (!original.ShutdownConfirmed)
             {
                 using var deadline = new CancellationTokenSource(
                     TimeSpan.FromSeconds(15), cleanupTimeProvider ?? TimeProvider.System);
                 using var cleanup = CancellationTokenSource.CreateLinkedTokenSource(
                     deadline.Token, runtimeLifetimeCancellationToken);
+                shutdownAttempted = true;
                 var terminating = original.AgentChat.TerminateAsync(CancellationToken.None);
                 original.PendingRestartCleanup = terminating;
                 ObserveCleanup(terminating);
@@ -423,19 +425,45 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
                 original.ShutdownConfirmed = true;
             }
 
-            await persistStoppedAsync(CancellationToken.None).ConfigureAwait(false);
+            using (var deadline = new CancellationTokenSource(
+                TimeSpan.FromSeconds(15), cleanupTimeProvider ?? TimeProvider.System))
+            using (var cleanup = CancellationTokenSource.CreateLinkedTokenSource(
+                deadline.Token, runtimeLifetimeCancellationToken))
+            {
+                var transitioning = persistStoppedAsync(cleanup.Token).AsTask();
+                original.PendingRestartCleanup = transitioning;
+                ObserveCleanup(transitioning);
+                await transitioning.WaitAsync(cleanup.Token).ConfigureAwait(false);
+                cleanup.Token.ThrowIfCancellationRequested();
+            }
             runtimeLifetimeCancellationToken.ThrowIfCancellationRequested();
             var effectiveServices = this.WithSelfAsFactory(
                 services ?? original.AgentChat.RuntimeServices ?? this._services);
-            replacement = await this.CreateChatOnForegroundAsync(
+            using var startupDeadline = new CancellationTokenSource(
+                TimeSpan.FromSeconds(15), cleanupTimeProvider ?? TimeProvider.System);
+            using var startup = CancellationTokenSource.CreateLinkedTokenSource(
+                startupDeadline.Token, runtimeLifetimeCancellationToken);
+            var creating = this.CreateChatOnForegroundAsync(
                 original.AgentChat.CreateRuntimeReplacementRequest(effectiveServices, checkpoint) with
                 {
-                    CancellationToken = runtimeLifetimeCancellationToken,
+                    CancellationToken = startup.Token,
                 },
-                runtimeLifetimeCancellationToken).ConfigureAwait(false);
+                startup.Token);
+            try
+            {
+                replacement = await creating.WaitAsync(startup.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException error) when (!creating.IsCompleted)
+            {
+                original.ShutdownConfirmed = false;
+                var lateCleanup = CleanupLateReplacementAsync(creating);
+                original.PendingRestartCleanup = lateCleanup;
+                ObserveCleanup(lateCleanup);
+                throw new AgentRuntimeRestartCleanupUnconfirmedException(error);
+            }
             runtimeLifetimeCancellationToken.ThrowIfCancellationRequested();
             PopulateAgentChatRef(effectiveServices, replacement);
-            await this._gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+            await this._gate.WaitAsync(startup.Token).ConfigureAwait(false);
             try
             {
                 ObjectDisposedException.ThrowIf(this._disposed, this);
@@ -453,10 +481,11 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
             {
                 this._gate.Release();
             }
-            await this.PostToForegroundAsync(() =>
-                this._runningSessions.Add(new RunningAgentChat(sessionId, this, replacement)))
+            await this.PostRestartForegroundAsync(() =>
+                this._runningSessions.Add(new RunningAgentChat(sessionId, this, replacement)),
+                startup.Token, cleanupTimeProvider ?? TimeProvider.System)
                 .ConfigureAwait(false);
-            await this._gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+            await this._gate.WaitAsync(startup.Token).ConfigureAwait(false);
             try
             {
                 ObjectDisposedException.ThrowIf(this._disposed, this);
@@ -472,8 +501,25 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
         catch (Exception error)
         {
             Exception failure = error;
+            if (!shutdownAttempted && !original.ShutdownConfirmed)
+            {
+                var stopping = original.AgentChat.TerminateAsync(CancellationToken.None);
+                original.PendingRestartCleanup = stopping;
+                ObserveCleanup(stopping);
+            }
             if (replacement is not null)
             {
+                ObserveCleanup(this.PostToForegroundAsync(() =>
+                {
+                    for (var index = this._runningSessions.Count - 1; index >= 0; index--)
+                        if (ReferenceEquals(this._runningSessions[index].AgentChat, replacement))
+                            this._runningSessions.RemoveAt(index);
+                }));
+                if (error is OperationCanceledException)
+                {
+                    original.ShutdownConfirmed = false;
+                    failure = new AgentRuntimeRestartCleanupUnconfirmedException(error);
+                }
                 try
                 {
                     using var deadline = new CancellationTokenSource(
@@ -497,10 +543,40 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
         }
     }
 
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Task, byte> outstandingRestartCleanup = new();
+
+    private async Task PostRestartForegroundAsync(
+        Action action,
+        CancellationToken cancellationToken,
+        TimeProvider timeProvider)
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15), timeProvider);
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token, cancellationToken);
+        var token = lifetime.Token;
+        var scheduled = Task.Factory.StartNew(() =>
+        {
+            token.ThrowIfCancellationRequested();
+            action();
+        }, token, TaskCreationOptions.None, this._foregroundScheduler);
+        ObserveCleanup(scheduled);
+        await scheduled.WaitAsync(token).ConfigureAwait(false);
+    }
+
     private static void ObserveCleanup(Task cleanup)
-        => _ = cleanup.ContinueWith(task => _ = task.Exception,
-            CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
+    {
+        outstandingRestartCleanup.TryAdd(cleanup, 0);
+        _ = cleanup.ContinueWith(task =>
+        {
+            _ = task.Exception;
+            outstandingRestartCleanup.TryRemove(task, out _);
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+    }
+
+    private static async Task CleanupLateReplacementAsync(Task<AgentChat> creating)
+    {
+        var lateReplacement = await creating.ConfigureAwait(false);
+        await lateReplacement.DisposeAsync().ConfigureAwait(false);
+    }
 
     private async Task<bool> TerminateCoreAsync(AgentSessionId sessionId, IAgentChat? expected, CancellationToken ct)
     {

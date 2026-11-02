@@ -14,6 +14,21 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory
     private readonly ConcurrentDictionary<AgentSessionRuntimeIdentity, RemoteAgentSessionLease> retiredRuntimeSources = new();
     private event Action<AgentSessionOwnerRestartRequest, AgentSessionOwnerRestartResult>? RestartStateChanged;
     private readonly ConcurrentDictionary<Task, byte> unfinishedRestartCleanup = new();
+    private static readonly ConcurrentDictionary<Task, byte> pendingPersistence = new();
+    private readonly ConcurrentDictionary<string, AgentSessionOwnerRestartResult> uncertainRestarts = new(StringComparer.Ordinal);
+
+    private sealed class RestartPersistenceTimeoutException()
+        : TimeoutException("The durable restart transition could not be confirmed within the owner deadline.");
+
+    private static void ObservePendingPersistence(Task operation)
+    {
+        pendingPersistence.TryAdd(operation, 0);
+        _ = operation.ContinueWith(completed =>
+        {
+            _ = completed.Exception;
+            pendingPersistence.TryRemove(completed, out _);
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+    }
 
     private async Task WaitForRestartCleanupAsync(Func<Task> startCleanup)
     {
@@ -72,14 +87,23 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory
 
     internal async Task<bool> IsRestartCleanupUnconfirmedAsync(string sessionId, long generation, CancellationToken ct)
     {
+        if (this.uncertainRestarts.ContainsKey(sessionId))
+            return true;
         var query = await this.FindAsync(sessionId, ct).ConfigureAwait(false);
         return query.Entity?.Data is JsonElement data
             && data.TryGetProperty("restart-operations", out var journal)
             && JsonSerializer.Deserialize<Dictionary<string, RestartOperation>>(
                 journal, Microsoft.Extensions.AI.AIJsonUtilities.DefaultOptions)!.Values.Any(operation =>
                     operation.Request.ExpectedRuntime.OwnershipGeneration == generation
-                    && operation.State is AgentSessionOwnerRestartState.Committed or AgentSessionOwnerRestartState.Blocked);
+                    && this.HasUnconfirmedRestartCleanup(operation));
     }
+
+    private bool HasUnconfirmedRestartCleanup(RestartOperation operation)
+        => operation.State is AgentSessionOwnerRestartState.Committed or AgentSessionOwnerRestartState.Blocked
+            || operation.StartupUnconfirmed && !(operation.State == AgentSessionOwnerRestartState.Succeeded
+                && this.hostedRuntimes.TryGetValue(operation.Replacement.AgentSessionId, out var current)
+                && current.Runtime.Epoch == operation.Replacement.RuntimeEpoch
+                && !current.Runtime.IsFenced && !current.State.PersistenceUncertain);
 
     private sealed record HostedRuntime(
         RemoteAgentSessionLease Runtime,
@@ -96,6 +120,7 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory
         public RuntimeEpoch[] PreviousReplacementEpochs { get; init; } = [];
         public required AgentSessionOwnerRestartState State { get; init; }
         public string? Message { get; init; }
+        public bool StartupUnconfirmed { get; init; }
 
         internal AgentSessionOwnerRestartResult ToResult() => new()
         {
@@ -109,6 +134,7 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory
     internal AgentSessionRuntimeIdentity? GetIdentity(IAgentChat chat)
         => this.hostedRuntimes.Values.FirstOrDefault(hosted =>
             ReferenceEquals(hosted.Runtime.Chat, chat)
+            && !hosted.State.PersistenceUncertain
             && !hosted.Runtime.IsFenced
             && hosted.Runtime.CanRestartIndependently) is { } hosted
             ? new AgentSessionRuntimeIdentity
@@ -127,11 +153,13 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory
         AgentSessionOwnerRestartRequest request,
         CancellationToken cancellationToken)
     {
+        if (this.uncertainRestarts.TryGetValue(request.ExpectedRuntime.AgentSessionId, out var uncertain))
+            return uncertain with { CommandId = request.CommandId };
         var query = await this.FindAsync(request.ExpectedRuntime.AgentSessionId, cancellationToken).ConfigureAwait(false);
         if (query.Entity is null)
             return null;
         var state = new PersistedRuntimeState(
-            this.dataAccessLayer, query.Entity, query.GetRequiredAuthoritativeTime());
+            this.dataAccessLayer, query.Entity, query.GetRequiredAuthoritativeTime(), this.timeProvider);
         var operations = await state.LoadRestartsAsync(cancellationToken).ConfigureAwait(false);
         var operation = request.CommandId == Guid.Empty
             ? operations.Values.LastOrDefault(value => value.Request.ExpectedRuntime == request.ExpectedRuntime)
@@ -140,6 +168,12 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory
             return null;
         if (request.CommandId != Guid.Empty && operation.Request != request)
             throw new InvalidOperationException("The restart command id was reused with a different payload.");
+        if (operation.State == AgentSessionOwnerRestartState.Succeeded && this.HasUnconfirmedRestartCleanup(operation))
+            return operation.ToResult() with
+            {
+                State = AgentSessionOwnerRestartState.Blocked,
+                Message = "The replacement's startup or cleanup has not been confirmed.",
+            };
         return operation.ToResult();
     }
 
@@ -151,6 +185,8 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory
         if (request.CommandId == Guid.Empty)
             throw new ArgumentException("Restart command id is required.", nameof(request));
         var expected = request.ExpectedRuntime;
+        if (this.uncertainRestarts.TryGetValue(expected.AgentSessionId, out var uncertain))
+            return uncertain with { CommandId = request.CommandId };
         if (this.runningChats is not RunningAgentChatTable table)
             throw new InvalidOperationException("The owning runtime table cannot replace this session.");
         var query = await this.FindAsync(expected.AgentSessionId, cancellationToken).ConfigureAwait(false);
@@ -163,7 +199,7 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory
 
         this.hostedRuntimes.TryGetValue(expected.AgentSessionId, out var hosted);
         var state = hosted?.State ?? new PersistedRuntimeState(
-            this.dataAccessLayer, query.Entity, query.GetRequiredAuthoritativeTime());
+            this.dataAccessLayer, query.Entity, query.GetRequiredAuthoritativeTime(), this.timeProvider);
         query = await state.RefreshAsync(
             () => this.FindAsync(expected.AgentSessionId, cancellationToken), cancellationToken).ConfigureAwait(false);
         persisted = query.Entity!.Data!.Value;
@@ -180,15 +216,24 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory
         }
         if (operation?.State is AgentSessionOwnerRestartState.Succeeded or AgentSessionOwnerRestartState.Blocked)
         {
+            if (operation.State == AgentSessionOwnerRestartState.Succeeded && this.HasUnconfirmedRestartCleanup(operation))
+                operation = operation with
+                {
+                    State = AgentSessionOwnerRestartState.Blocked,
+                    Message = "The replacement's startup or cleanup has not been confirmed.",
+                };
             await state.SaveRestartAsync(operation, CancellationToken.None).ConfigureAwait(false);
             if (operation.State == AgentSessionOwnerRestartState.Succeeded
                 && hosted?.Runtime.Epoch == operation.Replacement.RuntimeEpoch
                 && hosted.Runtime.Chat is AgentChat completedChat)
+            {
                 hosted.Runtime.ResumeAfterRestartViewersReady(
                     operation.ViewerAttachmentTokens, completedChat.InputQueueManager.ResumeAfterRuntimeHandoff);
+                await state.ConfirmRestartCompletionAsync(operation).ConfigureAwait(false);
+            }
             return operation.ToResult();
         }
-        if (operation?.State == AgentSessionOwnerRestartState.Committed)
+        if (operation?.State == AgentSessionOwnerRestartState.Committed || operation?.StartupUnconfirmed == true)
         {
             operation = operation with
             {
@@ -203,11 +248,15 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory
             if (this.retiredRuntimeSources.TryGetValue(expected, out var originalRuntime))
             {
                 if (!originalRuntime.HasTerminated)
-                    await originalRuntime.RetireForRestartAsync(operation.Replacement.RuntimeEpoch).ConfigureAwait(false);
-                await table.ReattachLocalViewersAsync(
-                    originalRuntime.Chat, operation.Replacement).ConfigureAwait(false);
+                    await this.WaitForRestartCleanupAsync(() =>
+                        originalRuntime.RetireForRestartAsync(operation.Replacement.RuntimeEpoch).AsTask()).ConfigureAwait(false);
+                await state.RunRestartPhaseAsync(token => table.ReattachLocalViewersAsync(
+                    originalRuntime.Chat, operation.Replacement, token)).ConfigureAwait(false);
             }
-            operation = operation with { State = AgentSessionOwnerRestartState.Succeeded, Message = null };
+            operation = operation with
+            {
+                State = AgentSessionOwnerRestartState.Succeeded, Message = null, StartupUnconfirmed = true,
+            };
             await state.SaveRestartAsync(operation, CancellationToken.None, markRunning: true).ConfigureAwait(false);
             if (hosted.Runtime.Chat is AgentChat alreadyReplaced)
                 hosted.Runtime.ResumeAfterRestartViewersReady(
@@ -215,6 +264,7 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory
                     alreadyReplaced.InputQueueManager.ResumeAfterRuntimeHandoff);
             this.retiredRuntimeSources.TryRemove(expected, out _);
             this.PublishRestartState(table, hosted.Runtime.Chat, request, operation.ToResult());
+            await state.ConfirmRestartCompletionAsync(operation).ConfigureAwait(false);
             return operation.ToResult();
         }
 
@@ -224,7 +274,7 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory
             && stoppedExpiry <= query.GetRequiredAuthoritativeTime())
         {
             state = new PersistedRuntimeState(
-                this.dataAccessLayer, query.Entity!, query.GetRequiredAuthoritativeTime());
+                this.dataAccessLayer, query.Entity!, query.GetRequiredAuthoritativeTime(), this.timeProvider);
             hosted = hosted with { State = state };
             this.hostedRuntimes[expected.AgentSessionId] = hosted;
             operation = operation with
@@ -256,6 +306,8 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory
         IDisposable? runtimeTransition = null;
         try
         {
+        try
+        {
             if (hosted is null)
             {
                 if (operation is null || !shutdownConfirmed)
@@ -272,6 +324,7 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory
                 };
                 operation = operation with
                 {
+                    StartupUnconfirmed = true,
                     Replacement = replacementIdentity,
                     PreviousReplacementEpochs = operation.PreviousReplacementEpochs
                         .Append(operation.Replacement.RuntimeEpoch).ToArray(),
@@ -281,7 +334,7 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory
                 recoveredOwnership = this.CreateOwnershipLease(state, () => replacement);
                 recoveredOwnership.Start(state.LeasePeriod);
                 var context = this.contextFactory.Create(persisted);
-                replacementLease = await table.AcquireAsync(new AcquireAgentChatRequest
+                replacementLease = await state.RunRestartPhaseAsync(token => table.AcquireAsync(new AcquireAgentChatRequest
                 {
                     OwnerRuntimeAcquisition = true,
                     RuntimeQueueCheckpoint = operation.Checkpoint,
@@ -295,7 +348,15 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory
                         ExecutorTransportFactoryRegistry = context.TransportFactoryRegistry,
                         RemoteAgentSessionRuntimeIntent = context.Intent,
                     },
-                }, state.OwnerLifetime.Token).ConfigureAwait(false);
+                }, token), async lateLease =>
+                {
+                    try
+                    {
+                        await table.TerminateOwnerRuntimeExactAsync(
+                            lateLease.SessionId, lateLease.AgentChat, CancellationToken.None, this.timeProvider).ConfigureAwait(false);
+                    }
+                    finally { await lateLease.DisposeAsync().ConfigureAwait(false); }
+                }).ConfigureAwait(false);
             }
             else
             {
@@ -359,15 +420,22 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory
                             operation = committed;
                         }
                     },
-                    async _ =>
+                    async token =>
                     {
                         if (!hosted.Runtime.HasTerminated)
                             await this.WaitForRestartCleanupAsync(() => hosted.Runtime.RetireWithinRestartTransitionAsync(
                                 replacementIdentity.RuntimeEpoch).AsTask()).ConfigureAwait(false);
                         shutdownConfirmed = true;
-                        operation = operation! with { State = AgentSessionOwnerRestartState.Stopped };
-                        await state.SaveRestartAsync(operation, CancellationToken.None).ConfigureAwait(false);
-                        await state.RotateForRestartAsync(replacementIdentity, CancellationToken.None).ConfigureAwait(false);
+                        token.ThrowIfCancellationRequested();
+                        operation = operation! with
+                        {
+                            State = AgentSessionOwnerRestartState.Stopped,
+                            StartupUnconfirmed = true,
+                        };
+                        await state.SaveRestartAsync(operation, token).ConfigureAwait(false);
+                        token.ThrowIfCancellationRequested();
+                        await state.RotateForRestartAsync(replacementIdentity, token).ConfigureAwait(false);
+                        token.ThrowIfCancellationRequested();
                         recoveredOwnership = this.CreateOwnershipLease(state, () => replacement);
                         recoveredOwnership.Start(state.LeasePeriod);
                     },
@@ -405,24 +473,31 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory
                         oldRuntime.RetireForRestartAsync(replacementIdentity.RuntimeEpoch).AsTask()).ConfigureAwait(false);
             }
             if (oldRuntime is not null)
-                await table.ReattachLocalViewersAsync(oldRuntime.Chat, replacementIdentity).ConfigureAwait(false);
-            operation = operation! with { State = AgentSessionOwnerRestartState.Succeeded, Message = null };
+                await state.RunRestartPhaseAsync(token => table.ReattachLocalViewersAsync(
+                    oldRuntime.Chat, replacementIdentity, token)).ConfigureAwait(false);
+            operation = operation! with { State = AgentSessionOwnerRestartState.Succeeded, Message = null, StartupUnconfirmed = true };
             await state.SaveRestartAsync(operation, CancellationToken.None, markRunning: true).ConfigureAwait(false);
             if (replacementLease.AgentChat is AgentChat newChat)
                 replacement.ResumeAfterRestartViewersReady(
                     operation.ViewerAttachmentTokens, newChat.InputQueueManager.ResumeAfterRuntimeHandoff);
             this.retiredRuntimeSources.TryRemove(expected, out _);
             this.PublishRestartState(table, oldRuntime?.Chat, request, operation.ToResult());
+            await state.ConfirmRestartCompletionAsync(operation).ConfigureAwait(false);
             return operation.ToResult();
         }
         catch (OperationCanceledException) when (operation is null && cancellationToken.IsCancellationRequested)
         {
             throw;
         }
-        catch (Exception)
+        catch (Exception restartError)
         {
             if (operation is null)
                 throw;
+            if (restartError is AgentRuntimeRestartCleanupUnconfirmedException)
+                shutdownConfirmed = false;
+            if (state.PersistenceUncertain)
+                return await this.QuarantineRestartAsync(
+                    state, operation, table, oldRuntime, replacement, replacementLease, recoveredOwnership).ConfigureAwait(false);
             try
             {
                 var authority = await state.RefreshAsync(
@@ -433,35 +508,29 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory
             }
             catch (Exception refreshError)
             {
+                if (state.PersistenceUncertain)
+                    return await this.QuarantineRestartAsync(
+                        state, operation, table, oldRuntime, replacement, replacementLease, recoveredOwnership).ConfigureAwait(false);
                 state.OwnerLifetime.Cancel();
-                if (recoveredOwnership is not null)
-                    await this.WaitForRestartCleanupAsync(() => recoveredOwnership.DisposeAsync().AsTask()).ConfigureAwait(false);
-                if (replacementLease is not null)
+                try
                 {
-                    try
-                    {
-                        await state.SaveRestartAsync(operation with
-                        {
-                            State = AgentSessionOwnerRestartState.Blocked,
-                            Message = "Replacement authority or cleanup could not be confirmed.",
-                        }, CancellationToken.None).ConfigureAwait(false);
-                    }
-                    catch (AgentSessionConcurrentUpdateException) when (refreshError is AgentSessionUnavailableException) { }
-                    finally
+                    if (replacementLease is not null)
                     {
                         try
                         {
-                            await this.WaitForRestartCleanupAsync(() => table.TerminateOwnerRuntimeExactAsync(
-                                replacementLease.SessionId, replacementLease.AgentChat, CancellationToken.None)).ConfigureAwait(false);
+                            await state.SaveRestartAsync(operation with
+                            {
+                                State = AgentSessionOwnerRestartState.Blocked,
+                                Message = "Replacement authority or cleanup could not be confirmed.",
+                            }, CancellationToken.None).ConfigureAwait(false);
                         }
-                        finally
-                        {
-                            await this.WaitForRestartCleanupAsync(() => replacementLease.DisposeAsync().AsTask()).ConfigureAwait(false);
-                            if (replacement is not null)
-                                await this.WaitForRestartCleanupAsync(() =>
-                                    replacement.RetireForRestartAsync(replacement.Epoch).AsTask()).ConfigureAwait(false);
-                        }
+                        catch (AgentSessionConcurrentUpdateException) when (refreshError is AgentSessionUnavailableException) { }
                     }
+                }
+                finally
+                {
+                    await this.CleanupRestartResourcesAsync(
+                        table, replacement, replacementLease, recoveredOwnership, retireOnly: true).ConfigureAwait(false);
                 }
                 if (refreshError is not AgentSessionUnavailableException)
                     throw;
@@ -478,6 +547,7 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory
                         durable.ViewerAttachmentTokens, completedChat.InputQueueManager.ResumeAfterRuntimeHandoff);
                 this.retiredRuntimeSources.TryRemove(expected, out _);
                 this.PublishRestartState(table, oldRuntime?.Chat, request, durable.ToResult());
+                await state.ConfirmRestartCompletionAsync(durable).ConfigureAwait(false);
                 return durable.ToResult();
             }
             if (replacementLease is null && recoveredOwnership is not null)
@@ -487,7 +557,15 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory
                     State = AgentSessionOwnerRestartState.Blocked,
                     Message = "Replacement ownership cleanup has not been confirmed. Replacement is blocked.",
                 };
-                await state.SaveRestartAsync(operation, CancellationToken.None).ConfigureAwait(false);
+                try
+                {
+                    await state.SaveRestartAsync(operation, CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                    return await this.QuarantineRestartAsync(
+                        state, operation, table, oldRuntime, replacement, replacementLease, recoveredOwnership).ConfigureAwait(false);
+                }
                 try
                 {
                     await this.WaitForRestartCleanupAsync(() => recoveredOwnership.DisposeAsync().AsTask()).ConfigureAwait(false);
@@ -512,19 +590,19 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory
                     State = AgentSessionOwnerRestartState.Blocked,
                     Message = "Unpublished replacement cleanup has not been confirmed. Replacement is blocked.",
                 };
-                await state.SaveRestartAsync(operation, CancellationToken.None).ConfigureAwait(false);
                 try
                 {
-                    if (recoveredOwnership is not null)
-                        await this.WaitForRestartCleanupAsync(() => recoveredOwnership.DisposeAsync().AsTask()).ConfigureAwait(false);
-                    if (replacement is not null)
-                        await this.WaitForRestartCleanupAsync(() => replacement.DisposeAsync().AsTask()).ConfigureAwait(false);
-                    else
-                    {
-                        await this.WaitForRestartCleanupAsync(() => table.TerminateOwnerRuntimeExactAsync(
-                            replacementLease.SessionId, replacementLease.AgentChat, CancellationToken.None)).ConfigureAwait(false);
-                        await this.WaitForRestartCleanupAsync(() => replacementLease.DisposeAsync().AsTask()).ConfigureAwait(false);
-                    }
+                    await state.SaveRestartAsync(operation, CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                    return await this.QuarantineRestartAsync(
+                        state, operation, table, oldRuntime, replacement, replacementLease, recoveredOwnership).ConfigureAwait(false);
+                }
+                try
+                {
+                    await this.CleanupRestartResourcesAsync(
+                        table, replacement, replacementLease, recoveredOwnership).ConfigureAwait(false);
                 }
                 catch
                 {
@@ -540,6 +618,7 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory
             }
             operation = operation with
             {
+                StartupUnconfirmed = !shutdownConfirmed,
                 State = shutdownConfirmed ? AgentSessionOwnerRestartState.Stopped : AgentSessionOwnerRestartState.Blocked,
                 Message = shutdownConfirmed
                     ? "The session is stopped with pending input preserved. Retry this restart operation."
@@ -549,18 +628,136 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory
             this.PublishRestartState(table, oldRuntime?.Chat, request, operation.ToResult());
             if (this.hostedRuntimes.TryGetValue(expected.AgentSessionId, out var stoppedRuntime))
             {
-                if (stoppedRuntime.Runtime.Chat is AgentChat stoppedChat)
-                    await stoppedChat.PublishRuntimeRestartDiagnosticAsync(operation.Message!).ConfigureAwait(false);
-                await stoppedRuntime.Runtime.PublishRestartStoppedAsync(new SessionRestartStoppedEvent
-                    {
-                        Message = operation.Message!, Request = request, Result = operation.ToResult(),
-                    }, blockRuntime: !shutdownConfirmed).ConfigureAwait(false);
+                try
+                {
+                    if (stoppedRuntime.Runtime.Chat is AgentChat stoppedChat)
+                        await this.WaitForRestartCleanupAsync(() =>
+                            stoppedChat.PublishRuntimeRestartDiagnosticAsync(operation.Message!)).ConfigureAwait(false);
+                }
+                finally
+                {
+                    await stoppedRuntime.Runtime.PublishRestartStoppedAsync(new SessionRestartStoppedEvent
+                        {
+                            Message = operation.Message!, Request = request, Result = operation.ToResult(),
+                        }, blockRuntime: !shutdownConfirmed).ConfigureAwait(false);
+                }
             }
             return operation.ToResult();
         }
         finally
         {
             runtimeTransition?.Dispose();
+        }
+        }
+        catch (RestartPersistenceTimeoutException) when (operation is not null)
+        {
+            return await this.QuarantineRestartAsync(
+                state, operation, table, oldRuntime, replacement, replacementLease, recoveredOwnership).ConfigureAwait(false);
+        }
+    }
+
+    private async Task CleanupRestartResourcesAsync(
+        RunningAgentChatTable table,
+        RemoteAgentSessionLease? replacement,
+        RunningAgentChatLease? replacementLease,
+        AgentSessionOwnershipLease? ownership,
+        bool retireOnly = false)
+    {
+        var errors = new List<Exception>();
+        async Task CleanAsync(Func<Task> cleanup)
+        {
+            try { await this.WaitForRestartCleanupAsync(cleanup).ConfigureAwait(false); }
+            catch (Exception error)
+            {
+                lock (errors)
+                    errors.Add(error);
+            }
+        }
+        var cleanups = new List<Task>();
+        if (ownership is not null)
+            cleanups.Add(CleanAsync(() => ownership.DisposeAsync().AsTask()));
+        if (replacement is not null && !retireOnly)
+            cleanups.Add(CleanAsync(() => replacement.DisposeAsync().AsTask()));
+        if (replacementLease is not null)
+            cleanups.Add(CleanAsync(() => table.TerminateOwnerRuntimeExactAsync(
+                replacementLease.SessionId, replacementLease.AgentChat, CancellationToken.None, this.timeProvider)));
+        if (replacement is not null && retireOnly)
+            cleanups.Add(CleanAsync(() => replacement.RetireForRestartAsync(replacement.Epoch).AsTask()));
+        await Task.WhenAll(cleanups).ConfigureAwait(false);
+        if (replacementLease is not null)
+            await CleanAsync(() => replacementLease.DisposeAsync().AsTask()).ConfigureAwait(false);
+        if (errors.Count != 0 && (errors.Count == 1 || errors.All(error => error is OperationCanceledException)))
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(errors[0]).Throw();
+        if (errors.Count > 1)
+            throw new AggregateException(errors);
+    }
+
+    private async Task<AgentSessionOwnerRestartResult> QuarantineRestartAsync(
+        PersistedRuntimeState state,
+        RestartOperation operation,
+        RunningAgentChatTable table,
+        RemoteAgentSessionLease? original,
+        RemoteAgentSessionLease? replacement,
+        RunningAgentChatLease? replacementLease,
+        AgentSessionOwnershipLease? ownership)
+    {
+        var blocked = operation with
+        {
+            State = AgentSessionOwnerRestartState.Blocked,
+            StartupUnconfirmed = true,
+            Message = "Durable restart state or cleanup is unconfirmed. Replacement is blocked.",
+        };
+        this.uncertainRestarts[operation.Request.ExpectedRuntime.AgentSessionId] = blocked.ToResult();
+        this.PublishRestartState(table, original?.Chat, operation.Request, blocked.ToResult());
+        // A failed journal write must never bypass actual resource cleanup. Each resource
+        // has its own owner deadline; late work stays rooted and cannot publish a replacement.
+        async Task CleanAsync(Func<Task> cleanup)
+        {
+            try { await this.WaitForRestartCleanupAsync(cleanup).ConfigureAwait(false); }
+            catch (Exception) { }
+        }
+        try
+        {
+            await this.CleanupRestartResourcesAsync(
+                table, replacement, replacementLease, ownership, retireOnly: true).ConfigureAwait(false);
+        }
+        catch (Exception) { }
+        if (original is not null && !original.HasTerminated)
+            await CleanAsync(() => original.RetireWithinRestartTransitionAsync(operation.Replacement.RuntimeEpoch).AsTask())
+                .ConfigureAwait(false);
+        var reconcile = this.FenceLatePersistenceAsync(state.PendingPersistence, blocked);
+        ObservePendingPersistence(reconcile);
+        return blocked.ToResult();
+    }
+
+    private async Task FenceLatePersistenceAsync(Task pending, RestartOperation blocked)
+    {
+        try { await pending.ConfigureAwait(false); }
+        catch (Exception) { }
+        try
+        {
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15), this.timeProvider);
+            var queryTask = this.FindAsync(blocked.Request.ExpectedRuntime.AgentSessionId, deadline.Token);
+            ObservePendingPersistence(queryTask);
+            var query = await queryTask.WaitAsync(deadline.Token).ConfigureAwait(false);
+            if (query.Entity is null)
+                return;
+            var state = new PersistedRuntimeState(
+                this.dataAccessLayer, query.Entity, query.GetRequiredAuthoritativeTime(), this.timeProvider);
+            var operations = await state.LoadRestartsAsync(deadline.Token).ConfigureAwait(false);
+            if (operations.TryGetValue(blocked.Request.CommandId.ToString("D"), out var durable)
+                && durable.Request == blocked.Request && durable.Replacement == blocked.Replacement
+                && ReadLong(query.Entity.Data!.Value, "ownership-generation")
+                    == blocked.Request.ExpectedRuntime.OwnershipGeneration
+                && string.Equals(ReadString(query.Entity.Data.Value, "owning-profile-entity-id")
+                    ?? ReadString(query.Entity.Data.Value, "host-profile-entity-id"),
+                    blocked.Request.ExpectedRuntime.OwningProfileEntityId, StringComparison.OrdinalIgnoreCase))
+                await state.SaveRestartAsync(blocked, deadline.Token).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // The durable pre-start reservation remains conservative when storage is
+            // unavailable; no retry is authorized from the quarantined local state.
         }
     }
 
@@ -586,13 +783,20 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory
         CancellationToken cancellationToken,
         bool allowStoppedRetry = true)
     {
+        if (this.uncertainRestarts.TryGetValue(sessionId, out var uncertain))
+            throw new InvalidOperationException(uncertain.Message);
         var query = await this.FindAsync(sessionId, cancellationToken).ConfigureAwait(false);
         if (query.Entity is null)
             throw new AgentSessionUnavailableException();
         var state = this.hostedRuntimes.TryGetValue(sessionId, out var hosted)
             ? hosted.State : new PersistedRuntimeState(
-                this.dataAccessLayer, query.Entity, query.GetRequiredAuthoritativeTime());
+                this.dataAccessLayer, query.Entity, query.GetRequiredAuthoritativeTime(), this.timeProvider);
         var operations = await state.LoadRestartsAsync(cancellationToken).ConfigureAwait(false);
+        if (operations.Values.Any(operation => operation.StartupUnconfirmed
+            && operation.State == AgentSessionOwnerRestartState.Succeeded
+            && (hosted is null || hosted.Runtime.IsFenced
+                || hosted.Runtime.Epoch != operation.Replacement.RuntimeEpoch)))
+            throw new InvalidOperationException("The prior replacement's cleanup has not been confirmed.");
         var pending = operations.Values.LastOrDefault(operation =>
             operation.Request.ExpectedRuntime.OwnershipGeneration == ReadLong(query.Entity.Data!.Value, "ownership-generation")
             && string.Equals(operation.Request.ExpectedRuntime.OwningProfileEntityId,
@@ -621,7 +825,7 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory
             return false;
         var state = this.hostedRuntimes.TryGetValue(sessionId, out var hosted)
             ? hosted.State : new PersistedRuntimeState(
-                this.dataAccessLayer, query.Entity, query.GetRequiredAuthoritativeTime());
+                this.dataAccessLayer, query.Entity, query.GetRequiredAuthoritativeTime(), this.timeProvider);
         var operations = await state.LoadRestartsAsync(cancellationToken).ConfigureAwait(false);
         var visited = new HashSet<RuntimeEpoch>();
         while (visited.Add(previous))

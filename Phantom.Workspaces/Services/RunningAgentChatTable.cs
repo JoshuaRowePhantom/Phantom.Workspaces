@@ -128,13 +128,15 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
 
     internal async Task ReattachLocalViewersAsync(
         IAgentChat original,
-        AgentSessionRuntimeIdentity replacementIdentity)
+        AgentSessionRuntimeIdentity replacementIdentity,
+        CancellationToken cancellationToken = default)
     {
         RunningAgentChatLease[] viewers;
         lock (this._entityInfoLock)
             viewers = this.localViewers.TryGetValue(original, out var current) ? current.ToArray() : [];
         foreach (var viewer in viewers)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (viewer.ReattachAsync is not { } reattach)
                 continue;
             var replacement = await this.AcquireAsync(new AcquireAgentChatRequest
@@ -142,7 +144,8 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                 AgentSessionId = new AgentSessionId(replacementIdentity.AgentSessionId),
                 OwnerRuntimeAcquisition = true,
                 IsViewerReattachment = true,
-            }, CancellationToken.None).ConfigureAwait(false);
+            }, cancellationToken).ConfigureAwait(false);
+            replacement.ReattachmentCancellation = cancellationToken;
             replacement.RestartIdentity = replacementIdentity;
             replacement.RestartRuntimeAsync = viewer.RestartRuntimeAsync;
             replacement.RestartStatusAsync = viewer.RestartStatusAsync;
@@ -150,6 +153,7 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
             try
             {
                 await reattach(replacement).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
             }
             catch
             {
@@ -887,11 +891,19 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         return await this.TerminateLocalAsync(sessionId, null, ct).ConfigureAwait(false);
     }
 
-    internal Task<bool> TerminateOwnerRuntimeExactAsync(
-        AgentSessionId sessionId, IAgentChat expected, CancellationToken cancellationToken)
-        => this.TerminateLocalAsync(sessionId, expected, cancellationToken);
+    internal async Task<bool> TerminateOwnerRuntimeExactAsync(
+        AgentSessionId sessionId,
+        IAgentChat expected,
+        CancellationToken cancellationToken,
+        TimeProvider? timeProvider = null)
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15), timeProvider ?? TimeProvider.System);
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token, cancellationToken);
+        return await this.TerminateLocalAsync(sessionId, expected, lifetime.Token, boundCleanup: true).ConfigureAwait(false);
+    }
 
-    private async Task<bool> TerminateLocalAsync(AgentSessionId sessionId, IAgentChat? expected, CancellationToken ct)
+    private async Task<bool> TerminateLocalAsync(
+        AgentSessionId sessionId, IAgentChat? expected, CancellationToken ct, bool boundCleanup = false)
     {
         SemaphoreSlim gate;
         lock (this._entityInfoLock)
@@ -902,9 +914,14 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         await gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var terminated = expected is null
-                ? await this._factory.TerminateAsync(sessionId, CancellationToken.None).ConfigureAwait(false)
-                : await this._factory.TerminateExactAsync(sessionId, expected, CancellationToken.None).ConfigureAwait(false);
+            var terminating = expected is null
+                ? this._factory.TerminateAsync(sessionId, boundCleanup ? ct : CancellationToken.None)
+                : this._factory.TerminateExactAsync(sessionId, expected, boundCleanup ? ct : CancellationToken.None);
+            if (boundCleanup)
+                ObserveOwnerCleanup(terminating);
+            var terminated = boundCleanup
+                ? await terminating.WaitAsync(ct).ConfigureAwait(false)
+                : await terminating.ConfigureAwait(false);
             if (!terminated)
                 return false;
 
@@ -919,10 +936,31 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                 }
             }
             if (retained is not null)
-                await retained.DisposeAsync().ConfigureAwait(false);
+            {
+                var disposing = retained.DisposeAsync().AsTask();
+                if (boundCleanup)
+                {
+                    ObserveOwnerCleanup(disposing);
+                    await disposing.WaitAsync(ct).ConfigureAwait(false);
+                }
+                else
+                    await disposing.ConfigureAwait(false);
+            }
             return true;
         }
         finally { gate.Release(); }
+    }
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Task, byte> pendingOwnerCleanup = new();
+
+    private static void ObserveOwnerCleanup(Task task)
+    {
+        pendingOwnerCleanup.TryAdd(task, 0);
+        _ = task.ContinueWith(completed =>
+        {
+            _ = completed.Exception;
+            pendingOwnerCleanup.TryRemove(completed, out _);
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
 
     /// <inheritdoc/>

@@ -437,6 +437,10 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
        this.replaceableCommands.Current = innerRegistry;
        var resolvedClient = clientInfo.ChatClient;
         this.modelClient = resolvedClient.GetService(typeof(IModelSlashCommandClient)) as IModelSlashCommandClient;
+        if (this.request.RuntimeQueueCheckpoint?.ModelId is { } restoredModel && this.modelClient is not null)
+            await this.modelClient.SetModelIdAsync(restoredModel, initializationToken).ConfigureAwait(false);
+        if (resolvedClient.GetService(typeof(CopilotSdkChatClient)) is CopilotSdkChatClient configurableClient)
+            configurableClient.EnterModelMutation = this.EnterModelMutation;
         this.acceptsUserInput = resolvedClient is not IHostedAgentChatClient;
        if (resolvedClient is SubAgentChatClient sac)
        {
@@ -817,6 +821,28 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
     internal AgentServices? RuntimeServices => this.request.AgentServices;
 
     private bool runtimeConfigurationFrozen;
+    private int modelMutationsInProgress;
+
+    private IDisposable EnterModelMutation()
+    {
+        lock (this.toolsLock)
+        {
+            if (this.runtimeConfigurationFrozen)
+                throw new InvalidOperationException("Runtime configuration is frozen during restart.");
+            this.modelMutationsInProgress++;
+        }
+        return new ModelMutation(this);
+    }
+
+    private sealed class ModelMutation(AgentChat owner) : IDisposable
+    {
+        public void Dispose()
+        {
+            lock (owner.toolsLock)
+                owner.modelMutationsInProgress--;
+        }
+    }
+
     private readonly Dictionary<string, string> effectiveParameterValues = new(StringComparer.Ordinal);
     private readonly HashSet<string> liveConfiguredToolRoots = new(StringComparer.Ordinal);
 
@@ -824,10 +850,13 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
     {
         lock (this.toolsLock)
         {
+            if (this.modelMutationsInProgress != 0)
+                throw new InvalidOperationException("A model change is still in progress.");
             var checkpoint = this.InputQueueManager.BeginRuntimeHandoff(this.InputQueuesForRuntimeHandoff);
             this.runtimeConfigurationFrozen = true;
             return checkpoint with
             {
+                ModelId = this.modelClient?.ModelId,
                 ToolEnablement = this.toolIndex.ToDictionary(pair => pair.Key, pair => pair.Value.IsEnabled),
                 ParameterValues = new Dictionary<string, string>(this.effectiveParameterValues),
             };

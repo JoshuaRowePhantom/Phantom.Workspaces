@@ -115,6 +115,7 @@ internal sealed class FakeCopilotSession : ICopilotSession
 
     /// <summary>The number of times <see cref="SetModelAsync"/> has been invoked.</summary>
     public int SetModelAsyncCallCount { get; private set; }
+    public Func<string, CancellationToken, Task>? SetModelHandler { get; set; }
 
     public Task SetModelAsync(string modelId, CancellationToken cancellationToken)
     {
@@ -124,7 +125,7 @@ internal sealed class FakeCopilotSession : ICopilotSession
             this.SetModelAsyncCallCount++;
         }
 
-        return Task.CompletedTask;
+        return this.SetModelHandler?.Invoke(modelId, cancellationToken) ?? Task.CompletedTask;
     }
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;

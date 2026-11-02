@@ -592,11 +592,15 @@ public sealed partial class DataAccessAgentSessionRuntimeHostFactoryTests
         private readonly LocalTransportFactory localTransportFactory;
         internal Action<UpdateRequest>? OnUpdate { get; set; }
         internal Action<UpdateRequest>? OnUpdated { get; set; }
+        internal Func<UpdateRequest, Task>? BeforeUpdateAsync { get; set; }
+        internal Func<UpdateRequest, Task>? AfterUpdateAsync { get; set; }
+        internal Func<Task>? BeforeQueryAsync { get; set; }
         internal Action<RemoteAgentSessionLease>? BeforePublication { get; set; }
         internal bool FailStartup { get; set; }
         internal bool FailNextQuery { get; set; }
         internal bool FailFinalPersistence { get; set; }
         internal Func<StoreRequestAgent, CancellationToken, Task>? FinalPersistence { get; set; }
+        internal Func<Task>? BeforeRestoreAsync { get; set; }
         internal InMemoryAgentPersistenceStore Store { get; }
         internal QueryEntitySnapshot Persisted => this.current;
 
@@ -618,13 +622,15 @@ public sealed partial class DataAccessAgentSessionRuntimeHostFactoryTests
 
         internal RestartEnvironment(
             InMemoryAgentPersistenceStore? store = null, QueryEntitySnapshot? persisted = null, bool dropHandoff = false,
-            TaskScheduler? foregroundScheduler = null, bool dropRestartResult = false)
+            TaskScheduler? foregroundScheduler = null, bool dropRestartResult = false, AgentServices? runtimeServices = null)
         {
             this.current = persisted ?? Entity();
             this.Store = store ?? new InMemoryAgentPersistenceStore();
             this.Layer.Setup(layer => layer.QueryAsync(It.IsAny<QueryRequest>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync(() =>
+                .Returns(async () =>
                 {
+                    if (this.BeforeQueryAsync is { } beforeQuery)
+                        await beforeQuery();
                     lock (this.gate)
                     {
                         if (this.FailNextQuery)
@@ -656,31 +662,36 @@ public sealed partial class DataAccessAgentSessionRuntimeHostFactoryTests
                     }
                 });
             this.Layer.Setup(layer => layer.UpdateAsync(It.IsAny<UpdateRequest>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync((UpdateRequest request, CancellationToken token) =>
+                .Returns(async (UpdateRequest request, CancellationToken token) =>
                 {
                     token.ThrowIfCancellationRequested();
+                    if (this.BeforeUpdateAsync is { } beforeUpdate)
+                        await beforeUpdate(request);
+                    UpdateResult result;
                     lock (this.gate)
                     {
                         this.OnUpdate?.Invoke(request);
                         var change = Assert.Single(request.Changes);
                         if (change.ConcurrencyTag != this.current.ConcurrencyTag)
                             return FailedConcurrencyUpdate(this.current);
-                        var result = SuccessfulUpdate(this.current, change.Data!.Value, $"revision-{++this.revision}");
+                        result = SuccessfulUpdate(this.current, change.Data!.Value, $"revision-{++this.revision}");
                         this.current = this.current with
                         {
                             Data = change.Data,
                             ConcurrencyTag = result.EntityResults.Single().ConcurrencyTag,
                         };
                         this.OnUpdated?.Invoke(request);
-                        return result;
                     }
+                    if (this.AfterUpdateAsync is { } afterUpdate)
+                        await afterUpdate(request);
+                    return result;
                 });
             var client = new Mock<IChatClient>();
             client.Setup(value => value.GetService(It.IsAny<Type>(), It.IsAny<object?>()))
                 .Returns((Type _, object? _) => this.FailStartup
                     ? throw new IOException("Replacement backend unavailable.")
                     : null);
-            var services = new AgentServices { ChatClientOverride = client.Object };
+            var services = runtimeServices ?? new AgentServices { ChatClientOverride = client.Object };
             var persistence = new Mock<IAgentPersistenceStore>();
             persistence.Setup(value => value.StoreAsync(It.IsAny<StoreRequestAgent>(), It.IsAny<CancellationToken>()))
                 .Returns(async (StoreRequestAgent request, CancellationToken token) =>
@@ -692,7 +703,12 @@ public sealed partial class DataAccessAgentSessionRuntimeHostFactoryTests
                     await this.Store.StoreAsync(request, token);
                 });
             persistence.Setup(value => value.RestoreAsync(It.IsAny<RestoreRequest>(), It.IsAny<CancellationToken>()))
-                .Returns((RestoreRequest request, CancellationToken token) => this.Store.RestoreAsync(request, token));
+                .Returns(async (RestoreRequest request, CancellationToken token) =>
+                {
+                    if (this.BeforeRestoreAsync is { } beforeRestore)
+                        await beforeRestore();
+                    return await this.Store.RestoreAsync(request, token);
+                });
             persistence.Setup(value => value.ReadMessagesAsync(It.IsAny<ReadMessagesRequest>(), It.IsAny<CancellationToken>()))
                 .Returns((ReadMessagesRequest request, CancellationToken token) => this.Store.ReadMessagesAsync(request, token));
             persistence.Setup(value => value.ReadSubAgentChildIdsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))

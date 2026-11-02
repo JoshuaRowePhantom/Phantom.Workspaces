@@ -168,6 +168,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
     {
         await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(async () =>
         {
+            replacement.ReattachmentCancellation.ThrowIfCancellationRequested();
             if (this.disposed || this.agent is null || this.loggerFactory is null)
             {
                 await replacement.DisposeAsync();
@@ -178,18 +179,37 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
             var view = this.ComposeRuntimeReplacement is { } compose
                 ? await compose(replacement.AgentChat)
                 : original.CreateRuntimeReplacement(replacement.AgentChat);
-            original.PropertyChanged -= this.OnAgentPropertyChanged;
-            original.AltKeyStateChanged -= this.OnAgentAltKeyStateChanged;
-            original.GoToTabAtIndexRequested -= this.OnAgentGoToTabAtIndexRequested;
-            original.GoToWorkspacePaneAtIndexRequested -= this.OnAgentGoToWorkspacePaneAtIndexRequested;
-            await original.DisposeViewResourcesAsync();
-            this.agent = null;
-            this.state = AgentTabState.Loading;
-            this.SetLease(replacement);
-            this.SetRestartError(null);
-            this.SetReady(view, this.loggerFactory);
-            if (originalLease is not null)
-                await originalLease.DisposeAsync();
+            var adopted = false;
+            try
+            {
+                replacement.ReattachmentCancellation.ThrowIfCancellationRequested();
+                if (this.disposed || !ReferenceEquals(this.lease, originalLease))
+                    return;
+                original.PropertyChanged -= this.OnAgentPropertyChanged;
+                original.AltKeyStateChanged -= this.OnAgentAltKeyStateChanged;
+                original.GoToTabAtIndexRequested -= this.OnAgentGoToTabAtIndexRequested;
+                original.GoToWorkspacePaneAtIndexRequested -= this.OnAgentGoToWorkspacePaneAtIndexRequested;
+                await original.DisposeViewResourcesAsync();
+                replacement.ReattachmentCancellation.ThrowIfCancellationRequested();
+                if (this.disposed || !ReferenceEquals(this.lease, originalLease))
+                    return;
+                this.agent = null;
+                this.state = AgentTabState.Loading;
+                this.SetLease(replacement);
+                this.SetRestartError(null);
+                this.SetReady(view, this.loggerFactory);
+                adopted = true;
+                if (originalLease is not null)
+                    await originalLease.DisposeAsync();
+            }
+            finally
+            {
+                if (!adopted)
+                {
+                    try { await view.DisposeViewResourcesAsync(); }
+                    finally { await replacement.DisposeAsync(); }
+                }
+            }
         });
     }
 

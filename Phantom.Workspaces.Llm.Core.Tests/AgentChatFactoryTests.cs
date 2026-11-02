@@ -16,6 +16,99 @@ public sealed class AgentChatFactoryTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task RestartSession_QueuedForegroundRemoval_TimesOutWithoutLateMutation(bool disconnectCaller)
+    {
+        var timeProvider = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        var scheduler = new GatedForegroundScheduler();
+        await using var factory = new AgentChatFactory(
+            new InMemoryAgentPersistenceStore(),
+            new AgentServices { ChatClientOverride = new DeterministicTestChatClient() },
+            scheduler);
+        var sessionId = new AgentSessionId("restart-foreground-deadline");
+        await using var original = await factory.GetOrCreateAsync(sessionId, EchoAgentDefinition);
+        using var caller = new CancellationTokenSource();
+        var restarting = factory.RestartExactAsync(
+            sessionId,
+            original.AgentChat,
+            null,
+            (_, _) =>
+            {
+                scheduler.Pause();
+                return ValueTask.CompletedTask;
+            },
+            caller.Token,
+            _ => ValueTask.CompletedTask,
+            CancellationToken.None,
+            cleanupTimeProvider: timeProvider);
+        try
+        {
+            await scheduler.Queued.Task;
+            if (disconnectCaller)
+                caller.Cancel();
+            timeProvider.Advance(TimeSpan.FromSeconds(15));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => restarting);
+            Assert.Same(original.AgentChat, Assert.Single(factory.RunningSessions).AgentChat);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                factory.GetOrCreateAsync(sessionId, EchoAgentDefinition));
+        }
+        finally
+        {
+            scheduler.Resume();
+            await original.LocalAgentChat.DisposeAsync();
+        }
+        Assert.Same(original.AgentChat, Assert.Single(factory.RunningSessions).AgentChat);
+    }
+
+    private sealed class GatedForegroundScheduler : TaskScheduler
+    {
+        private readonly Queue<Task> tasks = new();
+        private bool paused;
+        public TaskCompletionSource Queued { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void Pause()
+        {
+            lock (this.tasks)
+                this.paused = true;
+        }
+
+        public void Resume()
+        {
+            lock (this.tasks)
+            {
+                this.paused = false;
+                while (this.tasks.TryDequeue(out var task))
+                    this.Dispatch(task);
+            }
+        }
+
+        protected override IEnumerable<Task>? GetScheduledTasks()
+        {
+            lock (this.tasks)
+                return this.tasks.ToArray();
+        }
+
+        protected override void QueueTask(Task task)
+        {
+            lock (this.tasks)
+            {
+                if (this.paused)
+                {
+                    this.tasks.Enqueue(task);
+                    this.Queued.TrySetResult();
+                    return;
+                }
+            }
+            this.Dispatch(task);
+        }
+
+        protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued) => false;
+
+        private void Dispatch(Task task) => ThreadPool.QueueUserWorkItem(_ => this.TryExecuteTask(task));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task RestartSession_EffectiveToolsAndParameters_AreFencedAndRestoredFromDurableCheckpoint(
         bool recoverCheckpoint)
     {

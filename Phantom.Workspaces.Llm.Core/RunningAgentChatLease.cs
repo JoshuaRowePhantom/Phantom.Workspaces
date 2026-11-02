@@ -20,6 +20,7 @@ public sealed class RunningAgentChatLease : IAsyncDisposable
     internal Func<Remote.AgentSessionOwnerRestartRequest, CancellationToken,
         Task<Remote.AgentSessionOwnerRestartResult?>>? RestartStatusAsync { get; set; }
     internal Func<RunningAgentChatLease, Task>? ReattachAsync { get; set; }
+    internal CancellationToken ReattachmentCancellation { get; set; }
     internal AgentSessionRestartCommandState RestartCommandState { get; set; } = new();
 
     /// <summary>Positive terminal evidence for this captured runtime, not its session ID's current replacement.</summary>

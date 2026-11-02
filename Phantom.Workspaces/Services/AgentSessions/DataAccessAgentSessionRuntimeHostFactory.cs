@@ -62,7 +62,7 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory :
             throw new AgentSessionUnavailableException();
 
         var state = new PersistedRuntimeState(
-            this.dataAccessLayer, persisted, query.GetRequiredAuthoritativeTime());
+            this.dataAccessLayer, persisted, query.GetRequiredAuthoritativeTime(), this.timeProvider);
         await state.RecordInterruptedAndAcquireAsync(intent, ct).ConfigureAwait(false);
         RunningAgentChatLease? chatLease = null;
         RemoteAgentSessionLease? runtime = null;
@@ -159,7 +159,7 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory :
                 {
                     var terminated = this.runningChats is RunningAgentChatTable table
                         ? await table.TerminateOwnerRuntimeExactAsync(
-                            chatLease.SessionId, chat, CancellationToken.None).ConfigureAwait(false)
+                            chatLease.SessionId, chat, CancellationToken.None, this.timeProvider).ConfigureAwait(false)
                         : await this.runningChats.TerminateExactAsync(
                             chatLease.SessionId, chat, CancellationToken.None).ConfigureAwait(false);
                     if (!terminated
@@ -200,6 +200,8 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory :
     public async ValueTask<bool> TryTakeOverAsync(
         AgentSessionTakeoverRequest request, CancellationToken ct)
     {
+        if (this.uncertainRestarts.ContainsKey(request.AgentSessionId))
+            return false;
         var query = await this.FindAsync(request.AgentSessionId, ct).ConfigureAwait(false);
         var entity = query.Entity;
         if (entity?.Data is not JsonElement data
@@ -214,7 +216,7 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory :
             && JsonSerializer.Deserialize<Dictionary<string, RestartOperation>>(
                 journal, Microsoft.Extensions.AI.AIJsonUtilities.DefaultOptions)!.Values.Any(operation =>
                     operation.Request.ExpectedRuntime.OwnershipGeneration == request.ExpectedOwnershipGeneration
-                    && operation.State is AgentSessionOwnerRestartState.Committed or AgentSessionOwnerRestartState.Blocked))
+                    && this.HasUnconfirmedRestartCleanup(operation)))
             return false;
         var hasEpoch = data.TryGetProperty("runtime-epoch", out _);
         var hasLease = data.TryGetProperty("runtime-lease-expiry", out _);
@@ -388,17 +390,88 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory :
         private EntitySnapshot entity;
         private JsonElement data;
         private DateTimeOffset authoritativeTime;
+        private readonly TimeProvider timeProvider;
+        internal bool PersistenceUncertain { get; private set; }
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<Task, byte> persistenceOperations = new();
+        internal Task PendingPersistence => Task.WhenAll(this.persistenceOperations.Keys);
 
         internal PersistedRuntimeState(
             IDataAccessLayer dataAccessLayer,
             EntitySnapshot entity,
-            DateTimeOffset authoritativeTime)
+            DateTimeOffset authoritativeTime,
+            TimeProvider timeProvider)
         {
             this.dataAccessLayer = dataAccessLayer;
             this.entity = entity;
             this.data = entity.Data!.Value;
             this.authoritativeTime = authoritativeTime;
+            this.timeProvider = timeProvider;
         }
+
+        private async Task<T> AwaitPersistenceAsync<T>(
+            Func<Task<T>> startOperation, CancellationToken cancellationToken, bool fenceOnTimeout = true)
+        {
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15), this.timeProvider);
+            using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token, cancellationToken);
+            var operation = startOperation();
+            this.persistenceOperations.TryAdd(operation, 0);
+            ObservePendingPersistence(operation);
+            _ = operation.ContinueWith(completed => this.persistenceOperations.TryRemove(completed, out _),
+                CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            try
+            {
+                var result = await operation.WaitAsync(lifetime.Token).ConfigureAwait(false);
+                this.ThrowIfPersistenceUncertain();
+                return result;
+            }
+            catch (Exception) when (!operation.IsCompleted)
+            {
+                if (!fenceOnTimeout)
+                    throw new TimeoutException("The completed runtime's journal acknowledgement is pending.");
+                this.PersistenceUncertain = true;
+                this.OwnerLifetime.Cancel();
+                throw new RestartPersistenceTimeoutException();
+            }
+        }
+
+        private void ThrowIfPersistenceUncertain()
+        {
+            if (this.PersistenceUncertain)
+                throw new RestartPersistenceTimeoutException();
+        }
+
+        internal async Task RunRestartPhaseAsync(Func<CancellationToken, Task> phase)
+            => await this.RunRestartPhaseAsync(async token =>
+            {
+                await phase(token).ConfigureAwait(false);
+                return true;
+            }).ConfigureAwait(false);
+
+        internal async Task<T> RunRestartPhaseAsync<T>(
+            Func<CancellationToken, Task<T>> phase,
+            Func<T, Task>? cleanupLateResult = null)
+        {
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15), this.timeProvider);
+            var operation = phase(deadline.Token);
+            ObservePendingPersistence(operation);
+            try
+            {
+                var result = await operation.WaitAsync(deadline.Token).ConfigureAwait(false);
+                deadline.Token.ThrowIfCancellationRequested();
+                return result;
+            }
+            catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+            {
+                this.PersistenceUncertain = true;
+                this.OwnerLifetime.Cancel();
+                if (cleanupLateResult is not null)
+                    ObservePendingPersistence(CleanupLateResultAsync(operation, cleanupLateResult));
+                throw new RestartPersistenceTimeoutException();
+            }
+        }
+
+        private static async Task CleanupLateResultAsync<T>(Task<T> operation, Func<T, Task> cleanup)
+            => await cleanup(await operation.ConfigureAwait(false)).ConfigureAwait(false);
 
         internal RuntimeEpoch Epoch { get; private set; }
         internal CancellationTokenSource OwnerLifetime { get; } = new();
@@ -409,10 +482,11 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory :
         internal async Task<AuthoritativeQueryResult> RefreshAsync(
             Func<Task<AuthoritativeQueryResult>> queryAsync, CancellationToken cancellationToken)
         {
+            this.ThrowIfPersistenceUncertain();
             await this.gate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                var query = await queryAsync().ConfigureAwait(false);
+                var query = await this.AwaitPersistenceAsync(queryAsync, cancellationToken).ConfigureAwait(false);
                 if (query.Entity?.Data is not JsonElement refreshed
                     || ReadLong(refreshed, "ownership-generation") != ReadLong(this.data, "ownership-generation")
                     || !string.Equals(
@@ -453,6 +527,7 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory :
 
         internal async ValueTask<Dictionary<string, RestartOperation>> LoadRestartsAsync(CancellationToken cancellationToken)
         {
+            this.ThrowIfPersistenceUncertain();
             await this.gate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
@@ -465,7 +540,8 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory :
         }
 
         internal async ValueTask SaveRestartAsync(
-            RestartOperation operation, CancellationToken cancellationToken, bool markRunning = false)
+            RestartOperation operation, CancellationToken cancellationToken, bool markRunning = false,
+            bool fenceOnTimeout = true)
         {
             var operations = await this.LoadRestartsAsync(cancellationToken).ConfigureAwait(false);
             foreach (var existing in operations.Values.Where(value =>
@@ -479,14 +555,27 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory :
             };
             if (markRunning)
                 updates["runtime-state"] = "running";
-            await this.ReplaceAsync(updates, "Record agent session restart operation", cancellationToken).ConfigureAwait(false);
+            await this.ReplaceAsync(updates, "Record agent session restart operation", cancellationToken, fenceOnTimeout).ConfigureAwait(false);
+        }
+
+        internal async Task ConfirmRestartCompletionAsync(RestartOperation operation)
+        {
+            try
+            {
+                // Success is already durable and the published runtime is healthy. An
+                // ambiguous acknowledgement here must not initiate destructive cleanup.
+                await this.SaveRestartAsync(operation with { StartupUnconfirmed = false },
+                    CancellationToken.None, fenceOnTimeout: false).ConfigureAwait(false);
+            }
+            catch (Exception) { }
         }
 
         internal async ValueTask RotateForRestartAsync(
             AgentSessionRuntimeIdentity replacement,
             CancellationToken cancellationToken)
         {
-            var query = await this.dataAccessLayer.QueryAsync(new QueryRequest
+            this.ThrowIfPersistenceUncertain();
+            var query = await this.AwaitPersistenceAsync(() => this.dataAccessLayer.QueryAsync(new QueryRequest
             {
                 Clauses =
                 [
@@ -500,7 +589,7 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory :
                     },
                 ],
                 Timestamps = [null],
-            }, cancellationToken).ConfigureAwait(false);
+            }, cancellationToken), cancellationToken).ConfigureAwait(false);
             var authoritativeTime = query.AuthoritativeTimestamp?.DateTime
                 ?? throw new AgentSessionTakeoverBlockedException();
             if (this.Expiry != default && authoritativeTime >= this.Expiry)
@@ -592,14 +681,23 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory :
                 ["continue-in-background"] = value,
             }, "Update agent session retention", ct);
 
-        internal ValueTask PersistStoppedAsync(CancellationToken ct)
-            => this.ReplaceAsync(new Dictionary<string, object?>
+        internal async ValueTask PersistStoppedAsync(CancellationToken ct)
+        {
+            var operations = await this.LoadRestartsAsync(ct).ConfigureAwait(false);
+            foreach (var operation in operations.Values.ToArray())
+                if (operation.State == AgentSessionOwnerRestartState.Succeeded
+                    && operation.Replacement.RuntimeEpoch == this.Epoch)
+                    operations[operation.Request.CommandId.ToString("D")] = operation with { StartupUnconfirmed = false };
+            await this.ReplaceAsync(new Dictionary<string, object?>
             {
                 ["runtime-state"] = "stopped",
                 ["last-stopped-runtime-epoch"] = this.Epoch.Value.ToString("D"),
                 ["runtime-epoch"] = null,
                 ["runtime-lease-expiry"] = null,
-            }, "Stop agent session runtime", ct);
+                ["restart-operations"] = JsonSerializer.SerializeToElement(
+                    operations, Microsoft.Extensions.AI.AIJsonUtilities.DefaultOptions),
+            }, "Stop agent session runtime", ct).ConfigureAwait(false);
+        }
 
         internal async ValueTask ReleaseAsync(CancellationToken ct)
         {
@@ -608,20 +706,24 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory :
         }
 
         private async ValueTask ReplaceAsync(
-            IReadOnlyDictionary<string, object?> updates, string comment, CancellationToken ct)
+            IReadOnlyDictionary<string, object?> updates, string comment, CancellationToken ct,
+            bool fenceOnTimeout = true)
         {
-            if (!await this.TryReplaceAsync(updates, comment, ct).ConfigureAwait(false))
+            if (!await this.TryReplaceAsync(updates, comment, ct, fenceOnTimeout).ConfigureAwait(false))
                 throw new AgentSessionConcurrentUpdateException();
         }
 
         private async ValueTask<bool> TryReplaceAsync(
-            IReadOnlyDictionary<string, object?> updates, string comment, CancellationToken ct)
+            IReadOnlyDictionary<string, object?> updates, string comment, CancellationToken ct,
+            bool fenceOnTimeout = true)
         {
+            this.ThrowIfPersistenceUncertain();
             await this.gate.WaitAsync(ct).ConfigureAwait(false);
             try
             {
                 var replacement = Merge(this.data, updates);
-                var result = await this.dataAccessLayer.UpdateAsync(new UpdateRequest
+                ct.ThrowIfCancellationRequested();
+                var result = await this.AwaitPersistenceAsync(() => this.dataAccessLayer.UpdateAsync(new UpdateRequest
                 {
                     UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = comment } },
                     Changes =
@@ -634,7 +736,7 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory :
                             EntityChangeMode = EntityChangeMode.Replace,
                         },
                     ],
-                }, ct).ConfigureAwait(false);
+                }, ct), ct, fenceOnTimeout).ConfigureAwait(false);
                 var changed = result.EntityResults.SingleOrDefault();
                 if (changed is null || changed.ConcurrencyMatchState == ConcurrencyMatchState.NotMatched)
                     return false;

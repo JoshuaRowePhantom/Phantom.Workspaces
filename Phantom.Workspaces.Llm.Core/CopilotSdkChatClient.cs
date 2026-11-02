@@ -579,9 +579,12 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     /// reuses the same session rather than recreating it. When no session is live yet, the model id
     /// is simply stashed and applied by the next created/resumed session.
     /// </summary>
+    internal Func<IDisposable>? EnterModelMutation { get; set; }
+
     public async Task SetModelIdAsync(string modelId, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
+        using var mutation = this.EnterModelMutation?.Invoke();
 
         if (this.copilotSession is { } session)
         {
