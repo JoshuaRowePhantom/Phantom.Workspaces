@@ -14,6 +14,55 @@ namespace Phantom.Workspaces.Llm.Tests;
 public sealed class AgentChatFactoryTests
 {
     [Fact]
+    public async Task RestartSession_AuthorityStoppedJournalFailure_DoesNotStartReplacement()
+    {
+        var sessionId = new AgentSessionId("restart-stopped-journal-failure");
+        await using var factory = CreateFactory();
+        await using var original = await factory.GetOrCreateAsync(sessionId, EchoAgentDefinition);
+        var failure = new IOException("Stopped journal could not be persisted.");
+
+        Assert.Same(failure, await Record.ExceptionAsync(() => factory.RestartExactAsync(
+            sessionId,
+            original.AgentChat,
+            null,
+            (_, _) => ValueTask.CompletedTask,
+            CancellationToken.None,
+            _ => ValueTask.FromException(failure),
+            CancellationToken.None)));
+
+        Assert.True(original.LocalAgentChat.IsTerminal);
+        Assert.Empty(factory.RunningSessions);
+        await Assert.ThrowsAsync<IOException>(() => factory.GetAsync(sessionId));
+    }
+
+    [Fact]
+    public async Task RestartSession_AuthorityStoppedJournal_PrecedesReplacementStartup()
+    {
+        var sessionId = new AgentSessionId("restart-stopped-journal-order");
+        await using var factory = CreateFactory();
+        await using var original = await factory.GetOrCreateAsync(sessionId, EchoAgentDefinition);
+        var stopped = false;
+
+        await using var replacement = await factory.RestartExactAsync(
+            sessionId,
+            original.AgentChat,
+            null,
+            (_, _) => ValueTask.CompletedTask,
+            CancellationToken.None,
+            _ =>
+            {
+                Assert.True(original.LocalAgentChat.IsTerminal);
+                Assert.Empty(factory.RunningSessions);
+                stopped = true;
+                return ValueTask.CompletedTask;
+            },
+            CancellationToken.None);
+
+        Assert.True(stopped);
+        Assert.NotSame(original.AgentChat, replacement.AgentChat);
+    }
+
+    [Fact]
     public async Task RestartSession_PreservesPerSessionServicesInsteadOfFactoryDefaults()
     {
         var sessionId = new AgentSessionId("restart-per-session-services");
@@ -291,6 +340,10 @@ public sealed class AgentChatFactoryTests
         }
         await using var replacement = await restart;
         Assert.True(checkpoint!.HasInterruptedWork);
+        Assert.Contains(replacement.AgentChat.History, item =>
+            item.Role == AgentChatHistoryItem.DiagnosticChatRole
+            && item.Contents.OfType<TextContent>().Any(content =>
+                content.Text.Contains("Tool side effects may already have occurred", StringComparison.Ordinal)));
         Assert.All(replacement.AgentChat.InputQueues.Snapshot.Queues, queue => Assert.Empty(queue.Items));
         Assert.Equal(1, stream.DisposalCount);
     }

@@ -607,6 +607,15 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
            try
            {
                this.LoadInitialHistory(persistedMessages);
+               if (this.request.RuntimeQueueCheckpoint?.HasInterruptedWork == true)
+                   this.AddHistoryItem(new AgentChatHistoryItem
+                   {
+                       Role = AgentChatHistoryItem.DiagnosticChatRole,
+                       Timestamp = this.timeProvider.GetUtcNow(),
+                       Contents = [new TextContent(
+                           "The session restarted while work was in progress. That work was not replayed. "
+                           + "Tool side effects may already have occurred; verify their outcome before explicitly retrying.")],
+                   });
 
                // Signal that persisted history has been loaded into History. Consumers (e.g. the
                // chat output control) await this before taking the initial history snapshot so the
@@ -781,6 +790,14 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
 
     /// <summary>Underlying queue manager, for advanced queue behaviors.</summary>
     public AgentInputQueueManager InputQueueManager => this.queueManager;
+
+    internal Task PublishRuntimeRestartDiagnosticAsync(string message)
+        => Task.Factory.StartNew(() => this.AddHistoryItem(new AgentChatHistoryItem
+        {
+            Role = AgentChatHistoryItem.DiagnosticChatRole,
+            Timestamp = this.timeProvider.GetUtcNow(),
+            Contents = [new TextContent(message)],
+        }), CancellationToken.None, TaskCreationOptions.DenyChildAttach, this.foregroundScheduler);
 
     internal InternalCreateAgentChatRequest CreateRuntimeReplacementRequest(
         AgentServices services,

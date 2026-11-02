@@ -13,6 +13,14 @@ public sealed class RunningAgentChatLease : IAsyncDisposable
     public AgentSessionId SessionId { get; }
 
     public IAgentChat AgentChat { get; }
+    internal Remote.AgentSessionRuntimeIdentity? RestartIdentity { get; set; }
+    internal Func<Remote.AgentSessionRuntimeIdentity?>? RestartIdentityProvider { get; set; }
+    internal Func<Remote.AgentSessionOwnerRestartRequest, CancellationToken,
+        Task<Remote.AgentSessionOwnerRestartResult>>? RestartRuntimeAsync { get; set; }
+    internal Func<Remote.AgentSessionOwnerRestartRequest, CancellationToken,
+        Task<Remote.AgentSessionOwnerRestartResult?>>? RestartStatusAsync { get; set; }
+    internal Func<RunningAgentChatLease, Task>? ReattachAsync { get; set; }
+    internal AgentSessionRestartCommandState RestartCommandState { get; set; } = new();
 
     /// <summary>Positive terminal evidence for this captured runtime, not its session ID's current replacement.</summary>
     public bool IsRuntimeTerminal => this.AgentChat switch
@@ -42,6 +50,11 @@ public sealed class RunningAgentChatLease : IAsyncDisposable
         _onDispose = onDispose;
         _afterDispose = afterDispose;
         this.prepareIdleClose = prepareIdleClose;
+    }
+
+    internal sealed class AgentSessionRestartCommandState
+    {
+        internal Remote.AgentSessionOwnerRestartRequest? Pending { get; set; }
     }
 
     public Task<bool> TryPrepareIdleCloseAsync(CancellationToken ct = default)

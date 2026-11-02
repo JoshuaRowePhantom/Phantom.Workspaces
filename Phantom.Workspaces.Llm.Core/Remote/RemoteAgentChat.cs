@@ -36,6 +36,7 @@ public sealed class RemoteAgentChat : IAgentChat
     private bool isTerminal;
     private AgentInformation information;
     private Usage usage;
+    private RuntimeEpoch? appliedRuntimeEpoch;
 
     private RemoteAgentChat(RemoteAgentSessionClient client, TaskScheduler foregroundScheduler)
     {
@@ -99,6 +100,7 @@ public sealed class RemoteAgentChat : IAgentChat
     public int ViewerCount { get; private set; }
     internal bool IsConnected => this.isConnected;
     internal bool IsTerminal => this.isTerminal;
+    internal RemoteAgentSessionClient RestartClient => this.client;
 
     public event EventHandler? InformationChanged;
     public event EventHandler? ToolsChanged;
@@ -375,9 +377,20 @@ public sealed class RemoteAgentChat : IAgentChat
         if (this.disposed) return;
         switch (AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(frame))
         {
+            case SessionRestartStoppedEvent:
+                this.IsBusy = false;
+                this.isTerminal = true;
+                this.SetConnected(false);
+                this.RuntimeStateChanged?.Invoke(this, EventArgs.Empty);
+                break;
             case SessionSnapshotEvent e:
+                var acknowledgesReplacement = this.appliedRuntimeEpoch is { } previousEpoch
+                    && previousEpoch != frame.RuntimeEpoch;
                 this.ApplySnapshot(e.Snapshot);
+                this.appliedRuntimeEpoch = frame.RuntimeEpoch;
                 this.initialized.TrySetResult();
+                if (acknowledgesReplacement)
+                    _ = this.AcknowledgeRestartProjectionAsync();
                 break;
             case HistoryAppendedEvent e:
                 var item = Deserialize<AgentChatHistoryItem>(e.Item);
@@ -473,6 +486,19 @@ public sealed class RemoteAgentChat : IAgentChat
         }
     }
 
+    private async Task AcknowledgeRestartProjectionAsync()
+    {
+        try
+        {
+            await this.client.AcknowledgeRestartProjectionAsync(this.lifetimeCancellation.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (this.lifetimeCancellation.IsCancellationRequested) { }
+        catch (Exception)
+        {
+            System.Diagnostics.Trace.TraceWarning("Agent session replacement projection acknowledgement failed.");
+        }
+    }
+
     private void ApplySnapshot(AgentSessionSnapshot snapshot)
     {
         ProtocolValueValidator.Validate(snapshot.Information);
@@ -482,7 +508,6 @@ public sealed class RemoteAgentChat : IAgentChat
         this.usage = snapshot.Usage;
         this.IsBusy = snapshot.IsBusy;
         this.isTerminal = false;
-        this.SetConnected(true);
         this.ContinueInBackground = snapshot.ContinueInBackground;
         this.ViewerCount = snapshot.ViewerCount;
         this.History.Clear();
@@ -502,6 +527,9 @@ public sealed class RemoteAgentChat : IAgentChat
         this.ReplaceTools(snapshot.Tools);
         this.ReplaceSubagents(snapshot.Subagents);
         this.ReconcileModals(snapshot.Modals);
+        this.SetConnected(true);
+        this.InformationChanged?.Invoke(this, EventArgs.Empty);
+        this.UsageChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private void SetConnected(bool value)

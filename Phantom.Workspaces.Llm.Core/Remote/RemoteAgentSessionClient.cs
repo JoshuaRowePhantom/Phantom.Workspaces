@@ -26,6 +26,7 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
     private bool terminal;
     private bool disposed;
     private Task? reconnectAttempt;
+    private RuntimeEpoch? replacementEpoch;
 
     public RemoteAgentSessionClient(ITransport transport)
         : this(transport, TimeProvider.System)
@@ -42,6 +43,64 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
     internal event EventHandler? UnexpectedlyDisconnected;
     internal TimeProvider TimeProvider => this.timeProvider;
     public ReplayCursor? LastAppliedCursor { get; private set; }
+    private bool canRestartIndependently;
+    internal string? RestartDisabledReason { get; private set; }
+    internal AgentSessionRuntimeIdentity? RestartIdentity => this.canRestartIndependently && this.openRequest is { } open
+        && this.runtimeEpoch is { } epoch
+        ? new AgentSessionRuntimeIdentity
+        {
+            AgentSessionId = open.AgentSessionId,
+            OwningProfileEntityId = open.ExpectedOwningProfileEntityId,
+            OwnershipGeneration = open.ExpectedOwnershipGeneration,
+            RuntimeEpoch = epoch,
+        }
+        : null;
+
+    internal async Task<AgentSessionOwnerRestartResult> RestartAsync(
+        AgentSessionOwnerRestartRequest request,
+        CancellationToken cancellationToken)
+    {
+        await using var restartChannel = await this.transport.ConnectToMessageChannelAsync(
+            JsonSerializer.SerializeToElement(new
+            {
+                type = "restart-agent-session",
+                request,
+            }, AgentSessionProtocolCodec.Options),
+            cancellationToken).ConfigureAwait(false);
+        var response = await restartChannel.Reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+        var result = JsonSerializer.Deserialize<AgentSessionOwnerRestartResult>(
+            response, AgentSessionProtocolCodec.Options)
+            ?? throw new RemoteAgentProtocolException("Restart returned no result.");
+        if (result.CommandId != request.CommandId)
+            throw new RemoteAgentProtocolException("Restart returned a mismatched command id.");
+        return result;
+    }
+
+    internal Task AcknowledgeRestartProjectionAsync(CancellationToken cancellationToken)
+        => this.SendNoResultAsync(new RestartViewerReadyCommand
+        {
+            CommandId = Guid.NewGuid(),
+            CorrelationId = Guid.NewGuid(),
+            RuntimeEpoch = this.RequireEpoch(),
+        }, cancellationToken);
+
+    internal async Task<AgentSessionOwnerRestartResult?> GetRestartStatusAsync(
+        AgentSessionOwnerRestartRequest request,
+        CancellationToken cancellationToken)
+    {
+        await using var statusChannel = await this.transport.ConnectToMessageChannelAsync(
+            JsonSerializer.SerializeToElement(new
+            {
+                type = "agent-session-restart-status",
+                request,
+            }, AgentSessionProtocolCodec.Options), cancellationToken).ConfigureAwait(false);
+        var response = await statusChannel.Reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+        var result = JsonSerializer.Deserialize<AgentSessionOwnerRestartResult>(
+            response, AgentSessionProtocolCodec.Options);
+        if (result is not null && result.CommandId != request.CommandId)
+            throw new RemoteAgentProtocolException("Restart status returned a mismatched command id.");
+        return result;
+    }
 
     public static async Task<AgentSessionRemoteStatus> GetStatusAsync(
         AgentSessionStatusRequest request, CancellationToken ct = default,
@@ -223,7 +282,7 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
                 var request = this.openRequest with
                 {
                     OpenIntent = AgentSessionOpenIntent.Attach,
-                    ReplayCursor = this.LastAppliedCursor,
+                    ReplayCursor = this.replacementEpoch is null ? this.LastAppliedCursor : null,
                 };
                 this.reconnecting = true;
                 attempt = this.OpenChannelAsync(request, ct);
@@ -555,6 +614,16 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
         TaskCompletionSource<AgentSessionServerFrame> ready)
     {
         var value = AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(frame);
+        if (this.replacementEpoch is { } replacement
+            && this.reconnecting && value is SessionSnapshotEvent)
+        {
+            if (frame.RuntimeEpoch != replacement)
+                throw new RemoteAgentProtocolException("Restart did not attach the published replacement epoch.");
+            this.runtimeEpoch = replacement;
+            this.LastAppliedCursor = null;
+            this.abandonedCommands.Clear();
+            this.replacementEpoch = null;
+        }
         if (this.runtimeEpoch is { } epoch && epoch != frame.RuntimeEpoch)
             throw new RemoteAgentProtocolException("The runtime epoch changed.");
         if (this.LastAppliedCursor is { } cursor && frame.Sequence != cursor.Sequence + 1)
@@ -582,8 +651,16 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
         if (this.runtimeEpoch is null && value is not SessionSnapshotEvent)
             throw new RemoteAgentProtocolException("The first attached-session frame must be a snapshot.");
         this.runtimeEpoch ??= frame.RuntimeEpoch;
+        if (value is SessionSnapshotEvent snapshot)
+        {
+            this.canRestartIndependently = snapshot.Snapshot.CanRestartIndependently;
+            this.RestartDisabledReason = snapshot.Snapshot.RestartDisabledReason;
+        }
         this.LastAppliedCursor = new ReplayCursor { Epoch = frame.RuntimeEpoch, Sequence = frame.Sequence };
-        var completesOpen = value is SessionSnapshotEvent || this.reconnecting;
+        if (value is SessionRestartingEvent restarting)
+            this.replacementEpoch = restarting.ReplacementRuntimeEpoch;
+        var completesOpen = value is SessionSnapshotEvent
+            || this.reconnecting && value is not SessionRestartingEvent;
         if (completesOpen)
         {
             this.reconnecting = false;

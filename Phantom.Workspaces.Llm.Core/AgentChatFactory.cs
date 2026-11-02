@@ -45,7 +45,7 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
         _foregroundScheduler = foregroundScheduler;
     }
 
-    public async Task<RunningAgentChatLease> GetOrCreateAsync(
+    public Task<RunningAgentChatLease> GetOrCreateAsync(
         AgentSessionId sessionId,
         AgentDefinition? definition = null,
         AgentServices? services = null,
@@ -53,6 +53,25 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
         string? descriptionOverride = null,
         bool registerAsRunningAgent = true,
         CancellationToken ct = default)
+        => this.GetOrCreateAsync(
+            sessionId,
+            definition,
+            services,
+            displayNameOverride,
+            descriptionOverride,
+            registerAsRunningAgent,
+            ct,
+            null);
+
+    internal async Task<RunningAgentChatLease> GetOrCreateAsync(
+        AgentSessionId sessionId,
+        AgentDefinition? definition,
+        AgentServices? services,
+        string? displayNameOverride,
+        string? descriptionOverride,
+        bool registerAsRunningAgent,
+        CancellationToken ct,
+        AgentRuntimeQueueCheckpoint? runtimeQueueCheckpoint)
     {
         while (true)
         {
@@ -121,6 +140,7 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
                         DescriptionOverride = descriptionOverride,
                         ForegroundScheduler = _foregroundScheduler,
                         CancellationToken = ct,
+                        RuntimeQueueCheckpoint = runtimeQueueCheckpoint,
                     }, ct);
                     PopulateAgentChatRef(effectiveServices, chat);
                     _entries[sessionId] = new Entry { AgentChat = chat, RefCount = 1 };
@@ -311,12 +331,31 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
     public Task<bool> TerminateExactAsync(AgentSessionId sessionId, IAgentChat expected, CancellationToken ct = default)
         => this.TerminateCoreAsync(sessionId, expected, ct);
 
-    public async Task<RunningAgentChatLease> RestartExactAsync(
+    public Task<RunningAgentChatLease> RestartExactAsync(
         AgentSessionId sessionId,
         IAgentChat expected,
         AgentServices? services,
         Func<AgentRuntimeQueueCheckpoint, CancellationToken, ValueTask> persistCheckpointAsync,
         CancellationToken cancellationToken = default)
+        => this.RestartExactAsync(
+            sessionId,
+            expected,
+            services,
+            persistCheckpointAsync,
+            cancellationToken,
+            _ => ValueTask.CompletedTask,
+            CancellationToken.None,
+            false);
+
+    internal async Task<RunningAgentChatLease> RestartExactAsync(
+        AgentSessionId sessionId,
+        IAgentChat expected,
+        AgentServices? services,
+        Func<AgentRuntimeQueueCheckpoint, CancellationToken, ValueTask> persistCheckpointAsync,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, ValueTask> persistStoppedAsync,
+        CancellationToken runtimeLifetimeCancellationToken,
+        bool durableOwnerCommit = true)
     {
         Entry original;
         AgentRuntimeQueueCheckpoint checkpoint;
@@ -335,7 +374,8 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
             try
             {
                 await persistCheckpointAsync(checkpoint, cancellationToken).ConfigureAwait(false);
-                cancellationToken.ThrowIfCancellationRequested();
+                if (!durableOwnerCommit)
+                    cancellationToken.ThrowIfCancellationRequested();
             }
             catch
             {
@@ -369,11 +409,17 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
                 await original.AgentChat.PersistFinalRuntimeStateAsync().ConfigureAwait(false);
                 original.ShutdownConfirmed = true;
             }
+            await persistStoppedAsync(CancellationToken.None).ConfigureAwait(false);
+            runtimeLifetimeCancellationToken.ThrowIfCancellationRequested();
             var effectiveServices = this.WithSelfAsFactory(
                 services ?? original.AgentChat.RuntimeServices ?? this._services);
             replacement = await this.CreateChatOnForegroundAsync(
-                original.AgentChat.CreateRuntimeReplacementRequest(effectiveServices, checkpoint),
-                CancellationToken.None).ConfigureAwait(false);
+                original.AgentChat.CreateRuntimeReplacementRequest(effectiveServices, checkpoint) with
+                {
+                    CancellationToken = runtimeLifetimeCancellationToken,
+                },
+                runtimeLifetimeCancellationToken).ConfigureAwait(false);
+            runtimeLifetimeCancellationToken.ThrowIfCancellationRequested();
             PopulateAgentChatRef(effectiveServices, replacement);
             await this._gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
             try

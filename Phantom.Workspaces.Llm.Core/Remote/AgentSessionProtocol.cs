@@ -189,6 +189,10 @@ internal sealed record SetContinueInBackgroundCommand : AgentSessionCommand
     public required bool ContinueInBackground { get; init; }
 }
 internal sealed record DetachCommand : AgentSessionCommand { public override string Type => "detach"; }
+internal sealed record RestartViewerReadyCommand : AgentSessionCommand
+{
+    public override string Type => "restart-viewer-ready";
+}
 internal sealed record DetachIfIdleCommand : AgentSessionCommand
 {
     public override string Type => "detach-if-idle";
@@ -196,6 +200,16 @@ internal sealed record DetachIfIdleCommand : AgentSessionCommand
 }
 
 internal abstract record AgentSessionServerEvent { public abstract string Type { get; } }
+internal sealed record SessionRestartStoppedEvent : AgentSessionServerEvent
+{
+    public override string Type => "session-restart-stopped";
+    public required string Message { get; init; }
+}
+internal sealed record SessionRestartingEvent : AgentSessionServerEvent
+{
+    public override string Type => "session-restarting";
+    public required RuntimeEpoch ReplacementRuntimeEpoch { get; init; }
+}
 internal sealed record SessionStatusEvent : AgentSessionServerEvent
 {
     public override string Type => "session-status";
@@ -313,6 +327,8 @@ internal sealed record SessionTerminalEvent : AgentSessionServerEvent
 
 internal sealed record AgentSessionSnapshot
 {
+    public bool CanRestartIndependently { get; init; }
+    public string? RestartDisabledReason { get; init; }
     public required AgentInformation Information { get; init; }
     public required Usage Usage { get; init; }
     public required AgentInputQueuesSnapshot InputQueues { get; init; }
@@ -444,6 +460,7 @@ internal static class AgentSessionProtocolCodec
             "set-tool-enabled" => typeof(SetToolEnabledCommand),
             "set-continue-in-background" => typeof(SetContinueInBackgroundCommand),
             "detach" => typeof(DetachCommand),
+            "restart-viewer-ready" => typeof(RestartViewerReadyCommand),
             "detach-if-idle" => typeof(DetachIfIdleCommand),
             _ => throw Protocol($"Unknown command discriminator '{type}'."),
         };
@@ -526,6 +543,8 @@ internal static class AgentSessionProtocolCodec
             {
                 "session-status" => typeof(SessionStatusEvent),
                 "session-snapshot" => typeof(SessionSnapshotEvent),
+                "session-restarting" => typeof(SessionRestartingEvent),
+                "session-restart-stopped" => typeof(SessionRestartStoppedEvent),
                 "history-appended" => typeof(HistoryAppendedEvent),
                 "usage-changed" => typeof(UsageChangedEvent),
                 "agent-information-changed" => typeof(AgentInformationChangedEvent),
@@ -573,6 +592,10 @@ internal static class AgentSessionProtocolCodec
         {
             switch (value)
             {
+                case SessionRestartStoppedEvent stopped when string.IsNullOrWhiteSpace(stopped.Message):
+                    throw new RemoteAgentProtocolException("Restart stopped-state message is required.");
+                case SessionRestartingEvent restarting when restarting.ReplacementRuntimeEpoch.Value == Guid.Empty:
+                    throw new RemoteAgentProtocolException("Replacement runtime epoch is required.");
                 case SessionSnapshotEvent snapshot:
                     if (snapshot.Snapshot is null
                         || snapshot.Snapshot.History is null
@@ -814,6 +837,8 @@ internal static class AgentSessionProtocolCodec
         "subagents-snapshot", "subagents-changed", "modal-raised", "modal-updated",
         "modal-dismissed", "session-retention-changed", "command-completed", "operation-error",
         "session-terminal",
+        "session-restarting",
+        "session-restart-stopped",
     };
 
     private sealed class AgentInformationConverter : JsonConverter<AgentInformation>
