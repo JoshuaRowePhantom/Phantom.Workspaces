@@ -1700,8 +1700,9 @@ public sealed class RunningAgentChatTableTests
     public async Task SetContinueInBackgroundAsync_LocalOwner_PersistsBeforePublishingPreference(bool viewerClose)
     {
         var registry = new FakeLocalRuntimeRegistry();
+        var factory = new FakeRunningAgentChatFactory();
         var table = new RunningAgentChatTable(
-            new FakeRunningAgentChatFactory(), new FakeRuntimeContextFactory());
+            factory, new FakeRuntimeContextFactory());
         table.ConfigureLocalRuntimeRegistry(registry);
         var sessionId = new AgentSessionId("local-retention");
         var entity = JsonDocument.Parse(
@@ -1713,14 +1714,88 @@ public sealed class RunningAgentChatTableTests
         }, TestContext.Current.CancellationToken);
         var row = Assert.Single(table.RunningSessions);
 
-        if (viewerClose)
-            await table.RetainForViewerCloseAsync(sessionId, TestContext.Current.CancellationToken);
-        else
-            await table.SetContinueInBackgroundAsync(sessionId, true, TestContext.Current.CancellationToken);
+        try
+        {
+            if (viewerClose)
+                await table.RetainForViewerCloseAsync(sessionId, TestContext.Current.CancellationToken);
+            else
+                await table.SetContinueInBackgroundAsync(sessionId, true, TestContext.Current.CancellationToken);
 
-        Assert.Equal(1, registry.Writes);
-        Assert.True(registry.LastValue);
-        Assert.True(row.ContinueInBackground);
+            Assert.Equal(1, registry.Writes);
+            Assert.True(registry.LastValue);
+            Assert.True(row.ContinueInBackground);
+        }
+        finally
+        {
+            try { await table.SetContinueInBackgroundAsync(sessionId, false, CancellationToken.None); }
+            finally { await lease.DisposeAsync(); }
+        }
+        Assert.Empty(factory.RunningSessions);
+        Assert.Empty(table.RunningSessions);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RetentionFixtureCleanup_AwaitsActualChatDisposal_EvenWhenBodyThrows(bool throwInBody)
+    {
+        var disposing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finishDisposal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var disposed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var factory = new FakeRunningAgentChatFactory(disposeChatAsync: async chat =>
+        {
+            disposing.TrySetResult();
+            await finishDisposal.Task;
+            await (await chat).DisposeAsync();
+            disposed.TrySetResult();
+        });
+        var table = new RunningAgentChatTable(factory, new FakeRuntimeContextFactory());
+        table.ConfigureLocalRuntimeRegistry(new FakeLocalRuntimeRegistry());
+        var sessionId = new AgentSessionId("retention-cleanup");
+        await using var lease = await table.AcquireAsync(new AcquireAgentChatRequest
+        {
+            AgentSessionId = sessionId,
+            AgentSessionEntity = JsonSerializer.SerializeToElement(new Dictionary<string, object>
+            {
+                ["entity-id"] = "11111111-1111-1111-1111-111111111112",
+                ["agent-session-id"] = sessionId.Value!,
+            }),
+        }, TestContext.Current.CancellationToken);
+
+        async Task BodyAsync()
+        {
+            try
+            {
+                await table.SetContinueInBackgroundAsync(sessionId, true, TestContext.Current.CancellationToken);
+                Assert.True(Assert.Single(table.RunningSessions).ContinueInBackground);
+                if (throwInBody)
+                    throw new InvalidOperationException("Body failed after retaining the owner.");
+            }
+            finally
+            {
+                try { await table.SetContinueInBackgroundAsync(sessionId, false, CancellationToken.None); }
+                finally { await lease.DisposeAsync(); }
+            }
+        }
+
+        var body = BodyAsync();
+        try
+        {
+            await disposing.Task.WaitAsync(TestContext.Current.CancellationToken);
+            Assert.False(body.IsCompleted);
+            Assert.False(disposed.Task.IsCompleted);
+        }
+        finally
+        {
+            finishDisposal.TrySetResult();
+        }
+        if (throwInBody)
+            await Assert.ThrowsAsync<InvalidOperationException>(() => body);
+        else
+            await body;
+        await disposed.Task.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.Empty(factory.RunningSessions);
+        Assert.Empty(table.RunningSessions);
     }
 
     [Fact]
