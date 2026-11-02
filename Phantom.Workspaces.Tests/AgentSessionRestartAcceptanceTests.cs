@@ -597,8 +597,9 @@ public sealed partial class DataAccessAgentSessionRuntimeHostFactoryTests
             .Select(item => new { item.Role, item.Contents }),
         AIJsonUtilities.DefaultOptions);
 
-    private sealed class RestartBlockedChannel : IMessageChannel
+    private sealed class RestartBlockedChannel(string? blockedType = null) : IMessageChannel
     {
+        private readonly string? blockedType = blockedType;
         private readonly Channel<JsonElement> incoming = Channel.CreateUnbounded<JsonElement>();
         internal TaskCompletionSource Blocked { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource WriteCancelled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -614,7 +615,8 @@ public sealed partial class DataAccessAgentSessionRuntimeHostFactoryTests
         private sealed class BlockedWriter(RestartBlockedChannel owner) : ChannelWriter<JsonElement>
         {
             public override bool TryComplete(Exception? error = null) => true;
-            public override bool TryWrite(JsonElement item) => false;
+            public override bool TryWrite(JsonElement item)
+                => owner.blockedType is not null && item.GetProperty("type").GetString() != owner.blockedType;
             public override async ValueTask<bool> WaitToWriteAsync(CancellationToken cancellationToken = default)
             {
                 owner.Blocked.TrySetResult();

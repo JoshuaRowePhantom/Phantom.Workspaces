@@ -166,6 +166,35 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
 
     internal bool IsRestartRetirement { get { lock (this.gate) return this.replacementEpoch is not null; } }
 
+    internal async ValueTask PublishRestartStoppedAsync(SessionRestartStoppedEvent stopped, bool blockRuntime)
+    {
+        using var deadline = new CancellationTokenSource(ReconnectGrace, this.timeProvider);
+        try
+        {
+            if (this.ownershipLease is not null)
+            {
+                var quiescing = this.ownershipLease.DisposeAsync().AsTask();
+                _ = quiescing.ContinueWith(task => _ = task.Exception,
+                    CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+                await quiescing.WaitAsync(deadline.Token).ConfigureAwait(false);
+            }
+            await this.PublishAsync(stopped, ct: deadline.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+        {
+            lock (this.gate)
+                foreach (var attachment in this.attachments.Values)
+                    attachment.Publisher.AbortUnderLock(new TimeoutException("Stopped-state delivery exceeded its owner deadline."));
+        }
+        finally
+        {
+            if (blockRuntime)
+                lock (this.gate)
+                    this.fenced = true;
+        }
+    }
+
     internal void PrepareRetirement(RuntimeEpoch epoch)
     {
         lock (this.gate)

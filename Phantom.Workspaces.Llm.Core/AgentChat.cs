@@ -843,17 +843,18 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
         }
     }
 
-    internal async ValueTask PersistFinalRuntimeStateAsync()
+    internal async ValueTask PersistFinalRuntimeStateAsync(CancellationToken cancellationToken = default)
     {
         Task[] providerCleanup;
         lock (this.processingStateLock)
             providerCleanup = this.providerCleanupTasks.ToArray();
         await Task.WhenAll(providerCleanup).WaitAsync(
-            DisposeDrainTimeout, this.disposalTimeProvider).ConfigureAwait(false);
+            DisposeDrainTimeout, this.disposalTimeProvider, cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
         var persistence = this.persistenceProvider
             ?? throw new InvalidOperationException("The runtime has no initialized persistence provider.");
         await persistence.PersistFinalSessionAsync(
-            this.GetSession().Session, CancellationToken.None).ConfigureAwait(false);
+            this.GetSession().Session, cancellationToken).ConfigureAwait(false);
     }
 
     private readonly List<Task> providerCleanupTasks = [];

@@ -24,8 +24,11 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed partial class MainWindowTabCommandsIntegrationTests
 {
-    [AvaloniaFact]
-    public async Task RestartSession_DefaultProductionCoordinator_RendersMenuAndReplacesTheActualOwnerInPlace()
+    [AvaloniaTheory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task RestartSession_DefaultProductionCoordinator_RendersMenuAndReplacesTheActualOwnerInPlace(bool failStartup, bool failFinalPersistence)
     {
         var foregroundScheduler = TaskScheduler.FromCurrentSynchronizationContext();
         await using var environment = new DataAccessAgentSessionRuntimeHostFactoryTests.RestartEnvironment(
@@ -47,12 +50,24 @@ public sealed partial class MainWindowTabCommandsIntegrationTests
         tab.SetLease(viewer);
         tab.SetReady(new AgentViewModel(original, "production", "", logger, foregroundScheduler), logger);
         await viewModel.OpenTabAsync(tab);
+        var peerViewer = await environment.AcquireAsync();
+        var peerLogger = new ObservableLoggerFactory();
+        var peerTab = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = "tab-production-peer", Title = "Peer", AgentSessionId = "session",
+            Entity = CreateWorkspaceEntity("production-peer"),
+        };
+        peerTab.SetLease(peerViewer);
+        peerTab.SetReady(new AgentViewModel(original, "peer", "", peerLogger, foregroundScheduler), peerLogger);
+        await viewModel.OpenTabAsync(peerTab);
         var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         tab.PropertyChanged += (_, change) =>
         {
             if (change.PropertyName == nameof(tab.IsRestartInProgress) && !tab.IsRestartInProgress)
                 completed.TrySetResult();
         };
+        environment.FailStartup = failStartup;
+        environment.FailFinalPersistence = failFinalPersistence;
         var window = new MainWindow(viewModel);
         window.Show();
         try
@@ -66,11 +81,50 @@ public sealed partial class MainWindowTabCommandsIntegrationTests
             Assert.True(restart.IsEnabled);
             restart.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(MenuItem.ClickEvent));
             await completed.Task.WaitAsync(TestContext.Current.CancellationToken);
+            if (failFinalPersistence)
+            {
+                Assert.Contains("blocked", tab.RestartError);
+                menu.Close();
+                await OpenNativeMenuAsync(window, item);
+                restart = Assert.Single(menu.Items.OfType<MenuItem>(), value => Equals(value.Header, "Restart agent session…"));
+                Assert.False(restart.IsEnabled);
+                Assert.True(TabCommandContext.TryCreateForKeyboardOrigin(viewModel, peerTab, out var blockedContext));
+                Assert.False(viewModel.AgentSessionRestartService.GetAvailability(peerTab, blockedContext!).IsAvailable);
+                Assert.Null(viewModel.AgentSessionRestartService.PrepareRestart(peerTab, blockedContext!));
+                Assert.Empty(environment.Table.RunningSessions);
+                return;
+            }
+            if (failStartup)
+            {
+                Assert.Contains("Retry", tab.RestartError);
+                var pending = Assert.IsType<Phantom.Workspaces.Llm.Remote.AgentSessionOwnerRestartRequest>(
+                    viewer.RestartCommandState.Pending);
+                Assert.Null(viewer.RestartIdentityProvider!());
+                Assert.True(TabCommandContext.TryCreateForKeyboardOrigin(viewModel, peerTab, out var peerContext));
+                Assert.True(viewModel.AgentSessionRestartService.GetAvailability(peerTab, peerContext!).IsAvailable);
+                Assert.Equal(pending.CommandId,
+                    viewModel.AgentSessionRestartService.PrepareRestart(peerTab, peerContext!)!.CommandId);
+                completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                environment.FailStartup = false;
+                menu.Close();
+                await OpenNativeMenuAsync(window, item);
+                restart = Assert.Single(menu.Items.OfType<MenuItem>(), value => Equals(value.Header, "Restart agent session…"));
+                Assert.True(restart.IsEnabled);
+                restart.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(MenuItem.ClickEvent));
+                await completed.Task.WaitAsync(TestContext.Current.CancellationToken);
+                Assert.Equal(Phantom.Workspaces.Llm.Remote.AgentSessionOwnerRestartState.Succeeded,
+                    (await viewer.RestartStatusAsync!(pending, TestContext.Current.CancellationToken))!.State);
+            }
             Assert.Null(tab.RestartError);
             Assert.NotSame(original, tab.Lease!.AgentChat);
             Assert.True(Assert.IsType<AgentChat>(original).IsTerminal);
             Assert.Equal(AgentTabState.Ready, tab.State);
             Assert.Single(environment.Table.RunningSessions);
+            Assert.Same(tab.Lease.AgentChat, peerTab.Lease!.AgentChat);
+            Assert.True(TabCommandContext.TryCreateForKeyboardOrigin(viewModel, peerTab, out var nextContext));
+            var next = viewModel.AgentSessionRestartService.PrepareRestart(peerTab, nextContext!)!;
+            Assert.Equal(peerTab.Lease.RestartIdentityProvider!()!.RuntimeEpoch.Value, next.RuntimeEpoch);
+            Assert.Null(peerTab.Lease.RestartCommandState.Pending);
         }
         finally
         {

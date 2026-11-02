@@ -13,16 +13,20 @@ internal sealed class AgentSessionRestartCoordinator : IAgentSessionRestartServi
         TabCommandContext context)
         => new()
         {
-            IsAvailable = GetIdentity(tab) is not null && tab.Lease?.RestartRuntimeAsync is not null,
-            DisabledReason = tab.Lease?.AgentChat is RemoteAgentChat remote
+            IsAvailable = GetRetryIdentity(tab) is not null
+                || tab.Lease?.RestartCommandState.Result?.State != AgentSessionOwnerRestartState.Blocked
+                    && GetIdentity(tab) is not null && tab.Lease?.RestartRuntimeAsync is not null,
+            DisabledReason = tab.Lease?.RestartCommandState.Result?.Message
+                ?? (tab.Lease?.AgentChat is RemoteAgentChat remote
                 ? remote.RestartClient.RestartDisabledReason ?? "This remote runtime has no durable restart authority."
-                : "This session has no independently restartable owning runtime; parent-managed children share their parent's lifecycle.",
+                : "This session has no independently restartable owning runtime; parent-managed children share their parent's lifecycle."),
         };
 
     public AgentSessionRestartRequest? PrepareRestart(
         AgentSessionWorkspaceTabViewModel tab,
         TabCommandContext context)
-        => (tab.Lease?.RestartCommandState.Pending?.ExpectedRuntime ?? GetIdentity(tab)) is { } identity
+        => tab.Lease?.RestartCommandState.Result?.State != AgentSessionOwnerRestartState.Blocked
+            && (GetRetryIdentity(tab) ?? GetIdentity(tab)) is { } identity
             && tab.Lease is { RestartRuntimeAsync: not null } lease
             ? new AgentSessionRestartRequest
             {
@@ -32,7 +36,8 @@ internal sealed class AgentSessionRestartCoordinator : IAgentSessionRestartServi
                 ExpectedOwnerId = identity.OwningProfileEntityId,
                 OwnershipGeneration = identity.OwnershipGeneration,
                 RuntimeEpoch = identity.RuntimeEpoch.Value,
-                CommandId = lease.RestartCommandState.Pending?.CommandId ?? Guid.NewGuid(),
+                CommandId = GetRetryIdentity(tab) is not null
+                    ? lease.RestartCommandState.Pending!.CommandId : Guid.NewGuid(),
             }
             : null;
 
@@ -46,6 +51,7 @@ internal sealed class AgentSessionRestartCoordinator : IAgentSessionRestartServi
         var ownerRequest = OwnerRequest(request);
         lease.RestartCommandState.Pending = ownerRequest;
         var result = await restart(ownerRequest, cancellationToken).ConfigureAwait(false);
+        lease.RestartCommandState.Result = result;
         if (result.State is AgentSessionOwnerRestartState.Succeeded or AgentSessionOwnerRestartState.TargetChanged)
             lease.RestartCommandState.Pending = null;
         return Result(result);
@@ -92,4 +98,9 @@ internal sealed class AgentSessionRestartCoordinator : IAgentSessionRestartServi
         => tab.Lease?.AgentChat is RemoteAgentChat remote
             ? remote.RestartClient.RestartIdentity
             : tab.Lease?.RestartIdentityProvider is { } provider ? provider() : tab.Lease?.RestartIdentity;
+
+    private static AgentSessionRuntimeIdentity? GetRetryIdentity(AgentSessionWorkspaceTabViewModel tab)
+        => tab.Lease is { RestartRuntimeAsync: not null } lease
+            && lease.RestartCommandState.Result?.State == AgentSessionOwnerRestartState.Stopped
+                ? lease.RestartCommandState.Pending?.ExpectedRuntime : null;
 }

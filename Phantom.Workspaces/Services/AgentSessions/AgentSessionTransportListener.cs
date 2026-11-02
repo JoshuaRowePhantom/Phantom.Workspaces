@@ -34,7 +34,7 @@ public sealed class AgentSessionTransportListener : ITransportListener
             || !request.TryGetProperty("type", out var type)
             || type.ValueKind != JsonValueKind.String
             || type.GetString() is not ("attach-agent-session" or "take-over-agent-session"
-                or "restart-agent-session" or "agent-session-restart-status"))
+                or "restart-agent-session" or "agent-session-restart-status" or "observe-agent-session-restart"))
             return null;
         lock (this.gate) ObjectDisposedException.ThrowIf(this.disposed, this);
         var stage = "validate-request";
@@ -44,6 +44,14 @@ public sealed class AgentSessionTransportListener : ITransportListener
         try
         {
             var peer = this.peerIdentityProvider.GetRequiredIdentity(channel);
+            if (type.GetString() == "observe-agent-session-restart")
+            {
+                var expected = request.GetProperty("expected-runtime").Deserialize<AgentSessionRuntimeIdentity>(
+                    AgentSessionProtocolCodec.Options) ?? throw new RemoteAgentProtocolException("Restart identity was null.");
+                var observation = new RestartObservation(this.host, peer, expected, channel, this.RemoveActive);
+                lock (this.gate) this.active.Add(observation);
+                return observation;
+            }
             if (type.GetString() is "restart-agent-session" or "agent-session-restart-status")
             {
                 var restart = JsonSerializer.Deserialize<AgentSessionOwnerRestartRequest>(
@@ -132,15 +140,19 @@ public sealed class AgentSessionTransportListener : ITransportListener
 
     public async ValueTask DisposeAsync()
     {
-        TransportAttachmentHandle[] leases;
+        IAsyncDisposable[] leases;
         lock (this.gate)
         {
             if (this.disposed) return;
             this.disposed = true;
-            leases = this.active.OfType<TransportAttachmentHandle>().ToArray();
+            leases = this.active.ToArray();
             this.active.Clear();
         }
-        foreach (var lease in leases) await lease.ShutdownAsync().ConfigureAwait(false);
+        foreach (var lease in leases)
+            if (lease is TransportAttachmentHandle attachment)
+                await attachment.ShutdownAsync().ConfigureAwait(false);
+            else
+                await lease.DisposeAsync().ConfigureAwait(false);
         await this.host.DisposeAsync().ConfigureAwait(false);
     }
 
@@ -185,6 +197,62 @@ public sealed class AgentSessionTransportListener : ITransportListener
     private void RemoveActive(IAsyncDisposable handle)
     {
         lock (this.gate) this.active.Remove(handle);
+    }
+
+    private sealed class RestartObservation : IAsyncDisposable
+    {
+        private readonly CancellationTokenSource lifetime = new();
+        private readonly Action<IAsyncDisposable> remove;
+        private readonly Task pump;
+        private int disposed;
+
+        internal RestartObservation(RemoteAgentSessionHost host, TransportPeerIdentity peer,
+            AgentSessionRuntimeIdentity expected, IMessageChannel channel, Action<IAsyncDisposable> remove)
+        {
+            this.remove = remove;
+            this.pump = this.RunAsync(host, peer, expected, channel);
+            _ = this.pump.ContinueWith(task => _ = task.Exception, CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
+
+        private async Task RunAsync(RemoteAgentSessionHost host, TransportPeerIdentity peer,
+            AgentSessionRuntimeIdentity expected, IMessageChannel channel)
+        {
+            var writing = WriteAsync();
+            var closed = channel.Reader.ReadAsync(this.lifetime.Token).AsTask();
+            try
+            {
+                await Task.WhenAny(writing, closed).ConfigureAwait(false);
+                await this.lifetime.CancelAsync().ConfigureAwait(false);
+                await writing.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (this.lifetime.IsCancellationRequested) { }
+            finally
+            {
+                await ((Task)closed).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+                await channel.DisposeAsync().ConfigureAwait(false);
+            }
+
+            async Task WriteAsync()
+            {
+                await foreach (var result in host.ObserveRestartAsync(peer, expected, this.lifetime.Token).ConfigureAwait(false))
+                {
+                    await channel.Writer.WriteAsync(
+                        JsonSerializer.SerializeToElement(result, AgentSessionProtocolCodec.Options), this.lifetime.Token).ConfigureAwait(false);
+                    if (result is null || result.State is AgentSessionOwnerRestartState.Succeeded or AgentSessionOwnerRestartState.Blocked)
+                        return;
+                }
+            }
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            if (Interlocked.Exchange(ref this.disposed, 1) != 0) return;
+            this.remove(this);
+            await this.lifetime.CancelAsync().ConfigureAwait(false);
+            try { await this.pump.ConfigureAwait(false); }
+            finally { this.lifetime.Dispose(); }
+        }
     }
 
     private sealed class TransportAttachmentHandle(

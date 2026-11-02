@@ -55,6 +55,7 @@ public sealed class RunningAgentChatLease : IAsyncDisposable
     internal sealed class AgentSessionRestartCommandState
     {
         internal Remote.AgentSessionOwnerRestartRequest? Pending { get; set; }
+        internal Remote.AgentSessionOwnerRestartResult? Result { get; set; }
     }
 
     public Task<bool> TryPrepareIdleCloseAsync(CancellationToken ct = default)

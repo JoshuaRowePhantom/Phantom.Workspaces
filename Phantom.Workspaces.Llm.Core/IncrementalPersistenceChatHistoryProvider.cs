@@ -112,8 +112,10 @@ internal sealed class IncrementalPersistenceChatHistoryProvider : ChatHistoryPro
         AgentSession session,
         CancellationToken cancellationToken)
     {
-        this.cachedAgentSessionJson = await this.SerializeSessionAsync(
+        var serialized = await this.SerializeSessionAsync(
             session, cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        this.cachedAgentSessionJson = serialized;
         await this.store.StoreAsync(new StoreRequestAgent
         {
             Agent = this.BuildPersistedAgent(session),

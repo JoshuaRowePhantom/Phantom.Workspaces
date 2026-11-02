@@ -73,7 +73,8 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
         {
             if (this.runtimeFactory is DataAccessAgentSessionRuntimeHostFactory restartFactory)
                 await restartFactory.RecoverPendingRestartAsync(
-                    open.AgentSessionId, this.runtimeRegistry, ct).ConfigureAwait(false);
+                    open.AgentSessionId, this.runtimeRegistry, ct,
+                    allowStoppedRetry: open.OpenIntent != AgentSessionOpenIntent.Attach).ConfigureAwait(false);
             var existing = await this.runtimeRegistry.TryGetAsync(
                 open.AgentSessionId, open.ExpectedOwnershipGeneration, ct).ConfigureAwait(false);
             switch (open.OpenIntent)
@@ -184,11 +185,24 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
             AgentSessionOwnerRestartRequest request,
             CancellationToken cancellationToken)
         {
-            using var transition = await this.EnterTransitionAsync(
-                request.ExpectedRuntime.AgentSessionId, cancellationToken).ConfigureAwait(false);
             var factory = await this.AuthorizeRestartAsync(
                 peer, request.ExpectedRuntime, cancellationToken).ConfigureAwait(false);
             return await factory.GetRestartStatusAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+
+        internal async IAsyncEnumerable<AgentSessionOwnerRestartResult?> ObserveRestartAsync(
+            TransportPeerIdentity peer, AgentSessionRuntimeIdentity expected,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            var factory = await this.AuthorizeRestartAsync(peer, expected, cancellationToken).ConfigureAwait(false);
+            if (factory is not DataAccessAgentSessionRuntimeHostFactory durable)
+                throw new AgentSessionUnavailableException();
+            await foreach (var result in durable.ObserveRestartAsync(expected, cancellationToken).ConfigureAwait(false))
+            {
+                // Recheck authority before delivering a later state; a watch never grants ownership.
+                await this.AuthorizeRestartAsync(peer, expected, cancellationToken).ConfigureAwait(false);
+                yield return result;
+            }
         }
 
         private async ValueTask<IAgentSessionRestartRuntimeHostFactory> AuthorizeRestartAsync(
@@ -341,6 +355,10 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
             }, ct).ConfigureAwait(false);
             if (!decision.IsAllowed) throw new AgentSessionUnavailableException();
 
+            if (this.runtimeFactory is DataAccessAgentSessionRuntimeHostFactory restartFactory
+                && await restartFactory.IsRestartCleanupUnconfirmedAsync(
+                    request.AgentSessionId, request.ExpectedOwnershipGeneration, ct).ConfigureAwait(false))
+                throw new AgentSessionTakeoverBlockedException();
             var existing = await this.runtimeRegistry.TryGetAsync(
                 request.AgentSessionId, request.ExpectedOwnershipGeneration, ct).ConfigureAwait(false);
             if (existing is not null

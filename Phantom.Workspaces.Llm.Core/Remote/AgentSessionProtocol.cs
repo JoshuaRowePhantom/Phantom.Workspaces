@@ -204,6 +204,8 @@ internal sealed record SessionRestartStoppedEvent : AgentSessionServerEvent
 {
     public override string Type => "session-restart-stopped";
     public required string Message { get; init; }
+    public AgentSessionOwnerRestartRequest? Request { get; init; }
+    public AgentSessionOwnerRestartResult? Result { get; init; }
 }
 internal sealed record SessionRestartingEvent : AgentSessionServerEvent
 {

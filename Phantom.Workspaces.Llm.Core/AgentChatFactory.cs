@@ -23,6 +23,7 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
         public TaskCompletionSource? DisposalCompletion { get; set; }
         public AgentRuntimeQueueCheckpoint? RestartCheckpoint { get; set; }
         public bool ShutdownConfirmed { get; set; }
+        public Task? PendingRestartCleanup { get; set; }
     }
 
     private readonly IAgentPersistenceStore _store;
@@ -355,7 +356,8 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
         CancellationToken cancellationToken,
         Func<CancellationToken, ValueTask> persistStoppedAsync,
         CancellationToken runtimeLifetimeCancellationToken,
-        bool durableOwnerCommit = true)
+        bool durableOwnerCommit = true,
+        TimeProvider? cleanupTimeProvider = null)
     {
         Entry original;
         AgentRuntimeQueueCheckpoint checkpoint;
@@ -404,10 +406,23 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
             }).ConfigureAwait(false);
             if (!original.ShutdownConfirmed)
             {
-                await original.AgentChat.TerminateAsync(CancellationToken.None).ConfigureAwait(false);
-                await original.AgentChat.PersistFinalRuntimeStateAsync().ConfigureAwait(false);
+                using var deadline = new CancellationTokenSource(
+                    TimeSpan.FromSeconds(15), cleanupTimeProvider ?? TimeProvider.System);
+                using var cleanup = CancellationTokenSource.CreateLinkedTokenSource(
+                    deadline.Token, runtimeLifetimeCancellationToken);
+                var terminating = original.AgentChat.TerminateAsync(CancellationToken.None);
+                original.PendingRestartCleanup = terminating;
+                ObserveCleanup(terminating);
+                await terminating.WaitAsync(cleanup.Token).ConfigureAwait(false);
+                cleanup.Token.ThrowIfCancellationRequested();
+                var persisting = original.AgentChat.PersistFinalRuntimeStateAsync(cleanup.Token).AsTask();
+                original.PendingRestartCleanup = persisting;
+                ObserveCleanup(persisting);
+                await persisting.WaitAsync(cleanup.Token).ConfigureAwait(false);
+                cleanup.Token.ThrowIfCancellationRequested();
                 original.ShutdownConfirmed = true;
             }
+
             await persistStoppedAsync(CancellationToken.None).ConfigureAwait(false);
             runtimeLifetimeCancellationToken.ThrowIfCancellationRequested();
             var effectiveServices = this.WithSelfAsFactory(
@@ -461,7 +476,12 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
             {
                 try
                 {
-                    await replacement.DisposeAsync().ConfigureAwait(false);
+                    using var deadline = new CancellationTokenSource(
+                        TimeSpan.FromSeconds(15), cleanupTimeProvider ?? TimeProvider.System);
+                    var cleaning = replacement.DisposeAsync().AsTask();
+                    original.PendingRestartCleanup = cleaning;
+                    ObserveCleanup(cleaning);
+                    await cleaning.WaitAsync(deadline.Token).ConfigureAwait(false);
                 }
                 catch (Exception cleanupError)
                 {
@@ -476,6 +496,11 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
             throw;
         }
     }
+
+    private static void ObserveCleanup(Task cleanup)
+        => _ = cleanup.ContinueWith(task => _ = task.Exception,
+            CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
 
     private async Task<bool> TerminateCoreAsync(AgentSessionId sessionId, IAgentChat? expected, CancellationToken ct)
     {
@@ -506,6 +531,8 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
 
         if (!ownsDisposal)
         {
+            if (disposalCompletion.Task.IsFaulted)
+                await disposalCompletion.Task.WaitAsync(ct).ConfigureAwait(false);
             await toDispose.TerminateAsync(ct).ConfigureAwait(false);
             await disposalCompletion.Task.WaitAsync(ct).ConfigureAwait(false);
             return true;
@@ -631,7 +658,7 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
 
     public async ValueTask DisposeAsync()
     {
-        List<AgentChat> toDispose;
+        List<Entry> toDispose;
 
         await _gate.WaitAsync();
         try
@@ -639,7 +666,7 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
             if (_disposed)
                 return;
             _disposed = true;
-            toDispose = _entries.Values.Select(e => e.AgentChat).ToList();
+            toDispose = _entries.Values.ToList();
             _entries.Clear();
         }
         finally
@@ -647,7 +674,12 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
             _gate.Release();
         }
 
-        await Task.WhenAll(toDispose.Select(c => c.DisposeAsync().AsTask()));
+        await Task.WhenAll(toDispose.Select(async entry =>
+        {
+            if (entry.PendingRestartCleanup is { } pending)
+                await pending.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+            await entry.AgentChat.DisposeAsync().ConfigureAwait(false);
+        }));
     }
 
     private Task PostToForegroundAsync(Action action)

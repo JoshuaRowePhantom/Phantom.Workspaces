@@ -82,7 +82,8 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         Func<AgentRuntimeQueueCheckpoint, CancellationToken, ValueTask> persistCheckpointAsync,
         Func<CancellationToken, ValueTask> persistStoppedAsync,
         CancellationToken cancellationToken,
-        CancellationToken runtimeLifetimeCancellationToken)
+        CancellationToken runtimeLifetimeCancellationToken,
+        TimeProvider cleanupTimeProvider)
     {
         var sessionId = new AgentSessionId(request.ExpectedRuntime.AgentSessionId);
         SemaphoreSlim gate;
@@ -97,14 +98,32 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                 throw new InvalidOperationException("The owning factory does not support runtime replacement.");
             return await factory.RestartExactAsync(
                 sessionId, expected, services, persistCheckpointAsync, cancellationToken,
-                persistStoppedAsync, runtimeLifetimeCancellationToken).ConfigureAwait(false);
+                persistStoppedAsync, runtimeLifetimeCancellationToken,
+                cleanupTimeProvider: cleanupTimeProvider).ConfigureAwait(false);
         }
+
         finally
         {
             lock (this._entityInfoLock)
                 this.restartingSessions.Remove(sessionId);
             gate.Release();
         }
+    }
+
+    internal void PublishRestartState(
+        IAgentChat original, AgentSessionOwnerRestartRequest request, AgentSessionOwnerRestartResult result)
+    {
+        lock (this._entityInfoLock)
+        {
+            foreach (var pair in this.localViewers)
+                foreach (var viewer in pair.Value.Where(viewer => ReferenceEquals(pair.Key, original)
+                    || viewer.RestartCommandState.Pending?.ExpectedRuntime == request.ExpectedRuntime))
+                {
+                    viewer.RestartCommandState.Pending = result.State == AgentSessionOwnerRestartState.Succeeded ? null : request;
+                    viewer.RestartCommandState.Result = result;
+                }
+        }
+        TabCommands.AgentSessionTabCommandProvider.Instance.NotifyCommandsChanged();
     }
 
     internal async Task ReattachLocalViewersAsync(
@@ -1292,6 +1311,7 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                     RestartIdentity = this.Chat.RestartClient.RestartIdentity,
                     RestartRuntimeAsync = this.Chat.RestartClient.RestartAsync,
                     RestartStatusAsync = this.Chat.RestartClient.GetRestartStatusAsync,
+                    RestartCommandState = this.Chat.RestartClient.RestartCommandState,
                 };
             }
             finally

@@ -98,6 +98,41 @@ public class IncrementalPersistenceChatHistoryProviderTests
         Assert.Equal(0, spyStore.StoreCallCount);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PersistFinalSessionAsync_LateSerializer_CannotStartAWriteAfterCancellation(bool cancel)
+    {
+        var store = new SpyAgentPersistenceStore();
+        var provider = new IncrementalPersistenceChatHistoryProvider(null, store);
+        var session = new TestAgentSession();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var lifetime = new CancellationTokenSource();
+        provider.SetSessionSerializer(async (_, _) =>
+        {
+            entered.TrySetResult();
+            await finish.Task;
+            return new MongoDB.Bson.BsonDocument("completed", true);
+        });
+        var persisting = provider.PersistFinalSessionAsync(session, lifetime.Token).AsTask();
+        await entered.Task;
+        if (cancel) lifetime.Cancel();
+        finish.TrySetResult();
+        if (cancel)
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => persisting);
+            Assert.Equal(0, store.StoreCallCount);
+            Assert.Null(provider.BuildPersistedAgent(session).AgentSessionJson);
+        }
+        else
+        {
+            await persisting;
+            Assert.Equal(1, store.StoreCallCount);
+            Assert.True(provider.BuildPersistedAgent(session).AgentSessionJson!["completed"].AsBoolean);
+        }
+    }
+
     private sealed class TestAgentSession : Microsoft.Agents.AI.AgentSession
     {
     }

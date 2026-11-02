@@ -596,6 +596,7 @@ public sealed partial class DataAccessAgentSessionRuntimeHostFactoryTests
         internal bool FailStartup { get; set; }
         internal bool FailNextQuery { get; set; }
         internal bool FailFinalPersistence { get; set; }
+        internal Func<StoreRequestAgent, CancellationToken, Task>? FinalPersistence { get; set; }
         internal InMemoryAgentPersistenceStore Store { get; }
         internal QueryEntitySnapshot Persisted => this.current;
 
@@ -682,9 +683,14 @@ public sealed partial class DataAccessAgentSessionRuntimeHostFactoryTests
             var services = new AgentServices { ChatClientOverride = client.Object };
             var persistence = new Mock<IAgentPersistenceStore>();
             persistence.Setup(value => value.StoreAsync(It.IsAny<StoreRequestAgent>(), It.IsAny<CancellationToken>()))
-                .Returns((StoreRequestAgent request, CancellationToken token) => this.FailFinalPersistence
-                    ? ValueTask.FromException(new IOException("Final framework persistence unavailable."))
-                    : this.Store.StoreAsync(request, token));
+                .Returns(async (StoreRequestAgent request, CancellationToken token) =>
+                {
+                    if (this.FailFinalPersistence)
+                        throw new IOException("Final framework persistence unavailable.");
+                    if (this.FinalPersistence is { } persistence)
+                        await persistence(request, token);
+                    await this.Store.StoreAsync(request, token);
+                });
             persistence.Setup(value => value.RestoreAsync(It.IsAny<RestoreRequest>(), It.IsAny<CancellationToken>()))
                 .Returns((RestoreRequest request, CancellationToken token) => this.Store.RestoreAsync(request, token));
             persistence.Setup(value => value.ReadMessagesAsync(It.IsAny<ReadMessagesRequest>(), It.IsAny<CancellationToken>()))
@@ -746,6 +752,23 @@ public sealed partial class DataAccessAgentSessionRuntimeHostFactoryTests
                 AgentSessionId = new AgentSessionId("session"),
                 AgentSessionEntity = this.current.Data,
             }, TestContext.Current.CancellationToken);
+
+        internal async Task<RunningAgentChatLease> AcquireRemoteAsync(TaskScheduler foregroundScheduler)
+        {
+            var unusedLocalFactory = new Mock<Phantom.Workspaces.Llm.IRunningAgentChatFactory>();
+            unusedLocalFactory.SetupGet(value => value.RunningSessions)
+                .Returns(new System.Collections.ObjectModel.ObservableCollection<RunningAgentChat>());
+            var remoteTable = new RunningAgentChatTable(unusedLocalFactory.Object);
+            return await remoteTable.AcquireAsync(new AcquireAgentChatRequest
+            {
+                AgentSessionId = new AgentSessionId("session"),
+                AgentSessionEntity = this.current.Data,
+                AcquisitionMode = AgentChatAcquisitionMode.AttachRemote,
+                OwningProfileTransport = await this.localTransportFactory.ConnectToAsync(
+                    JsonSerializer.SerializeToElement(new { type = "local" }), TestContext.Current.CancellationToken),
+                ForegroundScheduler = foregroundScheduler,
+            }, TestContext.Current.CancellationToken);
+        }
 
         public async ValueTask DisposeAsync()
         {

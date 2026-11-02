@@ -345,6 +345,21 @@ public sealed class RemoteAgentChat : IAgentChat
 
     private async Task ReconnectAfterLossAsync(CancellationToken ct)
     {
+        if (this.client.HasRestartHandoff || this.client.HasDurableRestartAuthority)
+        {
+            try
+            {
+                var state = await this.ObserveRestartAsync(ct).ConfigureAwait(false);
+                if (state == AgentSessionOwnerRestartState.Blocked)
+                    return;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
+            catch (RemoteAgentSessionException error) when (error.Code is "unauthorized" or "runtime-changed") { return; }
+            catch (RemoteAgentSessionException) { }
+            catch (RemoteAgentProtocolException) { }
+            catch (IOException) { }
+            catch (NotSupportedException) { }
+        }
         foreach (var delay in new[] { 250, 500, 1000, 1000, 1000, 1000 })
         {
             if (this.disposed || this.detached) return;
@@ -355,6 +370,7 @@ public sealed class RemoteAgentChat : IAgentChat
                 await this.ReconnectNowAsync(ct).ConfigureAwait(false);
                 return;
             }
+
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 return;
@@ -364,12 +380,42 @@ public sealed class RemoteAgentChat : IAgentChat
                 return;
             }
             catch (RemoteAgentSessionException error)
-                when (error.Code is "not-found" or "runtime-changed" or "unauthorized")
+                when (error.Code is "not-found" or "runtime-changed" or "unauthorized" or "invalid-request")
             {
+                if (error.Code is "not-found" or "invalid-request")
+                {
+                    try
+                    {
+                        if (await this.ObserveRestartAsync(ct).ConfigureAwait(false) == AgentSessionOwnerRestartState.Succeeded)
+                            await this.ReconnectNowAsync(ct).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+                }
                 return;
             }
             catch when (!this.disposed && !this.detached) { }
         }
+    }
+
+    private Task<AgentSessionOwnerRestartState?> ObserveRestartAsync(CancellationToken ct)
+        => this.client.ObserveRestartAsync(result => this.QueueForeground(() =>
+        {
+            if (result.State is AgentSessionOwnerRestartState.Stopped or AgentSessionOwnerRestartState.Blocked)
+                this.ApplyRestartStopped(result.Message ?? "Restart stopped. Reconcile this operation before retrying.");
+        }), ct);
+
+    private void ApplyRestartStopped(string message)
+    {
+        this.IsBusy = false;
+        this.isTerminal = true;
+        this.History.Add(new AgentChatHistoryItem
+        {
+            Role = AgentChatHistoryItem.DiagnosticChatRole,
+            Timestamp = this.client.TimeProvider.GetUtcNow(),
+            Contents = [new Microsoft.Extensions.AI.TextContent(message)],
+        });
+        this.SetConnected(false);
+        this.RuntimeStateChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private void ApplyFrame(AgentSessionServerFrame frame)
@@ -377,11 +423,8 @@ public sealed class RemoteAgentChat : IAgentChat
         if (this.disposed) return;
         switch (AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(frame))
         {
-            case SessionRestartStoppedEvent:
-                this.IsBusy = false;
-                this.isTerminal = true;
-                this.SetConnected(false);
-                this.RuntimeStateChanged?.Invoke(this, EventArgs.Empty);
+            case SessionRestartStoppedEvent stopped:
+                this.ApplyRestartStopped(stopped.Message);
                 break;
             case SessionSnapshotEvent e:
                 var acknowledgesReplacement = this.appliedRuntimeEpoch is { } previousEpoch

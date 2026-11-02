@@ -45,7 +45,13 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
     public ReplayCursor? LastAppliedCursor { get; private set; }
     private bool canRestartIndependently;
     internal string? RestartDisabledReason { get; private set; }
-    internal AgentSessionRuntimeIdentity? RestartIdentity => this.canRestartIndependently && this.openRequest is { } open
+    internal RunningAgentChatLease.AgentSessionRestartCommandState RestartCommandState { get; } = new();
+    internal bool HasRestartHandoff => this.replacementEpoch is not null;
+    internal bool HasDurableRestartAuthority => this.canRestartIndependently;
+    internal AgentSessionRuntimeIdentity? RestartIdentity => this.canRestartIndependently && this.channel is not null
+        && this.RestartCommandState.Result?.State is not (AgentSessionOwnerRestartState.Stopped
+            or AgentSessionOwnerRestartState.Blocked or AgentSessionOwnerRestartState.Committed)
+        && this.openRequest is { } open
         && this.runtimeEpoch is { } epoch
         ? new AgentSessionRuntimeIdentity
         {
@@ -100,6 +106,67 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
         if (result is not null && result.CommandId != request.CommandId)
             throw new RemoteAgentProtocolException("Restart status returned a mismatched command id.");
         return result;
+    }
+
+    internal async Task<AgentSessionOwnerRestartState?> ObserveRestartAsync(
+        Func<AgentSessionOwnerRestartResult, Task> applyState, CancellationToken cancellationToken)
+    {
+        var open = this.openRequest ?? throw new InvalidOperationException("The session has not been opened.");
+        var expected = new AgentSessionRuntimeIdentity
+        {
+            AgentSessionId = open.AgentSessionId,
+            OwningProfileEntityId = open.ExpectedOwningProfileEntityId,
+            OwnershipGeneration = open.ExpectedOwnershipGeneration,
+            RuntimeEpoch = this.RequireEpoch(),
+        };
+        await using var observation = await this.transport.ConnectToMessageChannelAsync(
+            JsonSerializer.SerializeToElement(new { type = "observe-agent-session-restart", expectedRuntime = expected },
+                AgentSessionProtocolCodec.Options), cancellationToken).ConfigureAwait(false);
+        await foreach (var raw in observation.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+        {
+            if (raw.ValueKind == JsonValueKind.Object && raw.TryGetProperty("protocol-version", out _))
+            {
+                var frame = AgentSessionProtocolCodec.DeserializeFrame(raw);
+                if (AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(frame) is SessionTerminalEvent terminal)
+                    throw CreateTerminalException(terminal, frame.CorrelationId);
+                throw new RemoteAgentProtocolException("Restart observation returned an unexpected frame.");
+            }
+            AgentSessionOwnerRestartResult? result;
+            try
+            {
+                result = raw.Deserialize<AgentSessionOwnerRestartResult>(AgentSessionProtocolCodec.Options);
+            }
+            catch (Exception ex) when (ex is JsonException or ArgumentException)
+            {
+                throw new RemoteAgentProtocolException("Restart observation returned a malformed result.");
+            }
+            if (result is null)
+                return null;
+            if (result.CommandId == Guid.Empty || result.ReplacementRuntime is not { } replacement
+                || replacement.AgentSessionId != expected.AgentSessionId
+                || replacement.OwningProfileEntityId != expected.OwningProfileEntityId
+                || replacement.OwnershipGeneration != expected.OwnershipGeneration
+                || replacement.RuntimeEpoch.Value == Guid.Empty || replacement.RuntimeEpoch == expected.RuntimeEpoch
+                || result.State is not (AgentSessionOwnerRestartState.Committed or AgentSessionOwnerRestartState.Stopped
+                    or AgentSessionOwnerRestartState.Blocked or AgentSessionOwnerRestartState.Succeeded))
+                throw new RemoteAgentProtocolException("Restart observation returned a mismatched runtime.");
+            this.RestartCommandState.Pending = new AgentSessionOwnerRestartRequest
+            {
+                CommandId = result.CommandId, ExpectedRuntime = expected,
+            };
+            this.RestartCommandState.Result = result;
+            await applyState(result).ConfigureAwait(false);
+            if (result.State == AgentSessionOwnerRestartState.Blocked)
+                return result.State;
+            if (result.State == AgentSessionOwnerRestartState.Succeeded)
+            {
+                this.RestartCommandState.Pending = null;
+                this.replacementEpoch = this.runtimeEpoch == replacement.RuntimeEpoch ? null : replacement.RuntimeEpoch;
+                this.reconnectDeadline = this.timeProvider.GetUtcNow().AddSeconds(5);
+                return result.State;
+            }
+        }
+        throw new RemoteAgentProtocolException("Restart observation closed before a terminal result.");
     }
 
     public static async Task<AgentSessionRemoteStatus> GetStatusAsync(
@@ -614,6 +681,8 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
         TaskCompletionSource<AgentSessionServerFrame> ready)
     {
         var value = AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(frame);
+        if (this.reconnecting && value is SessionTerminalEvent reconnectFailure)
+            throw CreateTerminalException(reconnectFailure, frame.CorrelationId);
         if (this.replacementEpoch is { } replacement
             && this.reconnecting && value is SessionSnapshotEvent)
         {
@@ -660,6 +729,14 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
         {
             this.canRestartIndependently = capability.CanRestartIndependently;
             this.RestartDisabledReason = capability.DisabledReason;
+        }
+        if (value is SessionRestartStoppedEvent { Request: { } stoppedRequest, Result: { } stoppedResult })
+        {
+            if (stoppedRequest.CommandId != stoppedResult.CommandId
+                || stoppedRequest.ExpectedRuntime.RuntimeEpoch != frame.RuntimeEpoch)
+                throw new RemoteAgentProtocolException("Restart stopped-state identity is mismatched.");
+            this.RestartCommandState.Pending = stoppedRequest;
+            this.RestartCommandState.Result = stoppedResult;
         }
         this.LastAppliedCursor = new ReplayCursor { Epoch = frame.RuntimeEpoch, Sequence = frame.Sequence };
         if (value is SessionRestartingEvent restarting)

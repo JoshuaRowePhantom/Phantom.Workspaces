@@ -210,6 +210,12 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory :
                 request.ExpectedOwningProfileEntityId,
                 StringComparison.OrdinalIgnoreCase))
             return false;
+        if (data.TryGetProperty("restart-operations", out var journal)
+            && JsonSerializer.Deserialize<Dictionary<string, RestartOperation>>(
+                journal, Microsoft.Extensions.AI.AIJsonUtilities.DefaultOptions)!.Values.Any(operation =>
+                    operation.Request.ExpectedRuntime.OwnershipGeneration == request.ExpectedOwnershipGeneration
+                    && operation.State is AgentSessionOwnerRestartState.Committed or AgentSessionOwnerRestartState.Blocked))
+            return false;
         var hasEpoch = data.TryGetProperty("runtime-epoch", out _);
         var hasLease = data.TryGetProperty("runtime-lease-expiry", out _);
         if (hasEpoch || hasLease)
