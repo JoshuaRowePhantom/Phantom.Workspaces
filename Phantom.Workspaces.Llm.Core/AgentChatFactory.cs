@@ -369,8 +369,7 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
                 || original.DisposalCompletion is not null
                     && !(original.ShutdownConfirmed && original.DisposalCompletion.Task.IsFaulted))
                 throw new InvalidOperationException("The expected agent runtime changed or is stopping.");
-            checkpoint = original.RestartCheckpoint ?? original.AgentChat.InputQueueManager.BeginRuntimeHandoff(
-                original.AgentChat.InputQueuesForRuntimeHandoff);
+            checkpoint = original.RestartCheckpoint ?? original.AgentChat.BeginRuntimeHandoff();
             try
             {
                 await persistCheckpointAsync(checkpoint, cancellationToken).ConfigureAwait(false);
@@ -380,7 +379,7 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
             catch
             {
                 if (!original.ShutdownConfirmed)
-                    original.AgentChat.InputQueueManager.ResumeAfterRuntimeHandoff();
+                    original.AgentChat.RollbackRuntimeHandoff();
                 throw;
             }
             completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

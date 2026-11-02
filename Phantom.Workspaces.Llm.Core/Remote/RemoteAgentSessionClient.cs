@@ -656,6 +656,11 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
             this.canRestartIndependently = snapshot.Snapshot.CanRestartIndependently;
             this.RestartDisabledReason = snapshot.Snapshot.RestartDisabledReason;
         }
+        if (value is SessionRestartCapabilityChangedEvent capability)
+        {
+            this.canRestartIndependently = capability.CanRestartIndependently;
+            this.RestartDisabledReason = capability.DisabledReason;
+        }
         this.LastAppliedCursor = new ReplayCursor { Epoch = frame.RuntimeEpoch, Sequence = frame.Sequence };
         if (value is SessionRestartingEvent restarting)
             this.replacementEpoch = restarting.ReplacementRuntimeEpoch;

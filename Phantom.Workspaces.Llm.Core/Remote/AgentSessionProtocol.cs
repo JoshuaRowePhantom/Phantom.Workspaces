@@ -301,6 +301,12 @@ internal sealed record ModalDismissedEvent : AgentSessionServerEvent
     public override string Type => "modal-dismissed";
     public required string ModalId { get; init; }
 }
+internal sealed record SessionRestartCapabilityChangedEvent : AgentSessionServerEvent
+{
+    public override string Type => "session-restart-capability-changed";
+    public required bool CanRestartIndependently { get; init; }
+    public string? DisabledReason { get; init; }
+}
 internal sealed record SessionRetentionChangedEvent : AgentSessionServerEvent
 {
     public override string Type => "session-retention-changed";
@@ -561,6 +567,7 @@ internal static class AgentSessionProtocolCodec
                 "modal-updated" => typeof(ModalUpdatedEvent),
                 "modal-dismissed" => typeof(ModalDismissedEvent),
                 "session-retention-changed" => typeof(SessionRetentionChangedEvent),
+                "session-restart-capability-changed" => typeof(SessionRestartCapabilityChangedEvent),
                 "command-completed" => typeof(CommandCompletedEvent),
                 "operation-error" => typeof(OperationErrorEvent),
                 "session-terminal" => typeof(SessionTerminalEvent),
@@ -836,7 +843,7 @@ internal static class AgentSessionProtocolCodec
         "streaming-completed", "busy-changed", "tools-snapshot", "tools-changed",
         "subagents-snapshot", "subagents-changed", "modal-raised", "modal-updated",
         "modal-dismissed", "session-retention-changed", "command-completed", "operation-error",
-        "session-terminal",
+        "session-terminal", "session-restart-capability-changed",
         "session-restarting",
         "session-restart-stopped",
     };

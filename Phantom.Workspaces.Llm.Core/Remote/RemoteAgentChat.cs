@@ -439,6 +439,9 @@ public sealed class RemoteAgentChat : IAgentChat
                     this.TurnCompleted?.Invoke(this, completedItem);
                 }
                 break;
+            case SessionRestartCapabilityChangedEvent:
+                this.RuntimeStateChanged?.Invoke(this, EventArgs.Empty);
+                break;
             case BusyChangedEvent e:
                 this.IsBusy = e.IsBusy;
                 this.RuntimeStateChanged?.Invoke(this, EventArgs.Empty);

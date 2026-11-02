@@ -518,6 +518,8 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
        };
 #pragma warning restore MAAI001
        AgentFactory.ConfigureChatOptions(resolvedAgentDefinition, this.chatOptions.ChatOptions);
+       if (this.request.RuntimeQueueCheckpoint is { } configurationCheckpoint)
+           this.UpdateParameterValues(configurationCheckpoint.ParameterValues);
        this.runtimeContextProviderRegistrations = await this.CreateRuntimeContextProviderRegistrationsAsync(
            resolvedAgentDefinition,
            this.request.AgentServices,
@@ -814,6 +816,33 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
 
     internal AgentServices? RuntimeServices => this.request.AgentServices;
 
+    private bool runtimeConfigurationFrozen;
+    private readonly Dictionary<string, string> effectiveParameterValues = new(StringComparer.Ordinal);
+    private readonly HashSet<string> liveConfiguredToolRoots = new(StringComparer.Ordinal);
+
+    internal AgentRuntimeQueueCheckpoint BeginRuntimeHandoff()
+    {
+        lock (this.toolsLock)
+        {
+            var checkpoint = this.InputQueueManager.BeginRuntimeHandoff(this.InputQueuesForRuntimeHandoff);
+            this.runtimeConfigurationFrozen = true;
+            return checkpoint with
+            {
+                ToolEnablement = this.toolIndex.ToDictionary(pair => pair.Key, pair => pair.Value.IsEnabled),
+                ParameterValues = new Dictionary<string, string>(this.effectiveParameterValues),
+            };
+        }
+    }
+
+    internal void RollbackRuntimeHandoff()
+    {
+        lock (this.toolsLock)
+        {
+            this.runtimeConfigurationFrozen = false;
+            this.InputQueueManager.ResumeAfterRuntimeHandoff();
+        }
+    }
+
     internal async ValueTask PersistFinalRuntimeStateAsync()
     {
         Task[] providerCleanup;
@@ -965,12 +994,18 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
             string? reenabledServerId = null;
             lock (this.toolsLock)
             {
+                if (this.runtimeConfigurationFrozen)
+                    throw new InvalidOperationException("Runtime configuration is frozen during restart.");
                 if (!this.toolIndex.TryGetValue(toolId, out var node))
                 {
                     throw new ArgumentException($"Unknown tool id '{toolId}'.", nameof(toolId));
                 }
 
                 changed = SetNodeEnabled(node, enabled);
+                var configuredRoot = node;
+                while (configuredRoot.Parent is not null)
+                    configuredRoot = configuredRoot.Parent;
+                this.liveConfiguredToolRoots.Add(configuredRoot.Id);
                 if (node.Parent is not null)
                 {
                     RecomputeAncestorEnabled(node.Parent);
@@ -1012,16 +1047,19 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
     public void UpdateParameterValues(IReadOnlyDictionary<string, string> parameterValues)
     {
         ArgumentNullException.ThrowIfNull(parameterValues);
-        var chatOptions = this.chatOptions?.ChatOptions;
-        if (chatOptions is null)
+        lock (this.toolsLock)
         {
-            return;
-        }
-
-        chatOptions.AdditionalProperties ??= [];
-        foreach (var (key, value) in parameterValues)
-        {
-            chatOptions.AdditionalProperties[key] = value;
+            if (this.runtimeConfigurationFrozen)
+                throw new InvalidOperationException("Runtime configuration is frozen during restart.");
+            var chatOptions = this.chatOptions?.ChatOptions;
+            if (chatOptions is null)
+                return;
+            chatOptions.AdditionalProperties ??= [];
+            foreach (var (key, value) in parameterValues)
+            {
+                chatOptions.AdditionalProperties[key] = value;
+                this.effectiveParameterValues[key] = value;
+            }
         }
     }
 
@@ -3338,6 +3376,8 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                             SetNodeEnabled(root, false);
                         this.toolRoots.Remove(previous);
                     }
+                    if (!this.liveConfiguredToolRoots.Contains(root.Id))
+                        this.RestoreRestartToolEnablement(root);
                     this.toolRoots.Add(root);
                 }
                 this.toolIndex.Clear();
@@ -3986,6 +4026,14 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
         {
             RecomputeAncestorEnabled(node.Parent);
         }
+    }
+
+    private void RestoreRestartToolEnablement(ToolStateNode node)
+    {
+        if (this.request.RuntimeQueueCheckpoint?.ToolEnablement.TryGetValue(node.Id, out var enabled) == true)
+            SetNodeEnabled(node, enabled);
+        foreach (var child in node.Children)
+            this.RestoreRestartToolEnablement(child);
     }
 
     private static AgentChatToolItem CreateToolSnapshot(ToolStateNode node)

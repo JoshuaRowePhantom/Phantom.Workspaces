@@ -13,6 +13,83 @@ namespace Phantom.Workspaces.Llm.Tests;
 
 public sealed class AgentChatFactoryTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RestartSession_EffectiveToolsAndParameters_AreFencedAndRestoredFromDurableCheckpoint(
+        bool recoverCheckpoint)
+    {
+        var sessionId = new AgentSessionId("restart-effective-configuration");
+        var store = new InMemoryAgentPersistenceStore();
+        var services = new AgentServices
+        {
+            ChatClientOverride = new DeterministicTestChatClient(),
+            ToolsetFactory = ToolsetFactory.CreateNamedToolsetFactory(
+                kind: "restart-toolset",
+                createToolsetAsync: (_, _) => Task.FromResult<Microsoft.Agents.AI.AIContextProvider?>(
+                    ToolsetFactory.CreateFixedToolset(AIFunctionFactory.Create(() => "result", "restart-tool")))),
+        };
+        await using var factory = new AgentChatFactory(store, services, TaskScheduler.Default);
+        var definition = AgentDefinitionLoader.LoadAgentFromJson(
+            EchoAgentDefinitionJson.Replace("\"tools\": []",
+                "\"tools\": [{ \"kind\": \"restart-toolset\" }]"));
+        await using var original = await factory.GetOrCreateAsync(sessionId, definition);
+        await original.LocalAgentChat.Initialization;
+        var tool = Assert.Single(original.AgentChat.GetToolSnapshot());
+        await original.AgentChat.SetToolEnabledAsync(tool.Id, false, CancellationToken.None);
+        original.LocalAgentChat.UpdateParameterValues(new Dictionary<string, string>
+        {
+            ["working-directory"] = @"C:\effective-not-definition",
+            ["other-live-option"] = "changed",
+        });
+        AgentRuntimeQueueCheckpoint? durable = null;
+        await using var replacement = await factory.RestartExactAsync(
+            sessionId,
+            original.AgentChat,
+            null,
+            async (checkpoint, _) =>
+            {
+                durable = System.Text.Json.JsonSerializer.Deserialize<AgentRuntimeQueueCheckpoint>(
+                    System.Text.Json.JsonSerializer.Serialize(checkpoint, AIJsonUtilities.DefaultOptions),
+                    AIJsonUtilities.DefaultOptions);
+                Assert.Throws<InvalidOperationException>(() =>
+                    original.LocalAgentChat.UpdateParameterValues(new Dictionary<string, string> { ["changed"] = "late" }));
+                await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                    original.AgentChat.SetToolEnabledAsync(tool.Id, true, CancellationToken.None));
+            },
+            CancellationToken.None);
+        await replacement.LocalAgentChat.Initialization;
+        Assert.False(Assert.Single(replacement.AgentChat.GetToolSnapshot()).IsEnabled);
+        await replacement.AgentChat.SetToolEnabledAsync(tool.Id, true, CancellationToken.None);
+        var roots = (System.Collections.IList)typeof(AgentChat)
+            .GetField("toolRoots", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(replacement.LocalAgentChat)!;
+        var rediscovered = Array.CreateInstance(roots[0]!.GetType(), roots.Count);
+        roots.CopyTo(rediscovered, 0);
+        await (Task)typeof(AgentChat)
+            .GetMethod("PublishToolRootsAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(replacement.LocalAgentChat, [rediscovered, CancellationToken.None])!;
+        Assert.True(Assert.Single(replacement.AgentChat.GetToolSnapshot()).IsEnabled);
+        Assert.Equal(@"C:\effective-not-definition", replacement.LocalAgentChat.BeginRuntimeHandoff()
+            .ParameterValues["working-directory"]);
+        if (recoverCheckpoint)
+        {
+            await using var recovered = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+            {
+                AgentDefinition = null,
+                AgentSessionId = sessionId.Value,
+                AgentServices = services,
+                ConfiguredStore = store,
+                ClientOverride = services.ChatClientOverride,
+                RuntimeQueueCheckpoint = durable,
+                ForegroundScheduler = TaskScheduler.Default,
+            });
+            await recovered.Initialization;
+            Assert.False(Assert.Single(recovered.GetToolSnapshot()).IsEnabled);
+            Assert.Equal("changed", recovered.BeginRuntimeHandoff().ParameterValues["other-live-option"]);
+        }
+    }
+
     [Fact]
     public async Task RestartSession_AuthorityStoppedJournalFailure_DoesNotStartReplacement()
     {
