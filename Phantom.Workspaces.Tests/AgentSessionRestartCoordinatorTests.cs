@@ -622,8 +622,11 @@ public sealed partial class DataAccessAgentSessionRuntimeHostFactoryTests
 
         internal RestartEnvironment(
             InMemoryAgentPersistenceStore? store = null, QueryEntitySnapshot? persisted = null, bool dropHandoff = false,
-            TaskScheduler? foregroundScheduler = null, bool dropRestartResult = false, AgentServices? runtimeServices = null)
+            TaskScheduler? foregroundScheduler = null, bool dropRestartResult = false, AgentServices? runtimeServices = null,
+            FakeTimeProvider? timeProvider = null)
         {
+            if (timeProvider is not null)
+                this.Time = timeProvider;
             this.current = persisted ?? Entity();
             this.Store = store ?? new InMemoryAgentPersistenceStore();
             this.Layer.Setup(layer => layer.QueryAsync(It.IsAny<QueryRequest>(), It.IsAny<CancellationToken>()))

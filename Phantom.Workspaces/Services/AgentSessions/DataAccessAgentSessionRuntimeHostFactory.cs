@@ -391,6 +391,7 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory :
         private JsonElement data;
         private DateTimeOffset authoritativeTime;
         private readonly TimeProvider timeProvider;
+        private RestartOperation? completionToConfirm;
         internal bool PersistenceUncertain { get; private set; }
         private readonly System.Collections.Concurrent.ConcurrentDictionary<Task, byte> persistenceOperations = new();
         internal Task PendingPersistence => Task.WhenAll(this.persistenceOperations.Keys);
@@ -560,10 +561,13 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory :
 
         internal async Task ConfirmRestartCompletionAsync(RestartOperation operation)
         {
+            this.completionToConfirm = operation;
             try
             {
                 // Success is already durable and the published runtime is healthy. An
                 // ambiguous acknowledgement here must not initiate destructive cleanup.
+                // Renewal reloads authority and the CAS tag, and confirms this exact
+                // successful operation even if this write never committed.
                 await this.SaveRestartAsync(operation with { StartupUnconfirmed = false },
                     CancellationToken.None, fenceOnTimeout: false).ConfigureAwait(false);
             }
@@ -645,34 +649,93 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory :
 
         internal async ValueTask<AgentSessionOwnershipLeasePeriod?> RenewAsync(CancellationToken ct)
         {
-            var query = await this.dataAccessLayer.QueryAsync(new QueryRequest
+            this.ThrowIfPersistenceUncertain();
+            await this.gate.WaitAsync(ct).ConfigureAwait(false);
+            try
             {
-                Clauses =
-                [
-                    new TopLevelQueryClause
-                    {
-                        ClauseIdentifier = new QueryClauseIdentifier("agent-session"),
-                        Clause = new EntityTypeQueryClause
+                this.OwnerLifetime.Token.ThrowIfCancellationRequested();
+                var query = await this.AwaitPersistenceAsync(() => this.dataAccessLayer.QueryAsync(new QueryRequest
+                {
+                    Clauses =
+                    [
+                        new TopLevelQueryClause
                         {
-                            EntityTypeNames = new EntityTypeNameSet(["agent-session"]),
+                            ClauseIdentifier = new QueryClauseIdentifier("agent-session"),
+                            Clause = new EntityTypeQueryClause
+                            {
+                                EntityTypeNames = new EntityTypeNameSet(["agent-session"]),
+                            },
                         },
-                    },
-                ],
-                Timestamps = [null],
-            }, ct).ConfigureAwait(false);
-            if (query.AuthoritativeTimestamp is not { } timestamp)
-                return null;
-            if (timestamp.DateTime >= this.Expiry)
-                return null;
-            var expiry = timestamp.DateTime + LeaseDuration;
-            if (!await this.TryReplaceAsync(new Dictionary<string, object?>
+                    ],
+                    Timestamps = [null],
+                }, ct), ct).ConfigureAwait(false);
+                ct.ThrowIfCancellationRequested();
+                var refreshedEntity = query.Batches.SelectMany(batch => batch.Entities)
+                    .SingleOrDefault(candidate => candidate.EntityId == this.entity.EntityId);
+                if (query.AuthoritativeTimestamp is not { } timestamp)
+                    return null;
+                if (refreshedEntity?.Data is not JsonElement refreshed
+                    || ReadLong(refreshed, "ownership-generation") != ReadLong(this.data, "ownership-generation")
+                    || !string.Equals(
+                        ReadString(refreshed, "owning-profile-entity-id") ?? ReadString(refreshed, "host-profile-entity-id"),
+                        ReadString(this.data, "owning-profile-entity-id") ?? ReadString(this.data, "host-profile-entity-id"),
+                        StringComparison.OrdinalIgnoreCase)
+                    || !TryReadRuntimeEpoch(refreshed, out var epoch) || epoch != this.Epoch.Value
+                    || !TryReadLeaseExpiry(refreshed, out var persistedExpiry)
+                    || timestamp.DateTime >= persistedExpiry || timestamp.DateTime >= this.Expiry
+                    || ReadString(refreshed, "runtime-state") is not ("running" or "restarting"))
+                {
+                    this.OwnerLifetime.Cancel();
+                    return null;
+                }
+                var expiry = timestamp.DateTime + LeaseDuration;
+                var updates = new Dictionary<string, object?>
+                {
+                    ["runtime-lease-expiry"] = expiry.ToString("O"),
+                };
+                if (this.completionToConfirm is { } completion
+                    && completion.Replacement.RuntimeEpoch == this.Epoch)
+                {
+                    var operations = refreshed.TryGetProperty("restart-operations", out var journal)
+                        ? JsonSerializer.Deserialize<Dictionary<string, RestartOperation>>(
+                            journal, Microsoft.Extensions.AI.AIJsonUtilities.DefaultOptions)
+                        : null;
+                    if (operations?.GetValueOrDefault(completion.Request.CommandId.ToString("D")) is not { } durable
+                        || durable.Request != completion.Request || durable.Replacement != completion.Replacement
+                        || durable.Replacement.RuntimeEpoch != this.Epoch
+                        || durable.State != AgentSessionOwnerRestartState.Succeeded)
+                    {
+                        this.OwnerLifetime.Cancel();
+                        return null;
+                    }
+                    foreach (var existing in operations.Values.Where(value =>
+                        value.Request.ExpectedRuntime == completion.Request.ExpectedRuntime).ToArray())
+                    {
+                        if (existing.Replacement != completion.Replacement
+                            || existing.State != AgentSessionOwnerRestartState.Succeeded)
+                        {
+                            this.OwnerLifetime.Cancel();
+                            return null;
+                        }
+                        operations[existing.Request.CommandId.ToString("D")] = existing with { StartupUnconfirmed = false };
+                    }
+                    updates["restart-operations"] = JsonSerializer.SerializeToElement(
+                        operations, Microsoft.Extensions.AI.AIJsonUtilities.DefaultOptions);
+                }
+                // Never merge a renewal onto the acknowledgement-dependent cached tag.
+                // Keep query, identity validation and CAS under the same gate as writes.
+                this.entity = refreshedEntity;
+                this.data = refreshed;
+                if (!await this.TryReplaceUnderGateAsync(updates, "Renew agent session runtime lease", ct).ConfigureAwait(false))
+                    return null;
+                this.authoritativeTime = timestamp.DateTime;
+                this.Expiry = expiry;
+                return this.LeasePeriod;
+            }
+            finally
             {
-                ["runtime-lease-expiry"] = expiry.ToString("O"),
-            }, "Renew agent session runtime lease", ct).ConfigureAwait(false))
-                return null;
-            this.authoritativeTime = timestamp.DateTime;
-            this.Expiry = expiry;
-            return this.LeasePeriod;
+                this.gate.Release();
+            }
         }
 
         internal ValueTask PersistRetentionAsync(bool value, CancellationToken ct)
@@ -721,39 +784,48 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory :
             await this.gate.WaitAsync(ct).ConfigureAwait(false);
             try
             {
-                var replacement = Merge(this.data, updates);
-                ct.ThrowIfCancellationRequested();
-                var result = await this.AwaitPersistenceAsync(() => this.dataAccessLayer.UpdateAsync(new UpdateRequest
-                {
-                    UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = comment } },
-                    Changes =
-                    [
-                        new EntityChange
-                        {
-                            EntityId = this.entity.EntityId,
-                            ConcurrencyTag = this.entity.ConcurrencyTag,
-                            Data = replacement,
-                            EntityChangeMode = EntityChangeMode.Replace,
-                        },
-                    ],
-                }, ct), ct, fenceOnTimeout).ConfigureAwait(false);
-                var changed = result.EntityResults.SingleOrDefault();
-                if (changed is null || changed.ConcurrencyMatchState == ConcurrencyMatchState.NotMatched)
-                    return false;
-                if (changed.Errors.Count != 0)
-                    throw new InvalidOperationException("The persisted agent session update was rejected.");
-                this.data = replacement;
-                this.entity = changed.CurrentEntity ?? this.entity with
-                {
-                    Data = replacement,
-                    ConcurrencyTag = changed.ConcurrencyTag,
-                };
-                return true;
+                return await this.TryReplaceUnderGateAsync(updates, comment, ct, fenceOnTimeout).ConfigureAwait(false);
             }
             finally
             {
                 this.gate.Release();
             }
+        }
+
+        private async ValueTask<bool> TryReplaceUnderGateAsync(
+            IReadOnlyDictionary<string, object?> updates, string comment, CancellationToken ct,
+            bool fenceOnTimeout = true)
+        {
+            this.ThrowIfPersistenceUncertain();
+            var replacement = Merge(this.data, updates);
+            ct.ThrowIfCancellationRequested();
+            var result = await this.AwaitPersistenceAsync(() => this.dataAccessLayer.UpdateAsync(new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = comment } },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = this.entity.EntityId,
+                        ConcurrencyTag = this.entity.ConcurrencyTag,
+                        Data = replacement,
+                        EntityChangeMode = EntityChangeMode.Replace,
+                    },
+                ],
+            }, ct), ct, fenceOnTimeout).ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+            var changed = result.EntityResults.SingleOrDefault();
+            if (changed is null || changed.ConcurrencyMatchState == ConcurrencyMatchState.NotMatched)
+                return false;
+            if (changed.Errors.Count != 0)
+                throw new InvalidOperationException("The persisted agent session update was rejected.");
+            this.data = replacement;
+            this.entity = changed.CurrentEntity ?? this.entity with
+            {
+                Data = replacement,
+                ConcurrencyTag = changed.ConcurrencyTag,
+            };
+            return true;
         }
     }
 }

@@ -135,6 +135,7 @@ internal sealed partial class DataAccessAgentSessionRuntimeHostFactory
         => this.hostedRuntimes.Values.FirstOrDefault(hosted =>
             ReferenceEquals(hosted.Runtime.Chat, chat)
             && !hosted.State.PersistenceUncertain
+            && !hosted.State.OwnerLifetime.IsCancellationRequested
             && !hosted.Runtime.IsFenced
             && hosted.Runtime.CanRestartIndependently) is { } hosted
             ? new AgentSessionRuntimeIdentity
