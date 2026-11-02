@@ -20,6 +20,18 @@ namespace Phantom.Workspaces.Agent.Gui.ViewModels;
 
 public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsyncDisposable
 {
+    public AgentViewModel CreateRuntimeReplacement(IAgentChat replacement)
+        => new(new AgentViewModelOptions
+        {
+            AgentChat = replacement,
+            DisplayName = this.DisplayName,
+            Description = this.Description,
+            LoggerFactory = this.loggerFactory,
+            ForegroundScheduler = this.foregroundScheduler,
+            ParentAgentViewModel = this.ParentAgentViewModel,
+            RemoteChildResolver = this.remoteChildResolver,
+        });
+
     private readonly IAgentChat agentChat;
     private readonly ObservableLoggerFactory loggerFactory;
     private readonly ILogger logger;

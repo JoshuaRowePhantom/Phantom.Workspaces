@@ -30,6 +30,9 @@ public sealed record AgentSessionRestartResult
     public required AgentSessionRestartOutcome Outcome { get; init; }
 
     public string? Message { get; init; }
+    public Guid? CommandId { get; init; }
+    public Phantom.Workspaces.Llm.Remote.AgentSessionRuntimeIdentity? ReplacementRuntime { get; init; }
+    public bool CanRetry { get; init; }
 }
 
 public sealed record AgentSessionRestartRequest
@@ -70,6 +73,10 @@ public interface IAgentSessionRestartService
     Task<AgentSessionRestartResult> RestartAsync(
         AgentSessionRestartRequest request,
         CancellationToken cancellationToken);
+
+    Task<AgentSessionRestartResult?> GetStatusAsync(
+        AgentSessionRestartRequest request,
+        CancellationToken cancellationToken);
 }
 
 internal sealed class UnavailableAgentSessionRestartService : IAgentSessionRestartService
@@ -101,6 +108,11 @@ internal sealed class UnavailableAgentSessionRestartService : IAgentSessionResta
     public AgentSessionRestartRequest? PrepareRestart(
         AgentSessionWorkspaceTabViewModel tab,
         TabCommandContext context) => null;
+
+    public Task<AgentSessionRestartResult?> GetStatusAsync(
+        AgentSessionRestartRequest request,
+        CancellationToken cancellationToken)
+        => Task.FromResult<AgentSessionRestartResult?>(null);
 }
 
 public interface IAgentSessionRestartConsentProvider

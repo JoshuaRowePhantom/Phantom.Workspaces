@@ -10,6 +10,9 @@ namespace Phantom.Workspaces.Services;
 
 public sealed class AcquireAgentChatRequest
 {
+    internal bool OwnerRuntimeAcquisition { get; init; }
+    internal bool IsViewerReattachment { get; init; }
+    internal AgentRuntimeQueueCheckpoint? RuntimeQueueCheckpoint { get; init; }
     public Action<IAgentChat>? ObserveInitializingChat { get; init; }
     public Action? CancelStartup { get; init; }
     public CancellationToken? ProgressCancellation { get; init; }

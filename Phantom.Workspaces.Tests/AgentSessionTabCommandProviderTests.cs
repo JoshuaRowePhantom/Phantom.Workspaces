@@ -353,6 +353,11 @@ public sealed class AgentSessionTabCommandProviderTests
 
     private sealed class RecordingRestartService : IAgentSessionRestartService
     {
+        public Task<AgentSessionRestartResult?> GetStatusAsync(
+            AgentSessionRestartRequest request,
+            CancellationToken cancellationToken)
+            => Task.FromResult<AgentSessionRestartResult?>(null);
+
         private int restartCallCount;
 
         public int RestartCallCount => this.restartCallCount;

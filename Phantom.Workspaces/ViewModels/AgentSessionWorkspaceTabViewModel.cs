@@ -153,10 +153,40 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
 
     public void SetLease(RunningAgentChatLease value)
     {
+        if (this.lease is not null)
+            this.lease.ReattachAsync = null;
         this.lease = value;
+        value.ReattachAsync = this.ReattachRuntimeAsync;
         this.ownershipGeneration++;
         this.runtimeEpoch = Guid.NewGuid();
         this.leaseDisposables.Add(value);
+    }
+
+    private async Task ReattachRuntimeAsync(RunningAgentChatLease replacement)
+    {
+        await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(async () =>
+        {
+            if (this.disposed || this.agent is null || this.loggerFactory is null)
+            {
+                await replacement.DisposeAsync();
+                return;
+            }
+            var original = this.agent;
+            var originalLease = this.lease;
+            var view = original.CreateRuntimeReplacement(replacement.AgentChat);
+            original.PropertyChanged -= this.OnAgentPropertyChanged;
+            original.AltKeyStateChanged -= this.OnAgentAltKeyStateChanged;
+            original.GoToTabAtIndexRequested -= this.OnAgentGoToTabAtIndexRequested;
+            original.GoToWorkspacePaneAtIndexRequested -= this.OnAgentGoToWorkspacePaneAtIndexRequested;
+            await original.DisposeViewResourcesAsync();
+            this.agent = null;
+            this.state = AgentTabState.Loading;
+            this.SetLease(replacement);
+            this.SetRestartError(null);
+            this.SetReady(view, this.loggerFactory);
+            if (originalLease is not null)
+                await originalLease.DisposeAsync();
+        });
     }
 
     internal void ObserveSessionDisplay(RunningAgentChatWithEntityInfo display)
@@ -581,7 +611,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
 
     internal void SetRestartInProgress(bool value)
     {
-        if (this.SetProperty(ref this.isRestartInProgress, value))
+        if (this.SetProperty(ref this.isRestartInProgress, value, nameof(this.IsRestartInProgress)))
         {
             AgentSessionTabCommandProvider.Instance.NotifyCommandsChanged();
         }
@@ -589,7 +619,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
 
     internal void SetRestartError(string? value)
     {
-        if (this.SetProperty(ref this.restartError, value))
+        if (this.SetProperty(ref this.restartError, value, nameof(this.RestartError)))
         {
             AgentSessionTabCommandProvider.Instance.NotifyCommandsChanged();
         }

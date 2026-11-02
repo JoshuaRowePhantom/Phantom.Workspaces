@@ -9,6 +9,10 @@ internal interface IRemoteAgentSessionRuntimeRegistry
         CancellationToken ct = default);
     ValueTask<bool> TryTerminateAsync(TerminateAgentSessionRuntimeRequest request, CancellationToken ct = default);
     ValueTask SetContinueInBackgroundAsync(UpdateAgentSessionRuntimeRetentionRequest request, CancellationToken ct = default);
+    ValueTask ReplaceForRestartAsync(
+        RemoteAgentSessionLease? expected,
+        RemoteAgentSessionLease replacement,
+        CancellationToken cancellationToken);
 }
 
 internal interface IAgentSessionChildRegistry
@@ -26,6 +30,28 @@ internal sealed class RemoteAgentSessionRuntimeRegistry :
 
     internal RemoteAgentSessionRuntimeRegistry(TimeProvider timeProvider)
         => ArgumentNullException.ThrowIfNull(timeProvider);
+
+    public ValueTask ReplaceForRestartAsync(
+        RemoteAgentSessionLease? expected,
+        RemoteAgentSessionLease replacement,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (this.gate)
+        {
+            ObjectDisposedException.ThrowIf(this.disposed, this);
+            var key = new RuntimeKey(replacement.SessionId, replacement.OwnershipGeneration);
+            this.entries.TryGetValue(key, out var current);
+            if (expected is not null && !ReferenceEquals(current?.Lease, expected)
+                || expected is null && current is not null)
+                throw new InvalidOperationException("The owning runtime changed before restart publication.");
+            var entry = new RegistryEntry(Task.FromResult(replacement)) { Lease = replacement };
+            this.entries[key] = entry;
+            current?.MarkRemoved();
+            replacement.Terminated += this.OnTerminated;
+        }
+        return ValueTask.CompletedTask;
+    }
 
     public async ValueTask<RemoteAgentSessionLease?> TryGetAsync(string sessionId, long ownershipGeneration, CancellationToken ct = default)
     {

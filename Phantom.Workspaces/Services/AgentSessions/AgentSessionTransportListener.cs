@@ -33,7 +33,8 @@ public sealed class AgentSessionTransportListener : ITransportListener
         if (request.ValueKind != JsonValueKind.Object
             || !request.TryGetProperty("type", out var type)
             || type.ValueKind != JsonValueKind.String
-            || type.GetString() is not ("attach-agent-session" or "take-over-agent-session"))
+            || type.GetString() is not ("attach-agent-session" or "take-over-agent-session"
+                or "restart-agent-session" or "agent-session-restart-status"))
             return null;
         lock (this.gate) ObjectDisposedException.ThrowIf(this.disposed, this);
         var stage = "validate-request";
@@ -43,6 +44,18 @@ public sealed class AgentSessionTransportListener : ITransportListener
         try
         {
             var peer = this.peerIdentityProvider.GetRequiredIdentity(channel);
+            if (type.GetString() is "restart-agent-session" or "agent-session-restart-status")
+            {
+                var restart = JsonSerializer.Deserialize<AgentSessionOwnerRestartRequest>(
+                    request.GetProperty("request"), AgentSessionProtocolCodec.Options)
+                    ?? throw new RemoteAgentProtocolException("Restart request was null.");
+                var result = type.GetString() == "agent-session-restart-status"
+                    ? await this.host.GetRestartStatusAsync(peer, restart, ct).ConfigureAwait(false)
+                    : await this.host.RestartAsync(peer, restart, ct).ConfigureAwait(false);
+                await channel.Writer.WriteAsync(
+                    JsonSerializer.SerializeToElement(result, AgentSessionProtocolCodec.Options), ct).ConfigureAwait(false);
+                return null;
+            }
             if (type.GetString() == "take-over-agent-session")
             {
                 stage = "deserialize-takeover";

@@ -7,7 +7,7 @@ namespace Phantom.Workspaces.Services.AgentSessions;
 internal enum AgentSessionAuthorizationOperation
 {
     Status, Open, Reconnect, Send, SetToolState, SetBackgroundPreference, Interrupt, Terminate,
-    OpenSubagent, ModalResponse, Takeover,
+    OpenSubagent, ModalResponse, Takeover, Restart,
 }
 
 internal sealed record AgentSessionAuthorizationRequest

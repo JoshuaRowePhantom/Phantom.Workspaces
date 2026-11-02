@@ -14,6 +14,17 @@ internal interface IAgentSessionRuntimeHostFactory
     ValueTask<bool> TryTakeOverAsync(AgentSessionTakeoverRequest request, CancellationToken ct);
 }
 
+internal interface IAgentSessionRestartRuntimeHostFactory
+{
+    Task<AgentSessionOwnerRestartResult> RestartAsync(
+        AgentSessionOwnerRestartRequest request,
+        IRemoteAgentSessionRuntimeRegistry registry,
+        CancellationToken cancellationToken);
+    Task<AgentSessionOwnerRestartResult?> GetRestartStatusAsync(
+        AgentSessionOwnerRestartRequest request,
+        CancellationToken cancellationToken);
+}
+
 internal sealed class RemoteAgentSessionHost : IAsyncDisposable
 {
     private readonly IAgentSessionAttachAuthorizer authorizer;
@@ -60,6 +71,9 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
         await openGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
+            if (this.runtimeFactory is DataAccessAgentSessionRuntimeHostFactory restartFactory)
+                await restartFactory.RecoverPendingRestartAsync(
+                    open.AgentSessionId, this.runtimeRegistry, ct).ConfigureAwait(false);
             var existing = await this.runtimeRegistry.TryGetAsync(
                 open.AgentSessionId, open.ExpectedOwnershipGeneration, ct).ConfigureAwait(false);
             switch (open.OpenIntent)
@@ -102,6 +116,18 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
         var attachment = initial.Attachment;
         try
         {
+            if (open.ReplayCursor is { } previous && previous.Epoch != runtime.Epoch)
+            {
+                if (this.runtimeFactory is not DataAccessAgentSessionRuntimeHostFactory restartFactory
+                    || !await restartFactory.CanReconcileEpochAsync(
+                        open.AgentSessionId, previous.Epoch, runtime.Epoch, ct).ConfigureAwait(false))
+                    throw new AgentSessionUnavailableException();
+                var handoff = AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.CreateFrame(
+                    previous.Epoch, previous.Sequence + 1, Guid.NewGuid(),
+                    new SessionRestartingEvent { ReplacementRuntimeEpoch = runtime.Epoch });
+                await request.Channel.Writer.WriteAsync(
+                    AgentSessionProtocolCodec.SerializeFrame(handoff), ct).ConfigureAwait(false);
+            }
             foreach (var frame in initial.Frames)
             {
                 await request.Channel.Writer.WriteAsync(
@@ -133,6 +159,154 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
         TransportPeerIdentity peer, AgentSessionTakeoverRequest request, CancellationToken ct = default)
         => this.TakeOverCoreAsync(peer, request, ct);
 
+    internal async Task<AgentSessionOwnerRestartResult> RestartAsync(
+        TransportPeerIdentity peer,
+        AgentSessionOwnerRestartRequest request,
+        CancellationToken cancellationToken)
+    {
+        var expected = request.ExpectedRuntime;
+        var gate = this.openGates.GetOrAdd(expected.AgentSessionId, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var restartFactory = await this.AuthorizeRestartAsync(peer, expected, cancellationToken).ConfigureAwait(false);
+            return await restartFactory.RestartAsync(
+                request, this.runtimeRegistry, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+        internal async Task<AgentSessionOwnerRestartResult?> GetRestartStatusAsync(
+            TransportPeerIdentity peer,
+            AgentSessionOwnerRestartRequest request,
+            CancellationToken cancellationToken)
+        {
+            using var transition = await this.EnterTransitionAsync(
+                request.ExpectedRuntime.AgentSessionId, cancellationToken).ConfigureAwait(false);
+            var factory = await this.AuthorizeRestartAsync(
+                peer, request.ExpectedRuntime, cancellationToken).ConfigureAwait(false);
+            return await factory.GetRestartStatusAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+
+        private async ValueTask<IAgentSessionRestartRuntimeHostFactory> AuthorizeRestartAsync(
+            TransportPeerIdentity peer,
+            AgentSessionRuntimeIdentity expected,
+            CancellationToken cancellationToken)
+        {
+            var authorization = await this.authorizer.AuthorizeAsync(peer, new AgentSessionAuthorizationRequest
+            {
+                AgentSessionId = expected.AgentSessionId,
+                ExpectedOwningProfileEntityId = expected.OwningProfileEntityId,
+                ExpectedOwnershipGeneration = expected.OwnershipGeneration,
+                Operation = AgentSessionAuthorizationOperation.Restart,
+            }, cancellationToken).ConfigureAwait(false);
+            if (!authorization.IsAllowed
+                || this.runtimeFactory is not IAgentSessionRestartRuntimeHostFactory factory)
+                throw new AgentSessionUnavailableException();
+            return factory;
+        }
+        internal AgentSessionRuntimeIdentity? GetIdentity(Phantom.Workspaces.Llm.IAgentChat chat)
+            => (this.runtimeFactory as DataAccessAgentSessionRuntimeHostFactory)?.GetIdentity(chat);
+
+        internal void AddLocalViewer(IAgentChat chat)
+            => (this.runtimeFactory as DataAccessAgentSessionRuntimeHostFactory)?.FindRuntime(chat)?.AddLocalViewer();
+
+        internal ValueTask ReleaseLocalViewerAsync(IAgentChat chat)
+            => (this.runtimeFactory as DataAccessAgentSessionRuntimeHostFactory)?.FindRuntime(chat)?.ReleaseLocalViewerAsync()
+                ?? ValueTask.CompletedTask;
+
+        internal async Task<bool> TerminateLocalRuntimeAsync(
+            TransportPeerIdentity peer,
+            AgentSessionRuntimeIdentity identity,
+            CancellationToken cancellationToken)
+        {
+            using var transition = await this.EnterTransitionAsync(identity.AgentSessionId, cancellationToken).ConfigureAwait(false);
+            var authorization = await this.authorizer.AuthorizeAsync(peer, new AgentSessionAuthorizationRequest
+            {
+                AgentSessionId = identity.AgentSessionId,
+                ExpectedOwningProfileEntityId = identity.OwningProfileEntityId,
+                ExpectedOwnershipGeneration = identity.OwnershipGeneration,
+                Operation = AgentSessionAuthorizationOperation.Terminate,
+            }, cancellationToken).ConfigureAwait(false);
+            if (!authorization.IsAllowed)
+                throw new AgentSessionUnavailableException();
+            return await this.runtimeRegistry.TryTerminateAsync(new TerminateAgentSessionRuntimeRequest
+            {
+                SessionId = identity.AgentSessionId,
+                OwnershipGeneration = identity.OwnershipGeneration,
+                Epoch = identity.RuntimeEpoch,
+            }, CancellationToken.None).ConfigureAwait(false);
+        }
+
+        internal async Task SetLocalRetentionAsync(
+            TransportPeerIdentity peer,
+            AgentSessionRuntimeIdentity identity,
+            bool continueInBackground,
+            CancellationToken cancellationToken)
+        {
+            using var transition = await this.EnterTransitionAsync(identity.AgentSessionId, cancellationToken).ConfigureAwait(false);
+            var authorization = await this.authorizer.AuthorizeAsync(peer, new AgentSessionAuthorizationRequest
+            {
+                AgentSessionId = identity.AgentSessionId,
+                ExpectedOwningProfileEntityId = identity.OwningProfileEntityId,
+                ExpectedOwnershipGeneration = identity.OwnershipGeneration,
+                Operation = AgentSessionAuthorizationOperation.SetBackgroundPreference,
+            }, cancellationToken).ConfigureAwait(false);
+            if (!authorization.IsAllowed)
+                throw new AgentSessionUnavailableException();
+            await this.runtimeRegistry.SetContinueInBackgroundAsync(new UpdateAgentSessionRuntimeRetentionRequest
+            {
+                SessionId = identity.AgentSessionId,
+                OwnershipGeneration = identity.OwnershipGeneration,
+                Epoch = identity.RuntimeEpoch,
+                ContinueInBackground = continueInBackground,
+            }, cancellationToken).ConfigureAwait(false);
+        }
+
+        internal async Task<RunningAgentChatLease> EnsureLocalRuntimeAsync(
+            TransportPeerIdentity peer,
+            AcquireAgentChatRequest request,
+            Func<Task<RunningAgentChatLease>> acquireViewer,
+            CancellationToken cancellationToken)
+        {
+            var factory = this.runtimeFactory as DataAccessAgentSessionRuntimeHostFactory
+                ?? throw new AgentSessionUnavailableException();
+            var entity = request.AgentSessionEntity!.Value;
+            var expectedOwner = entity.TryGetProperty("owning-profile-entity-id", out var owner)
+                ? owner.GetString()! : entity.GetProperty("host-profile-entity-id").GetString()!;
+            var generation = entity.GetProperty("ownership-generation").GetInt64();
+            var gate = this.openGates.GetOrAdd(request.AgentSessionId.Value, static _ => new SemaphoreSlim(1, 1));
+            await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var authorized = await this.authorizer.AuthorizeAsync(peer, new AgentSessionAuthorizationRequest
+                {
+                    AgentSessionId = request.AgentSessionId.Value,
+                    ExpectedOwningProfileEntityId = expectedOwner,
+                    ExpectedOwnershipGeneration = generation,
+                    Operation = AgentSessionAuthorizationOperation.Open,
+                }, cancellationToken).ConfigureAwait(false);
+                if (!authorized.IsAllowed)
+                    throw new AgentSessionUnavailableException();
+                var intent = await factory.LoadIntentAsync(
+                    request.AgentSessionId.Value, cancellationToken).ConfigureAwait(false)
+                    ?? throw new AgentSessionUnavailableException();
+                await factory.RecoverPendingRestartAsync(
+                    request.AgentSessionId.Value, this.runtimeRegistry, cancellationToken).ConfigureAwait(false);
+                await this.runtimeRegistry.GetOrStartAsync(
+                    intent,
+                    token => factory.StartLocalAsync(intent, request, token),
+                    cancellationToken).ConfigureAwait(false);
+                return await acquireViewer().ConfigureAwait(false);
+            }
+            finally
+            {
+                gate.Release();
+            }
+        }
     public ValueTask DisposeAsync()
         => this.runtimeRegistry is IAsyncDisposable disposable ? disposable.DisposeAsync() : ValueTask.CompletedTask;
 
@@ -209,6 +383,7 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
     {
         try
         {
+            using var transition = await this.EnterTransitionAsync(open.AgentSessionId, ct).ConfigureAwait(false);
             var operation = command switch
             {
             SetToolEnabledCommand => AgentSessionAuthorizationOperation.SetToolState,
@@ -232,11 +407,23 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
                 throw new AgentSessionUnavailableException();
             attachment.EnsureConnected();
 
+            if (command is RestartViewerReadyCommand)
+            {
+                runtime.AcknowledgeRestartViewer(attachment.AttachmentToken);
+                await attachment.PublishAsync(new CommandCompletedEvent
+                {
+                    CommandId = command.CommandId,
+                    Result = JsonSerializer.SerializeToElement(true),
+                }, command.CorrelationId, ct).ConfigureAwait(false);
+                return;
+            }
+
             if (command is TerminateSessionCommand)
             {
                 await runtime.TryTerminateAsync(ct).ConfigureAwait(false);
                 return;
             }
+
             if (command is DetachCommand)
             {
                 await attachment.ReleaseExplicitlyAsync().ConfigureAwait(false);
@@ -272,6 +459,23 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
                     CorrelationId = command.CorrelationId,
                 },
             }, command.CorrelationId, ct).ConfigureAwait(false);
+        }
+    }
+
+    private async ValueTask<IDisposable> EnterTransitionAsync(string sessionId, CancellationToken cancellationToken)
+    {
+        var semaphore = this.openGates.GetOrAdd(sessionId, static _ => new SemaphoreSlim(1, 1));
+        await semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+        return new OwnerTransition(semaphore);
+    }
+
+    private sealed class OwnerTransition(SemaphoreSlim semaphore) : IDisposable
+    {
+        private int disposed;
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref this.disposed, 1) == 0)
+                semaphore.Release();
         }
     }
 

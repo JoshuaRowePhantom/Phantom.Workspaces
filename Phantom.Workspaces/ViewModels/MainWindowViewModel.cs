@@ -3298,7 +3298,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         = new AgentSessionCloseDecisionProvider();
 
     internal IAgentSessionRestartService AgentSessionRestartService { get; set; }
-        = UnavailableAgentSessionRestartService.Instance;
+        = Services.AgentSessions.AgentSessionRestartCoordinator.Instance;
 
     internal IAgentSessionRestartConsentProvider AgentSessionRestartConsentProvider { get; set; }
         = new AgentSessionRestartConsentProvider();

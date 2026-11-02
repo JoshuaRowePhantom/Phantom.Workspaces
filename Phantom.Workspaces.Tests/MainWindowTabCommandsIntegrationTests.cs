@@ -11,6 +11,9 @@ using Moq;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Agent.Gui;
+using AgentViewModel = Phantom.Workspaces.Agent.Gui.ViewModels.AgentViewModel;
+using Phantom.Workspaces.Services.AgentSessions;
 using Phantom.Workspaces.Services.TabCommands;
 using Phantom.Workspaces.ViewModels;
 using System.Collections.Immutable;
@@ -21,6 +24,60 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class MainWindowTabCommandsIntegrationTests
 {
+    [AvaloniaFact]
+    public async Task RestartSession_DefaultProductionCoordinator_RendersMenuAndReplacesTheActualOwnerInPlace()
+    {
+        var foregroundScheduler = TaskScheduler.FromCurrentSynchronizationContext();
+        await using var environment = new DataAccessAgentSessionRuntimeHostFactoryTests.RestartEnvironment(
+            foregroundScheduler: foregroundScheduler);
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        Assert.IsType<AgentSessionRestartCoordinator>(viewModel.AgentSessionRestartService);
+        viewModel.AgentSessionRestartConsentProvider = new DelegateConsentProvider((_, _) => Task.FromResult(true));
+        var viewer = await environment.AcquireAsync();
+        var original = viewer.AgentChat;
+        var logger = new ObservableLoggerFactory();
+        var tab = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = "tab-production-restart",
+            Title = "Production",
+            Entity = CreateWorkspaceEntity("production-restart"),
+            AgentSessionId = "session",
+        };
+        tab.SetLease(viewer);
+        tab.SetReady(new AgentViewModel(original, "production", "", logger, foregroundScheduler), logger);
+        await viewModel.OpenTabAsync(tab);
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        tab.PropertyChanged += (_, change) =>
+        {
+            if (change.PropertyName == nameof(tab.IsRestartInProgress) && !tab.IsRestartInProgress)
+                completed.TrySetResult();
+        };
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            var strip = await WaitForContentTabStripAsync(window);
+            var item = strip.GetVisualDescendants().OfType<DocumentTabStripItem>()
+                .Single(value => value.DataContext is WorkspaceDocument { Id: "tab-production-restart" });
+            await OpenNativeMenuAsync(window, item);
+            var menu = Assert.IsType<ContextMenu>(item.DocumentContextMenu);
+            var restart = Assert.Single(menu.Items.OfType<MenuItem>(), value => Equals(value.Header, "Restart agent session…"));
+            Assert.True(restart.IsEnabled);
+            restart.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(MenuItem.ClickEvent));
+            await completed.Task.WaitAsync(TestContext.Current.CancellationToken);
+            Assert.Null(tab.RestartError);
+            Assert.NotSame(original, tab.Lease!.AgentChat);
+            Assert.True(Assert.IsType<AgentChat>(original).IsTerminal);
+            Assert.Equal(AgentTabState.Ready, tab.State);
+            Assert.Single(environment.Table.RunningSessions);
+        }
+        finally
+        {
+            await MainWindowIntegrationTests.CloseWindowAsync(window);
+        }
+    }
+
     [AvaloniaFact(Timeout = 30_000)]
     public async Task RestartSession_ContextMenuTargetsInactiveTab_RestartsClickedSession()
     {
@@ -501,6 +558,11 @@ public sealed class MainWindowTabCommandsIntegrationTests
 
     private sealed class RecordingRestartService : IAgentSessionRestartService
     {
+        public Task<AgentSessionRestartResult?> GetStatusAsync(
+            AgentSessionRestartRequest request,
+            CancellationToken cancellationToken)
+            => Task.FromResult<AgentSessionRestartResult?>(null);
+
         private readonly object gate = new();
 
         public TaskCompletionSource<AgentSessionRestartRequest> LastRequest { get; } =

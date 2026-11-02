@@ -7,7 +7,8 @@ using Phantom.Workspaces.Llm.Remote;
 
 namespace Phantom.Workspaces.Services.AgentSessions;
 
-internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRuntimeHostFactory
+internal sealed partial class DataAccessAgentSessionRuntimeHostFactory :
+    IAgentSessionRuntimeHostFactory, IAgentSessionRestartRuntimeHostFactory
 {
     private static readonly TimeSpan LeaseDuration = TimeSpan.FromSeconds(30);
     private readonly IDataAccessLayer dataAccessLayer;
@@ -39,8 +40,14 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
         return result.Entity?.Data is JsonElement data ? this.contextFactory.Create(data).Intent : null;
     }
 
-    public async Task<RemoteAgentSessionLease> StartAsync(
+    public Task<RemoteAgentSessionLease> StartAsync(
         PersistedAgentSessionRuntimeIntent intent, CancellationToken ct)
+        => this.StartLocalAsync(intent, null, ct);
+
+    internal async Task<RemoteAgentSessionLease> StartLocalAsync(
+        PersistedAgentSessionRuntimeIntent intent,
+        AcquireAgentChatRequest? localRequest,
+        CancellationToken ct)
     {
         var query = await this.FindAsync(intent.AgentSessionId, ct).ConfigureAwait(false);
         var persisted = query.Entity ?? throw new AgentSessionUnavailableException();
@@ -58,9 +65,20 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
             this.dataAccessLayer, persisted, query.GetRequiredAuthoritativeTime());
         await state.RecordInterruptedAndAcquireAsync(intent, ct).ConfigureAwait(false);
         RunningAgentChatLease? chatLease = null;
+        RemoteAgentSessionLease? runtime = null;
+        var ownership = this.CreateOwnershipLease(state, () => runtime);
+        ownership.Start(state.LeasePeriod);
+        using var startupCancellation = CancellationTokenSource.CreateLinkedTokenSource(ct, state.OwnerLifetime.Token);
         try
         {
-            var sessionContext = new CurrentSessionContext
+            var sessionContext = ((localRequest?.AgentServices?.CurrentSessionContext
+                ?? this.hostServices?.CurrentSessionContext) as CurrentSessionContext
+                ?? new CurrentSessionContext
+                {
+                    AgentSessionId = intent.AgentSessionId,
+                    OwningProfileEntityId = intent.OwningProfileEntityId,
+                    OwnershipGeneration = intent.OwnershipGeneration,
+                }) with
             {
                 AgentSessionId = intent.AgentSessionId,
                 OwningProfileEntityId = intent.OwningProfileEntityId,
@@ -69,31 +87,56 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
             };
             chatLease = await this.runningChats.AcquireAsync(new AcquireAgentChatRequest
             {
+                OwnerRuntimeAcquisition = true,
                 AgentSessionId = new AgentSessionId(intent.AgentSessionId),
                 AgentSessionEntity = data,
-                AgentServices = (this.hostServices ?? new AgentServices()) with
+                AgentServices = (localRequest?.AgentServices ?? this.hostServices ?? new AgentServices()) with
                 {
                     CurrentSessionContext = sessionContext,
                 },
-                AgentDefinitionResolver = this.definitionResolver,
+                AgentDefinition = localRequest?.AgentDefinition,
+                AgentManifest = localRequest?.AgentManifest,
+                AgentDefinitionResolver = localRequest?.AgentDefinitionResolver ?? this.definitionResolver,
+                ObserveInitializingChat = localRequest?.ObserveInitializingChat,
+                CancelStartup = localRequest?.CancelStartup,
+                ProgressCancellation = localRequest?.ProgressCancellation,
                 Parameters = ReadStringDictionary(data, "parameter-values"),
                 EntityId = persisted.EntityId.ToString(),
                 EntityName = RunningAgentChatTable.ReadCanonicalDisplayName(data) ?? "",
                 EntityDisplayName = RunningAgentChatTable.ReadCanonicalDisplayName(data),
                 AcquisitionMode = AgentChatAcquisitionMode.Local,
-            }, ct).ConfigureAwait(false);
+            }, startupCancellation.Token).ConfigureAwait(false);
 
+            state.OwnerLifetime.Token.ThrowIfCancellationRequested();
+            runtime = this.CreateRuntimeLease(intent, state, chatLease, sessionContext, ownership: ownership);
+            return runtime;
+        }
+        catch
+        {
+            await ownership.DisposeAsync().ConfigureAwait(false);
+            if (chatLease is not null)
+                await chatLease.DisposeAsync().ConfigureAwait(false);
+            await state.ReleaseAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private RemoteAgentSessionLease CreateRuntimeLease(
+        PersistedAgentSessionRuntimeIntent intent,
+        PersistedRuntimeState state,
+        RunningAgentChatLease chatLease,
+        CurrentSessionContext sessionContext,
+        bool publish = true,
+        AgentSessionOwnershipLease? ownership = null)
+    {
+            state.OwnerLifetime.Token.ThrowIfCancellationRequested();
             var chat = chatLease.AgentChat;
             RemoteAgentSessionLease? runtime = null;
-            var ownership = new AgentSessionOwnershipLease(
-                this.timeProvider,
-                token => state.RenewAsync(token),
-                async token =>
-                {
-                    if (runtime is not null)
-                        await runtime.ReportFatalFailureAsync(token).ConfigureAwait(false);
-                },
-                token => state.ReleaseAsync(token));
+            if (ownership is null)
+            {
+                ownership = this.CreateOwnershipLease(state, () => runtime);
+                ownership.Start(state.LeasePeriod);
+            }
             runtime = new RemoteAgentSessionLease(
                 intent.AgentSessionId,
                 intent.OwnershipGeneration,
@@ -101,7 +144,12 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
                 chat,
                 intent.ContinueInBackground,
                 () => Snapshot(chat),
-                (value, token) => state.PersistRetentionAsync(value, token),
+                async (value, token) =>
+                {
+                    await state.PersistRetentionAsync(value, token).ConfigureAwait(false);
+                    (this.runningChats as RunningAgentChatTable)?.ApplyOwnerRuntimeRetention(
+                        new AgentSessionId(intent.AgentSessionId), value);
+                },
                 token => state.PersistStoppedAsync(token),
                 this.timeProvider,
                 ownership,
@@ -109,22 +157,43 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
                 sessionContext,
                 terminateRuntimeAsync: async () =>
                 {
-                    if (!await this.runningChats.TerminateExactAsync(
-                        chatLease.SessionId, chat, CancellationToken.None).ConfigureAwait(false)
+                    var terminated = this.runningChats is RunningAgentChatTable table
+                        ? await table.TerminateOwnerRuntimeExactAsync(
+                            chatLease.SessionId, chat, CancellationToken.None).ConfigureAwait(false)
+                        : await this.runningChats.TerminateExactAsync(
+                            chatLease.SessionId, chat, CancellationToken.None).ConfigureAwait(false);
+                    if (!terminated
                         && !chatLease.IsRuntimeTerminal)
                         throw new InvalidOperationException("The owning runtime could not be terminated.");
                 });
-            ownership.Start(state.LeasePeriod);
+            runtime.HasDurableRestartAuthority = true;
+            runtime.Terminated += (_, _) =>
+            {
+                if (this.hostedRuntimes.TryGetValue(intent.AgentSessionId, out var current)
+                    && ReferenceEquals(current.Runtime, runtime))
+                    this.hostedRuntimes.TryRemove(
+                        new KeyValuePair<string, HostedRuntime>(intent.AgentSessionId, current));
+            };
+            (this.runningChats as RunningAgentChatTable)?.ApplyOwnerRuntimeRetention(
+                new AgentSessionId(intent.AgentSessionId), intent.ContinueInBackground);
+            if (publish)
+                this.hostedRuntimes[intent.AgentSessionId] = new HostedRuntime(
+                    runtime, state, chatLease, intent);
             return runtime;
-        }
-        catch
-        {
-            if (chatLease is not null)
-                await chatLease.DisposeAsync().ConfigureAwait(false);
-            await state.ReleaseAsync(CancellationToken.None).ConfigureAwait(false);
-            throw;
-        }
     }
+
+    private AgentSessionOwnershipLease CreateOwnershipLease(
+        PersistedRuntimeState state, Func<RemoteAgentSessionLease?> runtime)
+        => new(
+            this.timeProvider,
+            token => state.RenewAsync(token),
+            async token =>
+            {
+                state.OwnerLifetime.Cancel();
+                if (runtime() is { } current)
+                    await current.ReportFatalFailureAsync(token).ConfigureAwait(false);
+            },
+            token => state.ReleaseAsync(token));
 
     public async ValueTask<bool> TryTakeOverAsync(
         AgentSessionTakeoverRequest request, CancellationToken ct)
@@ -321,9 +390,122 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
         }
 
         internal RuntimeEpoch Epoch { get; private set; }
+        internal CancellationTokenSource OwnerLifetime { get; } = new();
         internal DateTimeOffset Expiry { get; private set; }
         internal AgentSessionOwnershipLeasePeriod LeasePeriod
             => new(this.authoritativeTime, this.Expiry);
+
+        internal async Task<AuthoritativeQueryResult> RefreshAsync(
+            Func<Task<AuthoritativeQueryResult>> queryAsync, CancellationToken cancellationToken)
+        {
+            await this.gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var query = await queryAsync().ConfigureAwait(false);
+                if (query.Entity?.Data is not JsonElement refreshed
+                    || ReadLong(refreshed, "ownership-generation") != ReadLong(this.data, "ownership-generation")
+                    || !string.Equals(
+                        ReadString(refreshed, "owning-profile-entity-id") ?? ReadString(refreshed, "host-profile-entity-id"),
+                        ReadString(this.data, "owning-profile-entity-id") ?? ReadString(this.data, "host-profile-entity-id"),
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    this.OwnerLifetime.Cancel();
+                    throw new AgentSessionUnavailableException();
+                }
+                if (this.Epoch != default && TryReadRuntimeEpoch(refreshed, out var currentEpoch)
+                    && currentEpoch != this.Epoch.Value)
+                {
+                    var operations = refreshed.TryGetProperty("restart-operations", out var journal)
+                        ? JsonSerializer.Deserialize<Dictionary<string, RestartOperation>>(
+                            journal, Microsoft.Extensions.AI.AIJsonUtilities.DefaultOptions)
+                        : null;
+                    if (operations?.Values.Any(operation =>
+                        operation.Request.ExpectedRuntime.RuntimeEpoch == this.Epoch
+                        && operation.Replacement.RuntimeEpoch.Value == currentEpoch
+                        && operation.State is AgentSessionOwnerRestartState.Stopped
+                            or AgentSessionOwnerRestartState.Succeeded) != true)
+                    {
+                        this.OwnerLifetime.Cancel();
+                        throw new AgentSessionUnavailableException();
+                    }
+                    this.Epoch = new RuntimeEpoch { Value = currentEpoch };
+                }
+                this.entity = query.Entity;
+                this.data = refreshed;
+                this.authoritativeTime = query.GetRequiredAuthoritativeTime();
+                return query;
+            }
+            finally { this.gate.Release(); }
+        }
+
+        internal async ValueTask<Dictionary<string, RestartOperation>> LoadRestartsAsync(CancellationToken cancellationToken)
+        {
+            await this.gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                return this.data.TryGetProperty("restart-operations", out var journal)
+                    ? JsonSerializer.Deserialize<Dictionary<string, RestartOperation>>(
+                        journal, Microsoft.Extensions.AI.AIJsonUtilities.DefaultOptions)!
+                    : new Dictionary<string, RestartOperation>(StringComparer.Ordinal);
+            }
+            finally { this.gate.Release(); }
+        }
+
+        internal async ValueTask SaveRestartAsync(
+            RestartOperation operation, CancellationToken cancellationToken, bool markRunning = false)
+        {
+            var operations = await this.LoadRestartsAsync(cancellationToken).ConfigureAwait(false);
+            foreach (var existing in operations.Values.Where(value =>
+                value.Request.ExpectedRuntime == operation.Request.ExpectedRuntime).ToArray())
+                operations[existing.Request.CommandId.ToString("D")] = operation with { Request = existing.Request };
+            operations[operation.Request.CommandId.ToString("D")] = operation;
+            var updates = new Dictionary<string, object?>
+            {
+                ["restart-operations"] = JsonSerializer.SerializeToElement(
+                    operations, Microsoft.Extensions.AI.AIJsonUtilities.DefaultOptions),
+            };
+            if (markRunning)
+                updates["runtime-state"] = "running";
+            await this.ReplaceAsync(updates, "Record agent session restart operation", cancellationToken).ConfigureAwait(false);
+        }
+
+        internal async ValueTask RotateForRestartAsync(
+            AgentSessionRuntimeIdentity replacement,
+            CancellationToken cancellationToken)
+        {
+            var query = await this.dataAccessLayer.QueryAsync(new QueryRequest
+            {
+                Clauses =
+                [
+                    new TopLevelQueryClause
+                    {
+                        ClauseIdentifier = new QueryClauseIdentifier("agent-session"),
+                        Clause = new EntityTypeQueryClause
+                        {
+                            EntityTypeNames = new EntityTypeNameSet(["agent-session"]),
+                        },
+                    },
+                ],
+                Timestamps = [null],
+            }, cancellationToken).ConfigureAwait(false);
+            var authoritativeTime = query.AuthoritativeTimestamp?.DateTime
+                ?? throw new AgentSessionTakeoverBlockedException();
+            if (this.Expiry != default && authoritativeTime >= this.Expiry)
+            {
+                this.OwnerLifetime.Cancel();
+                throw new AgentSessionTakeoverBlockedException();
+            }
+            var expiry = authoritativeTime + LeaseDuration;
+            await this.ReplaceAsync(new Dictionary<string, object?>
+            {
+                ["runtime-state"] = "restarting",
+                ["runtime-epoch"] = replacement.RuntimeEpoch.Value.ToString("D"),
+                ["runtime-lease-expiry"] = expiry.ToString("O"),
+            }, "Fence replacement agent session runtime epoch", cancellationToken).ConfigureAwait(false);
+            this.authoritativeTime = authoritativeTime;
+            this.Expiry = expiry;
+            this.Epoch = replacement.RuntimeEpoch;
+        }
 
         internal async ValueTask RecordInterruptedAndAcquireAsync(
             PersistedAgentSessionRuntimeIntent intent, CancellationToken ct)
@@ -378,14 +560,17 @@ internal sealed class DataAccessAgentSessionRuntimeHostFactory : IAgentSessionRu
             }, ct).ConfigureAwait(false);
             if (query.AuthoritativeTimestamp is not { } timestamp)
                 return null;
-            this.authoritativeTime = timestamp.DateTime;
-            this.Expiry = timestamp.DateTime + LeaseDuration;
-            return await this.TryReplaceAsync(new Dictionary<string, object?>
+            if (timestamp.DateTime >= this.Expiry)
+                return null;
+            var expiry = timestamp.DateTime + LeaseDuration;
+            if (!await this.TryReplaceAsync(new Dictionary<string, object?>
             {
-                ["runtime-lease-expiry"] = this.Expiry.ToString("O"),
-            }, "Renew agent session runtime lease", ct).ConfigureAwait(false)
-                ? this.LeasePeriod
-                : null;
+                ["runtime-lease-expiry"] = expiry.ToString("O"),
+            }, "Renew agent session runtime lease", ct).ConfigureAwait(false))
+                return null;
+            this.authoritativeTime = timestamp.DateTime;
+            this.Expiry = expiry;
+            return this.LeasePeriod;
         }
 
         internal ValueTask PersistRetentionAsync(bool value, CancellationToken ct)

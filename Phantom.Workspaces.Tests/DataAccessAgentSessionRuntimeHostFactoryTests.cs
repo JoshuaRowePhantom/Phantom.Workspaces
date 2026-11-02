@@ -11,7 +11,7 @@ using System.Collections.ObjectModel;
 
 namespace Phantom.Workspaces.Tests;
 
-public sealed class DataAccessAgentSessionRuntimeHostFactoryTests
+public sealed partial class DataAccessAgentSessionRuntimeHostFactoryTests
 {
     private const string Owner = "11111111-1111-1111-1111-111111111111";
     private const string NewOwner = "22222222-2222-2222-2222-222222222222";

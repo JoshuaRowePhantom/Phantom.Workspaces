@@ -122,6 +122,8 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
                 TimeProvider.System,
                 remoteHostServices);
             var host = new RemoteAgentSessionHost(authorizer, runtimeRegistry, runtimeFactory);
+            if (runningAgentChats is RunningAgentChatTable ownerTable)
+                ownerTable.ConfigureOwnerRuntime(host, localPeer);
             var listener = new AgentSessionTransportListener(
                 host,
                 peerIdentities,

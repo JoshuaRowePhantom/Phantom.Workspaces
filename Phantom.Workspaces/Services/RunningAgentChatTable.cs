@@ -39,9 +39,14 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
     private readonly Dictionary<AgentSessionId, RemoteRunningSession> publishedRemoteSessions = new();
     private readonly Dictionary<AgentSessionId, JsonElement> localRuntimeEntities = new();
     private readonly Dictionary<AgentSessionId, SemaphoreSlim> localAcquisitionGates = new();
+    private readonly HashSet<AgentSessionId> restartingSessions = [];
     private readonly object _entityInfoLock = new();
     private readonly ObservableCollection<RunningAgentChatWithEntityInfo> _runningSessions = new();
     private ILocalAgentSessionRuntimeRegistry? localRuntimeRegistry;
+    private RemoteAgentSessionHost? ownerRuntimeHost;
+    private TransportPeerIdentity? localPeer;
+    private readonly Dictionary<IAgentChat, HashSet<RunningAgentChatLease>> localViewers =
+        new(ReferenceEqualityComparer.Instance);
 
     /// <inheritdoc/>
     public ObservableCollection<RunningAgentChatWithEntityInfo> RunningSessions => _runningSessions;
@@ -61,10 +66,90 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
     internal void ConfigureLocalRuntimeRegistry(ILocalAgentSessionRuntimeRegistry registry)
         => this.localRuntimeRegistry = registry ?? throw new ArgumentNullException(nameof(registry));
 
+    internal void ConfigureOwnerRuntime(RemoteAgentSessionHost host, TransportPeerIdentity peer)
+    {
+        this.ownerRuntimeHost = host;
+        this.localPeer = peer;
+    }
+
+    internal void ApplyOwnerRuntimeRetention(AgentSessionId sessionId, bool continueInBackground)
+        => this.FindEntry(sessionId)?.SetContinueInBackground(continueInBackground);
+
+    internal async Task<RunningAgentChatLease> RestartOwnedRuntimeAsync(
+        AgentSessionOwnerRestartRequest request,
+        IAgentChat expected,
+        AgentServices services,
+        Func<AgentRuntimeQueueCheckpoint, CancellationToken, ValueTask> persistCheckpointAsync,
+        Func<CancellationToken, ValueTask> persistStoppedAsync,
+        CancellationToken cancellationToken,
+        CancellationToken runtimeLifetimeCancellationToken)
+    {
+        var sessionId = new AgentSessionId(request.ExpectedRuntime.AgentSessionId);
+        SemaphoreSlim gate;
+        lock (this._entityInfoLock)
+            gate = this.localAcquisitionGates[sessionId];
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            lock (this._entityInfoLock)
+                this.restartingSessions.Add(sessionId);
+            if (this._factory is not AgentChatFactory factory)
+                throw new InvalidOperationException("The owning factory does not support runtime replacement.");
+            return await factory.RestartExactAsync(
+                sessionId, expected, services, persistCheckpointAsync, cancellationToken,
+                persistStoppedAsync, runtimeLifetimeCancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            lock (this._entityInfoLock)
+                this.restartingSessions.Remove(sessionId);
+            gate.Release();
+        }
+    }
+
+    internal async Task ReattachLocalViewersAsync(
+        IAgentChat original,
+        AgentSessionRuntimeIdentity replacementIdentity)
+    {
+        RunningAgentChatLease[] viewers;
+        lock (this._entityInfoLock)
+            viewers = this.localViewers.TryGetValue(original, out var current) ? current.ToArray() : [];
+        foreach (var viewer in viewers)
+        {
+            if (viewer.ReattachAsync is not { } reattach)
+                continue;
+            var replacement = await this.AcquireAsync(new AcquireAgentChatRequest
+            {
+                AgentSessionId = new AgentSessionId(replacementIdentity.AgentSessionId),
+                OwnerRuntimeAcquisition = true,
+                IsViewerReattachment = true,
+            }, CancellationToken.None).ConfigureAwait(false);
+            replacement.RestartIdentity = replacementIdentity;
+            replacement.RestartRuntimeAsync = viewer.RestartRuntimeAsync;
+            replacement.RestartStatusAsync = viewer.RestartStatusAsync;
+            replacement.RestartCommandState = viewer.RestartCommandState;
+            try
+            {
+                await reattach(replacement).ConfigureAwait(false);
+            }
+            catch
+            {
+                await replacement.DisposeAsync().ConfigureAwait(false);
+                throw;
+            }
+        }
+    }
+
     /// <inheritdoc/>
-    public async Task<RunningAgentChatLease> AcquireAsync(
+    public Task<RunningAgentChatLease> AcquireAsync(
         AcquireAgentChatRequest request,
         CancellationToken ct = default)
+        => this.AcquireCoreAsync(request, ct, false);
+
+    private async Task<RunningAgentChatLease> AcquireCoreAsync(
+        AcquireAgentChatRequest request,
+        CancellationToken ct,
+        bool ownerAuthorized)
     {
         ArgumentNullException.ThrowIfNull(request);
         using var progress = request.ObserveInitializingChat is { } observe
@@ -94,6 +179,12 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         {
             return await this.AcquireRemoteAsync(request, ct).ConfigureAwait(false);
         }
+        if (!ownerAuthorized && !request.OwnerRuntimeAcquisition
+            && request.AgentSessionEntity is { } ownerEntity
+            && ownerEntity.TryGetProperty("ownership-generation", out _)
+            && this.ownerRuntimeHost is { } host)
+            return await host.EnsureLocalRuntimeAsync(
+                this.localPeer!, request, () => this.AcquireCoreAsync(request, ct, true), ct).ConfigureAwait(false);
         SemaphoreSlim localGate;
         lock (this._entityInfoLock)
         {
@@ -120,6 +211,7 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         CancellationToken ct)
     {
         var sessionId = request.AgentSessionId;
+        var isViewer = !request.OwnerRuntimeAcquisition || request.IsViewerReattachment;
         // Store entity info before calling the factory so the CollectionChanged handler can read it
         // when the factory posts the Add mutation on the foreground scheduler.
         lock (_entityInfoLock)
@@ -131,7 +223,10 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                 : request.EntityName == sessionId.Value ? "" : request.EntityName;
             if (!_entityInfo.TryGetValue(sessionId, out var previous)
                 || !string.IsNullOrWhiteSpace(name))
-                _entityInfo[sessionId] = (name ?? "", request.EntityId, request.WorkspaceId);
+                _entityInfo[sessionId] = (
+                    name ?? "",
+                    request.EntityId ?? previous.EntityId,
+                    request.WorkspaceId ?? previous.WorkspaceId);
         }
 
         var isRunning = IsRunning(sessionId);
@@ -177,9 +272,14 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                 this.localRuntimeEntities[sessionId] = entity.Clone();
         }
 
-        var definition = await ResolveDefinitionIfNeededAsync(request, isRunning, ct).ConfigureAwait(false);
+        var definition = request.RuntimeQueueCheckpoint is null
+            ? await ResolveDefinitionIfNeededAsync(request, isRunning, ct).ConfigureAwait(false)
+            : null;
 
-        var lease = await _factory.GetOrCreateAsync(
+        var lease = request.RuntimeQueueCheckpoint is { } checkpoint && this._factory is AgentChatFactory checkpointFactory
+            ? await checkpointFactory.GetOrCreateAsync(
+                sessionId, null, services, request.EntityDisplayName, request.EntityDescription, true, ct, checkpoint)
+            : await _factory.GetOrCreateAsync(
             sessionId,
             definition,
             services,
@@ -197,8 +297,9 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                 entry.ApplyAuthoritativeDisplayName(canonicalName);
             else
                 entry.ApplyLaunchName(GetEntityInfo(sessionId).EntityName);
-            entry.IncrementViewerCount();
-            if (!isRunning && continueInBackground)
+            if (isViewer)
+                entry.IncrementViewerCount();
+            if (isViewer && !isRunning && continueInBackground)
             {
                 var retainedLease = await _factory.GetAsync(
                     sessionId,
@@ -210,7 +311,8 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
             }
         }
 
-        return new RunningAgentChatLease(
+        RunningAgentChatLease? viewer = null;
+        viewer = new RunningAgentChatLease(
             lease.SessionId,
             lease.AgentChat,
             onDispose: async () =>
@@ -225,11 +327,21 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                     localGate.Release();
                 }
             },
-            afterDispose: () =>
+            afterDispose: async () =>
             {
-                if (ReferenceEquals(entry, this.FindEntry(sessionId)))
+                lock (this._entityInfoLock)
+                {
+                    if (this.localViewers.TryGetValue(lease.AgentChat, out var viewers))
+                    {
+                        viewers.Remove(viewer!);
+                        if (viewers.Count == 0)
+                            this.localViewers.Remove(lease.AgentChat);
+                    }
+                }
+                if (isViewer && ReferenceEquals(entry, this.FindEntry(sessionId)))
                     entry?.DecrementViewerCount();
-                return ValueTask.CompletedTask;
+                if (isViewer && this.ownerRuntimeHost is { } lifecycle)
+                    await lifecycle.ReleaseLocalViewerAsync(lease.AgentChat).ConfigureAwait(false);
             },
             prepareIdleClose: async token =>
             {
@@ -243,6 +355,30 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                     localGate.Release();
                 }
             });
+        if (isViewer)
+        {
+            viewer.RestartIdentity = this.ownerRuntimeHost?.GetIdentity(lease.AgentChat);
+            viewer.RestartIdentityProvider = () => this.ownerRuntimeHost?.GetIdentity(lease.AgentChat);
+            if (viewer.RestartIdentity is not null && this.ownerRuntimeHost is { } runtimeHost)
+            {
+                viewer.RestartRuntimeAsync = (restart, token) =>
+                    runtimeHost.RestartAsync(this.localPeer!, restart, token);
+                viewer.RestartStatusAsync = (restart, token) =>
+                    runtimeHost.GetRestartStatusAsync(this.localPeer!, restart, token);
+            }
+            this.ownerRuntimeHost?.AddLocalViewer(lease.AgentChat);
+        }
+        lock (this._entityInfoLock)
+        {
+            if (!this.localViewers.TryGetValue(lease.AgentChat, out var viewers))
+            {
+                viewers = [];
+                this.localViewers.Add(lease.AgentChat, viewers);
+            }
+            if (isViewer)
+                viewers.Add(viewer);
+        }
+        return viewer;
     }
 
     private static AgentExecutionTrustContext? CreateExecutionTrustContext(
@@ -678,10 +814,13 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                         _runningSessions.RemoveAt(i);
                         lock (_entityInfoLock)
                         {
-                            _entityInfo.Remove(removed.SessionId);
+                            if (!this.restartingSessions.Contains(removed.SessionId))
+                            {
+                                _entityInfo.Remove(removed.SessionId);
+                                localRuntimeEntities.Remove(removed.SessionId);
+                            }
                             // Keep the session gate across epochs: old waiters and replacement
                             // acquisition must serialize on the same owner.
-                            localRuntimeEntities.Remove(removed.SessionId);
                         }
                         break;
                     }
@@ -717,8 +856,16 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
             await remote.TerminateAsync(ct).ConfigureAwait(false);
             return true;
         }
+        var local = this._factory.RunningSessions.FirstOrDefault(item => item.SessionId == sessionId)?.AgentChat;
+        if (local is not null && this.ownerRuntimeHost?.GetIdentity(local) is { } identity)
+            return await this.ownerRuntimeHost.TerminateLocalRuntimeAsync(
+                this.localPeer!, identity, ct).ConfigureAwait(false);
         return await this.TerminateLocalAsync(sessionId, null, ct).ConfigureAwait(false);
     }
+
+    internal Task<bool> TerminateOwnerRuntimeExactAsync(
+        AgentSessionId sessionId, IAgentChat expected, CancellationToken cancellationToken)
+        => this.TerminateLocalAsync(sessionId, expected, cancellationToken);
 
     private async Task<bool> TerminateLocalAsync(AgentSessionId sessionId, IAgentChat? expected, CancellationToken ct)
     {
@@ -772,6 +919,8 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         var remote = this.FindRemoteSession(sessionId);
         if (remote is not null)
             return ReferenceEquals(remote.Chat, expected) ? TerminateRemoteAsync() : Task.FromResult(false);
+        if (this.ownerRuntimeHost?.GetIdentity(expected) is { } identity)
+            return this.ownerRuntimeHost.TerminateLocalRuntimeAsync(this.localPeer!, identity, ct);
         return this.TerminateLocalAsync(sessionId, expected, ct);
 
         async Task<bool> TerminateRemoteAsync()
@@ -802,6 +951,14 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
             if (expected is not null && !ReferenceEquals(remote.Chat, expected))
                 throw new InvalidOperationException("The owning runtime changed.");
             await remote.SetContinueInBackgroundAsync(continueInBackground, ct).ConfigureAwait(false);
+            return;
+        }
+        var localChat = expected ?? this._factory.RunningSessions.FirstOrDefault(item => item.SessionId == sessionId)?.AgentChat;
+        if (localChat is not null && this.ownerRuntimeHost?.GetIdentity(localChat) is { } identity)
+        {
+            await this.ownerRuntimeHost.SetLocalRetentionAsync(
+                this.localPeer!, identity, continueInBackground, ct).ConfigureAwait(false);
+            entry.SetContinueInBackground(continueInBackground);
             return;
         }
 
@@ -1125,7 +1282,12 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                             return true;
                         }
                         finally { leaseGate.Release(); }
-                    });
+                    })
+                {
+                    RestartIdentity = this.Chat.RestartClient.RestartIdentity,
+                    RestartRuntimeAsync = this.Chat.RestartClient.RestartAsync,
+                    RestartStatusAsync = this.Chat.RestartClient.GetRestartStatusAsync,
+                };
             }
             finally
             {

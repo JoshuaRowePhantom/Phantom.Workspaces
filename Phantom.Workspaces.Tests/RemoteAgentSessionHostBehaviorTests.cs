@@ -129,13 +129,12 @@ public sealed partial class RemoteAgentSessionHostTests
     }
 
     [Fact]
-    public async Task OpenAsync_ReconnectExpiredCursor_SendsSnapshotWithoutRelaunch()
+    public async Task OpenAsync_ReconnectUnprovenEpochChange_RejectsWithoutRelaunch()
     {
         await using var fixture = new HostFixture();
         var cursor = new ProtocolReplayCursor { Epoch = new RuntimeEpoch { Value = Guid.NewGuid() }, Sequence = 0 };
-        await using var attachment = await fixture.Host.OpenAsync(
-            fixture.Request(AgentSessionOpenIntent.Attach, cursor: cursor));
-        Assert.Contains("session-snapshot", (await fixture.Channel.Output.ReadAsync()).GetRawText());
+        await Assert.ThrowsAsync<AgentSessionUnavailableException>(() => fixture.Host.OpenAsync(
+            fixture.Request(AgentSessionOpenIntent.Attach, cursor: cursor)));
         Assert.Equal(0, fixture.FactoryStarts);
     }
 
