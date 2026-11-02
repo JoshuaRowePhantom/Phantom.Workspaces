@@ -51,7 +51,7 @@ public sealed class LocalTransport : ITransport
                     return;
                 }
 
-                await serverChannel.Reader.Completion.ConfigureAwait(false);
+                await serverChannel.Closed.ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -159,12 +159,14 @@ public sealed class LocalTransport : ITransport
     private sealed class LocalMessageChannel : IMessageChannel
     {
         private readonly Channel<JsonElement> inbound = Channel.CreateUnbounded<JsonElement>();
+        private readonly TaskCompletionSource closed = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private LocalMessageChannel? peer;
-        private bool disposed;
+        private int disposed;
 
         public ChannelWriter<JsonElement> Writer => new ForwardingWriter(this);
 
         public ChannelReader<JsonElement> Reader => this.inbound.Reader;
+        public Task Closed => this.closed.Task;
 
         public static (LocalMessageChannel client, LocalMessageChannel server) CreatePair()
         {
@@ -178,18 +180,18 @@ public sealed class LocalTransport : ITransport
         public void Complete(Exception? exception = null)
         {
             this.inbound.Writer.TryComplete(exception);
+            this.closed.TrySetResult();
         }
 
         public ValueTask DisposeAsync()
         {
-            if (this.disposed)
+            if (Interlocked.Exchange(ref this.disposed, 1) != 0)
             {
                 return ValueTask.CompletedTask;
             }
 
-            this.disposed = true;
-            this.inbound.Writer.TryComplete();
-            this.peer?.inbound.Writer.TryComplete();
+            this.Complete();
+            this.peer?.Complete();
             return ValueTask.CompletedTask;
         }
 

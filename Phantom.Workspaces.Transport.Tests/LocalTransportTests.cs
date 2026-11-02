@@ -130,6 +130,60 @@ public class LocalTransportTests
         Assert.NotNull(stream);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task LocalTransport_ClosedChannelWithUnreadMessage_AwaitsLeaseCleanupNotBufferDrain(
+        bool serverCloses, bool serverHasUnreadMessage)
+    {
+        var registry = new TransportRegistry();
+        var listener = new GatedCleanupListener();
+        registry.Register(listener);
+        await using var transport = new LocalTransport(registry);
+        var client = await transport.ConnectToMessageChannelAsync(JsonSerializer.SerializeToElement(new { }));
+        var server = await listener.Opened.Task;
+        var writer = serverHasUnreadMessage ? client : server;
+        var reader = serverHasUnreadMessage ? server : client;
+        await writer.Writer.WriteAsync(JsonSerializer.SerializeToElement("unread at retirement"));
+        await (serverCloses ? server : client).DisposeAsync();
+        Assert.False(reader.Reader.Completion.IsCompleted);
+        var disposing = transport.DisposeAsync().AsTask();
+        try
+        {
+            await listener.Disposing.Task;
+            Assert.False(disposing.IsCompleted);
+        }
+        finally { listener.Finish.TrySetResult(); }
+        await disposing;
+        Assert.True(listener.Disposed);
+        Assert.Equal("unread at retirement", (await reader.Reader.ReadAsync()).GetString());
+        await reader.Reader.Completion;
+    }
+
+    private sealed class GatedCleanupListener : ITransportListener, IAsyncDisposable
+    {
+        internal TaskCompletionSource<IMessageChannel> Opened { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource Disposing { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource Finish { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal bool Disposed { get; private set; }
+
+        public Task<IAsyncDisposable?> OnChannelOpenAsync(JsonElement request, IMessageChannel channel, CancellationToken ct = default)
+        {
+            this.Opened.TrySetResult(channel);
+            return Task.FromResult<IAsyncDisposable?>(this);
+        }
+        public Task<IAsyncDisposable?> OnStreamOpenAsync(JsonElement request, Stream stream, CancellationToken ct = default)
+            => Task.FromResult<IAsyncDisposable?>(null);
+        public async ValueTask DisposeAsync()
+        {
+            this.Disposing.TrySetResult();
+            await this.Finish.Task;
+            this.Disposed = true;
+        }
+    }
+
     private sealed class EchoListener : ITransportListener
     {
         public Task<IAsyncDisposable?> OnChannelOpenAsync(JsonElement request, IMessageChannel channel, CancellationToken ct = default)
