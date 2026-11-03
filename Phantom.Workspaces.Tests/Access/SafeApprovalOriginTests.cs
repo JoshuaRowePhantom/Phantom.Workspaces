@@ -15,6 +15,98 @@ namespace Phantom.Workspaces.Tests.Access;
 
 public sealed class SafeApprovalOriginTests
 {
+    public static IEnumerable<object[]> NamedScopeCases()
+    {
+        foreach (var scope in Enum.GetValues<ReleaseMemoryScopeKind>().Where(scope => scope != ReleaseMemoryScopeKind.AllowOnce))
+            foreach (var shape in new[] { "complete", "name-only", "mismatched-kinds", "credential-only" })
+                yield return [scope, shape];
+    }
+
+    [AvaloniaTheory]
+    [MemberData(nameof(NamedScopeCases))]
+    public async Task PersistedRenderedScopes_SeparateEffectiveBindingFromPartialHistory_AndForgetExactIdentity(
+        ReleaseMemoryScopeKind scope, string shape)
+    {
+        var directory = Path.Combine(Environment.CurrentDirectory, ".access-origin-tests", Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(directory, "memory.json");
+        var ct = TestContext.Current.CancellationToken;
+        var complete = Origin("Build", "Review", "GitHub MCP");
+        var origin = shape switch
+        {
+            "name-only" => complete with { Manifest = null, ManifestName = new("Named manifest"), Session = null },
+            "mismatched-kinds" => complete with { Manifest = complete.Session, Session = complete.Manifest },
+            "credential-only" => complete with { Manifest = null, Session = null, Requester = null },
+            _ => complete,
+        };
+        var request = Request(origin);
+        var other = request with { Credential = request.Credential with { LogicalIdentifier = new() { Digest = new string('f', 64) } } };
+        var window = new Window();
+        try
+        {
+            await using (var policy = new ReleaseAuthorizationPolicy(new ReleaseMemoryStore(path)))
+            {
+                await policy.CommitAsync(new() { Request = request, Scope = scope }, ct);
+                await policy.CommitAsync(new() { Request = other, Scope = scope }, ct);
+            }
+            await using var reloaded = new ReleaseAuthorizationPolicy(new ReleaseMemoryStore(path));
+            await using var model = new ReleaseMemoryAdministrationViewModel
+            { Administration = new ReleaseMemoryAdministration { Policy = reloaded } };
+            await model.RefreshAsync(ct);
+            Assert.Equal(2, model.Items.Count);
+            var row = model.Items.Single(item => item.LogicalIdentifier == request.Credential.LogicalIdentifier);
+            Assert.Equal(origin.Sanitize(), row.SafeContext!.Details);
+            Assert.Equal(scope, row.Scope);
+            var sessionBound = scope is ReleaseMemoryScopeKind.SessionIdentity or ReleaseMemoryScopeKind.KeyInSession;
+            var manifestBound = scope is ReleaseMemoryScopeKind.ManifestIdentity or ReleaseMemoryScopeKind.ManifestContent
+                or ReleaseMemoryScopeKind.KeyInManifestContent or ReleaseMemoryScopeKind.McpProviderOnManifest;
+            var expectedBound = shape == "complete" && sessionBound ? complete.Session!.ToString()
+                : shape == "complete" && manifestBound ? complete.Manifest!.ToString()
+                : shape == "name-only" && manifestBound ? "Named manifest" : null;
+            Assert.Equal(CredentialAccessText.Scope(scope) + (expectedBound is null ? "" : $" — {expectedBound}"), row.SafeDisplayName);
+            var control = new ReleaseMemoryAdministrationControl { DataContext = model };
+            window.Content = control;
+            window.Show();
+            window.UpdateLayout();
+            var text = string.Join("\n", control.GetVisualDescendants().OfType<TextBlock>().Select(block => block.Text));
+            Assert.Contains($"Applies to: {row.SafeDisplayName}", text);
+            Assert.Contains("Credential: Build API key", text);
+            Assert.Contains("Source: Secret store", text);
+            if (shape == "complete")
+            {
+                Assert.Contains($"manifest {complete.Manifest}", text);
+                Assert.Contains($"session {complete.Session}", text);
+            }
+            if (shape == "name-only")
+                Assert.Contains("manifest Named manifest (entity reference unavailable)", text);
+            if (shape == "mismatched-kinds")
+            {
+                Assert.Contains("Manifest/session details were not recorded", text);
+                Assert.DoesNotContain(complete.Manifest!.ToString(), text);
+                Assert.DoesNotContain(complete.Session!.ToString(), text);
+            }
+            if (shape == "credential-only")
+                Assert.Contains("Older approval — manifest/session details were not recorded", text);
+            var forget = Assert.Single(control.GetVisualDescendants().OfType<Button>(), button => Equals(button.CommandParameter, row));
+            Assert.Contains("Build API key", AutomationProperties.GetName(forget));
+            Assert.Contains("Source: Secret store", AutomationProperties.GetName(forget));
+            if (shape == "complete") Assert.Contains("Review", AutomationProperties.GetName(forget));
+            var renamed = request with { Use = request.Use with { Lineage = request.Use.Lineage with
+                { ApprovalOrigin = Origin("Different history", "Different session", "Different MCP") } } };
+            Assert.IsType<ReleasePolicyMatched>(await reloaded.EvaluateAsync(renamed, ct));
+            var differentRequestor = renamed with
+            {
+                RequestorIdentifier = CredentialIdentityFactory.CreateRequestorIdentifier(AccessRequestorKind.Manifest, "different"),
+            };
+            Assert.Equal(scope == ReleaseMemoryScopeKind.AllUses,
+                await reloaded.EvaluateAsync(differentRequestor, ct) is ReleasePolicyMatched);
+            await model.RemoveCommand.ExecuteAsync(row);
+            Assert.Equal(other.Credential.LogicalIdentifier, Assert.Single(await reloaded.ListAsync(ct)).LogicalIdentifier);
+            Assert.IsType<ReleasePolicyRequired>(await reloaded.EvaluateAsync(request, ct));
+            Assert.IsType<ReleasePolicyMatched>(await reloaded.EvaluateAsync(other, ct));
+        }
+        finally { window.Close(); if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true); }
+    }
+
     [Theory]
     [InlineData("${SECRET:Key}")]
     [InlineData("https://provider.test/token")]

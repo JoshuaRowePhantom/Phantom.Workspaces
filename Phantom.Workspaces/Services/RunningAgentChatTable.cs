@@ -339,8 +339,11 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                     runtimeContext.Intent) with
                 {
                     ApprovalSession = Llm.Interfaces.Access.SafeWorkspaceEntityReference.FromEntity(
-                        Llm.Interfaces.Access.SafeWorkspaceEntityKind.Session, request.EntityId,
-                        request.EntityDisplayName ?? request.EntityName),
+                        Llm.Interfaces.Access.SafeWorkspaceEntityKind.Session,
+                        entity.TryGetProperty("entity-id", out var persistedEntityId)
+                            ? persistedEntityId.ValueKind == JsonValueKind.String ? persistedEntityId.GetString() : null
+                            : request.EntityId,
+                        ReadCanonicalDisplayName(entity) ?? request.EntityDisplayName ?? request.EntityName),
                 },
             };
             lock (this._entityInfoLock)
