@@ -208,7 +208,7 @@ public sealed class ReleaseAuthorizationPolicy : IReleaseAuthorizationPolicy, IP
                 SourceIdentifier = record.SourceIdentifier,
                 AccountIdentifier = record.AccountIdentifier,
                 Scope = record.Scope,
-                SafeDisplayName = CredentialAccessText.Scope(record.Scope),
+                SafeDisplayName = DescribeScope(record),
                 SafeContext = record.SafeContext is { } context && context.IsValid() ? context : null,
             }).ToArray();
         }
@@ -339,8 +339,23 @@ public sealed class ReleaseAuthorizationPolicy : IReleaseAuthorizationPolicy, IP
             Kind = request.Credential.Kind,
             Source = source,
             Origin = request.Use.Kind,
+            Details = request.Use.Lineage.ApprovalOrigin?.Sanitize(),
         };
         return context.IsValid() ? context : null;
+    }
+
+    private static string DescribeScope(ReleaseMemoryRecord record)
+    {
+        var origin = record.SafeContext?.Details;
+        var bound = record.Scope switch
+        {
+            ReleaseMemoryScopeKind.SessionIdentity or ReleaseMemoryScopeKind.KeyInSession => origin?.Session?.ToString(),
+            ReleaseMemoryScopeKind.ManifestIdentity or ReleaseMemoryScopeKind.ManifestContent
+                or ReleaseMemoryScopeKind.KeyInManifestContent or ReleaseMemoryScopeKind.McpProviderOnManifest
+                => origin?.Manifest?.ToString() ?? origin?.ManifestName?.Value,
+            _ => null,
+        };
+        return bound is null ? CredentialAccessText.Scope(record.Scope) : $"{CredentialAccessText.Scope(record.Scope)} — {bound}";
     }
 
     private sealed record AuthorizationEntry

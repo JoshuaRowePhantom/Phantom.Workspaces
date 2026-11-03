@@ -9,6 +9,7 @@ namespace Phantom.Workspaces.Llm.Secrets;
 /// </summary>
 public interface IPlatformSecretStore
 {
+    bool SupportsNamedCredentialManagement => false;
     /// <summary>
     /// Reads the secret stored under <paramref name="name"/>, or <see langword="null"/> when no such
     /// secret exists.

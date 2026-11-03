@@ -28,6 +28,78 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class RunningAgentChatTableTests
 {
+    [Theory(Timeout = 30000)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AcquireAsync_RecoveredOwner_UsesPersistedSessionOriginThroughBrokerAndDurableReload(bool misleadingLaunchFields)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var directory = System.IO.Path.Combine(Environment.CurrentDirectory, ".access-origin-tests", Guid.NewGuid().ToString("N"));
+        var path = System.IO.Path.Combine(directory, "memory.json");
+        var entityId = Guid.NewGuid();
+        var manifestId = Guid.NewGuid();
+        var store = new Access.SavedCredentialAdministrationTests.Store();
+        store.Values["BuildApiKey"] = "synthetic-private-marker";
+        try
+        {
+            await using var host = Services.Access.AccessHostServices.Create(new Services.Access.AccessHostOptions
+            { PlatformSecretStore = store, Dispatch = action => action(), ReleaseMemoryFilePath = path });
+            host.EnterRuntime();
+            var authorization = new TaskCompletionSource<ViewModels.AuthorizationRequestRowViewModel>(TaskCreationOptions.RunContinuationsAsynchronously);
+            ((INotifyCollectionChanged)host.AuthorizationRows.Rows).CollectionChanged += (_, e) =>
+            {
+                if (e.NewItems is not null)
+                    foreach (ViewModels.AuthorizationRequestRowViewModel row in e.NewItems)
+                        authorization.TrySetResult(row);
+            };
+            var manifest = AgentManifestLoader.LoadManifestFromJson($$$"""
+                {"name":"build","displayName":"Build manifest","metadata":{"entity-id":"{{{manifestId}}}"},
+                 "template":{"kind":"prompt","name":"build","instructions":"${SECRET:BuildApiKey}",
+                  "model":{"id":"echo","provider":"echo","apiType":"Echo"} } }
+                """);
+            var definition = await AgentFactory.CreateAgentDefinitionAsync(new CreateAgentDefinitionRequest { AgentManifest = manifest }, ct);
+            var services = new AgentServices { AccessBroker = host.Broker, ChatClientOverride = new DeterministicTestChatClient() };
+            await using var factory = new AgentChatFactory(new InMemoryAgentPersistenceStore(), services, TaskScheduler.Default);
+            var table = new RunningAgentChatTable(factory, new AgentSessionRuntimeContextFactory(null));
+            using var persisted = JsonDocument.Parse($$"""
+                {"entity-id":"{{entityId}}","entity-types":["agent-session"],"display-name":{"default":"Recovered review"},
+                 "agent-session-id":"recovered-review","host-profile-entity-id":"11111111-1111-1111-1111-111111111111",
+                 "ownership-generation":5}
+                """);
+            var acquisition = table.AcquireAsync(new AcquireAgentChatRequest
+            {
+                AgentSessionId = new("recovered-review"), AgentSessionEntity = persisted.RootElement.Clone(),
+                AgentDefinition = definition, AgentServices = services, OwnerRuntimeAcquisition = true,
+                EntityId = misleadingLaunchFields ? Guid.NewGuid().ToString() : null,
+                EntityDisplayName = misleadingLaunchFields ? "Unrelated launch title" : null,
+                EntityName = misleadingLaunchFields ? "Unrelated entity" : "",
+            }, ct);
+            if (await Task.WhenAny(authorization.Task, acquisition) == acquisition)
+            {
+                await using var completed = await acquisition;
+                Assert.True(authorization.Task.IsCompleted, "Acquisition bypassed required credential approval.");
+            }
+            var row = await authorization.Task;
+            row.SelectedMemoryOption = row.MemoryOptions.Single(option => option.Scope == ReleaseMemoryScopeKind.AllUses);
+            row.SelectedSourceOption = row.SourceOptions.Single(option => option.Kind == CredentialSourceKind.SecretStore);
+            await row.ApplyCommand.ExecuteAsync(null);
+            await using var lease = await acquisition;
+            Assert.Equal(1, store.Reads);
+            await using var reloaded = new Services.Access.ReleaseAuthorizationPolicy(new Services.Access.ReleaseMemoryStore(path));
+            var saved = Assert.Single(await reloaded.ListAsync(ct));
+            Assert.Equal(ReleaseMemoryScopeKind.AllUses, saved.Scope);
+            var origin = Assert.IsType<SafeApprovalOrigin>(saved.SafeContext!.Details);
+            Assert.Equal(entityId, origin.Session!.Identifier);
+            Assert.Equal("Recovered review", origin.Session.Name.Value);
+            Assert.Equal(manifestId, origin.Manifest!.Identifier);
+            Assert.Equal("BuildApiKey", origin.Credential!.Value);
+            Assert.Equal(CredentialSourceKind.SecretStore, saved.SafeContext.Source);
+            Assert.DoesNotContain("synthetic-private-marker", await System.IO.File.ReadAllTextAsync(path, ct));
+            Assert.DoesNotContain("Unrelated launch", saved.SafeContext.ToString());
+        }
+        finally { if (System.IO.Directory.Exists(directory)) System.IO.Directory.Delete(directory, recursive: true); }
+    }
+
     // ── FakeRunningAgentChatFactory ────────────────────────────────────────────
 
     private sealed class FakeRunningAgentChatFactory : IRunningAgentChatFactory

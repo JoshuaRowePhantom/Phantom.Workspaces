@@ -23,6 +23,47 @@ if (args.Length >= 1 && args[0] == "--echo-argv")
     return 0;
 }
 
+if (args.Length == 7 && args[0] == "--snapshot-update")
+{
+    Action? waiting = args[6] == "observe-wait" ? () => { Console.WriteLine("WAITING"); Console.Out.Flush(); } : null;
+    Phantom.Workspaces.Data.IDataAccessLayer store = args[5] == "git"
+        ? new Phantom.Workspaces.Data.Offline.GitDataAccessLayer(args[1]) { WaitingForSnapshot = waiting }
+        : new Phantom.Workspaces.Data.Offline.FilesystemDataAccessLayer(args[1]) { WaitingForSnapshot = waiting };
+    Console.WriteLine("READY");
+    Console.Out.Flush();
+    if (await Console.In.ReadLineAsync() != "UPDATE")
+        return 2;
+    var id = new Phantom.Workspaces.Data.EntityId(args[2]);
+    var snapshotResult = await store.UpdateAsync(new Phantom.Workspaces.Data.UpdateRequest
+    {
+        UpdateMetadata = new Phantom.Workspaces.Data.UpdateMetadata
+        {
+            Comment = new Phantom.Workspaces.Data.Markdown { Text = "Process snapshot regression" },
+        },
+        Changes =
+        [
+            new Phantom.Workspaces.Data.EntityChange
+            {
+                EntityId = id,
+                ConcurrencyTag = args[3] == "-" ? null : new Phantom.Workspaces.Data.ConcurrencyTag(args[3]),
+                EntityChangeMode = Phantom.Workspaces.Data.EntityChangeMode.Replace,
+                Data = JsonSerializer.SerializeToElement(new Dictionary<string, object>
+                {
+                    ["entity-id"] = id.ToString(),
+                    ["entity-types"] = new[] { "entity" },
+                    ["display-name"] = args[4],
+                }),
+            },
+        ],
+    });
+    Console.WriteLine(JsonSerializer.Serialize(snapshotResult.EntityResults.Select(r => new
+    {
+        State = r.UpdateState.ToString(), Tag = r.ConcurrencyTag?.Value,
+    })));
+    Console.Out.Flush();
+    return 0;
+}
+
 if (args.Length >= 2 && args[0] == "--child-exit")
 {
     Console.WriteLine("PROBE_READY");

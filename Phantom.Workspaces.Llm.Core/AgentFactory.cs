@@ -638,6 +638,8 @@ public static class AgentFactory
         var contentHash = AgentManifestSecretUseMemoryFactory.ComputeManifestContentHash(manifest);
 
         definition.Metadata ??= new Dictionary<string, object>();
+        if (SafeApprovalLabel.FromName(manifest.DisplayName ?? manifest.Name) is { } name)
+            definition.Metadata[AgentManifestSecretUseMemoryFactory.OriginManifestNameMetadataKey] = name.Value;
         if (!string.IsNullOrEmpty(manifestId))
         {
             definition.Metadata[AgentManifestSecretUseMemoryFactory.OriginManifestIdMetadataKey] = manifestId;
@@ -850,6 +852,10 @@ public static class AgentFactory
             Manifest = origin.ManifestIdentity is { } identity ? CredentialIdentityFactory.CreateLineageIdentifier("manifest", identity) : null,
             ManifestContent = origin.ManifestContentHash is { } content ? CredentialIdentityFactory.CreateLineageIdentifier("manifest-content", content) : null,
         };
+        lineage = lineage with
+        {
+            ApprovalOrigin = lineage.ApprovalOrigin ?? CreateApprovalOrigin(manifest, definition, services, origin.ManifestIdentity),
+        };
         var materialized = await new AgentDefinitionSecretMaterializer()
             .MaterializeAsync(
                 definition,
@@ -864,6 +870,7 @@ public static class AgentFactory
         return (materialized.Definition, services with
         {
             AccessLineage = lineage,
+            AccessUse = services.AccessUse is { } suppliedUse ? suppliedUse with { Lineage = lineage } : null,
             SecretPlaceholderResolver = materialized.Resolver,
             DeferredSecretReferences = materialized.DeferredSecretReferences,
         });
@@ -1487,7 +1494,11 @@ public static class AgentFactory
     {
         if ((services?.AccessUse?.Lineage ?? services?.AccessLineage) is { } supplied)
         {
-            return supplied;
+            var manifestOrigin = AgentManifestSecretUseMemoryFactory.CreateLineage(null, agent, null);
+            return supplied with
+            {
+                ApprovalOrigin = supplied.ApprovalOrigin ?? CreateApprovalOrigin(null, agent, services, manifestOrigin.ManifestIdentity),
+            };
         }
         var origin = AgentManifestSecretUseMemoryFactory.CreateLineage(
             null,
@@ -1498,7 +1509,25 @@ public static class AgentFactory
             Session = origin.SessionIdentity is { } session ? CredentialIdentityFactory.CreateLineageIdentifier("session", session) : null,
             Manifest = origin.ManifestIdentity is { } manifest ? CredentialIdentityFactory.CreateLineageIdentifier("manifest", manifest) : null,
             ManifestContent = origin.ManifestContentHash is { } content ? CredentialIdentityFactory.CreateLineageIdentifier("manifest-content", content) : null,
+            ApprovalOrigin = CreateApprovalOrigin(null, agent, services, origin.ManifestIdentity),
         };
+    }
+
+    private static SafeApprovalOrigin? CreateApprovalOrigin(
+        AgentManifest? manifest, AgentDefinition definition, AgentServices? services, string? manifestIdentity)
+    {
+        string? name = manifest?.DisplayName ?? manifest?.Name;
+        if (name is null && definition.Metadata?.TryGetValue(
+                AgentManifestSecretUseMemoryFactory.OriginManifestNameMetadataKey, out var stored) == true)
+            name = stored is string text ? text
+                : stored is JsonElement { ValueKind: JsonValueKind.String } element ? element.GetString() : null;
+        var result = new SafeApprovalOrigin
+        {
+            Manifest = SafeWorkspaceEntityReference.FromEntity(SafeWorkspaceEntityKind.Manifest, manifestIdentity, name),
+            ManifestName = SafeApprovalLabel.FromName(name),
+            Session = (services?.CurrentSessionContext as CurrentSessionContext)?.ApprovalSession,
+        };
+        return result.ManifestName is null && result.Manifest is null && result.Session is null ? null : result;
     }
 
     private static async Task<ModelCredentialBinding> AcquireModelCredentialAsync(

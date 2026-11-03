@@ -51,10 +51,10 @@ public sealed class ReleaseMemoryAdministrationViewModelTests
             window.Content = control;
             window.Show();
             window.UpdateLayout();
-            Assert.Contains(control.GetVisualDescendants().OfType<TextBlock>(), text => text.Text == "Details unavailable");
+            Assert.Contains(control.GetVisualDescendants().OfType<TextBlock>(), text => text.Text == "Older approval — manifest/session details were not recorded");
             var forget = Assert.Single(control.GetVisualDescendants().OfType<Button>(),
                 button => button.CommandParameter is ReleaseMemoryDescriptor);
-            Assert.Equal("Forget approval: Details unavailable", Avalonia.Automation.AutomationProperties.GetName(forget));
+            Assert.Equal("Forget approval: Older approval — manifest/session details were not recorded", Avalonia.Automation.AutomationProperties.GetName(forget));
             await model.RemoveCommand.ExecuteAsync(forget.CommandParameter);
             Assert.Empty(await policy.ListAsync(token));
             Assert.IsType<ReleasePolicyRequired>(await policy.EvaluateAsync(request, token));
@@ -105,7 +105,7 @@ public sealed class ReleaseMemoryAdministrationViewModelTests
             var texts = control.GetVisualDescendants().OfType<TextBlock>().Select(block => block.Text).ToArray();
             Assert.Contains(first.SafeContext!.ToString(), texts);
             Assert.Contains(second.SafeContext!.ToString(), texts);
-            Assert.Equal(2, texts.Count(text => text == "All uses of this credential"));
+            Assert.Equal(2, texts.Count(text => text == "Applies to: All uses of this credential"));
             var actions = control.GetVisualDescendants().OfType<Button>()
                 .Where(button => button.CommandParameter is ReleaseMemoryDescriptor).ToArray();
             Assert.Equal(2, actions.Length);
@@ -328,9 +328,9 @@ public sealed class ReleaseMemoryAdministrationViewModelTests
         Assert.Contains(control.GetVisualDescendants().OfType<Button>(), button =>
             button.Content?.ToString() == "Forget approval" && button.Command?.CanExecute(button.CommandParameter) == true);
         Assert.Contains(control.GetVisualDescendants().OfType<TextBlock>(), block => block.Text == "Saved approvals");
-        Assert.Contains(control.GetVisualDescendants().OfType<TextBlock>(), block => block.Text == "Details unavailable");
+        Assert.Contains(control.GetVisualDescendants().OfType<TextBlock>(), block => block.Text == "Older approval — manifest/session details were not recorded");
         Assert.Contains(control.GetVisualDescendants().OfType<Button>(), button =>
-            Avalonia.Automation.AutomationProperties.GetName(button) == "Forget approval: Details unavailable");
+            Avalonia.Automation.AutomationProperties.GetName(button) == "Forget approval: Older approval — manifest/session details were not recorded");
         Assert.Contains(control.GetVisualDescendants().OfType<TextBlock>(), block =>
             block.Text == "Forgetting removes only this approval. Cached credentials and provider access stay unchanged.");
         window.Close();

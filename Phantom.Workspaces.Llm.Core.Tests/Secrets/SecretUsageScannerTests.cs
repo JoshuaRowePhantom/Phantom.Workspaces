@@ -7,6 +7,14 @@ namespace Phantom.Workspaces.Llm.Core.Tests.Secrets;
 
 public sealed class SecretUsageScannerTests
 {
+    [Fact]
+    public void Scan_DefaultGitHubMcpTool_ReturnsGitHubTokenUsage()
+    {
+        var usage = Assert.Single(new SecretUsageScanner().Scan(GitHubMcpDefaultFixture.CreateDefinition()));
+        Assert.Equal("GitHubToken", usage.SecretName);
+        Assert.Equal("definition.tools.github.connection.apiKey", usage.JsonPath);
+    }
+
     private static AgentDefinition Load(string json)
         => AgentDefinition.FromJson(json)
             ?? throw new System.InvalidOperationException("Failed to load agent definition for test.");

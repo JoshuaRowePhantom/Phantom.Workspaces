@@ -20,7 +20,7 @@
     "connection": {
       "kind": "key",
       "endpoint": "https://api.githubcopilot.com/mcp/",
-      "apiKey": "${GITHUB_TOKEN}"
+      "apiKey": "${SECRET:GitHubToken}"
     },
     "approvalMode": {
       "kind": "never"

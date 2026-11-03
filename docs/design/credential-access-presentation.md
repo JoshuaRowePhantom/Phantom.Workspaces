@@ -4,7 +4,8 @@ The user-facing vocabulary is centralized in `CredentialAccessText`:
 
 * Requests: current approval/provider work.
 * Saved approvals: policy only. Forgetting does not delete credentials or revoke access.
-* Cached credentials: local material only. Deleting does not forget approvals or revoke access.
+* Saved Credentials: named platform secrets plus a distinct cached/provider-managed group.
+  Deleting a cached generation does not delete a saved entry, forget approvals or revoke access.
 * Provider access: supported provider-side revocation, with affected cache clearing only
   after success. Saved approvals remain. Failures must not imply either operation succeeded.
 
@@ -13,23 +14,35 @@ binding fingerprints and policy matching are unchanged.
 
 ## Saved approval details
 
-Optional `SafeApprovalContext` persists only four closed enums: credential
-provider/kind, selected source kind and originating use kind. Broker construction
-captures the selected source's kind; the policy validates the complete context
-before saving it, and reload/listing validates it again. No supplied display
-string, account name, raw identifier, credential material or provider payload is
-copied into this context. Friendly strings are built exclusively from fixed
-allowlisted vocabulary.
+Optional `SafeApprovalContext` retains the four closed categories (provider/kind,
+selected source kind and originating use kind) and optional `SafeApprovalOrigin`.
+Explicit manifest name/projection fields and host session entity presentation
+supply immutable bounded labels and allowlisted Manifest/Session references:
+real nonempty workspace GUID, entity kind and validated name snapshot. Logical
+secret names come from request construction, named MCP requesters from tool/server
+names; GitHub credentials use a fixed provider label. No general request/use display
+string, URL, JSON path, payload, account/source/credential digest or expanded secret
+is copied. Labels accept at most 120 letters/digits and limited name punctuation,
+reject controls/formatting, placeholder/URI syntax and known token prefixes.
+Snapshots survive core, deferred MCP and direct MCP requests, broker selected-source
+policy creation, provisional finalization and version-1 reload.
 
-Missing/invalid context displays **Details unavailable** without changing policy
-identity or matching. Version-1 records remain usable and forgettable. Origin is
-explicitly historical ("Originally approved for"), never a restriction on an
-AllUses approval. Rendered contextual action names carry these same safe details.
-Duplicate descriptions are valid: commands always remove the selected identifier.
-Optional context is deserialized independently: unknown enum strings/numbers,
-missing required context fields and malformed shapes produce Details unavailable,
-not an unreadable approval file. The surrounding document and policy identity
-remain strictly validated.
+Origin is explicitly historical ("Originally requested by"), separately from
+**Applies to** effective scope. Manifest/session-bound scopes include safely
+captured bound entity details; AllUses never becomes restricted by origin.
+Equal entity names include short real workspace GUIDs. Optional entity links route
+through existing entity-open handling (which checks live availability); snapshots
+remain useful after rename/deletion without a per-row live lookup. No digest links.
+Accessible Forget labels contain the same safe origin; removal still uses only the
+exact selected policy identifier. Cache deletion and provider revocation are separate.
+
+Legacy context shows **Older approval — manifest/session details were not recorded**.
+No reliable persisted legacy origin joins exist; no label/hash-based backfill is
+attempted. Each optional origin field is decoded independently: a malformed label
+or reference is unavailable without erasing valid source/category or sibling
+origin fields. Invalid category fields discard only optional context, not approvals.
+The surrounding document and policy identities remain strict and version-1
+records remain matched and individually forgettable.
 
 ## One nonmodal host
 
@@ -37,7 +50,7 @@ One top-right Credential access glyph routes to one retained, owned
 `AccessAdministrationWindow`. Its live badge counts unique actionable process
 rows, including local submitting/rejection transitions. Zero shows no alert.
 Manual navigation selects Requests when attention is needed, otherwise Saved approvals.
-The host also contains Cached credentials and Provider access. Requests binds the
+The host also contains Saved Credentials and Provider access. Requests binds the
 exact process-owned rows instance, never a copied collection or a second registry.
 Fresh actionable prompts automatically show Requests after the shell opens,
 without activation. The registry issues a monotonic prompt generation, independent
@@ -64,7 +77,7 @@ Requests control, not an additional popup/window or copied rows collection.
 The window is shown nonmodally before administration refresh, so live requests
 and the main shell remain usable while saved lists load. Initialization tasks and
 Closed-triggered disposal tasks remain owned/observed. Closing cancels refresh
-and disposes only the three administration models; application shutdown awaits
+and disposes only the administration models and sensitive editor; application shutdown awaits
 this lifecycle before the process access graph. Reopening creates fresh models
 while retaining process row identity and presentation state. Escape closes the
 host and returns keyboard focus to the credential key. Failures are reported
@@ -74,3 +87,33 @@ scroll offset across page changes, provider revisions and close/reopen, checking
 source/scope selection, details and focus alongside row identity. Rendered scope
 choices are also exercised from real broker-generated options, including AllUses;
 provider revocation coverage distinguishes denied/generic failures from success.
+
+## Named saved credentials
+
+The third tab inventories names from the exact process platform store, including
+unused entries; refresh and View metadata do not read values. Windows explicitly
+supports management; unsupported backends disable it without creating a fallback
+vault. Provider-owned colon namespaces (including oauth:, mcp-oauth:, devtunnel:
+and legacy versions) and ambiguous/invalid names are metadata-only, managed elsewhere.
+Ordinary logical names remain editable. Generic names are bounded to 256 characters,
+without controls, placeholder syntax, surrounding whitespace or namespace punctuation.
+Values are limited to the Windows generic-credential blob bound (1280 UTF-16 characters).
+
+View starts masked and reads only on explicit Reveal; Edit is an explicit value
+read. Add uses a blank name/value, while updates keep the exact name immutable.
+The dedicated sensitive control alone holds Avalonia's unavoidable transient
+plaintext TextBox buffer; no list/general view model or serialized entity holds
+values. Its custom automation peer exposes no value/text provider or descendant
+text, even during visual reveal. Focus loss and the 30-second reveal timer remask;
+cancel, row switch, tab/window close and disposal clear control buffers and cancel
+stale completions. SecureString owners and BSTR conversion buffers are disposed/
+cleared; immutable managed strings cannot be guaranteed erased. No automatic copy.
+
+The shared trusted-local administrator serializes operations and rechecks names
+before create/update/delete. Add never intentionally overwrites a collision;
+missing rows are not recreated by Update. This is not external-process CAS:
+simultaneous external editors remain last-writer-wins, explicitly warned in the editor.
+Save updates storage only. Existing leases retain fixed material until normal
+generation rotation on a later authorized acquisition; saves never grant approval
+or hot-replace a lease. Separate confirmations distinguish saved-entry deletion
+from cached-generation deletion, Forget approval and provider Revoke access.

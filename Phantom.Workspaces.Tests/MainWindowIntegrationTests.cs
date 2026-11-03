@@ -47,6 +47,129 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class MainWindowIntegrationTests
 {
+    [AvaloniaTheory(Timeout = 30_000)]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AuthorizationHost_PendingSavedInventory_CallerOrOwnerCancellationCompletes(bool callerCancels)
+    {
+        var store = new PendingSavedStore { BlockInventory = true };
+        await using var services = Services.Access.AccessHostServices.Create(new Services.Access.AccessHostOptions
+        {
+            PlatformSecretStore = store, Dispatch = action => action(),
+            ReleaseMemoryFilePath = Path.Combine(Environment.CurrentDirectory, ".nonexistent-access-admin", "release-memory.json"),
+        });
+        await using var host = new AccessAdministrationWindow(services);
+        using var caller = new CancellationTokenSource();
+        var refresh = host.RefreshAsync(caller.Token);
+        await store.InventoryEntered.Task;
+        if (callerCancels)
+        {
+            caller.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => refresh);
+            await host.DisposeAsync();
+        }
+        else
+        {
+            await host.DisposeAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => refresh);
+        }
+        Assert.True(store.InventoryCancelled);
+        Assert.True(host.IsDisposed);
+        Assert.Equal(0, store.Reads);
+        Assert.Same(services.AuthorizationRows, host.RequestRows);
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task AuthorizationHost_SensitiveReadCloseAndReopen_ObservesOwnerAndRetainsSharedServices()
+    {
+        var store = new PendingSavedStore();
+        await using var access = Services.Access.AccessHostServices.Create(new Services.Access.AccessHostOptions
+        {
+            PlatformSecretStore = store, Dispatch = action => action(),
+            ReleaseMemoryFilePath = Path.Combine(Environment.CurrentDirectory, ".nonexistent-access-admin", "release-memory.json"),
+        });
+        var application = new ApplicationServices(CreateTestRunningAgentChatTable(), new AgentPersistenceStoreCache(),
+            Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance, accessBroker: access.Broker);
+        await using var viewModel = CreateTestMainWindowViewModel(applicationServices: application);
+        await viewModel.InitializeAsync();
+        var owner = new MainWindow(viewModel);
+        await using var popup = new AuthorizationRequestsPopupViewModel { Rows = access.AuthorizationRows };
+        owner.AttachAccessHost(access, popup);
+        owner.Show();
+        try
+        {
+            var key = owner.FindControl<Button>("CredentialAccessKey")!;
+            key.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            await owner.AccessAdministrationReady;
+            var host = Assert.IsType<AccessAdministrationWindow>(owner.LastAccessAdministrationWindow);
+            host.SelectPage(CredentialAccessPage.CachedCredentials);
+            var editor = Assert.IsType<Controls.SavedCredentialsAdministrationControl>(((TabItem)host.Pages.Items[2]!).Content);
+            Assert.Single(editor.Items);
+            var read = editor.OpenEditAsync(Assert.Single(editor.Items));
+            await store.ReadEntered.Task;
+            host.Close();
+            var disposal = owner.DisposeClosedAccessAdministrationAsync();
+            Assert.Null(editor.ValueField.Text);
+            Assert.False(editor.IsEditorVisible);
+            Assert.False(disposal.IsCompleted);
+            Assert.True(owner.IsEnabled);
+            using var material = Access.SavedCredentialAdministrationTests.Secure("late-private-marker");
+            store.ReadCompletion.SetResult(material.Copy());
+            await read;
+            await disposal;
+            Assert.True(host.IsDisposed);
+            Assert.Null(editor.ValueField.Text);
+            key.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            await owner.AccessAdministrationReady;
+            var reopened = Assert.IsType<AccessAdministrationWindow>(owner.LastAccessAdministrationWindow);
+            Assert.NotSame(host, reopened);
+            Assert.Same(access.AuthorizationRows, reopened.RequestRows);
+            reopened.SelectPage(CredentialAccessPage.CachedCredentials);
+            var freshEditor = Assert.IsType<Controls.SavedCredentialsAdministrationControl>(((TabItem)reopened.Pages.Items[2]!).Content);
+            Assert.NotSame(editor, freshEditor);
+            Assert.False(freshEditor.IsEditorVisible);
+            Assert.Null(freshEditor.ValueField.Text);
+            Assert.Single(freshEditor.Items);
+            reopened.UpdateLayout();
+            var cacheControl = reopened.GetVisualDescendants().OfType<Controls.CredentialCacheAdministrationControl>().Single();
+            Assert.True(Assert.IsType<CredentialCacheAdministrationViewModel>(cacheControl.DataContext)
+                .RefreshCommand.CanExecute(null));
+            Assert.Equal(1, store.Reads);
+        }
+        finally { await CloseWindowAsync(owner); }
+    }
+
+    private sealed class PendingSavedStore : IPlatformSecretStore
+    {
+        public bool SupportsNamedCredentialManagement => true;
+        public bool BlockInventory { get; init; }
+        public bool InventoryCancelled { get; private set; }
+        public int Reads { get; private set; }
+        public TaskCompletionSource InventoryEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReadEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<System.Security.SecureString?> ReadCompletion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public async Task<IReadOnlyList<string>> EnumerateNamesAsync(string prefix, CancellationToken ct)
+        {
+            if (this.BlockInventory)
+            {
+                this.InventoryEntered.TrySetResult();
+                var never = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                try { await never.Task.WaitAsync(ct); }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                { this.InventoryCancelled = true; throw; }
+            }
+            return ["SavedName"];
+        }
+        public Task<System.Security.SecureString?> ReadAsync(string name, CancellationToken ct)
+        {
+            this.Reads++;
+            this.ReadEntered.TrySetResult();
+            return this.ReadCompletion.Task;
+        }
+        public Task WriteAsync(string name, System.Security.SecureString value, CancellationToken ct) => throw new InvalidOperationException("No writes expected.");
+        public Task DeleteAsync(string name, CancellationToken ct) => throw new InvalidOperationException("No deletes expected.");
+    }
+
     [AvaloniaFact(Timeout = 30_000)]
     public async Task PrimaryViewTree_ActualPopulationBinding_CountsCollapsedDescendantsAndViewSwitch()
     {
@@ -425,7 +548,7 @@ public sealed class MainWindowIntegrationTests
             Assert.Same(window, dialog.Owner);
             Assert.Same(accessHost.AuthorizationRows, dialog.RequestRows);
             Assert.Equal(CredentialAccessPage.SavedApprovals, dialog.SelectedPage);
-            Assert.Equal(new[] { "Requests", "Saved approvals", "Cached credentials", "Provider access" },
+            Assert.Equal(new[] { "Requests", "Saved approvals", "Saved Credentials", "Provider access" },
                 dialog.Pages.Items.Cast<TabItem>().Select(item => item.Header));
             Assert.True(window.IsEnabled);
             Assert.True(shushButton.Focus());

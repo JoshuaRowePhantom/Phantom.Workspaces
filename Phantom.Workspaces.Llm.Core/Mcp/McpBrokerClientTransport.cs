@@ -58,6 +58,7 @@ internal sealed class McpBrokerClientTransport : IClientTransport, IAsyncDisposa
             SafeDisplayName = "MCP server",
         };
         var lineage = services.AccessUse?.Lineage ?? services.AccessLineage ?? new CredentialUseLineage();
+        lineage = WithOrigin(lineage, tool);
         var use = CreateUse(requestor, lineage, services.AccessUse);
         IAsyncDisposable credential;
         HttpMessageHandler handler;
@@ -91,6 +92,15 @@ internal sealed class McpBrokerClientTransport : IClientTransport, IAsyncDisposa
         ILoggerFactory? loggerFactory,
         CancellationToken cancellationToken)
     {
+        if (connection.ApiKey == "${GITHUB_TOKEN}"
+            && Uri.TryCreate(connection.Endpoint, UriKind.Absolute, out var legacyEndpoint)
+            && legacyEndpoint.Host.Equals("api.githubcopilot.com", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                "Legacy GitHub MCP authentication is unsupported. Change the effective MCP connection to " +
+                "${SECRET:GitHubToken}, provision GitHubToken on the executor and authorize it through Credential access; " +
+                "then recreate the agent session. Machine/user overrides and inline connections must be updated explicitly.");
+        }
         if (services?.AccessBroker is not { } broker ||
             !Uri.TryCreate(connection.Endpoint, UriKind.Absolute, out var endpoint) || endpoint.Scheme != Uri.UriSchemeHttps)
         {
@@ -150,7 +160,8 @@ internal sealed class McpBrokerClientTransport : IClientTransport, IAsyncDisposa
                 Kind = CredentialKind.Secret,
             },
             Requestor = requestor,
-            Use = CreateUse(requestor, services.AccessUse?.Lineage ?? services.AccessLineage ?? new CredentialUseLineage(), services.AccessUse),
+            Use = CreateUse(requestor, WithOrigin(
+                services.AccessUse?.Lineage ?? services.AccessLineage ?? new CredentialUseLineage(), tool, name), services.AccessUse),
             PresentationScope = services.AccessPresentationScope,
             Sources = [new()
             {
@@ -183,6 +194,16 @@ internal sealed class McpBrokerClientTransport : IClientTransport, IAsyncDisposa
         HttpMessageHandler innerHandler) => new SensitiveUseHandler(result.AccessToken, endpoint, result.RejectGenerationAsync)
         {
             InnerHandler = innerHandler,
+        };
+
+    private static CredentialUseLineage WithOrigin(CredentialUseLineage lineage, McpTool tool, string? credential = null) =>
+        lineage with
+        {
+            ApprovalOrigin = (lineage.ApprovalOrigin ?? new()) with
+            {
+                Requester = SafeApprovalLabel.FromName(tool.ServerName ?? tool.Name),
+                Credential = SafeApprovalLabel.FromName(credential) ?? lineage.ApprovalOrigin?.Credential,
+            },
         };
 
     private static async Task<IClientTransport> CreateOwnedTransportAsync(

@@ -100,7 +100,7 @@ internal sealed class McpOAuthProviderConfigurationFactory(
             Scopes = scopes,
             TransportMode = transportMode,
             Source = CredentialIdentityFactory.CreateSourceIdentifier(CredentialProviderKind.McpOAuth, $"per-tool:{identifier.Digest}"),
-            Cache = new CredentialManagerTokenCache(store, "mcp-oauth:", identifier.Digest),
+            Cache = new CredentialManagerTokenCache(store, Llm.Secrets.PlatformSecretNames.McpOAuth, identifier.Digest),
         };
         return createHttpHandler is null ? configuration : configuration with { CreateHttpHandler = createHttpHandler };
     }

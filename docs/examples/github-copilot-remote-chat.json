@@ -52,7 +52,7 @@
       "connection": {
         "kind": "key",
         "endpoint": "https://api.githubcopilot.com/mcp/",
-        "apiKey": "${GITHUB_TOKEN}"
+        "apiKey": "${SECRET:GitHubToken}"
       },
       "serverName": "github",
       "approvalMode": {
@@ -73,7 +73,7 @@
     "prerequisites": [
       "The remote user-computer-profile is enrolled and reachable via the reverse-tunnel transport.",
       "An llm-trust-profile exists whose HostingWorkspacesClientInstances contains the remote profile's client-instance id (see Phantom.Workspaces.Llm.Core/Trust/TrustProfile.cs).",
-      "GITHUB_TOKEN with Copilot access is available on the remote host, or the remote user is signed in to the Copilot CLI."
+      "For the model, GITHUB_TOKEN with Copilot access is available on the remote host, or its user is signed in to Copilot CLI. For MCP, save GitHubToken on the effective executor and authorize its use through Credential access."
     ],
     "parameters": {
       "note": "When wrapped as an agent-manifest, declare these two parameters on the manifest (not on the AgentDefinition itself). The Launchpad UI collects values and AgentDefinitionParameterSubstitutor substitutes them into model.options.additionalProperties.",

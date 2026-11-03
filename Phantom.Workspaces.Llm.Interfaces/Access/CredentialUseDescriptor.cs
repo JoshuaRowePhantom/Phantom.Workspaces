@@ -24,6 +24,7 @@ public sealed record CredentialUseLineage
     public CredentialLineageIdentifier? ManifestContent { get; init; }
     public CredentialLineageIdentifier? Key { get; init; }
     public CredentialLineageIdentifier? ProviderConfiguration { get; init; }
+    public SafeApprovalOrigin? ApprovalOrigin { get; init; }
 }
 
 public sealed record CredentialUseDescriptor

@@ -773,8 +773,21 @@ internal sealed class AccessBroker : IAccessBroker
             SourceIdentifier = source,
             SourceKind = inspection.Sources.SingleOrDefault(candidate => candidate.Identifier == source)?.Kind,
             RequestorIdentifier = request.Requestor.Identifier,
-            Use = request.Use with { MemoryScopes = Array.AsReadOnly(request.Use.MemoryScopes.ToArray()) },
+            Use = request.Use with
+            {
+                MemoryScopes = Array.AsReadOnly(request.Use.MemoryScopes.ToArray()),
+                Lineage = request.Use.Lineage with { ApprovalOrigin = SafeOrigin(request) },
+            },
         };
+
+    private static SafeApprovalOrigin? SafeOrigin<TResult>(CredentialAccessRequest<TResult> request)
+        where TResult : ICredentialAccessResult
+    {
+        var origin = request.Use.Lineage.ApprovalOrigin?.Sanitize();
+        var label = request is StoredSecretAccessRequest secret ? SafeApprovalLabel.FromName(secret.Reference.Name)
+            : request.Credential.Provider == CredentialProviderKind.GitHub ? SafeApprovalLabel.FromName("GitHub access token") : null;
+        return label is null ? origin : (origin ?? new()) with { Credential = label };
+    }
 
     private static CredentialAccountIdentifier? SelectedSourceAccount(
         CredentialReference requested,

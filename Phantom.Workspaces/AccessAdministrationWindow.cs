@@ -12,6 +12,7 @@ public sealed class AccessAdministrationWindow : Window, IAsyncDisposable
     private readonly ReleaseMemoryAdministrationViewModel releaseMemory;
     private readonly CredentialCacheAdministrationViewModel caches;
     private readonly ProviderGrantAdministrationViewModel grants;
+    private readonly Controls.SavedCredentialsAdministrationControl savedCredentials;
     private readonly TaskCompletionSource disposal = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int disposalStarted;
     private readonly CancellationTokenSource lifetime = new();
@@ -25,6 +26,7 @@ public sealed class AccessAdministrationWindow : Window, IAsyncDisposable
     public CredentialAccessPage SelectedPage => (CredentialAccessPage)this.pages.SelectedIndex;
     internal TabControl Pages => this.pages;
     internal bool RequestsAlongsideManagement => this.presentation.Children.Contains(this.requests);
+    internal Func<Llm.Interfaces.Access.SafeWorkspaceEntityReference, Task>? NavigateEntityAsync { get; set; }
 
     public AccessAdministrationWindow(AccessHostServices host)
     {
@@ -37,6 +39,9 @@ public sealed class AccessAdministrationWindow : Window, IAsyncDisposable
         this.releaseMemory = new ReleaseMemoryAdministrationViewModel { Administration = host.ReleaseMemoryAdministration };
         this.caches = new CredentialCacheAdministrationViewModel { Administration = host.CredentialCacheAdministration };
         this.grants = new ProviderGrantAdministrationViewModel { Administration = host.ProviderGrantAdministration };
+        this.savedCredentials = new Controls.SavedCredentialsAdministrationControl(
+            host.SavedCredentialAdministration ?? new SavedCredentialAdministration(new Llm.Secrets.NullPlatformSecretStore()),
+            new Controls.CredentialCacheAdministrationControl { DataContext = this.caches });
         this.requests = new Controls.AuthorizationRequestRowsControl { DataContext = this.RequestRows };
         this.requestsPage = new TabItem { Header = CredentialAccessText.Requests, Content = this.requests };
         this.pages = new TabControl
@@ -48,12 +53,16 @@ public sealed class AccessAdministrationWindow : Window, IAsyncDisposable
                 new TabItem
                 {
                     Header = CredentialAccessText.SavedApprovals,
-                    Content = new Controls.ReleaseMemoryAdministrationControl { DataContext = this.releaseMemory },
+                    Content = new Controls.ReleaseMemoryAdministrationControl
+                    {
+                        DataContext = this.releaseMemory,
+                        NavigateEntityAsync = reference => this.NavigateEntityAsync?.Invoke(reference) ?? Task.CompletedTask,
+                    },
                 },
                 new TabItem
                 {
                     Header = CredentialAccessText.CachedCredentials,
-                    Content = new Controls.CredentialCacheAdministrationControl { DataContext = this.caches },
+                    Content = this.savedCredentials,
                 },
                 new TabItem
                 {
@@ -65,7 +74,11 @@ public sealed class AccessAdministrationWindow : Window, IAsyncDisposable
         this.presentation = new Grid { ColumnDefinitions = new ColumnDefinitions("0,*"), Children = { this.pages } };
         this.pages.SelectionChanged += (_, arguments) =>
         {
-            if (ReferenceEquals(arguments.Source, this.pages)) { this.RestoreRequestsTab(); }
+            if (ReferenceEquals(arguments.Source, this.pages))
+            {
+                this.RestoreRequestsTab();
+                if (this.SelectedPage != CredentialAccessPage.CachedCredentials) this.savedCredentials.CloseEditor();
+            }
         };
         Grid.SetColumn(this.pages, 1);
         this.Content = this.presentation;
@@ -119,6 +132,7 @@ public sealed class AccessAdministrationWindow : Window, IAsyncDisposable
         await this.releaseMemory.RefreshAsync(linked.Token);
         linked.Token.ThrowIfCancellationRequested();
         await this.caches.RefreshAsync(linked.Token);
+        await this.savedCredentials.RefreshAsync(linked.Token);
         linked.Token.ThrowIfCancellationRequested();
         await this.grants.RefreshAsync(linked.Token);
         linked.Token.ThrowIfCancellationRequested();
@@ -140,7 +154,7 @@ public sealed class AccessAdministrationWindow : Window, IAsyncDisposable
             catch (OperationCanceledException) when (this.lifetime.IsCancellationRequested) { }
             catch (Exception exception) { failures.Add(exception); }
         }
-        foreach (var viewModel in new IAsyncDisposable[] { this.releaseMemory, this.caches, this.grants })
+        foreach (var viewModel in new IAsyncDisposable[] { this.releaseMemory, this.caches, this.grants, this.savedCredentials })
         {
             try { await viewModel.DisposeAsync(); }
             catch (Exception exception) { failures.Add(exception); }

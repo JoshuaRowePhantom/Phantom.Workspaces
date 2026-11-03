@@ -59,7 +59,8 @@ public sealed class McpTransportFactoryTests
         Assert.Equal(new Uri(Endpoint), typed.Options.Endpoint);
         Assert.Equal(1, broker.Calls);
         Assert.Equal(1, catalog.Calls);
-        Assert.Equal(lineage, broker.McpRequest!.Use.Lineage);
+        Assert.Equal(lineage, broker.McpRequest!.Use.Lineage with { ApprovalOrigin = null });
+        Assert.Equal("private-server", broker.McpRequest.Use.Lineage.ApprovalOrigin!.Requester!.Value);
         Assert.Equal(AccessPresentationScope.Bootstrap, broker.McpRequest.PresentationScope);
         Assert.DoesNotContain("private", broker.McpRequest.Requestor.SafeDisplayName, StringComparison.Ordinal);
 
@@ -148,7 +149,8 @@ public sealed class McpTransportFactoryTests
         });
         await using var owned = (IAsyncDisposable)transport;
         Assert.Same(requestor, broker.McpRequest!.Requestor);
-        Assert.Equal(lineage, broker.McpRequest.Use.Lineage);
+        Assert.Equal(lineage, broker.McpRequest.Use.Lineage with { ApprovalOrigin = null });
+        Assert.Equal("private-server", broker.McpRequest.Use.Lineage.ApprovalOrigin!.Requester!.Value);
         Assert.Equal(CredentialUseKind.Mcp, broker.McpRequest.Use.Kind);
         Assert.Equal(use.MemoryScopes, broker.McpRequest.Use.MemoryScopes);
         Assert.NotEqual(use.Fingerprint, broker.McpRequest.Use.Fingerprint);
@@ -283,15 +285,24 @@ public sealed class McpTransportFactoryTests
     public async Task McpTransportFactory_ApiKeyReference_UsesStoredSecretBrokerWithoutHeaderMaterialization()
     {
         var broker = new Broker();
+        var origin = new SafeApprovalOrigin
+        {
+            Manifest = new(SafeWorkspaceEntityKind.Manifest, Guid.NewGuid(), new("Tools manifest")),
+            Session = new(SafeWorkspaceEntityKind.Session, Guid.NewGuid(), new("Review session")),
+        };
         var transport = await CreateAsync(new McpTool
         {
             ServerName = "MCP server",
             Connection = new ApiKeyConnection { Endpoint = Endpoint, ApiKey = "${SECRET:configured-key}" },
-        }, new AgentServices { AccessBroker = broker });
+        }, new AgentServices { AccessBroker = broker, AccessLineage = new() { ApprovalOrigin = origin } });
         await using var owned = (IAsyncDisposable)transport;
         var request = Assert.IsType<StoredSecretAccessRequest>(broker.LastRequest);
         Assert.Equal("configured-key", request.Reference.Name);
         Assert.Equal(CredentialSourceKind.SecretStore, Assert.Single(request.Sources).Kind);
+        Assert.Equal(origin.Manifest, request.Use.Lineage.ApprovalOrigin!.Manifest);
+        Assert.Equal(origin.Session, request.Use.Lineage.ApprovalOrigin.Session);
+        Assert.Equal("configured-key", request.Use.Lineage.ApprovalOrigin.Credential!.Value);
+        Assert.Equal("MCP server", request.Use.Lineage.ApprovalOrigin.Requester!.Value);
         var options = Assert.IsType<McpBrokerClientTransport>(transport).Options;
         Assert.Null(options.OAuth);
         Assert.Null(options.AdditionalHeaders);
@@ -331,6 +342,60 @@ public sealed class McpTransportFactoryTests
             Connection = new ApiKeyConnection { Endpoint = Endpoint, ApiKey = "${SECRET:another-scope}" },
         }, new AgentServices { AccessBroker = broker, SecretPlaceholderResolver = resolver }));
         Assert.Equal(1, broker.Calls);
+    }
+
+    [Fact]
+    public async Task McpTransportFactory_LegacyGitHubKeyWithEmptyResolver_FailsBeforeHttpWithConversionGuidance()
+    {
+        var broker = new Broker();
+        await using var resolver = new Phantom.Workspaces.Llm.Secrets.SecretPlaceholderResolver();
+        var httpCalls = 0;
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => CreateAsync(new McpTool
+        {
+            Connection = new ApiKeyConnection
+            {
+                Endpoint = "https://api.githubcopilot.com/mcp/",
+                ApiKey = "${GITHUB_TOKEN}",
+            },
+        }, new AgentServices
+        {
+            AccessBroker = broker,
+            SecretPlaceholderResolver = resolver,
+            McpHttpMessageHandlerFactory = () => { httpCalls++; return new HttpClientHandler(); },
+        }));
+        Assert.Contains("${SECRET:GitHubToken}", error.Message);
+        Assert.Contains("recreate", error.Message);
+        Assert.Equal(0, broker.Calls);
+        Assert.Equal(0, httpCalls);
+    }
+
+    [Fact]
+    public async Task McpTransportFactory_DefaultGitHubMaterializedHandle_BorrowsApprovedLease()
+    {
+        var definition = Secrets.GitHubMcpDefaultFixture.CreateDefinition();
+        await using var broker = new Secrets.ManifestAccessTestBroker();
+        var materializer = new Phantom.Workspaces.Llm.Secrets.AgentDefinitionSecretMaterializer();
+        await using var core = await materializer
+            .MaterializeAsync(definition, broker, new CredentialUseLineage(), CancellationToken.None);
+        var originalTool = Assert.IsAssignableFrom<McpTool>(Assert.Single(Assert.IsType<PromptAgent>(definition).Tools!));
+        await using var materialized = await materializer.MaterializeServerAsync(originalTool, new AgentServices
+        {
+            AccessBroker = broker, SecretPlaceholderResolver = core.Resolver,
+            DeferredSecretReferences = core.DeferredSecretReferences,
+        }, CancellationToken.None);
+        var tool = Assert.IsAssignableFrom<McpTool>(Assert.Single(Assert.IsType<PromptAgent>(materialized.Definition).Tools!));
+        var calls = broker.Requests.Count;
+        var transport = await CreateAsync(tool, new AgentServices
+        {
+            AccessBroker = broker,
+            SecretPlaceholderResolver = materialized.Resolver,
+        });
+        await using var owned = (IAsyncDisposable)transport;
+        Assert.Null(Assert.IsType<McpBrokerClientTransport>(transport).Options.AdditionalHeaders);
+        await owned.DisposeAsync();
+        Assert.Equal(calls, broker.Requests.Count);
+        Assert.IsType<SensitiveValueUseSucceeded<int>>(await Assert.Single(broker.Results).Lease.UseAsync(
+            (_, _) => ValueTask.FromResult(1), CancellationToken.None));
     }
 
     [Fact]

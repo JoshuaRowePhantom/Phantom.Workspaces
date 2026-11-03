@@ -10,6 +10,67 @@ namespace Phantom.Workspaces.Data.Tests;
 #pragma warning disable CS0618
 public sealed class SchemaPopulatorTests
 {
+    [Theory]
+    [InlineData("github-copilot-chat.json")]
+    [InlineData("github-copilot-remote-chat.json")]
+    [InlineData("github-models-chat.json")]
+    [InlineData("github-models-chat-with-mongodb.json")]
+    public void GitHubExamples_McpUsesNamedCredential_ModelRetainsProviderAuthentication(string file)
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "Phantom.Workspaces.slnx")))
+            root = root.Parent;
+        Assert.NotNull(root);
+        using var example = JsonDocument.Parse(File.ReadAllText(Path.Combine(root.FullName, "docs", "examples", file)));
+        Assert.Equal("${GITHUB_TOKEN}", example.RootElement.GetProperty("model")
+            .GetProperty("connection").GetProperty("apiKey").GetString());
+        var github = Assert.Single(example.RootElement.GetProperty("tools").EnumerateArray(),
+            tool => tool.GetProperty("kind").GetString() == "mcp" &&
+                tool.TryGetProperty("serverName", out var name) && name.GetString() == "github");
+        Assert.Equal("${SECRET:GitHubToken}", github.GetProperty("connection").GetProperty("apiKey").GetString());
+        Assert.Equal("https://api.githubcopilot.com/mcp/", github.GetProperty("connection").GetProperty("endpoint").GetString());
+    }
+
+    [Fact]
+    public async Task Populate_LegacyGitHubDefault_IsReplacedOnReseedWithoutChangingCustomEntities()
+    {
+        var store = new InMemoryDataAccessLayer();
+        var populator = new SchemaPopulator(store);
+        Assert.Empty(await populator.Populate());
+        var id = new EntityId("e5f6a7b8-3c4d-4e5f-9a0b-2c3d4e5f6a7b");
+        var export = await store.ExportAsync(new ExportRequest());
+        var snapshot = export.ChangeBatches.SelectMany(batch => batch.Entities).Single(e => e.EntityId == id);
+        var legacy = JsonNode.Parse(snapshot.Data!.Value.GetRawText())!;
+        legacy["mcp-server"]!["connection"]!["apiKey"] = "${GITHUB_TOKEN}";
+        var customId = new EntityId("f3652e9a-a472-47f5-a55c-dac023d2ef87");
+        var custom = JsonNode.Parse(legacy.ToJsonString())!;
+        custom["entity-id"] = customId.ToString();
+        custom["names"] = JsonNode.Parse("""[["users","test","mcp-servers","github"]]""");
+        var update = await store.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "Legacy fixture" } },
+            Changes =
+            [
+                new EntityChange { EntityId = id, ConcurrencyTag = snapshot.ConcurrencyTag,
+                    EntityChangeMode = EntityChangeMode.Replace, Data = JsonSerializer.SerializeToElement(legacy) },
+                new EntityChange { EntityId = customId,
+                    EntityChangeMode = EntityChangeMode.Replace, Data = JsonSerializer.SerializeToElement(custom) },
+            ],
+        });
+        Assert.All(update.EntityResults, result => Assert.NotEqual(UpdateState.Failed, result.UpdateState));
+        Assert.Empty(await populator.Populate());
+        export = await store.ExportAsync(new ExportRequest());
+        var entities = export.ChangeBatches.SelectMany(batch => batch.Entities)
+            .GroupBy(entity => entity.EntityId).Select(group => group.Last()).ToArray();
+        var seeded = entities.Single(e => e.EntityId == id).Data!.Value;
+        var connection = seeded.GetProperty("mcp-server").GetProperty("connection");
+        Assert.Equal("${SECRET:GitHubToken}", connection.GetProperty("apiKey").GetString());
+        Assert.Equal("https://api.githubcopilot.com/mcp/", connection.GetProperty("endpoint").GetString());
+        Assert.Equal("github", seeded.GetProperty("names")[0][2].GetString());
+        Assert.Equal("${GITHUB_TOKEN}", entities.Single(e => e.EntityId == customId).Data!.Value
+            .GetProperty("mcp-server").GetProperty("connection").GetProperty("apiKey").GetString());
+    }
+
     [Fact]
     public async Task Populate_ValidatedPipeline_PerformsExactlyOneTrustedSeedValidationPass()
     {

@@ -2,6 +2,7 @@ using System.IO;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Avalonia.Interactivity;
+using Avalonia.LogicalTree;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -92,7 +93,7 @@ public sealed class LegacyAuthorizationUiRemovalTests
                 var items = tabs.Items.Cast<TabItem>().ToArray();
                 Assert.Equal(4, items.Length);
                 Assert.Equal(
-                    new[] { "Requests", "Saved approvals", "Cached credentials", "Provider access" },
+                    new[] { "Requests", "Saved approvals", "Saved Credentials", "Provider access" },
                     items.Select(item => Assert.IsType<string>(item.Header)));
                 var requests = Assert.IsType<AuthorizationRequestRowsControl>(items[0].Content);
                 Assert.Same(host.AuthorizationRows, requests.DataContext);
@@ -101,7 +102,9 @@ public sealed class LegacyAuthorizationUiRemovalTests
                 Assert.Same(window, administration.Owner);
                 Assert.True(window.IsEnabled);
                 AssertAdministration(items[1], typeof(ReleaseMemoryAdministrationControl), host.ReleaseMemoryAdministration);
-                AssertAdministration(items[2], typeof(CredentialCacheAdministrationControl), host.CredentialCacheAdministration);
+                var saved = Assert.IsType<SavedCredentialsAdministrationControl>(items[2].Content);
+                AssertAdministration(saved.GetLogicalDescendants().OfType<CredentialCacheAdministrationControl>().Single(),
+                    typeof(CredentialCacheAdministrationControl), host.CredentialCacheAdministration);
                 AssertAdministration(items[3], typeof(ProviderGrantAdministrationControl), host.ProviderGrantAdministration);
                 administration.Close();
                 Dispatcher.UIThread.RunJobs();
@@ -124,6 +127,11 @@ public sealed class LegacyAuthorizationUiRemovalTests
     private static void AssertAdministration(TabItem tab, Type controlType, object service)
     {
         var control = Assert.IsAssignableFrom<UserControl>(tab.Content);
+        AssertAdministration(control, controlType, service);
+    }
+
+    private static void AssertAdministration(UserControl control, Type controlType, object service)
+    {
         Assert.Equal(controlType, control.GetType());
         Assert.NotNull(control.DataContext);
         Assert.Same(service, control.DataContext.GetType().GetProperty("Administration")!.GetValue(control.DataContext));

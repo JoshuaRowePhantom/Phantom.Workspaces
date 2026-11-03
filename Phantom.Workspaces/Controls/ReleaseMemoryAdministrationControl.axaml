@@ -3,6 +3,7 @@
              xmlns:vm="using:Phantom.Workspaces.ViewModels"
              xmlns:access="using:Phantom.Workspaces.Llm.Interfaces.Access"
              xmlns:copy="using:Phantom.Workspaces.Services.Access"
+             xmlns:converters="using:Avalonia.Data.Converters"
              x:Class="Phantom.Workspaces.Controls.ReleaseMemoryAdministrationControl"
              x:DataType="vm:ReleaseMemoryAdministrationViewModel">
     <StackPanel Spacing="8">
@@ -15,11 +16,19 @@
                 <DataTemplate x:DataType="access:ReleaseMemoryDescriptor">
                     <Grid ColumnDefinitions="*,Auto">
                         <StackPanel>
-                            <TextBlock Text="{Binding SafeDisplayName}" TextWrapping="Wrap" />
-                            <TextBlock Text="{Binding SafeContext, TargetNullValue='Details unavailable'}" TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding SafeContext, TargetNullValue='Older approval — manifest/session details were not recorded'}" TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding SafeDisplayName, StringFormat='Applies to: {0}'}" TextWrapping="Wrap" />
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <Button Content="Open original manifest (if available)" Click="OpenOrigin"
+                                        IsVisible="{Binding SafeContext.Details.Manifest, Converter={x:Static converters:ObjectConverters.IsNotNull}}"
+                                        CommandParameter="{Binding SafeContext.Details.Manifest}" />
+                                <Button Content="Open original session (if available)" Click="OpenOrigin"
+                                        IsVisible="{Binding SafeContext.Details.Session, Converter={x:Static converters:ObjectConverters.IsNotNull}}"
+                                        CommandParameter="{Binding SafeContext.Details.Session}" />
+                            </StackPanel>
                         </StackPanel>
                         <Button Grid.Column="1" Content="{x:Static copy:CredentialAccessText.ForgetApproval}"
-                                AutomationProperties.Name="{Binding SafeContext, StringFormat='Forget approval: {0}', TargetNullValue='Forget approval: Details unavailable'}"
+                                AutomationProperties.Name="{Binding SafeContext, StringFormat='Forget approval: {0}', TargetNullValue='Forget approval: Older approval — manifest/session details were not recorded'}"
                                 Command="{Binding $parent[UserControl].((vm:ReleaseMemoryAdministrationViewModel)DataContext).RemoveCommand}"
                                 CommandParameter="{Binding}" />
                     </Grid>

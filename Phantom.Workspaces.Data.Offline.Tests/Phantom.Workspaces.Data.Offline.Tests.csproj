@@ -20,5 +20,7 @@
     <ProjectReference Include="..\Phantom.Workspaces.Data.Offline\Phantom.Workspaces.Data.Offline.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Data.Core.Tests\Phantom.Workspaces.Data.Core.Tests.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Testing\Phantom.Workspaces.Testing.csproj" />
+    <ProjectReference Include="..\Phantom.Workspaces.Test.WindowsProcessProbe\Phantom.Workspaces.Test.WindowsProcessProbe.csproj" ReferenceOutputAssembly="false" CopyTestHelper="true" />
   </ItemGroup>
+  <Import Project="..\scripts\TestHelperOutput.targets" />
 </Project>

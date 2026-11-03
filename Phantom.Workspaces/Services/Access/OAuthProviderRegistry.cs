@@ -53,7 +53,7 @@ internal sealed class OAuthProviderRegistry
                     Provider = provider,
                     ClientAuthentication = clientAuthentication,
                     Scopes = canonicalScopes,
-                    Cache = new CredentialManagerTokenCache(this.store, "oauth:", credential.LogicalIdentifier.Digest),
+                    Cache = new CredentialManagerTokenCache(this.store, Llm.Secrets.PlatformSecretNames.OAuth, credential.LogicalIdentifier.Digest),
                     CallbackBindings = this.callbackBindings,
                     CreateHttpHandler = this.createHttpHandler,
                     TimeProvider = this.timeProvider,
