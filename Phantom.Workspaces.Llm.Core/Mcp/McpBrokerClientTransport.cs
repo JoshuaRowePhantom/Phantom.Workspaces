@@ -91,6 +91,15 @@ internal sealed class McpBrokerClientTransport : IClientTransport, IAsyncDisposa
         ILoggerFactory? loggerFactory,
         CancellationToken cancellationToken)
     {
+        if (connection.ApiKey == "${GITHUB_TOKEN}"
+            && Uri.TryCreate(connection.Endpoint, UriKind.Absolute, out var legacyEndpoint)
+            && legacyEndpoint.Host.Equals("api.githubcopilot.com", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                "Legacy GitHub MCP authentication is unsupported. Change the effective MCP connection to " +
+                "${SECRET:GitHubToken}, provision GitHubToken on the executor and authorize it through Credential access; " +
+                "then recreate the agent session. Machine/user overrides and inline connections must be updated explicitly.");
+        }
         if (services?.AccessBroker is not { } broker ||
             !Uri.TryCreate(connection.Endpoint, UriKind.Absolute, out var endpoint) || endpoint.Scheme != Uri.UriSchemeHttps)
         {

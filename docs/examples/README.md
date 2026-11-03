@@ -30,6 +30,23 @@ Load an agent with chat history persistence (MongoDB included in agent definitio
 
 ## Examples
 
+### GitHub MCP credentials (all examples)
+
+The GitHub MCP connection uses `${SECRET:GitHubToken}`. Save a suitable token as
+`GitHubToken` in the platform secret store on the **effective executor**, then
+authorize its use through Credential access. Missing or denied credentials fail
+closed before HTTP; MCP does not implicitly read `GITHUB_TOKEN` or run `gh auth token`.
+Model-provider credentials are separate and retain their provider-specific setup.
+
+The built-in `defaults/mcp-servers/github` is replaced on normal seed/reseed.
+Machine overrides win over user overrides, which win over defaults. Update any
+effective override or inline connection explicitly; custom configurations are
+never silently rewritten. Recreate the agent after changing references so its
+materialization owns fresh approved handles. Existing `github-secret-gated`
+custom entities use the same broker-gated strategy, not an alternative to an
+“ungated” default. Correct stale descriptions in your own custom entity without
+changing unrelated configuration.
+
 ### qwen-local-chat.yaml / qwen-local-chat.json
 
 A minimal chat agent that:

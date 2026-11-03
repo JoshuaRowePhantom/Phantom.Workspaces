@@ -9,7 +9,7 @@
     "apiType": "OpenAI",
     "connection": {
       "kind": "key",
-      "apiKey": "${GITHUB_TOKEN}"
+      "apiKey": "${SECRET:GitHubToken}"
     },
     "options": {
       "temperature": 0.2,
@@ -52,7 +52,7 @@
       "github"
     ],
     "prerequisites": [
-      "Sign in to the GitHub Copilot CLI, or set GITHUB_TOKEN in your environment with Copilot and GitHub MCP access."
+      "For the model, sign in to the GitHub Copilot CLI or set GITHUB_TOKEN with Copilot access. For MCP, save GitHubToken on the executor and authorize its use through Credential access; no implicit environment/gh fallback."
     ]
   }
 }

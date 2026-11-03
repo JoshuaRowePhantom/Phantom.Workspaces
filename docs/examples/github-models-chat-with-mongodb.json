@@ -10,7 +10,7 @@
     "connection": {
       "kind": "key",
       "endpoint": "https://models.github.ai/inference",
-      "apiKey": "${GITHUB_TOKEN}"
+      "apiKey": "${SECRET:GitHubToken}"
     },
     "options": {
       "temperature": 0.2,
@@ -68,7 +68,7 @@
       "persistent-history"
     ],
     "prerequisites": [
-      "Set GITHUB_TOKEN in your environment with access to GitHub Models and GitHub MCP.",
+      "Set GITHUB_TOKEN for GitHub Models. Separately save GitHubToken on the executor for MCP and authorize it through Credential access; no implicit MCP environment/gh fallback.",
       "Docker and docker-compose installed for MongoDB container."
     ]
   }

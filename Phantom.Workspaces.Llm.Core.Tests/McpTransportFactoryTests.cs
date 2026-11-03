@@ -334,6 +334,60 @@ public sealed class McpTransportFactoryTests
     }
 
     [Fact]
+    public async Task McpTransportFactory_LegacyGitHubKeyWithEmptyResolver_FailsBeforeHttpWithConversionGuidance()
+    {
+        var broker = new Broker();
+        await using var resolver = new Phantom.Workspaces.Llm.Secrets.SecretPlaceholderResolver();
+        var httpCalls = 0;
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => CreateAsync(new McpTool
+        {
+            Connection = new ApiKeyConnection
+            {
+                Endpoint = "https://api.githubcopilot.com/mcp/",
+                ApiKey = "${GITHUB_TOKEN}",
+            },
+        }, new AgentServices
+        {
+            AccessBroker = broker,
+            SecretPlaceholderResolver = resolver,
+            McpHttpMessageHandlerFactory = () => { httpCalls++; return new HttpClientHandler(); },
+        }));
+        Assert.Contains("${SECRET:GitHubToken}", error.Message);
+        Assert.Contains("recreate", error.Message);
+        Assert.Equal(0, broker.Calls);
+        Assert.Equal(0, httpCalls);
+    }
+
+    [Fact]
+    public async Task McpTransportFactory_DefaultGitHubMaterializedHandle_BorrowsApprovedLease()
+    {
+        var definition = Secrets.GitHubMcpDefaultFixture.CreateDefinition();
+        await using var broker = new Secrets.ManifestAccessTestBroker();
+        var materializer = new Phantom.Workspaces.Llm.Secrets.AgentDefinitionSecretMaterializer();
+        await using var core = await materializer
+            .MaterializeAsync(definition, broker, new CredentialUseLineage(), CancellationToken.None);
+        var originalTool = Assert.IsAssignableFrom<McpTool>(Assert.Single(Assert.IsType<PromptAgent>(definition).Tools!));
+        await using var materialized = await materializer.MaterializeServerAsync(originalTool, new AgentServices
+        {
+            AccessBroker = broker, SecretPlaceholderResolver = core.Resolver,
+            DeferredSecretReferences = core.DeferredSecretReferences,
+        }, CancellationToken.None);
+        var tool = Assert.IsAssignableFrom<McpTool>(Assert.Single(Assert.IsType<PromptAgent>(materialized.Definition).Tools!));
+        var calls = broker.Requests.Count;
+        var transport = await CreateAsync(tool, new AgentServices
+        {
+            AccessBroker = broker,
+            SecretPlaceholderResolver = materialized.Resolver,
+        });
+        await using var owned = (IAsyncDisposable)transport;
+        Assert.Null(Assert.IsType<McpBrokerClientTransport>(transport).Options.AdditionalHeaders);
+        await owned.DisposeAsync();
+        Assert.Equal(calls, broker.Requests.Count);
+        Assert.IsType<SensitiveValueUseSucceeded<int>>(await Assert.Single(broker.Results).Lease.UseAsync(
+            (_, _) => ValueTask.FromResult(1), CancellationToken.None));
+    }
+
+    [Fact]
     public async Task McpTransportFactory_DeferredApiKeyReference_AcquiresAtConnectEvenWhenResolverPresent()
     {
         var broker = new Broker();

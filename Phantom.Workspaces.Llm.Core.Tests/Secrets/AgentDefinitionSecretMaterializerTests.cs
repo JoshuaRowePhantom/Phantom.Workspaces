@@ -12,6 +12,47 @@ namespace Phantom.Workspaces.Llm.Core.Tests.Secrets;
 public sealed class AgentDefinitionSecretMaterializerTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MaterializeAsync_DefaultGitHubMcpTool_UsesApprovedHandleOrFailsWithoutRewrite(bool denied)
+    {
+        var definition = GitHubMcpDefaultFixture.CreateDefinition();
+        var original = definition.ToJson();
+        await using var broker = new ManifestAccessTestBroker { FailAt = denied ? 1 : 0 };
+        var materializer = new AgentDefinitionSecretMaterializer();
+        await using var core = await materializer.MaterializeAsync(
+            definition, broker, new CredentialUseLineage(), CancellationToken.None);
+        Assert.Empty(broker.Requests);
+        Assert.Equal("${SECRET:GitHubToken}", Assert.Single(core.DeferredSecretReferences));
+        var originalTool = Assert.IsAssignableFrom<McpTool>(Assert.Single(Assert.IsType<PromptAgent>(definition).Tools!));
+        var services = new AgentServices
+        {
+            AccessBroker = broker,
+            SecretPlaceholderResolver = core.Resolver,
+            DeferredSecretReferences = core.DeferredSecretReferences,
+        };
+        if (denied)
+        {
+            await Assert.ThrowsAsync<SecretMaterializationFailedException>(() =>
+                materializer.MaterializeServerAsync(originalTool, services, CancellationToken.None));
+            Assert.Equal(original, definition.ToJson());
+        }
+        else
+        {
+            await using var materialized = await materializer.MaterializeServerAsync(originalTool, services, CancellationToken.None);
+            var tool = Assert.IsAssignableFrom<McpTool>(Assert.Single(Assert.IsType<PromptAgent>(materialized.Definition).Tools!));
+            var key = Assert.IsType<ApiKeyConnection>(tool.Connection).ApiKey;
+            Assert.NotEqual("${SECRET:GitHubToken}", key);
+            Assert.True(materialized.Resolver.TryResolve(key, out var lease));
+            Assert.Same(Assert.Single(broker.Results).Lease, lease);
+            Assert.DoesNotContain("material", materialized.Definition.ToJson());
+        }
+        var request = Assert.Single(broker.Requests);
+        Assert.Equal("GitHubToken", request.Reference.Name);
+        Assert.Equal(CredentialUseKind.Mcp, request.Use.Kind);
+    }
+
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public async Task MaterializeServerAsync_OpaqueReference_BorrowsRegisteredHandleOrFailsClosed(bool registered)

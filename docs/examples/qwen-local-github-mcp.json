@@ -38,7 +38,7 @@
       "connection": {
         "kind": "key",
         "endpoint": "https://api.githubcopilot.com/mcp/",
-        "apiKey": "${GITHUB_TOKEN}"
+        "apiKey": "${SECRET:GitHubToken}"
       },
       "serverName": "github",
       "serverDescription": "GitHub's official remote MCP server (https://github.com/github/github-mcp-server)",
@@ -54,7 +54,7 @@
     "prerequisites": [
       "Ollama installed and running locally",
       "qwen3.6 model downloaded: ollama pull qwen3.6",
-      "GITHUB_TOKEN environment variable set to your GitHub CLI token: gh auth token"
+      "Save a suitable GitHub token as GitHubToken in the executor's platform secret store and authorize its MCP use through Credential access. No implicit environment/gh fallback is used."
     ],
     "references": {
       "mcpServer": "https://github.com/github/github-mcp-server",
