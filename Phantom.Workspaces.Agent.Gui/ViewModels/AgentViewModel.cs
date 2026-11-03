@@ -65,6 +65,14 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private Task remoteNavigation = Task.CompletedTask;
     private long remoteNavigationGeneration;
     private bool isDisposed;
+    private readonly object toolProjectionLock = new();
+    // Reserve ownership for construction before subscribing. Default is not a serial scheduler.
+    private bool toolProjectionOwned = true;
+    private bool toolProjectionPending = true;
+    private bool toolProjectionActive;
+    private bool toolProjectionStopped;
+    private TaskCompletionSource toolProjectionIdle = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private Task? viewDisposal;
     private readonly AgentChatInterruptState interruptState;
     private readonly object interruptProjectionLock = new();
     private readonly AsyncRelayCommand interruptCommand;
@@ -164,7 +172,6 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.NavigateToAgentHandler = this.NavigateToAgent;
 
         this.agentChat.InformationChanged += this.OnInformationChanged;
-        this.agentChat.ToolsChanged += this.OnToolsChanged;
         this.agentChat.UsageChanged += this.OnUsageChanged;
         if (this.RunningItems is INotifyCollectionChanged runningItemsNotifications)
         {
@@ -259,8 +266,19 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         }
         this.capturingRestoreContinuations = false;
 
-        this.ApplyToolSnapshot(agentChat.GetToolSnapshot());
         this.RefreshModalProjection();
+        this.agentChat.ToolsChanged += this.OnToolsChanged;
+        try
+        {
+            // Construction already runs on the foreground context. Events during subscription or
+            // sampling only mark pending work; they cannot enter this initial transaction.
+            this.DrainToolProjection();
+        }
+        catch
+        {
+            this.agentChat.ToolsChanged -= this.OnToolsChanged;
+            throw;
+        }
     }
 
     public string DisplayName { get; }
@@ -809,7 +827,95 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     }
 
     private void OnToolsChanged(object? sender, EventArgs e)
-        => this.ApplyToolSnapshot(this.agentChat.GetToolSnapshot());
+    {
+        lock (this.toolProjectionLock)
+        {
+            if (this.toolProjectionStopped) return;
+            this.toolProjectionPending = true;
+            if (this.toolProjectionOwned) return;
+            this.toolProjectionOwned = true;
+            this.toolProjectionIdle = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+
+        try
+        {
+            var task = Task.Factory.StartNew(this.DrainToolProjection, CancellationToken.None,
+                TaskCreationOptions.DenyChildAttach, this.foregroundScheduler);
+            _ = task.ContinueWith(
+                failed => this.logger.LogError(failed.Exception, "Foreground tool projection failed."),
+                CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+        }
+        catch
+        {
+            this.StopFailedToolProjection();
+            throw;
+        }
+    }
+
+    // Quiescence, not discovery completion: optional MCP servers continue initializing independently.
+    internal Task ToolProjectionIdle
+    {
+        get { lock (this.toolProjectionLock) return this.toolProjectionIdle.Task; }
+    }
+
+    private void DrainToolProjection()
+    {
+        try
+        {
+            while (true)
+            {
+                lock (this.toolProjectionLock)
+                {
+                    if (this.toolProjectionStopped || !this.toolProjectionPending)
+                    {
+                        this.toolProjectionActive = false;
+                        this.toolProjectionOwned = false;
+                        this.toolProjectionIdle.TrySetResult();
+                        return;
+                    }
+                    this.toolProjectionActive = true;
+                    this.toolProjectionPending = false;
+                }
+
+                // Both sampling and the full notification transaction belong to this owner.
+                // Never hold the state lock while invoking user/collection callbacks.
+                this.ApplyToolSnapshot(this.agentChat.GetToolSnapshot());
+            }
+        }
+        catch
+        {
+            this.StopFailedToolProjection();
+            throw;
+        }
+    }
+
+    private void StopFailedToolProjection()
+    {
+        lock (this.toolProjectionLock)
+        {
+            // A failed transaction is not safe to retry silently.
+            this.toolProjectionStopped = true;
+            this.toolProjectionPending = false;
+            this.toolProjectionActive = false;
+            this.toolProjectionOwned = false;
+            this.toolProjectionIdle.TrySetResult();
+        }
+    }
+
+    private Task StopToolProjection()
+    {
+        lock (this.toolProjectionLock)
+        {
+            this.toolProjectionStopped = true;
+            this.toolProjectionPending = false;
+            if (this.toolProjectionActive) return this.toolProjectionIdle.Task;
+            // Queued work will observe stopped without touching the transformer. Do not wait
+            // for that task: disposal may itself run on the scheduler it is queued behind.
+            this.toolProjectionIdle.TrySetResult();
+            return Task.CompletedTask;
+        }
+    }
 
     private void ApplyToolSnapshot(IReadOnlyList<AgentChatToolItem> tools)
     {
@@ -818,6 +924,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         {
             this.Tools.Add(this.CreateToolViewModel(tool));
         }
+        if (ReferenceEquals(this.SelectedEditorItem?.DetailContent, this.toolsDetail))
+            this.toolsDetail.SetRootItem(this.SelectedEditorItem);
     }
 
     private AgentChatToolViewModel CreateToolViewModel(AgentChatToolItem tool)
@@ -838,10 +946,43 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         await this.agentChat.DisposeAsync();
     }
 
-    public async ValueTask DisposeViewResourcesAsync()
+    public ValueTask DisposeViewResourcesAsync()
     {
-        if (this.isDisposed) return;
+        TaskCompletionSource? owner = null;
+        Task disposal;
+        lock (this.toolProjectionLock)
+        {
+            if (this.viewDisposal is null)
+            {
+                owner = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                this.viewDisposal = owner.Task;
+            }
+            disposal = this.viewDisposal;
+        }
+        if (owner is not null) _ = this.CompleteViewDisposalAsync(owner);
+        return new ValueTask(disposal);
+    }
+
+    private async Task CompleteViewDisposalAsync(TaskCompletionSource completion)
+    {
+        try
+        {
+            await this.DisposeViewResourcesCoreAsync();
+            completion.SetResult();
+        }
+        catch (Exception error)
+        {
+            // Every caller joins the same disposal and receives the original failure.
+            completion.SetException(error);
+        }
+    }
+
+    private async Task DisposeViewResourcesCoreAsync()
+    {
         this.isDisposed = true;
+        var toolProjectionStopped = this.StopToolProjection();
+        this.agentChat.ToolsChanged -= this.OnToolsChanged;
+        await toolProjectionStopped;
         this.remoteChildrenLifetime.Cancel();
         foreach (var child in this.remoteChildren.Values)
             if (child.StatusHandler is not null)
@@ -866,7 +1007,6 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         ((INotifyCollectionChanged)this.agentChat.SubAgents).CollectionChanged -= this.OnSubAgentsCollectionChanged;
         ((INotifyCollectionChanged)this.agentChat.Modals).CollectionChanged -= this.OnLocalModalsChanged;
         this.agentChat.InformationChanged -= this.OnInformationChanged;
-        this.agentChat.ToolsChanged -= this.OnToolsChanged;
         this.agentChat.UsageChanged -= this.OnUsageChanged;
         if (this.RunningItems is INotifyCollectionChanged runningItemsNotifications)
         {

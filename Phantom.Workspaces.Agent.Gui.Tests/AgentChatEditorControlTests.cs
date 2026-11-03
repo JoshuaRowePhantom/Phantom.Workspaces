@@ -25,6 +25,58 @@ namespace Phantom.Workspaces.Agent.Gui.Tests;
 
 public sealed class AgentChatEditorControlTests
 {
+    [AvaloniaFact]
+    public async Task AgentChatEditorControl_ToolsChangedFromBackground_UpdatesOnForegroundContext()
+    {
+        var chat = new ToolProjectionChat(await CreateAgentChatAsync());
+        chat.Publish(ToolProjectionChat.Tool("initial"));
+        using var logs = new ObservableLoggerFactory();
+        await using var vm = new AgentViewModel(chat, "owner", "", logs,
+            TaskScheduler.FromCurrentSynchronizationContext());
+        var root = Assert.Single(vm.EditorItems);
+        var nav = root.Children.Single(item => item.Id == "chat-tools");
+        vm.SelectedEditorItem = nav;
+        nav.IsExpanded = false;
+        var detail = Assert.IsType<AgentChatToolsDetailViewModel>(nav.DetailContent);
+        var selectedDocument = vm.SelectedDetailDocument;
+        var control = new AgentChatEditorControl { DataContext = vm };
+        var window = new Window { Width = 1000, Height = 700, Content = control };
+        var notificationContexts = new List<bool>();
+        var applied = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        vm.Tools.CollectionChanged += (_, _) => notificationContexts.Add(Dispatcher.UIThread.CheckAccess());
+        nav.Children.CollectionChanged += (_, _) => notificationContexts.Add(Dispatcher.UIThread.CheckAccess());
+        detail.DisplayedRootItems.CollectionChanged += (_, _) =>
+        {
+            notificationContexts.Add(Dispatcher.UIThread.CheckAccess());
+            if (detail.DisplayedRootItems.Select(item => item.Id).SequenceEqual(["latest", "disabled"]))
+                applied.TrySetResult();
+        };
+        window.Show();
+        try
+        {
+            await Task.Run(() =>
+            {
+                Assert.False(Dispatcher.UIThread.CheckAccess());
+                chat.Publish(ToolProjectionChat.Tool("latest"), ToolProjectionChat.Tool("disabled", false, "Ready"));
+            }, TestContext.Current.CancellationToken);
+            await applied.Task.WaitAsync(TestContext.Current.CancellationToken);
+            await vm.ToolProjectionIdle;
+            Assert.NotEmpty(notificationContexts);
+            Assert.All(notificationContexts, Assert.True);
+            Assert.Same(root, Assert.Single(vm.EditorItems));
+            Assert.Same(nav, root.Children.Single(item => item.Id == "chat-tools"));
+            Assert.Same(nav, vm.SelectedEditorItem);
+            Assert.Same(selectedDocument, vm.SelectedDetailDocument);
+            Assert.False(nav.IsExpanded);
+            Assert.Equal(chat.GetToolSnapshot().Select(item => item.Id), vm.Tools.Select(item => item.Id));
+            Assert.Equal(vm.Tools.Select(item => item.Id), nav.Children.Select(item => item.Id));
+            Assert.Equal(vm.Tools.Select(item => item.Id), detail.DisplayedRootItems.Select(item => item.Id));
+            Assert.False(vm.Tools[1].IsEnabled);
+            Assert.Equal("Ready", vm.Tools[1].Status);
+        }
+        finally { window.Close(); }
+    }
+
     [Fact]
     public void AgentChatEditorControl_LogsNode_UsesVirtualizedList()
     {

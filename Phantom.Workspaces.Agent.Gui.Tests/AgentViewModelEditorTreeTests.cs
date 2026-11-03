@@ -9,6 +9,273 @@ namespace Phantom.Workspaces.Agent.Gui.Tests;
 public sealed class AgentViewModelEditorTreeTests
 {
     [Fact]
+    public async Task ToolsNavItem_DiscoveryOverlapsInitialSnapshot_ProjectsLatestSnapshotWithoutThrowing()
+    {
+        var chat = new ToolProjectionChat(await CreateChatAsync());
+        chat.Publish(ToolProjectionChat.Tool("pending", status: "Loading"));
+        using var release = new ManualResetEventSlim();
+        var sampled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        chat.SnapshotRead = () =>
+        {
+            chat.SnapshotRead = null;
+            sampled.SetResult();
+            // Only the constructor's worker is blocked; never the UI thread or a projection lock.
+            release.Wait(TestContext.Current.CancellationToken);
+        };
+        using var logs = new ObservableLoggerFactory();
+        var construction = Task.Run(() => new AgentViewModel(chat, "test", "", logs, TaskScheduler.Default),
+            TestContext.Current.CancellationToken);
+        await sampled.Task.WaitAsync(TestContext.Current.CancellationToken);
+        try
+        {
+            chat.Publish(ToolProjectionChat.Tool("pending-2", status: "Loading"));
+            chat.Publish(ToolProjectionChat.Tool("complete") with
+                { Children = [ToolProjectionChat.Tool("child", false, "Ready")] },
+                ToolProjectionChat.Tool("disabled", false));
+        }
+        finally { release.Set(); }
+        await using var vm = await construction;
+        await vm.ToolProjectionIdle;
+        AssertToolProjection(vm, chat.GetToolSnapshot());
+    }
+
+    [Fact]
+    public async Task ToolsNavItem_PublicationDuringInitialization_DoesNotLoseSnapshot()
+    {
+        var chat = new ToolProjectionChat(await CreateChatAsync());
+        chat.Subscribed = () => chat.Publish(ToolProjectionChat.Tool("at-subscription"));
+        using var logs = new ObservableLoggerFactory();
+        await using var vm = new AgentViewModel(chat, "test", "", logs, TaskScheduler.Default);
+        await vm.ToolProjectionIdle;
+        AssertToolProjection(vm, chat.GetToolSnapshot());
+    }
+
+    [Fact]
+    public async Task ToolsNavItem_InitialSnapshotFault_UnsubscribesAndPropagates()
+    {
+        await using var chat = new ToolProjectionChat(await CreateChatAsync());
+        chat.SnapshotRead = () => throw new InvalidOperationException("initial-projection-failure");
+        using var logs = new ObservableLoggerFactory();
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            new AgentViewModel(chat, "test", "", logs, TaskScheduler.Default));
+        Assert.Equal("initial-projection-failure", exception.Message);
+        Assert.Equal(0, chat.SubscriberCount);
+    }
+
+    [Fact]
+    public async Task ToolsNavItem_ConcurrentRefreshRequests_AppliesSnapshotsSerially()
+    {
+        var chat = new ToolProjectionChat(await CreateChatAsync());
+        using var logs = new ObservableLoggerFactory();
+        await using var vm = new AgentViewModel(chat, "test", "", logs, TaskScheduler.Default);
+        using var release = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var depth = 0;
+        var depths = new System.Collections.Concurrent.ConcurrentBag<int>();
+        var first = 0;
+        vm.Tools.CollectionChanged += (_, e) =>
+        {
+            var current = Interlocked.Increment(ref depth);
+            depths.Add(current);
+            try
+            {
+                if (e.Action == NotifyCollectionChangedAction.Add && Interlocked.Exchange(ref first, 1) == 0)
+                {
+                    chat.Publish(ToolProjectionChat.Tool("reentrant"));
+                    entered.SetResult();
+                    // This is a thread-pool projection callback, not a UI callback.
+                    release.Wait(TestContext.Current.CancellationToken);
+                }
+            }
+            finally { Interlocked.Decrement(ref depth); }
+        };
+        var firstPublication = Task.Run(() => chat.Publish(ToolProjectionChat.Tool("first")),
+            TestContext.Current.CancellationToken);
+        await entered.Task.WaitAsync(TestContext.Current.CancellationToken);
+        try
+        {
+            await Task.WhenAll(Enumerable.Range(0, 20).Select(i =>
+                Task.Run(() => chat.Publish(ToolProjectionChat.Tool($"concurrent-{i}")),
+                    TestContext.Current.CancellationToken)));
+            chat.Publish(ToolProjectionChat.Tool("last", false, "Ready"));
+        }
+        finally { release.Set(); }
+        await firstPublication;
+        await vm.ToolProjectionIdle;
+        Assert.All(depths, value => Assert.Equal(1, value));
+        AssertToolProjection(vm, chat.GetToolSnapshot());
+    }
+
+    [Fact]
+    public async Task ToolsNavItem_QueuedOlderRefresh_DoesNotOverwriteNewerSnapshot()
+    {
+        var chat = new ToolProjectionChat(await CreateChatAsync());
+        var scheduler = new ToolProjectionScheduler();
+        using var logs = new ObservableLoggerFactory();
+        await using var vm = new AgentViewModel(chat, "test", "", logs, scheduler);
+        var samples = 0;
+        chat.SnapshotRead = () => samples++;
+        chat.Publish(ToolProjectionChat.Tool("old", status: "Loading"));
+        chat.Publish(ToolProjectionChat.Tool("latest", false, "Ready"));
+        Assert.Equal(0, samples);
+        Assert.Equal(1, scheduler.Count);
+        scheduler.Drain();
+        await vm.ToolProjectionIdle;
+        Assert.Equal(1, samples);
+        AssertToolProjection(vm, chat.GetToolSnapshot());
+        chat.Publish(ToolProjectionChat.Tool("next-generation"));
+        scheduler.Drain();
+        await vm.ToolProjectionIdle;
+        AssertToolProjection(vm, chat.GetToolSnapshot());
+    }
+
+    [Fact]
+    public async Task ToolsNavItem_DisposedWithQueuedRefresh_DoesNotMutateCollections()
+    {
+        var chat = new ToolProjectionChat(await CreateChatAsync());
+        var scheduler = new ToolProjectionScheduler();
+        using var logs = new ObservableLoggerFactory();
+        var vm = new AgentViewModel(chat, "test", "", logs, scheduler);
+        var lateDelivery = chat.CaptureDelivery();
+        var mutations = 0;
+        vm.Tools.CollectionChanged += (_, _) => mutations++;
+        chat.Publish(ToolProjectionChat.Tool("queued"));
+        await vm.DisposeViewResourcesAsync();
+        Assert.Equal(0, chat.SubscriberCount);
+        lateDelivery?.Invoke(chat, EventArgs.Empty);
+        scheduler.Drain();
+        chat.Publish(ToolProjectionChat.Tool("after"));
+        Assert.Equal(0, mutations);
+        await chat.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task ToolsNavItem_DisposedDuringApplication_WaitsForOwnerBeforeTransformerTeardown()
+    {
+        var chat = new ToolProjectionChat(await CreateChatAsync());
+        using var logs = new ObservableLoggerFactory();
+        var vm = new AgentViewModel(chat, "test", "", logs, TaskScheduler.Default);
+        using var release = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        vm.Tools.CollectionChanged += (_, e) =>
+        {
+            if (e.Action != NotifyCollectionChangedAction.Reset) return;
+            entered.SetResult();
+            // The test holds only the worker that owns this projection transaction.
+            release.Wait(TestContext.Current.CancellationToken);
+        };
+        var publication = Task.Run(() => chat.Publish(ToolProjectionChat.Tool("active")),
+            TestContext.Current.CancellationToken);
+        await entered.Task.WaitAsync(TestContext.Current.CancellationToken);
+        var disposal = vm.DisposeViewResourcesAsync().AsTask();
+        var joinedDisposal = vm.DisposeViewResourcesAsync().AsTask();
+        try
+        {
+            Assert.Same(disposal, joinedDisposal);
+            Assert.False(disposal.IsCompleted);
+            Assert.False(joinedDisposal.IsCompleted);
+        }
+        finally { release.Set(); }
+        await publication;
+        await disposal;
+        await joinedDisposal;
+        AssertToolProjection(vm, chat.GetToolSnapshot());
+        var before = vm.Tools.ToArray();
+        chat.Publish(ToolProjectionChat.Tool("too-late"));
+        Assert.Equal(before, vm.Tools);
+        await chat.DisposeAsync();
+    }
+
+    private static void AssertToolProjection(AgentViewModel vm, IReadOnlyList<AgentChatToolItem> snapshot)
+    {
+        var nav = vm.EditorItems.Single().Children.Single(item => item.Id == "chat-tools");
+        Assert.Equal(snapshot.Select(t => t.Id), vm.Tools.Select(t => t.Id));
+        Assert.Equal(snapshot.Select(t => t.Id), nav.Children.Select(t => t.Id));
+        Assert.Equal(snapshot.Select(t => t.IsEnabled), vm.Tools.Select(t => t.IsEnabled));
+        Assert.Equal(snapshot.Select(t => t.Status), vm.Tools.Select(t => t.Status));
+        AssertToolChildren(snapshot, vm.Tools, nav.Children);
+    }
+
+    private static void AssertToolChildren(
+        IReadOnlyList<AgentChatToolItem> expected,
+        IReadOnlyList<AgentChatToolViewModel> tools,
+        IReadOnlyList<AgentEditorNavigationItemViewModel> navigation)
+    {
+        Assert.Equal(expected.Select(t => t.Id), tools.Select(t => t.Id));
+        Assert.Equal(expected.Select(t => t.Id), navigation.Select(t => t.Id));
+        for (var i = 0; i < expected.Count; i++)
+        {
+            Assert.Equal(expected[i].IsEnabled, tools[i].IsEnabled);
+            Assert.Equal(expected[i].Status, tools[i].Status);
+            Assert.Same(tools[i], navigation[i].Tool);
+            AssertToolChildren(expected[i].Children, tools[i].Children, navigation[i].Children);
+        }
+    }
+
+    [Fact]
+    public async Task ToolsNavItem_ScheduledProjectionFault_IsObservedAndReportedWithoutRetry()
+    {
+        var chat = new ToolProjectionChat(await CreateChatAsync());
+        var scheduler = new ToolProjectionScheduler();
+        using var logs = new ObservableLoggerFactory();
+        await using var vm = new AgentViewModel(chat, "test", "", logs, scheduler);
+        var reported = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        logs.EntryAdded += (_, text) =>
+        {
+            if (text.Contains("Foreground tool projection failed.", StringComparison.Ordinal))
+                reported.TrySetResult(text);
+        };
+        var samples = 0;
+        chat.SnapshotRead = () =>
+        {
+            samples++;
+            throw new InvalidOperationException("deterministic-projection-failure");
+        };
+        chat.Publish(ToolProjectionChat.Tool("failed"));
+        scheduler.Drain();
+        var report = await reported.Task.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.Contains("deterministic-projection-failure", report, StringComparison.Ordinal);
+        Assert.Contains(nameof(InvalidOperationException), report, StringComparison.Ordinal);
+        chat.Publish(ToolProjectionChat.Tool("not-silently-retried"));
+        scheduler.Drain();
+        Assert.Equal(1, samples);
+        Assert.Empty(vm.Tools);
+    }
+
+    [Fact]
+    public async Task ToolsNavItem_SchedulerRejectsRefresh_PropagatesWithoutLeavingOwnerActive()
+    {
+        var chat = new ToolProjectionChat(await CreateChatAsync());
+        var scheduler = new ToolProjectionScheduler();
+        using var logs = new ObservableLoggerFactory();
+        await using var vm = new AgentViewModel(chat, "test", "", logs, scheduler);
+        scheduler.RejectNext = true;
+        var exception = Assert.Throws<TaskSchedulerException>(() => chat.Publish(ToolProjectionChat.Tool("rejected")));
+        Assert.Equal("deterministic-scheduler-rejection", exception.InnerException?.Message);
+        await vm.ToolProjectionIdle;
+        chat.Publish(ToolProjectionChat.Tool("not-retried"));
+        Assert.Equal(0, scheduler.Count);
+        Assert.Empty(vm.Tools);
+    }
+
+    [Fact]
+    public async Task ToolsNavItem_DisposalFailure_PropagatesToAllJoinedCallers()
+    {
+        await using var chat = new ToolProjectionChat(await CreateChatAsync());
+        using var logs = new ObservableLoggerFactory();
+        var vm = new AgentViewModel(chat, "test", "", logs, TaskScheduler.Default);
+        chat.UnsubscribingInformation = () => throw new InvalidOperationException("deterministic-disposal-failure");
+        var first = vm.DisposeViewResourcesAsync().AsTask();
+        var second = vm.DisposeViewResourcesAsync().AsTask();
+        Assert.Same(first, second);
+        var firstFailure = await Assert.ThrowsAsync<InvalidOperationException>(async () => await first);
+        var secondFailure = await Assert.ThrowsAsync<InvalidOperationException>(async () => await second);
+        Assert.Same(firstFailure, secondFailure);
+        Assert.Equal("deterministic-disposal-failure", firstFailure.Message);
+        Assert.Equal(0, chat.SubscriberCount);
+    }
+
+    [Fact]
     public async Task AgentViewModel_DoesNotExpose_DiagnosticsInspectorProperty()
     {
         // Issue #819: The DiagnosticsInspector property was removed.
@@ -85,8 +352,9 @@ public sealed class AgentViewModelEditorTreeTests
         var chatDetailsNav = root.Children.First(c => c.Id == "chat-details");
         var subAgentsNav = root.Children.First(c => c.Id == "chat-sub-agents");
 
-        await WaitForMcpToolsLoadedAsync(chat);
-        await WaitForChildrenCountAsync(toolsNav, expectedCount: 1);
+        await chat.Initialization.WaitAsync(TestContext.Current.CancellationToken);
+        await viewModel.ToolProjectionIdle;
+        AssertToolProjection(viewModel, chat.GetToolSnapshot());
 
         Assert.Single(toolsNav.Children);
         Assert.Empty(chatDetailsNav.Children);
@@ -370,8 +638,10 @@ public sealed class AgentViewModelEditorTreeTests
         var subAgentToolsNav = subAgentNav.Children.First(c => c.Id == "chat-tools");
 
         var subAgentChat = (AgentChat)chat.SubAgents.First(s => s.AgentId == "sub-agent-1");
-        await WaitForMcpToolsLoadedAsync(subAgentChat);
-        await WaitForChildrenCountAsync(subAgentToolsNav, expectedCount: 1);
+        await subAgentChat.Initialization.WaitAsync(TestContext.Current.CancellationToken);
+        var childVm = viewModel.SubAgentsContainer.Slots.Single(s => s.AgentId == "sub-agent-1").SubAgentViewModel;
+        await childVm.ToolProjectionIdle;
+        AssertToolProjection(childVm, subAgentChat.GetToolSnapshot());
 
         Assert.Single(subAgentToolsNav.Children);
     }
@@ -629,80 +899,4 @@ public sealed class AgentViewModelEditorTreeTests
         await chat.GetOrCreateAsync(agentId, definition, $"tool-call-{agentId}", TestContext.Current.CancellationToken);
     }
 
-    private static async Task WaitForMcpToolsLoadedAsync(AgentChat chat)
-    {
-        if (chat.GetToolSnapshot().Count > 0)
-        {
-            return;
-        }
-
-        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        void OnToolsChanged(object? _, EventArgs __)
-        {
-            if (chat.GetToolSnapshot().Count > 0)
-            {
-                signal.TrySetResult();
-            }
-        }
-
-        chat.ToolsChanged += OnToolsChanged;
-        try
-        {
-            if (chat.GetToolSnapshot().Count > 0)
-            {
-                return;
-            }
-
-            const int timeoutMs = 30_000;
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-            cts.CancelAfter(timeoutMs);
-
-            try
-            {
-                await signal.Task.WaitAsync(cts.Token);
-            }
-            catch (OperationCanceledException)
-            {
-                throw new TimeoutException($"MCP tools did not load within {timeoutMs}ms");
-            }
-        }
-        finally
-        {
-            chat.ToolsChanged -= OnToolsChanged;
-        }
-    }
-
-    private static async Task WaitForChildrenCountAsync(AgentEditorNavigationItemViewModel item, int expectedCount)
-    {
-        if (item.Children.Count == expectedCount)
-        {
-            return;
-        }
-
-        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        void OnChildrenChanged(object? _, NotifyCollectionChangedEventArgs __)
-        {
-            if (item.Children.Count == expectedCount)
-            {
-                signal.TrySetResult();
-            }
-        }
-
-        ((INotifyCollectionChanged)item.Children).CollectionChanged += OnChildrenChanged;
-        try
-        {
-            if (item.Children.Count == expectedCount)
-            {
-                return;
-            }
-
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-            cts.CancelAfter(TimeSpan.FromSeconds(30));
-            await signal.Task.WaitAsync(cts.Token);
-        }
-        finally
-        {
-            ((INotifyCollectionChanged)item.Children).CollectionChanged -= OnChildrenChanged;
-        }
-    }
 }
