@@ -23,9 +23,12 @@ if (args.Length >= 1 && args[0] == "--echo-argv")
     return 0;
 }
 
-if (args.Length == 5 && args[0] == "--snapshot-update")
+if (args.Length == 7 && args[0] == "--snapshot-update")
 {
-    var store = new Phantom.Workspaces.Data.Offline.FilesystemDataAccessLayer(args[1]);
+    Action? waiting = args[6] == "observe-wait" ? () => { Console.WriteLine("WAITING"); Console.Out.Flush(); } : null;
+    Phantom.Workspaces.Data.IDataAccessLayer store = args[5] == "git"
+        ? new Phantom.Workspaces.Data.Offline.GitDataAccessLayer(args[1]) { WaitingForSnapshot = waiting }
+        : new Phantom.Workspaces.Data.Offline.FilesystemDataAccessLayer(args[1]) { WaitingForSnapshot = waiting };
     Console.WriteLine("READY");
     Console.Out.Flush();
     if (await Console.In.ReadLineAsync() != "UPDATE")
@@ -42,7 +45,7 @@ if (args.Length == 5 && args[0] == "--snapshot-update")
             new Phantom.Workspaces.Data.EntityChange
             {
                 EntityId = id,
-                ConcurrencyTag = new Phantom.Workspaces.Data.ConcurrencyTag(args[3]),
+                ConcurrencyTag = args[3] == "-" ? null : new Phantom.Workspaces.Data.ConcurrencyTag(args[3]),
                 EntityChangeMode = Phantom.Workspaces.Data.EntityChangeMode.Replace,
                 Data = JsonSerializer.SerializeToElement(new Dictionary<string, object>
                 {

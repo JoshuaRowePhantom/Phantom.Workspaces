@@ -25,6 +25,8 @@ public sealed class GitDataAccessLayer : IDataAccessLayer
     }
 
     public string RepositoryPath { get; }
+    internal Action? WaitingForSnapshot { get; set; }
+    internal Action? BeforeCommit { get; set; }
 
     public bool InitializeLocalRepository()
     {
@@ -157,7 +159,7 @@ public sealed class GitDataAccessLayer : IDataAccessLayer
         CancellationToken cancellationToken = default)
     {
         return RepositorySnapshotLock.RunAsync(
-            this.RepositoryPath, () => this.UpdateCore(request, cancellationToken), cancellationToken);
+            this.RepositoryPath, () => this.UpdateCore(request, cancellationToken), cancellationToken, this.WaitingForSnapshot);
     }
 
     private UpdateResult UpdateCore(
@@ -201,7 +203,10 @@ public sealed class GitDataAccessLayer : IDataAccessLayer
                 ? "Update entities"
                 : request.UpdateMetadata.Comment.Text;
             using (RepositoryStartupDiagnostics.Start("git-commit"))
+            {
+                this.BeforeCommit?.Invoke();
                 repository.Commit(commitMessage, signature, signature);
+            }
 
             if (!hasRemote)
             {

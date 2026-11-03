@@ -13,12 +13,12 @@ internal static class RepositorySnapshotLock
         return "Phantom.Workspaces.Snapshot." + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
     }
 
-    internal static Task<T> RunAsync<T>(string path, Func<T> operation, CancellationToken cancellationToken)
-        => Task.Run(() => Run(path, operation, cancellationToken), cancellationToken);
+    internal static Task<T> RunAsync<T>(string path, Func<T> operation, CancellationToken cancellationToken, Action? waiting = null)
+        => Task.Run(() => Run(path, operation, cancellationToken, waiting), cancellationToken);
 
     // All callers execute synchronous disk operations on a worker. Keeping acquisition, work and
     // release on that thread preserves Mutex ownership; no UI thread or async continuation holds it.
-    internal static T Run<T>(string path, Func<T> operation, CancellationToken cancellationToken)
+    internal static T Run<T>(string path, Func<T> operation, CancellationToken cancellationToken, Action? waiting = null)
     {
         using var mutex = new Mutex(false, GetName(path));
         var acquired = false;
@@ -26,9 +26,14 @@ internal static class RepositorySnapshotLock
         {
             try
             {
-                acquired = WaitHandle.WaitAny([mutex, cancellationToken.WaitHandle]) == 0;
+                acquired = mutex.WaitOne(0);
+                if (!acquired)
+                {
+                    waiting?.Invoke();
+                    acquired = WaitHandle.WaitAny([mutex, cancellationToken.WaitHandle]) == 0;
+                }
             }
-            catch (AbandonedMutexException exception) when (exception.MutexIndex == 0)
+            catch (AbandonedMutexException exception) when (exception.MutexIndex is 0 or -1)
             {
                 acquired = true;
             }

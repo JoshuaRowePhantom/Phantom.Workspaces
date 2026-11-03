@@ -48,12 +48,15 @@ public sealed class RepositorySnapshotLockTests
         });
         await acquired.Task;
         using var cancellation = new CancellationTokenSource();
-        cancellation.Cancel();
+        var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         try
         {
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Task.Run(() =>
+            var waiter = Task.Run(() =>
                 RepositorySnapshotLock.Run<int>(directory.Path, () => throw new InvalidOperationException("Must not run"),
-                    cancellation.Token)));
+                    cancellation.Token, () => waiting.SetResult()));
+            await waiting.Task;
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiter);
         }
         finally
         {

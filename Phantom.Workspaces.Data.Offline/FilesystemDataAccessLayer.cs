@@ -28,6 +28,8 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
     }
 
     public string Path { get; }
+    internal Action? WaitingForSnapshot { get; set; }
+    internal Action? SnapshotDataRead { get; set; }
 
     public Task<ExportResult> ExportAsync(
         ExportRequest request,
@@ -243,12 +245,12 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
         UpdateRequest request,
         CancellationToken cancellationToken = default)
     {
-        return RepositorySnapshotLock.RunAsync(this.Path, () => this.UpdateLocked(request), cancellationToken);
+        return RepositorySnapshotLock.RunAsync(this.Path, () => this.UpdateLocked(request), cancellationToken, this.WaitingForSnapshot);
     }
 
     internal UpdateResult UpdateLocked(UpdateRequest request)
     {
-        this.nextSequenceNumber = this.LoadNextSequenceNumber();
+        this.nextSequenceNumber = Math.Max(this.nextSequenceNumber, this.LoadNextSequenceNumber());
         return this.UpdateCore(request);
     }
 
@@ -260,6 +262,7 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
         var pendingData = new Dictionary<EntityId, JsonElement?>();
         var pendingPreviousData = new Dictionary<EntityId, JsonElement?>();
         var failed = false;
+        var proposedSequence = this.nextSequenceNumber;
 
         foreach (var change in request.Changes)
         {
@@ -327,7 +330,7 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
                 continue;
             }
 
-            var nextSequenceNumber = this.nextSequenceNumber + 1;
+            var nextSequenceNumber = checked(++proposedSequence);
             var modifiedTime = new Timestamp(this.timeProvider.GetUtcNow(), nextSequenceNumber.ToString());
             var nextTag = new ConcurrencyTag(nextSequenceNumber.ToString());
             var nextSnapshot = new EntitySnapshot
@@ -363,6 +366,14 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
             };
         }
 
+        // Reserve revisions durably before publishing data, including deletions. A crash or
+        // Git reset may discard snapshots, but must never make an issued tag reusable.
+        if (proposedSequence > this.nextSequenceNumber)
+        {
+            PublishSnapshot(this.GetRevisionPath(), proposedSequence.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            this.nextSequenceNumber = proposedSequence;
+        }
+
         foreach (var entityResult in results)
         {
             var entityId = entityResult.ResultingEntityId;
@@ -372,7 +383,6 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
             }
 
             var previousData = pendingPreviousData.GetValueOrDefault(entityId);
-            this.nextSequenceNumber++;
             this.WriteEntityFile(entityId, data);
             this.WriteEntityMetadata(entityId, entityResult.ConcurrencyTag!.Value, entityResult.CurrentEntity!.ModifiedTime);
             this.UpdateEntityNameIndexes(entityId, previousData, data);
@@ -628,6 +638,7 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
         }
 
         using var document = JsonDocument.Parse(ReadSnapshotText(entityPath));
+        this.SnapshotDataRead?.Invoke();
         var metadata = this.ReadEntityMetadata(entityId);
         return new EntitySnapshot
         {
@@ -761,6 +772,9 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
     private long LoadNextSequenceNumber()
     {
         var maxSequence = 0L;
+        var revisionPath = this.GetRevisionPath();
+        if (File.Exists(revisionPath))
+            maxSequence = long.Parse(ReadSnapshotText(revisionPath), System.Globalization.CultureInfo.InvariantCulture);
         foreach (var metadataPath in Directory.EnumerateFiles(this.Path, "*.meta", SearchOption.AllDirectories))
         {
             try
@@ -780,6 +794,24 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
         }
 
         return maxSequence;
+    }
+
+    private string GetRevisionPath()
+    {
+        // Git's private administrative directory is outside reset/stage/commit. This also
+        // resolves linked-worktree .git files instead of treating them as directories.
+        var gitPath = System.IO.Path.Combine(this.Path, ".git");
+        if (Directory.Exists(gitPath))
+            return System.IO.Path.Combine(gitPath, "phantom-snapshot-revision");
+        if (File.Exists(gitPath))
+        {
+            var reference = ReadSnapshotText(gitPath).Trim();
+            if (!reference.StartsWith("gitdir: ", StringComparison.Ordinal))
+                throw new InvalidDataException("Invalid Git administrative directory reference.");
+            var administrativeDirectory = System.IO.Path.GetFullPath(reference["gitdir: ".Length..], this.Path);
+            return System.IO.Path.Combine(administrativeDirectory, "phantom-snapshot-revision");
+        }
+        return System.IO.Path.Combine(this.Path, ".snapshot-revision");
     }
 
     private static string ReadSnapshotText(string path)
