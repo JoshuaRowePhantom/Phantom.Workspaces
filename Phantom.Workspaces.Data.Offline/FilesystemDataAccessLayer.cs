@@ -370,7 +370,12 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
         // Git reset may discard snapshots, but must never make an issued tag reusable.
         if (proposedSequence > this.nextSequenceNumber)
         {
-            PublishSnapshot(this.GetRevisionPath(), proposedSequence.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            var revision = proposedSequence.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var privateRevisionPath = this.GetRevisionPath();
+            PublishSnapshot(privateRevisionPath, revision);
+            var publishedRevisionPath = System.IO.Path.Combine(this.Path, ".snapshot-revision");
+            if (privateRevisionPath != publishedRevisionPath)
+                PublishSnapshot(publishedRevisionPath, revision);
             this.nextSequenceNumber = proposedSequence;
         }
 
@@ -775,6 +780,9 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
         var revisionPath = this.GetRevisionPath();
         if (File.Exists(revisionPath))
             maxSequence = long.Parse(ReadSnapshotText(revisionPath), System.Globalization.CultureInfo.InvariantCulture);
+        var publishedRevisionPath = System.IO.Path.Combine(this.Path, ".snapshot-revision");
+        if (File.Exists(publishedRevisionPath))
+            maxSequence = Math.Max(maxSequence, long.Parse(ReadSnapshotText(publishedRevisionPath), System.Globalization.CultureInfo.InvariantCulture));
         foreach (var metadataPath in Directory.EnumerateFiles(this.Path, "*.meta", SearchOption.AllDirectories))
         {
             try
@@ -798,8 +806,8 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
 
     private string GetRevisionPath()
     {
-        // Git's private administrative directory is outside reset/stage/commit. This also
-        // resolves linked-worktree .git files instead of treating them as directories.
+        // The private floor survives Git reset; the root copy travels with commits/clones.
+        // Resolve linked-worktree .git files instead of treating them as directories.
         var gitPath = System.IO.Path.Combine(this.Path, ".git");
         if (Directory.Exists(gitPath))
             return System.IO.Path.Combine(gitPath, "phantom-snapshot-revision");

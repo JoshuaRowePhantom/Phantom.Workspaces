@@ -11,6 +11,58 @@ public sealed class FilesystemSnapshotPublicationTests
 {
     [Fact(Timeout = 60000)]
     [Trait("Category", "SlowGit")]
+    public async Task CloneAfterLastEntityDeletion_RetainsPublishedRevisionAndRejectsStaleTag()
+    {
+        using var source = TestPathFactory.CreateIsolatedTempDirectory("snapshot-revision-source");
+        using var clone = TestPathFactory.CreateIsolatedTempDirectory("snapshot-revision-clone");
+        var id = new EntityId("c5788404-0940-4b5c-950a-a8483c7c34ca");
+        var store = new GitDataAccessLayer(source.Path);
+        var original = Assert.Single((await store.UpdateAsync(Request(id, "old"))).EntityResults).ConcurrencyTag;
+        await store.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "Delete last entity" } },
+            Changes = [new EntityChange { EntityId = id, ConcurrencyTag = original, EntityChangeMode = EntityChangeMode.Replace }],
+        });
+        Repository.Clone(source.Path, clone.Path);
+        // Only the tracked snapshot was cloned; the private reset-resistant floor is local.
+        Assert.False(File.Exists(System.IO.Path.Combine(clone.Path, ".git", "phantom-snapshot-revision")));
+        var clonedStore = new GitDataAccessLayer(clone.Path);
+        // Keep this a local snapshot transaction; no changes are pushed back to the source fixture.
+        using (var repository = new Repository(clone.Path))
+            repository.Network.Remotes.Remove("origin");
+        var replacement = Assert.Single((await clonedStore.UpdateAsync(Request(id, "replacement"))).EntityResults);
+        Assert.NotEqual(original, replacement.ConcurrencyTag);
+        Assert.Equal(UpdateState.Failed, Assert.Single((await clonedStore.UpdateAsync(Request(id, "stale") with
+        {
+            Changes = [Request(id, "stale").Changes.Single() with { ConcurrencyTag = original }],
+        })).EntityResults).UpdateState);
+    }
+
+    [Theory(Timeout = 60000)]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task GitAdministrativeReference_ResolvesLinkedFloorOrFailsClosed(bool valid)
+    {
+        using var directory = TestPathFactory.CreateIsolatedTempDirectory("snapshot-linked-revision");
+        var administrative = System.IO.Path.Combine(directory.Path, "administrative");
+        Directory.CreateDirectory(administrative);
+        File.WriteAllText(System.IO.Path.Combine(directory.Path, ".git"), valid ? "gitdir: administrative\n" : "not a gitdir reference");
+        var store = new FilesystemDataAccessLayer(directory.Path);
+        var id = new EntityId("7afc405c-0608-433e-932f-47ff625c6303");
+        if (!valid)
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(() => store.UpdateAsync(Request(id, "new")));
+            return;
+        }
+        File.WriteAllText(System.IO.Path.Combine(administrative, "phantom-snapshot-revision"), "90");
+        var result = Assert.Single((await store.UpdateAsync(Request(id, "new"))).EntityResults);
+        Assert.Equal("91", result.ConcurrencyTag!.Value.Value);
+        Assert.Equal("91", File.ReadAllText(System.IO.Path.Combine(directory.Path, ".snapshot-revision")));
+        Assert.Equal("91", File.ReadAllText(System.IO.Path.Combine(administrative, "phantom-snapshot-revision")));
+    }
+
+    [Fact(Timeout = 60000)]
+    [Trait("Category", "SlowGit")]
     public async Task GitResetToEarlierSnapshot_ReopenedWriterNeverReissuesDiscardedRevision()
     {
         using var directory = TestPathFactory.CreateIsolatedTempDirectory("snapshot-git-reset-revision");
