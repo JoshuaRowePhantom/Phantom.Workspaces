@@ -132,7 +132,7 @@ public sealed class AccessAdministrationWindow : Window, IAsyncDisposable
         await this.releaseMemory.RefreshAsync(linked.Token);
         linked.Token.ThrowIfCancellationRequested();
         await this.caches.RefreshAsync(linked.Token);
-        await this.savedCredentials.RefreshAsync();
+        await this.savedCredentials.RefreshAsync(linked.Token);
         linked.Token.ThrowIfCancellationRequested();
         await this.grants.RefreshAsync(linked.Token);
         linked.Token.ThrowIfCancellationRequested();

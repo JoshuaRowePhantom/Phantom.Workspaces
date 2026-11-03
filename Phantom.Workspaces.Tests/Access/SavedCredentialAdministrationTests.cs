@@ -6,6 +6,36 @@ namespace Phantom.Workspaces.Tests.Access;
 
 public sealed class SavedCredentialAdministrationTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RecreatedName_RejectsRetiredRowsForReadUpdateAndDelete(bool managedDeletion)
+    {
+        var store = new Store();
+        store.Values["Name"] = "old";
+        var service = new SavedCredentialAdministration(store);
+        var old = Assert.Single(await service.ListAsync(TestContext.Current.CancellationToken));
+        if (managedDeletion)
+            await service.DeleteAsync(old, TestContext.Current.CancellationToken);
+        else
+        {
+            store.Values.Remove("Name");
+            Assert.Empty(await service.ListAsync(TestContext.Current.CancellationToken));
+        }
+        using var value = Secure("replacement");
+        await service.CreateAsync("Name", value, TestContext.Current.CancellationToken);
+        var replacement = Assert.Single(await service.ListAsync(TestContext.Current.CancellationToken));
+        Assert.NotEqual(old.Identifier, replacement.Identifier);
+        await Assert.ThrowsAsync<SavedCredentialOperationException>(() => service.ReadForEditorAsync(old, TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<SavedCredentialOperationException>(() => service.UpdateAsync(old, value, TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<SavedCredentialOperationException>(() => service.DeleteAsync(old, TestContext.Current.CancellationToken));
+        Assert.Equal(0, store.Reads);
+        Assert.Equal("replacement", store.Values["Name"]);
+        await service.UpdateAsync(replacement, value, TestContext.Current.CancellationToken);
+        await service.DeleteAsync(replacement, TestContext.Current.CancellationToken);
+        Assert.Empty(store.Values);
+    }
+
     [Fact]
     public async Task Inventory_UnusedAndProviderOwnedNames_DoesNotReadValuesAndFailsClosedForManagedRows()
     {

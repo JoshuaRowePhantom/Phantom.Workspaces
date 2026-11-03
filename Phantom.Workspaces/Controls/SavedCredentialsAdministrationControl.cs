@@ -23,24 +23,26 @@ internal sealed class SavedCredentialsAdministrationControl : UserControl, IAsyn
     private readonly Button reveal = new() { Content = "Reveal value" };
     private readonly Button save = new() { Content = "Save changes" };
     private readonly Button delete = new() { Content = "Confirm delete saved credential" };
-    private readonly DispatcherTimer revealTimer = new() { Interval = TimeSpan.FromSeconds(30) };
+    private readonly TimeProvider timeProvider;
+    private ITimer? revealTimer;
     private readonly CancellationTokenSource lifetime = new();
     private CancellationTokenSource? editorLifetime;
     private readonly List<Button> actions = [];
     private SavedCredentialMetadata? selected;
     private EditorMode mode;
     private int revision;
+    private int revealPermission;
     private bool disposed;
     private Task? active;
 
     internal SavedCredentialsAdministrationControl(
-        SavedCredentialAdministration administration, Control cachedCredentials)
+        SavedCredentialAdministration administration, Control cachedCredentials, TimeProvider? timeProvider = null)
     {
         this.administration = administration;
+        this.timeProvider = timeProvider ?? TimeProvider.System;
         AutomationProperties.SetName(this.name, "Saved credential name");
         AutomationProperties.SetName(this.value, "Saved credential value");
         AutomationProperties.SetLiveSetting(this.status, AutomationLiveSetting.Polite);
-        this.revealTimer.Tick += (_, _) => this.Remask();
         this.LostFocus += (_, _) => this.Remask();
         this.reveal.Click += async (_, _) => await this.RevealAsync();
         this.save.Click += async (_, _) => await this.SaveAsync();
@@ -94,8 +96,9 @@ internal sealed class SavedCredentialsAdministrationControl : UserControl, IAsyn
     internal TextBox NameField => this.name;
     internal bool IsEditorVisible => this.editor.IsVisible;
     internal IReadOnlyList<SavedCredentialMetadata> Items { get; private set; } = [];
+    internal Task? ActiveOperation => this.active;
 
-    internal Task RefreshAsync() => this.RunAsync(this.RefreshCoreAsync);
+    internal Task RefreshAsync(CancellationToken cancellationToken = default) => this.RunAsync(this.RefreshCoreAsync, cancellationToken);
 
     private async Task RefreshCoreAsync(CancellationToken ct)
     {
@@ -172,17 +175,25 @@ internal sealed class SavedCredentialsAdministrationControl : UserControl, IAsyn
     {
         var row = this.selected;
         var version = this.revision;
+        var permission = this.revealPermission;
         if (row is null || this.mode is not (EditorMode.View or EditorMode.Edit)) return Task.CompletedTask;
         return this.RunAsync(async ct =>
         {
             using var material = await this.administration.ReadForEditorAsync(row, ct);
             ct.ThrowIfCancellationRequested();
-            if (this.disposed || version != this.revision) return;
+            if (this.disposed || version != this.revision || (reveal && permission != this.revealPermission)) return;
             var pointer = Marshal.SecureStringToBSTR(material!);
             try { this.value.Text = Marshal.PtrToStringBSTR(pointer); }
             finally { Marshal.ZeroFreeBSTR(pointer); }
             this.value.RevealPassword = reveal;
-            if (reveal) this.revealTimer.Start();
+            if (reveal)
+            {
+                this.revealTimer?.Dispose();
+                this.revealTimer = this.timeProvider.CreateTimer(_ => Dispatcher.UIThread.Post(() =>
+                {
+                    if (version == this.revision && permission == this.revealPermission) this.Remask();
+                }), null, TimeSpan.FromSeconds(30), Timeout.InfiniteTimeSpan);
+            }
             this.status.Text = reveal ? "Value revealed locally until focus loss or 30 seconds." : "Value loaded into masked editor.";
         }, this.editorLifetime?.Token ?? this.lifetime.Token);
     }
@@ -232,7 +243,9 @@ internal sealed class SavedCredentialsAdministrationControl : UserControl, IAsyn
 
     internal void Remask()
     {
-        this.revealTimer.Stop();
+        this.revealPermission++;
+        this.revealTimer?.Dispose();
+        this.revealTimer = null;
         this.value.RevealPassword = false;
         if (this.mode == EditorMode.View) this.value.Text = null;
     }

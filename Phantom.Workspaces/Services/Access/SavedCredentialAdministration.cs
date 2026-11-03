@@ -67,6 +67,7 @@ internal sealed class SavedCredentialAdministration(IPlatformSecretStore store)
         {
             await this.RequireCurrentAsync(row, ct).ConfigureAwait(false);
             await store.DeleteAsync(row.Name, ct).ConfigureAwait(false);
+            this.identities.Remove(row.Name);
         }
         finally { this.operations.Release(); }
     }
@@ -85,6 +86,9 @@ internal sealed class SavedCredentialAdministration(IPlatformSecretStore store)
         if (!this.IsSupported) return [];
         var names = await store.EnumerateNamesAsync("", ct).ConfigureAwait(false);
         ct.ThrowIfCancellationRequested();
+        var currentNames = names.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var missing in this.identities.Keys.Where(name => !currentNames.Contains(name)).ToArray())
+            this.identities.Remove(missing);
         var result = new List<SavedCredentialMetadata>();
         foreach (var name in names.Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase))
         {

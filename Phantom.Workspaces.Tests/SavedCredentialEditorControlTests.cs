@@ -1,7 +1,10 @@
 using Avalonia.Automation.Peers;
 using Avalonia.Automation.Provider;
 using Avalonia.Controls;
+using Avalonia.Interactivity;
+using Avalonia.VisualTree;
 using Avalonia.Headless.XUnit;
+using Microsoft.Extensions.Time.Testing;
 using Phantom.Workspaces.Controls;
 using Phantom.Workspaces.Services.Access;
 using Phantom.Workspaces.Tests.Access;
@@ -10,6 +13,148 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class SavedCredentialEditorControlTests
 {
+    [AvaloniaFact]
+    public async Task UnsupportedStore_RendersDisabledNamedActions_IndependentCacheStillUsable()
+    {
+        var descriptor = new Llm.Interfaces.Access.CredentialCacheDescriptor
+        {
+            Identifier = new() { Value = Guid.NewGuid() }, Provider = Llm.Interfaces.Access.CredentialProviderKind.Entra,
+            Kind = Llm.Interfaces.Access.CredentialKind.AccessToken, Generation = new() { Value = Guid.NewGuid() },
+            SourceIdentifier = new() { Digest = new string('a', 64) },
+        };
+        var administration = new Moq.Mock<Llm.Interfaces.Access.ICredentialCacheAdministration>();
+        administration.Setup(service => service.ListAsync(Moq.It.IsAny<CancellationToken>()))
+            .Returns(ValueTask.FromResult<IReadOnlyList<Llm.Interfaces.Access.CredentialCacheDescriptor>>([descriptor]));
+        await using var model = new ViewModels.CredentialCacheAdministrationViewModel { Administration = administration.Object };
+        await model.RefreshAsync(TestContext.Current.CancellationToken);
+        var cache = new CredentialCacheAdministrationControl { DataContext = model };
+        await using var control = new SavedCredentialsAdministrationControl(
+            new SavedCredentialAdministration(new Llm.Secrets.NullPlatformSecretStore()), cache);
+        var window = new Window { Content = control };
+        window.Show();
+        try
+        {
+            await control.RefreshAsync();
+            window.UpdateLayout();
+            Assert.Contains(control.GetVisualDescendants().OfType<TextBlock>(),
+                text => text.Text == "Named saved-credential management is unavailable on this platform.");
+            var add = Assert.Single(control.GetVisualDescendants().OfType<Button>(), button => button.Content as string == "Add credential");
+            Assert.False(add.IsEffectivelyEnabled);
+            Assert.DoesNotContain(control.GetVisualDescendants().OfType<Button>(),
+                button => button.IsEffectivelyVisible && button.Content as string is "View" or "Edit value");
+            Assert.False(control.IsEditorVisible);
+            Assert.Same(cache, Assert.Single(control.GetVisualDescendants().OfType<CredentialCacheAdministrationControl>()));
+            Assert.Same(descriptor, Assert.Single(model.Items));
+            Assert.True(model.RefreshCommand.CanExecute(null));
+            Assert.True(model.RemoveCommand.CanExecute(descriptor));
+            Assert.Contains(cache.GetVisualDescendants().OfType<Button>(), button =>
+                button.Content as string == "Delete cached credential" && button.IsEffectivelyEnabled);
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaFact]
+    public async Task PendingReveal_RealFocusLoss_CompletionCannotRestoreRevealOrValue()
+    {
+        var store = new DelayedStore();
+        await using var control = new SavedCredentialsAdministrationControl(new SavedCredentialAdministration(store), new TextBlock());
+        var outside = new Button { Content = "Outside" };
+        var window = new Window { Content = new StackPanel { Children = { control, outside } } };
+        window.Show();
+        try
+        {
+            await control.RefreshAsync();
+            await control.OpenViewAsync(Assert.Single(control.Items));
+            Assert.True(control.ValueField.Focus());
+            Click(control, "Reveal value");
+            var pending = Assert.IsAssignableFrom<Task>(control.ActiveOperation);
+            await store.Entered.Task;
+            Assert.True(outside.Focus());
+            using var material = SavedCredentialAdministrationTests.Secure("late-private-marker");
+            store.Read.SetResult(material.Copy());
+            await pending;
+            Assert.Null(control.ValueField.Text);
+            Assert.False(control.ValueField.RevealPassword);
+            Assert.True(control.IsEditorVisible);
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaFact]
+    public async Task RevealTimeout_ProductionTimerRoute_RemasksAndClearsWithoutAutomationExposure()
+    {
+        var clock = new FakeTimeProvider();
+        var store = new SavedCredentialAdministrationTests.Store();
+        store.Values["Name"] = "private-marker";
+        await using var control = new SavedCredentialsAdministrationControl(new SavedCredentialAdministration(store), new TextBlock(), clock);
+        var window = new Window { Content = control };
+        window.Show();
+        try
+        {
+            await control.RefreshAsync();
+            Click(control, "View");
+            Click(control, "Reveal value");
+            await control.ActiveOperation!;
+            Assert.True(control.ValueField.RevealPassword);
+            var remasked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            control.ValueField.PropertyChanged += (_, e) =>
+            {
+                if (e.Property == TextBox.RevealPasswordProperty && !control.ValueField.RevealPassword)
+                    remasked.TrySetResult();
+            };
+            clock.Advance(TimeSpan.FromSeconds(30));
+            await remasked.Task;
+            Assert.False(control.ValueField.RevealPassword);
+            Assert.Null(control.ValueField.Text);
+            var peer = ControlAutomationPeer.CreatePeerForElement(control.ValueField)!;
+            Assert.False(peer is IValueProvider);
+            Assert.Empty(peer.GetChildren());
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaFact]
+    public async Task GuardedButtons_WriteFailureRetainsDirtyEditor_ThenRetryUpdatesExactName()
+    {
+        var store = new SavedCredentialAdministrationTests.Store();
+        store.Values["Name"] = "old";
+        store.BeforeWrite = () => throw new System.IO.IOException("private-marker");
+        await using var control = new SavedCredentialsAdministrationControl(new SavedCredentialAdministration(store), new TextBlock());
+        var window = new Window { Content = control };
+        window.Show();
+        try
+        {
+            await control.RefreshAsync();
+            Click(control, "Edit value");
+            await control.ActiveOperation!;
+            Assert.True(control.NameField.IsReadOnly);
+            Assert.False(control.ValueField.RevealPassword);
+            control.ValueField.Text = "private-marker";
+            Click(control, "Save changes");
+            await control.ActiveOperation!;
+            Assert.Equal("old", store.Values["Name"]);
+            Assert.True(control.IsEditorVisible);
+            Assert.Equal("private-marker", control.ValueField.Text);
+            Assert.DoesNotContain("private-marker", control.SafeStatus);
+            Assert.Contains("No success", control.SafeStatus);
+            store.BeforeWrite = null;
+            Click(control, "Save changes");
+            await control.ActiveOperation!;
+            Assert.Equal("private-marker", store.Values["Name"]);
+            Assert.False(control.IsEditorVisible);
+            Assert.Null(control.ValueField.Text);
+        }
+        finally { window.Close(); }
+    }
+
+    private static void Click(Control control, string text)
+    {
+        var button = Assert.Single(control.GetVisualDescendants().OfType<Button>(),
+            candidate => candidate.Content as string == text && candidate.IsEffectivelyVisible);
+        Assert.True(button.IsEffectivelyEnabled);
+        button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+    }
+
     [AvaloniaFact]
     public async Task ViewAndReveal_AreExplicitAndAutomationNeverExposesValue()
     {

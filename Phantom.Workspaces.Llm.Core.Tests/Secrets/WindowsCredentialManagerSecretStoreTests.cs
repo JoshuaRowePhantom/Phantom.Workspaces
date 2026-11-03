@@ -88,6 +88,29 @@ public sealed class WindowsCredentialManagerSecretStoreTests
     }
 
     [WindowsFact]
+    public async Task WriteExistingName_ReadsUpdatedValueAndPreservesOtherEntry()
+    {
+        await WithExclusiveStoreAsync(async store =>
+        {
+            using var original = MakeSecureString("original-synthetic");
+            using var updated = MakeSecureString("updated-synthetic");
+            using var other = MakeSecureString("other-synthetic");
+            await store.WriteAsync(ConstantName, original, CancellationToken.None);
+            await store.WriteAsync(SecondConstantName, other, CancellationToken.None);
+            await store.WriteAsync(ConstantName, updated, CancellationToken.None);
+            using var read = await store.ReadAsync(ConstantName, CancellationToken.None);
+            using var otherRead = await store.ReadAsync(SecondConstantName, CancellationToken.None);
+            Assert.NotNull(read);
+            Assert.NotNull(otherRead);
+            Assert.Equal("updated-synthetic", Reveal(read));
+            Assert.Equal("other-synthetic", Reveal(otherRead));
+            var names = await store.EnumerateNamesAsync(ConstantName, CancellationToken.None);
+            Assert.Equal(2, names.Count);
+            Assert.Contains(ConstantName, names);
+        });
+    }
+
+    [WindowsFact]
     public async Task Write_ThenRead_ReturnsSameValue()
     {
         await WithExclusiveStoreAsync(async store =>
