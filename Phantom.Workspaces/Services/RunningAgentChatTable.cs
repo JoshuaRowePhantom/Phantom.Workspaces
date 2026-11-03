@@ -336,7 +336,12 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                 CurrentSessionContext = CreateCurrentSessionContext(
                     services?.CurrentSessionContext as CurrentSessionContext,
                     sessionId,
-                    runtimeContext.Intent),
+                    runtimeContext.Intent) with
+                {
+                    ApprovalSession = Llm.Interfaces.Access.SafeWorkspaceEntityReference.FromEntity(
+                        Llm.Interfaces.Access.SafeWorkspaceEntityKind.Session, request.EntityId,
+                        request.EntityDisplayName ?? request.EntityName),
+                },
             };
             lock (this._entityInfoLock)
                 this.localRuntimeEntities[sessionId] = entity.Clone();

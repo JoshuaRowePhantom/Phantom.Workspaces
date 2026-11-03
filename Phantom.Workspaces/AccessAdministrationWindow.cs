@@ -26,6 +26,7 @@ public sealed class AccessAdministrationWindow : Window, IAsyncDisposable
     public CredentialAccessPage SelectedPage => (CredentialAccessPage)this.pages.SelectedIndex;
     internal TabControl Pages => this.pages;
     internal bool RequestsAlongsideManagement => this.presentation.Children.Contains(this.requests);
+    internal Func<Llm.Interfaces.Access.SafeWorkspaceEntityReference, Task>? NavigateEntityAsync { get; set; }
 
     public AccessAdministrationWindow(AccessHostServices host)
     {
@@ -52,7 +53,11 @@ public sealed class AccessAdministrationWindow : Window, IAsyncDisposable
                 new TabItem
                 {
                     Header = CredentialAccessText.SavedApprovals,
-                    Content = new Controls.ReleaseMemoryAdministrationControl { DataContext = this.releaseMemory },
+                    Content = new Controls.ReleaseMemoryAdministrationControl
+                    {
+                        DataContext = this.releaseMemory,
+                        NavigateEntityAsync = reference => this.NavigateEntityAsync?.Invoke(reference) ?? Task.CompletedTask,
+                    },
                 },
                 new TabItem
                 {

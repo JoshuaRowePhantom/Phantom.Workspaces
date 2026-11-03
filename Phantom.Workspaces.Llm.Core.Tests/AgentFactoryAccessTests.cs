@@ -18,6 +18,45 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 
 public sealed class AgentFactoryAccessTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AgentFactory_ManifestAndResumedDefinition_CaptureTrustedOriginAlongsideHashedLineage(bool resumed)
+    {
+        var manifestId = Guid.NewGuid();
+        var session = new SafeWorkspaceEntityReference(SafeWorkspaceEntityKind.Session, Guid.NewGuid(), new("Review session"));
+        var manifest = AgentManifestLoader.LoadManifestFromJson($$$"""
+            {"name":"build","displayName":"Build manifest","metadata":{"entity-id":"{{{manifestId}}}"},
+             "template":{"kind":"prompt","name":"build","instructions":"${SECRET:BuildApiKey}",
+              "model":{"id":"echo","provider":"echo","apiType":"Echo"}}
+            }
+            """);
+        var definition = await AgentFactory.CreateAgentDefinitionAsync(new CreateAgentDefinitionRequest { AgentManifest = manifest }, CancellationToken.None);
+        var broker = new AgentAccessTestBroker { Material = "private-model-value" };
+        var result = await AgentFactory.MaterializeSecretsIfNeededAsync(definition, new AgentServices
+        {
+            AccessBroker = broker,
+            CurrentSessionContext = new CurrentSessionContext
+            {
+                AgentSessionId = "session", OwningProfileEntityId = "profile", OwnershipGeneration = 0,
+                ApprovalSession = session,
+            },
+        }, resumed ? null : manifest, "session", CancellationToken.None);
+        await using var resolver = Assert.IsAssignableFrom<IAsyncDisposable>(result.Services!.SecretPlaceholderResolver);
+        var request = Assert.Single(broker.StoredRequests);
+        var origin = request.Use.Lineage.ApprovalOrigin!;
+        Assert.Equal("BuildApiKey", origin.Credential!.Value);
+        Assert.Equal(manifestId, origin.Manifest!.Identifier);
+        Assert.Equal("Build manifest", origin.Manifest.Name.Value);
+        Assert.Equal(session, origin.Session);
+        Assert.Equal(CredentialIdentityFactory.CreateLineageIdentifier("manifest", manifestId.ToString()), request.Use.Lineage.Manifest);
+        Assert.DoesNotContain("private-model-value", JsonSerializer.Serialize(origin));
+        var withoutDisplay = request.Use.Lineage with { ApprovalOrigin = null };
+        Assert.Equal(
+            CredentialIdentityFactory.CreateUseFingerprint(request.Use.Kind, withoutDisplay, request.Requestor.Identifier, "purpose"),
+            CredentialIdentityFactory.CreateUseFingerprint(request.Use.Kind, request.Use.Lineage, request.Requestor.Identifier, "purpose"));
+    }
+
     [Fact]
     public async Task AgentFactory_SecretHandle_UsesBrokerLeaseAtSdkBoundary()
     {

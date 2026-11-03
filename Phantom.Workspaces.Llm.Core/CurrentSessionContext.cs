@@ -84,4 +84,5 @@ public sealed record CurrentSessionContext
     /// in which case this remains null.
     /// </summary>
     public RuntimeEpoch? RuntimeEpoch { get; init; }
+    public Interfaces.Access.SafeWorkspaceEntityReference? ApprovalSession { get; init; }
 }

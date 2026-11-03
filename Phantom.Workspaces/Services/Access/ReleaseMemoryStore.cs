@@ -26,10 +26,18 @@ public sealed class ReleaseMemoryStore
             using var document = JsonDocument.ParseValue(ref reader);
             try
             {
-                var context = document.RootElement.Deserialize<SafeApprovalContext>(MetadataSerializerOptions);
-                return context is not null && context.IsValid() ? context : null;
+                var root = document.RootElement;
+                var context = new SafeApprovalContext
+                {
+                    Provider = root.GetProperty("provider").Deserialize<CredentialProviderKind>(MetadataSerializerOptions),
+                    Kind = root.GetProperty("kind").Deserialize<CredentialKind>(MetadataSerializerOptions),
+                    Source = root.GetProperty("source").Deserialize<CredentialSourceKind>(MetadataSerializerOptions),
+                    Origin = root.GetProperty("origin").Deserialize<CredentialUseKind>(MetadataSerializerOptions),
+                    Details = ReadOrigin(root),
+                };
+                return context.IsValid() ? context : null;
             }
-            catch (JsonException)
+            catch (Exception exception) when (exception is JsonException or KeyNotFoundException or InvalidOperationException)
             {
                 // Optional display metadata cannot invalidate policy identity or prevent Forget.
                 // The administration row explicitly renders "Details unavailable" for rejected context.
@@ -39,6 +47,25 @@ public sealed class ReleaseMemoryStore
 
         public override void Write(Utf8JsonWriter writer, SafeApprovalContext value, JsonSerializerOptions options) =>
             JsonSerializer.Serialize(writer, value, MetadataSerializerOptions);
+
+        private static SafeApprovalOrigin? ReadOrigin(JsonElement root)
+        {
+            if (!root.TryGetProperty("details", out var details) || details.ValueKind != JsonValueKind.Object) return null;
+            return new SafeApprovalOrigin
+            {
+                Manifest = ReadPart<SafeWorkspaceEntityReference>(details, "manifest"),
+                Session = ReadPart<SafeWorkspaceEntityReference>(details, "session"),
+                ManifestName = ReadPart<SafeApprovalLabel>(details, "manifestName"),
+                Credential = ReadPart<SafeApprovalLabel>(details, "credential"),
+                Requester = ReadPart<SafeApprovalLabel>(details, "requester"),
+            }.Sanitize();
+        }
+
+        private static T? ReadPart<T>(JsonElement root, string name) where T : class
+        {
+            try { return root.TryGetProperty(name, out var value) ? value.Deserialize<T>(MetadataSerializerOptions) : null; }
+            catch (JsonException) { return null; }
+        }
     }
 
     public ReleaseMemoryStore(string? filePath = null)

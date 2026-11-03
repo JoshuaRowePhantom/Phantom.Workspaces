@@ -1,12 +1,13 @@
 namespace Phantom.Workspaces.Llm.Interfaces.Access;
 
-/// <summary>Closed, non-identifying context. No caller-supplied label is retained.</summary>
+/// <summary>Closed categories plus validated origin snapshots, independent of policy identity.</summary>
 public sealed record SafeApprovalContext
 {
     public required CredentialProviderKind Provider { get; init; }
     public required CredentialKind Kind { get; init; }
     public required CredentialSourceKind Source { get; init; }
     public required CredentialUseKind Origin { get; init; }
+    public SafeApprovalOrigin? Details { get; init; }
 
     public bool IsValid() =>
         Enum.IsDefined(this.Provider) && Enum.IsDefined(this.Kind) &&
@@ -23,6 +24,7 @@ public sealed record SafeApprovalContext
         string[] kinds = ["secret", "access token", "identity token", "connection token", "credential use", "completion access", "anonymous access"];
         string[] sources = ["Secret store", "Environment", "GitHub CLI", "Provider cache", "Provider", "CLI-managed"];
         string[] origins = ["application use", "agent use", "manifest use", "MCP access", "repository access", "tunnel access", "completion access"];
-        return $"{providers[(int)this.Provider]} {kinds[(int)this.Kind]} • Source: {sources[(int)this.Source]} • Originally approved for: {origins[(int)this.Origin]}";
+        return $"{this.Details?.ToString() ?? "Older approval — manifest/session details were not recorded"}" +
+            $" • {providers[(int)this.Provider]} {kinds[(int)this.Kind]} • Source: {sources[(int)this.Source]} • Originally approved for: {origins[(int)this.Origin]}";
     }
 }

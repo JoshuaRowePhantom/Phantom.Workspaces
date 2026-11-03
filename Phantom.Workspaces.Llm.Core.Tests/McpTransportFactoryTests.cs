@@ -59,7 +59,8 @@ public sealed class McpTransportFactoryTests
         Assert.Equal(new Uri(Endpoint), typed.Options.Endpoint);
         Assert.Equal(1, broker.Calls);
         Assert.Equal(1, catalog.Calls);
-        Assert.Equal(lineage, broker.McpRequest!.Use.Lineage);
+        Assert.Equal(lineage, broker.McpRequest!.Use.Lineage with { ApprovalOrigin = null });
+        Assert.Equal("private-server", broker.McpRequest.Use.Lineage.ApprovalOrigin!.Requester!.Value);
         Assert.Equal(AccessPresentationScope.Bootstrap, broker.McpRequest.PresentationScope);
         Assert.DoesNotContain("private", broker.McpRequest.Requestor.SafeDisplayName, StringComparison.Ordinal);
 
@@ -148,7 +149,8 @@ public sealed class McpTransportFactoryTests
         });
         await using var owned = (IAsyncDisposable)transport;
         Assert.Same(requestor, broker.McpRequest!.Requestor);
-        Assert.Equal(lineage, broker.McpRequest.Use.Lineage);
+        Assert.Equal(lineage, broker.McpRequest.Use.Lineage with { ApprovalOrigin = null });
+        Assert.Equal("private-server", broker.McpRequest.Use.Lineage.ApprovalOrigin!.Requester!.Value);
         Assert.Equal(CredentialUseKind.Mcp, broker.McpRequest.Use.Kind);
         Assert.Equal(use.MemoryScopes, broker.McpRequest.Use.MemoryScopes);
         Assert.NotEqual(use.Fingerprint, broker.McpRequest.Use.Fingerprint);
@@ -283,15 +285,24 @@ public sealed class McpTransportFactoryTests
     public async Task McpTransportFactory_ApiKeyReference_UsesStoredSecretBrokerWithoutHeaderMaterialization()
     {
         var broker = new Broker();
+        var origin = new SafeApprovalOrigin
+        {
+            Manifest = new(SafeWorkspaceEntityKind.Manifest, Guid.NewGuid(), new("Tools manifest")),
+            Session = new(SafeWorkspaceEntityKind.Session, Guid.NewGuid(), new("Review session")),
+        };
         var transport = await CreateAsync(new McpTool
         {
             ServerName = "MCP server",
             Connection = new ApiKeyConnection { Endpoint = Endpoint, ApiKey = "${SECRET:configured-key}" },
-        }, new AgentServices { AccessBroker = broker });
+        }, new AgentServices { AccessBroker = broker, AccessLineage = new() { ApprovalOrigin = origin } });
         await using var owned = (IAsyncDisposable)transport;
         var request = Assert.IsType<StoredSecretAccessRequest>(broker.LastRequest);
         Assert.Equal("configured-key", request.Reference.Name);
         Assert.Equal(CredentialSourceKind.SecretStore, Assert.Single(request.Sources).Kind);
+        Assert.Equal(origin.Manifest, request.Use.Lineage.ApprovalOrigin!.Manifest);
+        Assert.Equal(origin.Session, request.Use.Lineage.ApprovalOrigin.Session);
+        Assert.Equal("configured-key", request.Use.Lineage.ApprovalOrigin.Credential!.Value);
+        Assert.Equal("MCP server", request.Use.Lineage.ApprovalOrigin.Requester!.Value);
         var options = Assert.IsType<McpBrokerClientTransport>(transport).Options;
         Assert.Null(options.OAuth);
         Assert.Null(options.AdditionalHeaders);

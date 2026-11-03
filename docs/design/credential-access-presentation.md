@@ -14,23 +14,35 @@ binding fingerprints and policy matching are unchanged.
 
 ## Saved approval details
 
-Optional `SafeApprovalContext` persists only four closed enums: credential
-provider/kind, selected source kind and originating use kind. Broker construction
-captures the selected source's kind; the policy validates the complete context
-before saving it, and reload/listing validates it again. No supplied display
-string, account name, raw identifier, credential material or provider payload is
-copied into this context. Friendly strings are built exclusively from fixed
-allowlisted vocabulary.
+Optional `SafeApprovalContext` retains the four closed categories (provider/kind,
+selected source kind and originating use kind) and optional `SafeApprovalOrigin`.
+Explicit manifest name/projection fields and host session entity presentation
+supply immutable bounded labels and allowlisted Manifest/Session references:
+real nonempty workspace GUID, entity kind and validated name snapshot. Logical
+secret names come from request construction, named MCP requesters from tool/server
+names; GitHub credentials use a fixed provider label. No general request/use display
+string, URL, JSON path, payload, account/source/credential digest or expanded secret
+is copied. Labels accept at most 120 letters/digits and limited name punctuation,
+reject controls/formatting, placeholder/URI syntax and known token prefixes.
+Snapshots survive core, deferred MCP and direct MCP requests, broker selected-source
+policy creation, provisional finalization and version-1 reload.
 
-Missing/invalid context displays **Details unavailable** without changing policy
-identity or matching. Version-1 records remain usable and forgettable. Origin is
-explicitly historical ("Originally approved for"), never a restriction on an
-AllUses approval. Rendered contextual action names carry these same safe details.
-Duplicate descriptions are valid: commands always remove the selected identifier.
-Optional context is deserialized independently: unknown enum strings/numbers,
-missing required context fields and malformed shapes produce Details unavailable,
-not an unreadable approval file. The surrounding document and policy identity
-remain strictly validated.
+Origin is explicitly historical ("Originally requested by"), separately from
+**Applies to** effective scope. Manifest/session-bound scopes include safely
+captured bound entity details; AllUses never becomes restricted by origin.
+Equal entity names include short real workspace GUIDs. Optional entity links route
+through existing entity-open handling (which checks live availability); snapshots
+remain useful after rename/deletion without a per-row live lookup. No digest links.
+Accessible Forget labels contain the same safe origin; removal still uses only the
+exact selected policy identifier. Cache deletion and provider revocation are separate.
+
+Legacy context shows **Older approval — manifest/session details were not recorded**.
+No reliable persisted legacy origin joins exist; no label/hash-based backfill is
+attempted. Each optional origin field is decoded independently: a malformed label
+or reference is unavailable without erasing valid source/category or sibling
+origin fields. Invalid category fields discard only optional context, not approvals.
+The surrounding document and policy identities remain strict and version-1
+records remain matched and individually forgettable.
 
 ## One nonmodal host
 

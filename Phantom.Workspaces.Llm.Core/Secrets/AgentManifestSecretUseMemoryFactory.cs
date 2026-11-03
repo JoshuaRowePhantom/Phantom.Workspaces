@@ -23,6 +23,7 @@ public sealed class AgentManifestSecretUseMemoryFactory
     /// hash.
     /// </summary>
     public const string OriginManifestIdMetadataKey = "origin-manifest-id";
+    public const string OriginManifestNameMetadataKey = "origin-manifest-name";
 
     /// <summary>
     /// The agent-definition metadata key carrying the SHA-256 of the origin manifest template's

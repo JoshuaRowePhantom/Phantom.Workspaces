@@ -386,6 +386,8 @@ public partial class MainWindow : Window
             if (window is null)
             {
                 window = this.AccessAdministrationWindowFactory(host);
+                window.NavigateEntityAsync = reference => this.DataContext is MainWindowViewModel navigation
+                    ? navigation.OpenEntityByIdAsync(reference.Identifier.ToString("D")) : Task.CompletedTask;
                 this.LastAccessAdministrationWindow = window;
                 window.SelectPage(page);
                 var retainedWindow = window;

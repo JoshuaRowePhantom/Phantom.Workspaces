@@ -10,6 +10,33 @@ namespace Phantom.Workspaces.Tests.Access;
 public sealed class StoredSecretAccessExecutorTests
 {
     [Fact]
+    public async Task Broker_SelectedStoreSource_PersistsValidatedLogicalLabelAndOriginNotCallerDisplay()
+    {
+        await using var executor = new StoredSecretAccessExecutor(new Source());
+        var (broker, registry) = Create(executor);
+        await using var brokerOwner = broker;
+        await using var registryOwner = registry;
+        var request = Request();
+        var origin = SafeApprovalOriginTests.Origin("Tools manifest", "Build session", "GitHub MCP");
+        request = request with { Use = request.Use with
+        {
+            SafeDisplayName = "UNTRUSTED-DISPLAY-PAYLOAD",
+            Lineage = request.Use.Lineage with { ApprovalOrigin = origin },
+            MemoryScopes = [ReleaseMemoryScopeKind.AllowOnce, ReleaseMemoryScopeKind.AllUses],
+        } };
+        var pending = broker.AcquireAsync(request, TestContext.Current.CancellationToken);
+        await AllowAsync(registry, CredentialSourceKind.SecretStore, ReleaseMemoryScopeKind.AllUses);
+        await using var acquired = Assert.IsType<AccessSucceeded<StoredSecretAccessResult>>(await pending).Result;
+        var descriptor = Assert.Single(await Assert.IsType<ReleaseAuthorizationPolicy>(broker.Policy)
+            .ListAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(origin with { Credential = new("TEST_SECRET") }, descriptor.SafeContext!.Details);
+        Assert.Equal(CredentialSourceKind.SecretStore, descriptor.SafeContext.Source);
+        Assert.DoesNotContain("UNTRUSTED-DISPLAY-PAYLOAD", descriptor.SafeContext.ToString());
+        Assert.Equal(request.Sources.Single(source => source.Kind == CredentialSourceKind.SecretStore).Identifier, descriptor.SourceIdentifier);
+        await Assert.IsType<ReleaseAuthorizationPolicy>(broker.Policy).ForgetAsync(descriptor.Identifier, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public async Task SavedValueUpdated_NextAuthorizedAcquisitionRotatesWithoutHotReplacingExistingLease()
     {
         var store = new SavedCredentialAdministrationTests.Store();
@@ -254,7 +281,8 @@ public sealed class StoredSecretAccessExecutorTests
 
     internal static async Task AllowAsync(
         UserAuthorizationRegistry registry,
-        CredentialSourceKind selected)
+        CredentialSourceKind selected,
+        ReleaseMemoryScopeKind? scope = null)
     {
         var pending = new TaskCompletionSource<UserAuthorizationSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
         void ObservePending()
@@ -272,7 +300,7 @@ public sealed class StoredSecretAccessExecutorTests
             {
                 RequestIdentifier = row.Identifier,
                 ExpectedRevision = row.Revision,
-                Memory = row.SelectedMemory,
+                Memory = scope is { } selectedScope ? row.MemoryOptions.Single(option => option.Scope == selectedScope).Identifier : row.SelectedMemory,
                 Source = row.SourceOptions.Single(source => source.Kind == selected).Identifier,
             }, TestContext.Current.CancellationToken);
         }

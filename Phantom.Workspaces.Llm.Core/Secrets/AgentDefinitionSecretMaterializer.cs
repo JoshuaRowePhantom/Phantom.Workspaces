@@ -39,7 +39,13 @@ public sealed class AgentDefinitionSecretMaterializer
         return this.MaterializeScopeAsync(
             definition,
             services.AccessBroker,
-            services.AccessUse?.Lineage ?? services.AccessLineage ?? new CredentialUseLineage(),
+            (services.AccessUse?.Lineage ?? services.AccessLineage ?? new CredentialUseLineage()) with
+            {
+                ApprovalOrigin = ((services.AccessUse?.Lineage ?? services.AccessLineage)?.ApprovalOrigin ?? new()) with
+                {
+                    Requester = SafeApprovalLabel.FromName(tool.ServerName ?? tool.Name),
+                },
+            },
             cancellationToken,
             services.AccessPresentationScope,
             services.AccessRequestor ?? new AccessRequestor
@@ -139,7 +145,11 @@ public sealed class AgentDefinitionSecretMaterializer
             Kind = AccessRequestorKind.Manifest,
             SafeDisplayName = "Manifest",
         };
-        var useLineage = lineage with { Key = CredentialIdentityFactory.CreateLineageIdentifier("secret-key", usage.SecretName) };
+        var useLineage = lineage with
+        {
+            Key = CredentialIdentityFactory.CreateLineageIdentifier("secret-key", usage.SecretName),
+            ApprovalOrigin = (lineage.ApprovalOrigin ?? new()) with { Credential = SafeApprovalLabel.FromName(usage.SecretName) },
+        };
         var scopes = new List<ReleaseMemoryScopeKind> { ReleaseMemoryScopeKind.AllowOnce, ReleaseMemoryScopeKind.ExactUse, ReleaseMemoryScopeKind.AllUses };
         if (lineage.Session is not null)
         {

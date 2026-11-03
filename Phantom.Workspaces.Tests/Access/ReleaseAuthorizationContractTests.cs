@@ -56,9 +56,15 @@ public sealed class ReleaseAuthorizationContractTests
     public void ReleaseMemoryDescriptor_SafeMetadata_ContainsOnlyAllowlistedProperties()
     {
         var properties = typeof(SafeApprovalContext).GetProperties();
-        Assert.Equal(new[] { "Kind", "Origin", "Provider", "Source" },
+        Assert.Equal(new[] { "Details", "Kind", "Origin", "Provider", "Source" },
             properties.Select(property => property.Name).Order());
-        Assert.All(properties, property => Assert.True(property.PropertyType.IsEnum));
+        Assert.All(properties.Where(property => property.Name != "Details"), property => Assert.True(property.PropertyType.IsEnum));
+        Assert.Equal(typeof(SafeApprovalOrigin), properties.Single(property => property.Name == "Details").PropertyType);
+        Assert.Equal(new[] { "Credential", "Manifest", "ManifestName", "Requester", "Session" },
+            typeof(SafeApprovalOrigin).GetProperties().Select(property => property.Name).Order());
+        Assert.Equal(new[] { "Identifier", "Kind", "Name" },
+            typeof(SafeWorkspaceEntityReference).GetProperties().Select(property => property.Name).Order());
+        Assert.Equal("Value", Assert.Single(typeof(SafeApprovalLabel).GetProperties()).Name);
         var safe = new SafeApprovalContext
         {
             Provider = CredentialProviderKind.StoredSecret, Kind = CredentialKind.Secret,

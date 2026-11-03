@@ -30,6 +30,11 @@ public sealed class AgentDefinitionSecretMaterializerTests
             AccessBroker = broker,
             SecretPlaceholderResolver = core.Resolver,
             DeferredSecretReferences = core.DeferredSecretReferences,
+            AccessLineage = new() { ApprovalOrigin = new()
+            {
+                Manifest = new(SafeWorkspaceEntityKind.Manifest, Guid.NewGuid(), new("Tools manifest")),
+                Session = new(SafeWorkspaceEntityKind.Session, Guid.NewGuid(), new("Build session")),
+            } },
         };
         if (denied)
         {
@@ -50,6 +55,10 @@ public sealed class AgentDefinitionSecretMaterializerTests
         var request = Assert.Single(broker.Requests);
         Assert.Equal("GitHubToken", request.Reference.Name);
         Assert.Equal(CredentialUseKind.Mcp, request.Use.Kind);
+        Assert.Equal("GitHubToken", request.Use.Lineage.ApprovalOrigin!.Credential!.Value);
+        Assert.Equal(services.AccessLineage.ApprovalOrigin!.Manifest, request.Use.Lineage.ApprovalOrigin.Manifest);
+        Assert.Equal(services.AccessLineage.ApprovalOrigin.Session, request.Use.Lineage.ApprovalOrigin.Session);
+        Assert.NotNull(request.Use.Lineage.ApprovalOrigin.Requester);
     }
 
     [Theory]
