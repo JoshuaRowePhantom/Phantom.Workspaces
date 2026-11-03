@@ -10,7 +10,7 @@
     "connection": {
       "kind": "key",
       "endpoint": "https://models.github.ai/inference",
-      "apiKey": "${SECRET:GitHubToken}"
+      "apiKey": "${GITHUB_TOKEN}"
     },
     "options": {
       "temperature": 0.2,
@@ -30,7 +30,7 @@
       "connection": {
         "kind": "key",
         "endpoint": "https://api.githubcopilot.com/mcp/",
-        "apiKey": "${GITHUB_TOKEN}"
+        "apiKey": "${SECRET:GitHubToken}"
       },
       "serverName": "github",
       "serverDescription": "GitHub's official remote MCP server (https://github.com/github/github-mcp-server)",

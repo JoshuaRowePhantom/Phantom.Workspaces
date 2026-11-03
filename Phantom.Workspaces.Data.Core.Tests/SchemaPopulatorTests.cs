@@ -10,6 +10,27 @@ namespace Phantom.Workspaces.Data.Tests;
 #pragma warning disable CS0618
 public sealed class SchemaPopulatorTests
 {
+    [Theory]
+    [InlineData("github-copilot-chat.json")]
+    [InlineData("github-copilot-remote-chat.json")]
+    [InlineData("github-models-chat.json")]
+    [InlineData("github-models-chat-with-mongodb.json")]
+    public void GitHubExamples_McpUsesNamedCredential_ModelRetainsProviderAuthentication(string file)
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "Phantom.Workspaces.slnx")))
+            root = root.Parent;
+        Assert.NotNull(root);
+        using var example = JsonDocument.Parse(File.ReadAllText(Path.Combine(root.FullName, "docs", "examples", file)));
+        Assert.Equal("${GITHUB_TOKEN}", example.RootElement.GetProperty("model")
+            .GetProperty("connection").GetProperty("apiKey").GetString());
+        var github = Assert.Single(example.RootElement.GetProperty("tools").EnumerateArray(),
+            tool => tool.GetProperty("kind").GetString() == "mcp" &&
+                tool.TryGetProperty("serverName", out var name) && name.GetString() == "github");
+        Assert.Equal("${SECRET:GitHubToken}", github.GetProperty("connection").GetProperty("apiKey").GetString());
+        Assert.Equal("https://api.githubcopilot.com/mcp/", github.GetProperty("connection").GetProperty("endpoint").GetString());
+    }
+
     [Fact]
     public async Task Populate_LegacyGitHubDefault_IsReplacedOnReseedWithoutChangingCustomEntities()
     {

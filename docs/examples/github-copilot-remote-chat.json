@@ -9,7 +9,7 @@
     "apiType": "OpenAI",
     "connection": {
       "kind": "key",
-      "apiKey": "${SECRET:GitHubToken}"
+      "apiKey": "${GITHUB_TOKEN}"
     },
     "options": {
       "temperature": 0.2,
@@ -52,7 +52,7 @@
       "connection": {
         "kind": "key",
         "endpoint": "https://api.githubcopilot.com/mcp/",
-        "apiKey": "${GITHUB_TOKEN}"
+        "apiKey": "${SECRET:GitHubToken}"
       },
       "serverName": "github",
       "approvalMode": {
