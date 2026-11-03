@@ -16,6 +16,7 @@ namespace Phantom.Workspaces.Llm.Secrets;
 [SupportedOSPlatform("windows")]
 public sealed class WindowsCredentialManagerSecretStore : IPlatformSecretStore
 {
+    public bool SupportsNamedCredentialManagement => OperatingSystem.IsWindows();
     /// <summary>The default target-name prefix for all Phantom.Workspaces credentials.</summary>
     public const string DefaultTargetPrefix = "Phantom.Workspaces:";
 

@@ -7,7 +7,8 @@ public static class CredentialAccessText
     public const string Title = "Credential access";
     public const string Requests = "Requests";
     public const string SavedApprovals = "Saved approvals";
-    public const string CachedCredentials = "Cached credentials";
+    public const string CachedCredentials = "Saved Credentials";
+    public const string CacheGroup = "Cached credentials";
     public const string ProviderAccess = "Provider access";
     public const string ForgetApproval = "Forget approval";
     public const string DeleteCredential = "Delete cached credential";

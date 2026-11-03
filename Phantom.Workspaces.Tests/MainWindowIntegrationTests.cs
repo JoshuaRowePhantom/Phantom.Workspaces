@@ -425,7 +425,7 @@ public sealed class MainWindowIntegrationTests
             Assert.Same(window, dialog.Owner);
             Assert.Same(accessHost.AuthorizationRows, dialog.RequestRows);
             Assert.Equal(CredentialAccessPage.SavedApprovals, dialog.SelectedPage);
-            Assert.Equal(new[] { "Requests", "Saved approvals", "Cached credentials", "Provider access" },
+            Assert.Equal(new[] { "Requests", "Saved approvals", "Saved Credentials", "Provider access" },
                 dialog.Pages.Items.Cast<TabItem>().Select(item => item.Header));
             Assert.True(window.IsEnabled);
             Assert.True(shushButton.Focus());

@@ -37,6 +37,7 @@ public sealed class AccessHostServices : IAsyncDisposable
     public required IReleaseMemoryAdministration ReleaseMemoryAdministration { get; init; }
     public required CredentialCacheAdministration CredentialCacheAdministration { get; init; }
     public required ProviderGrantAdministration ProviderGrantAdministration { get; init; }
+    internal SavedCredentialAdministration? SavedCredentialAdministration { get; init; }
     public AccessPresentationScope PresentationScope => Volatile.Read(ref this.runtimePresentation) == 0
         ? AccessPresentationScope.Bootstrap : AccessPresentationScope.Runtime;
 
@@ -165,6 +166,7 @@ public sealed class AccessHostServices : IAsyncDisposable
                 PresentationOwner = presentationOwner,
                 AuthorizationRegistry = registry,
                 AuthorizationRows = rows,
+                SavedCredentialAdministration = new SavedCredentialAdministration(options.PlatformSecretStore),
                 ReleaseMemoryAdministration = new ReleaseMemoryAdministration { Policy = policy },
                 CredentialCacheAdministration = new CredentialCacheAdministration(
                     new object[] { storedSecret, gitHub, entra, oauth, mcp, connect }.OfType<ICredentialCacheAdministration>()),

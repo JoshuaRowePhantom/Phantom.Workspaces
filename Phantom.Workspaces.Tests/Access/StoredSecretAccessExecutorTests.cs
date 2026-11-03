@@ -10,6 +10,39 @@ namespace Phantom.Workspaces.Tests.Access;
 public sealed class StoredSecretAccessExecutorTests
 {
     [Fact]
+    public async Task SavedValueUpdated_NextAuthorizedAcquisitionRotatesWithoutHotReplacingExistingLease()
+    {
+        var store = new SavedCredentialAdministrationTests.Store();
+        store.Values["TEST_SECRET"] = "original";
+        var administration = new SavedCredentialAdministration(store);
+        await using var executor = new StoredSecretAccessExecutor(store);
+        var (broker, registry) = Create(executor);
+        await using var brokerOwner = broker;
+        await using var registryOwner = registry;
+        var request = Request();
+        var acquiring = broker.AcquireAsync(request, TestContext.Current.CancellationToken);
+        await AllowAsync(registry, CredentialSourceKind.SecretStore);
+        await using var first = Assert.IsType<AccessSucceeded<StoredSecretAccessResult>>(await acquiring).Result;
+        var before = Assert.Single(await ((ICredentialCacheAdministration)executor).ListAsync(TestContext.Current.CancellationToken));
+        using var updated = SavedCredentialAdministrationTests.Secure("updated");
+        var row = Assert.Single(await administration.ListAsync(TestContext.Current.CancellationToken));
+        await administration.UpdateAsync(row, updated, TestContext.Current.CancellationToken);
+        Assert.Equal("original", Assert.IsType<SensitiveValueUseSucceeded<string>>(await first.Lease.UseAsync(
+            (value, _) => ValueTask.FromResult(value), TestContext.Current.CancellationToken)).Result);
+        Assert.Equal(before.Generation, Assert.Single(await ((ICredentialCacheAdministration)executor)
+            .ListAsync(TestContext.Current.CancellationToken)).Generation);
+        acquiring = broker.AcquireAsync(request, TestContext.Current.CancellationToken);
+        await AllowAsync(registry, CredentialSourceKind.SecretStore);
+        await using var second = Assert.IsType<AccessSucceeded<StoredSecretAccessResult>>(await acquiring).Result;
+        Assert.Equal("updated", Assert.IsType<SensitiveValueUseSucceeded<string>>(await second.Lease.UseAsync(
+            (value, _) => ValueTask.FromResult(value), TestContext.Current.CancellationToken)).Result);
+        Assert.IsType<SensitiveValueUseReacquisitionRequired<int>>(await first.Lease.UseAsync(
+            (_, _) => ValueTask.FromResult(1), TestContext.Current.CancellationToken));
+        Assert.All(registry.GetSnapshot(), snapshot => Assert.DoesNotContain(
+            snapshot.MemoryOptions, option => option.Scope == ReleaseMemoryScopeKind.AllUses));
+    }
+
+    [Fact]
     public async Task StoredSecretExecutor_InspectAsync_DoesNotReadPlatformOrEnvironmentValue()
     {
         var source = new Source();
