@@ -10,7 +10,6 @@ namespace Phantom.Workspaces.Data.Offline;
 /// </summary>
 public sealed class GitDataAccessLayer : IDataAccessLayer
 {
-    private readonly SemaphoreSlim updateSemaphore = new(1, 1);
     private readonly FilesystemDataAccessLayer filesystemDataAccessLayer;
     private readonly TimeProvider timeProvider;
 
@@ -153,23 +152,15 @@ public sealed class GitDataAccessLayer : IDataAccessLayer
         return this.filesystemDataAccessLayer.QueryAsync(request, cancellationToken);
     }
 
-    public async Task<UpdateResult> UpdateAsync(
+    public Task<UpdateResult> UpdateAsync(
         UpdateRequest request,
         CancellationToken cancellationToken = default)
     {
-        using (RepositoryStartupDiagnostics.Start("git-update-lock"))
-            await this.updateSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            return await this.UpdateCoreAsync(request, cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            this.updateSemaphore.Release();
-        }
+        return RepositorySnapshotLock.RunAsync(
+            this.RepositoryPath, () => this.UpdateCore(request, cancellationToken), cancellationToken);
     }
 
-    private async Task<UpdateResult> UpdateCoreAsync(
+    private UpdateResult UpdateCore(
         UpdateRequest request,
         CancellationToken cancellationToken)
     {
@@ -189,7 +180,7 @@ public sealed class GitDataAccessLayer : IDataAccessLayer
 
             UpdateResult updateResult;
             using (RepositoryStartupDiagnostics.Start("git-filesystem-update"))
-                updateResult = await this.filesystemDataAccessLayer.UpdateAsync(request, cancellationToken).ConfigureAwait(false);
+                updateResult = this.filesystemDataAccessLayer.UpdateLocked(request);
             if (updateResult.EntityResults.Any(entityResult => entityResult.UpdateState == UpdateState.Failed))
             {
                 return updateResult;

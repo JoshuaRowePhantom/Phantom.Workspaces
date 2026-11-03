@@ -14,7 +14,6 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
     private const string EntitiesDirectoryName = "entities";
     private const string EntityNamesIndexDirectoryName = "entityNames";
     private const string EntityNamePrefixesIndexDirectoryName = "entityNamePrefixes";
-    private readonly object updateLock = new();
     private readonly Dictionary<EntityId, EntitySnapshot> deletedEntities = new();
     private readonly TimeProvider timeProvider;
     private long nextSequenceNumber;
@@ -26,7 +25,6 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
         this.Path = path;
         this.timeProvider = timeProvider ?? TimeProvider.System;
         Directory.CreateDirectory(this.Path);
-        this.nextSequenceNumber = this.LoadNextSequenceNumber();
     }
 
     public string Path { get; }
@@ -34,6 +32,9 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
     public Task<ExportResult> ExportAsync(
         ExportRequest request,
         CancellationToken cancellationToken = default)
+        => RepositorySnapshotLock.RunAsync(this.Path, () => this.ExportCore(request, cancellationToken), cancellationToken);
+
+    private ExportResult ExportCore(ExportRequest request, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -48,8 +49,7 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
             .FirstOrDefault();
         var finalSnapshotTime = latest?.ModifiedTime ?? new Timestamp(DateTimeOffset.UnixEpoch, "0");
 
-        return Task.FromResult(
-            new ExportResult
+        return new ExportResult
             {
                 ChangeBatches = entities
                     .Select(
@@ -71,12 +71,15 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
                         })
                     .ToArray(),
                 FinalSnapshotTime = finalSnapshotTime,
-            });
+            };
     }
 
     public Task<GetResult> GetAsync(
         GetRequest request,
         CancellationToken cancellationToken = default)
+        => RepositorySnapshotLock.RunAsync(this.Path, () => this.GetCore(request, cancellationToken), cancellationToken);
+
+    private GetResult GetCore(GetRequest request, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -123,16 +126,18 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
                 });
         }
 
-        return Task.FromResult(
-            new GetResult
+        return new GetResult
             {
                 Batches = batches,
-            });
+            };
     }
 
     public Task<GetChangedEntitiesResult> GetChangedEntitiesAsync(
         GetChangedEntitiesRequest request,
         CancellationToken cancellationToken = default)
+        => RepositorySnapshotLock.RunAsync(this.Path, () => this.GetChangedCore(request, cancellationToken), cancellationToken);
+
+    private GetChangedEntitiesResult GetChangedCore(GetChangedEntitiesRequest request, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -155,11 +160,10 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
             }
         }
 
-        return Task.FromResult(
-            new GetChangedEntitiesResult
+        return new GetChangedEntitiesResult
             {
                 Entities = changed,
-            });
+            };
     }
 
     public Task<GetHistoryResult> GetHistoryAsync(
@@ -192,15 +196,12 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
 
         // The filesystem stores authoritative snapshots, while the in-memory DAL supplies the
         // shared query evaluator. Restore disk concurrency tags before returning query results.
-        EntitySnapshot[] snapshots;
-        lock (this.updateLock)
-        {
-            snapshots = this.EnumerateEntityIdsFromFiles()
+        var snapshots = await RepositorySnapshotLock.RunAsync(this.Path, () =>
+            this.EnumerateEntityIdsFromFiles()
                 .Select(this.TryLoadEntitySnapshot)
                 .OfType<EntitySnapshot>()
                 .Where(static snapshot => snapshot.Data is not null)
-                .ToArray();
-        }
+                .ToArray(), cancellationToken).ConfigureAwait(false);
         var evaluator = new InMemoryDataAccessLayer(timeProvider: this.timeProvider);
         if (snapshots.Length > 0)
         {
@@ -242,12 +243,13 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
         UpdateRequest request,
         CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
+        return RepositorySnapshotLock.RunAsync(this.Path, () => this.UpdateLocked(request), cancellationToken);
+    }
 
-        lock (this.updateLock)
-        {
-            return Task.FromResult(this.UpdateCore(request));
-        }
+    internal UpdateResult UpdateLocked(UpdateRequest request)
+    {
+        this.nextSequenceNumber = this.LoadNextSequenceNumber();
+        return this.UpdateCore(request);
     }
 
     private UpdateResult UpdateCore(
@@ -625,7 +627,7 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
             return this.deletedEntities.GetValueOrDefault(entityId);
         }
 
-        using var document = JsonDocument.Parse(File.ReadAllText(entityPath));
+        using var document = JsonDocument.Parse(ReadSnapshotText(entityPath));
         var metadata = this.ReadEntityMetadata(entityId);
         return new EntitySnapshot
         {
@@ -683,7 +685,7 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
             return;
         }
 
-        File.WriteAllText(filePath, data.Value.GetRawText());
+        PublishSnapshot(filePath, data.Value.GetRawText());
     }
 
     private void WriteEntityMetadata(
@@ -709,7 +711,7 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
             return;
         }
 
-        File.WriteAllText(
+        PublishSnapshot(
             metadataPath,
             JsonSerializer.Serialize(
                 new EntityMetadata
@@ -726,7 +728,7 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
         var metadataPath = GetMetadataPath(this.Path, entityId);
         if (File.Exists(metadataPath))
         {
-            using var document = JsonDocument.Parse(File.ReadAllText(metadataPath));
+            using var document = JsonDocument.Parse(ReadSnapshotText(metadataPath));
             var root = document.RootElement;
             if (root.TryGetProperty("concurrencyTag", out var concurrencyTagElement)
                 && concurrencyTagElement.ValueKind == JsonValueKind.String
@@ -763,7 +765,7 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
         {
             try
             {
-                using var document = JsonDocument.Parse(File.ReadAllText(metadataPath));
+                using var document = JsonDocument.Parse(ReadSnapshotText(metadataPath));
                 if (document.RootElement.TryGetProperty("changeId", out var changeIdElement)
                     && changeIdElement.ValueKind == JsonValueKind.String
                     && long.TryParse(changeIdElement.GetString(), out var sequence)
@@ -778,6 +780,38 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
         }
 
         return maxSequence;
+    }
+
+    private static string ReadSnapshotText(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+
+    private static void PublishSnapshot(string path, string content)
+    {
+        var staging = path + "." + Guid.NewGuid().ToString("N") + ".staging";
+        try
+        {
+            using (var stream = new FileStream(staging, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                using (var writer = new StreamWriter(stream, leaveOpen: true))
+                {
+                    writer.Write(content);
+                    writer.Flush();
+                }
+                stream.Flush(flushToDisk: true);
+            }
+            if (File.Exists(path))
+                File.Replace(staging, path, destinationBackupFileName: null);
+            else
+                File.Move(staging, path);
+        }
+        finally
+        {
+            File.Delete(staging);
+        }
     }
 
     private void WriteRelationshipMarkerFiles(

@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <PackageReference Include="LibGit2Sharp" />
+    <InternalsVisibleTo Include="Phantom.Workspaces.Data.Offline.Tests" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Phantom.Workspaces.Data.Core\Phantom.Workspaces.Data.Core.csproj" />
