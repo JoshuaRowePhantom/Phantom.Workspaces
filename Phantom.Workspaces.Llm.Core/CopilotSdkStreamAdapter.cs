@@ -62,6 +62,12 @@ public static class CopilotSdkStreamAdapter
     public const string LifecycleEventIdPropertyName = "lifecycle-event-id";
     public const string LifecycleParentEventIdPropertyName = "lifecycle-parent-event-id";
     public const string LifecycleTimestampPropertyName = "lifecycle-timestamp";
+    public const string ExecutionModePropertyName = "execution-mode";
+    public const string ParentTaskIdPropertyName = "parent-task-id";
+    public const string MultiTurnPropertyName = "multi-turn";
+    public const string NotificationKindPropertyName = "copilot.sdk.notification-kind";
+    public const string NotificationTaskIdPropertyName = "copilot.sdk.notification-task-id";
+    public const string SubAgentConfiguredLifecycleName = "copilot.subagent.configured";
 
     /// <summary>Lifecycle-start argument: the sub-agent's display name.</summary>
     public const string DisplayNameArgumentName = "display-name";
@@ -127,6 +133,7 @@ public static class CopilotSdkStreamAdapter
     {
         ArgumentNullException.ThrowIfNull(events);
         logger ??= NullLogger.Instance;
+        var reportedTypes = new HashSet<Type>();
 
         await foreach (var sessionEvent in events.ReadAllAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -208,7 +215,28 @@ public static class CopilotSdkStreamAdapter
                                     [DisplayNameArgumentName] = started.Data?.AgentDisplayName,
                                     [DescriptionArgumentName] = started.Data?.AgentDescription,
                                     [AgentNameArgumentName] = started.Data?.AgentName,
+                                    [ExecutionModePropertyName] = started.Data?.ExecutionMode,
+                                    [ParentTaskIdPropertyName] = started.Data?.ParentId,
+                                    ["resumable"] = started.Data?.Resumable,
+                                    ["model"] = started.Data?.Model,
                                 }), started, started.Data?.ToolCallId),
+                        ],
+                    };
+                    break;
+
+                case SubagentConfiguredEvent configured:
+                    yield return new ChatResponseUpdate
+                    {
+                        Contents =
+                        [
+                            TagLifecycle(new FunctionCallContent(configured.AgentId ?? string.Empty,
+                                SubAgentConfiguredLifecycleName, new Dictionary<string, object?>
+                                {
+                                    [MultiTurnPropertyName] = configured.Data.MultiTurn,
+                                    ["model"] = configured.Data.Model,
+                                    ["context-tier"] = configured.Data.ContextTier,
+                                    ["reasoning-effort"] = configured.Data.ReasoningEffort,
+                                }), configured, null),
                         ],
                     };
                     break;
@@ -220,7 +248,9 @@ public static class CopilotSdkStreamAdapter
                         [
                             TagLifecycle(new FunctionResultContent(
                                 completedId,
-                                """{"event":"completed"}"""), completed, completed.Data?.ToolCallId),
+                                completed.Data?.Cancelled == true
+                                    ? """{"event":"cancelled"}"""
+                                    : """{"event":"completed"}"""), completed, completed.Data?.ToolCallId),
                         ],
                     };
                     break;
@@ -254,6 +284,17 @@ public static class CopilotSdkStreamAdapter
                         new TextContent(StripSystemNotificationTags(notification.Data.Content)),
                         notification.AgentId);
                     content.AdditionalProperties![ContentTypePropertyName] = SystemNotificationContentType;
+                    if (notification.Data.Kind is SystemNotificationAgentIdle idle)
+                    {
+                        content.AdditionalProperties[NotificationKindPropertyName] = "agent_idle";
+                        content.AdditionalProperties[NotificationTaskIdPropertyName] = idle.AgentId;
+                    }
+                    else if (notification.Data.Kind is SystemNotificationAgentCompleted terminal)
+                    {
+                        content.AdditionalProperties[NotificationKindPropertyName] = "agent_completed";
+                        content.AdditionalProperties[NotificationTaskIdPropertyName] = terminal.AgentId;
+                        content.AdditionalProperties["copilot.sdk.notification-status"] = terminal.Status.Value;
+                    }
                     yield return new ChatResponseUpdate
                     {
                         Role = ChatRole.System,
@@ -364,11 +405,14 @@ public static class CopilotSdkStreamAdapter
                     // known-benign SDK lifecycle / metadata events are handled by explicit case
                     // arms above.
                     var runtimeTypeName = sessionEvent?.GetType().FullName ?? "<null>";
-                    var runtimeAgentId = sessionEvent?.AgentId;
-                    logger.LogDebug(
-                        "Copilot SDK adapter received an unmapped session event of type {EventType} for AgentId {AgentId}; consumed silently.",
-                        runtimeTypeName,
-                        string.IsNullOrEmpty(runtimeAgentId) ? "<root>" : runtimeAgentId);
+                    if (reportedTypes.Count < 16 && sessionEvent is not null && reportedTypes.Add(sessionEvent.GetType()))
+                    {
+                        var contract = CopilotSdkEventContract.Classify(sessionEvent.Type);
+                        logger.LogDebug(
+                            "Copilot SDK adapter received an unmapped session event of type {EventType}; category {Category}: {Reason}; scope {Scope}; consumed silently.",
+                            runtimeTypeName, contract.Category, contract.Reason,
+                            string.IsNullOrEmpty(sessionEvent.AgentId) ? "<root>" : "<child>");
+                    }
                     break;
             }
         }

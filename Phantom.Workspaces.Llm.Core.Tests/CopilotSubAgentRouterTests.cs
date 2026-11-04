@@ -21,6 +21,32 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 /// </summary>
 public sealed class CopilotSubAgentRouterTests
 {
+    [Fact]
+    public async Task CopilotSubAgentRouter_TerminalWaitsForCanonicalObserver_RejectsStaleEpoch()
+    {
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var table = new SubAgentTestFakes.FakeSubAgentTable();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var decision = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var router = new CopilotSubAgentRouter(Channel.CreateUnbounded<ChatResponseUpdate>().Writer, factory, table,
+            canFinishInvocation: _ =>
+            {
+                entered.TrySetResult();
+                return new ValueTask<bool>(decision.Task);
+            });
+        await router.RouteAsync(LifecycleStart("child", "call"));
+        var chat = Assert.Single(table.AddedChats);
+        var terminal = router.RouteAsync(LifecycleCompleted("child"));
+        await entered.Task;
+        Assert.False(terminal.IsCompleted);
+        Assert.Equal(AgentChatCompletionState.Running, chat.CompletionState);
+        decision.SetResult(false);
+        await terminal;
+        Assert.Equal(AgentChatCompletionState.Running, chat.CompletionState);
+        Assert.False(factory.CreatedReceiver!.BeginInvocation());
+        await router.TerminalizeRemainingChildrenAsync(new OperationCanceledException());
+    }
+
     private static (CopilotSubAgentRouter router, Channel<ChatResponseUpdate> channel)
         CreateRouter(
             SubAgentTestFakes.FakeRunningAgentChatFactory? factory = null,
@@ -193,9 +219,10 @@ public sealed class CopilotSubAgentRouterTests
         var chat = existing!.AgentChat!;
         await router.RouteAsync(LifecycleCompleted("child"));
         Assert.Equal(AgentChatCompletionState.Succeeded, chat.CompletionState);
-        await ApplyAndWaitAsync("idle", AgentChatCompletionState.Running);
-        Assert.Equal(AgentChatCompletionState.Running, chat.CompletionState);
-        router.ApplyTaskState("call", "running");
+        await ApplyAndWaitAsync("running", AgentChatCompletionState.Running);
+        await ApplyAndWaitAsync("idle", AgentChatCompletionState.Succeeded);
+        Assert.Equal(AgentChatCompletionState.Succeeded, chat.CompletionState);
+        await ApplyAndWaitAsync("running", AgentChatCompletionState.Running);
         Assert.Same(chat, Assert.Single(table.AddedChats));
         await ApplyAndWaitAsync("completed", AgentChatCompletionState.Succeeded);
         Assert.Equal(AgentChatCompletionState.Succeeded, chat.CompletionState);

@@ -21,7 +21,7 @@ using Xunit;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
-public sealed class CopilotSdkChatClientTests
+public sealed partial class CopilotSdkChatClientTests
 {
 #pragma warning disable GHCP001
     [Fact]
@@ -231,6 +231,16 @@ public sealed class CopilotSdkChatClientTests
         session.Emit(new SessionBackgroundTasksChangedEvent { Data = new SessionBackgroundTasksChangedData() });
         await failed.Task;
         Assert.Equal(AgentChatCompletionState.Failed, ((IRunningSubAgent)child).CompletionState);
+        session.Tasks = [new TaskInfoAgent
+        {
+            Id = "child", ToolCallId = "call", AgentType = "task", Prompt = "follow-up",
+            Description = "test", StartedAt = DateTimeOffset.UtcNow, Status = GitHub.Copilot.Rpc.TaskStatus.Running,
+        }];
+        await EmitObservedAsync(client, session, new SessionBackgroundTasksChangedEvent
+        {
+            Id = Guid.NewGuid(), Data = new(),
+        });
+        Assert.Equal(AgentChatCompletionState.Running, ((IRunningSubAgent)child).CompletionState);
         var becameIdle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         child.CompletionStateChanged += (_, _) =>
         {

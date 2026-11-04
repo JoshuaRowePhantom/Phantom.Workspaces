@@ -20,6 +20,7 @@ public sealed record PersistedAgentDto
     /// keeps the original last-activity time on reload (issue #1140).
     /// </summary>
     public DateTime? LastUpdatedUtc { get; init; }
+    public string? SubAgentLifecycleState { get; init; }
 }
 
 public sealed record StoreAgentRequest

@@ -11,6 +11,29 @@ namespace Phantom.Workspaces.Agent.Gui.Tests;
 
 public sealed class RunningSubAgentsHtmlTransformerTests
 {
+    [Theory]
+    [InlineData(AgentChatCompletionState.Succeeded)]
+    [InlineData(AgentChatCompletionState.Unknown)]
+    [InlineData(AgentChatCompletionState.Failed)]
+    public void RunningSubAgentsHtmlTransformer_HistoricalChildReconcilesToIdle_RemovesRunningPanel(AgentChatCompletionState state)
+    {
+        var history = new List<SubAgentActivityLine> { new(SubAgentActivityKind.AgentText, "retained answer") };
+        var child = new StubSubAgent("child", "Reusable child", AgentChatCompletionState.Running, activity: history);
+        var children = new ObservableCollection<IRunningSubAgentDisplay> { child };
+        var sink = new RecordingSink();
+        using var transformer = new RunningSubAgentsHtmlTransformer(children, [], sink);
+        sink.Clear();
+        child.SetCompletionState(state);
+        Assert.Contains(sink.Operations, op => op.Kind == "remove"
+            && op.Path == ChatOutputHtmlRenderer.SubAgentPanelInnerId);
+        Assert.DoesNotContain(sink.Operations, op => op.Kind == "update"
+            && op.Path == ChatOutputHtmlRenderer.SubAgentPanelSentinelId);
+        Assert.Same(child, Assert.Single(children));
+        sink.Clear();
+        child.SetCompletionState(AgentChatCompletionState.Running);
+        Assert.Contains(sink.Operations, op => op.Content.Contains("retained answer", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void RunningSubAgentsHtmlTransformer_LastChildBecomesIdle_RemovesPanelWithoutDeletingChild()
     {

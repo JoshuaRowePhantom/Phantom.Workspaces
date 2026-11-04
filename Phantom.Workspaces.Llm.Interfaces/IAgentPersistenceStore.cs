@@ -55,6 +55,9 @@ public readonly record struct PersistedAgent
     /// (issue #1140). A missing value falls back to construction time.
     /// </summary>
     public DateTime? LastUpdatedUtc { get; init; }
+
+    /// <summary>Normalized child execution state; retained independently from its resumable history.</summary>
+    public string? SubAgentLifecycleState { get; init; }
 }
 
 public readonly record struct StoreRequestAgent
@@ -73,5 +76,4 @@ public readonly record struct ReadMessagesRequest
 {
     public required string AgentSessionId { get; init; }
 }
-
 

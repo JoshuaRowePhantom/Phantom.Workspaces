@@ -15,6 +15,54 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 
 public sealed class CopilotSdkEventPipelineTests
 {
+    [Fact]
+    public async Task DispatchAsync_CancelledSubagentCompletedEvent_DoesNotSetSucceeded()
+    {
+        var factory = new FakeRunningAgentChatFactory();
+        var (router, _) = CreateRouter(factory);
+        await DispatchAsync(router, StartedEvent("agent"));
+        var chat = factory.CreatedLease!.LocalAgentChat!;
+        var receiver = (CopilotSubAgentChatClient)chat.GetService(typeof(ICopilotSubAgentReceiver))!;
+        var completion = CompletedEvent("agent");
+        completion.Data.Cancelled = true;
+        await DispatchAsync(router, completion);
+        Assert.Equal(AgentChatCompletionState.Failed, chat.CompletionState);
+        await chat.WaitForLifecyclePersistenceAsync();
+        Assert.Equal("cancelled", (await factory.Store.RestoreAsync(new() { AgentSessionId = chat.AgentSessionId }))!.Value.SubAgentLifecycleState);
+        var error = await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+        {
+            await foreach (var _ in receiver.GetStreamingResponseAsync([])) { }
+        });
+        Assert.Contains("cancelled", error.Message);
+        await router.TerminalizeRemainingChildrenAsync(new OperationCanceledException());
+        await DispatchAsync(router, completion);
+        Assert.Equal(AgentChatCompletionState.Failed, chat.CompletionState);
+    }
+
+    [Fact]
+    public async Task GetStreamingResponseAsync_BackgroundDispatchReturnAndAssistantIdle_PreservesExecutingChild()
+    {
+        var factory = new FakeRunningAgentChatFactory();
+        var (router, _) = CreateRouter(factory);
+        var started = StartedEvent("agent");
+        started.Data.ExecutionMode = "background";
+        await DispatchAsync(router, started);
+        var chat = factory.CreatedLease!.LocalAgentChat!;
+        var receiver = (CopilotSubAgentChatClient)chat.GetService(typeof(ICopilotSubAgentReceiver))!;
+        await DispatchAsync(router, SessionEvent.FromJson("""
+            {"type":"tool.execution_complete","id":"11111111-1111-1111-1111-111111111111",
+             "timestamp":"2026-01-01T00:00:00Z","data":{"toolCallId":"call-1","success":true,"result":{"content":"Dispatched"}}}
+            """));
+        await DispatchAsync(router, SessionEvent.FromJson("""
+            {"type":"assistant.idle","id":"22222222-2222-2222-2222-222222222222",
+             "timestamp":"2026-01-01T00:00:01Z","data":{}}
+            """));
+        Assert.Equal(AgentChatCompletionState.Running, chat.CompletionState);
+        Assert.False(receiver.BeginInvocation());
+        await DispatchAsync(router, CompletedEvent("agent"));
+        Assert.Equal(AgentChatCompletionState.Succeeded, chat.CompletionState);
+    }
+
     private static (CopilotSubAgentRouter router, Channel<ChatResponseUpdate> channel)
         CreateRouter(
             FakeRunningAgentChatFactory? factory = null,
@@ -389,6 +437,7 @@ public sealed class CopilotSdkEventPipelineTests
     private sealed class FakeRunningAgentChatFactory : IRunningAgentChatFactory
     {
         private readonly InMemoryAgentPersistenceStore _store = new();
+        public InMemoryAgentPersistenceStore Store => this._store;
 
         public RunningAgentChatLease? CreatedLease { get; private set; }
         public bool LeaseDisposed { get; private set; }

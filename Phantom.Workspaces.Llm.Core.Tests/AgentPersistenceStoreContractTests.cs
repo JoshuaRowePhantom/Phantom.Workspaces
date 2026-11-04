@@ -9,6 +9,33 @@ namespace Phantom.Workspaces.Llm.Tests;
 
 public abstract class AgentPersistenceStoreContractTests
 {
+    [Theory]
+    [InlineData("cancelled")]
+    [InlineData("failed")]
+    [InlineData("idle")]
+    [InlineData("unknown")]
+    [InlineData("running")]
+    [InlineData("completed")]
+    public async Task StoreAsync_LifecycleOnlyThenTranscriptWrite_PreservesOutcomeAndHistory(string state)
+    {
+        await this.ResetStoreAsync();
+        var store = await this.CreateStoreAsync();
+        var agent = CreatePersistedAgent("lifecycle-contract", "child");
+        await store.StoreAsync(new() { Agent = agent, NewMessages = [new(ChatRole.Assistant, "retained answer")] });
+        await store.StoreAsync(new()
+        {
+            Agent = new() { AgentSessionId = agent.AgentSessionId, SubAgentLifecycleState = state },
+        });
+        await store.StoreAsync(new() { Agent = agent, NewMessages = [new(ChatRole.Assistant, "later answer")] });
+        var restored = await store.RestoreAsync(new() { AgentSessionId = agent.AgentSessionId });
+        Assert.Equal(state, restored!.Value.SubAgentLifecycleState);
+        Assert.Equal(agent.AgentDefinitionJson, restored.Value.AgentDefinitionJson);
+        Assert.Equal(agent.AgentSessionJson, restored.Value.AgentSessionJson);
+        var messages = await store.ReadMessagesAsync(new() { AgentSessionId = agent.AgentSessionId });
+        Assert.Equal(2, messages.Length);
+        Assert.Equal("retained answer", messages[0].Text);
+    }
+
     protected abstract ValueTask<IAgentPersistenceStore> CreateStoreAsync();
 
     protected virtual ValueTask ResetStoreAsync()

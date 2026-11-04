@@ -21,6 +21,7 @@ internal sealed class CopilotSdkSubAgentStateReconciler(
     private readonly HashSet<Guid> processedEventIds = [];
     private readonly Dictionary<Guid, SessionEvent> pendingEvents = [];
     private Guid? lastEventId;
+    private Action<SessionEvent>? applyEvent;
 
     internal async Task<bool> ObserveEventAsync(
         SessionEvent live,
@@ -30,6 +31,7 @@ internal sealed class CopilotSdkSubAgentStateReconciler(
         await this.eventGate.WaitAsync(this.shutdown.Token).ConfigureAwait(false);
         try
         {
+            this.applyEvent = apply;
             if (live.Id != Guid.Empty && this.processedEventIds.Contains(live.Id)) return false;
             if (this.lastEventId is { } previous && live.ParentId is { } parent && parent != previous)
             {
@@ -120,10 +122,14 @@ internal sealed class CopilotSdkSubAgentStateReconciler(
                     lock (this.gate)
                     {
                         if (this.disposed) return;
+                        if (this.dirty) continue;
                         publish(snapshot);
                         if (this.pendingEvents.Count > 0)
                         {
-                            this.lastEventId = this.pendingEvents.Values.OrderBy(e => e.Timestamp).Last().Id;
+                            // A task snapshot cannot replace invocation evidence (sync tasks can
+                            // be absent, and terminal tasks can already have been evicted).
+                            foreach (var deferred in OrderReplay(this.pendingEvents.Values.ToArray()))
+                                this.AcceptEvent(deferred, this.applyEvent!);
                             this.pendingEvents.Clear();
                         }
                         if (!this.dirty)

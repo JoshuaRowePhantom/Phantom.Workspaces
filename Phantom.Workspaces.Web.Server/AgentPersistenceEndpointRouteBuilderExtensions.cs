@@ -199,6 +199,7 @@ public static class AgentPersistenceEndpointRouteBuilderExtensions
         AgentDefinitionJson = agent.AgentDefinitionJson.ToJsonElement(),
         CopilotSdkSessionId = agent.CopilotSdkSessionId,
         LastUpdatedUtc = agent.LastUpdatedUtc,
+        SubAgentLifecycleState = agent.SubAgentLifecycleState,
     };
 
     private static PersistedAgent FromDto(PersistedAgentDto dto) => new()
@@ -208,5 +209,6 @@ public static class AgentPersistenceEndpointRouteBuilderExtensions
         AgentDefinitionJson = dto.AgentDefinitionJson.ToBsonDocument(),
         CopilotSdkSessionId = dto.CopilotSdkSessionId,
         LastUpdatedUtc = dto.LastUpdatedUtc,
+        SubAgentLifecycleState = dto.SubAgentLifecycleState,
     };
 }

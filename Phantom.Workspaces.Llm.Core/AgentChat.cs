@@ -175,6 +175,10 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
     private bool acceptsUserInput = true;
     private DateTime lastUpdatedAt;
     private AgentChatCompletionState? completionStateOverride;
+    private long lifecycleProjectionVersion;
+    private string? subAgentLifecycleState;
+    private readonly object lifecyclePersistenceGate = new();
+    private Task lifecyclePersistence = Task.CompletedTask;
 
     // Steering messages injected mid-run (via ToolResultSteeringMiddleware or CopilotSdkChatClient)
     // are injected into the active PartialResponseConflator so they appear at the tool-result
@@ -393,6 +397,11 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
        if (restoredAgent is { LastUpdatedUtc: { } persistedUpdatedUtc })
        {
            this.lastUpdatedAt = persistedUpdatedUtc;
+       }
+       if (restoredAgent?.SubAgentLifecycleState is { } restoredLifecycle)
+       {
+           this.subAgentLifecycleState = restoredLifecycle == "running" ? "unknown" : restoredLifecycle;
+           this.completionStateOverride = CopilotSubAgentLifecycleStore.ToCompletionState(this.subAgentLifecycleState);
        }
 
        var resolvedAgentDefinition = this.request.AgentDefinition
@@ -1858,13 +1867,14 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
     internal void ApplySubAgentLifecycleState(ApplySubAgentStateRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var state = request.State is "running" or "idle" or "working" or "waiting" or "attention"
-            ? AgentChatCompletionState.Running
-            : request.State is "failed" or "cancelled"
-                ? AgentChatCompletionState.Failed
-                : AgentChatCompletionState.Succeeded;
+        var version = Interlocked.Increment(ref this.lifecycleProjectionVersion);
+        var state = CopilotSubAgentLifecycleStore.ToCompletionState(request.State);
         _ = Task.Factory.StartNew(
-            () => this.SetCompletionState(state),
+            () =>
+            {
+                if (version == Volatile.Read(ref this.lifecycleProjectionVersion))
+                    this.SetCompletionState(state, preserveLastUpdatedAt: false, request.State);
+            },
             CancellationToken.None,
             TaskCreationOptions.DenyChildAttach,
             this.foregroundScheduler);
@@ -1873,12 +1883,14 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
     internal void RequestHostedFollowUp()
     {
         if (this.acceptsUserInput) return;
+        var version = Volatile.Read(ref this.lifecycleProjectionVersion);
         _ = Task.Factory.StartNew(async () =>
         {
             Task? previous;
             lock (this.processingStateLock) previous = this.activeTurnCompletion?.Task;
             if (previous is not null) await previous.ConfigureAwait(false);
-            this.ApplySubAgentLifecycleState(new(this.AgentSessionId, CopilotSubAgentLifecycleLayer.Session, "running"));
+            if (version == Volatile.Read(ref this.lifecycleProjectionVersion))
+                this.ApplySubAgentLifecycleState(new(this.AgentSessionId, CopilotSubAgentLifecycleLayer.Session, "running"));
             this.StartProcessingLoop();
         }, CancellationToken.None, TaskCreationOptions.DenyChildAttach, this.foregroundScheduler).Unwrap();
     }
@@ -1896,8 +1908,17 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
     /// </param>
     internal void SetCompletionState(
         AgentChatCompletionState state,
-        bool preserveLastUpdatedAt)
+        bool preserveLastUpdatedAt,
+        string? lifecycleState = null)
     {
+        var normalized = lifecycleState ?? (this.subAgentLifecycleState is { } existing
+            && CopilotSubAgentLifecycleStore.ToCompletionState(existing) == state ? existing
+            : state == AgentChatCompletionState.Running ? "running"
+            : state == AgentChatCompletionState.Failed ? "failed"
+            : state == AgentChatCompletionState.Unknown ? "unknown" : "completed");
+        if (!preserveLastUpdatedAt && this.subAgentLifecycleState != normalized)
+            this.QueueLifecyclePersistence(this.agentSessionId, normalized);
+        this.subAgentLifecycleState = normalized;
         // #1128: Idempotent — bail if the override is already at the requested state so
         // repeated calls (e.g. from restore + a stray terminal event) don't re-fire the
         // completion notification and cause duplicate UI updates.
@@ -1925,6 +1946,32 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
             this.foregroundScheduler);
     }
 
+    private void QueueLifecyclePersistence(string childSessionId, string state)
+    {
+        lock (this.lifecyclePersistenceGate)
+        {
+            var previous = this.lifecyclePersistence;
+            this.lifecyclePersistence = PersistAsync();
+            async Task PersistAsync()
+            {
+                await previous.ConfigureAwait(false);
+                await this.request.ConfiguredStore.StoreAsync(new()
+                {
+                    Agent = new()
+                    {
+                        AgentSessionId = childSessionId, SubAgentLifecycleState = state,
+                        LastUpdatedUtc = this.timeProvider.GetUtcNow().UtcDateTime,
+                    },
+                }).ConfigureAwait(false);
+            }
+        }
+    }
+
+    internal Task WaitForLifecyclePersistenceAsync()
+    {
+        lock (this.lifecyclePersistenceGate) return this.lifecyclePersistence;
+    }
+
     private async Task RestoreSubAgentsAsync(CancellationToken cancellationToken)
     {
         var childIds = await this.request.ConfiguredStore.ReadSubAgentChildIdsAsync(
@@ -1950,7 +1997,14 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
         cancellationToken.ThrowIfCancellationRequested();
         foreach (var stub in stubs)
         {
-            stub.SetRestoredCompletionState(AgentChatCompletionState.Succeeded);
+            var persisted = await this.request.ConfiguredStore.RestoreAsync(
+                new RestoreRequest { AgentSessionId = stub.SessionId.Value }, cancellationToken);
+            var state = persisted?.SubAgentLifecycleState;
+            if (state is null) stub.SetRestoredCompletionState(AgentChatCompletionState.Succeeded);
+            else stub.SetRestoredLifecycleState(state == "running" ? "unknown" : state);
+            stub.LifecycleObservedAt = persisted?.LastUpdatedUtc is { } updated
+                ? new DateTimeOffset(DateTime.SpecifyKind(updated, DateTimeKind.Utc)) : null;
+            stub.PersistLifecycleState = value => this.QueueLifecyclePersistence(stub.SessionId.Value, value);
         }
 
         lock (this.subAgentsLock)
@@ -2187,6 +2241,8 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
             }
         }
 
+        try { await this.WaitForLifecyclePersistenceAsync().ConfigureAwait(false); }
+        catch (Exception error) { failures.Add(error); }
         if (failures.Count != 0)
         {
             throw new AggregateException("Agent chat resource cleanup failed.", failures);
@@ -2796,6 +2852,7 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
     private async Task RunHostedProcessLoopAsync(
         CancellationToken cancellationToken)
     {
+        var projectionVersion = Volatile.Read(ref this.lifecycleProjectionVersion);
         var activeTurnCompletion =
             new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         lock (this.processingStateLock)
@@ -2847,10 +2904,16 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
             }
 
             await partialResponses.DrainAsync();
-            this.SetCompletionState(AgentChatCompletionState.Succeeded);
+            if (projectionVersion == Volatile.Read(ref this.lifecycleProjectionVersion))
+                this.SetCompletionState(AgentChatCompletionState.Succeeded);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+        }
+        catch (OperationCanceledException)
+        {
+            if (projectionVersion == Volatile.Read(ref this.lifecycleProjectionVersion))
+                this.SetCompletionState(AgentChatCompletionState.Failed, preserveLastUpdatedAt: false, "cancelled");
         }
         catch (Exception ex)
         {
@@ -2871,7 +2934,8 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                 this.UpdateRunningItem(runningItem, errorItems);
             }
 
-            this.SetCompletionState(AgentChatCompletionState.Failed);
+            if (projectionVersion == Volatile.Read(ref this.lifecycleProjectionVersion))
+                this.SetCompletionState(AgentChatCompletionState.Failed);
         }
         finally
         {

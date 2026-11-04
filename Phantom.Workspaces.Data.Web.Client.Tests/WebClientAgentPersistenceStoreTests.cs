@@ -55,6 +55,7 @@ public sealed class WebClientAgentPersistenceStoreTests
             AgentSessionJson = null,
             AgentDefinitionJson = null,
             CopilotSdkSessionId = "copilot-session-id",
+            SubAgentLifecycleState = "cancelled",
         };
         var messages = new[]
         {
@@ -72,6 +73,7 @@ public sealed class WebClientAgentPersistenceStoreTests
         Assert.NotNull(deserializedRequest);
         Assert.Equal("test-session-id", deserializedRequest!.Agent.AgentSessionId);
         Assert.Equal("copilot-session-id", deserializedRequest.Agent.CopilotSdkSessionId);
+        Assert.Equal("cancelled", deserializedRequest.Agent.SubAgentLifecycleState);
         Assert.Single(deserializedRequest.NewMessages!);
     }
 
@@ -84,6 +86,7 @@ public sealed class WebClientAgentPersistenceStoreTests
             AgentSessionJson = JsonDocument.Parse("{\"key\":\"value\"}").RootElement,
             AgentDefinitionJson = null,
             CopilotSdkSessionId = "restored-copilot-id",
+            SubAgentLifecycleState = "cancelled",
         };
         var handler = new RecordingHttpMessageHandler(
             _ => JsonResponse(responseDto));
@@ -98,6 +101,7 @@ public sealed class WebClientAgentPersistenceStoreTests
         Assert.NotNull(result);
         Assert.Equal("restored-session-id", result.Value.AgentSessionId);
         Assert.Equal("restored-copilot-id", result.Value.CopilotSdkSessionId);
+        Assert.Equal("cancelled", result.Value.SubAgentLifecycleState);
         Assert.NotNull(result.Value.AgentSessionJson);
     }
 

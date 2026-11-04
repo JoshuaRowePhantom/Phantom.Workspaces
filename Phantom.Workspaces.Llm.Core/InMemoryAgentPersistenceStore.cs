@@ -51,6 +51,7 @@ internal sealed class InMemoryAgentPersistenceStore : IAgentPersistenceStore
                 AgentSessionJson = request.Agent.AgentSessionJson ?? session.Agent?.AgentSessionJson,
                 AgentDefinitionJson = request.Agent.AgentDefinitionJson ?? session.Agent?.AgentDefinitionJson,
                 CopilotSdkSessionId = request.Agent.CopilotSdkSessionId ?? session.Agent?.CopilotSdkSessionId,
+                SubAgentLifecycleState = request.Agent.SubAgentLifecycleState ?? session.Agent?.SubAgentLifecycleState,
                 LastUpdatedUtc = stampedLastUpdatedUtc,
             };
             if (newMessages.Length > 0)

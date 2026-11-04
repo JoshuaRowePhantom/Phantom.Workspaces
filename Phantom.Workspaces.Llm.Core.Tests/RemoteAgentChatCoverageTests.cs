@@ -99,8 +99,11 @@ public sealed partial class RemoteAgentChatTests
         Assert.Equal("history", a.Description);
     }
 
-    [Fact]
-    public async Task RemoteAgentChat_IdleChildSnapshotAndUpdate_RemainsNonrunningAfterReconnect()
+    [Theory]
+    [InlineData(AgentChatCompletionState.Succeeded)]
+    [InlineData(AgentChatCompletionState.Unknown)]
+    [InlineData(AgentChatCompletionState.Failed)]
+    public async Task RemoteAgentChat_IdleChildSnapshotAndUpdate_RemainsNonrunningAfterReconnect(AgentChatCompletionState outcome)
     {
         static JsonElement Child(AgentChatCompletionState state) => JsonSerializer.SerializeToElement(new
         {
@@ -125,12 +128,12 @@ public sealed partial class RemoteAgentChatTests
         var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         original.CompletionStateChanged += (_, _) =>
         {
-            if (original.CompletionState == AgentChatCompletionState.Succeeded)
+            if (original.CompletionState == outcome)
                 changed.TrySetResult();
         };
         await transport.SendAsync(Frame(2, new SubagentsChangedEvent
         {
-            Subagents = [Child(AgentChatCompletionState.Succeeded)],
+            Subagents = [Child(outcome)],
         }));
         await changed.Task;
         Assert.Same(original, Assert.Single(chat.SubAgents));
@@ -138,7 +141,7 @@ public sealed partial class RemoteAgentChatTests
         var reloaded = Event(chat, nameof(chat.InformationChanged));
         await transport.SendAsync(Frame(3, new SessionSnapshotEvent
         {
-            Snapshot = AgentSessionProtocolCodecTests.Snapshot() with { Subagents = [Child(AgentChatCompletionState.Succeeded)] },
+            Snapshot = AgentSessionProtocolCodecTests.Snapshot() with { Subagents = [Child(outcome)] },
         }));
         await transport.SendAsync(Frame(4, new AgentInformationChangedEvent
         {
@@ -146,7 +149,7 @@ public sealed partial class RemoteAgentChatTests
         }));
         await reloaded;
         Assert.Same(original, Assert.Single(chat.SubAgents));
-        Assert.Equal(AgentChatCompletionState.Succeeded, Assert.Single(chat.SubAgents).CompletionState);
+        Assert.Equal(outcome, Assert.Single(chat.SubAgents).CompletionState);
     }
 
     [Fact]

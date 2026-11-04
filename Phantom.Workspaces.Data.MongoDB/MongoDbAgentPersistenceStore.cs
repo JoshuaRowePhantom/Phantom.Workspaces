@@ -38,32 +38,23 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(request.Agent.AgentSessionId);
 
-        if (request.Agent.AgentSessionJson is not null)
+        if (request.Agent.AgentSessionJson is not null || request.Agent.SubAgentLifecycleState is not null)
         {
-            // Preserve a previously stored SDK session id when this store call does not carry one,
-            // mirroring how the in-memory store coalesces (issue #3).
-            var copilotSdkSessionId = request.Agent.CopilotSdkSessionId;
-            if (copilotSdkSessionId is null)
-            {
-                var existingSessionDocument = await this.sessionsCollection
-                    .Find(Builders<MongoDbPersistedSessionDocument>.Filter.Eq(static x => x.AgentSessionId, request.Agent.AgentSessionId))
-                    .FirstOrDefaultAsync(cancellationToken)
-                    .ConfigureAwait(false);
-                copilotSdkSessionId = existingSessionDocument?.CopilotSdkSessionId;
-            }
-
-            var persistedSessionDocument = new MongoDbPersistedSessionDocument
-            {
-                AgentSessionId = request.Agent.AgentSessionId,
-                AgentSessionJson = request.Agent.AgentSessionJson,
-                CopilotSdkSessionId = copilotSdkSessionId,
-                UpdatedUtc = this.timeProvider.GetUtcNow().UtcDateTime,
-            };
-
-            await this.sessionsCollection.ReplaceOneAsync(
+            // Lifecycle-only writes and ordinary message persistence must not replace each
+            // other's fields. In particular a later transcript flush must retain cancellation.
+            var builder = Builders<MongoDbPersistedSessionDocument>.Update;
+            var update = builder.SetOnInsert(x => x.AgentSessionId, request.Agent.AgentSessionId)
+                .Set(x => x.UpdatedUtc, request.Agent.LastUpdatedUtc ?? this.timeProvider.GetUtcNow().UtcDateTime);
+            if (request.Agent.AgentSessionJson is { } sessionJson)
+                update = update.Set(x => x.AgentSessionJson, sessionJson);
+            if (request.Agent.CopilotSdkSessionId is { } sdkSessionId)
+                update = update.Set(x => x.CopilotSdkSessionId, sdkSessionId);
+            if (request.Agent.SubAgentLifecycleState is { } state)
+                update = update.Set(x => x.SubAgentLifecycleState, state);
+            await this.sessionsCollection.UpdateOneAsync(
                     filter: Builders<MongoDbPersistedSessionDocument>.Filter.Eq(static x => x.AgentSessionId, request.Agent.AgentSessionId),
-                    replacement: persistedSessionDocument,
-                    options: new ReplaceOptions { IsUpsert = true },
+                    update: update,
+                    options: new UpdateOptions { IsUpsert = true },
                     cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -156,6 +147,7 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
             AgentSessionJson = sessionDocument.AgentSessionJson,
             AgentDefinitionJson = agentDefinitionJson,
             CopilotSdkSessionId = sessionDocument.CopilotSdkSessionId,
+            SubAgentLifecycleState = sessionDocument.SubAgentLifecycleState,
             LastUpdatedUtc = sessionDocument.UpdatedUtc == default
                 ? null
                 : sessionDocument.UpdatedUtc,
@@ -238,6 +230,7 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
         public BsonDocument? AgentSessionJson { get; init; }
 
         public string? CopilotSdkSessionId { get; init; }
+        public string? SubAgentLifecycleState { get; init; }
 
         public DateTime UpdatedUtc { get; init; }
     }

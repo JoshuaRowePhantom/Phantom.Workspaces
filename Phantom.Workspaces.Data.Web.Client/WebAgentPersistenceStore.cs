@@ -131,6 +131,7 @@ public sealed class WebAgentPersistenceStore : IAgentPersistenceStore
             : JsonDocument.Parse(agent.AgentDefinitionJson.ToJson()).RootElement,
         CopilotSdkSessionId = agent.CopilotSdkSessionId,
         LastUpdatedUtc = agent.LastUpdatedUtc,
+        SubAgentLifecycleState = agent.SubAgentLifecycleState,
     };
 
     private static PersistedAgent FromDto(PersistedAgentDto dto) => new()
@@ -144,5 +145,6 @@ public sealed class WebAgentPersistenceStore : IAgentPersistenceStore
             : BsonDocument.Parse(dto.AgentDefinitionJson.Value.GetRawText()),
         CopilotSdkSessionId = dto.CopilotSdkSessionId,
         LastUpdatedUtc = dto.LastUpdatedUtc,
+        SubAgentLifecycleState = dto.SubAgentLifecycleState,
     };
 }

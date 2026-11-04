@@ -12,6 +12,16 @@ public sealed class SubAgent : IRunningSubAgent, IAgentChatSubagentsSnapshotProv
 {
     private readonly IRunningAgentChatFactory? _factory;
     private AgentChatCompletionState? _restoredCompletionState;
+    internal Action<string>? PersistLifecycleState { get; set; }
+    internal string? LifecycleState { get; private set; }
+    internal DateTimeOffset? LifecycleObservedAt { get; set; }
+
+    internal void SetRestoredLifecycleState(string state)
+    {
+        if (this.LifecycleState != state) this.PersistLifecycleState?.Invoke(state);
+        this.LifecycleState = state;
+        this.SetRestoredCompletionState(CopilotSubAgentLifecycleStore.ToCompletionState(state));
+    }
 
     /// <summary>The session ID of the child agent chat.</summary>
     public AgentSessionId SessionId { get; }

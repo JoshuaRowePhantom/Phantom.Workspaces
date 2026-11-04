@@ -17,6 +17,101 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 /// </summary>
 public sealed class CopilotSdkStreamAdapterTests
 {
+    [Fact]
+    public void TranslateCopilotSdkSessionEvents_AllPinnedEventTypes_HaveDocumentedClassification()
+    {
+        var union = typeof(SessionEvent).GetCustomAttributes(
+            typeof(System.Text.Json.Serialization.JsonDerivedTypeAttribute), false)
+            .Cast<System.Text.Json.Serialization.JsonDerivedTypeAttribute>().ToArray();
+        Assert.Equal(136, union.Length);
+        foreach (var member in union)
+        {
+            var classification = CopilotSdkEventContract.Classify((string)member.TypeDiscriminator!);
+            Assert.NotEqual("unsupported", classification.Category);
+            Assert.False(string.IsNullOrWhiteSpace(classification.Reason), member.DerivedType.Name);
+        }
+        Assert.Equal("unsupported", CopilotSdkEventContract.Classify("future.event").Category);
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_UnknownWireDiscriminator_ReportsBoundedCompatibilityDiagnostic()
+    {
+        var value = SessionEvent.FromJson("""
+            {"id":"11111111-1111-1111-1111-111111111111","timestamp":"2026-01-01T00:00:00Z",
+             "type":"future.private-type","agentId":"private-child","data":{"secret":"private-payload"}}
+            """);
+        Assert.IsType<SessionEvent>(value);
+        Assert.Equal("unknown", value.Type);
+        var channel = Channel.CreateUnbounded<SessionEvent>();
+        for (var i = 0; i < 50; i++) channel.Writer.TryWrite(value);
+        channel.Writer.Complete();
+        var logger = new RecordingLogger();
+        var updates = new List<ChatResponseUpdate>();
+        await foreach (var update in CopilotSdkStreamAdapter.TranslateCopilotSdkSessionEvents(channel.Reader, logger))
+            updates.Add(update);
+        Assert.Empty(updates);
+        var diagnostic = Assert.Single(logger.Entries);
+        Assert.Contains("SDK discarded unknown discriminator/data", diagnostic.Message);
+        Assert.DoesNotContain("private", diagnostic.Message);
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_ConfiguredMultiTurnAndExecutionMode_PreservesLifecycleMetadata()
+    {
+        var parent = Guid.NewGuid();
+        var updates = await TranslateAsync(new SubagentStartedEvent
+        {
+            AgentId = "child", ParentId = parent,
+            Data = new()
+            {
+                AgentName = "task", AgentDisplayName = "Task", AgentDescription = "test", ToolCallId = "call",
+                ParentId = "spawning-task", ExecutionMode = "background", Model = "model", Resumable = false,
+            },
+        }, new SubagentConfiguredEvent
+        {
+            AgentId = "child", Data = new() { Model = "resolved", MultiTurn = true },
+        });
+        var started = Assert.IsType<FunctionCallContent>(Assert.Single(updates[0].Contents));
+        Assert.Equal("background", started.Arguments![CopilotSdkStreamAdapter.ExecutionModePropertyName]);
+        Assert.Equal("spawning-task", started.Arguments[CopilotSdkStreamAdapter.ParentTaskIdPropertyName]);
+        Assert.Equal(parent, started.AdditionalProperties![CopilotSdkStreamAdapter.LifecycleParentEventIdPropertyName]);
+        var configured = Assert.IsType<FunctionCallContent>(Assert.Single(updates[1].Contents));
+        Assert.Equal(CopilotSdkStreamAdapter.SubAgentConfiguredLifecycleName, configured.Name);
+        Assert.Equal(true, configured.Arguments![CopilotSdkStreamAdapter.MultiTurnPropertyName]);
+        Assert.Equal("resolved", configured.Arguments["model"]);
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_CancelledSubagentCompletedEvent_PreservesCancelledOutcome()
+    {
+        var delivered = SessionEvent.FromJson("""
+            {"id":"11111111-1111-1111-1111-111111111111","timestamp":"2026-01-01T00:00:00Z",
+             "type":"subagent.completed","agentId":"child",
+             "data":{"toolCallId":"call","agentName":"task","agentDisplayName":"Task","cancelled":true}}
+            """);
+        Assert.True(Assert.IsType<SubagentCompletedEvent>(delivered).Data.Cancelled);
+        var updates = await TranslateAsync(delivered);
+        var result = Assert.IsType<FunctionResultContent>(Assert.Single(Assert.Single(updates).Contents));
+        Assert.Contains("\"event\":\"cancelled\"", result.Result!.ToString());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(null)]
+    public async Task TranslateCopilotSdkSessionEvents_SubagentCompletedWithoutCancellation_PreservesSuccessfulOutcome(bool? cancelled)
+    {
+        var updates = await TranslateAsync(new SubagentCompletedEvent
+        {
+            AgentId = "child",
+            Data = new SubagentCompletedData
+            {
+                ToolCallId = "call", AgentName = "task", AgentDisplayName = "Task", Cancelled = cancelled,
+            },
+        });
+        var result = Assert.IsType<FunctionResultContent>(Assert.Single(Assert.Single(updates).Contents));
+        Assert.Equal("""{"event":"completed"}""", result.Result!.ToString());
+    }
+
     private static async Task<List<ChatResponseUpdate>> TranslateAsync(params SessionEvent[] events)
     {
         var channel = Channel.CreateUnbounded<SessionEvent>();
@@ -807,7 +902,7 @@ public sealed class CopilotSdkStreamAdapterTests
     }
 
     [Fact]
-    public async Task TranslateCopilotSdkSessionEvents_UnmappedEvent_LogsDebugWithTypeAndAgentId()
+    public async Task TranslateCopilotSdkSessionEvents_UnmappedEvent_LogsDebugWithTypeAndRedactedScope()
     {
         // Fix #1323: observability is preserved — the default arm logs at Debug (not Warning) with
         // the runtime type name and the originating AgentId.
@@ -824,7 +919,8 @@ public sealed class CopilotSdkStreamAdapterTests
         Assert.DoesNotContain(logger.Entries, e => e.Level == Microsoft.Extensions.Logging.LogLevel.Warning);
         var debug = Assert.Single(logger.Entries, e => e.Level == Microsoft.Extensions.Logging.LogLevel.Debug);
         Assert.Contains(nameof(UnknownTestEvent), debug.Message, StringComparison.Ordinal);
-        Assert.Contains("agent-42", debug.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("agent-42", debug.Message, StringComparison.Ordinal);
+        Assert.Contains("<child>", debug.Message, StringComparison.Ordinal);
     }
 
     [Fact]

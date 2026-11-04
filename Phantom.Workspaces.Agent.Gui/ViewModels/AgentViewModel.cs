@@ -1971,14 +1971,14 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             var desired = new List<AgentEditorNavigationItemViewModel>();
             foreach (var item in this.Target)
             {
-                if (!hide || !(item.IsSucceeded || item.IsFailed))
+                if (!hide || item.IsRunning)
                 {
                     desired.Add(item);
                 }
             }
 
             desired = desired
-                .OrderBy(item => (item.IsSucceeded || item.IsFailed) ? 1 : 0)
+                .OrderBy(item => item.IsRunning ? 0 : 1)
                 .ThenByDescending(item => item.LastUpdatedAt ?? DateTime.MinValue)
                 .ToList();
 

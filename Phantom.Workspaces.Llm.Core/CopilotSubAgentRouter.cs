@@ -41,6 +41,7 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
     private readonly Func<string, SubAgent?>? resolveChild;
     private readonly Func<string, SubAgent?>? resolveTaskChild;
     private readonly Action<string, string?>? invocationFinished;
+    private readonly Func<FunctionResultContent, ValueTask<bool>>? canFinishInvocation;
 
     // Tool starts arriving on the root stream, keyed by CallId, buffered so they can be injected
     // as the first history message when the corresponding sub-agent-started lifecycle signal
@@ -80,7 +81,8 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
         Action<string, string?, SubAgent>? registerChild = null,
         Func<string, SubAgent?>? resolveChild = null,
         Func<string, SubAgent?>? resolveTaskChild = null,
-        Action<string, string?>? invocationFinished = null)
+        Action<string, string?>? invocationFinished = null,
+        Func<FunctionResultContent, ValueTask<bool>>? canFinishInvocation = null)
     {
         ArgumentNullException.ThrowIfNull(rootWriter);
         ArgumentNullException.ThrowIfNull(factory);
@@ -94,6 +96,7 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
         this.resolveChild = resolveChild;
         this.resolveTaskChild = resolveTaskChild;
         this.invocationFinished = invocationFinished;
+        this.canFinishInvocation = canFinishInvocation;
     }
 
     internal void ApplyTaskState(string toolCallId, string state)
@@ -473,13 +476,14 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
 
     private async Task HandleSubAgentResultAsync(FunctionResultContent result)
     {
+        if (this.canFinishInvocation is { } guard && !await guard(result).ConfigureAwait(false)) return;
         var agentId = result.CallId;
         if (string.IsNullOrEmpty(agentId))
         {
             return;
         }
 
-        var (failed, error) = ParseLifecycleResult(result);
+        var (failed, cancelled, error) = ParseLifecycleResult(result);
 
         ChildRoutingEntry? entry;
         bool removeFromChildSinks = false;
@@ -537,7 +541,11 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
             return;
         }
 
-        if (failed)
+        if (cancelled)
+        {
+            await entry.CompleteAsFailedAsync(new OperationCanceledException("Sub-agent execution was cancelled.")).ConfigureAwait(false);
+        }
+        else if (failed)
         {
             await entry.CompleteAsFailedAsync(new AgentSubagentFailedException(error)).ConfigureAwait(false);
         }
@@ -675,7 +683,7 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
         });
     }
 
-    private static (bool Failed, string? Error) ParseLifecycleResult(FunctionResultContent result)
+    private static (bool Failed, bool Cancelled, string? Error) ParseLifecycleResult(FunctionResultContent result)
     {
         if (result.Result is string json)
         {
@@ -687,11 +695,13 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
                     var failed = document.RootElement.TryGetProperty("event", out var eventElement)
                         && eventElement.ValueKind == JsonValueKind.String
                         && eventElement.GetString() == "failed";
+                    var cancelled = eventElement.ValueKind == JsonValueKind.String
+                        && eventElement.GetString() == "cancelled";
                     var error = document.RootElement.TryGetProperty("error", out var errorElement)
                         && errorElement.ValueKind == JsonValueKind.String
                         ? errorElement.GetString()
                         : null;
-                    return (failed, error);
+                    return (failed, cancelled, error);
                 }
             }
             catch (JsonException)
@@ -700,7 +710,7 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
             }
         }
 
-        return (false, null);
+        return (false, false, null);
     }
 
     private static string? GetArgument(FunctionCallContent call, string name)
@@ -921,11 +931,12 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
             if (target is not null)
             {
                 target.Fail(exception);
+                var lifecycleState = exception is OperationCanceledException ? "cancelled" : "failed";
                 if (leaseToDispose?.LocalAgentChat is { } agentChat)
                 {
-                    agentChat.SetCompletionState(AgentChatCompletionState.Failed);
+                    agentChat.SetCompletionState(AgentChatCompletionState.Failed, preserveLastUpdatedAt: false, lifecycleState);
                 }
-                else this.existingChat?.SetCompletionState(AgentChatCompletionState.Failed);
+                else this.existingChat?.SetCompletionState(AgentChatCompletionState.Failed, preserveLastUpdatedAt: false, lifecycleState);
             }
 
             if (leaseToDispose is not null)

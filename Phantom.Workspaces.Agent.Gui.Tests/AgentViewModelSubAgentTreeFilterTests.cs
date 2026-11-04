@@ -6,11 +6,47 @@ using Microsoft.Extensions.Time.Testing;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
 using Xunit;
+using Avalonia.Headless.XUnit;
+using System.Collections.Specialized;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
 public sealed class AgentViewModelSubAgentTreeFilterTests
 {
+    [AvaloniaTheory]
+    [InlineData("idle")]
+    [InlineData("unknown")]
+    [InlineData("cancelled")]
+    public async Task SubAgentsTree_HistoricalChildReconcilesToIdle_UpdatesHideCompletedWithoutCollectionMutation(string state)
+    {
+        await using var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory,
+            TaskScheduler.FromCurrentSynchronizationContext());
+        await AddSubAgentAsync(chat, "worker", "Worker");
+        var child = (AgentChat)Assert.Single(chat.SubAgents);
+        var navigation = Assert.Single(viewModel.EditorItems).Children.Single(c => c.Id == "chat-sub-agents");
+        Assert.Single(navigation.Children);
+        var historicalMutations = 0;
+        ((INotifyCollectionChanged)chat.SubAgents).CollectionChanged += (_, _) => historicalMutations++;
+        var removed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ((INotifyCollectionChanged)navigation.Children).CollectionChanged += (_, _) =>
+        {
+            if (navigation.Children.Count == 0) removed.TrySetResult();
+        };
+        child.ApplySubAgentLifecycleState(new(child.AgentSessionId, CopilotSubAgentLifecycleLayer.Session, state));
+        await removed.Task;
+        Assert.Equal(0, historicalMutations);
+        Assert.Same(child, Assert.Single(chat.SubAgents));
+        Assert.Equal("Sub-agents (1)", navigation.Name);
+        Assert.NotEqual(AgentChatCompletionState.Running, child.CompletionState);
+        navigation.HideCompletedAgents = false;
+        Assert.Single(navigation.Children);
+        child.ApplySubAgentLifecycleState(new(child.AgentSessionId, CopilotSubAgentLifecycleLayer.Session, "running"));
+        navigation.HideCompletedAgents = true;
+        Assert.Single(navigation.Children);
+    }
+
     // #1226: Inject a controllable clock so back-to-back SetCompletionState calls produce
     // strictly-ordered LastUpdatedAt values. Without this the tests inherited the OS clock's
     // ~15ms resolution and the timestamp-ordered assertions flaked when completions landed in
