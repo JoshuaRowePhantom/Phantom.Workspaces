@@ -4,6 +4,57 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 
 public sealed class CopilotSubAgentLifecycleStoreTests
 {
+    [Theory]
+    [InlineData("idle", "completed")]
+    [InlineData("cancelled", "cancelled")]
+    [InlineData("failed", "failed")]
+    public void CopilotSubAgentLifecycleStore_EvictedStableTaskResumes_FencesOldAndAcceptsFreshTerminal(string prior, string outcome)
+    {
+        var store = new CopilotSubAgentLifecycleStore();
+        var time = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Invocation, "running",
+            InvocationToolCallId: "call", ObservedAt: time));
+        store.ReplaceTasks([new("child", CopilotSubAgentLifecycleLayer.Task, prior,
+            TaskId: "task", InvocationToolCallId: "call", ObservedAt: time.AddSeconds(1))]);
+        var previous = store.InvocationGeneration("call");
+        store.ReplaceTasks([]);
+        store.ReplaceTasks([new("child", CopilotSubAgentLifecycleLayer.Task, "running",
+            TaskId: "task", InvocationToolCallId: "call", ObservedAt: time.AddSeconds(3))]);
+        Assert.True(store.InvocationGeneration("call") > previous);
+        Assert.False(store.IsInvocationTerminal("call"));
+        Assert.False(store.Apply(new("child", CopilotSubAgentLifecycleLayer.Invocation, "cancelled",
+            InvocationToolCallId: "call", ObservedAt: time.AddSeconds(2))));
+        Assert.Equal("running", store.Project("child"));
+        Assert.True(store.Apply(new("child", CopilotSubAgentLifecycleLayer.Invocation, outcome,
+            InvocationToolCallId: "call", ObservedAt: time.AddSeconds(4))));
+        Assert.Equal(outcome, store.Project("child"));
+    }
+
+    [Theory]
+    [InlineData("cancelled", false, false)]
+    [InlineData("cancelled", true, false)]
+    [InlineData("cancelled", false, true)]
+    [InlineData("failed", false, false)]
+    [InlineData("failed", true, false)]
+    [InlineData("failed", false, true)]
+    public void CopilotSubAgentLifecycleStore_HistoricalTerminalTasks_CannotOverwriteLatestEpoch(
+        string outcome, bool reverse, bool evictLatest)
+    {
+        var store = new CopilotSubAgentLifecycleStore();
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Invocation, "running", InvocationToolCallId: "old"));
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Invocation, "completed", InvocationToolCallId: "old"));
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Invocation, "running", InvocationToolCallId: "new"));
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Invocation, outcome, InvocationToolCallId: "new"));
+        ApplySubAgentStateRequest old = new("child", CopilotSubAgentLifecycleLayer.Task, "completed",
+            TaskId: "old-task", InvocationToolCallId: "old");
+        ApplySubAgentStateRequest current = new("child", CopilotSubAgentLifecycleLayer.Task, outcome,
+            TaskId: "new-task", InvocationToolCallId: "new");
+        store.ReplaceTasks(evictLatest ? [old] : reverse ? [current, old] : [old, current]);
+        Assert.Equal(outcome, store.Project("child"));
+        store.ReplaceTasks([]);
+        Assert.Equal(outcome, store.Project("child"));
+    }
+
     [Fact]
     public void CopilotSubAgentLifecycleStore_DeliveredCancellationAfterSuccessfulSnapshot_RefinesOutcome()
     {

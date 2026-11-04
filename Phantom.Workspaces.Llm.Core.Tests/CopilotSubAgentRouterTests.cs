@@ -21,6 +21,57 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 /// </summary>
 public sealed class CopilotSubAgentRouterTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CopilotSubAgentRouter_CanonicalLifecycleOwnsReceiver_DelayedStartAndResultCannotReopenOrOverwrite(bool cancelled)
+    {
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var table = new SubAgentTestFakes.FakeSubAgentTable();
+        SubAgent? child = null;
+        var router = new CopilotSubAgentRouter(Channel.CreateUnbounded<ChatResponseUpdate>().Writer, factory, table,
+            registerChild: (_, _, value) => child = value, resolveChild: _ => child,
+            canonicalLifecycle: true);
+        await router.RouteAsync(LifecycleStart("child", "first"));
+        var chat = Assert.Single(table.AddedChats);
+        var receiver = factory.CreatedReceiver!;
+        receiver.Fail(new OperationCanceledException());
+        chat.SetCompletionState(AgentChatCompletionState.Failed);
+        await router.RouteAsync(LifecycleCompleted("child"));
+        await router.RouteAsync(LifecycleStart("child", "second"));
+        Assert.Equal(AgentChatCompletionState.Failed, chat.CompletionState);
+        Assert.True(receiver.BeginInvocation());
+        chat.SetCompletionState(AgentChatCompletionState.Running);
+        await router.RouteAsync(LifecycleResult("child", cancelled ? """{"event":"cancelled"}""" : """{"event":"completed"}"""));
+        Assert.Equal(AgentChatCompletionState.Running, chat.CompletionState);
+        Assert.False(receiver.BeginInvocation());
+    }
+
+    [Theory]
+    [InlineData("child")]
+    [InlineData("")]
+    public async Task CopilotSubAgentRouter_RetiredNotificationReceiver_IsNotInterruptedAgainOrReplaced(string agentId)
+    {
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var table = new SubAgentTestFakes.FakeSubAgentTable();
+        var (router, _) = CreateRouter(factory, table);
+        await router.RouteAsync(LifecycleStart(agentId, "call"));
+        var child = Assert.Single(table.AddedChats);
+        var receiver = factory.CreatedReceiver!;
+        receiver.Complete();
+        await router.RetireChildAsync(child);
+        await router.RetireChildAsync(child);
+        Assert.True(receiver.BeginInvocation());
+        child.SetCompletionState(AgentChatCompletionState.Running);
+        await router.RouteAsync(LifecycleStart("other", "other-call"));
+        var other = factory.CreatedReceiver!;
+        await router.TerminalizeRemainingChildrenAsync(new OperationCanceledException());
+        Assert.Equal(AgentChatCompletionState.Running, child.CompletionState);
+        Assert.False(receiver.BeginInvocation());
+        Assert.True(other.BeginInvocation());
+        Assert.Equal(2, table.AddedChats.Count);
+    }
+
     [Fact]
     public async Task CopilotSubAgentRouter_TerminalWaitsForCanonicalObserver_RejectsStaleEpoch()
     {

@@ -29,6 +29,8 @@ internal sealed class CopilotSubAgentLifecycleStore
     };
     private readonly Dictionary<string, (string State, long? Revision)> sessions = new(StringComparer.Ordinal);
     private readonly Dictionary<string, (string Chat, string State, string? Invocation)> tasks = new(StringComparer.Ordinal);
+    // Snapshot membership is not execution history: retained task IDs can resume after eviction.
+    private readonly Dictionary<string, (string Chat, string State, string? Invocation)> taskHistory = new(StringComparer.Ordinal);
     private readonly Dictionary<string, (string Chat, string State, long Generation, DateTimeOffset? Timestamp)> invocations = new(StringComparer.Ordinal);
     private readonly HashSet<string> sessionSupersededByTask = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> lastNonrunningTaskStates = new(StringComparer.Ordinal);
@@ -73,8 +75,9 @@ internal sealed class CopilotSubAgentLifecycleStore
                 if (string.IsNullOrEmpty(request.TaskId)) return false;
                 if (request.ExecutionBoundary is { } taskBoundary && taskBoundary < this.Generation) return false;
                 var resuming = request.State == "running"
-                    && this.tasks.TryGetValue(request.TaskId, out var oldTask) && oldTask.State != "running";
+                    && this.taskHistory.TryGetValue(request.TaskId, out var oldTask) && oldTask.State != "running";
                 this.tasks[request.TaskId] = (request.ChatKey, request.State, request.InvocationToolCallId);
+                this.taskHistory[request.TaskId] = this.tasks[request.TaskId];
                 if (request.State == "running")
                 {
                     if (resuming)
@@ -83,8 +86,9 @@ internal sealed class CopilotSubAgentLifecycleStore
                         if (request.InvocationToolCallId is { Length: > 0 } resumedInvocation)
                         {
                             this.invocations.TryGetValue(resumedInvocation, out var priorInvocation);
-                            this.invocations[resumedInvocation] = (request.ChatKey, "running", this.Generation,
-                                request.ObservedAt ?? priorInvocation.Timestamp);
+                            if (priorInvocation.State != "running")
+                                this.invocations[resumedInvocation] = (request.ChatKey, "running", this.Generation,
+                                    request.ObservedAt ?? priorInvocation.Timestamp);
                         }
                     }
                     this.sessionSupersededByTask.Remove(request.ChatKey);
@@ -92,14 +96,19 @@ internal sealed class CopilotSubAgentLifecycleStore
                 }
                 else if (request.State == "idle" || IsTerminal(request.State))
                 {
-                    this.sessionSupersededByTask.Add(request.ChatKey);
                     var outcome = request.State;
                     if (outcome is "idle" or "completed"
                         && request.InvocationToolCallId is { } knownId
                         && this.invocations.TryGetValue(knownId, out var known)
                         && known.State is "failed" or "cancelled")
                         outcome = known.State;
-                    this.lastNonrunningTaskStates[request.ChatKey] = outcome;
+                    var taskGeneration = this.InvocationGeneration(request.InvocationToolCallId) ?? 0;
+                    if (request.InvocationToolCallId is null
+                        || !this.invocations.Values.Any(i => i.Chat == request.ChatKey && i.Generation > taskGeneration))
+                    {
+                        this.sessionSupersededByTask.Add(request.ChatKey);
+                        this.lastNonrunningTaskStates[request.ChatKey] = outcome;
+                    }
                     if (request.State == "idle" && request.InvocationToolCallId is { Length: > 0 } toolCallId)
                         this.Apply(new(request.ChatKey, CopilotSubAgentLifecycleLayer.Invocation,
                             "completed", InvocationToolCallId: toolCallId));
@@ -139,6 +148,9 @@ internal sealed class CopilotSubAgentLifecycleStore
                     foreach (var task in this.tasks.Where(t => t.Value.Chat == request.ChatKey
                                  && t.Value.Invocation == request.InvocationToolCallId).ToArray())
                         this.tasks[task.Key] = (task.Value.Chat, request.State, task.Value.Invocation);
+                    foreach (var task in this.taskHistory.Where(t => t.Value.Chat == request.ChatKey
+                                 && t.Value.Invocation == request.InvocationToolCallId).ToArray())
+                        this.taskHistory[task.Key] = (task.Value.Chat, request.State, task.Value.Invocation);
                 }
                 break;
         }

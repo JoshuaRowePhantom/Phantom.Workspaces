@@ -72,6 +72,7 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
     // ever misattributed to the parent transcript, even during the async-create race window.
     private readonly Dictionary<string, ChildRoutingEntry> childSinks =
         new(StringComparer.Ordinal);
+    private readonly bool canonicalLifecycle;
 
     internal CopilotSubAgentRouter(
         ChannelWriter<ChatResponseUpdate> rootWriter,
@@ -82,7 +83,8 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
         Func<string, SubAgent?>? resolveChild = null,
         Func<string, SubAgent?>? resolveTaskChild = null,
         Action<string, string?>? invocationFinished = null,
-        Func<FunctionResultContent, ValueTask<bool>>? canFinishInvocation = null)
+        Func<FunctionResultContent, ValueTask<bool>>? canFinishInvocation = null,
+        bool canonicalLifecycle = false)
     {
         ArgumentNullException.ThrowIfNull(rootWriter);
         ArgumentNullException.ThrowIfNull(factory);
@@ -97,6 +99,7 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
         this.resolveTaskChild = resolveTaskChild;
         this.invocationFinished = invocationFinished;
         this.canFinishInvocation = canFinishInvocation;
+        this.canonicalLifecycle = canonicalLifecycle;
     }
 
     internal void ApplyTaskState(string toolCallId, string state)
@@ -104,6 +107,28 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
         if (this.resolveTaskChild?.Invoke(toolCallId)?.AgentChat is not { } child) return;
         child.ApplySubAgentLifecycleState(new(child.AgentSessionId, CopilotSubAgentLifecycleLayer.Task, state,
             InvocationToolCallId: toolCallId));
+    }
+
+    internal async Task RetireChildAsync(AgentChat chat)
+    {
+        var retired = new HashSet<ChildRoutingEntry>();
+        lock (this.childSinks)
+            foreach (var pair in this.childSinks.Where(p => p.Value.Chat == chat).ToArray())
+            {
+                this.childSinks.Remove(pair.Key);
+                retired.Add(pair.Value);
+            }
+        lock (this.pendingChildSinksByToolCall)
+            foreach (var pair in this.pendingChildSinksByToolCall.Where(p => p.Value.Chat == chat).ToArray())
+            {
+                this.pendingChildSinksByToolCall.Remove(pair.Key);
+                this.pendingChildSinksToolCallOrder.Remove(pair.Key);
+                retired.Add(pair.Value);
+            }
+        lock (this.pendingChildrenByToolCall)
+            foreach (var pair in this.pendingChildrenByToolCall.Where(p => retired.Contains(p.Value)).ToArray())
+                this.pendingChildrenByToolCall.Remove(pair.Key);
+        foreach (var entry in retired) await entry.RetireAsync().ConfigureAwait(false);
     }
 
     /// <summary>
@@ -419,13 +444,14 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
                     existing = restoredLease.LocalAgentChat;
                 }
                 var receiver = existing?.GetService(typeof(ICopilotSubAgentReceiver)) as ICopilotSubAgentReceiver;
-                if (receiver is CopilotSubAgentChatClient reusable && reusable.BeginInvocation())
+                if (!this.canonicalLifecycle && receiver is CopilotSubAgentChatClient reusable && reusable.BeginInvocation())
                     existing!.RequestHostedFollowUp();
                 if (receiver is not null)
                 {
-                    existing!.SetCompletionState(AgentChatCompletionState.Running);
+                    if (this.canonicalLifecycle) this.registerChild?.Invoke(agentId, parentToolCallId, restored);
+                    else existing!.SetCompletionState(AgentChatCompletionState.Running);
                     if (restoredLease is not null) entry.Attach(restoredLease, receiver);
-                    else entry.AttachExisting(existing, receiver);
+                    else entry.AttachExisting(existing!, receiver);
                     return;
                 }
                 if (restoredLease is not null) await restoredLease.DisposeAsync().ConfigureAwait(false);
@@ -534,6 +560,16 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
 
         if (entry is null)
         {
+            if (this.canonicalLifecycle
+                && result.AdditionalProperties?.TryGetValue(CopilotSdkStreamAdapter.InvocationToolCallIdPropertyName,
+                    out var invocationId) == true
+                && invocationId is string call
+                && this.resolveTaskChild?.Invoke(call)?.AgentChat is { } correlated)
+            {
+                await this.RetireChildAsync(correlated).ConfigureAwait(false);
+                this.invocationFinished?.Invoke(agentId, call);
+                return;
+            }
             this.logger?.LogWarning(
                 "Received {Lifecycle} for unknown sub-agent ID '{AgentId}'; ignoring.",
                 failed ? "SubagentFailed" : "SubagentCompleted",
@@ -541,7 +577,13 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
             return;
         }
 
-        if (cancelled)
+        if (this.canonicalLifecycle)
+        {
+            // The lifetime observer already applied this epoch and ended its receiver.
+            // A delayed turn subscription must not signal or project into a resumed epoch.
+            await entry.RetireAsync().ConfigureAwait(false);
+        }
+        else if (cancelled)
         {
             await entry.CompleteAsFailedAsync(new OperationCanceledException("Sub-agent execution was cancelled.")).ConfigureAwait(false);
         }
@@ -623,7 +665,7 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
             }
             if (chat?.GetService(typeof(ICopilotSubAgentReceiver)) is ICopilotSubAgentReceiver receiver)
             {
-                if (receiver is CopilotSubAgentChatClient reusable && reusable.BeginInvocation())
+                if (!this.canonicalLifecycle && receiver is CopilotSubAgentChatClient reusable && reusable.BeginInvocation())
                     chat.RequestHostedFollowUp();
                 if (lease is null) entry.AttachExisting(chat, receiver);
                 else entry.Attach(lease, receiver);
@@ -740,6 +782,21 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
     /// </summary>
     private sealed class ChildRoutingEntry
     {
+        internal AgentChat? Chat { get { lock (this.gate) return this.existingChat ?? this.lease?.LocalAgentChat; } }
+
+        internal async Task RetireAsync()
+        {
+            RunningAgentChatLease? retained;
+            lock (this.gate)
+            {
+                this.disposed = true;
+                retained = this.lease;
+                this.lease = null;
+                this.pending.Clear();
+            }
+            if (retained is not null) await retained.DisposeAsync().ConfigureAwait(false);
+        }
+
         private readonly object gate = new();
         private readonly string agentId;
         private readonly ILogger? logger;
