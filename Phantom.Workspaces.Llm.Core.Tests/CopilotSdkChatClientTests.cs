@@ -445,12 +445,14 @@ public sealed partial class CopilotSdkChatClientTests
             {"kind":"prompt","name":"hosted-subagent","model":{"id":"github-copilot-subagent","provider":"github-copilot-subagent"},"tools":[]}
             """);
         var receiver = new CopilotSubAgentChatClient();
+        var foreground = new ConcurrentExclusiveSchedulerPair().ExclusiveScheduler;
         await using var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
         {
             AgentDefinition = definition,
             ConfiguredStore = new InMemoryAgentPersistenceStore(),
             ClientOverride = receiver,
             DisplayNameOverride = "Follow-up child",
+            ForegroundScheduler = foreground,
         });
         var child = new SubAgent(new AgentSessionId(chat.AgentSessionId), chat, null);
         client.RegisterRestoredSubAgent(child);
@@ -460,12 +462,19 @@ public sealed partial class CopilotSdkChatClientTests
 
         var children = new ObservableCollection<IRunningSubAgent> { child };
         var readOnlyChildren = new ReadOnlyObservableCollection<IRunningSubAgent>(children);
-        using var browser = new SubAgentBrowserViewModel(readOnlyChildren) { HideCompleted = true };
+        var (browser, display, displays, sink, panel) = await Task.Factory.StartNew(() =>
+        {
+            var browser = new SubAgentBrowserViewModel(readOnlyChildren) { HideCompleted = true };
+            var display = new RunningSubAgentDisplay(chat);
+            var displays = new ObservableCollection<IRunningSubAgentDisplay> { display };
+            var sink = new SubAgentPanelSink();
+            var panel = new RunningSubAgentsHtmlTransformer(displays, [], sink);
+            return (browser, display, displays, sink, panel);
+        }, CancellationToken.None, TaskCreationOptions.DenyChildAttach, foreground);
+        await using var browserLifetime = new LifecycleUiLifetime(browser, foreground);
+        await using var displayLifetime = new LifecycleUiLifetime(display, foreground);
+        await using var panelLifetime = new LifecycleUiLifetime(panel, foreground);
         Assert.Empty(browser.VisibleItems);
-        using var display = new RunningSubAgentDisplay(chat);
-        var displays = new ObservableCollection<IRunningSubAgentDisplay> { display };
-        var sink = new SubAgentPanelSink();
-        using var panel = new RunningSubAgentsHtmlTransformer(displays, [], sink);
         var childMutations = 0;
         var displayMutations = 0;
         children.CollectionChanged += (_, _) => childMutations++;
