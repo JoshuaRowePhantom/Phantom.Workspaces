@@ -183,6 +183,200 @@ public sealed partial class CopilotSdkChatClientTests
             CancellationToken ct) => throw new NotSupportedException();
     }
 
+    public static IEnumerable<object[]> UnknownRetirementCases()
+    {
+        foreach (var disappeared in new[] { false, true })
+        foreach (var mode in new[] { "live", "parent", "restored", "lazy" })
+        foreach (var evidence in new[] { "completed", "failed", "cancelled", "notification-idle", "notification-completed", "notification-failed" })
+            yield return [disappeared, mode, evidence];
+    }
+
+    private static SessionEvent RetirementTerminal(string evidence, int epoch)
+    {
+        if (evidence.StartsWith("notification-", StringComparison.Ordinal))
+        {
+            var status = evidence["notification-".Length..];
+            return new SystemNotificationEvent
+            {
+                Id = Guid.NewGuid(), AgentId = "wrong-envelope", Timestamp = LifecycleTime.AddSeconds(epoch),
+                Data = new()
+                {
+                    Content = "not correlation",
+                    Kind = status == "idle"
+                        ? new SystemNotificationAgentIdle { AgentId = "task", AgentType = "task" }
+                        : new SystemNotificationAgentCompleted { AgentId = "task", AgentType = "task", Status = new(status) },
+                },
+            };
+        }
+        return evidence == "failed" ? new SubagentFailedEvent
+        {
+            Id = Guid.NewGuid(), AgentId = "child", Timestamp = LifecycleTime.AddSeconds(epoch),
+            Data = new() { ToolCallId = "call", AgentName = "task", AgentDisplayName = "Task", Error = "fresh failure diagnostic" },
+        } : LifecycleFinish(epoch: epoch, cancelled: evidence == "cancelled");
+    }
+
+    private static (object Channel, bool Closed) ReceiverExecution(CopilotSubAgentChatClient receiver)
+    {
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        return (typeof(CopilotSubAgentChatClient).GetField("_channel", flags)!.GetValue(receiver)!,
+            (bool)typeof(CopilotSubAgentChatClient).GetField("completed", flags)!.GetValue(receiver)!);
+    }
+
+    [Theory]
+    [MemberData(nameof(UnknownRetirementCases))]
+    public async Task CopilotSdkChatClient_UnknownAfterEviction_ResumesSameExecutionReceiverAndFencesOldEvidence(
+        bool disappeared, string mode, string evidence)
+    {
+        var session = new Infrastructure.FakeCopilotSession();
+        var sdk = new Infrastructure.FakeCopilotClient(session)
+        {
+            LiveSessionStates = [new() { SessionId = "child", Status = AgentRegistryLiveTargetEntryStatus.Working, StatusRevision = 1 }],
+        };
+        await using var client = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
+        client.SetCopilotClientFactoryForTest(new Infrastructure.FakeCopilotClientFactory(sdk));
+        client.SetSubAgentDependencies(new SubAgentTestFakes.FakeRunningAgentChatFactory(), new SubAgentTestFakes.FakeSubAgentTable());
+        await InvokeEnsureSessionAsync(client);
+        var store = new InMemoryAgentPersistenceStore();
+        var id = CopilotSubAgentIdentity.Create("child", "call");
+        if (mode == "restored") await store.StoreAsync(new()
+        {
+            Agent = new() { AgentSessionId = id.Value, SubAgentLifecycleState = "completed" },
+        });
+        var receiver = new CopilotSubAgentChatClient();
+        await using var chat = mode == "lazy" ? null : await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentSessionId = id.Value, AgentDefinition = LifecycleDefinition(), ConfiguredStore = store,
+            ClientOverride = receiver, ForegroundScheduler = new LifecycleInlineScheduler(),
+        });
+        var child = chat is null ? new SubAgent(id, null) : new SubAgent(id, chat, null);
+        string? lazyPersistedState = null;
+        child.PersistLifecycleState = value => lazyPersistedState = value;
+        using var ui = await ObserveLifecycleUiAsync(child);
+        if (mode is "restored" or "lazy") client.RegisterRestoredSubAgent(child);
+        else RegisterLifecycleChild(client, child);
+        var history = new ObservableCollection<IRunningSubAgent> { child };
+        var mutations = 0;
+        history.CollectionChanged += (_, _) => mutations++;
+        var transcript = new AgentChatHistoryItem { Role = ChatRole.Assistant, Contents = [new TextContent("retained history")] };
+        chat?.History.Add(transcript);
+        await using var parent = new LifecycleParentTurn(client, session, mode == "parent");
+        await EmitObservedAsync(client, session, LifecycleStart());
+        if (parent.Pending is not null)
+        {
+            await RouterBarrierAsync(client, session, parent.Pending, 0);
+            parent.Next();
+        }
+        await SnapshotAsync(client, session, 0, LifecycleTask(GitHub.Copilot.Rpc.TaskStatus.Running));
+        var state = (CopilotSubAgentLifecycleStore)typeof(CopilotSdkChatClient)
+            .GetField("subAgentStates", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(client)!;
+        var originalGeneration = state.InvocationGeneration("call");
+        await SnapshotAsync(client, session, 1);
+        sdk.LiveSessionStates = disappeared ? []
+            : [new() { SessionId = "child", Status = AgentRegistryLiveTargetEntryStatus.Done, StatusRevision = 2 }];
+        await SnapshotAsync(client, session, 2);
+        Assert.Equal(AgentChatCompletionState.Unknown, ((IRunningSubAgent)child).CompletionState);
+        Assert.False(ui.Sink.RunningPanel);
+        Assert.Empty(ui.Browser.VisibleItems);
+        var retiredReceiver = ReceiverExecution(receiver);
+        if (chat is not null)
+        {
+            Assert.True(retiredReceiver.Closed);
+            await chat.WaitForLifecyclePersistenceAsync();
+            Assert.Equal("unknown", (await store.RestoreAsync(new() { AgentSessionId = id.Value }))!.Value.SubAgentLifecycleState);
+        }
+        else Assert.Equal("unknown", lazyPersistedState);
+
+        await SnapshotAsync(client, session, 4, LifecycleTask(GitHub.Copilot.Rpc.TaskStatus.Running));
+        var resumedGeneration = state.InvocationGeneration("call");
+        Assert.True(resumedGeneration > originalGeneration);
+        Assert.Equal(AgentChatCompletionState.Running, ((IRunningSubAgent)child).CompletionState);
+        Assert.True(ui.Sink.RunningPanel);
+        Assert.Single(ui.Browser.VisibleItems);
+        var resumedReceiver = ReceiverExecution(receiver);
+        if (chat is not null)
+        {
+            Assert.False(resumedReceiver.Closed);
+            Assert.NotSame(retiredReceiver.Channel, resumedReceiver.Channel);
+        }
+        await SnapshotAsync(client, session, 4, LifecycleTask(GitHub.Copilot.Rpc.TaskStatus.Running));
+        Assert.Equal(resumedGeneration, state.InvocationGeneration("call"));
+        Assert.Same(resumedReceiver.Channel, ReceiverExecution(receiver).Channel);
+        var stale = RetirementTerminal(evidence, 3);
+        await EmitObservedAsync(client, session, stale);
+        await EmitObservedAsync(client, session, stale);
+        if (parent.Pending is not null)
+        {
+            await RouterBarrierAsync(client, session, parent.Pending, 4);
+            parent.Next();
+        }
+        Assert.False(ReceiverExecution(receiver).Closed);
+        Assert.Same(resumedReceiver.Channel, ReceiverExecution(receiver).Channel);
+        Assert.Equal(resumedGeneration, state.InvocationGeneration("call"));
+        Assert.Equal("running", state.Project(id.Value));
+        Assert.Equal(AgentChatCompletionState.Running, ((IRunningSubAgent)child).CompletionState);
+
+        Task outputReceived = Task.CompletedTask;
+        System.Collections.Specialized.NotifyCollectionChangedEventHandler? onOutput = null;
+        if (chat is not null)
+        {
+            var received = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            onOutput = (_, _) =>
+            {
+                if (chat.History.Any(item => item.Contents.OfType<TextContent>().Any(t => t.Text == "resumed output")))
+                    received.TrySetResult();
+            };
+            ((System.Collections.Specialized.INotifyCollectionChanged)chat.History).CollectionChanged += onOutput;
+            outputReceived = received.Task;
+            await EmitObservedAsync(client, session, new AssistantMessageEvent
+            {
+                Id = Guid.NewGuid(), AgentId = "child", Timestamp = LifecycleTime.AddSeconds(5),
+                Data = new() { MessageId = "resumed", Content = "resumed output" },
+            });
+            if (parent.Pending is not null)
+            {
+                await RouterBarrierAsync(client, session, parent.Pending, 5);
+                parent.Next();
+            }
+        }
+        session.Tasks = [];
+        await EmitObservedAsync(client, session, RetirementTerminal(evidence, 6));
+        if (parent.Pending is not null)
+        {
+            await RouterBarrierAsync(client, session, parent.Pending, 6);
+            parent.Next();
+        }
+        await outputReceived;
+        if (chat is not null)
+            ((System.Collections.Specialized.INotifyCollectionChanged)chat.History).CollectionChanged -= onOutput;
+        var raw = evidence.EndsWith("failed", StringComparison.Ordinal) ? "failed"
+            : evidence == "cancelled" ? "cancelled" : "completed";
+        Assert.Equal(raw, state.Project(id.Value));
+        Assert.True(client.IsInvocationTerminal("call"));
+        Assert.False(ui.Sink.RunningPanel);
+        Assert.Empty(ui.Browser.VisibleItems);
+        if (chat is not null)
+        {
+            Assert.True(ReceiverExecution(receiver).Closed);
+            await chat.WaitForLifecyclePersistenceAsync();
+            Assert.Equal(raw, (await store.RestoreAsync(new() { AgentSessionId = id.Value }))!.Value.SubAgentLifecycleState);
+            await using var restored = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+            {
+                AgentSessionId = id.Value, AgentDefinition = LifecycleDefinition(), ConfiguredStore = store,
+                ClientOverride = new CopilotSubAgentChatClient(), ForegroundScheduler = new LifecycleInlineScheduler(),
+            });
+            Assert.Equal(raw == "completed" ? AgentChatCompletionState.Succeeded : AgentChatCompletionState.Failed,
+                restored.CompletionState);
+            Assert.Contains(transcript, chat.History);
+            Assert.Same(chat, child.AgentChat);
+        }
+        else Assert.Equal(raw, lazyPersistedState);
+        Assert.Equal(id, child.SessionId);
+        Assert.Same(child, Assert.Single(history));
+        Assert.Equal(0, mutations);
+        ui.Browser.HideCompleted = false;
+        Assert.Same(child, Assert.Single(ui.Browser.VisibleItems));
+    }
+
     [Theory]
     [InlineData("completed", false)]
     [InlineData("cancelled", false)]

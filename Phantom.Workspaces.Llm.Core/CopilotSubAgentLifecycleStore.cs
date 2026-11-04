@@ -60,16 +60,8 @@ internal sealed class CopilotSubAgentLifecycleStore
                     && (request.StatusRevision is not { } incoming || incoming <= revision))
                     return false;
                 this.sessions[request.ChatKey] = (request.State, request.StatusRevision);
-                if (request.State is "done" or "idle" && request.ExecutionBoundary is { } boundary
-                    && !this.tasks.Values.Any(t => t.Chat == request.ChatKey && IsTaskActive(t.State)))
-                {
-                    var unresolved = this.invocations.Where(i => i.Value.Chat == request.ChatKey
-                        && i.Value.State == "running" && i.Value.Generation <= boundary).ToArray();
-                    foreach (var invocation in unresolved)
-                        this.invocations[invocation.Key] =
-                            (invocation.Value.Chat, "unknown", invocation.Value.Generation, invocation.Value.Timestamp);
-                    if (unresolved.Length > 0) this.sessionSupersededByTask.Add(request.ChatKey);
-                }
+                if (request.State is "done" or "idle" && request.ExecutionBoundary is { } boundary)
+                    this.RetireUnresolvedInvocations(request.ChatKey, boundary);
                 break;
             case CopilotSubAgentLifecycleLayer.Task:
                 if (string.IsNullOrEmpty(request.TaskId)) return false;
@@ -145,12 +137,7 @@ internal sealed class CopilotSubAgentLifecycleStore
                         this.sessionSupersededByTask.Add(request.ChatKey);
                         this.lastNonrunningTaskStates[request.ChatKey] = request.State;
                     }
-                    foreach (var task in this.tasks.Where(t => t.Value.Chat == request.ChatKey
-                                 && t.Value.Invocation == request.InvocationToolCallId).ToArray())
-                        this.tasks[task.Key] = (task.Value.Chat, request.State, task.Value.Invocation);
-                    foreach (var task in this.taskHistory.Where(t => t.Value.Chat == request.ChatKey
-                                 && t.Value.Invocation == request.InvocationToolCallId).ToArray())
-                        this.taskHistory[task.Key] = (task.Value.Chat, request.State, task.Value.Invocation);
+                    this.UpdateInvocationTasks(request.ChatKey, request.InvocationToolCallId, request.State);
                 }
                 break;
         }
@@ -186,13 +173,34 @@ internal sealed class CopilotSubAgentLifecycleStore
         if (this.sessions.TryGetValue(chatKey, out var previous))
         {
             this.sessions[chatKey] = ("done", previous.Revision);
-            if (executionBoundary is { } boundary
-                && !this.tasks.Values.Any(t => t.Chat == chatKey && IsTaskActive(t.State)))
-                foreach (var invocation in this.invocations.Where(i => i.Value.Chat == chatKey
-                             && i.Value.State == "running" && i.Value.Generation <= boundary).ToArray())
-                    this.invocations[invocation.Key] =
-                        (invocation.Value.Chat, "unknown", invocation.Value.Generation, invocation.Value.Timestamp);
+            if (executionBoundary is { } boundary)
+                this.RetireUnresolvedInvocations(chatKey, boundary);
         }
+    }
+
+    private void RetireUnresolvedInvocations(string chatKey, long boundary)
+    {
+        if (this.tasks.Values.Any(t => t.Chat == chatKey && IsTaskActive(t.State))) return;
+        foreach (var invocation in this.invocations.Where(i => i.Value.Chat == chatKey
+                     && i.Value.State == "running" && i.Value.Generation <= boundary).ToArray())
+        {
+            this.invocations[invocation.Key] =
+                (chatKey, "unknown", invocation.Value.Generation, invocation.Value.Timestamp);
+            // Retirement ends execution even when the last running task row was evicted.
+            // Keep its durable state aligned so reuse opens a new generation and receiver.
+            this.UpdateInvocationTasks(chatKey, invocation.Key, "unknown");
+            this.sessionSupersededByTask.Add(chatKey);
+        }
+    }
+
+    private void UpdateInvocationTasks(string chatKey, string invocationId, string state)
+    {
+        foreach (var task in this.tasks.Where(t => t.Value.Chat == chatKey
+                     && t.Value.Invocation == invocationId).ToArray())
+            this.tasks[task.Key] = (chatKey, state, invocationId);
+        foreach (var task in this.taskHistory.Where(t => t.Value.Chat == chatKey
+                     && t.Value.Invocation == invocationId).ToArray())
+            this.taskHistory[task.Key] = (chatKey, state, invocationId);
     }
 
     internal bool CanFinishInvocation(string chatKey, string? invocationId, DateTimeOffset? timestamp)

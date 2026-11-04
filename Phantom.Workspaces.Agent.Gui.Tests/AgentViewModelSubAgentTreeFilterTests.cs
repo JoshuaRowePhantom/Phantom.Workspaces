@@ -14,6 +14,68 @@ namespace Phantom.Workspaces.Agent.Gui.Tests;
 public sealed class AgentViewModelSubAgentTreeFilterTests
 {
     [AvaloniaTheory]
+    [InlineData(false, "completed")]
+    [InlineData(true, "completed")]
+    [InlineData(false, "cancelled")]
+    [InlineData(true, "cancelled")]
+    public async Task SubAgentsTree_UnknownRetirementThenSameTaskResumption_UsesCanonicalEpoch(
+        bool disappeared, string outcome)
+    {
+        await using var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory,
+            TaskScheduler.FromCurrentSynchronizationContext());
+        await AddSubAgentAsync(chat, "worker", "Worker");
+        var child = (AgentChat)Assert.Single(chat.SubAgents);
+        var navigation = Assert.Single(viewModel.EditorItems).Children.Single(c => c.Id == "chat-sub-agents");
+        var historicalMutations = 0;
+        ((INotifyCollectionChanged)chat.SubAgents).CollectionChanged += (_, _) => historicalMutations++;
+        var store = new CopilotSubAgentLifecycleStore();
+        var start = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
+        store.Apply(new(child.AgentSessionId, CopilotSubAgentLifecycleLayer.Session, "working", StatusRevision: 1));
+        store.Apply(new(child.AgentSessionId, CopilotSubAgentLifecycleLayer.Invocation, "running",
+            InvocationToolCallId: "call", ObservedAt: start));
+        store.ReplaceTasks([new(child.AgentSessionId, CopilotSubAgentLifecycleLayer.Task, "running",
+            TaskId: "task", InvocationToolCallId: "call")]);
+        store.ReplaceTasks([]);
+        if (disappeared) store.RemoveSession(child.AgentSessionId, store.Generation);
+        else store.Apply(new(child.AgentSessionId, CopilotSubAgentLifecycleLayer.Session, "done",
+            StatusRevision: 2, ExecutionBoundary: store.Generation));
+        await ProjectAndObserveAsync("unknown", visible: false);
+        store.ReplaceTasks([new(child.AgentSessionId, CopilotSubAgentLifecycleLayer.Task, "running",
+            TaskId: "task", InvocationToolCallId: "call", ObservedAt: start.AddSeconds(4))]);
+        await ProjectAndObserveAsync("running", visible: true);
+        Assert.False(store.Apply(new(child.AgentSessionId, CopilotSubAgentLifecycleLayer.Invocation, "cancelled",
+            InvocationToolCallId: "call", ObservedAt: start.AddSeconds(3))));
+        Assert.Single(navigation.Children);
+        Assert.True(store.Apply(new(child.AgentSessionId, CopilotSubAgentLifecycleLayer.Invocation, outcome,
+            InvocationToolCallId: "call", ObservedAt: start.AddSeconds(5))));
+        await ProjectAndObserveAsync(outcome, visible: false);
+        Assert.Equal(0, historicalMutations);
+        Assert.Same(child, Assert.Single(chat.SubAgents));
+        Assert.Equal("Sub-agents (1)", navigation.Name);
+        navigation.HideCompletedAgents = false;
+        Assert.Single(navigation.Children);
+
+        async Task ProjectAndObserveAsync(string state, bool visible)
+        {
+            Assert.Equal(state, store.Project(child.AgentSessionId));
+            var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            void OnChanged(object? sender, NotifyCollectionChangedEventArgs args)
+            {
+                if (navigation.Children.Count == (visible ? 1 : 0)) changed.TrySetResult();
+            }
+            ((INotifyCollectionChanged)navigation.Children).CollectionChanged += OnChanged;
+            try
+            {
+                child.ApplySubAgentLifecycleState(new(child.AgentSessionId, CopilotSubAgentLifecycleLayer.Session, state));
+                await changed.Task;
+            }
+            finally { ((INotifyCollectionChanged)navigation.Children).CollectionChanged -= OnChanged; }
+        }
+    }
+
+    [AvaloniaTheory]
     [InlineData("idle")]
     [InlineData("unknown")]
     [InlineData("cancelled")]

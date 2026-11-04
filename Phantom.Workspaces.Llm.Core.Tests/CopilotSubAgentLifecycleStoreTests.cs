@@ -5,6 +5,84 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 public sealed class CopilotSubAgentLifecycleStoreTests
 {
     [Theory]
+    [InlineData(false, "completed")]
+    [InlineData(false, "failed")]
+    [InlineData(false, "cancelled")]
+    [InlineData(true, "completed")]
+    [InlineData(true, "failed")]
+    [InlineData(true, "cancelled")]
+    public void CopilotSubAgentLifecycleStore_UnknownAfterEviction_ResumesDurableTaskEpoch(
+        bool disappeared, string outcome)
+    {
+        var store = new CopilotSubAgentLifecycleStore();
+        var time = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Session, "working", StatusRevision: 1));
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Invocation, "running",
+            InvocationToolCallId: "call", ObservedAt: time));
+        store.ReplaceTasks([new("child", CopilotSubAgentLifecycleLayer.Task, "running",
+            TaskId: "task", InvocationToolCallId: "call", ObservedAt: time)]);
+        var originalGeneration = store.InvocationGeneration("call");
+        store.ReplaceTasks([]);
+        if (disappeared) store.RemoveSession("child", store.Generation);
+        else store.Apply(new("child", CopilotSubAgentLifecycleLayer.Session, "done",
+            StatusRevision: 2, ExecutionBoundary: store.Generation));
+        Assert.Equal("unknown", store.Project("child"));
+        Assert.False(store.IsInvocationTerminal("call"));
+        store.ReplaceTasks([new("child", CopilotSubAgentLifecycleLayer.Task, "running",
+            TaskId: "task", InvocationToolCallId: "call", ObservedAt: time.AddSeconds(4))]);
+        var resumedGeneration = store.InvocationGeneration("call");
+        Assert.True(resumedGeneration > originalGeneration);
+        Assert.Equal("running", store.Project("child"));
+        store.ReplaceTasks([new("child", CopilotSubAgentLifecycleLayer.Task, "running",
+            TaskId: "task", InvocationToolCallId: "call", ObservedAt: time.AddSeconds(5))]);
+        Assert.Equal(resumedGeneration, store.InvocationGeneration("call"));
+        Assert.False(store.CanFinishInvocation("child", "call", time.AddSeconds(3)));
+        Assert.False(store.Apply(new("child", CopilotSubAgentLifecycleLayer.Invocation, outcome,
+            InvocationToolCallId: "call", ObservedAt: time.AddSeconds(3))));
+        Assert.Equal("running", store.Project("child"));
+        Assert.True(store.Apply(new("child", CopilotSubAgentLifecycleLayer.Invocation, outcome,
+            InvocationToolCallId: "call", ObservedAt: time.AddSeconds(6))));
+        Assert.Equal(outcome, store.Project("child"));
+    }
+
+    [Theory]
+    [InlineData(false, "sync")]
+    [InlineData(true, "sync")]
+    [InlineData(false, "independent-task")]
+    [InlineData(true, "independent-task")]
+    [InlineData(false, "newer-invocation")]
+    [InlineData(true, "newer-invocation")]
+    public void CopilotSubAgentLifecycleStore_AuthoritativeRetirement_PreservesCurrentWork(
+        bool disappeared, string work)
+    {
+        var store = new CopilotSubAgentLifecycleStore();
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Session, "working", StatusRevision: 1));
+        store.Apply(new("child", CopilotSubAgentLifecycleLayer.Invocation, "running", InvocationToolCallId: "call"));
+        store.ReplaceTasks([new("child", CopilotSubAgentLifecycleLayer.Task, "running",
+            TaskId: "task", InvocationToolCallId: "call")]);
+        var boundary = store.Generation;
+        if (work == "newer-invocation")
+        {
+            store.ReplaceTasks([]);
+            store.Apply(new("child", CopilotSubAgentLifecycleLayer.Invocation, "running", InvocationToolCallId: "new"));
+        }
+        else if (work == "independent-task")
+            store.ReplaceTasks([new("child", CopilotSubAgentLifecycleLayer.Task, "running",
+                TaskId: "independent", InvocationToolCallId: "independent-call")]);
+        if (disappeared) store.RemoveSession("child", boundary);
+        else store.Apply(new("child", CopilotSubAgentLifecycleLayer.Session, "done",
+            StatusRevision: 2, ExecutionBoundary: boundary));
+        Assert.Equal("running", store.Project("child"));
+        if (work != "newer-invocation")
+        {
+            var generation = store.Generation;
+            store.ReplaceTasks([new("child", CopilotSubAgentLifecycleLayer.Task, "running",
+                TaskId: "task", InvocationToolCallId: "call")]);
+            Assert.Equal(generation, store.Generation);
+        }
+    }
+
+    [Theory]
     [InlineData("idle", "completed")]
     [InlineData("cancelled", "cancelled")]
     [InlineData("failed", "failed")]
