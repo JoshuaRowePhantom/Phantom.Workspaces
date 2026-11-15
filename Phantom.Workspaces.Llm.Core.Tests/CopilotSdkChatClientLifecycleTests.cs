@@ -158,6 +158,8 @@ public sealed partial class CopilotSdkChatClientTests
         public InMemoryAgentPersistenceStore Store { get; } = new();
         public CopilotSubAgentChatClient Receiver { get; } = new();
         public RunningAgentChatLease? Lease { get; private set; }
+        public TaskCompletionSource<RunningAgentChatLease> Created { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Exception? CreateFailure { get; set; }
         public int Releases { get; private set; }
         public Func<ValueTask>? ReleaseAsync { get; set; }
         public async Task<RunningAgentChatLease> CreateAsync(AgentDefinition definition, AgentSessionId sessionId,
@@ -166,16 +168,19 @@ public sealed partial class CopilotSdkChatClientTests
         {
             this.Entered.TrySetResult();
             await this.Continue.Task;
+            if (this.CreateFailure is { } failure) throw failure;
             var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
             {
                 AgentSessionId = sessionId.Value, AgentDefinition = LifecycleDefinition(), ConfiguredStore = this.Store,
                 ClientOverride = this.Receiver, ForegroundScheduler = new LifecycleInlineScheduler(),
             });
-            return this.Lease = new(sessionId, chat, () =>
+            this.Lease = new(sessionId, chat, () =>
             {
                 this.Releases++;
                 return this.ReleaseAsync?.Invoke() ?? ValueTask.CompletedTask;
             });
+            this.Created.TrySetResult(this.Lease);
+            return this.Lease;
         }
 
         public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, bool registerAsRunningAgent, CancellationToken ct) =>

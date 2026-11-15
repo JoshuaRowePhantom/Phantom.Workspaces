@@ -14,8 +14,11 @@ internal sealed class FakeCopilotClient : ICopilotClient
         this.ReadEventsHandler?.Invoke(request, cancellationToken)
         ?? Task.FromResult(new EventsReadResult { Events = [], HasMore = false });
     public IReadOnlyList<AgentRegistryLiveTargetEntry> LiveSessionStates { get; set; } = [];
+    public Exception? LiveSessionFailure { get; set; }
     public Task<IReadOnlyList<AgentRegistryLiveTargetEntry>> ListLiveSessionStatesAsync(CancellationToken cancellationToken)
-        => Task.FromResult(this.LiveSessionStates);
+        => this.LiveSessionFailure is { } failure
+            ? Task.FromException<IReadOnlyList<AgentRegistryLiveTargetEntry>>(failure)
+            : Task.FromResult(this.LiveSessionStates);
 
     public FakeCopilotClient(FakeCopilotSession session)
     {

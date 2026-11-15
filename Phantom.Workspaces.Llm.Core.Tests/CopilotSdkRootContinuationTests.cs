@@ -1264,7 +1264,7 @@ public sealed class CopilotSdkRootContinuationTests
         Assert.False(client.HasPendingRootContinuation);
     }
 
-    private sealed class SerializedStore : IAgentPersistenceStore
+    internal sealed class SerializedStore : IAgentPersistenceStore
     {
         private readonly InMemoryAgentPersistenceStore inner = new();
         public Exception? RestoreFailure { get; set; }

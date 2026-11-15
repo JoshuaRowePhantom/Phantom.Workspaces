@@ -142,8 +142,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private readonly Dictionary<Guid, TaskCompletionSource> terminalObservationBarriers = [];
     private readonly Dictionary<Guid, long?> acceptedTerminalGenerations = [];
     private Exception? stateObserverFailure;
+    internal TimeProvider StateObservationTimeProvider { get; set; } = TimeProvider.System;
     private readonly List<Task> childRetirementTasks = [];
-    private ChannelWriter<ChatResponseUpdate>? activeRootWriter;
     private CopilotSdkRootEventQueue? rootEventQueue;
     private readonly List<Task> admittedSends = [];
     internal const string ConsumeContinuationOptionName = "copilot.sdk.consume-continuation";
@@ -191,7 +191,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 return reservation.AsContinuation();
             lock (this.subAgentStateGate)
                 if (this.stateObserverFailure is { } observationFailure)
-                    throw new InvalidOperationException("Copilot session observation failed.", observationFailure);
+                    System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(observationFailure).Throw();
             if (!owner.TryStartRequest(reservation.Reader,
                 () => session.SendAsync(BuildMessageOptions(messages), cancellationToken),
                 out var sending, () =>
@@ -1298,29 +1298,38 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         var rootEvents = new CopilotSdkRootEventQueue();
         rootEvents.ContinuationAvailable += () => this.RootContinuationAvailable?.Invoke();
         this.rootEventQueue = rootEvents;
-        this.stateSubscription = session.Subscribe(e =>
+        try
         {
-            channel.Writer.TryWrite(e);
-            rootEvents.Accept(e);
-        });
-        if (resumed)
-        {
-            try
+            this.stateSubscription = session.Subscribe(e =>
             {
-                foreach (var persisted in await this.ReadPersistedSubAgentEventsAsync(session.SessionId, cancellationToken).ConfigureAwait(false))
-                    await reconciler.ObserveEventAsync(persisted,
-                        _ => Task.FromResult<IReadOnlyList<SessionEvent>>([]),
-                        this.ObserveSubAgentLifecycle).ConfigureAwait(false);
+                channel.Writer.TryWrite(e);
+                rootEvents.Accept(e);
+            });
+            if (resumed)
+            {
+                try
+                {
+                    foreach (var persisted in await this.ReadPersistedSubAgentEventsAsync(session.SessionId, cancellationToken).ConfigureAwait(false))
+                        await reconciler.ObserveEventAsync(persisted,
+                            _ => Task.FromResult<IReadOnlyList<SessionEvent>>([]),
+                            this.ObserveSubAgentLifecycle).ConfigureAwait(false);
+                }
+                catch (NotSupportedException) { }
             }
+            try { await reconciler.InvalidateAsync().WaitAsync(cancellationToken).ConfigureAwait(false); }
+            catch (NotSupportedException)
+            {
+                // Older/remote sessions may not expose the experimental RPC yet.
+            }
+            try { await this.RefreshLiveSessionStatesAsync(cancellationToken).ConfigureAwait(false); }
             catch (NotSupportedException) { }
         }
-        try { await reconciler.InvalidateAsync().WaitAsync(cancellationToken).ConfigureAwait(false); }
-        catch (NotSupportedException)
+        catch (Exception exception)
         {
-            // Older/remote sessions may not expose the experimental RPC yet.
+            this.FailRootObservation(rootEvents, exception);
+            channel.Writer.TryComplete();
+            throw;
         }
-        try { await this.RefreshLiveSessionStatesAsync(cancellationToken).ConfigureAwait(false); }
-        catch (NotSupportedException) { }
         this.stateObserverPump = Task.Run(async () =>
         {
             try
@@ -1370,19 +1379,15 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             catch (OperationCanceledException) when (shutdown.IsCancellationRequested) { }
             catch (Exception ex)
             {
-                lock (this.subAgentStateGate)
-                {
-                    this.stateObserverFailure = ex;
-                    foreach (var barrier in this.terminalObservationBarriers.Values) barrier.TrySetException(ex);
-                    this.activeRootWriter?.TryComplete(ex);
-                }
+                this.FailRootObservation(rootEvents, ex);
+                channel.Writer.TryComplete();
                 this.loggerFactory?.CreateLogger<CopilotSdkChatClient>()
                     .LogWarning(ex, "Observing Copilot background task state failed.");
             }
         });
         this.liveSessionPoller = Task.Run(async () =>
         {
-            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1), this.StateObservationTimeProvider);
             try
             {
                 while (await timer.WaitForNextTickAsync(shutdown.Token).ConfigureAwait(false))
@@ -1396,10 +1401,23 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             catch (OperationCanceledException) when (shutdown.IsCancellationRequested) { }
             catch (Exception ex)
             {
+                this.FailRootObservation(rootEvents, ex);
+                channel.Writer.TryComplete();
                 this.loggerFactory?.CreateLogger<CopilotSdkChatClient>()
                     .LogWarning(ex, "Observing Copilot live session status failed.");
             }
         });
+    }
+
+    private void FailRootObservation(CopilotSdkRootEventQueue? owner, Exception exception)
+    {
+        owner?.Fail(exception);
+        lock (this.subAgentStateGate)
+        {
+            if (owner is null || !ReferenceEquals(owner, this.rootEventQueue)) return;
+            this.stateObserverFailure ??= exception;
+            foreach (var barrier in this.terminalObservationBarriers.Values) barrier.TrySetException(exception);
+        }
     }
 
     private async Task DispatchLiveChildUpdateAsync(SessionEvent e, CancellationToken cancellationToken)
@@ -1510,6 +1528,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
     private void OwnChildRetirement(Task? routingRetirement, SubAgent child)
     {
+        var owner = this.rootEventQueue;
         RunningAgentChatLease? retainedLease;
         lock (this.subAgentStateGate) this.liveChildLeases.Remove(child.SessionId.Value, out retainedLease);
         var retirement = ObserveRetirementAsync();
@@ -1529,12 +1548,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             }
             catch (Exception exception)
             {
-                lock (this.subAgentStateGate)
-                {
-                    this.stateObserverFailure = exception;
-                    foreach (var barrier in this.terminalObservationBarriers.Values) barrier.TrySetException(exception);
-                    this.activeRootWriter?.TryComplete(exception);
-                }
+                this.FailRootObservation(owner, exception);
                 this.loggerFactory?.CreateLogger<CopilotSdkChatClient>()
                     .LogError(exception, "Retiring Copilot child resources failed.");
                 throw;
@@ -1695,10 +1709,10 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 }
             });
 
-            var finalEvent = await session.SendAndWaitAsync(
+            var finalEvent = await rootEvents.StartDirectResponse(() => session.SendAndWaitAsync(
                 messageOptions,
                 timeout: null,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken)).ConfigureAwait(false);
 
             lock (toolEventLock)
             {
@@ -1778,9 +1792,10 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             var session = admittedBatch?.HasAcceptedOutput == true
                 ? this.copilotSession ?? throw new InvalidOperationException("The accepted root batch has no owning native session.")
                 : await this.EnsureSessionAsync(options, turnCancellationToken).ConfigureAwait(false);
-            lock (this.subAgentStateGate)
-                if (this.stateObserverFailure is { } failure)
-                    throw new InvalidOperationException("Copilot session observation failed.", failure);
+            if (admittedBatch?.HasAcceptedOutput != true && this.rootEventQueue?.HasPending != true)
+                lock (this.subAgentStateGate)
+                    if (this.stateObserverFailure is { } failure)
+                        System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
 
             var channel = Channel.CreateUnbounded<ChatResponseUpdate>(new UnboundedChannelOptions
             {
@@ -1814,7 +1829,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                         Task observed;
                         lock (this.subAgentStateGate)
                         {
-                            if (this.stateObserverFailure is { } failure) throw new InvalidOperationException("Lifecycle observation failed.", failure);
+                            if (this.stateObserverFailure is { } failure)
+                                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
                             if (!this.terminalObservationBarriers.TryGetValue(eventId, out var barrier))
                                 this.terminalObservationBarriers[eventId] = barrier = new(TaskCreationOptions.RunContinuationsAsynchronously);
                             observed = barrier.Task;
@@ -1845,10 +1861,6 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                     }
                 }, canonicalLifecycle: true);
             this.currentRouter = router;
-            lock (this.subAgentStateGate)
-            {
-                this.activeRootWriter = channel.Writer;
-            }
 
             // Fix for GitHub issue #765: serialize event dispatch via a channel to prevent concurrent
             // routing calls from corrupting internal dictionaries. SingleReader ensures the drain
@@ -1862,7 +1874,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             if (admittedBatch is not null) eventReader = admittedBatch.Take();
             eventReader ??= rootEvents.Acquire(continuation, out acquiredContinuation);
             admittedBatch = null;
-            outputDrain?.Attach(rootEvents.SealAccepted);
+            outputDrain?.Attach(rootEvents.SealAccepted, rootEvents.Fail);
 
             var dispatchLoop = Task.Run(async () =>
             {
@@ -1883,7 +1895,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                         await router.RouteAsync(update).ConfigureAwait(false);
                     }
 
-                    channel.Writer.TryComplete();
+                    rootEvents.CompleteDispatch(error => channel.Writer.TryComplete(error));
                 }
                 catch (OperationCanceledException) when (turnCancellationToken.IsCancellationRequested)
                 {
@@ -1891,6 +1903,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 }
                 catch (Exception exception)
                 {
+                    this.FailRootObservation(rootEvents, exception);
                     // Without this, a dispatch failure kills the event loop while the CLI keeps
                     // streaming: every subsequent session event is dropped and the turn's channel
                     // never completes, so the remaining output silently never renders (issue
@@ -1898,7 +1911,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                     this.loggerFactory?.CreateLogger<CopilotSdkChatClient>().LogError(
                         exception,
                         "Session event dispatch failed; failing the turn.");
-                    channel.Writer.TryComplete(exception);
+                    rootEvents.CompleteDispatch(error => channel.Writer.TryComplete(error), exception);
                 }
             }, outputDrain is null ? turnCancellationToken : CancellationToken.None);
 
@@ -1949,8 +1962,6 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                         finally
                         {
                             if (ReferenceEquals(this.currentRouter, router)) this.currentRouter = null;
-                            lock (this.subAgentStateGate)
-                                if (ReferenceEquals(this.activeRootWriter, channel.Writer)) this.activeRootWriter = null;
                         }
                     }
                 }
@@ -1963,7 +1974,14 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 {
                     if (continuation || acquiredContinuation || promptSent) return;
                     cancellationToken.ThrowIfCancellationRequested();
-                    await session.SendAsync(messageOptions!, cancellationToken).ConfigureAwait(false);
+                    if (!rootEvents.TryStartRequest(eventReader,
+                        () => session.SendAsync(messageOptions!, cancellationToken), out var sending,
+                        () => cancellationToken.ThrowIfCancellationRequested()))
+                    {
+                        acquiredContinuation = true;
+                        return;
+                    }
+                    await sending!.ConfigureAwait(false);
                     promptSent = true;
                     InstallSteering();
                 },

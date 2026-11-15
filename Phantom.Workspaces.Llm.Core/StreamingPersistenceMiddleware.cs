@@ -81,7 +81,7 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
         if (drain is not null)
         {
             if (admittedBatch?.HasAcceptedOutput == true)
-                drain.Attach(admittedBatch.Owner.SealAccepted);
+                drain.Attach(admittedBatch.Owner.SealAccepted, admittedBatch.Owner.Fail);
             options = options?.Clone() ?? new();
             options.AdditionalProperties ??= [];
             options.AdditionalProperties[CopilotSdkOutputDrain.OptionName] = drain;
@@ -231,6 +231,7 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
             {
                 persistenceFailed = true;
                 primaryFailure ??= failure;
+                drain?.RequestFailure(failure);
                 throw;
             }
         }

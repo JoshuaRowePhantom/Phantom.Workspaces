@@ -40,19 +40,40 @@ internal sealed class CopilotSdkOutputDrain
     internal const string CancellationOptionName = "copilot.sdk.owning-run-cancellation";
     private readonly object gate = new();
     private Action? seal;
+    private Action<Exception>? fail;
+    private Exception? failure;
     private bool stopRequested;
     internal bool StopRequested { get { lock (this.gate) return this.stopRequested; } }
     internal bool HasOwner { get { lock (this.gate) return this.seal is not null; } }
 
-    internal void Attach(Action sealBatch)
+    internal void Attach(Action sealBatch, Action<Exception>? failBatch = null)
     {
         bool stop;
+        Exception? failed;
         lock (this.gate)
         {
             this.seal = sealBatch;
+            this.fail = failBatch;
             stop = this.stopRequested;
+            failed = this.failure;
         }
-        if (stop) sealBatch();
+        if (failed is not null && failBatch is not null) failBatch(failed);
+        else if (stop) sealBatch();
+    }
+
+    internal void RequestFailure(Exception exception)
+    {
+        Action<Exception>? failBatch;
+        Action? sealBatch;
+        lock (this.gate)
+        {
+            this.failure ??= exception;
+            failBatch = this.fail;
+            sealBatch = this.seal;
+        }
+        if (failBatch is not null) failBatch(exception);
+        else sealBatch?.Invoke();
+        lock (this.gate) this.stopRequested = true;
     }
 
     internal void RequestStop()
@@ -76,6 +97,7 @@ internal sealed class CopilotSdkRootEventQueue
     private bool stopped;
     private bool directResponse;
     private bool sealedForDrain;
+    private Exception? failure;
 
     internal event Action? ContinuationAvailable;
 
@@ -123,6 +145,7 @@ internal sealed class CopilotSdkRootEventQueue
     {
         lock (this.gate)
         {
+            this.ThrowIfFailed();
             if (this.stopped || this.receiving is not null || this.pending.Count > 0)
                 throw new InvalidOperationException("Pending root output must be consumed before a direct response.");
             this.directResponse = true;
@@ -134,6 +157,17 @@ internal sealed class CopilotSdkRootEventQueue
         lock (this.gate) this.directResponse = false;
     }
 
+    internal Task<T> StartDirectResponse<T>(Func<Task<T>> send)
+    {
+        lock (this.gate)
+        {
+            this.ThrowIfFailed();
+            if (this.stopped || this.sealedForDrain || !this.directResponse)
+                throw new OperationCanceledException("Direct Copilot admission has stopped.");
+            return send();
+        }
+    }
+
     internal ChannelReader<SessionEvent> Acquire(bool continuation) => this.Acquire(continuation, out _);
 
     internal ChannelReader<SessionEvent> Acquire(bool continuation, out bool acquiredContinuation)
@@ -143,6 +177,7 @@ internal sealed class CopilotSdkRootEventQueue
             if (this.stopped) throw new InvalidOperationException("Copilot root event receipt has stopped.");
             acquiredContinuation = this.pending.TryDequeue(out var pendingTurn);
             if (acquiredContinuation) return pendingTurn!;
+            this.ThrowIfFailed();
             var channel = CreateChannel();
             if (continuation) channel.Writer.Complete();
             else this.receiving = channel;
@@ -159,7 +194,8 @@ internal sealed class CopilotSdkRootEventQueue
                 this.receiving.Writer.TryComplete();
                 this.receiving = null;
             }
-
+            // An empty failed reservation may be released without advancing its reader.
+            if (reader.Completion.IsFaulted) _ = reader.Completion.Exception;
         }
     }
 
@@ -181,6 +217,7 @@ internal sealed class CopilotSdkRootEventQueue
                 this.receiving.Writer.TryComplete();
                 this.receiving = null;
             }
+            if (reader.Completion.IsFaulted) _ = reader.Completion.Exception;
         }
         if (notify) this.ContinuationAvailable?.Invoke();
     }
@@ -195,6 +232,50 @@ internal sealed class CopilotSdkRootEventQueue
         }
     }
 
+    internal void Fail(Exception exception)
+    {
+        lock (this.gate)
+        {
+            this.RecordFailure(exception);
+            this.sealedForDrain = true;
+            this.receiving?.Writer.TryComplete(this.failure);
+            this.receiving = null;
+        }
+    }
+
+    // Completing routed output is ordered with failure publication, after buffered receipts
+    // have had their opportunity to route. A slow persistence consumer does not own this fence.
+    internal void CompleteDispatch(Action<Exception?> complete, Exception? exception = null)
+    {
+        lock (this.gate)
+        {
+            if (exception is not null) this.Fail(exception);
+            complete(this.failure);
+        }
+    }
+
+    private void RecordFailure(Exception exception)
+    {
+        if (this.failure is null) this.failure = exception;
+        else if (exception is AggregateException aggregate)
+            foreach (var inner in aggregate.InnerExceptions) this.RecordFailure(inner);
+        else if (exception.InnerException is { } cause && Contains(exception, this.failure))
+            this.RecordFailure(cause);
+        else if (!Contains(this.failure, exception))
+            this.failure = new AggregateException("Copilot root output failed.", this.failure, exception);
+
+        static bool Contains(Exception outer, Exception inner) => ReferenceEquals(outer, inner)
+            || (outer is AggregateException aggregate
+                ? aggregate.InnerExceptions.Any(value => Contains(value, inner))
+                : outer.InnerException is { } cause && Contains(cause, inner));
+    }
+
+    private void ThrowIfFailed()
+    {
+        if (this.failure is { } failed)
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failed).Throw();
+    }
+
     // The native invocation starts under the receipt gate, without awaiting under the lock.
     // Before this transition output belongs to the preceding request; afterwards the reserved
     // reader owns the new request. No prompt may be published before this decision.
@@ -204,6 +285,7 @@ internal sealed class CopilotSdkRootEventQueue
         {
             sending = null;
             if (reader.TryPeek(out _) || this.pending.Count > 0) return false;
+            this.ThrowIfFailed();
             if (this.stopped || this.sealedForDrain)
                 throw new OperationCanceledException("Fresh Copilot admission has stopped.");
             verifyAdmission?.Invoke();
@@ -216,13 +298,14 @@ internal sealed class CopilotSdkRootEventQueue
     internal bool IsReceiving(ChannelReader<SessionEvent> reader)
     {
         lock (this.gate)
-            return !this.stopped && !this.sealedForDrain && ReferenceEquals(this.receiving?.Reader, reader);
+            return this.failure is null && !this.stopped && !this.sealedForDrain && ReferenceEquals(this.receiving?.Reader, reader);
     }
 
     internal Task StartSteering(ChannelReader<SessionEvent> reader, Func<bool> admissionOpen, Func<Task> send)
     {
         lock (this.gate)
         {
+            this.ThrowIfFailed();
             if (!this.IsReceiving(reader) || !admissionOpen())
                 throw new OperationCanceledException("The owning Copilot turn no longer accepts steering.");
             // Native start, terminal receipt and sealing share this gate; never await here.

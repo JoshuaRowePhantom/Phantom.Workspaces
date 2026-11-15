@@ -11,6 +11,36 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 
 public class StreamingPersistenceMiddlewareTests
 {
+    [Fact]
+    public async Task AppendFailure_FencesNativeAdmissionBeforeProviderDisposalWithoutRetry()
+    {
+        var original = new IOException("ambiguous append original");
+        var store = new SpyAgentPersistenceStore { Failure = original };
+        var provider = CreateProvider(store);
+        var root = new CopilotSdkRootEventQueue();
+        var reader = root.Acquire(false);
+        using var sdk = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
+        var inner = new FailingCleanupClient(null, null)
+        {
+            Copilot = sdk,
+            ConfigureDrain = drain => drain.Attach(root.SealAccepted, root.Fail),
+            BeforeDisposal = () =>
+            {
+                Assert.False(root.IsReceiving(reader));
+                Assert.Same(original, Assert.Throws<IOException>(() =>
+                {
+                    _ = root.StartSteering(reader, () => true, () => throw new Xunit.Sdk.XunitException("must not start"));
+                }));
+            },
+        };
+        var middleware = new StreamingPersistenceMiddleware(inner, provider, store);
+        var session = CreateSession(provider);
+        middleware.SetCurrentSession(session);
+        Assert.Same(original, await Assert.ThrowsAsync<IOException>(() => ConsumeAsync(middleware, session)));
+        Assert.Equal(1, store.StoreCallCount);
+        Assert.Equal(1, inner.Disposals);
+    }
+
     [Theory]
     [InlineData(true, true, false)]
     [InlineData(false, true, true)]
@@ -36,11 +66,19 @@ public class StreamingPersistenceMiddlewareTests
 
     private sealed class FailingCleanupClient(Exception? providerFailure, Exception? disposalFailure) : IChatClient, IAsyncEnumerable<ChatResponseUpdate>, IAsyncEnumerator<ChatResponseUpdate>
     {
+        public CopilotSdkChatClient? Copilot { get; init; }
+        public Action<CopilotSdkOutputDrain>? ConfigureDrain { get; init; }
+        public Action? BeforeDisposal { get; init; }
         public int Disposals { get; private set; }
         private int reads;
         public ChatResponseUpdate Current => MakeUpdate("accepted trailing output");
         public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(IEnumerable<ChatMessage> messages,
-            ChatOptions? options = null, CancellationToken cancellationToken = default) => this;
+            ChatOptions? options = null, CancellationToken cancellationToken = default)
+        {
+            if (options?.AdditionalProperties?.GetValueOrDefault(CopilotSdkOutputDrain.OptionName) is CopilotSdkOutputDrain drain)
+                this.ConfigureDrain?.Invoke(drain);
+            return this;
+        }
         public IAsyncEnumerator<ChatResponseUpdate> GetAsyncEnumerator(CancellationToken cancellationToken = default) => this;
         public ValueTask<bool> MoveNextAsync()
         {
@@ -50,10 +88,12 @@ public class StreamingPersistenceMiddlewareTests
         public ValueTask DisposeAsync()
         {
             this.Disposals++;
+            this.BeforeDisposal?.Invoke();
             return disposalFailure is null ? ValueTask.CompletedTask : ValueTask.FromException(disposalFailure);
         }
         public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+        public object? GetService(Type serviceType, object? serviceKey = null) =>
+            serviceType == typeof(CopilotSdkChatClient) ? this.Copilot : null;
         public void Dispose() { }
     }
 
